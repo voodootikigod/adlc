@@ -95,9 +95,11 @@ them" half:
      dedup with green suites, triage classification.
    - Mid models (Sonnet-class) for the build phase proper — errors here are
      caught by rails + prosecution, so paying for perfection is waste.
-   - Frontier models (Opus/Fable-class) where errors are *expensive to detect*:
-     specs, decomposition, interface contracts, final verdicts. A subtly wrong
-     contract sails through every gate and poisons everything downstream.
+   - Frontier-tier (the *best model you are allowed to run* — the doctrine
+     assumes an Opus-class ceiling, see Appendix E) where errors are
+     *expensive to detect*: specs, decomposition, interface contracts, final
+     verdicts. A subtly wrong contract sails through every gate and poisons
+     everything downstream.
 
    This inverts the common instinct (best model writes the code). The code is
    the most-verified artifact in the system; the spec is the least.
@@ -128,6 +130,52 @@ them" half:
 P0 Triage ──► P1 Interrogate ──► P2 Decompose ──► P3 Rail ──► P4 Build ──► P5 Prosecute ──► P6 Integrate ──► P7 Distill
    │              │ human gate       │ cold-start      │ RED gate    │ green gate   │ zero-findings    │ human gate      │ feeds P1..P4
    └─ small fixes skip to P3 (rail the bug, fix, prosecute-lite)                          gate                            of next run
+```
+
+```mermaid
+flowchart TB
+    REQ([Request]) --> P0{"P0 Triage<br/>risk × blast radius"}
+    P0 -- trivial --> DIRECT["Direct edit + existing rails"]
+    P0 -- bounded bug --> P3
+    P0 -- substantial --> P1
+
+    subgraph SPECIFY["SPECIFY — human + best-available judgment"]
+        P1["P1 Interrogate<br/>parallax: N readings → measured divergences<br/>premortem stress test"]
+        G1{{"GATE: spec-lint clean +<br/>ambiguity below threshold +<br/>HUMAN approves spec"}}
+        P2["P2 Decompose<br/>ticket DAG + edge contracts<br/>foundation built and merged first"]
+        G2{{"GATE: coldstart per ticket +<br/>merge-forecast certifies width"}}
+        P1 --> G1 --> P2 --> G2
+        G1 -. divergence high .-> P1
+        G2 -. gaps .-> P2
+    end
+
+    G2 --> P3
+
+    subgraph BUILD["RAIL + BUILD — mid/cheap models inside structure"]
+        P3["P3 Rail<br/>tests + contracts authored in a separate context, then frozen"]
+        G3{{"GATE: suite RED for the right reasons +<br/>hollow-test audits the rails"}}
+        PF["preflight: environment determinism"]
+        P4["P4 Build<br/>parallel worktrees · single writer per partition<br/>model-router: tier by float + rail density<br/>flail-detector: two-strike regeneration"]
+        G4{{"GATE: rails green + build + lint +<br/>rails-guard: freeze intact, no suppressions"}}
+        P3 --> G3 --> PF --> P4 --> G4
+        G4 -. flail or fail: regenerate .-> P4
+    end
+
+    G4 --> P5
+
+    subgraph PROSECUTE["PROSECUTE — pooled fresh contexts"]
+        P5["P5 Prosecute<br/>refute-chartered lenses in parallel<br/>stack recall measured by review-calibration"]
+        VF{"verify each finding:<br/>reproduce or kill"}
+        G5{{"GATE: 2 consecutive dry passes +<br/>gate-manifest chain valid"}}
+        P5 --> VF
+        VF -- verified findings --> FIXBACK["fix tickets"] --> P4
+        VF -- dry --> G5
+    end
+
+    G5 --> P6["P6 Integrate<br/>sequential merge, foundation-first<br/>behavior-diff for the human<br/>HUMAN behavioral acceptance"]
+    P6 --> P7["P7 Distill<br/>simplify under green rails<br/>skill-mining + lesson-foundry<br/>skill-rot freshness sweep"]
+    P7 -. "lessons → lints and skills<br/>priors → model-router<br/>questions → P1 templates" .-> P1
+    DIRECT --> P5
 ```
 
 ### P0 — Triage
@@ -987,3 +1035,140 @@ divergence exceeds the gate threshold.
 | Integrator | Cheap + deterministic ops | Never needs more — merges are mechanical or escalated |
 | parallax N | 3 (spec), 5 (edges) | Residual divergence persists at threshold → raise N before escalating to human |
 | Speculation | On, for any edge with a converged (parallax-passed) contract | Contract ambiguity score above threshold → serialize that edge |
+
+---
+
+## Appendix E — The Frontier-Free Doctrine
+
+**Constraint:** the lifecycle must hit its accuracy targets with Opus, Sonnet,
+and Haiku only — no Fable, no Mythos. Not as a degraded mode but as the
+design center. (The constraint is also the common enterprise reality:
+approved-model lists, quota ceilings, procurement lag.)
+
+**Premise:** the gap between a mid model and a frontier model is almost
+entirely a gap in *single-pass judgment* — depth of insight per forward pass,
+coherent horizon length, and knowing-what-it-doesn't-know. The doctrine: at
+every point where the lifecycle appears to need single-pass judgment, buy the
+same outcome with search, verification, decomposition, banking, or
+measurement instead. Five substitutions, one honest loss account.
+
+### E1. The generator–verifier gap is the engine
+
+Recognizing a correct artifact is easier than producing one — and *checking*
+one deterministically is easier still. A model that cannot write the right
+answer in one pass can usually select it from N candidates; a test suite can
+verify it with probability 1. So the quality of output decouples from the
+quality of the generator and couples to the quality of the **verifier** —
+and this lifecycle's verifiers are tests, types, contract checks, and hash
+chains: model-free. Generate wide and cheap; verify deterministically;
+select with a mid model. **You never need a model smarter than the gate it
+must pass** — that is the doctrine in one line.
+
+### E2. Search replaces insight
+
+What a frontier model produces in one pass, a mid model produces as the best
+of N diverse attempts: judge panels with differently-anchored prompts for
+design, consensus-fix agreement for hard bugs, loop-until-dry for review
+breadth. Compute substitutes for capability at a measurable exchange rate —
+and `review-calibration` makes the exchange rate a number: if a 3-pass
+Sonnet prosecution stack shows 0.85 planted-bug recall and a 1-pass
+anything shows 0.6, the stack *is* the more capable reviewer. Measure the
+stack, never the model. Tune N until the stack hits the target; stop
+believing tier labels.
+
+### E3. Decomposition replaces horizon
+
+Mid models hold a shorter coherent horizon before judgment degrades, so the
+unit of work shrinks to fit *comfortably inside the weakest assigned
+model's* useful window — ticket size is tier-indexed, not fixed. The P2
+cold-start gate already enforces the property that makes this work: a
+ticket executable from its own text alone is horizon-free by construction.
+A Haiku that only ever sees 4k tokens of well-railed ticket is not operating
+below Fable; it is operating below its own degradation point, which is the
+only line that matters.
+
+### E4. Banking replaces presence
+
+Frontier-quality judgment, once expressed, can be crystallized into
+artifacts that cost nothing to consume and never get tired: a prosecution
+finding becomes a lint (`lesson-foundry`); a convention becomes a skill; a
+recurring question becomes an interrogation template; a contract becomes
+frozen rails. Rent the big model occasionally — one Opus pass to mint
+structure — then spend Sonnet inside that structure indefinitely, with
+`skill-rot` guarding the bank against staleness. The organization's
+capability migrates from the model tier into the artifact layer, where it
+compounds instead of being re-billed per token. This is also the honest
+answer to "what about when Fable ships?": `model-ratchet` means every
+frontier release re-audits — for free — everything the mid models built,
+and `lesson-foundry` banks whatever it finds. You get frontier quality
+*retroactively* without frontier dependence prospectively.
+
+### E5. Measurement replaces metacognition
+
+The single capability mid models most lack is knowing what they don't know.
+Every tool in this lifecycle that looks like it needs metacognition replaces
+it with sampling plus arithmetic: `parallax` swaps "do you have questions?"
+(introspection) for divergence-of-N-readings (measurement); `consensus-fix`
+swaps "are you sure?" for agreement statistics; `review-calibration` swaps
+"do you trust the reviewer?" for planted-bug recall; `coldstart` swaps "is
+this ticket clear?" for a cheap model's enumerated gaps. None of these need
+a smarter model. They need more samples of the same model and a division
+operation.
+
+### E6. Humans are the frontier tier
+
+The two human gates (P1 spec approval, P6 behavioral acceptance) sit exactly
+where frontier judgment would otherwise be spent: "is this what I meant?"
+and "is this what I meant, running?". The doctrine's reallocation: human
+minutes substitute for frontier-model presence at the two irreplaceable
+points, and the tooling (`behavior-diff`, `gate-manifest attest`,
+parallax's multiple-choice divergences) exists to compress what the human
+must absorb so the minutes stay minutes. A Sonnet fleet with a human at two
+gates outperforms an unsupervised frontier model at exactly the failure
+modes that matter most — intent misreads — because the human *is* the
+ground truth for intent.
+
+### E7. The honest loss account
+
+What you actually give up without Fable/Mythos, and the mitigation:
+
+| Loss | Mitigation |
+|------|-----------|
+| Single-pass architectural elegance — the design insight a frontier model has and a panel synthesis approximates | Judge panel of 3 differently-anchored proposals + premortem + human pick at the P1 gate. Approximation is real but bounded: architecture errors are exactly what the gate's human attends to |
+| Subtle cross-cutting bug intuition — the bug only deep reading catches | Loop-until-dry raises recall asymptotically; `model-ratchet` schedules the deep read for whenever a stronger model *is* available; the bug class that survives both is rare and ships under a behavior-diffed human gate |
+| Latency — N passes are slower than one brilliant pass | Recovered by parallelism (the passes were going to idle otherwise) and by the cache-warm economics of small tickets |
+| Long-horizon refactors that resist decomposition | The genuinely hard residue. Serialize them, give them the best available model, the densest rails, and an in-flight validator — and accept that this 5% of work runs at mid-model quality with maximum supervision |
+
+Net: the lifecycle converts a capability shortfall into a compute-plus-
+process bill, and the gates keep the conversion honest. When the
+constraint lifts, nothing is wasted — every mechanism here amplifies a
+frontier model exactly the way it amplifies a mid one.
+
+---
+
+## Appendix F — Harness Primitive Map
+
+The lifecycle's organs mapped to primitives that exist *today* in modern
+agent harnesses (Claude Code and equivalents). Same admission rule as
+tools: a primitive earns its place by tracing to a flaw defended (F1–F8)
+or a property exploited (E1–E5) — otherwise it's theater, however new.
+
+| Lifecycle organ | Harness primitive | Why this primitive |
+|----------------|-------------------|--------------------|
+| Orchestrator lane (D0) | **Workflow scripts** — deterministic JS with `pipeline()`/`parallel()`/`phase()`, schema-forced agent output, journal-based resume | Control flow is code, judgment is models (D0). Resume-from-journal = cache replay: a failed run re-executes only edited steps. This repo's own toolkit was built as one such workflow — build → prosecute → fix pipelined per tool |
+| Structured handoffs between agents | **Schema-forced structured output** (validated at the tool layer, model retries on mismatch) | Deterministic interfaces between probabilistic parts — Principle 1 applied to agent-to-agent edges, not just phases |
+| Builder cell + in-flight validator (D2 field notes) | **Agent teams**: delegate-mode lead, direct teammate messaging, shared task list | Validator messages corrections *during* construction; lead never writes code. `TeammateIdle` hook = pull-based work-stealing; `TaskCompleted` hook = build gate the implementer cannot skip |
+| Rail freeze (P3, C5) | **PreToolUse hooks** blocking Edit/Write on rail paths (+ branch protection in CI) | F5 routes around instructions; it cannot route around a hook. Enforcement lives at the tool layer, not the prompt layer |
+| Gate evidence (C11) | **Stop / TaskCompleted hooks** appending to gate-manifest | Evidence emitted as a side effect of finishing work, not as a ceremony agents can forget |
+| Preflight (D2 field notes) | **SessionStart hooks** | Environment determinism checked before the first agent spawns, permission prompts front-loaded |
+| Maintenance metabolism (C9, C10, C12) | **Cron / scheduled autonomous loops** | lesson-foundry, skill-rot, and model-ratchet are exactly idle-time work: scheduled, budgeted, no human trigger |
+| Long-running supervision | **Background tasks + monitors; wakeup-paced loops** | Poll external state at cache-window cadence — under ~5 min stays prompt-cache-warm, otherwise commit to long sleeps. Pacing is a token-economics decision, not a politeness one |
+| Isolation ladder (P4) | Same-tree disjoint scopes → **git worktrees** → **sandboxes** | Route by blast radius: disjoint declared scopes need nothing; mutating parallel work needs worktrees; hostile or rm-rf-capable work needs a decommissionable sandbox |
+| Token economics (§6) | **Prompt-cache discipline**: stable system prefixes, atomic tickets, conclusions-not-transcripts between agents, budget-ceilinged loops | The spend is input-context re-reads, not output style (§4). Small stable tickets are cache-shaped by construction |
+| Knowledge layer (P7) | **Skills with progressive disclosure + persistent memory + deferred tool schemas** | Load capability lazily; front-matter-first loading is the same idea as deferred tool schemas — context stays lean until relevance is proven |
+| Fix loops (P5→P4) | **Resumable agents** (continue a named agent with context intact vs. fresh spawn) | Deliberate choice per Principle 3: fixers *continue* (they need the build context), reviewers *never* do (they need its absence) |
+
+Adoption note: primitives churn faster than principles. When a harness
+ships something new, the question is never "is it powerful?" but "which
+row does it improve?" — a primitive that doesn't land in this table yet is
+a primitive waiting for its flaw.

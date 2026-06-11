@@ -1,0 +1,9 @@
+{
+  "name": "@aidlc/hollow-test",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "hollow-test": "./bin/hollow-test.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

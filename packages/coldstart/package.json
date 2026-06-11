@@ -1,0 +1,9 @@
+{
+  "name": "@aidlc/coldstart",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "coldstart": "./bin/coldstart.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

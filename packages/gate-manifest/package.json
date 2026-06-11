@@ -1,0 +1,9 @@
+{
+  "name": "@aidlc/gate-manifest",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "gate-manifest": "./bin/gate-manifest.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}
