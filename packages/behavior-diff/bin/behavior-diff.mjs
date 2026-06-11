@@ -4,7 +4,7 @@
 
 import { readFileSync } from 'node:fs';
 import { parseArgs, pass, gateFail, opError, printJson } from '../../core/index.mjs';
-import { validateConfig, runCapture, writeSnapshot } from '../lib/capture.mjs';
+import { validateConfig, runCapture, writeSnapshot, reachableCount } from '../lib/capture.mjs';
 import { loadSnapshot, compareSnapshots } from '../lib/compare.mjs';
 import { renderReport } from '../lib/report.mjs';
 
@@ -63,13 +63,25 @@ if (verb === 'capture') {
   }
 
   const total = snapshot.routes.length;
-  const errored = snapshot.routes.filter((r) => r.error).length;
-  const ok = total - errored;
+  const ok = reachableCount(snapshot);
+  const errored = total - ok;
 
   if (flags.json) {
     printJson({ out: flags.out, total, ok, errored });
   } else {
     console.log(`captured ${ok}/${total} routes (${errored} error${errored !== 1 ? 's' : ''}) → ${flags.out}`);
+  }
+
+  // Reachability gate: if no route returned a real HTTP response, the target
+  // was unreachable (e.g. server never started). An all-errored snapshot is an
+  // operational failure, not a clean capture — there is nothing meaningful to
+  // diff, and emitting a "green" snapshot would let a dead service slip through
+  // the P6 human gate. The snapshot is still written above for inspection.
+  if (ok === 0) {
+    opError(
+      `0/${total} routes reachable — target appears down (snapshot written to "${flags.out}" for inspection). ` +
+      `Refusing to emit a usable capture: an all-errored snapshot cannot be meaningfully diffed.`
+    );
   }
 
   pass();
@@ -97,16 +109,24 @@ if (verb === 'compare') {
   }
 
   const result = compareSnapshots(before, after);
-  const { identical, changed, onlyInBefore, onlyInAfter } = result;
+  const { identical, changed, unreachable, onlyInBefore, onlyInAfter } = result;
   const totalChanged = changed.length + onlyInBefore.length + onlyInAfter.length;
+  // Routes dead in both snapshots are NOT a clean pass — the human must see
+  // them rather than receive a false all-clear.
+  const totalUnreachable = unreachable.length;
 
   if (flags.json) {
-    printJson({ identical: identical.length, changed: totalChanged, result });
+    printJson({
+      identical: identical.length,
+      changed: totalChanged,
+      unreachable: totalUnreachable,
+      result,
+    });
   } else {
     console.log(renderReport(result));
   }
 
-  if (totalChanged === 0) {
+  if (totalChanged === 0 && totalUnreachable === 0) {
     pass();
   } else {
     gateFail('');

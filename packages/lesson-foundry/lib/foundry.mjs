@@ -1,10 +1,19 @@
 // Core orchestration logic for lesson-foundry — pure/near-pure functions.
 // Reads findings, clusters, routes, and produces emission plans.
 
+import { readFileSync } from 'node:fs';
 import { readEntries } from '../../core/index.mjs';
 import { clusterFindings } from './cluster.mjs';
 import { routeCluster, clusterName } from './route.mjs';
 import { planEmissions } from './emit.mjs';
+
+/**
+ * Marker that uniquely identifies a spec-gap cluster's question inside the
+ * interrogation template. Must stay in sync with buildSpecGapLine in emit.mjs.
+ */
+function specGapMarker(name) {
+  return `cluster: ${name}`;
+}
 
 /**
  * Load findings from the ledger.
@@ -52,26 +61,54 @@ export function buildClusters(findings, minSize, threshold = 0.5) {
 }
 
 /**
- * Check gate condition: does every cluster have a defense file already on disk?
- * Returns array of clusters that are unbanked (no defense file found).
+ * Check gate condition: is every cluster actually defended?
+ *
+ * - lint/skill clusters are banked when their dedicated defense file exists.
+ * - spec-gap clusters are banked ONLY when the interrogation template actually
+ *   contains this cluster's specific question (content check) — not merely
+ *   because the template file exists. Otherwise the first banked spec-gap would
+ *   silently defend every future spec-gap cluster.
+ *
+ * `readFile` is injected for testability; defaults to a real fs read that
+ * returns '' when the file is absent/unreadable.
  */
-export function findUnbankedClusters(clusters, outDir, existsSync) {
+export function findUnbankedClusters(
+  clusters,
+  outDir,
+  existsSync,
+  readFile = defaultReadFile
+) {
+  const templatePath = `${outDir}/interrogation-template.md`;
+  // Read the template once; reuse across spec-gap clusters.
+  let templateContent = null;
+  const getTemplate = () => {
+    if (templateContent === null) {
+      templateContent = existsSync(templatePath) ? readFile(templatePath) : '';
+    }
+    return templateContent;
+  };
+
   return clusters.filter((cluster) => {
     const route = cluster.route;
     const name = cluster.name;
 
-    let defenseFile;
     if (route === 'lint') {
-      defenseFile = `${outDir}/${name}.lint.json`;
-    } else if (route === 'skill') {
-      defenseFile = `${outDir}/${name}.SKILL.md`;
-    } else {
-      // spec-gap: check interrogation-template.md exists
-      defenseFile = `${outDir}/interrogation-template.md`;
+      return !existsSync(`${outDir}/${name}.lint.json`);
     }
-
-    return !existsSync(defenseFile);
+    if (route === 'skill') {
+      return !existsSync(`${outDir}/${name}.SKILL.md`);
+    }
+    // spec-gap: banked only if this cluster's question is present in the template.
+    return !getTemplate().includes(specGapMarker(name));
   });
+}
+
+function defaultReadFile(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 /**

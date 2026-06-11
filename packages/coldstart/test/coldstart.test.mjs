@@ -52,6 +52,9 @@ function runCLIWithMockGate(args, mockGapsJson, { cwd } = {}) {
   return runCLI(args, {
     cwd,
     extraEnv: {
+      // NODE_ENV=test is REQUIRED: the mock gate seam is only honored in tests.
+      // Without it, AIDLC_GATE_MOCK_RESPONSE is ignored (F5 backdoor closed).
+      NODE_ENV: 'test',
       ANTHROPIC_API_KEY: 'mock-key-for-testing',
       AIDLC_GATE_MOCK_RESPONSE: JSON.stringify(mockGapsJson),
     },
@@ -583,5 +586,54 @@ describe('CLI integration — exit code 2 and --json (mock gate)', () => {
     assert.ok(result.stdout.includes('[FAIL]'), 'output should say FAIL');
     assert.ok(result.stdout.includes('ContractSpec'), 'output should include gap what');
     assert.ok(result.stdout.includes('Contract named but not embedded'), 'output should include why_blocking');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F5 regression — the mock gate backdoor must be CLOSED outside NODE_ENV=test
+// A vague ticket with a green AIDLC_GATE_MOCK_RESPONSE and a dummy API key must
+// NOT pass via the mock. The gate must ignore the env var and take the real LLM
+// path (which fails closed without a valid key / network).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F5 regression — mock gate backdoor closed in production', () => {
+  let tmpDir;
+
+  test.before(() => {
+    tmpDir = makeTempDir();
+  });
+
+  test.after(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('vague ticket does NOT get a green mock verdict without NODE_ENV=test', () => {
+    const ticketsPath = writeTickets(tmpDir, [{ id: 'T1', title: 'Vague ticket' }]);
+    // Ambient, agent-controlled env var attempting to force a clean pass.
+    // NODE_ENV is explicitly NOT 'test' here (simulating CI/build env).
+    const result = runCLI(['T1', '--tickets', ticketsPath], {
+      cwd: tmpDir,
+      extraEnv: {
+        NODE_ENV: 'production',
+        ANTHROPIC_API_KEY: 'dummy-key-not-real',
+        AIDLC_GATE_MOCK_RESPONSE: JSON.stringify({ gaps: [] }),
+      },
+    });
+
+    // The mock's green verdict would be exit 0 with no gaps. The backdoor being
+    // closed means we must NOT see that mock pass — the real LLM path is taken
+    // and fails closed (no valid key / no network), so exit code is non-zero.
+    // Robust to network absence: any outcome except the mock's clean exit-0.
+    assert.notEqual(
+      result.status,
+      0,
+      `backdoor must be closed: vague ticket must not pass via mock.\n` +
+        `status: ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
+    );
+    // And it must not have produced the mock's clean [PASS] report.
+    assert.ok(
+      !(result.status === 0 && result.stdout.includes('[PASS]')),
+      `mock backdoor produced a green verdict outside test env.\nstdout: ${result.stdout}`
+    );
   });
 });

@@ -15,7 +15,10 @@ import { fileURLToPath } from 'node:url';
 // Lib under test
 import { parseCommitFiles, filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mjs';
 import { isPlantCaught, extractLineNumbers, countFalsePositives, scoreReview } from '../lib/scorer.mjs';
-import { groupByFile, applyAllPlantsToContent } from '../lib/runner.mjs';
+import {
+  groupByFile, applyAllPlantsToContent, runWithPlants, tokenizeCommand, substituteToken,
+} from '../lib/runner.mjs';
+import { existsSync } from 'node:fs';
 import { buildJsonReport } from '../lib/report.mjs';
 import { mutate } from '../../core/index.mjs';
 
@@ -412,6 +415,73 @@ describe('groupByFile', () => {
 
   it('returns empty map for empty input', () => {
     assert.equal(groupByFile([]).size, 0);
+  });
+});
+
+// ── tokenizeCommand / substituteToken ─────────────────────────────────────────
+
+describe('tokenizeCommand / substituteToken', () => {
+  it('splits on whitespace and honors quotes', () => {
+    assert.deepEqual(tokenizeCommand('node s.mjs "a b" {base}'), ['node', 's.mjs', 'a b', '{base}']);
+  });
+
+  it('substitutes {base} as a literal token (never re-tokenized)', () => {
+    assert.deepEqual(
+      substituteToken(['cmd', '{base}'], '{base}', '$(touch X)'),
+      ['cmd', '$(touch X)'],
+    );
+  });
+});
+
+// ── SECURITY: command injection via malicious base ref (regression) ───────────
+
+describe('runWithPlants — command injection regression', () => {
+  it('does NOT execute a shell payload embedded in the base ref', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-injection-'));
+    try {
+      const sentinel = join(dir, 'PWNED');
+      // Malicious ref. If ever handed to /bin/sh, $(touch PWNED) runs.
+      const maliciousRef = `$(touch ${sentinel})`;
+
+      // Empty plants → no files mutated; the run only exercises command
+      // construction + spawn. Deterministic, offline echo command.
+      const result = runWithPlants(
+        [],
+        `node -e "process.stdout.write(process.argv[1])" {base}`,
+        maliciousRef,
+        dir,
+        30000,
+      );
+
+      assert.equal(
+        existsSync(sentinel), false,
+        'INJECTION: shell executed $(touch PWNED) from the base ref',
+      );
+      // The untrusted ref arrived verbatim as a single literal argument.
+      assert.equal(result.stdout, maliciousRef);
+      assert.equal(result.exitCode, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does NOT execute a "; touch" payload embedded in the base ref', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-injection-'));
+    try {
+      const sentinel = join(dir, 'PWNED');
+      const maliciousRef = `HEAD; touch ${sentinel}`;
+      const result = runWithPlants(
+        [],
+        `node -e "process.stdout.write(process.argv[1])" {base}`,
+        maliciousRef,
+        dir,
+        30000,
+      );
+      assert.equal(existsSync(sentinel), false, 'INJECTION: "; touch" executed');
+      assert.equal(result.stdout, maliciousRef);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -194,18 +194,48 @@ test('findUnbankedClusters: banked clusters are excluded', () => {
   }
 });
 
-test('findUnbankedClusters: spec-gap cluster is banked if interrogation-template.md exists', () => {
+test('findUnbankedClusters: spec-gap cluster is banked only when its question is in the template', () => {
   const dir = makeTempDir();
   try {
     const outDir = join(dir, 'lessons');
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'interrogation-template.md'), '# template', 'utf8');
+    // Template contains this cluster's specific question marker → banked.
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      '# template\n- [ ] **[unknown]** unclear policy *(recurring in 2 findings, cluster: gap-cluster)*\n',
+      'utf8'
+    );
 
     const clusters = [
       { name: 'gap-cluster', route: 'spec-gap', size: 2, indices: [0, 1] },
     ];
     const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
     assert.strictEqual(unbanked.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// F2 regression: a bare template file must NOT silently defend a brand-new
+// spec-gap cluster whose question isn't actually written into it.
+test('findUnbankedClusters: spec-gap cluster is UNBANKED when template exists but lacks its question', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    // Template exists but only defends a DIFFERENT cluster.
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      '# template\n- [ ] **[unknown]** old issue *(recurring in 3 findings, cluster: some-other-gap)*\n',
+      'utf8'
+    );
+
+    const clusters = [
+      { name: 'new-gap', route: 'spec-gap', size: 2, indices: [0, 1] },
+    ];
+    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+    assert.strictEqual(unbanked.length, 1);
+    assert.strictEqual(unbanked[0].name, 'new-gap');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

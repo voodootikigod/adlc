@@ -61,7 +61,8 @@ if (verb === 'record') {
   if (flags.json) {
     printJson(entry);
   } else {
-    console.log(`recorded: seq=${entry.seq} gate=${entry.gate} ts=${entry.ts}`);
+    const signed = typeof entry.sig === 'string' ? ' (signed)' : ' (unsigned)';
+    console.log(`recorded: seq=${entry.seq} gate=${entry.gate} ts=${entry.ts}${signed}`);
   }
 
   pass();

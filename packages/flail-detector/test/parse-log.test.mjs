@@ -77,3 +77,43 @@ test('parseLog: JSONL with nested content key', () => {
   const { lines } = parseLog(content);
   assert.ok(lines.includes('Error: failed to connect'));
 });
+
+test('parseLog: real Claude Code transcript surfaces tool_use input.file_path', () => {
+  // Realistic event: assistant message whose content array carries a tool_use
+  // block; the written file lives at input.file_path (not in any prose string).
+  const entries = [
+    { type: 'user', message: { role: 'user', content: 'Add a feature.' } },
+    {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Writing the file now.' },
+          {
+            type: 'tool_use',
+            name: 'Write',
+            input: { file_path: '/etc/cron.d/backdoor', content: '* * * * * root sh' },
+          },
+        ],
+      },
+    },
+  ];
+  const content = entries.map((e) => JSON.stringify(e)).join('\n');
+  const { lines } = parseLog(content);
+  // The structured file target must be surfaced as a path-bearing line.
+  assert.ok(
+    lines.some((l) => l === 'Writing /etc/cron.d/backdoor'),
+    `expected a synthetic write line for the tool_use file_path; got: ${JSON.stringify(lines)}`,
+  );
+});
+
+test('parseLog: tool_input / parameters file_path variants are surfaced', () => {
+  const entries = [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', tool_input: { file_path: 'src/a.mjs' } }] } },
+    { type: 'tool_use', name: 'MultiEdit', parameters: { file_path: 'src/b.mjs' } },
+  ];
+  const content = entries.map((e) => JSON.stringify(e)).join('\n');
+  const { lines } = parseLog(content);
+  assert.ok(lines.includes('Writing src/a.mjs'));
+  assert.ok(lines.includes('Writing src/b.mjs'));
+});

@@ -3,11 +3,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { existsSync, rmSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   isFindingLine,
   parseFindingLine,
   runReviewCmd,
   parseFindingsFromOutput,
+  tokenizeCommand,
+  substituteToken,
 } from '../lib/run-review.mjs';
 
 // ---------------------------------------------------------------------------
@@ -123,5 +129,96 @@ describe('runReviewCmd', () => {
   it('reports non-zero exit code', () => {
     const result = runReviewCmd(`node -e "process.exit(1)"`, 'x.mjs');
     assert.equal(result.exitCode, 1);
+  });
+
+  it('passes a filename with spaces as ONE literal arg', () => {
+    // With shell:false tokenization, the substituted value is a single argv
+    // element even though it contains a space.
+    const result = runReviewCmd(
+      `node -e "process.stdout.write(process.argv[1])" {file}`,
+      'src/has space.mjs',
+    );
+    assert.equal(result.stdout, 'src/has space.mjs');
+    assert.equal(result.exitCode, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tokenizeCommand / substituteToken
+// ---------------------------------------------------------------------------
+
+describe('tokenizeCommand', () => {
+  it('splits on whitespace', () => {
+    assert.deepEqual(tokenizeCommand('node script.mjs {file}'), ['node', 'script.mjs', '{file}']);
+  });
+
+  it('keeps quoted segments as one token', () => {
+    assert.deepEqual(tokenizeCommand('node -e "a b c" {file}'), ['node', '-e', 'a b c', '{file}']);
+  });
+
+  it('throws on an unterminated quote', () => {
+    assert.throws(() => tokenizeCommand('node -e "oops'), /Unterminated quote/);
+  });
+});
+
+describe('substituteToken', () => {
+  it('substitutes a bare placeholder token as a literal', () => {
+    assert.deepEqual(substituteToken(['cmd', '{file}'], '{file}', '$(touch X)'), ['cmd', '$(touch X)']);
+  });
+
+  it('substitutes inside a flag token without splitting', () => {
+    assert.deepEqual(
+      substituteToken(['cmd', '--file={file}'], '{file}', 'a b.mjs'),
+      ['cmd', '--file=a b.mjs'],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SECURITY: command injection via malicious filename (regression)
+// ---------------------------------------------------------------------------
+
+describe('runReviewCmd — command injection regression', () => {
+  it('does NOT execute a shell payload embedded in the filename', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mr-injection-'));
+    try {
+      const sentinel = join(dir, 'PWNED');
+      // A filesystem-derived filename an attacker could commit. If the value is
+      // ever handed to /bin/sh, $(touch PWNED) executes and creates the file.
+      const maliciousFile = `$(touch ${sentinel}).mjs`;
+
+      // Deterministic, offline review cmd: echo the arg back. The payload must
+      // arrive as a LITERAL string, and PWNED must NOT exist afterwards.
+      const result = runReviewCmd(
+        `node -e "process.stdout.write(process.argv[1])" {file}`,
+        maliciousFile,
+      );
+
+      assert.equal(
+        existsSync(sentinel), false,
+        'INJECTION: shell executed $(touch PWNED) from the filename',
+      );
+      // The untrusted value arrived verbatim as a single literal argument.
+      assert.equal(result.stdout, maliciousFile);
+      assert.equal(result.exitCode, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does NOT execute a "; touch" payload embedded in the filename', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mr-injection-'));
+    try {
+      const sentinel = join(dir, 'PWNED');
+      const maliciousFile = `x.mjs; touch ${sentinel}`;
+      const result = runReviewCmd(
+        `node -e "process.stdout.write(process.argv[1])" {file}`,
+        maliciousFile,
+      );
+      assert.equal(existsSync(sentinel), false, 'INJECTION: "; touch" executed');
+      assert.equal(result.stdout, maliciousFile);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

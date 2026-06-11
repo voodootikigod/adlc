@@ -1,6 +1,10 @@
 // Tests for file emission shapes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { buildLintDescriptor, buildCheckScript, buildSkillStub, buildSpecGapLine, planEmissions } from '../lib/emit.mjs';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +48,62 @@ test('buildCheckScript: script name matches cluster name', () => {
   const findings = [{ desc: 'test finding', category: 'security' }];
   const { path } = buildCheckScript('my-cluster', findings);
   assert.strictEqual(path, 'check-my-cluster.mjs');
+});
+
+// F1 regression: the generated gate must NOT trip on itself. The script file
+// literally contains the pattern string (PATTERN constant + header comment), so
+// a naive grep over the repo would always find a match and fail forever.
+test('buildCheckScript: generated gate exits 0 when no REAL occurrences exist (does not trip on itself)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-gate-self-'));
+  try {
+    // A repo with NO genuine occurrence of the pattern in source.
+    const lessonsDir = join(dir, '.aidlc', 'lessons');
+    mkdirSync(lessonsDir, { recursive: true });
+    writeFileSync(join(dir, 'src.mjs'), 'export const ok = 1;\n', 'utf8');
+    // node_modules copy of the pattern must be ignored too.
+    const nm = join(dir, 'node_modules', 'pkg');
+    mkdirSync(nm, { recursive: true });
+    writeFileSync(join(nm, 'index.js'), 'const PATTERN = "TODO";\n', 'utf8');
+
+    const findings = [
+      { desc: 'Found "TODO" comment in production code', category: 'security' },
+      { desc: 'Another "TODO" left in production', category: 'security' },
+    ];
+    const { path, content } = buildCheckScript('todo-in-prod', findings);
+    // The script itself contains the pattern — that's the trap.
+    assert(content.includes('TODO'), 'precondition: generated script contains the pattern');
+    const scriptPath = join(lessonsDir, path);
+    writeFileSync(scriptPath, content, 'utf8');
+
+    const res = spawnSync(process.execPath, [scriptPath], { cwd: dir, encoding: 'utf8', timeout: 15000 });
+    assert.strictEqual(res.status, 0, `gate must PASS (exit 0) on a clean repo; got ${res.status}: ${res.stderr}${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildCheckScript: generated gate exits 2 when a GENUINE occurrence exists in source', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-gate-real-'));
+  try {
+    const lessonsDir = join(dir, '.aidlc', 'lessons');
+    mkdirSync(lessonsDir, { recursive: true });
+    // A real source file with the offending pattern.
+    writeFileSync(join(dir, 'app.mjs'), 'const x = 1; // TODO fix me later\n', 'utf8');
+
+    const findings = [
+      { desc: 'Found "TODO" comment in production code', category: 'security' },
+      { desc: 'Another "TODO" left in production', category: 'security' },
+    ];
+    const { path, content } = buildCheckScript('todo-in-prod', findings);
+    const scriptPath = join(lessonsDir, path);
+    writeFileSync(scriptPath, content, 'utf8');
+
+    const res = spawnSync(process.execPath, [scriptPath], { cwd: dir, encoding: 'utf8', timeout: 15000 });
+    assert.strictEqual(res.status, 2, `gate must FAIL (exit 2) on a genuine occurrence; got ${res.status}: ${res.stdout}`);
+    assert(res.stderr.includes('app.mjs'), `failure should point at the real file: ${res.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

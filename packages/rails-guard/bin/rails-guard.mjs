@@ -14,6 +14,7 @@ import {
   hashFiles,
   git,
   globMatch,
+  resolveBase,
   AIDLC_DIR,
 } from '../../core/index.mjs';
 
@@ -22,7 +23,7 @@ import { formatViolations, buildResult } from '../lib/output.mjs';
 
 const { values } = parseArgs({
   options: {
-    base:    { type: 'string',  default: 'HEAD' },
+    base:    { type: 'string'  },
     ticket:  { type: 'string'  },
     tickets: { type: 'string'  },
     rails:   { type: 'string',  multiple: true },
@@ -37,7 +38,11 @@ if (values.help) {
 
 Rail-freeze enforcement + suppression-marker gate (ADLC C5).
 
-  --base <ref>       Git ref to diff against (default: HEAD)
+  --base <ref>       Git ref to diff against. When omitted, the freeze baseline is
+                     resolved to the merge-base of HEAD with trunk (main/master/
+                     origin/main/origin/master). If no trunk ref is found, the
+                     gate fails closed — pass --base explicitly. NEVER defaults to
+                     HEAD, which would hide already-committed rail edits.
   --ticket <id>      Ticket ID to load rails and allow-suppression declarations from
   --tickets <path>   Path to tickets.json (default: .aidlc/tickets.json)
   --rails <glob>     One or more glob patterns declaring frozen rail paths
@@ -83,8 +88,23 @@ if (cliRails.length === 0 && ticket && (ticket.rails ?? []).length === 0) {
   opError(`ticket ${ticket.id} has no rails declared and no --rails flag supplied`);
 }
 
+// --- resolve freeze baseline ---
+// Honor an explicit --base. Otherwise resolve the merge-base with trunk; NEVER
+// fall back to 'HEAD' — `git diff HEAD` only shows working-tree changes, so a
+// builder who COMMITS a rail edit would leave a clean tree and forge a pass.
+let base = values.base;
+if (base === undefined) {
+  base = resolveBase();
+  if (base === null) {
+    opError(
+      'could not resolve a freeze baseline: no trunk ref (main/master/origin/main/' +
+      'origin/master) found. Pass --base <ref> explicitly. Refusing to default to ' +
+      'HEAD, which would hide already-committed rail edits.'
+    );
+  }
+}
+
 // --- git work ---
-const base = values.base ?? 'HEAD';
 let diff;
 let files;
 try {

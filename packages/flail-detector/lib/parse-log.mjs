@@ -28,6 +28,72 @@ function extractStrings(obj) {
 }
 
 /**
+ * Recursively extract tool-use file targets from a parsed JSONL event object.
+ *
+ * Real Claude Code transcripts carry the written/edited file at a nested
+ * `input.file_path` inside a `tool_use` block (Write/Edit/MultiEdit), which
+ * typically lives in an assistant message's `content` array. The plain
+ * `extractStrings` pass never surfaces these (it only pulls content/text/
+ * message string values), so the scope-violation and edit-churn signals —
+ * which key off file paths — could never fire on the one format that exists.
+ *
+ * This walks the structure and collects `file_path` values from the known
+ * tool-input container keys: `input`, `tool_input`, `parameters`. It also
+ * collects any bare nested `file_path` string as a defensive fallback.
+ *
+ * Returns an array of file-path strings (one entry per occurrence, so a path
+ * edited twice yields two entries — preserving churn counts).
+ */
+function extractFileTargets(obj) {
+  const TOOL_INPUT_KEYS = ['input', 'tool_input', 'parameters'];
+  const results = [];
+
+  const pushFromContainer = (container) => {
+    if (!container || typeof container !== 'object') return;
+    const fp = container.file_path;
+    if (typeof fp === 'string' && fp.length > 0) {
+      results.push(fp);
+    }
+    // MultiEdit-style: an `edits`/`files` array each carrying a file_path.
+    for (const key of ['edits', 'files']) {
+      if (Array.isArray(container[key])) {
+        for (const item of container[key]) {
+          if (item && typeof item === 'object' && typeof item.file_path === 'string') {
+            results.push(item.file_path);
+          }
+        }
+      }
+    }
+  };
+
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+
+    // Known tool-input containers: pull file_path directly.
+    for (const key of TOOL_INPUT_KEYS) {
+      if (node[key] && typeof node[key] === 'object') {
+        pushFromContainer(node[key]);
+      }
+    }
+
+    // Recurse into all object/array children to find nested tool_use blocks.
+    for (const key of Object.keys(node)) {
+      const val = node[key];
+      if (val && typeof val === 'object') {
+        walk(val);
+      }
+    }
+  };
+
+  walk(obj);
+  return results;
+}
+
+/**
  * Try to parse a single line as JSON.
  * Returns the parsed object, or null if parsing fails.
  */
@@ -66,6 +132,15 @@ export function parseLog(content) {
     for (let i = 0; i < nonEmpty.length; i++) {
       const obj = parsed[i];
       if (obj !== null) {
+        // Structured tool-use file targets (real Claude Code transcripts):
+        // emit a synthetic "Writing <path>" line so the existing extractPath
+        // patterns — and therefore the scope-violation and edit-churn signals —
+        // recognize the file without any change to the signal detectors.
+        for (const fp of extractFileTargets(obj)) {
+          lines.push(`Writing ${fp}`);
+        }
+        // Prose / "file_path" substring heuristics (legacy fixtures): keep as
+        // a fallback so older log formats still work.
         lines.push(...extractStrings(obj));
       } else {
         lines.push(nonEmpty[i]);

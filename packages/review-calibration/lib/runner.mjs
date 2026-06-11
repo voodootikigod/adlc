@@ -6,6 +6,65 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 /**
+ * Tokenize a command template into argv elements, honoring single and double
+ * quotes. Quotes group whitespace and are stripped from the resulting token.
+ * This is a shell-free tokenizer — it does NOT interpret `$`, backticks,
+ * pipes, redirects, or any other shell metacharacter.
+ *
+ * @param {string} template
+ * @returns {string[]} argv tokens
+ */
+export function tokenizeCommand(template) {
+  const tokens = [];
+  let current = '';
+  let inToken = false;
+  let quote = null;
+
+  for (let i = 0; i < template.length; i++) {
+    const ch = template[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      inToken = true;
+      continue;
+    }
+    if (ch === ' ' || ch === '\t' || ch === '\n') {
+      if (inToken) {
+        tokens.push(current);
+        current = '';
+        inToken = false;
+      }
+      continue;
+    }
+    current += ch;
+    inToken = true;
+  }
+  if (quote) {
+    throw new Error(`Unterminated quote in command template: ${template}`);
+  }
+  if (inToken) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * Substitute a placeholder into a tokenized command. The (untrusted) value is
+ * placed into argv tokens as a LITERAL and never re-tokenized, so a ref
+ * containing shell metacharacters stays a single discrete argument.
+ *
+ * @param {string[]} tokens
+ * @param {string} placeholder  e.g. '{base}'
+ * @param {string} value        untrusted substitution value
+ * @returns {string[]}
+ */
+export function substituteToken(tokens, placeholder, value) {
+  return tokens.map((tok) => tok.split(placeholder).join(value));
+}
+
+/**
  * Apply a set of plants (mutants) to the working tree simultaneously,
  * run the review command, then restore all files.
  *
@@ -42,12 +101,18 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs) {
       writeFileSync(absPath, mutated, 'utf8');
     }
 
-    // Build the command with {base} substituted.
-    const cmd = reviewCmd.replace(/\{base\}/g, baseRef);
+    // Tokenize the trusted template, THEN substitute the base ref as a
+    // discrete argv element. Run with shell:false so the ref is never re-parsed
+    // by /bin/sh — closing the command-injection class present when the
+    // template was interpolated and run with shell:true.
+    const argv = substituteToken(tokenizeCommand(reviewCmd), '{base}', baseRef);
+    if (argv.length === 0) {
+      return { stdout: '', stderr: 'empty review command', exitCode: 1, timedOut: false };
+    }
 
     // Run the review command.
-    const result = spawnSync(cmd, {
-      shell: true,
+    const result = spawnSync(argv[0], argv.slice(1), {
+      shell: false,
       cwd,
       timeout: timeoutMs,
       encoding: 'utf8',

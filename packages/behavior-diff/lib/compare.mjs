@@ -28,7 +28,11 @@ export function loadSnapshot(filePath) {
 
 /**
  * Compare two snapshots.
- * Returns { identical, changed, onlyInBefore, onlyInAfter, routeResults }
+ * Returns { identical, changed, unreachable, onlyInBefore, onlyInAfter }.
+ *
+ * `unreachable` holds routes that errored on BOTH sides (dead in before and
+ * after). These are surfaced separately so an all-error before/after pair can
+ * never be reported as a clean "identical" pass through the P6 human gate.
  */
 export function compareSnapshots(before, after) {
   const beforeMap = new Map();
@@ -44,6 +48,7 @@ export function compareSnapshots(before, after) {
   const allKeys = new Set([...beforeMap.keys(), ...afterMap.keys()]);
   const identical = [];
   const changed = [];
+  const unreachable = [];
   const onlyInBefore = [];
   const onlyInAfter = [];
 
@@ -59,11 +64,13 @@ export function compareSnapshots(before, after) {
       const diff = diffRoute(b, a);
       if (diff === null) {
         identical.push(key);
+      } else if (diff.unreachable) {
+        unreachable.push({ route: diff.route, error: diff.error });
       } else {
         changed.push(diff);
       }
     }
   }
 
-  return { identical, changed, onlyInBefore, onlyInAfter };
+  return { identical, changed, unreachable, onlyInBefore, onlyInAfter };
 }

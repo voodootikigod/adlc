@@ -337,6 +337,107 @@ describe('CLI: dirty tree rejection', () => {
   });
 });
 
+// ── red baseline rejection (the exploit) ──────────────────────────────────────
+// If the baseline (unmutated) suite is red, the runner marks EVERY mutant
+// "killed" (test exits non-zero regardless of the mutation) → vacuous pass.
+// The gate must run the unmutated suite once first and refuse if it isn't green.
+
+describe('CLI: red baseline rejection', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-redbase-'));
+    // A normal strong repo gives us a real diff with mutable targets.
+    createStrongTestRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (baseline not green), NOT 0, when --test-cmd is always-failing', () => {
+    // The exploit: a test command that always exits non-zero. Without a green
+    // baseline check, the runner sees every mutant as "killed" and exits 0
+    // ("All mutants killed"). The fix must catch this and exit 1.
+    const result = runCli(
+      ['--test-cmd', 'node -e "process.exit(1)"', '--base', 'HEAD~1', '--max', '10'],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `Expected exit 1 (red baseline refused), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      result.stderr.includes('baseline suite is not green'),
+      `Expected 'baseline suite is not green' in stderr, got: ${result.stderr}`
+    );
+  });
+
+  it('does not falsely report "All mutants killed" on a red baseline', () => {
+    const result = runCli(
+      ['--test-cmd', 'false', '--base', 'HEAD~1', '--max', '10'],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `Expected exit 1, got ${result.status}\nstderr: ${result.stderr}`);
+    assert.ok(
+      !result.stdout.includes('All mutants killed'),
+      `Gate vacuously passed on a red baseline: ${result.stdout}`
+    );
+  });
+});
+
+// ── default-base fail-closed ───────────────────────────────────────────────────
+// With no --base and no main/master trunk to resolve a merge-base against,
+// the old default ('HEAD') diffed HEAD vs HEAD = empty = vacuous pass. The fix
+// resolves a trunk merge-base and fails closed (exit 1) when none exists.
+
+describe('CLI: default base fails closed', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-nobase-'));
+    initRepo(dir);
+    // Rename the only branch off any trunk candidate so resolveBase() → null.
+    git(['branch', '-m', 'main', 'feature-only'], dir);
+    mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'test'));
+    writeFileSync(join(dir, 'src', 'math.mjs'), [
+      'export function add(a, b) {',
+      '  return a + b;',
+      '}',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'test', 'math.test.mjs'), [
+      "import { describe, it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { add } from '../src/math.mjs';",
+      "describe('add', () => {",
+      "  it('sums', () => { assert.strictEqual(add(2, 3), 5); });",
+      '});',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'init');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 when no --base and no trunk to resolve a base from', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs'],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `Expected exit 1 (no resolvable base), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      result.stderr.includes('could not resolve a base ref'),
+      `Expected 'could not resolve a base ref' in stderr, got: ${result.stderr}`
+    );
+  });
+});
+
 // ── no-args / help ───────────────────────────────────────────────────────────
 
 describe('CLI: no-args and --help', () => {

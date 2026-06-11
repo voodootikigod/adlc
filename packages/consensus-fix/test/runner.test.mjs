@@ -291,3 +291,138 @@ test('runConsensusFix all-divergent flag set correctly', async () => {
     cleanup(dir);
   }
 });
+
+// ─── rails (regression gate) ──────────────────────────────────────────────────
+
+test('runConsensusFix: candidate passing test-cmd but failing rails is NOT a survivor', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+
+    // The repro gate (testCmd) passes whenever the file is no longer 'original'.
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+    // The rails gate (railsCmd) passes ONLY when the file contains 'good fix'.
+    // A candidate that writes anything else games the repro but reddens rails.
+    const railsCmd = `test "$(cat '${f}')" = "good fix"`;
+
+    let call = 0;
+    const completeFn = async () => {
+      call++;
+      // Candidate 1: gaming fix — passes repro, fails rails.
+      if (call === 1) {
+        return JSON.stringify({ changes: [{ file: f, content: 'gaming fix' }] });
+      }
+      // Candidates 2 and 3: honest fix — passes both gates.
+      return JSON.stringify({ changes: [{ file: f, content: 'good fix' }] });
+    };
+
+    const result = await runConsensusFix({
+      testCmd,
+      railsCmd,
+      files: [f],
+      n: 3,
+      tier: 'mid',
+      completeFn,
+    });
+
+    assert.equal(result.railsChecked, true);
+    // Only the two honest candidates survive; the gaming one is rejected.
+    assert.equal(result.survivors.length, 2);
+    assert.ok(result.survivors.every((s) => s.index !== 0));
+
+    // The gaming candidate passed the repro but failed the rails — it lands in
+    // `failed`, not `survivors`.
+    const gaming = result.failed.find((r) => r.index === 0);
+    assert.ok(gaming, 'gaming candidate should be in failed');
+    assert.equal(gaming.testPassed, true);
+    assert.equal(gaming.railsPassed, false);
+    assert.equal(gaming.passed, false);
+
+    // The winner comes from the honest group (indices 1 or 2), never index 0.
+    assert.ok(result.selectionResult);
+    assert.notEqual(result.selectionResult.winner.index, 0);
+
+    assert.equal(readFileSync(f, 'utf8'), 'original');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix: competing candidate that passes both gates wins over a smaller-diff gaming fix', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+    const railsCmd = `grep -q RAILS_OK '${f}'`;
+
+    let call = 0;
+    const fn = async () => {
+      call++;
+      // Candidate 1: tiny diff that games the repro but lacks the rails token.
+      if (call === 1) {
+        return JSON.stringify({ changes: [{ file: f, content: 'x' }] });
+      }
+      // Candidate 2: larger diff that satisfies the rails gate.
+      return JSON.stringify({ changes: [{ file: f, content: 'RAILS_OK fix line one' }] });
+    };
+
+    const result = await runConsensusFix({
+      testCmd,
+      railsCmd,
+      files: [f],
+      n: 2,
+      tier: 'mid',
+      completeFn: fn,
+    });
+
+    // Only the rails-passing candidate survives — even though the gaming fix
+    // has the smaller diff, the smallest-diff tiebreaker never sees it.
+    assert.equal(result.survivors.length, 1);
+    assert.equal(result.survivors[0].index, 1);
+    assert.equal(result.selectionResult.winner.index, 1);
+
+    assert.equal(readFileSync(f, 'utf8'), 'original');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix: without --rails, emits a warning and survivors are repro-only', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+
+    const messages = [];
+    const result = await runConsensusFix({
+      testCmd,
+      // no railsCmd
+      files: [f],
+      n: 1,
+      tier: 'mid',
+      completeFn: async () =>
+        JSON.stringify({ changes: [{ file: f, content: 'any fix' }] }),
+      onProgress: (m) => messages.push(m),
+    });
+
+    assert.equal(result.railsChecked, false);
+    // A warning about the missing rails gate is surfaced (no silent caps).
+    assert.ok(
+      messages.some((m) => /WARNING/.test(m) && /--rails/.test(m)),
+      'expected a WARNING mentioning --rails'
+    );
+    // The candidate still survives on the repro gate alone.
+    assert.equal(result.survivors.length, 1);
+    assert.equal(result.survivors[0].railsPassed, true);
+    assert.equal(result.survivors[0].railsChecked, false);
+
+    assert.equal(readFileSync(f, 'utf8'), 'original');
+  } finally {
+    cleanup(dir);
+  }
+});

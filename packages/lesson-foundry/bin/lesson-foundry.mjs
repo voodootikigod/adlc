@@ -2,7 +2,7 @@
 // lesson-foundry — ADLC C9, the compounding closer.
 // Converts prosecution findings into permanent defenses.
 
-import { existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   parseArgs,
@@ -126,13 +126,23 @@ if (flags.write) {
       const fullPath = file.path;
       try {
         if (file.append && existsSync(fullPath)) {
-          // Append only the questions, not the header
+          // Append only NEW questions, not the header, and never re-append a
+          // question already present (dedup so N runs ≠ N copies).
+          const existing = readFileSync(fullPath, 'utf8');
+          const questionMarker = (line) => {
+            const m = line.match(/cluster: ([^)]+)\)/);
+            return m ? `cluster: ${m[1]}` : line.trim();
+          };
           const newLines = file.content
             .split('\n')
             .filter((l) => l.startsWith('- [ ]'))
-            .join('\n');
-          appendFileSync(fullPath, '\n' + newLines + '\n', 'utf8');
-          if (!flags.json) console.log(`  appended: ${fullPath}`);
+            .filter((l) => !existing.includes(questionMarker(l)));
+          if (newLines.length > 0) {
+            appendFileSync(fullPath, '\n' + newLines.join('\n') + '\n', 'utf8');
+            if (!flags.json) console.log(`  appended: ${fullPath}`);
+          } else if (!flags.json) {
+            console.log(`  up-to-date: ${fullPath}`);
+          }
         } else {
           writeFileSync(fullPath, file.content, 'utf8');
           if (!flags.json) console.log(`  wrote: ${fullPath}`);

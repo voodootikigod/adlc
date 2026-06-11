@@ -119,6 +119,16 @@ export async function runCapture(config, timeoutMs = DEFAULT_TIMEOUT_MS) {
 }
 
 /**
+ * Count how many routes in a snapshot returned a real HTTP response
+ * (i.e. were reachable — no transport/timeout error recorded).
+ * A route is "reachable" iff it has no `.error` field.
+ */
+export function reachableCount(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.routes)) return 0;
+  return snapshot.routes.filter((r) => !r.error).length;
+}
+
+/**
  * Write a capture snapshot to a file.
  */
 export function writeSnapshot(snapshot, outPath) {

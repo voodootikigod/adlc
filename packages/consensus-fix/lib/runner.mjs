@@ -59,6 +59,12 @@ export function validateCandidate(parsed, allowedPaths) {
  * @param {number} opts.n              — fan width
  * @param {string} opts.tier           — 'cheap' | 'mid' | 'frontier'
  * @param {Function} opts.completeFn   — async (prompt) => string (injectable for testing)
+ * @param {string} [opts.railsCmd]     — full frozen rail suite; regression gate.
+ *                                       A candidate survives only if BOTH testCmd
+ *                                       and railsCmd pass. If omitted, candidates
+ *                                       are NOT checked against the rails (a
+ *                                       warning is surfaced via onProgress and
+ *                                       the returned railsChecked=false flag).
  * @param {Function} [opts.onProgress] — optional callback for progress messages
  * @returns {Promise<RunResult>}
  */
@@ -68,8 +74,17 @@ export async function runConsensusFix({
   n,
   tier,
   completeFn,
+  railsCmd,
   onProgress = () => {},
 }) {
+  const railsChecked = Boolean(railsCmd);
+  if (!railsChecked) {
+    onProgress(
+      'WARNING: no --rails command supplied — candidates are NOT checked against ' +
+        'the full rails. A fix that reddens other tests/types can still survive. ' +
+        'Pass --rails "<full suite>" to close this regression gate.'
+    );
+  }
   // 1. Run test once — must fail.
   onProgress('Running test to confirm failure...');
   const initialRun = runCommand(testCmd);
@@ -134,19 +149,39 @@ export async function runConsensusFix({
 
     const { changes } = validation;
 
-    // Apply changes, run test, restore.
-    let passed = false;
+    // Apply changes, run the repro gate (testCmd) and — if supplied — the
+    // regression gate (railsCmd) against the SAME applied changes, then restore.
+    //
+    // C7: a candidate "survives" only when BOTH gates pass. A fix that makes
+    // the repro pass by deleting an assertion, weakening a sibling test, or
+    // breaking other tests reddens the rails and is REJECTED, not ranked.
+    let testPassed = false;
+    let railsPassed = false;
     let testRunOutput = '';
+    let railsRunOutput = '';
     try {
       applyChanges(changes, snapshot);
       const testRun = runCommand(testCmd);
-      passed = testRun.exitCode === 0;
+      testPassed = testRun.exitCode === 0;
       testRunOutput = testRun.output;
+
+      if (!railsChecked) {
+        // No rails gate configured — do not block on regressions, but the
+        // survivor is only as trustworthy as the repro gate.
+        railsPassed = true;
+      } else if (testPassed) {
+        // Only spend the rails run when the repro already passed; a candidate
+        // that fails the repro can never survive regardless of the rails.
+        const railsRun = runCommand(railsCmd);
+        railsPassed = railsRun.exitCode === 0;
+        railsRunOutput = railsRun.output;
+      }
     } finally {
       restoreSnapshot(snapshot);
     }
 
     const changedLines = totalChangedLines(changes, snapshot);
+    const passed = testPassed && railsPassed;
 
     results.push({
       index: i,
@@ -154,15 +189,25 @@ export async function runConsensusFix({
       changes,
       changedLines,
       passed,
+      testPassed,
+      railsPassed,
+      railsChecked,
       testRunOutput,
+      railsRunOutput,
     });
 
-    onProgress(
-      `  Candidate ${i + 1}: ${passed ? 'PASS' : 'FAIL'} | ${changedLines} changed line(s)`
-    );
+    let label;
+    if (passed) {
+      label = railsChecked ? 'PASS (repro+rails)' : 'PASS (repro; rails unchecked)';
+    } else if (testPassed && !railsPassed) {
+      label = 'REJECTED (repro passed but rails reddened)';
+    } else {
+      label = 'FAIL (repro)';
+    }
+    onProgress(`  Candidate ${i + 1}: ${label} | ${changedLines} changed line(s)`);
   }
 
-  // 6. Filter survivors (passed).
+  // 6. Filter survivors — passed means BOTH gates passed (or rails unchecked).
   const survivors = results.filter((r) => !r.discarded && r.passed);
   const discarded = results.filter((r) => r.discarded);
   const failed = results.filter((r) => !r.discarded && !r.passed);
@@ -183,6 +228,7 @@ export async function runConsensusFix({
     groups,
     allDivergent,
     selectionResult,
+    railsChecked,
     prompt,
     snapshot,
   };

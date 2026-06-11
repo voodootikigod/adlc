@@ -10,7 +10,25 @@ import { record, buildEntry, parseData, parseFileList, readLastRawLine } from '.
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
+import { canonicalEntryBytes, KEY_ENV } from '../lib/sign.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
+
+// ── key env helper ─────────────────────────────────────────────────────────────
+// Tests mutate process.env[AIDLC_MANIFEST_KEY] (read by record/verify via
+// sign.getKey). withKey sets it for the duration of fn and always restores,
+// so signing tests stay isolated from one another and from the no-key tests.
+
+function withKey(key, fn) {
+  const prev = process.env[KEY_ENV];
+  if (key === null) delete process.env[KEY_ENV];
+  else process.env[KEY_ENV] = key;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env[KEY_ENV];
+    else process.env[KEY_ENV] = prev;
+  }
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -226,30 +244,35 @@ describe('record → verify round-trip', () => {
 // ── tamper detection ──────────────────────────────────────────────────────────
 
 describe('tamper detection', () => {
+  // These assert hash-chain behavior specifically; pin to no-key mode so the
+  // break reason/seq is the prev-hash mismatch regardless of the runner's env
+  // (with a key set, a stale signature would trip first).
   it('tampered middle line → verify exit-2 path with correct seq', () => {
     const dir = makeTmp();
     try {
-      record({ gate: 'g1', dir });
-      record({ gate: 'g2', dir });
-      record({ gate: 'g3', dir });
+      withKey(null, () => {
+        record({ gate: 'g1', dir });
+        record({ gate: 'g2', dir });
+        record({ gate: 'g3', dir });
 
-      // Tamper line 2 (middle): read raw, replace second line
-      const lp = ledgerPath('manifest', dir);
-      const raw = readFileSync(lp, 'utf8');
-      const lines = raw.split('\n').filter(l => l.trim());
-      // Alter second line content (but keep valid JSON so parse succeeds)
-      const parsed = JSON.parse(lines[1]);
-      parsed.gate = 'TAMPERED';
-      lines[1] = JSON.stringify(parsed);
-      writeFileSync(lp, lines.join('\n') + '\n');
+        // Tamper line 2 (middle): read raw, replace second line
+        const lp = ledgerPath('manifest', dir);
+        const raw = readFileSync(lp, 'utf8');
+        const lines = raw.split('\n').filter(l => l.trim());
+        // Alter second line content (but keep valid JSON so parse succeeds)
+        const parsed = JSON.parse(lines[1]);
+        parsed.gate = 'TAMPERED';
+        lines[1] = JSON.stringify(parsed);
+        writeFileSync(lp, lines.join('\n') + '\n');
 
-      const r = verify(dir);
-      assert.equal(r.valid, false);
-      // Should break at seq 3 (line 3) since line 2 was changed → its hash differs
-      assert.ok(r.break !== null, 'break should not be null');
-      // The break is at line 3 (seq=3) because that entry's prev no longer
-      // matches the hash of the tampered line 2
-      assert.equal(r.break.seq, 3);
+        const r = verify(dir);
+        assert.equal(r.valid, false);
+        // Should break at seq 3 (line 3) since line 2 was changed → its hash differs
+        assert.ok(r.break !== null, 'break should not be null');
+        // The break is at line 3 (seq=3) because that entry's prev no longer
+        // matches the hash of the tampered line 2
+        assert.equal(r.break.seq, 3);
+      });
     } finally {
       cleanTmp(dir);
     }
@@ -258,20 +281,22 @@ describe('tamper detection', () => {
   it('tampered first entry prev field → verify detects it', () => {
     const dir = makeTmp();
     try {
-      record({ gate: 'g1', dir });
-      record({ gate: 'g2', dir });
+      withKey(null, () => {
+        record({ gate: 'g1', dir });
+        record({ gate: 'g2', dir });
 
-      const lp = ledgerPath('manifest', dir);
-      const raw = readFileSync(lp, 'utf8');
-      const lines = raw.split('\n').filter(l => l.trim());
-      const parsed = JSON.parse(lines[0]);
-      parsed.prev = 'tampered-hash';
-      lines[0] = JSON.stringify(parsed);
-      writeFileSync(lp, lines.join('\n') + '\n');
+        const lp = ledgerPath('manifest', dir);
+        const raw = readFileSync(lp, 'utf8');
+        const lines = raw.split('\n').filter(l => l.trim());
+        const parsed = JSON.parse(lines[0]);
+        parsed.prev = 'tampered-hash';
+        lines[0] = JSON.stringify(parsed);
+        writeFileSync(lp, lines.join('\n') + '\n');
 
-      const r = verify(dir);
-      assert.equal(r.valid, false);
-      assert.ok(r.break !== null);
+        const r = verify(dir);
+        assert.equal(r.valid, false);
+        assert.ok(r.break !== null);
+      });
     } finally {
       cleanTmp(dir);
     }
@@ -444,5 +469,168 @@ describe('seq increments', () => {
     } finally {
       cleanTmp(dir);
     }
+  });
+});
+
+// ── HMAC signing (keyed provenance) ───────────────────────────────────────────
+// The hash chain alone is keyless: a writer can recompute every `prev` and
+// forge a clean chain. These tests assert that with AIDLC_MANIFEST_KEY set,
+// only entries signed under the secret key verify — defeating that forgery.
+
+const KEY = 'test-secret-key-do-not-ship';
+
+describe('signing: signed record round-trip', () => {
+  it('two signed records verify as valid AND signed', () => {
+    const dir = makeTmp();
+    try {
+      withKey(KEY, () => {
+        const e1 = record({ gate: 'plan', dir });
+        const e2 = record({ gate: 'build', dir });
+        // Every entry carries a 64-hex-char HMAC signature.
+        assert.match(e1.sig, /^[0-9a-f]{64}$/);
+        assert.match(e2.sig, /^[0-9a-f]{64}$/);
+        const r = verify(dir);
+        assert.equal(r.valid, true);
+        assert.equal(r.signed, true);
+        assert.equal(r.count, 2);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+});
+
+describe('signing: forge-from-scratch attack is caught', () => {
+  it('a hand-built chain with correct prev hashes but no key fails verify with key', () => {
+    const dir = makeTmp();
+    try {
+      // Attacker (no key) forges a clean 2-entry chain from scratch: correct
+      // prev hashes, valid seq, but NO signatures.
+      const forged = withKey(null, () => {
+        const e1 = buildEntry({
+          gate: 'spec', ticket: 'T-1', data: undefined, filePaths: [],
+          prevRawLine: null, prevSeq: 0, ts: '2024-01-01T00:00:00.000Z',
+        });
+        const line1 = JSON.stringify(e1);
+        const e2 = buildEntry({
+          gate: 'ship', ticket: 'T-1', data: undefined, filePaths: [],
+          prevRawLine: line1, prevSeq: 1, ts: '2024-01-02T00:00:00.000Z',
+        });
+        const line2 = JSON.stringify(e2);
+        return line1 + '\n' + line2 + '\n';
+      });
+      // Entries have no sig — this is the keyless forgery.
+      assert.ok(!forged.includes('"sig"'));
+      const lp = ledgerPath('manifest', dir);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(lp, forged);
+
+      // The hash chain alone would accept this (sanity: no key → valid but unsigned).
+      withKey(null, () => {
+        const noKey = verify(dir);
+        assert.equal(noKey.valid, true);
+        assert.equal(noKey.signed, false);
+      });
+
+      // WITH the key, the forgery is rejected: unsigned entries fail.
+      withKey(KEY, () => {
+        const r = verify(dir);
+        assert.equal(r.valid, false);
+        assert.equal(r.signed, false);
+        assert.equal(r.break.reason, 'unsigned entry');
+        assert.equal(r.break.seq, 1);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+});
+
+describe('signing: tamper after signing is caught', () => {
+  it('editing a signed entry\'s data without re-signing → signature invalid', () => {
+    const dir = makeTmp();
+    try {
+      withKey(KEY, () => {
+        record({ gate: 'g1', rawData: '{"model":"haiku"}', dir });
+        record({ gate: 'g2', dir });
+
+        // Tamper the FIRST entry's data and recompute prev forward (so the
+        // hash chain still links) but DO NOT re-sign.
+        const lp = ledgerPath('manifest', dir);
+        const lines = readFileSync(lp, 'utf8').split('\n').filter(l => l.trim());
+
+        const e1 = JSON.parse(lines[0]);
+        e1.data = { model: 'frontier' }; // tampered payload, stale sig
+        lines[0] = JSON.stringify(e1);
+
+        // Repair the hash chain so prev mismatch isn't what trips verify —
+        // we want to prove the SIGNATURE catches this, not the hash chain.
+        const e2 = JSON.parse(lines[1]);
+        e2.prev = sha256(lines[0]);
+        lines[1] = JSON.stringify(e2);
+        writeFileSync(lp, lines.join('\n') + '\n');
+
+        const r = verify(dir);
+        assert.equal(r.valid, false);
+        assert.equal(r.break.reason, 'signature invalid');
+        assert.equal(r.break.seq, 1);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+});
+
+describe('signing: no key in env reports signed:false', () => {
+  it('hash chain still verifies, but result advertises no provenance', () => {
+    const dir = makeTmp();
+    try {
+      withKey(null, () => {
+        record({ gate: 'g1', dir });
+        record({ gate: 'g2', dir });
+        const r = verify(dir);
+        assert.equal(r.valid, true);
+        assert.equal(r.signed, false);
+        assert.equal(r.count, 2);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('signed entries still pass the hash chain when verified without a key', () => {
+    const dir = makeTmp();
+    try {
+      withKey(KEY, () => {
+        record({ gate: 'g1', dir });
+        record({ gate: 'g2', dir });
+      });
+      // No key present at verify time: hash chain holds, signed:false.
+      withKey(null, () => {
+        const r = verify(dir);
+        assert.equal(r.valid, true);
+        assert.equal(r.signed, false);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+});
+
+describe('signing: canonicalEntryBytes is deterministic and excludes sig', () => {
+  it('omits sig and fixes key order regardless of input field order', () => {
+    const base = {
+      seq: 1, gate: 'g', ts: '2024-01-01T00:00:00.000Z',
+      ticket: 'T-1', data: { a: 1 }, files: {}, prev: null,
+    };
+    const withSig = { ...base, sig: 'deadbeef' };
+    // Same logical entry, different insertion order + a sig field.
+    const reordered = {
+      sig: 'deadbeef', prev: null, files: {}, data: { a: 1 },
+      ticket: 'T-1', ts: '2024-01-01T00:00:00.000Z', gate: 'g', seq: 1,
+    };
+    assert.equal(canonicalEntryBytes(base), canonicalEntryBytes(withSig));
+    assert.equal(canonicalEntryBytes(base), canonicalEntryBytes(reordered));
+    assert.ok(!canonicalEntryBytes(withSig).includes('sig'));
   });
 });

@@ -2,6 +2,73 @@
 
 import { spawnSync } from 'node:child_process';
 
+/**
+ * Tokenize a command template into argv elements, honoring single and double
+ * quotes (so `--msg "hello world"` becomes two argv elements). Quotes only
+ * group whitespace; they are stripped from the resulting token. This is a
+ * deliberately small, shell-free tokenizer — it does NOT interpret `$`,
+ * backticks, pipes, redirects, globs, or any other shell metacharacter.
+ *
+ * @param {string} template
+ * @returns {string[]} argv tokens
+ */
+export function tokenizeCommand(template) {
+  const tokens = [];
+  let current = '';
+  let inToken = false;
+  let quote = null; // "'" | '"' | null
+
+  for (let i = 0; i < template.length; i++) {
+    const ch = template[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      inToken = true;
+      continue;
+    }
+    if (ch === ' ' || ch === '\t' || ch === '\n') {
+      if (inToken) {
+        tokens.push(current);
+        current = '';
+        inToken = false;
+      }
+      continue;
+    }
+    current += ch;
+    inToken = true;
+  }
+  if (quote) {
+    throw new Error(`Unterminated quote in command template: ${template}`);
+  }
+  if (inToken) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * Substitute {file} into a tokenized command. The untrusted value is placed
+ * into argv tokens as a LITERAL — the value is never re-tokenized, so a
+ * filename containing shell metacharacters (spaces, `$(...)`, backticks, `;`)
+ * stays a single discrete argument and is never interpreted by a shell.
+ *
+ * A token like `--file={file}` yields `--file=<value>`; a bare `{file}`
+ * token yields exactly `<value>`.
+ *
+ * @param {string[]} tokens
+ * @param {string} placeholder  e.g. '{file}'
+ * @param {string} value        untrusted substitution value
+ * @returns {string[]}
+ */
+export function substituteToken(tokens, placeholder, value) {
+  return tokens.map((tok) => tok.split(placeholder).join(value));
+}
+
 // A finding line is either:
 //   - matches /\S+:\d+/ anywhere  (e.g. "src/foo.js:42: something wrong")
 //   - starts with '- '            (bullet item)
@@ -29,7 +96,7 @@ export function isFindingLine(line) {
  * @param {string} line
  * @param {string} file  - the file being reviewed (used as context)
  */
-export function parseFindingLine(line, file) {
+export function parseFindingLine(line, _file) {
   const trimmed = line.trim();
   // Try to extract file:lineNo from start of line
   const locMatch = trimmed.match(/^(\S+):(\d+)(?::.*)?$/);
@@ -60,9 +127,16 @@ export function parseFindingLine(line, file) {
  * @returns {{ stdout: string, stderr: string, exitCode: number }}
  */
 export function runReviewCmd(reviewCmd, file) {
-  const cmd = reviewCmd.replace(/\{file\}/g, file);
-  const result = spawnSync(cmd, {
-    shell: true,
+  // Tokenize the trusted template, THEN substitute the untrusted file path as
+  // a discrete argv element. Run with shell:false so the filename is never
+  // re-parsed by /bin/sh — this closes the command-injection hole that existed
+  // when the template string was interpolated and run with shell:true.
+  const tokens = substituteToken(tokenizeCommand(reviewCmd), '{file}', file);
+  if (tokens.length === 0) {
+    return { stdout: '', stderr: 'empty review command', exitCode: 1 };
+  }
+  const result = spawnSync(tokens[0], tokens.slice(1), {
+    shell: false,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });

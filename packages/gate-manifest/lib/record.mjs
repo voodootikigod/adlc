@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { sha256, hashFiles, appendEntry, ledgerPath, AIDLC_DIR } from '../../core/index.mjs';
+import { getKey, signEntry } from './sign.mjs';
 
 /**
  * Parse JSON data from a --data flag string.
@@ -55,9 +56,10 @@ export function readLastRawLine(filePath) {
  * @param {string|null} opts.prevRawLine  raw bytes of the previous JSONL line (or null)
  * @param {number} opts.prevSeq     sequence number of previous entry (0 if none)
  * @param {string} opts.ts          ISO timestamp
+ * @param {string|null} [opts.key]  HMAC signing key; when present, entry gets a `sig`
  * @returns manifest entry object
  */
-export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq, ts }) {
+export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq, ts, key = null }) {
   const entry = {
     seq: prevSeq + 1,
     gate,
@@ -69,6 +71,11 @@ export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq
 
   entry.files = filePaths.length > 0 ? hashFiles(filePaths) : {};
   entry.prev = prevRawLine !== null ? sha256(prevRawLine) : null;
+
+  // Sign last: `sig` is computed over the canonical bytes of all other fields
+  // (see sign.mjs) and appended as the final field so it is excluded from the
+  // signed payload. Without a key the entry is unsigned and verify will flag it.
+  if (key) entry.sig = signEntry(key, entry);
 
   return entry;
 }
@@ -104,7 +111,8 @@ export function record({ gate, ticket, rawData, rawFiles, dir = AIDLC_DIR }) {
   }
 
   const ts = new Date().toISOString();
-  const entry = buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq, ts });
+  const key = getKey();
+  const entry = buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq, ts, key });
 
   appendEntry('manifest', entry, dir);
   return entry;

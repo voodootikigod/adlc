@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 
 import { diffJson, diffRoute, routeKey } from '../lib/diff.mjs';
-import { validateConfig, runCapture } from '../lib/capture.mjs';
+import { validateConfig, runCapture, reachableCount } from '../lib/capture.mjs';
 import { compareSnapshots, loadSnapshot } from '../lib/compare.mjs';
 import { renderReport } from '../lib/report.mjs';
 
@@ -210,6 +210,59 @@ describe('diffRoute', () => {
     const entry = makeEntry({ method: 'POST', path: '/submit' });
     assert.equal(routeKey(entry), 'POST /submit');
   });
+
+  // ── Regression: dead-in-both must NOT be treated as identical ──────────────
+  test('same error string on BOTH sides is unreachable, not identical', () => {
+    const dead = { method: 'GET', path: '/api/test', error: 'fetch failed' };
+    const result = diffRoute(dead, { ...dead });
+    assert.notEqual(result, null, 'must NOT be null (null means identical)');
+    assert.equal(result.unreachable, true);
+    assert.equal(result.error, 'fetch failed');
+    assert.equal(result.route, 'GET /api/test');
+  });
+
+  test('differing error strings on both sides still report an error diff', () => {
+    const result = diffRoute(
+      { method: 'GET', path: '/api/test', error: 'fetch failed' },
+      { method: 'GET', path: '/api/test', error: 'timeout after 10000ms' }
+    );
+    assert.ok(result);
+    assert.ok(!result.unreachable, 'a changed error is a diff, not an unreachable marker');
+    const d = result.diffs.find((d) => d.field === 'error');
+    assert.ok(d);
+    assert.equal(d.before, 'fetch failed');
+    assert.equal(d.after, 'timeout after 10000ms');
+  });
+});
+
+// ── reachableCount ──────────────────────────────────────────────────────────────
+
+describe('reachableCount', () => {
+  test('counts only routes without an error field', () => {
+    const snapshot = {
+      routes: [
+        { method: 'GET', path: '/a', status: 200, body: {} },
+        { method: 'GET', path: '/b', error: 'fetch failed' },
+        { method: 'GET', path: '/c', status: 500, body: {} },
+      ],
+    };
+    assert.equal(reachableCount(snapshot), 2);
+  });
+
+  test('all-errored snapshot has zero reachable', () => {
+    const snapshot = {
+      routes: [
+        { method: 'GET', path: '/a', error: 'fetch failed' },
+        { method: 'GET', path: '/b', error: 'fetch failed' },
+      ],
+    };
+    assert.equal(reachableCount(snapshot), 0);
+  });
+
+  test('missing routes array is treated as zero reachable', () => {
+    assert.equal(reachableCount({}), 0);
+    assert.equal(reachableCount(null), 0);
+  });
 });
 
 // ── validateConfig ─────────────────────────────────────────────────────────────
@@ -349,6 +402,18 @@ describe('renderReport', () => {
     assert.match(report, /body \(json\): 1 change/);
     assert.match(report, /price/);
   });
+
+  test('unreachable-in-both routes are surfaced in the report', () => {
+    const report = renderReport({
+      identical: [],
+      changed: [],
+      unreachable: [{ route: 'GET /health', error: 'fetch failed' }],
+      onlyInBefore: [],
+      onlyInAfter: [],
+    });
+    assert.match(report, /1 unreachable \(both\)/);
+    assert.match(report, /! GET \/health: unreachable in both snapshots \(fetch failed\)/);
+  });
 });
 
 // ── compareSnapshots ──────────────────────────────────────────────────────────
@@ -385,6 +450,39 @@ describe('compareSnapshots', () => {
     const result = compareSnapshots(before, after);
     assert.equal(result.changed.length, 1);
     assert.equal(result.changed[0].route, 'GET /b');
+  });
+
+  // ── Regression: a route dead in both snapshots is surfaced, not "identical" ──
+  test('route errored in both snapshots lands in unreachable, not identical', () => {
+    const before = snapshot([{ method: 'GET', path: '/dead', error: 'fetch failed' }]);
+    const after = snapshot([{ method: 'GET', path: '/dead', error: 'fetch failed' }]);
+    const result = compareSnapshots(before, after);
+    assert.equal(result.identical.length, 0, 'must NOT be reported as identical');
+    assert.equal(result.changed.length, 0);
+    assert.equal(result.unreachable.length, 1);
+    assert.equal(result.unreachable[0].route, 'GET /dead');
+    assert.equal(result.unreachable[0].error, 'fetch failed');
+  });
+
+  test('all-dead before/after never yields a clean (all-identical) verdict', () => {
+    const before = snapshot([
+      { method: 'GET', path: '/a', error: 'fetch failed' },
+      { method: 'GET', path: '/b', error: 'fetch failed' },
+    ]);
+    const after = snapshot([
+      { method: 'GET', path: '/a', error: 'fetch failed' },
+      { method: 'GET', path: '/b', error: 'fetch failed' },
+    ]);
+    const result = compareSnapshots(before, after);
+    const totalChanged = result.changed.length + result.onlyInBefore.length + result.onlyInAfter.length;
+    // The bin treats (totalChanged === 0 && unreachable === 0) as exit-0 pass.
+    // A dead service must break that condition so the human gate does not pass.
+    assert.ok(
+      totalChanged !== 0 || result.unreachable.length !== 0,
+      'a dead service must not produce an exit-0 clean verdict'
+    );
+    assert.equal(result.identical.length, 0);
+    assert.equal(result.unreachable.length, 2);
   });
 });
 
@@ -620,5 +718,37 @@ describe('round-trip: capture → compare', () => {
     } finally {
       await stopServer(server);
     }
+  });
+
+  // ── Regression: operator forgot to start the server for BOTH captures ───────
+  test('server down for both captures: zero reachable + no clean identical pass', async () => {
+    // Port 1 is not listening, so every route errors in both snapshots.
+    const config = {
+      baseUrl: 'http://127.0.0.1:1',
+      routes: [
+        { method: 'GET', path: '/health' },
+        { method: 'GET', path: '/api/users' },
+      ],
+    };
+
+    const before = await runCapture(config, 2000);
+    const after = await runCapture(config, 2000);
+
+    // (a) Capture: zero routes reachable — the bin's reachability gate fails on this.
+    assert.equal(reachableCount(before), 0, 'before snapshot should have zero reachable routes');
+    assert.equal(reachableCount(after), 0, 'after snapshot should have zero reachable routes');
+
+    // (b) Compare: the dead routes must surface as unreachable, never identical.
+    const result = compareSnapshots(before, after);
+    assert.equal(result.identical.length, 0, 'a dead service must not be reported identical');
+    assert.equal(result.unreachable.length, 2);
+
+    // The bin's exit-0 condition is (totalChanged === 0 && unreachable === 0);
+    // a dead service must violate it so the human gate cannot silently pass.
+    const totalChanged = result.changed.length + result.onlyInBefore.length + result.onlyInAfter.length;
+    assert.ok(
+      totalChanged !== 0 || result.unreachable.length !== 0,
+      'dead-in-both must not yield an exit-0 all-clear'
+    );
   });
 });
