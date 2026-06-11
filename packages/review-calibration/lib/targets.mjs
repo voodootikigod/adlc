@@ -50,6 +50,74 @@ export function filterCodeFiles(files) {
 }
 
 /**
+ * Load plants from an external JSON file (--plants-file). Enables externally
+ * authored plants: LLM-generated subtle bugs, hand-written semantic bugs —
+ * anything beyond the mechanical mutation operators.
+ *
+ * File format: JSON array of
+ *   { file: string, line: number (1-based), original: string,
+ *     mutated: string, category?: string }
+ *
+ * Each plant is validated against the current working tree: the file must
+ * exist and its `line` must exactly equal `original` (same refuse-if-drifted
+ * contract as mutate.applyMutant). Returns { plants, errors } — plants in
+ * the internal shape { file, absolutePath, line, operator, original, mutated }
+ * with operator = category ?? 'custom'.
+ *
+ * @param {string} plantsPath - path to the JSON file
+ * @param {string} cwd        - repo root
+ * @returns {{ plants: Array, errors: string[] }}
+ */
+export function loadPlantsFile(plantsPath, cwd) {
+  let raw;
+  try {
+    raw = readFileSync(plantsPath, 'utf8');
+  } catch (err) {
+    return { plants: [], errors: [`cannot read plants file: ${err.message}`] };
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    return { plants: [], errors: [`invalid JSON in plants file: ${err.message}`] };
+  }
+  if (!Array.isArray(data)) {
+    return { plants: [], errors: ['plants file must be a JSON array'] };
+  }
+
+  const plants = [];
+  const errors = [];
+  for (const [i, p] of data.entries()) {
+    const where = `plant[${i}]`;
+    if (!p || typeof p !== 'object') { errors.push(`${where}: not an object`); continue; }
+    if (typeof p.file !== 'string' || !p.file) { errors.push(`${where}: missing string "file"`); continue; }
+    if (!Number.isInteger(p.line) || p.line < 1) { errors.push(`${where}: "line" must be a positive integer`); continue; }
+    if (typeof p.original !== 'string') { errors.push(`${where}: missing string "original"`); continue; }
+    if (typeof p.mutated !== 'string' || p.mutated === p.original) {
+      errors.push(`${where}: "mutated" must be a string different from "original"`); continue;
+    }
+    const absolutePath = resolve(cwd, p.file);
+    const content = readFileSafe(absolutePath);
+    if (content === null) { errors.push(`${where}: cannot read ${p.file}`); continue; }
+    const lines = content.split('\n');
+    if (p.line > lines.length) { errors.push(`${where}: ${p.file} has only ${lines.length} lines`); continue; }
+    if (lines[p.line - 1] !== p.original) {
+      errors.push(`${where}: ${p.file}:${p.line} does not match "original" — refusing to apply drifted plant`);
+      continue;
+    }
+    plants.push({
+      file: p.file,
+      absolutePath,
+      line: p.line,
+      operator: p.category ?? 'custom',
+      original: p.original,
+      mutated: p.mutated,
+    });
+  }
+  return { plants, errors };
+}
+
+/**
  * Read a file safely. Returns null if the file cannot be read.
  *
  * @param {string} absolutePath

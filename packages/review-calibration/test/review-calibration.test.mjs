@@ -13,7 +13,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Lib under test
-import { parseCommitFiles, filterCodeFiles, selectPlants } from '../lib/targets.mjs';
+import { parseCommitFiles, filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mjs';
 import { isPlantCaught, extractLineNumbers, countFalsePositives, scoreReview } from '../lib/scorer.mjs';
 import { groupByFile, applyAllPlantsToContent } from '../lib/runner.mjs';
 import { buildJsonReport } from '../lib/report.mjs';
@@ -669,6 +669,72 @@ describe('E2E: dirty tree rejection', () => {
     );
     assert.equal(result.status, 1);
     assert.ok(result.stderr.includes('commit or stash'), result.stderr);
+  });
+});
+
+describe('loadPlantsFile', () => {
+  it('loads valid plants, validates line content against working tree', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-plants-'));
+    try {
+      writeFileSync(join(dir, 'a.mjs'), 'const x = 1;\nconst y = 2;\n');
+      const plantsPath = join(dir, 'plants.json');
+      writeFileSync(plantsPath, JSON.stringify([
+        { file: 'a.mjs', line: 2, original: 'const y = 2;', mutated: 'const y = 3;', category: 'subtle-llm' },
+      ]));
+      const { plants, errors } = loadPlantsFile(plantsPath, dir);
+      assert.equal(errors.length, 0);
+      assert.equal(plants.length, 1);
+      assert.equal(plants[0].operator, 'subtle-llm');
+      assert.equal(plants[0].line, 2);
+      assert.ok(plants[0].absolutePath.endsWith('a.mjs'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects drifted plants (original does not match file content)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-plants-'));
+    try {
+      writeFileSync(join(dir, 'a.mjs'), 'const x = 1;\n');
+      const plantsPath = join(dir, 'plants.json');
+      writeFileSync(plantsPath, JSON.stringify([
+        { file: 'a.mjs', line: 1, original: 'const x = 999;', mutated: 'const x = 0;' },
+      ]));
+      const { plants, errors } = loadPlantsFile(plantsPath, dir);
+      assert.equal(plants.length, 0);
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0].includes('drifted'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects invalid JSON, non-arrays, malformed entries, missing files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-plants-'));
+    try {
+      const badJson = join(dir, 'bad.json');
+      writeFileSync(badJson, 'not json');
+      assert.ok(loadPlantsFile(badJson, dir).errors[0].includes('invalid JSON'));
+
+      const notArray = join(dir, 'obj.json');
+      writeFileSync(notArray, '{}');
+      assert.ok(loadPlantsFile(notArray, dir).errors[0].includes('array'));
+
+      const mixed = join(dir, 'mixed.json');
+      writeFileSync(mixed, JSON.stringify([
+        { file: 'missing.mjs', line: 1, original: 'x', mutated: 'y' },
+        { line: 1, original: 'x', mutated: 'y' },
+        { file: 'a.mjs', line: 0, original: 'x', mutated: 'y' },
+        { file: 'a.mjs', line: 1, original: 'x', mutated: 'x' },
+      ]));
+      const { plants, errors } = loadPlantsFile(mixed, dir);
+      assert.equal(plants.length, 0);
+      assert.equal(errors.length, 4);
+
+      assert.ok(loadPlantsFile(join(dir, 'nope.json'), dir).errors[0].includes('cannot read'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -5,7 +5,7 @@
 import { writeFileSync, readFileSync } from 'node:fs';
 import { parseArgs, pass, gateFail, opError, printJson } from '../../core/index.mjs';
 import { git, isDirty, isGitRepo, mutate } from '../../core/index.mjs';
-import { filterCodeFiles, selectPlants } from '../lib/targets.mjs';
+import { filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mjs';
 import { runWithPlants } from '../lib/runner.mjs';
 import { scoreReview } from '../lib/scorer.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
@@ -19,6 +19,7 @@ const { values } = parseArgs({
     plants:       { type: 'string', default: '8' },
     'min-recall': { type: 'string', default: '0.5' },
     files:        { type: 'string' },   // Fallback file list (comma-separated)
+    'plants-file': { type: 'string' },  // Externally authored plants (JSON)
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -40,6 +41,11 @@ Options:
   --min-recall <f>      Minimum recall fraction to pass gate (default: 0.5)
   --files <list>        Fallback comma-separated file list when the commit
                         touches no eligible code files
+  --plants-file <path>  JSON array of externally authored plants:
+                        [{file, line, original, mutated, category?}, ...]
+                        Bypasses commit discovery and mechanical mutation —
+                        use for LLM-generated or hand-written subtle bugs.
+                        Each plant is validated against the working tree.
   --json                Machine-readable JSON output
   --help                Show this help
 
@@ -87,38 +93,49 @@ if (isDirty(cwd)) {
   opError('commit or stash first — review-calibration plants bugs in-place and restores them');
 }
 
-// ── discover target files from commit ────────────────────────────────────────
+// ── select plants: external file or mechanical mutation ──────────────────────
 
-let commitFiles = [];
+let plants;
 
-try {
-  const treeOutput = git(
-    ['diff-tree', '--no-commit-id', '-r', '--name-only', commitRef],
-    { cwd }
-  );
-  commitFiles = treeOutput.split('\n').map((l) => l.trim()).filter(Boolean);
-} catch (err) {
-  opError(`git diff-tree failed for commit "${commitRef}": ${err.message}`);
-}
+if (values['plants-file']) {
+  const { plants: loaded, errors } = loadPlantsFile(values['plants-file'], cwd);
+  if (errors.length > 0) {
+    opError(`plants file problems:\n  ${errors.join('\n  ')}`);
+  }
+  if (loaded.length === 0) {
+    opError('plants file contains no valid plants — cannot calibrate');
+  }
+  plants = loaded.slice(0, maxPlants);
+} else {
+  // Discover target files from the commit, then mutate mechanically.
+  let commitFiles = [];
+  try {
+    const treeOutput = git(
+      ['diff-tree', '--no-commit-id', '-r', '--name-only', commitRef],
+      { cwd }
+    );
+    commitFiles = treeOutput.split('\n').map((l) => l.trim()).filter(Boolean);
+  } catch (err) {
+    opError(`git diff-tree failed for commit "${commitRef}": ${err.message}`);
+  }
 
-let codeFiles = filterCodeFiles(commitFiles);
+  let codeFiles = filterCodeFiles(commitFiles);
 
-// Fallback to --files if no eligible code files found in commit.
-if (codeFiles.length === 0 && filesFlag.trim() !== '') {
-  const fallback = filesFlag.split(',').map((f) => f.trim()).filter(Boolean);
-  codeFiles = filterCodeFiles(fallback);
-}
+  // Fallback to --files if no eligible code files found in commit.
+  if (codeFiles.length === 0 && filesFlag.trim() !== '') {
+    const fallback = filesFlag.split(',').map((f) => f.trim()).filter(Boolean);
+    codeFiles = filterCodeFiles(fallback);
+  }
 
-if (codeFiles.length === 0) {
-  opError('no eligible code files found in commit (or --files fallback) — nothing to plant');
-}
+  if (codeFiles.length === 0) {
+    opError('no eligible code files found in commit (or --files fallback) — nothing to plant');
+  }
 
-// ── select plants ─────────────────────────────────────────────────────────────
+  plants = selectPlants(codeFiles, cwd, maxPlants, mutate.generateMutants);
 
-const plants = selectPlants(codeFiles, cwd, maxPlants, mutate.generateMutants);
-
-if (plants.length === 0) {
-  opError('no mutants could be generated from the target files — cannot calibrate');
+  if (plants.length === 0) {
+    opError('no mutants could be generated from the target files — cannot calibrate');
+  }
 }
 
 // ── SIGINT safety: track planted files for emergency restore ──────────────────
