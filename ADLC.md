@@ -38,7 +38,7 @@ These are the load-bearing facts. Everything downstream derives from this table.
 | F4 | **Confident hallucination** — fabricates APIs, claims fixes without running anything, invents findings during review | Trust in any unverified claim, in either direction (builder *or* critic) | Evidence or it didn't happen. Every claim gated by deterministic execution: tests, typecheck, build, repro |
 | F5 | **Reward hacking** — under pressure to satisfy a gate, games the gate: deletes tests, weakens assertions, mocks reality, adds skip markers | Every metric you gate on gets Goodharted | Gates must be vacuous-proof. Rails authored in a separate context from the builder and frozen during build. See §5 |
 | F6 | **Finding-count prior** — reviewers converge on ~10–20 findings and stop, regardless of how many exist | Single-pass review systematically undercounts | Loop until dry: repeat with fresh contexts until K consecutive passes find nothing new |
-| F7 | **Generative bloat** — verbose, duplicative output; reinvents what exists three files away | Codebase grows 20–30% fatter than necessary; future context costs compound | Post-merge simplify phase (cheaper and more reliable than preventing duplication at authoring time) |
+| F7 | **Generative bloat** — verbose, duplicative output; reinvents what exists three files away | Codebase accumulates real excess (duplication, dead branches, reinvented helpers); future context costs compound | Post-merge simplify phase (cheaper and more reliable than preventing duplication at authoring time) |
 | F8 | **Coherence loss across models/sessions** — different models (and fresh sessions) have different idioms; mid-task switching produces stylistic and architectural seams | Mid-build model failover; "resume where the other one left off" | Pin one model per task. Switch models at task boundaries only |
 
 And the flaws that are secretly **features** — this is the "works *because* of
@@ -387,7 +387,7 @@ Two halves:
    non-determinism means the duplication may never materialize where you
    guarded against it); deduplicating after is mechanical. This is the classic
    ADR/design-review moved to the back of the cycle because exploration became
-   free. Expect 20–30% reduction on agent-generated code. Cheap-to-mid model;
+   free. Expect a substantial reduction on agent-generated code. Cheap-to-mid model;
    the rails carry the risk.
 
 2. **Mine.** Skill-mine the codebase (idempotently — refresh stale skills,
@@ -419,7 +419,7 @@ default.
 | Multi-agent collaborative *construction* (3–7 creators comparing notes) | **Reject** | Search-parallelism misapplied to construction. Partition + contract + single writer instead (Principle 6) |
 | DRY at authoring time | **Reject** | Dedup moves to P7 where it's mechanical, not speculative |
 | Coverage % as a quality gate | **Reject** | Goodharted at machine speed. Mutation score or adversarial test audit (P3) |
-| Token quotas as cost control | **Reject** | Caps the wrong variable. A quota-pressured developer cuts the prosecution phase first — the most expensive *and* most valuable tokens. Govern cost-per-merged-verified-change; let the gates, not the wallet, end loops. ($1k/week on a real perf improvement is ~2% of a senior engineer's loaded cost. The right question was never "is $1k too much" — it's "did it merge, verified?") |
+| Token quotas as cost control | **Reject** | Caps the wrong variable. A quota-pressured developer cuts the prosecution phase first — the most expensive *and* most valuable tokens. Govern cost-per-merged-verified-change; let the gates, not the wallet, end loops. ($1k/week annualizes to roughly 15% of a senior engineer's loaded cost — a real fraction, but the wrong variable to cap. The right question was never "is $1k too much" — it's "did it merge, verified?") |
 | Output-style compression (caveman-speak) as the economy lever | **Mostly reject** | Output tokens are a minor line item in agentic loops; the spend is repeated input-context reads, cache misses, and re-exploration. Fix with skills, atomic tickets, conclusion-passing, and prompt-cache discipline. Worse: output is the model's working medium — degrading the language risks degrading the reasoning to save the cheapest tokens in the system. (The "providers pad tokens for revenue" framing is vibes, not analysis) |
 | Cross-model review as *the* mechanism | **Demote** | Active ingredients are fresh context + refute charter. Cross-model is a real but third-order bonus (P5) |
 | Mid-task model failover | **Reject for dev loops** | Right for production inference, wrong mid-task (F8). Models switch at task boundaries |
