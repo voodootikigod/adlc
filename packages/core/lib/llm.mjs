@@ -15,6 +15,22 @@
 
 import { spawn } from 'node:child_process';
 
+// agy's timeout marker is its ENTIRE output on failure. Matching it as a
+// bare substring would false-trip whenever a model quotes the phrase in a
+// legitimate answer, so require it to be the only meaningful content (last
+// non-empty line, output short). Exported for tests.
+export function isAgyTimeout(out) {
+  const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
+  const last = lines.at(-1) ?? '';
+  return /^Error: timed out waiting for response\.?$/.test(last) && out.length < 200;
+}
+
+// Env values that explicitly DISABLE a feature flag. 'false'/'0' are truthy
+// strings in JS, so a plain existence check would enable on AIDLC_AGY=false.
+function envEnabled(v) {
+  return v !== undefined && v !== '' && !['0', 'false', 'no', 'off', 'disabled'].includes(v.toLowerCase());
+}
+
 function agySend({ apiKey, model, system, prompt }, env = process.env) {
   // apiKey carries the binary path ('1'/'true' mean default 'agy').
   const bin = apiKey === '1' || apiKey === 'true' ? 'agy' : apiKey;
@@ -32,7 +48,7 @@ function agySend({ apiKey, model, system, prompt }, env = process.env) {
     p.on('close', (code) => {
       // agy exits 0 even on print-timeout; the error surfaces in the output.
       if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
-      if (/Error: timed out waiting for response/.test(out)) {
+      if (isAgyTimeout(out)) {
         return reject(new Error('agy: timed out waiting for response'));
       }
       resolve(out.replace(/\s+$/, ''));
@@ -145,9 +161,14 @@ export function detectProvider(env = process.env) {
   const candidates = forced ? PROVIDERS.filter((p) => p.name === forced) : PROVIDERS;
   for (const p of candidates) {
     const apiKey = env[p.envKey];
-    if (apiKey) return { ...p, apiKey };
-    // Forcing AIDLC_PROVIDER=agy needs no key — default to `agy` on PATH.
-    if (forced === 'agy' && p.name === 'agy') return { ...p, apiKey: '1' };
+    // agy is gated on a feature flag (truthy-but-not-"false"); API-key
+    // providers are gated on a non-empty key.
+    if (p.name === 'agy') {
+      if (envEnabled(apiKey)) return { ...p, apiKey };
+      if (forced === 'agy') return { ...p, apiKey: '1' }; // explicit force needs no key
+    } else if (apiKey) {
+      return { ...p, apiKey };
+    }
   }
   return null;
 }

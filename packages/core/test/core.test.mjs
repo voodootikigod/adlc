@@ -267,3 +267,21 @@ test('agy provider: live completion round-trip', { skip: process.env.AIDLC_LIVE_
     delete process.env.AIDLC_PROVIDER;
   }
 });
+
+import { isAgyTimeout } from '../lib/llm.mjs';
+
+test('isAgyTimeout: matches a bare timeout line, not the phrase inside prose', () => {
+  assert.equal(isAgyTimeout('Error: timed out waiting for response'), true);
+  assert.equal(isAgyTimeout('Error: timed out waiting for response.\n'), true);
+  // Model legitimately quoting the phrase in a longer answer must NOT trip:
+  assert.equal(isAgyTimeout('The system prints: Error: timed out waiting for response when the API is slow. Here is how to fix it: increase the timeout and retry the request with backoff.'), false);
+  assert.equal(isAgyTimeout('PONG'), false);
+});
+
+test('agy provider: AIDLC_AGY=false/0 do NOT enable the provider', () => {
+  assert.equal(detectProvider({ AIDLC_AGY: 'false' }), null);
+  assert.equal(detectProvider({ AIDLC_AGY: '0' }), null);
+  assert.equal(detectProvider({ AIDLC_AGY: 'off' }), null);
+  assert.equal(detectProvider({ AIDLC_AGY: '1' })?.name, 'agy');
+  assert.equal(detectProvider({ AIDLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
+});
