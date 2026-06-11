@@ -13,8 +13,15 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Lib under test
-import { parseCommitFiles, filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mjs';
-import { isPlantCaught, extractLineNumbers, countFalsePositives, scoreReview } from '../lib/scorer.mjs';
+import {
+  parseCommitFiles, filterCodeFiles, selectPlants, loadPlantsFile,
+  operatorToCategory, describeDefect,
+} from '../lib/targets.mjs';
+import { scorePlants, locatingFindings, countFalsePositives } from '../lib/scorer.mjs';
+import { parseFindings, parseProseFindings } from '../lib/findings.mjs';
+import { referenceJudge, defectTokens, calibrateJudge, makeLlmJudge } from '../lib/judge.mjs';
+import { echoReviewer, oracleReviewer } from '../lib/controls.mjs';
+import { verifyWitness, filterEquivalentMutants } from '../lib/verify.mjs';
 import {
   groupByFile, applyAllPlantsToContent, runWithPlants, tokenizeCommand, substituteToken,
 } from '../lib/runner.mjs';
@@ -201,169 +208,313 @@ describe('selectPlants', () => {
   });
 });
 
-// ── isPlantCaught ─────────────────────────────────────────────────────────────
+// ── findings parsing ──────────────────────────────────────────────────────────
 
-describe('isPlantCaught — catch by line proximity', () => {
-  const plant = { file: 'src/math.mjs', line: 10, mutated: '  return a - b;', original: '  return a + b;' };
-
-  it('catches when basename and exact line mentioned', () => {
-    assert.ok(isPlantCaught('math.mjs:10 potential bug found', plant));
+describe('parseFindings', () => {
+  it('parses adversarial-review JSON findings shape', () => {
+    const out = JSON.stringify({
+      findings: [
+        { file: 'src/auth.mjs', line_start: 42, title: 'Auth bypass', body: 'inverted check', evidence: 'if (role !== admin)' },
+      ],
+    });
+    const f = parseFindings(out);
+    assert.equal(f.length, 1);
+    assert.equal(f[0].file, 'src/auth.mjs');
+    assert.equal(f[0].line, 42);
+    assert.ok(f[0].description.includes('Auth bypass'));
   });
 
-  it('catches when basename and line within +3', () => {
-    assert.ok(isPlantCaught('math.mjs:13 issue here', plant));
+  it('parses a bare JSON array of findings', () => {
+    const out = JSON.stringify([{ file: 'a.mjs', line: 7, body: 'bug' }]);
+    const f = parseFindings(out);
+    assert.equal(f.length, 1);
+    assert.equal(f[0].line, 7);
   });
 
-  it('catches when basename and line within -3', () => {
-    assert.ok(isPlantCaught('math.mjs:7 problem', plant));
+  it('tolerates log lines around a JSON block', () => {
+    const out = 'starting review...\n{"findings":[{"file":"a.mjs","line":3,"body":"x"}]}\ndone';
+    const f = parseFindings(out);
+    assert.equal(f.length, 1);
+    assert.equal(f[0].file, 'a.mjs');
   });
 
-  it('misses when line is outside ±3', () => {
-    assert.ok(!isPlantCaught('math.mjs:14 issue here', plant));
+  it('falls back to prose file:line parsing', () => {
+    const f = parseProseFindings('src/math.mjs:10 off-by-one here\nnoise');
+    assert.equal(f.length, 1);
+    assert.equal(f[0].file, 'math.mjs');
+    assert.equal(f[0].line, 10);
+    assert.ok(f[0].description.includes('off-by-one'));
   });
 
-  it('misses when file not mentioned at all', () => {
-    assert.ok(!isPlantCaught('other.mjs:10 issue', plant));
+  it('carries a repro field through when present', () => {
+    const out = JSON.stringify({ findings: [{ file: 'a.mjs', line: 1, body: 'x', repro: { cmd: 'node', args: ['t.mjs'] } }] });
+    const f = parseFindings(out);
+    assert.ok(f[0].repro);
+    assert.equal(f[0].repro.cmd, 'node');
   });
 });
 
-describe('isPlantCaught — catch by snippet', () => {
+// ── judge (reference) ─────────────────────────────────────────────────────────
+
+describe('referenceJudge / defectTokens', () => {
   const plant = {
-    file: 'src/auth.mjs',
-    line: 5,
-    mutated: '  if (user.role !== "admin") {',
-    original: '  if (user.role === "admin") {',
+    file: 'src/auth.mjs', line: 5, category: 'logic-inversion',
+    defect: 'Inverted comparison: the conditional now matches the opposite case.',
+    original: 'if (x > 0)', mutated: 'if (x <= 0)',
   };
 
-  it('catches when a >=12-char substring of mutated line appears in output', () => {
-    // 'user.role !== ' is 14 chars
-    assert.ok(isPlantCaught('Found issue: user.role !== "admin"', plant));
+  it('extracts content tokens from the defect text', () => {
+    const t = defectTokens(plant);
+    assert.ok(t.includes('inverted'));
+    assert.ok(t.includes('comparison'));
+    assert.ok(!t.includes('the')); // stopword / too short
   });
 
-  it('misses when only short substrings match', () => {
-    // Only 'user' appears — less than 12 chars
-    assert.ok(!isPlantCaught('Found issue with user', plant));
+  it('accepts a finding that describes the defect', () => {
+    assert.equal(referenceJudge(plant, { description: 'The comparison is inverted, matching the opposite case' }), true);
   });
 
-  it('misses when none of mutated line is in output', () => {
-    assert.ok(!isPlantCaught('Unrelated finding about something else entirely', plant));
+  it('REJECTS a content-free echo finding (this is the whole fix)', () => {
+    assert.equal(referenceJudge(plant, { description: 'auth.mjs:5 changed' }), false);
   });
-});
 
-describe('isPlantCaught — mutated line shorter than 12 chars', () => {
-  const plant = { file: 'a.mjs', line: 3, mutated: '  x = 2;', original: '  x = 1;' };
-
-  it('does not try snippet match when mutated line is short', () => {
-    // File not mentioned, mutated too short for snippet — should miss
-    assert.ok(!isPlantCaught('some output with no useful info', plant));
+  it('rejects a finding quoting only the raw mutated line with no defect claim', () => {
+    assert.equal(referenceJudge(plant, { description: 'if (x <= 0)' }), false);
   });
 });
 
-// ── extractLineNumbers ────────────────────────────────────────────────────────
+// ── scorePlants — verifier-based scoring ──────────────────────────────────────
 
-describe('extractLineNumbers', () => {
-  it('extracts line numbers after filename:digits', () => {
-    const nums = extractLineNumbers('math.mjs:42 is wrong, also math.mjs:100', 'math.mjs');
-    assert.deepEqual(nums.sort((a, b) => a - b), [42, 100]);
-  });
-
-  it('returns empty when filename not found', () => {
-    const nums = extractLineNumbers('other.mjs:5 issue', 'math.mjs');
-    assert.deepEqual(nums, []);
-  });
-
-  it('handles full paths like src/math.mjs:10', () => {
-    const nums = extractLineNumbers('src/math.mjs:10 bug', 'math.mjs');
-    assert.deepEqual(nums, [10]);
-  });
-});
-
-// ── countFalsePositives ───────────────────────────────────────────────────────
-
-describe('countFalsePositives', () => {
-  it('counts findings not matching any plant', () => {
-    const plants = [{ file: 'math.mjs', line: 10 }];
-    // math.mjs:10 matches the plant; other.mjs:5 does not
-    const fps = countFalsePositives('math.mjs:10 bug\nother.mjs:5 issue', plants);
-    assert.equal(fps, 1);
-  });
-
-  it('counts zero when all findings match plants', () => {
-    const plants = [{ file: 'math.mjs', line: 10 }];
-    const fps = countFalsePositives('math.mjs:10 bug', plants);
-    assert.equal(fps, 0);
-  });
-
-  it('handles empty output', () => {
-    const fps = countFalsePositives('', [{ file: 'x.mjs', line: 1 }]);
-    assert.equal(fps, 0);
-  });
-
-  it('tolerates ±3 line proximity for plants', () => {
-    const plants = [{ file: 'a.mjs', line: 10 }];
-    // a.mjs:12 is within ±3 of line 10 → matches plant → not a FP
-    const fps = countFalsePositives('a.mjs:12 issue', plants);
-    assert.equal(fps, 0);
-  });
-});
-
-// ── scoreReview ───────────────────────────────────────────────────────────────
-
-describe('scoreReview', () => {
+describe('scorePlants', () => {
   const plants = [
-    { file: 'src/math.mjs', line: 5, operator: 'off-by-one',       original: '  return n + 1;', mutated: '  return n + 2;' },
-    { file: 'src/math.mjs', line: 10, operator: 'bool-flip',        original: '  return true;', mutated: '  return false;' },
-    { file: 'src/auth.mjs', line: 20, operator: 'invert-comparison', original: '  if (x > 0) {', mutated: '  if (x <= 0) {' },
+    { file: 'src/math.mjs', line: 5, operator: 'off-by-one', category: 'off-by-one',
+      defect: 'Off-by-one error: boundary shifted by one.', original: 'n + 1', mutated: 'n + 2' },
+    { file: 'src/math.mjs', line: 10, operator: 'bool-flip', category: 'logic-inversion',
+      defect: 'Inverted boolean flips the branch taken.', original: 'return true', mutated: 'return false' },
+    { file: 'src/auth.mjs', line: 20, operator: 'invert-comparison', category: 'logic-inversion',
+      defect: 'Inverted comparison matches the opposite case.', original: 'x > 0', mutated: 'x <= 0' },
   ];
 
-  it('recall = caught / total', () => {
-    // Reviewer finds first and third plants
-    const output = 'math.mjs:5 bug\nauth.mjs:20 issue';
-    const score = scoreReview(output, plants);
-    assert.equal(score.caught, 2);
-    assert.equal(score.total, 3);
-    assert.ok(Math.abs(score.recall - 2 / 3) < 0.001);
+  it('throws without a judge — refuses to string-match', async () => {
+    await assert.rejects(() => scorePlants(plants, [], {}), /requires a judge/);
   });
 
-  it('recall = 1 when all plants caught', () => {
-    const output = 'math.mjs:5 ok\nmath.mjs:10 ok\nauth.mjs:20 ok';
-    const score = scoreReview(output, plants);
+  it('oracle reviewer (perfect findings) → recall 1.0', async () => {
+    const findings = oracleReviewer(plants);
+    const score = await scorePlants(plants, findings, { judge: referenceJudge });
     assert.equal(score.recall, 1);
     assert.equal(score.caught, 3);
   });
 
-  it('recall = 0 when no plants caught', () => {
-    const output = 'no useful findings here at all';
-    const score = scoreReview(output, plants);
+  it('echo reviewer (content-free) → recall ~0  [INVERTED: this used to score 1.0]', async () => {
+    const findings = echoReviewer(plants);
+    const score = await scorePlants(plants, findings, { judge: referenceJudge });
+    assert.equal(score.caught, 0);
     assert.equal(score.recall, 0);
+  });
+
+  it('a finding must LOCATE and IDENTIFY — locating without identifying misses', async () => {
+    // located at the right line, but the description identifies nothing
+    const findings = [{ file: 'math.mjs', line: 5, description: 'line 5 was modified', evidence: 'n + 2' }];
+    const score = await scorePlants(plants, findings, { judge: referenceJudge });
     assert.equal(score.caught, 0);
   });
 
-  it('per-operator breakdown is correct', () => {
-    // Only catch the off-by-one plant
-    const output = 'math.mjs:5 off by one';
-    const score = scoreReview(output, plants);
-    assert.equal(score.perOperator['off-by-one'].caught, 1);
-    assert.equal(score.perOperator['off-by-one'].total, 1);
-    assert.equal(score.perOperator['bool-flip'].caught, 0);
-    assert.equal(score.perOperator['bool-flip'].total, 1);
-    assert.equal(score.perOperator['invert-comparison'].caught, 0);
-    assert.equal(score.perOperator['invert-comparison'].total, 1);
+  it('identifying at the wrong location does not count', async () => {
+    const findings = [{ file: 'math.mjs', line: 99, description: 'off-by-one boundary error' }];
+    const score = await scorePlants(plants, findings, { judge: referenceJudge });
+    assert.equal(score.caught, 0);
   });
 
-  it('results array has caught flag per plant', () => {
-    const output = 'math.mjs:10 bool flip issue';
-    const score = scoreReview(output, plants);
-    const boolFlipResult = score.results.find((r) => r.operator === 'bool-flip');
-    assert.ok(boolFlipResult.caught);
-    const offByOneResult = score.results.find((r) => r.operator === 'off-by-one');
-    assert.ok(!offByOneResult.caught);
+  it('partial catch → fractional recall, keyed per category', async () => {
+    const findings = [
+      { file: 'math.mjs', line: 5, description: 'off-by-one: boundary shifted' },
+      { file: 'auth.mjs', line: 20, description: 'comparison inverted, opposite case' },
+    ];
+    const score = await scorePlants(plants, findings, { judge: referenceJudge });
+    assert.equal(score.caught, 2);
+    assert.ok(Math.abs(score.recall - 2 / 3) < 1e-6);
+    assert.equal(score.perCategory['off-by-one'].caught, 1);
+    assert.equal(score.perCategory['logic-inversion'].total, 2);
+    assert.equal(score.perCategory['logic-inversion'].caught, 1);
   });
 
-  it('falsePositives count is included', () => {
-    const output = 'math.mjs:5 issue\nunrelated.mjs:99 spurious';
-    const score = scoreReview(output, plants);
-    assert.ok(typeof score.falsePositives === 'number');
+  it('precision falls when findings flag unplanted locations', async () => {
+    const findings = [
+      { file: 'math.mjs', line: 5, description: 'off-by-one boundary shifted' }, // TP
+      { file: 'other.mjs', line: 99, description: 'spurious' },                   // FP (no plant)
+    ];
+    const score = await scorePlants(plants, findings, { judge: referenceJudge });
+    assert.equal(score.truePositives, 1);
+    assert.equal(score.falsePositives, 1);
+    assert.equal(score.precision, 0.5);
+  });
+
+  it('uses a reviewer-supplied repro behaviorally when present (verifyRepro)', async () => {
+    const findings = [{ file: 'math.mjs', line: 5, description: 'anything', repro: { cmd: 'x' } }];
+    // verifyRepro discriminates → caught even though the judge would say no
+    const judge = () => false;
+    const verifyRepro = () => true;
+    const score = await scorePlants(plants, findings, { judge, verifyRepro });
+    assert.equal(score.results.find((r) => r.line === 5).caught, true);
+  });
+
+  it('a repro that does NOT discriminate is not a catch', async () => {
+    const findings = [{ file: 'math.mjs', line: 5, description: 'x', repro: { cmd: 'x' } }];
+    const score = await scorePlants(plants, findings, { judge: () => true, verifyRepro: () => false });
+    assert.equal(score.results.find((r) => r.line === 5).caught, false);
+  });
+});
+
+// ── countFalsePositives (new signature: findings, plants) ─────────────────────
+
+describe('countFalsePositives', () => {
+  it('counts findings located at no plant', () => {
+    const plants = [{ file: 'math.mjs', line: 10 }];
+    const findings = [{ file: 'math.mjs', line: 10 }, { file: 'other.mjs', line: 5 }];
+    assert.equal(countFalsePositives(findings, plants), 1);
+  });
+
+  it('±3 proximity counts as matching a plant', () => {
+    assert.equal(countFalsePositives([{ file: 'a.mjs', line: 12 }], [{ file: 'a.mjs', line: 10 }]), 0);
+  });
+
+  it('zero findings → zero false positives', () => {
+    assert.equal(countFalsePositives([], [{ file: 'x.mjs', line: 1 }]), 0);
+  });
+});
+
+// ── control reviewers + locatingFindings ──────────────────────────────────────
+
+describe('controls + locatingFindings', () => {
+  const plants = [{ file: 'src/a.mjs', line: 10, defect: 'Inverted boolean branch.', category: 'logic-inversion', mutated: 'return false' }];
+
+  it('echoReviewer emits one located, content-free finding per plant', () => {
+    const f = echoReviewer(plants);
+    assert.equal(f.length, 1);
+    assert.equal(f[0].line, 10);
+    assert.ok(locatingFindings(plants[0], f).length === 1);   // it LOCATES
+    assert.equal(referenceJudge(plants[0], f[0]), false);     // but does not IDENTIFY
+  });
+
+  it('oracleReviewer emits findings that both locate and identify', () => {
+    const f = oracleReviewer(plants);
+    assert.equal(referenceJudge(plants[0], f[0]), true);
+  });
+});
+
+// ── calibrateJudge ────────────────────────────────────────────────────────────
+
+describe('calibrateJudge', () => {
+  it('measures agreement of a judge against labeled pairs', async () => {
+    const p = { defect: 'Inverted comparison opposite case.', category: 'logic-inversion' };
+    const fixture = [
+      { plant: p, finding: { description: 'comparison inverted, opposite case' }, expected: true },
+      { plant: p, finding: { description: 'a.mjs:1 changed' }, expected: false },
+      { plant: p, finding: { description: 'the comparison is now inverted' }, expected: true },
+    ];
+    const { agreement, n } = await calibrateJudge(fixture, referenceJudge);
+    assert.equal(n, 3);
+    assert.equal(agreement, 1); // reference judge agrees with all three labels
+  });
+
+  it('reports disagreements when the judge is wrong', async () => {
+    const p = { defect: 'Off-by-one boundary error.', category: 'off-by-one' };
+    const alwaysTrue = () => true;
+    const fixture = [{ plant: p, finding: { description: 'noise' }, expected: false }];
+    const { agreement, disagreements } = await calibrateJudge(fixture, alwaysTrue);
+    assert.equal(agreement, 0);
+    assert.equal(disagreements.length, 1);
+  });
+});
+
+// ── makeLlmJudge (injected completion, no network) ────────────────────────────
+
+describe('makeLlmJudge', () => {
+  it('builds the judge prompt from plant + finding and parses {match}', async () => {
+    let seen;
+    const completeFn = async (opts) => { seen = opts; return '{"match": true}'; };
+    const extractJsonFn = (t) => JSON.parse(t);
+    const judge = makeLlmJudge(completeFn, extractJsonFn);
+    const plant = { file: 'a.mjs', line: 5, category: 'off-by-one', defect: 'boundary shifted', original: 'i<=n', mutated: 'i<n' };
+    const finding = { file: 'a.mjs', line: 5, description: 'loop misses last element' };
+    const out = await judge(plant, finding);
+    assert.equal(out, true);
+    assert.equal(seen.tier, 'cheap');
+    assert.ok(seen.prompt.includes('boundary shifted'));
+    assert.ok(seen.prompt.includes('loop misses last element'));
+  });
+
+  it('returns false when the model does not answer match:true', async () => {
+    const judge = makeLlmJudge(async () => '{"match": false}', (t) => JSON.parse(t));
+    assert.equal(await judge({ defect: 'x' }, { description: 'y' }), false);
+  });
+});
+
+// ── verify: witness / equivalent-mutant filter ────────────────────────────────
+
+describe('filterEquivalentMutants', () => {
+  it('passes through plants without a witness (witnessed:false), drops none', () => {
+    const plants = [{ absolutePath: '/x', line: 1, original: 'a', mutated: 'b' }];
+    const { valid, equivalent } = filterEquivalentMutants(plants, '/tmp', () => ({ status: 0 }));
+    assert.equal(valid.length, 1);
+    assert.equal(valid[0].witnessed, false);
+    assert.equal(equivalent.length, 0);
+  });
+
+  it('verifyWitness confirms a discriminating witness (pass on original, fail on mutant)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-witness-'));
+    try {
+      const file = join(dir, 's.mjs');
+      writeFileSync(file, 'const v = 1;\n');
+      const plant = {
+        absolutePath: file, line: 1, original: 'const v = 1;', mutated: 'const v = 2;',
+        witness: { cmd: 'node', args: [] },
+      };
+      // injected runFn: read the file, exit 0 iff it still says "= 1"
+      const runFn = () => {
+        const cur = readFileSync(file, 'utf8');
+        return { status: cur.includes('= 1') ? 0 : 1, timedOut: false };
+      };
+      const v = verifyWitness(plant, dir, runFn);
+      assert.equal(v.discriminates, true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('flags an equivalent mutant (witness fails to discriminate) for exclusion', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rc-equiv-'));
+    try {
+      const file = join(dir, 's.mjs');
+      writeFileSync(file, 'const v = 1;\n');
+      const plant = {
+        absolutePath: file, line: 1, original: 'const v = 1;', mutated: 'const v = 2;',
+        witness: { cmd: 'node', args: [] },
+      };
+      const runFn = () => ({ status: 0, timedOut: false }); // passes on both → no discrimination
+      const { valid, equivalent } = filterEquivalentMutants([plant], dir, runFn);
+      assert.equal(valid.length, 0);
+      assert.equal(equivalent.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── targets: category + defect ────────────────────────────────────────────────
+
+describe('operatorToCategory / describeDefect', () => {
+  it('maps mechanical operators to real bug categories', () => {
+    assert.equal(operatorToCategory('invert-comparison'), 'logic-inversion');
+    assert.equal(operatorToCategory('off-by-one'), 'off-by-one');
+    assert.equal(operatorToCategory('null-return'), 'null-handling');
+  });
+
+  it('describeDefect produces a non-empty defect description with the change', () => {
+    const d = describeDefect('invert-comparison', 'if (x > 0)', 'if (x <= 0)');
+    assert.ok(d.length > 0);
+    assert.ok(d.includes('x <= 0'));
   });
 });
 
@@ -490,40 +641,46 @@ describe('runWithPlants — command injection regression', () => {
 describe('buildJsonReport', () => {
   it('shapes the output correctly', () => {
     const scorecard = {
-      recall: 0.75,
-      caught: 3,
-      total: 4,
-      falsePositives: 2,
-      minRecall: 0.5,
-      commit: 'abc123',
-      reviewExitCode: 0,
-      perOperator: {
-        'bool-flip': { caught: 2, total: 2, recall: 1 },
+      recall: 0.75, caught: 3, total: 4,
+      precision: 0.6, truePositives: 3, falsePositives: 2,
+      minRecall: 0.5, scorer: 'judge', equivalentExcluded: 1,
+      commit: 'abc123', reviewExitCode: 0,
+      perCategory: {
+        'logic-inversion': { caught: 2, total: 2, recall: 1 },
         'off-by-one': { caught: 1, total: 2, recall: 0.5 },
       },
       results: [
-        { file: 'src/a.mjs', line: 5, operator: 'bool-flip', caught: true, original: 'x', mutated: 'y' },
-        { file: 'src/b.mjs', line: 10, operator: 'off-by-one', caught: false, original: 'x', mutated: 'z' },
+        { file: 'src/a.mjs', line: 5, category: 'logic-inversion', operator: 'bool-flip', caught: true, original: 'x', mutated: 'y' },
+        { file: 'src/b.mjs', line: 10, category: 'off-by-one', operator: 'off-by-one', caught: false, original: 'x', mutated: 'z' },
       ],
     };
     const report = buildJsonReport(scorecard);
     assert.equal(report.recall, 0.75);
-    assert.equal(report.caught, 3);
-    assert.equal(report.total, 4);
+    assert.equal(report.precision, 0.6);
     assert.equal(report.falsePositives, 2);
+    assert.equal(report.scorer, 'judge');
+    assert.equal(report.equivalentExcluded, 1);
     assert.equal(report.gatePass, true);
-    assert.equal(report.commit, 'abc123');
-    assert.equal(report.reviewExitCode, 0);
-    assert.deepEqual(Object.keys(report.perOperator), ['bool-flip', 'off-by-one']);
+    assert.deepEqual(Object.keys(report.perCategory), ['logic-inversion', 'off-by-one']);
     assert.equal(report.plants[0].status, 'caught');
+    assert.equal(report.plants[0].category, 'logic-inversion');
     assert.equal(report.plants[1].status, 'missed');
   });
 
   it('gatePass is false when recall < minRecall', () => {
     const scorecard = {
-      recall: 0.3, caught: 1, total: 3, falsePositives: 0,
-      minRecall: 0.5, commit: 'x', reviewExitCode: 0,
-      perOperator: {}, results: [],
+      recall: 0.3, caught: 1, total: 3, precision: 1, truePositives: 1, falsePositives: 0,
+      minRecall: 0.5, scorer: 'judge', commit: 'x', reviewExitCode: 0,
+      perCategory: {}, results: [],
+    };
+    assert.equal(buildJsonReport(scorecard).gatePass, false);
+  });
+
+  it('gatePass is false when precision below minPrecision even if recall passes', () => {
+    const scorecard = {
+      recall: 1, caught: 3, total: 3, precision: 0.4, truePositives: 3, falsePositives: 4,
+      minRecall: 0.5, minPrecision: 0.6, scorer: 'judge', commit: 'x', reviewExitCode: 0,
+      perCategory: {}, results: [],
     };
     assert.equal(buildJsonReport(scorecard).gatePass, false);
   });
@@ -553,6 +710,7 @@ describe('{base} substitution in review command', () => {
         '--commit', 'HEAD',
         '--plants', '2',
         '--min-recall', '0',
+        '--scorer', 'string', // offline: default judge needs an LLM
         '--json',
       ],
       dir
@@ -564,24 +722,25 @@ describe('{base} substitution in review command', () => {
   });
 });
 
-// ── end-to-end: fake review cmd that finds known plants ───────────────────────
+// ── end-to-end: the echo reviewer is no longer trusted ────────────────────────
+// A reviewer that echoes every changed line used to score recall 1.0 and PASS.
+// Now: the default (judge) scorer fails CLOSED with no LLM rather than emit a
+// string-matched number, and the gameable behavior survives ONLY behind the
+// explicit, warned --scorer string legacy flag.
 
-describe('E2E: fake review finds all plants → recall 1.0, gate passes', () => {
+describe('E2E: echo reviewer is not trusted; default judge fails closed', () => {
   let dir;
   let scriptDir;
   let scriptPath;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-e2e-pass-'));
+    dir = mkdtempSync(join(tmpdir(), 'rc-e2e-echo-'));
     createRepo(dir);
-
-    // Write the helper review script to a SEPARATE temp dir (outside the git
-    // repo) so writing it doesn't make the repo dirty.
     scriptDir = mkdtempSync(join(tmpdir(), 'rc-script-'));
     scriptPath = join(scriptDir, 'fake-review.mjs');
     writeFileSync(scriptPath, [
       '#!/usr/bin/env node',
-      '// Fake reviewer: report every changed line in any file as a finding.',
+      '// Echo reviewer: report every changed line as a finding, claiming nothing.',
       'import { execFileSync } from "node:child_process";',
       'const baseRef = process.argv[2] ?? "HEAD";',
       'let diff;',
@@ -609,45 +768,28 @@ describe('E2E: fake review finds all plants → recall 1.0, gate passes', () => 
     rmSync(scriptDir, { recursive: true, force: true });
   });
 
-  it('exits 0 when recall meets threshold and outputs valid JSON', () => {
-    const result = runCli(
-      [
-        '--review-cmd', `node ${scriptPath} {base}`,
-        '--commit', 'HEAD',
-        '--plants', '3',
-        '--min-recall', '0',
-        '--json',
-      ],
-      dir
-    );
-
-    assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
-    let parsed;
-    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, result.stdout);
-    assert.ok(typeof parsed.recall === 'number');
-    assert.ok(parsed.total > 0, 'Expected at least one plant');
-    assert.equal(parsed.gatePass, true);
-    assert.equal(result.status, 0);
+  it('default scorer (judge) with NO LLM provider → exit 1, refuses to string-match', () => {
+    const result = spawnSync('node', [BIN,
+      '--review-cmd', `node ${scriptPath} {base}`,
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--json',
+    ], {
+      cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: 60000,
+      env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', AIDLC_PROVIDER: '' },
+    });
+    assert.equal(result.status, 1, `expected fail-closed exit 1, got ${result.status}`);
+    assert.ok(/no LLM provider/i.test(result.stderr), result.stderr);
   });
 
-  it('reporter catches plants whose lines appear in diff output → recall > 0', () => {
-    // Run with --min-recall 0 so we just verify the run works and recall is measured.
-    const result = runCli(
-      [
-        '--review-cmd', `node ${scriptPath} {base}`,
-        '--commit', 'HEAD',
-        '--plants', '4',
-        '--min-recall', '0',
-        '--json',
-      ],
-      dir
-    );
+  it('--scorer string runs but PRINTS A WARNING that the number is untrustworthy', () => {
+    const result = runCli([
+      '--review-cmd', `node ${scriptPath} {base}`,
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--scorer', 'string', '--json',
+    ], dir);
     assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
+    assert.ok(/NOT trustworthy|gameab|echo/i.test(result.stderr), `expected legacy warning, got: ${result.stderr}`);
     const parsed = JSON.parse(result.stdout);
-    // The fake reviewer reports all changed lines, so at least some plants
-    // whose lines are reported should be caught.
-    assert.ok(parsed.total >= 1);
-    assert.ok(parsed.recall >= 0 && parsed.recall <= 1);
+    assert.equal(parsed.scorer, 'string');
+    assert.ok(parsed.total > 0);
   });
 });
 
@@ -671,6 +813,7 @@ describe('E2E: fake review finds nothing → recall 0, gate fails (exit 2)', () 
         '--commit', 'HEAD',
         '--plants', '3',
         '--min-recall', '0.5',
+        '--scorer', 'string',
         '--json',
       ],
       dir
@@ -705,6 +848,7 @@ describe('E2E: file restoration after run', () => {
         '--commit', 'HEAD',
         '--plants', '3',
         '--min-recall', '0',
+        '--scorer', 'string',
       ],
       dir
     );

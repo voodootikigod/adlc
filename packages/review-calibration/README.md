@@ -15,19 +15,41 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
    non-test, non-config source code. Falls back to `--files` if the commit
    touches no eligible files.
 2. **Plant selection**: `mutate.generateMutants` runs over each target file's
-   full content (no line restriction). Up to `--plants` mutants are selected by
-   round-robining across operators (off-by-one, bool-flip, invert-comparison,
-   logic-swap, null-return) for category coverage.
-3. **Apply all plants**: All selected mutants are written to the working tree
-   simultaneously. The reviewer sees the planted diff vs the base commit.
-4. **Run review command**: `--review-cmd` is executed with `{base}` replaced by
-   the commit ref. The combined stdout+stderr is captured.
-5. **Restore**: Files are always restored in a `finally` block. A SIGINT handler
-   provides a second layer of protection.
-6. **Score**: A plant is CAUGHT if the review output mentions its basename AND a
-   line number within ±3, OR contains a ≥12-char substring of the mutated line.
-   Recall = caught / total.
-7. **Gate**: Exit 2 if recall < `--min-recall`; exit 0 otherwise.
+   full content. Up to `--plants` mutants are selected by round-robining across
+   operators for coverage. Each plant carries a real bug **category** (off-by-one,
+   logic-inversion, null-handling, …) and a **defect** description. `--plants-file`
+   plants may also carry a **witness**.
+3. **Equivalent-mutant filter**: a plant with a witness must DISCRIMINATE
+   (pass on the original, fail on the mutant). Plants whose witness does not
+   discriminate are equivalent mutants — there is no bug to find, so they are
+   excluded from the denominator rather than scored as missed.
+4. **Control self-test**: before scoring, two reference reviewers run — an
+   *echoer* (must score ~0) and an *oracle* (must score 1.0). If either is wrong
+   the scorer itself is broken and the tool exits 1. This bound is what makes the
+   recall number trustworthy.
+5. **Apply all plants**, **run `--review-cmd`** (`{base}` → commit ref), **restore**
+   (always, via `finally` + SIGINT handler).
+6. **Parse findings**: the reviewer's output is parsed as structured findings
+   (adversarial-review `--json` shape, or a weak prose fallback).
+7. **Score**: a plant is CAUGHT only when a finding LOCATES it (file + line ±3)
+   **AND** identifies the defect — verified behaviorally (a reviewer-supplied
+   `repro` that discriminates) or judged semantically by a cheap model. There is
+   **no string-match shortcut**: a reviewer that echoes changed lines scores ~0.
+   Recall = caught / valid plants. Precision = true / (true + spurious findings).
+8. **Gate**: Exit 2 if recall < `--min-recall` (or precision < `--min-precision`
+   when set); exit 0 otherwise. Exit 1 on operational error or a failed control.
+
+### Scorer modes (`--scorer`)
+
+- **`judge`** (default) — cheap-model semantic match. Requires an LLM provider
+  (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`). With no provider
+  the tool **fails closed** (exit 1) rather than emit an untrustworthy number.
+  A reviewer-supplied `repro` is verified behaviorally and bypasses the judge.
+- **`string`** — LEGACY location-only matching. Gameable by a reviewer that
+  echoes changed lines; prints a warning and is not a trustworthy recall number.
+  Provided only as an offline escape hatch.
+
+See `REDESIGN.md` for the full design and the rationale for each decision.
 
 ## Safety
 
@@ -104,21 +126,27 @@ review-calibration \
   "recall": 0.625,
   "caught": 5,
   "total": 8,
-  "falsePositives": 2,
+  "precision": 0.83,
+  "truePositives": 5,
+  "falsePositives": 1,
   "minRecall": 0.5,
+  "minPrecision": null,
   "gatePass": true,
+  "scorer": "judge",
+  "judgeAgreement": null,
+  "equivalentExcluded": 0,
   "commit": "HEAD",
   "reviewExitCode": 0,
-  "perOperator": {
-    "off-by-one":        { "caught": 2, "total": 2, "recall": 1.0 },
-    "bool-flip":         { "caught": 1, "total": 2, "recall": 0.5 },
-    "invert-comparison": { "caught": 1, "total": 2, "recall": 0.5 },
-    "logic-swap":        { "caught": 1, "total": 2, "recall": 0.5 }
+  "perCategory": {
+    "off-by-one":      { "caught": 2, "total": 2, "recall": 1.0 },
+    "logic-inversion": { "caught": 2, "total": 4, "recall": 0.5 },
+    "null-handling":   { "caught": 1, "total": 2, "recall": 0.5 }
   },
   "plants": [
     {
       "file": "src/auth.mjs",
       "line": 42,
+      "category": "logic-inversion",
       "operator": "invert-comparison",
       "status": "caught",
       "original": "  if (user.role === 'admin') {",
@@ -128,20 +156,25 @@ review-calibration \
 }
 ```
 
-`falsePositives` is informational — the count of `file:line`-style findings in
-the review output that don't match any plant. Use to tune review verbosity.
+`precision` is real: `truePositives / (truePositives + falsePositives)`, where a
+false positive is a finding that locates no plant (in a clean base + only-our-plants
+tree, nothing else is broken).
 
 ## Scoring logic
 
-**Caught** — a plant is caught if ANY of these is true:
-1. The review output mentions the file's basename AND a line number within ±3 of
-   the plant's line (e.g. `auth.mjs:42`).
-2. The review output contains a ≥12-character contiguous substring of the
-   mutated line (catches snippet-quoted findings regardless of line numbers).
+**Caught** — a plant is caught only when a finding does BOTH:
+1. **Locates** it — mentions the file's basename and a line within ±3.
+2. **Identifies** it — a reviewer-supplied `repro` discriminates the mutant from
+   the original (model-free), or a cheap-model judge confirms the finding
+   describes *this* defect.
 
-**Per-operator recall** — the catch rate broken down by mutation operator.
-Low recall on a specific operator reveals category-level blind spots
-(e.g. low `logic-swap` recall → add a dedicated logic-flow review lens).
+There is no "output contains a substring of the changed line" rule: that is
+exactly what let a line-echoing reviewer score 1.0. Echoing locates but does not
+identify, so it scores ~0 — enforced by the built-in echo control on every run.
+
+**Per-category recall** — the catch rate broken down by real bug category
+(off-by-one, logic-inversion, null-handling, …), so low recall on a category
+points at a specific reviewer blind spot.
 
 ## Relationship to sibling tools
 
