@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 
 /** Paths that are not source code — excluded from plant targets. */
 const EXCLUDE_PATH_RE = /(?:test|spec)/i;
-const EXCLUDE_EXT_RE = /\.(?:md|json|yml|yaml|lock|txt|toml|snap|css|svg|png|jpg|gif)$/i;
+const EXCLUDE_EXT_RE = /\.(?:md|json|jsonl|yml|yaml|lock|txt|toml|snap|css|svg|png|jpg|gif)$/i;
 
 /**
  * Parse the output of `git show --name-only <commit>` and return the file
