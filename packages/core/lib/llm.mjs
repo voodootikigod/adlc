@@ -1,10 +1,44 @@
 // LLM provider detection and completion. Zero dependencies, native fetch.
 //
 // Tiers: 'cheap' | 'mid' | 'frontier'. Defaults below are overridable:
-//   AIDLC_PROVIDER        force provider: anthropic | openai | gemini
+//   AIDLC_PROVIDER        force provider: anthropic | openai | gemini | agy
 //   AIDLC_MODEL_CHEAP     model id for the cheap tier
 //   AIDLC_MODEL_MID       model id for the mid tier
 //   AIDLC_MODEL_FRONTIER  model id for the frontier tier
+//
+// The 'agy' provider runs completions through the Antigravity CLI
+// (`agy --print`) instead of an HTTP API — quota comes from the user's
+// Antigravity plan, no API key. Opt-in: set AIDLC_AGY=1 (or a path to the
+// agy binary) or force with AIDLC_PROVIDER=agy. Extra knobs:
+//   AIDLC_AGY_TIMEOUT   print-timeout passed to agy (default 300s)
+//   AIDLC_AGY_SANDBOX   set to 1 to pass --sandbox
+
+import { spawn } from 'node:child_process';
+
+function agySend({ apiKey, model, system, prompt }, env = process.env) {
+  // apiKey carries the binary path ('1'/'true' mean default 'agy').
+  const bin = apiKey === '1' || apiKey === 'true' ? 'agy' : apiKey;
+  const args = ['--print', '--print-timeout', env.AIDLC_AGY_TIMEOUT ?? '300s', '--model', model];
+  if (env.AIDLC_AGY_SANDBOX === '1') args.push('--sandbox');
+  const input = system ? `${system}\n\n---\n\n${prompt}` : prompt;
+  return new Promise((resolve, reject) => {
+    const p = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', (e) => reject(new Error(`agy spawn failed: ${e.message}`)));
+    p.stdin.end(input);
+    p.on('close', (code) => {
+      // agy exits 0 even on print-timeout; the error surfaces in the output.
+      if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
+      if (/Error: timed out waiting for response/.test(out)) {
+        return reject(new Error('agy: timed out waiting for response'));
+      }
+      resolve(out.replace(/\s+$/, ''));
+    });
+  });
+}
 
 const PROVIDERS = [
   {
@@ -88,6 +122,18 @@ const PROVIDERS = [
       return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('');
     },
   },
+  {
+    // Antigravity CLI subprocess provider. Last in the list so API-key
+    // providers win during auto-detection; force with AIDLC_PROVIDER=agy.
+    name: 'agy',
+    envKey: 'AIDLC_AGY',
+    models: {
+      cheap: 'Gemini 3.5 Flash (Medium)',
+      mid: 'Claude Sonnet 4.6 (Thinking)',
+      frontier: 'Claude Opus 4.6 (Thinking)',
+    },
+    send: agySend,
+  },
 ];
 
 /**
@@ -100,6 +146,8 @@ export function detectProvider(env = process.env) {
   for (const p of candidates) {
     const apiKey = env[p.envKey];
     if (apiKey) return { ...p, apiKey };
+    // Forcing AIDLC_PROVIDER=agy needs no key — default to `agy` on PATH.
+    if (forced === 'agy' && p.name === 'agy') return { ...p, apiKey: '1' };
   }
   return null;
 }

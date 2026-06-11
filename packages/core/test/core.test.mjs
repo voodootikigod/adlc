@@ -222,3 +222,48 @@ test('withLedgerLock: serialises writers so large concurrent lines never interle
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- agy provider ---
+
+import { detectProvider, resolveModel, complete } from '../lib/llm.mjs';
+
+test('agy provider: not auto-detected without AIDLC_AGY', () => {
+  const env = {};
+  assert.equal(detectProvider(env), null);
+});
+
+test('agy provider: AIDLC_AGY=1 enables detection, API keys still win', () => {
+  const agyOnly = detectProvider({ AIDLC_AGY: '1' });
+  assert.equal(agyOnly.name, 'agy');
+  const both = detectProvider({ ANTHROPIC_API_KEY: 'sk-x', AIDLC_AGY: '1' });
+  assert.equal(both.name, 'anthropic');
+});
+
+test('agy provider: AIDLC_PROVIDER=agy forces without any key', () => {
+  const p = detectProvider({ AIDLC_PROVIDER: 'agy' });
+  assert.equal(p.name, 'agy');
+  assert.equal(p.apiKey, '1');
+});
+
+test('agy provider: tier map resolves to Antigravity model names', () => {
+  const p = detectProvider({ AIDLC_PROVIDER: 'agy' });
+  assert.equal(resolveModel(p, { tier: 'cheap' }, {}), 'Gemini 3.5 Flash (Medium)');
+  assert.equal(resolveModel(p, { tier: 'mid' }, {}), 'Claude Sonnet 4.6 (Thinking)');
+  assert.equal(resolveModel(p, { tier: 'frontier' }, {}), 'Claude Opus 4.6 (Thinking)');
+  assert.equal(
+    resolveModel(p, { tier: 'cheap' }, { AIDLC_MODEL_CHEAP: 'Gemini 3.5 Flash (Low)' }),
+    'Gemini 3.5 Flash (Low)'
+  );
+});
+
+// Live test — opt-in only (burns one Antigravity request per run):
+//   AIDLC_LIVE_AGY=1 node --test test/core.test.mjs
+test('agy provider: live completion round-trip', { skip: process.env.AIDLC_LIVE_AGY !== '1' }, async () => {
+  process.env.AIDLC_PROVIDER = 'agy';
+  try {
+    const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: AIDLC-AGY-OK' });
+    assert.match(out, /AIDLC-AGY-OK/);
+  } finally {
+    delete process.env.AIDLC_PROVIDER;
+  }
+});
