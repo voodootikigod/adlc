@@ -4,8 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { execFileSync } from 'node:child_process';
 import { extractJson } from '../lib/llm.mjs';
 import { appendEntry, readEntries, sha256, hashFiles } from '../lib/ledger.mjs';
+import { resolveBase, refExists } from '../lib/git.mjs';
 import {
   validateTicket, loadTickets, topoSort, computeFloat,
   globMatch, inScope, scopesOverlap,
@@ -167,4 +169,56 @@ test('changedLinesFromDiff: maps new-side line numbers', () => {
   ].join('\n');
   const changed = changedLinesFromDiff(diff);
   assert.deepEqual([...changed['x.mjs']].sort(), [2, 4]);
+});
+
+function gitRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'core-git-'));
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  return { dir, g };
+}
+
+test('resolveBase: returns merge-base with trunk, not HEAD (freeze-gate baseline)', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    const baseCommit = g('rev-parse', 'HEAD').trim();
+    g('checkout', '-q', '-b', 'feature');
+    writeFileSync(join(dir, 'a.txt'), 'two\n');
+    g('add', '-A'); g('commit', '-qm', 'committed edit');
+    const base = resolveBase(dir);
+    assert.equal(base, baseCommit, 'base must be the divergence point, so committed edits are still visible');
+    assert.notEqual(base, g('rev-parse', 'HEAD').trim());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveBase: returns null when no trunk candidate exists (callers must fail closed)', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    g('branch', '-m', 'main', 'work'); // rename away from main/master
+    assert.equal(refExists('main', dir), false);
+    assert.equal(resolveBase(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('withLedgerLock: serialises writers so large concurrent lines never interleave', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'core-lock-'));
+  try {
+    const big = 'x'.repeat(8192); // > PIPE_BUF
+    for (let i = 0; i < 5; i++) appendEntry('manifest', { i, big }, dir);
+    const { entries, skipped } = readEntries('manifest', dir);
+    assert.equal(skipped.length, 0, 'no malformed (interleaved) lines');
+    assert.equal(entries.length, 5);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
