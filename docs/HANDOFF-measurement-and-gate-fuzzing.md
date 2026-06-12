@@ -14,7 +14,7 @@ memory. Read top to bottom, then start at "Execution plan."
 - **Doctrine:** `ADLC.md` (repo root). The lifecycle phases P0–P7, the flaw
   inventory F1–F8, the property exploits E1–E5, Principle 7 (model tiering),
   Appendix C (the tool catalog), Appendix E (the frontier-free doctrine).
-- **Blog series:** `docs/posts/` (9 posts). Post 9 (`09-the-gates-didnt-hold.md`)
+- **Blog series:** `docs/posts/` (9 posts). Post 8 (`08-the-gates-didnt-hold.md`)
   publicly promises the gate-fuzzing tool — building it is now load-bearing.
 - **Conventions:** `CONVENTIONS.md`. Shared lib is `@adlc/core`, imported as
   `../../core/index.mjs`. Many small files; immutable patterns; zero deps;
@@ -148,7 +148,7 @@ three items.**
   calibration finding that hardens that gate. This is what turns "we found 11
   bypasses once" into "finding bypasses is a CI gate." GAN/fuzzer for the
   lifecycle.
-- **Why now:** post 9 promises it in print; the gate-hardening sweep was a
+- **Why now:** post 8 promises it in print; the gate-hardening sweep was a
   one-time instance of exactly this process; without it, hardening doesn't
   compound.
 - **Reuses (do not rebuild):** review-calibration's `verify.mjs` witness/oracle
