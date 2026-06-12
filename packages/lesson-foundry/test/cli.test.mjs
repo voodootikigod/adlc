@@ -2,7 +2,7 @@
 // Spawns the binary as a subprocess to verify the real contract that CI depends on.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -17,10 +17,10 @@ function makeTempDir() {
 }
 
 function writeLedger(dir, entries) {
-  const aidlcDir = join(dir, '.aidlc');
-  mkdirSync(aidlcDir, { recursive: true });
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
   const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-  writeFileSync(join(aidlcDir, 'findings.jsonl'), content, 'utf8');
+  writeFileSync(join(adlcDir, 'findings.jsonl'), content, 'utf8');
 }
 
 function runCli(args, cwd) {
@@ -67,10 +67,11 @@ test('CLI exit 0: --gate passes when all clusters are banked', () => {
       { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
     ]);
-    // Bank the cluster by creating its defense file
-    const outDir = join(dir, '.aidlc', 'lessons');
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'interrogation-template.md'), '# template\n', 'utf8');
+    // Bank the cluster by emitting its real defense files first (this writes the
+    // cluster's specific question into the interrogation template).
+    const outDir = join(dir, '.adlc', 'lessons');
+    const writeRes = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(writeRes.code, 0, `--write should succeed: ${writeRes.stderr}`);
     const { code } = runCli(['--gate', '--out-dir', outDir], dir);
     assert.strictEqual(code, 0);
   } finally {
@@ -127,7 +128,7 @@ test('CLI exit 2: --gate details reported to stderr (not stdout)', () => {
       { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in query function' },
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in query function' },
     ]);
-    const { code, stderr, stdout } = runCli(['--gate'], dir);
+    const { code, stderr } = runCli(['--gate'], dir);
     assert.strictEqual(code, 2);
     // Gate failure details go to stderr, not stdout
     assert(stderr.length > 0, 'stderr should contain gate failure message');
@@ -206,6 +207,33 @@ test('CLI --json --gate: exit 2 with valid JSON gate result when unbanked', () =
   }
 });
 
+// ---------------------------------------------------------------------------
+// F3 regression: --write must be idempotent for the interrogation template.
+// Two identical runs must NOT duplicate the spec-gap question.
+// ---------------------------------------------------------------------------
+test('CLI --write: repeated runs do not duplicate interrogation questions', () => {
+  const dir = makeTempDir();
+  try {
+    writeLedger(dir, [
+      { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+      { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+    ]);
+    const outDir = join(dir, '.adlc', 'lessons');
+
+    const first = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(first.code, 0, `first --write should pass: ${first.stderr}`);
+    const second = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(second.code, 0, `second --write should pass: ${second.stderr}`);
+
+    const template = readFileSync(join(outDir, 'interrogation-template.md'), 'utf8');
+    const marker = 'cluster: missing-null-check-in-database-query';
+    const occurrences = template.split(marker).length - 1;
+    assert.strictEqual(occurrences, 1, `question should appear exactly once, found ${occurrences}:\n${template}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI --json --gate: exit 0 with valid JSON when all banked', () => {
   const dir = makeTempDir();
   try {
@@ -213,9 +241,10 @@ test('CLI --json --gate: exit 0 with valid JSON when all banked', () => {
       { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
     ]);
-    const outDir = join(dir, '.aidlc', 'lessons');
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'interrogation-template.md'), '# template\n', 'utf8');
+    const outDir = join(dir, '.adlc', 'lessons');
+    // Emit real defenses first so the cluster's question is actually banked.
+    const writeRes = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(writeRes.code, 0, `--write should succeed: ${writeRes.stderr}`);
     const { code, stdout } = runCli(['--json', '--gate', '--out-dir', outDir], dir);
     assert.strictEqual(code, 0);
     let parsed;

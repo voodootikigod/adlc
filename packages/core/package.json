@@ -1,8 +1,8 @@
 {
-  "name": "@aidlc/core",
+  "name": "@adlc/core",
   "version": "0.1.0",
   "type": "module",
-  "description": "Shared core for AIDLC tools: LLM providers, git helpers, CLI conventions, ledgers, tickets, mutations",
+  "description": "Shared core for ADLC tools: LLM providers, git helpers, CLI conventions, ledgers, tickets, mutations",
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",

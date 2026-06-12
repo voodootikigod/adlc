@@ -26,7 +26,7 @@ rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--llm] [--pro
 |------|---------|-------------|
 | `--limit N` | `50` | Maximum number of PRs to fetch |
 | `--min N` | `2` | Minimum cluster size to author a lens |
-| `--out-dir PATH` | `.aidlc/lenses` | Directory to write lens files into |
+| `--out-dir PATH` | `.adlc/lenses` | Directory to write lens files into |
 | `--write` | false | Emit lens files (default: dry-run) |
 | `--llm` | false | Use LLM to sharpen lens title and charter (one `mid` call per cluster) |
 | `--prompt-only` | false | Print LLM prompts and exit 0 (no API key required) |
@@ -45,7 +45,7 @@ rejection-mining --limit 100 --min 3
 rejection-mining --write
 
 # Write to custom directory with LLM-sharpened titles
-rejection-mining --out-dir .aidlc/prosecution-lenses --write --llm
+rejection-mining --out-dir .adlc/prosecution-lenses --write --llm
 
 # Get the LLM prompts without calling any API
 rejection-mining --prompt-only
@@ -67,9 +67,9 @@ rejection-mining results
 
   Title                           Signals  PRs    File
   ────────────────────────────────────────────────────────────────────────
-  Error Exposure Leak             6        4      .aidlc/lenses/lens-error-expose-raw.md
-  Hardcoded Credentials           5        3      .aidlc/lenses/lens-hardcode-credentials.md
-  missing-null-check-accessing    4        2      .aidlc/lenses/lens-missing-null-check.md
+  Error Exposure Leak             6        4      .adlc/lenses/lens-error-expose-raw.md
+  Hardcoded Credentials           5        3      .adlc/lenses/lens-hardcode-credentials.md
+  missing-null-check-accessing    4        2      .adlc/lenses/lens-missing-null-check.md
 
   (dry-run — add --write to emit lens files)
 ```
@@ -113,7 +113,7 @@ or stack traces being passed directly to API response bodies or client UI.
       "title": "Error Exposure Leak",
       "count": 6,
       "prCount": 4,
-      "path": ".aidlc/lenses/lens-error-expose-raw.md"
+      "path": ".adlc/lenses/lens-error-expose-raw.md"
     }
   ]
 }
@@ -140,7 +140,7 @@ or stack traces being passed directly to API response bodies or client UI.
 
 ## Core gaps
 
-None. All required functionality (LLM, CLI, exit codes) is available in `@aidlc/core`.
+None. All required functionality (LLM, CLI, exit codes) is available in `@adlc/core`.
 
 ## Architecture
 

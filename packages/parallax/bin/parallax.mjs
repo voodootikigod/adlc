@@ -61,7 +61,7 @@ if (values.edge) {
     opError('--edge requires two ticket IDs as positional arguments: parallax --edge T1 T2');
   }
   const [idA, idB] = positionals;
-  const ticketsPath = values.tickets ?? '.aidlc/tickets.json';
+  const ticketsPath = values.tickets ?? '.adlc/tickets.json';
   const { tickets, errors: loadErrors } = loadTickets(ticketsPath);
 
   if (loadErrors.length > 0) {
@@ -196,7 +196,7 @@ Flags:
   --tier cheap|mid|frontier  override LLM tier
   --json              machine-readable output
   --prompt-only       print prompts and exit 0 (no API key needed)
-  --tickets <path>    tickets file (default .aidlc/tickets.json)
+  --tickets <path>    tickets file (default .adlc/tickets.json)
   --context <file>    context file(s) for --route mode (repeatable)
 
 Exit codes: 0 = gate passes, 1 = operational error, 2 = gate fails

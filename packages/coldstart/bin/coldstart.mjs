@@ -17,7 +17,7 @@ import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 
 const { values, positionals } = parseArgs({
   options: {
-    tickets: { type: 'string', default: '.aidlc/tickets.json' },
+    tickets: { type: 'string', default: '.adlc/tickets.json' },
     all: { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },

@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/flail-detector",
+  "name": "@adlc/flail-detector",
   "version": "0.1.0",
   "type": "module",
   "bin": { "flail-detector": "./bin/flail-detector.mjs" },

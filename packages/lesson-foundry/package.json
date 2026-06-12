@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/lesson-foundry",
+  "name": "@adlc/lesson-foundry",
   "version": "0.1.0",
   "type": "module",
   "bin": { "lesson-foundry": "./bin/lesson-foundry.mjs" },

@@ -10,6 +10,38 @@ const EXCLUDE_PATH_RE = /(?:test|spec)/i;
 const EXCLUDE_EXT_RE = /\.(?:md|json|jsonl|yml|yaml|lock|txt|toml|snap|css|svg|png|jpg|gif)$/i;
 
 /**
+ * Map a mechanical mutation operator to a real bug CATEGORY. Per-category
+ * recall (auth-bypass, off-by-one, ...) is what exposes reviewer blind spots;
+ * keying the breakdown on the operator name — the mechanical move — could not.
+ */
+const OPERATOR_CATEGORY = {
+  'off-by-one': 'off-by-one',
+  'bool-flip': 'logic-inversion',
+  'invert-comparison': 'logic-inversion',
+  'logic-swap': 'logic-inversion',
+  'null-return': 'null-handling',
+};
+
+export function operatorToCategory(operator) {
+  return OPERATOR_CATEGORY[operator] ?? 'logic';
+}
+
+/** A short natural-language defect description the judge compares findings against. */
+export function describeDefect(operator, original, mutated) {
+  const o = (original ?? '').trim();
+  const m = (mutated ?? '').trim();
+  const map = {
+    'off-by-one': 'Off-by-one error: the boundary or arithmetic was shifted by one.',
+    'bool-flip': 'Inverted boolean: a true/false value was flipped, reversing the branch taken.',
+    'invert-comparison': 'Inverted comparison: the conditional now matches the opposite case.',
+    'logic-swap': 'Swapped logical operator, changing which conditions must hold.',
+    'null-return': 'Return value nulled out, dropping the real result.',
+  };
+  const head = map[operator] ?? 'Logic defect introduced by the change.';
+  return `${head} (\`${o}\` -> \`${m}\`)`;
+}
+
+/**
  * Parse the output of `git show --name-only <commit>` and return the file
  * paths that were changed (the first line is the commit subject; file paths
  * appear after the empty line following the commit message).
@@ -105,13 +137,21 @@ export function loadPlantsFile(plantsPath, cwd) {
       errors.push(`${where}: ${p.file}:${p.line} does not match "original" — refusing to apply drifted plant`);
       continue;
     }
+    if (p.witness !== undefined && (typeof p.witness !== 'object' || typeof p.witness.cmd !== 'string')) {
+      errors.push(`${where}: "witness" must be an object with a string "cmd"`); continue;
+    }
     plants.push({
       file: p.file,
       absolutePath,
       line: p.line,
       operator: p.category ?? 'custom',
+      category: p.category ?? 'custom',
+      defect: typeof p.defect === 'string' && p.defect.trim()
+        ? p.defect
+        : `Planted defect at ${p.file}:${p.line} (\`${p.original.trim()}\` -> \`${p.mutated.trim()}\`)`,
       original: p.original,
       mutated: p.mutated,
+      ...(p.witness ? { witness: p.witness } : {}),
     });
   }
   return { plants, errors };
@@ -161,7 +201,12 @@ export function selectPlants(codeFiles, cwd, maxPlants, generateMutants) {
     // Generate with no targetLines restriction (full file) and a large cap.
     const mutants = generateMutants(content, { maxMutants: 500 });
     for (const m of mutants) {
-      const entry = { file, absolutePath, line: m.line, operator: m.operator, original: m.original, mutated: m.mutated };
+      const entry = {
+        file, absolutePath, line: m.line, operator: m.operator,
+        category: operatorToCategory(m.operator),
+        defect: describeDefect(m.operator, m.original, m.mutated),
+        original: m.original, mutated: m.mutated,
+      };
       if (!byOperator.has(m.operator)) byOperator.set(m.operator, []);
       byOperator.get(m.operator).push(entry);
     }

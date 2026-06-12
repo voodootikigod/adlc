@@ -22,7 +22,7 @@ function makeCluster(overrides = {}) {
 function makePlan(overrides = {}) {
   return {
     slug: 'avoid-hardcoding',
-    path: '.aidlc/lenses/lens-avoid-hardcoding.md',
+    path: '.adlc/lenses/lens-avoid-hardcoding.md',
     content: '# Lens: Avoid Hardcoding',
     ...overrides,
   };
@@ -92,7 +92,7 @@ test('buildHumanReport: no clusters → shows "No clusters met" message', () => 
 
 test('buildHumanReport: reports Lenses count equal to clusters.length', () => {
   const clusters = [makeCluster(), makeCluster({ slug: 'other', prNumbers: new Set([4]) })];
-  const lensPlans = [makePlan(), makePlan({ slug: 'other', path: '.aidlc/lenses/lens-other.md' })];
+  const lensPlans = [makePlan(), makePlan({ slug: 'other', path: '.adlc/lenses/lens-other.md' })];
   const text = buildHumanReport({
     clusters,
     lensPlans,
@@ -136,7 +136,7 @@ test('buildHumanReport: table row uses LLM title when provided', () => {
 
 test('buildHumanReport: table row includes lens file path', () => {
   const cluster = makeCluster();
-  const plan = makePlan({ path: '.aidlc/lenses/lens-avoid-hardcoding.md' });
+  const plan = makePlan({ path: '.adlc/lenses/lens-avoid-hardcoding.md' });
   const text = buildHumanReport({
     clusters: [cluster],
     lensPlans: [plan],
@@ -144,7 +144,7 @@ test('buildHumanReport: table row includes lens file path', () => {
     totalPRs: 3,
     skippedPRs: 0,
   }).join('\n');
-  assert(text.includes('.aidlc/lenses/lens-avoid-hardcoding.md'));
+  assert(text.includes('.adlc/lenses/lens-avoid-hardcoding.md'));
 });
 
 test('buildHumanReport: shows dry-run marker when plan is null', () => {
@@ -167,7 +167,7 @@ test('buildHumanReport: multiple clusters each appear as table rows', () => {
   ];
   const lensPlans = [
     makePlan({ slug: 'avoid-hardcoding' }),
-    makePlan({ slug: 'missing-null-check', path: '.aidlc/lenses/lens-missing-null-check.md' }),
+    makePlan({ slug: 'missing-null-check', path: '.adlc/lenses/lens-missing-null-check.md' }),
   ];
   const text = buildHumanReport({
     clusters,
@@ -226,7 +226,7 @@ test('buildJsonResult: lensCount equals clusters.length', () => {
 
 test('buildJsonResult: each lens entry has required fields', () => {
   const cluster = makeCluster({ slug: 'avoid-hardcoding', title: null, count: 3, prNumbers: new Set([1, 2, 3]) });
-  const plan = makePlan({ path: '.aidlc/lenses/lens-avoid-hardcoding.md' });
+  const plan = makePlan({ path: '.adlc/lenses/lens-avoid-hardcoding.md' });
   const result = buildJsonResult({
     clusters: [cluster],
     lensPlans: [plan],
@@ -239,7 +239,7 @@ test('buildJsonResult: each lens entry has required fields', () => {
   assert(typeof lens.title === 'string');
   assert.strictEqual(lens.count, 3);
   assert.strictEqual(lens.prCount, 3);
-  assert.strictEqual(lens.path, '.aidlc/lenses/lens-avoid-hardcoding.md');
+  assert.strictEqual(lens.path, '.adlc/lenses/lens-avoid-hardcoding.md');
 });
 
 test('buildJsonResult: lens title falls back to slug when cluster.title is null', () => {
@@ -301,8 +301,8 @@ test('buildJsonResult: multiple lenses in correct order', () => {
     makeCluster({ slug: 'second', prNumbers: new Set([2]) }),
   ];
   const lensPlans = [
-    makePlan({ slug: 'first', path: '.aidlc/lenses/lens-first.md' }),
-    makePlan({ slug: 'second', path: '.aidlc/lenses/lens-second.md' }),
+    makePlan({ slug: 'first', path: '.adlc/lenses/lens-first.md' }),
+    makePlan({ slug: 'second', path: '.adlc/lenses/lens-second.md' }),
   ];
   const result = buildJsonResult({
     clusters,

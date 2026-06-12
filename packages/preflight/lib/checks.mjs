@@ -70,17 +70,17 @@ export async function checkGit(cwd = process.cwd()) {
   }
 }
 
-/** REQUIRED: write — write+delete .aidlc/tmp/preflight-test in cwd. */
+/** REQUIRED: write — write+delete .adlc/tmp/preflight-test in cwd. */
 export async function checkWrite(cwd = process.cwd()) {
   const name = 'write';
-  const dir = join(cwd, '.aidlc', 'tmp');
+  const dir = join(cwd, '.adlc', 'tmp');
   const file = join(dir, 'preflight-test');
   let written = false;
   try {
     await mkdir(dir, { recursive: true });
     await writeFile(file, 'preflight-write-test');
     written = true;
-    return { name, status: 'pass', detail: `.aidlc/tmp/preflight-test written and removed` };
+    return { name, status: 'pass', detail: `.adlc/tmp/preflight-test written and removed` };
   } catch (err) {
     return { name, status: 'fail', detail: String(err.message ?? err) };
   } finally {

@@ -31,14 +31,19 @@ export function buildCheckTicket(completeFn, extractJsonFn) {
  * Returns { id, gaps: [{what, why_blocking}] }.
  * Throws on LLM/network errors (caller handles with opError).
  *
- * When AIDLC_GATE_MOCK_RESPONSE is set in the environment it is parsed as
- * a JSON string and returned directly (skipping the real LLM call). This
- * allows CLI integration tests to exercise the full output and exit-code
- * paths without network access.
+ * ADLC_GATE_MOCK_RESPONSE is a TEST-ONLY seam: it is honored ONLY when
+ * NODE_ENV === 'test'. In that case it is parsed as a JSON string and
+ * returned directly (skipping the real LLM call), letting CLI integration
+ * tests exercise the full output and exit-code paths without network access.
+ *
+ * In any non-test run the env var is IGNORED and the real LLM path is taken.
+ * This closes the F5 backdoor where ambient, agent-controlled env data could
+ * force a green executability verdict with no LLM call. The real path fails
+ * closed when no API key is configured — which is the correct behavior.
  */
 export async function checkTicket(ticket) {
-  const mockEnv = process.env.AIDLC_GATE_MOCK_RESPONSE;
-  if (mockEnv !== undefined) {
+  const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
+  if (mockEnv !== undefined && process.env.NODE_ENV === 'test') {
     const parsed = JSON.parse(mockEnv);
     const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
     return { id: ticket.id, gaps };

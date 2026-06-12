@@ -79,7 +79,7 @@ export function buildPriors(entries) {
  * directly as "models" in the prior data — callers should store model names
  * that correspond to tier identifiers, or callers can just check by tier name).
  *
- * In the AIDLC context, the manifest stores the model *name*, not the tier.
+ * In the ADLC context, the manifest stores the model *name*, not the tier.
  * So we look for any model in the prior data and pick the best-performing one,
  * then map it back to a tier via the TIERS list.
  *

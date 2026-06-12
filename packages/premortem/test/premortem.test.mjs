@@ -293,7 +293,7 @@ export async function load(url, context, nextLoad) {
 `;
 
 const RUNNER_SOURCE = `
-import { run } from '/Users/voodootikigod/Projects/aidlc/packages/premortem/lib/run.mjs';
+import { run } from '__RUN_URL__';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -321,8 +321,10 @@ test('--json: run() emits JSON causes array to stdout (mocked LLM)', () => {
       JSON.stringify(coreUrl),
     );
 
+    // Derive run.mjs's real URL (never hardcode the absolute project path).
+    const runUrl = new URL('../lib/run.mjs', import.meta.url).href;
     writeFileSync(loaderPath, loaderWithUrl, 'utf8');
-    writeFileSync(runnerPath, RUNNER_SOURCE, 'utf8');
+    writeFileSync(runnerPath, RUNNER_SOURCE.replace('__RUN_URL__', runUrl), 'utf8');
 
     const result = spawnSync(
       process.execPath,

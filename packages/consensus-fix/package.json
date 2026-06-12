@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/consensus-fix",
+  "name": "@adlc/consensus-fix",
   "version": "0.1.0",
   "type": "module",
   "bin": { "consensus-fix": "./bin/consensus-fix.mjs" },

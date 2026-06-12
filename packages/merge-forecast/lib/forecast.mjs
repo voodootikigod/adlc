@@ -6,7 +6,7 @@
 import { parallelEligiblePairs, topoWaves, mergeOrder } from './reachability.mjs';
 import { pairScore } from './signals.mjs';
 import { walkTree } from './signals.mjs';
-import { isGitRepo, coChange } from '../../core/index.mjs';
+import { isGitRepo, coChange, topoSort } from '../../core/index.mjs';
 
 /**
  * Run the full forecast.
@@ -31,6 +31,28 @@ export async function runForecast(opts) {
     buildMin = null,
     mergeMin = null,
   } = opts;
+
+  // Validate the ticket DAG (Spec D2): a dependency cycle makes the schedule
+  // undefined. topoWaves drains indegree-0 nodes and silently DROPS any node
+  // trapped in a cycle, producing an empty/partial schedule with a clean exit.
+  // Detect that here and fail the gate instead, naming the offending tickets.
+  const { cycle } = topoSort(tickets);
+  if (cycle && cycle.length > 0) {
+    return {
+      pairs: [],
+      waves: [],
+      mergeOrder: [],
+      certifiedWidth: 0,
+      backpressureWidth: null,
+      recommendedWidth: 0,
+      warnings: [],
+      gateFailures: [
+        `dependency cycle in ticket DAG — cannot schedule: ` +
+          cycle.join(', '),
+      ],
+      pullQueueNote: 'idle builders claim next unblocked',
+    };
+  }
 
   // Walk the repo tree once
   const repoFiles = walkTree(root);

@@ -1,4 +1,4 @@
-# coldstart — AIDLC P2 Ticket Executability Gate
+# coldstart — ADLC P2 Ticket Executability Gate
 
 Checks whether a ticket is fully self-contained before a build agent touches it.
 A cheap-tier LLM plays the role of a fresh agent with no prior context and lists
@@ -21,7 +21,7 @@ coldstart --all     [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tickets <path>` | `.aidlc/tickets.json` | Path to the tickets file |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
 | `--all` | off | Run the gate on every ticket in the file |
 | `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made |
 | `--json` | off | Machine-readable JSON output for orchestrators |
@@ -98,8 +98,8 @@ as missing**. Only genuine human-only questions are gaps:
 The tool auto-detects the first available provider in order:
 `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GEMINI_API_KEY`.
 
-Force a provider: `AIDLC_PROVIDER=openai`.
-Override the cheap-tier model: `AIDLC_MODEL_CHEAP=claude-haiku-4-5`.
+Force a provider: `ADLC_PROVIDER=openai`.
+Override the cheap-tier model: `ADLC_MODEL_CHEAP=claude-haiku-4-5`.
 
 Without a provider, the tool exits 1 unless `--prompt-only` is passed.
 
@@ -115,6 +115,6 @@ and C5 (`rails-guard`).
 
 ## Core gaps
 
-None. All required functionality is available in `@aidlc/core`:
+None. All required functionality is available in `@adlc/core`:
 `loadTickets`, `complete`, `extractJson`, `parseArgs`, `pass`, `gateFail`,
 `opError`, `printJson`, `promptOnly`, `detectProvider`.

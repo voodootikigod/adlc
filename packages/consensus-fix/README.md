@@ -1,4 +1,4 @@
-# @aidlc/consensus-fix
+# @adlc/consensus-fix
 
 N-version programming for failing tests. Fan N independent LLM completions at the same broken test, evaluate each candidate, group survivors by agreement, and recommend the smallest fix from the largest consensus group.
 
@@ -23,6 +23,7 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--rails <cmd>` | _(none)_ | The **regression gate**: a command that runs the FULL frozen rail suite (all tests + types). A candidate survives only if BOTH `--test-cmd` and `--rails` exit 0. A candidate that fixes the repro but reddens the rails is **rejected**, not ranked. If omitted, candidates are checked only against `--test-cmd` and a **WARNING** is printed (no silent caps). |
 | `--n <int>` | `3` | Number of independent fix candidates to generate. |
 | `--tier cheap\|mid\|frontier` | `mid` | LLM tier to use for completions. |
 | `--apply` | off | Write the winning fix. Default is dry-run (report only). |
@@ -49,10 +50,11 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 3. **Fan**: send N independent, stateless LLM completions in parallel with the prompt: failing command + last 4000 chars of test output + all source file contents. Request JSON `{changes: [{file, content}]}`.
 4. **Evaluate sequentially**: for each candidate:
    - Parse and validate JSON. Discard if invalid or if any `file` is not in `--files`.
-   - Apply changes, run `--test-cmd`, record pass/fail and changed-line count.
+   - Apply changes, run `--test-cmd` (the **repro gate**). If it passes and `--rails` was supplied, run `--rails` (the **regression gate**) against the same applied changes. A candidate survives only if BOTH exit 0. A candidate that passes the repro but reddens the rails is rejected (lands in `failed`, not `survivors`).
+   - Record pass/fail and changed-line count.
    - Restore snapshot (`finally`) regardless of outcome.
 5. **Agreement grouping**: normalize each surviving changeset (collapse whitespace per line) and group identical sets.
-6. **Winner selection**: pick the member of the largest group with the fewest changed lines (ties broken by candidate index).
+6. **Winner selection**: among candidates that passed BOTH gates, pick the member of the largest agreement group with the fewest changed lines (ties broken by candidate index). The smallest-diff tiebreaker never sees a candidate that failed the rails, so it cannot reward a gaming fix.
 7. **Output**: dry-run report by default; `--apply` writes the winner.
 
 ### All-divergent detection
@@ -69,8 +71,16 @@ consensus-fix --test-cmd "node --test test/math.test.mjs" \
               --files src/math.mjs \
               --n 5
 
+# Repro gate + full rails regression gate (recommended).
+# A candidate that fixes the one test but breaks any other test is rejected.
+consensus-fix --test-cmd "node --test test/math.test.mjs" \
+              --rails    "node --test test/*.test.mjs" \
+              --files src/math.mjs \
+              --n 5
+
 # Apply the winner
 consensus-fix --test-cmd "npm test -- --grep 'add function'" \
+              --rails    "npm test" \
               --files src/add.mjs,src/utils.mjs \
               --apply
 
@@ -103,7 +113,8 @@ consensus-fix --test-cmd "node --test test/*.test.mjs" \
     "failed": 1,
     "discarded": 0,
     "groups": 1,
-    "allDivergent": false
+    "allDivergent": false,
+    "railsChecked": true
   },
   "groups": [
     { "groupIndex": 0, "size": 2, "candidateIndices": [0, 2] }
@@ -132,7 +143,7 @@ consensus-fix --test-cmd "node --test test/*.test.mjs" \
 
 ## LLM provider detection
 
-Inherits from `@aidlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`. Force a provider with `AIDLC_PROVIDER`. Override the model per tier via `AIDLC_MODEL_CHEAP`, `AIDLC_MODEL_MID`, `AIDLC_MODEL_FRONTIER`.
+Inherits from `@adlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`. Force a provider with `ADLC_PROVIDER`. Override the model per tier via `ADLC_MODEL_CHEAP`, `ADLC_MODEL_MID`, `ADLC_MODEL_FRONTIER`.
 
 ---
 
@@ -147,4 +158,4 @@ Inherits from `@aidlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API
 
 ## Core gaps
 
-None. `fan`, `complete`, `extractJson`, `detectProvider`, `resolveModel`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `promptOnly`, and `isDirty` are all provided by `@aidlc/core`.
+None. `fan`, `complete`, `extractJson`, `detectProvider`, `resolveModel`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `promptOnly`, and `isDirty` are all provided by `@adlc/core`.

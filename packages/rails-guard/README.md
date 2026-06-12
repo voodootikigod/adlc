@@ -31,9 +31,9 @@ rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] \
 |------|---------|-------------|
 | `--base <ref>` | `HEAD` | Git ref to diff against |
 | `--ticket <id>` | — | Load rails and `allow-suppression` declarations from this ticket |
-| `--tickets <path>` | `.aidlc/tickets.json` | Path to tickets file |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to tickets file |
 | `--rails <glob>` | — | One or more frozen-path globs (repeatable; overrides `ticket.rails`) |
-| `--record` | off | On a clean pass, append a manifest entry to `.aidlc/manifest.jsonl` |
+| `--record` | off | On a clean pass, append a manifest entry to `.adlc/manifest.jsonl` |
 | `--json` | off | Emit machine-readable JSON result |
 | `--help` | — | Print this help and exit 0 |
 
@@ -61,7 +61,7 @@ One declaration per line; case-sensitive; marker text must match exactly.
 rails-guard --rails "test/**" --rails "schema/**"
 
 # Use rails declared in ticket T42; allow .skip( for known broken test
-rails-guard --ticket T42 --tickets .aidlc/tickets.json
+rails-guard --ticket T42 --tickets .adlc/tickets.json
 
 # Diff against a feature branch base commit
 rails-guard --rails "test/**" --base origin/main
@@ -113,7 +113,7 @@ rails-guard: 2 violation(s) found
 
 ### Manifest record (`--record`, clean pass only)
 
-Appended to `.aidlc/manifest.jsonl`:
+Appended to `.adlc/manifest.jsonl`:
 
 ```json
 {
@@ -160,4 +160,4 @@ the time of the clean pass — a content-addressed snapshot usable for auditing.
 ## Core gaps
 
 None. All required APIs (`globMatch`, `hashFiles`, `appendEntry`, `changedFiles`,
-`gitDiff`, `loadTickets`) are present in `@aidlc/core`.
+`gitDiff`, `loadTickets`) are present in `@adlc/core`.

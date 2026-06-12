@@ -70,7 +70,7 @@ or if they have extensions `.md`, `.json`, `.yml`, `.yaml`, `.lock`, `.txt`,
 Within eligible files, only lines changed in the diff are targeted. Lines that
 are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 
-### Mutation operators (from `@aidlc/core`)
+### Mutation operators (from `@adlc/core`)
 
 | Operator | Example |
 |----------|---------|
@@ -120,7 +120,7 @@ are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 None. All required functionality (`gitDiff`, `isDirty`, `isGitRepo`,
 `mutate.generateMutants`, `mutate.applyMutant`, `mutate.changedLinesFromDiff`,
 `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`) is available in
-`@aidlc/core`.
+`@adlc/core`.
 
 ## Implementation notes
 

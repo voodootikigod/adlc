@@ -7,7 +7,7 @@ import { record, parseData } from '../lib/record.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
-import { AIDLC_DIR } from '../../core/index.mjs';
+import { ADLC_DIR } from '../../core/index.mjs';
 
 const { values: flags, positionals } = parseArgs({
   options: {
@@ -15,7 +15,7 @@ const { values: flags, positionals } = parseArgs({
     data:   { type: 'string' },
     files:  { type: 'string' },
     json:   { type: 'boolean', default: false },
-    dir:    { type: 'string', default: AIDLC_DIR },
+    dir:    { type: 'string', default: ADLC_DIR },
   },
 });
 
@@ -61,7 +61,8 @@ if (verb === 'record') {
   if (flags.json) {
     printJson(entry);
   } else {
-    console.log(`recorded: seq=${entry.seq} gate=${entry.gate} ts=${entry.ts}`);
+    const signed = typeof entry.sig === 'string' ? ' (signed)' : ' (unsigned)';
+    console.log(`recorded: seq=${entry.seq} gate=${entry.gate} ts=${entry.ts}${signed}`);
   }
 
   pass();

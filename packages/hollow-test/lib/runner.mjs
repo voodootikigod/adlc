@@ -16,6 +16,33 @@ function childEnv() {
 }
 
 /**
+ * Run the test command once against whatever is currently on disk. Does NOT
+ * mutate or restore any file — the caller controls file state. Used both for
+ * the green-baseline check (unmutated code) and inside runMutant (mutated
+ * code), so baseline and mutant runs are byte-for-byte identical in their
+ * spawn settings (shell, env, timeout, cwd).
+ *
+ * @param {string} testCmd   - Shell command to run the test suite.
+ * @param {number} timeoutMs - Maximum time in ms to wait for the test command.
+ * @param {string} cwd       - Working directory for the test command.
+ * @returns {{ status: number | null, timedOut: boolean }}
+ */
+export function runTest(testCmd, timeoutMs, cwd) {
+  const result = spawnSync(testCmd, {
+    shell: true,
+    cwd,
+    timeout: timeoutMs,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    env: childEnv(),
+  });
+
+  const timedOut = result.signal === 'SIGTERM' || result.status === null;
+
+  return { status: result.status, timedOut };
+}
+
+/**
  * Run one mutant trial. Writes mutated content to disk, runs test command,
  * always restores original content (finally-like pattern using try/finally).
  *
@@ -28,28 +55,20 @@ function childEnv() {
  * @returns {{ killed: boolean, timedOut: boolean, exitCode: number | null }}
  */
 export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) {
-  let result;
+  let trial;
   try {
     writeFileSync(filePath, mutated, 'utf8');
-    result = spawnSync(testCmd, {
-      shell: true,
-      cwd,
-      timeout: timeoutMs,
-      encoding: 'utf8',
-      stdio: 'pipe',
-      env: childEnv(),
-    });
+    trial = runTest(testCmd, timeoutMs, cwd);
   } finally {
-    // Always restore original content, even if spawnSync threw.
+    // Always restore original content, even if the test run threw.
     writeFileSync(filePath, original, 'utf8');
   }
 
-  const timedOut = result.signal === 'SIGTERM' || result.status === null;
-  const killed = timedOut || (result.status !== 0);
+  const killed = trial.timedOut || (trial.status !== 0);
 
   return {
     killed,
-    timedOut,
-    exitCode: result.status,
+    timedOut: trial.timedOut,
+    exitCode: trial.status,
   };
 }

@@ -4,8 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { execFileSync } from 'node:child_process';
 import { extractJson } from '../lib/llm.mjs';
 import { appendEntry, readEntries, sha256, hashFiles } from '../lib/ledger.mjs';
+import { resolveBase, refExists } from '../lib/git.mjs';
 import {
   validateTicket, loadTickets, topoSort, computeFloat,
   globMatch, inScope, scopesOverlap,
@@ -30,7 +32,7 @@ test('extractJson: throws on no JSON', () => {
 });
 
 test('ledger: append + read round-trip, malformed lines reported not swallowed', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'aidlc-ledger-'));
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-ledger-'));
   try {
     appendEntry('findings', { id: 1 }, dir);
     appendEntry('findings', { id: 2 }, dir);
@@ -57,7 +59,7 @@ test('validateTicket: catches missing fields', () => {
 });
 
 test('loadTickets: detects duplicate ids and unknown edges', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'aidlc-tickets-'));
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-tickets-'));
   try {
     const p = join(dir, 'tickets.json');
     writeFileSync(p, JSON.stringify({
@@ -167,4 +169,120 @@ test('changedLinesFromDiff: maps new-side line numbers', () => {
   ].join('\n');
   const changed = changedLinesFromDiff(diff);
   assert.deepEqual([...changed['x.mjs']].sort(), [2, 4]);
+});
+
+function gitRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'core-git-'));
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false'); // never depend on the dev's signing setup in a test
+  return { dir, g };
+}
+
+test('resolveBase: returns merge-base with trunk, not HEAD (freeze-gate baseline)', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    const baseCommit = g('rev-parse', 'HEAD').trim();
+    g('checkout', '-q', '-b', 'feature');
+    writeFileSync(join(dir, 'a.txt'), 'two\n');
+    g('add', '-A'); g('commit', '-qm', 'committed edit');
+    const base = resolveBase(dir);
+    assert.equal(base, baseCommit, 'base must be the divergence point, so committed edits are still visible');
+    assert.notEqual(base, g('rev-parse', 'HEAD').trim());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveBase: returns null when no trunk candidate exists (callers must fail closed)', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    g('branch', '-m', 'main', 'work'); // rename away from main/master
+    assert.equal(refExists('main', dir), false);
+    assert.equal(resolveBase(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('withLedgerLock: serialises writers so large concurrent lines never interleave', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'core-lock-'));
+  try {
+    const big = 'x'.repeat(8192); // > PIPE_BUF
+    for (let i = 0; i < 5; i++) appendEntry('manifest', { i, big }, dir);
+    const { entries, skipped } = readEntries('manifest', dir);
+    assert.equal(skipped.length, 0, 'no malformed (interleaved) lines');
+    assert.equal(entries.length, 5);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- agy provider ---
+
+import { detectProvider, resolveModel, complete } from '../lib/llm.mjs';
+
+test('agy provider: not auto-detected without ADLC_AGY', () => {
+  const env = {};
+  assert.equal(detectProvider(env), null);
+});
+
+test('agy provider: ADLC_AGY=1 enables detection, API keys still win', () => {
+  const agyOnly = detectProvider({ ADLC_AGY: '1' });
+  assert.equal(agyOnly.name, 'agy');
+  const both = detectProvider({ ANTHROPIC_API_KEY: 'sk-x', ADLC_AGY: '1' });
+  assert.equal(both.name, 'anthropic');
+});
+
+test('agy provider: ADLC_PROVIDER=agy forces without any key', () => {
+  const p = detectProvider({ ADLC_PROVIDER: 'agy' });
+  assert.equal(p.name, 'agy');
+  assert.equal(p.apiKey, '1');
+});
+
+test('agy provider: tier map resolves to Antigravity model names', () => {
+  const p = detectProvider({ ADLC_PROVIDER: 'agy' });
+  assert.equal(resolveModel(p, { tier: 'cheap' }, {}), 'Gemini 3.5 Flash (Medium)');
+  assert.equal(resolveModel(p, { tier: 'mid' }, {}), 'Claude Sonnet 4.6 (Thinking)');
+  assert.equal(resolveModel(p, { tier: 'frontier' }, {}), 'Claude Opus 4.6 (Thinking)');
+  assert.equal(
+    resolveModel(p, { tier: 'cheap' }, { ADLC_MODEL_CHEAP: 'Gemini 3.5 Flash (Low)' }),
+    'Gemini 3.5 Flash (Low)'
+  );
+});
+
+// Live test — opt-in only (burns one Antigravity request per run):
+//   ADLC_LIVE_AGY=1 node --test test/core.test.mjs
+test('agy provider: live completion round-trip', { skip: process.env.ADLC_LIVE_AGY !== '1' }, async () => {
+  process.env.ADLC_PROVIDER = 'agy';
+  try {
+    const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: ADLC-AGY-OK' });
+    assert.match(out, /ADLC-AGY-OK/);
+  } finally {
+    delete process.env.ADLC_PROVIDER;
+  }
+});
+
+import { isAgyTimeout } from '../lib/llm.mjs';
+
+test('isAgyTimeout: matches a bare timeout line, not the phrase inside prose', () => {
+  assert.equal(isAgyTimeout('Error: timed out waiting for response'), true);
+  assert.equal(isAgyTimeout('Error: timed out waiting for response.\n'), true);
+  // Model legitimately quoting the phrase in a longer answer must NOT trip:
+  assert.equal(isAgyTimeout('The system prints: Error: timed out waiting for response when the API is slow. Here is how to fix it: increase the timeout and retry the request with backoff.'), false);
+  assert.equal(isAgyTimeout('PONG'), false);
+});
+
+test('agy provider: ADLC_AGY=false/0 do NOT enable the provider', () => {
+  assert.equal(detectProvider({ ADLC_AGY: 'false' }), null);
+  assert.equal(detectProvider({ ADLC_AGY: '0' }), null);
+  assert.equal(detectProvider({ ADLC_AGY: 'off' }), null);
+  assert.equal(detectProvider({ ADLC_AGY: '1' })?.name, 'agy');
+  assert.equal(detectProvider({ ADLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
 });

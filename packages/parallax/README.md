@@ -1,4 +1,4 @@
-# @aidlc/parallax
+# @adlc/parallax
 
 Measured-ambiguity interrogation for feature requests, ticket edge contracts, and mid-build routing questions. Replaces single-model introspection with **sampling diversity as an instrument**: fan N independent cheap-tier completions, diff the readings, surface only the divergences as multiple-choice questions.
 
@@ -47,7 +47,7 @@ parallax --route "question" --context spec.md --context arch.md
 | `--edge` | false | Edge mode: follow with two ticket IDs as positionals |
 | `--route <text>` | — | Route mode: question to route |
 | `--context <file>` | — | Route mode: context file (repeatable) |
-| `--tickets <path>` | `.aidlc/tickets.json` | Tickets file for edge mode |
+| `--tickets <path>` | `.adlc/tickets.json` | Tickets file for edge mode |
 | `--n <int>` | 3 | Fan width (number of independent readings) |
 | `--threshold <0-1>` | 0.25 | Ambiguity score gate threshold |
 | `--tier cheap\|mid\|frontier` | cheap for fan, mid for divergence | Override LLM tier |
@@ -153,4 +153,4 @@ The score is the key output: a spec that converged at N=5 with score 0.00 is a m
 
 ## Core gaps
 
-None. All required functions (`fan`, `complete`, `extractJson`, `loadTickets`, `promptOnly`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `readStdin`) are present in `@aidlc/core`.
+None. All required functions (`fan`, `complete`, `extractJson`, `loadTickets`, `promptOnly`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `readStdin`) are present in `@adlc/core`.

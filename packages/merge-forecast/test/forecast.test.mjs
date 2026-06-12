@@ -8,9 +8,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const BIN = join(__dirname, '..', 'bin', 'merge-forecast.mjs');
 
 import {
   parallelEligiblePairs,
@@ -64,6 +68,32 @@ function gitCommit(dir, files, message) {
     execFileSync('git', ['add', relPath], { cwd: dir, stdio: 'ignore' });
   }
   execFileSync('git', ['commit', '-m', message, '--allow-empty'], { cwd: dir, stdio: 'ignore' });
+}
+
+/** Write a tickets file at .adlc/tickets.json under root. */
+function writeTickets(root, tickets) {
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2), 'utf8');
+}
+
+/**
+ * Invoke the merge-forecast bin with cwd=root.
+ * Returns { status, stdout, stderr }. Never throws on non-zero exit.
+ */
+function runBin(root, args = []) {
+  try {
+    const stdout = execFileSync('node', [BIN, ...args], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (err) {
+    return {
+      status: err.status ?? 1,
+      stdout: err.stdout?.toString() ?? '',
+      stderr: err.stderr?.toString() ?? '',
+    };
+  }
 }
 
 // ─── Reachability tests ───────────────────────────────────────────────────────
@@ -564,6 +594,106 @@ describe('walkTree', () => {
       assert.ok(files.includes('src/a.js'));
       assert.ok(!files.some((f) => f.includes('node_modules')));
       assert.ok(!files.some((f) => f.includes('.git')));
+    } finally {
+      cleanup(root);
+    }
+  });
+});
+
+// ─── Cyclic DAG regression (Spec D2 — must validate the ticket DAG) ────────────
+//
+// Regression for: a cyclic ticket DAG (T1→T2→T3→T1) was silently drained by the
+// indegree-0 wave scheduler, producing waves:[], mergeOrder:[], gateFailures:[]
+// and EXIT 0 — a genuine dependency-cycle partition reported as a clean schedule
+// of zero tickets. A cycle must fail the gate (exit 2) and name the tickets.
+
+describe('cyclic ticket DAG', () => {
+  test('runForecast surfaces a cycle as a gate failure naming the tickets', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/a.js': '// a' }, 'init');
+
+      const tickets = [
+        mkTicket('T1', { scope: ['src/a.js'], edges: [{ to: 'T2', contract: '' }] }),
+        mkTicket('T2', { scope: ['src/b.js'], edges: [{ to: 'T3', contract: '' }] }),
+        mkTicket('T3', { scope: ['src/c.js'], edges: [{ to: 'T1', contract: '' }] }),
+      ];
+      const result = await runForecast({ tickets, root });
+
+      assert.equal(result.gateFailures.length, 1);
+      assert.match(result.gateFailures[0], /cycle/i);
+      for (const id of ['T1', 'T2', 'T3']) {
+        assert.ok(
+          result.gateFailures[0].includes(id),
+          `expected cycle message to name ${id}, got: ${result.gateFailures[0]}`
+        );
+      }
+      // Must NOT pretend to have a valid (empty) schedule.
+      assert.deepEqual(result.waves, []);
+      assert.deepEqual(result.mergeOrder, []);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('bin exits 2 with a cycle error mentioning the involved ticket ids', () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/a.js': '// a' }, 'init');
+      writeTickets(root, [
+        mkTicket('T1', { scope: ['src/a.js'], edges: [{ to: 'T2', contract: '' }] }),
+        mkTicket('T2', { scope: ['src/b.js'], edges: [{ to: 'T3', contract: '' }] }),
+        mkTicket('T3', { scope: ['src/c.js'], edges: [{ to: 'T1', contract: '' }] }),
+      ]);
+
+      const { status, stdout, stderr } = runBin(root);
+      const out = stdout + stderr;
+
+      assert.equal(status, 2, `expected exit 2 (gate fail), got ${status}\n${out}`);
+      assert.match(out, /cycle/i);
+      for (const id of ['T1', 'T2', 'T3']) {
+        assert.ok(out.includes(id), `expected output to name ${id}, got:\n${out}`);
+      }
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('bin exits 2 for a cyclic DAG under --json too (no clean exit 0)', () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/a.js': '// a' }, 'init');
+      writeTickets(root, [
+        mkTicket('T1', { scope: ['src/a.js'], edges: [{ to: 'T2', contract: '' }] }),
+        mkTicket('T2', { scope: ['src/b.js'], edges: [{ to: 'T1', contract: '' }] }),
+      ]);
+
+      const { status, stdout } = runBin(root, ['--json']);
+      assert.equal(status, 2, `expected exit 2, got ${status}\n${stdout}`);
+      const parsed = JSON.parse(stdout);
+      assert.ok(parsed.gateFailures.length > 0);
+      assert.match(parsed.gateFailures[0], /cycle/i);
+      assert.ok(parsed.gateFailures[0].includes('T1') && parsed.gateFailures[0].includes('T2'));
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('valid acyclic DAG still exits 0 (no regression)', () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/auth/index.js': '// a', 'src/billing/index.js': '// b' }, 'init');
+      writeTickets(root, [
+        mkTicket('T1', { scope: ['src/auth/**'], edges: [{ to: 'T2', contract: 'src/auth/index.js' }] }),
+        mkTicket('T2', { scope: ['src/billing/**'] }),
+      ]);
+
+      const { status, stdout, stderr } = runBin(root);
+      assert.equal(status, 0, `expected exit 0 for acyclic DAG, got ${status}\n${stdout}${stderr}`);
     } finally {
       cleanup(root);
     }

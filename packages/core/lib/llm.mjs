@@ -1,10 +1,60 @@
 // LLM provider detection and completion. Zero dependencies, native fetch.
 //
 // Tiers: 'cheap' | 'mid' | 'frontier'. Defaults below are overridable:
-//   AIDLC_PROVIDER        force provider: anthropic | openai | gemini
-//   AIDLC_MODEL_CHEAP     model id for the cheap tier
-//   AIDLC_MODEL_MID       model id for the mid tier
-//   AIDLC_MODEL_FRONTIER  model id for the frontier tier
+//   ADLC_PROVIDER        force provider: anthropic | openai | gemini | agy
+//   ADLC_MODEL_CHEAP     model id for the cheap tier
+//   ADLC_MODEL_MID       model id for the mid tier
+//   ADLC_MODEL_FRONTIER  model id for the frontier tier
+//
+// The 'agy' provider runs completions through the Antigravity CLI
+// (`agy --print`) instead of an HTTP API — quota comes from the user's
+// Antigravity plan, no API key. Opt-in: set ADLC_AGY=1 (or a path to the
+// agy binary) or force with ADLC_PROVIDER=agy. Extra knobs:
+//   ADLC_AGY_TIMEOUT   print-timeout passed to agy (default 300s)
+//   ADLC_AGY_SANDBOX   set to 1 to pass --sandbox
+
+import { spawn } from 'node:child_process';
+
+// agy's timeout marker is its ENTIRE output on failure. Matching it as a
+// bare substring would false-trip whenever a model quotes the phrase in a
+// legitimate answer, so require it to be the only meaningful content (last
+// non-empty line, output short). Exported for tests.
+export function isAgyTimeout(out) {
+  const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
+  const last = lines.at(-1) ?? '';
+  return /^Error: timed out waiting for response\.?$/.test(last) && out.length < 200;
+}
+
+// Env values that explicitly DISABLE a feature flag. 'false'/'0' are truthy
+// strings in JS, so a plain existence check would enable on ADLC_AGY=false.
+function envEnabled(v) {
+  return v !== undefined && v !== '' && !['0', 'false', 'no', 'off', 'disabled'].includes(v.toLowerCase());
+}
+
+function agySend({ apiKey, model, system, prompt }, env = process.env) {
+  // apiKey carries the binary path ('1'/'true' mean default 'agy').
+  const bin = apiKey === '1' || apiKey === 'true' ? 'agy' : apiKey;
+  const args = ['--print', '--print-timeout', env.ADLC_AGY_TIMEOUT ?? '300s', '--model', model];
+  if (env.ADLC_AGY_SANDBOX === '1') args.push('--sandbox');
+  const input = system ? `${system}\n\n---\n\n${prompt}` : prompt;
+  return new Promise((resolve, reject) => {
+    const p = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', (e) => reject(new Error(`agy spawn failed: ${e.message}`)));
+    p.stdin.end(input);
+    p.on('close', (code) => {
+      // agy exits 0 even on print-timeout; the error surfaces in the output.
+      if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
+      if (isAgyTimeout(out)) {
+        return reject(new Error('agy: timed out waiting for response'));
+      }
+      resolve(out.replace(/\s+$/, ''));
+    });
+  });
+}
 
 const PROVIDERS = [
   {
@@ -88,18 +138,37 @@ const PROVIDERS = [
       return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('');
     },
   },
+  {
+    // Antigravity CLI subprocess provider. Last in the list so API-key
+    // providers win during auto-detection; force with ADLC_PROVIDER=agy.
+    name: 'agy',
+    envKey: 'ADLC_AGY',
+    models: {
+      cheap: 'Gemini 3.5 Flash (Medium)',
+      mid: 'Claude Sonnet 4.6 (Thinking)',
+      frontier: 'Claude Opus 4.6 (Thinking)',
+    },
+    send: agySend,
+  },
 ];
 
 /**
- * Detect the first available provider (or the one forced via AIDLC_PROVIDER).
+ * Detect the first available provider (or the one forced via ADLC_PROVIDER).
  * Returns { name, apiKey, models } or null when no key is present.
  */
 export function detectProvider(env = process.env) {
-  const forced = env.AIDLC_PROVIDER;
+  const forced = env.ADLC_PROVIDER;
   const candidates = forced ? PROVIDERS.filter((p) => p.name === forced) : PROVIDERS;
   for (const p of candidates) {
     const apiKey = env[p.envKey];
-    if (apiKey) return { ...p, apiKey };
+    // agy is gated on a feature flag (truthy-but-not-"false"); API-key
+    // providers are gated on a non-empty key.
+    if (p.name === 'agy') {
+      if (envEnabled(apiKey)) return { ...p, apiKey };
+      if (forced === 'agy') return { ...p, apiKey: '1' }; // explicit force needs no key
+    } else if (apiKey) {
+      return { ...p, apiKey };
+    }
   }
   return null;
 }
@@ -107,7 +176,7 @@ export function detectProvider(env = process.env) {
 /** Resolve a tier ('cheap'|'mid'|'frontier') or explicit model id to a model id. */
 export function resolveModel(provider, { tier = 'mid', model } = {}, env = process.env) {
   if (model) return model;
-  const override = env[`AIDLC_MODEL_${tier.toUpperCase()}`];
+  const override = env[`ADLC_MODEL_${tier.toUpperCase()}`];
   if (override) return override;
   const resolved = provider.models[tier];
   if (!resolved) throw new Error(`unknown tier: ${tier}`);

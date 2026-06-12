@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/behavior-diff",
+  "name": "@adlc/behavior-diff",
   "version": "0.1.0",
   "type": "module",
   "bin": { "behavior-diff": "./bin/behavior-diff.mjs" },

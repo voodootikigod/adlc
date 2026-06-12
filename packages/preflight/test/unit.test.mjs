@@ -91,7 +91,7 @@ describe('checkWrite', () => {
   it('passes and leaves no residue', async () => {
     const result = await checkWrite(dir);
     assert.equal(result.status, 'pass');
-    const tmpFile = join(dir, '.aidlc', 'tmp', 'preflight-test');
+    const tmpFile = join(dir, '.adlc', 'tmp', 'preflight-test');
     assert.equal(existsSync(tmpFile), false, 'preflight-test file should be cleaned up');
   });
 });

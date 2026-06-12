@@ -102,7 +102,13 @@ export function diffJson(before, after) {
 
 /**
  * Produce a per-route diff comparing a before-capture entry to an after-capture entry.
- * Returns a change descriptor object or null if identical.
+ * Returns one of:
+ *   - null                         → genuinely identical (both reachable, no diff)
+ *   - { route, diffs }             → reachable on at least one side, differences found
+ *   - { route, unreachable: true } → errored on BOTH sides (dead in both snapshots)
+ *
+ * An all-error pair is NOT identical: a route unreachable in both captures must be
+ * surfaced, never silently passed through the gate as "no change".
  */
 export function diffRoute(beforeEntry, afterEntry) {
   const diffs = [];
@@ -110,8 +116,10 @@ export function diffRoute(beforeEntry, afterEntry) {
   if (beforeEntry.error && afterEntry.error) {
     if (beforeEntry.error !== afterEntry.error) {
       diffs.push({ field: 'error', before: beforeEntry.error, after: afterEntry.error });
+      return { route: routeKey(beforeEntry), diffs };
     }
-    return diffs.length ? { route: routeKey(beforeEntry), diffs } : null;
+    // Same error string on both sides — still unreachable, not identical.
+    return { route: routeKey(beforeEntry), unreachable: true, error: beforeEntry.error };
   }
 
   if (beforeEntry.error || afterEntry.error) {

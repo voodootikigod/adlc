@@ -1,4 +1,4 @@
-# @aidlc/model-ratchet
+# @adlc/model-ratchet
 
 Scheduled re-prosecution of hot paths — **ADLC C12**.
 
@@ -6,7 +6,7 @@ Every frontier model release is a free re-audit of the existing codebase: new
 models find what old ones missed. `model-ratchet` identifies the most valuable
 files to re-prosecute (high churn × high criticality), then either prints a
 prosecution plan or drives your review command over them, appending verified
-findings to the shared `.aidlc/findings` ledger.
+findings to the shared `.adlc/findings` ledger.
 
 Run on every model release (or monthly) to ratchet codebase quality
 monotonically upward for the cost of a scheduled job.
@@ -20,7 +20,7 @@ monotonically upward for the cost of a scheduled job.
 ## Installation
 
 ```bash
-npm install -g @aidlc/model-ratchet   # or use npx
+npm install -g @adlc/model-ratchet   # or use npx
 ```
 
 ## Usage
@@ -82,7 +82,7 @@ stdout and parses findings:
 - Lines matching `/\S+:\d+/` (e.g. `src/foo.js:42: missing null check`)
 - Lines starting with `- ` (bullet items)
 
-Each finding is appended to `.aidlc/findings.jsonl`:
+Each finding is appended to `.adlc/findings.jsonl`:
 
 ```json
 {
@@ -156,14 +156,14 @@ jobs:
           node-version: '20'
       - name: Run model-ratchet
         run: |
-          npx @aidlc/model-ratchet \
+          npx @adlc/model-ratchet \
             --top 10 \
-            --review-cmd "npx @aidlc/adversarial-review --file {file}" \
+            --review-cmd "npx @adlc/adversarial-review --file {file}" \
             --json > ratchet-results.json
       - uses: actions/upload-artifact@v4
         with:
           name: ratchet-findings
-          path: .aidlc/findings.jsonl
+          path: .adlc/findings.jsonl
 ```
 
 ### Cron (shell)
@@ -171,7 +171,7 @@ jobs:
 ```bash
 # Run on every model release — add to crontab or a release script
 # crontab entry: run on the 1st of every month at 09:00
-# 0 9 1 * * cd /path/to/repo && model-ratchet --top 10 --review-cmd "adversarial-review {file}" --json >> .aidlc/ratchet-runs.log 2>&1
+# 0 9 1 * * cd /path/to/repo && model-ratchet --top 10 --review-cmd "adversarial-review {file}" --json >> .adlc/ratchet-runs.log 2>&1
 
 # Or run manually after a model upgrade:
 model-ratchet --top 20 --review-cmd "adversarial-review --file {file}" --json
@@ -181,13 +181,13 @@ model-ratchet --top 20 --review-cmd "adversarial-review --file {file}" --json
 
 ```yaml
 - name: Print hot paths prosecution plan
-  run: npx @aidlc/model-ratchet --top 10 --json
+  run: npx @adlc/model-ratchet --top 10 --json
 ```
 
 ## Core Gaps
 
 None. Uses `churn()`, `isGitRepo()`, `appendEntry()`, `parseArgs()`, `opError()`,
-`pass()`, `printJson()` from `@aidlc/core`. All hot-score logic, import-graph
+`pass()`, `printJson()` from `@adlc/core`. All hot-score logic, import-graph
 walking, and finding parsing live in `lib/`.
 
 ## Relationship to Sibling Tools
@@ -195,7 +195,7 @@ walking, and finding parsing live in `lib/`.
 - **adversarial-review** — natural choice for `--review-cmd`; `model-ratchet`
   aims it at the highest-value files.
 - **review-calibration (C8)** — calibrate first, then ratchet.
-- **lesson-foundry (C9)** — consume the `.aidlc/findings` ledger entries that
+- **lesson-foundry (C9)** — consume the `.adlc/findings` ledger entries that
   `model-ratchet` appends.
 - **gate-manifest (C11)** — findings from ratchet runs appear in the shared
   findings ledger that manifests track.

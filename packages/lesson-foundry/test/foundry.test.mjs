@@ -15,10 +15,10 @@ function makeTempDir() {
 }
 
 function writeLedger(dir, name, entries) {
-  const aidlcDir = join(dir, '.aidlc');
-  mkdirSync(aidlcDir, { recursive: true });
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
   const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-  writeFileSync(join(aidlcDir, `${name}.jsonl`), content, 'utf8');
+  writeFileSync(join(adlcDir, `${name}.jsonl`), content, 'utf8');
 }
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ test('loadFindings: reads entries from ledger', () => {
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'convention', severity: 'medium', desc: 'no error handling' },
     ]);
 
-    const { findings, skipped, filtered } = loadFindings('findings', join(dir, '.aidlc'));
+    const { findings, skipped, filtered } = loadFindings('findings', join(dir, '.adlc'));
     assert.strictEqual(findings.length, 2);
     assert.strictEqual(skipped, 0);
     assert.strictEqual(filtered, 0);
@@ -49,7 +49,7 @@ test('loadFindings: skips entries with verdict=killed', () => {
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', category: 'security', severity: 'high', desc: 'false positive', verdict: 'killed' },
     ]);
 
-    const { findings, filtered } = loadFindings('findings', join(dir, '.aidlc'));
+    const { findings, filtered } = loadFindings('findings', join(dir, '.adlc'));
     assert.strictEqual(findings.length, 1);
     assert.strictEqual(filtered, 1);
     assert.strictEqual(findings[0].desc, 'real issue');
@@ -61,8 +61,8 @@ test('loadFindings: skips entries with verdict=killed', () => {
 test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
   const dir = makeTempDir();
   try {
-    const aidlcDir = join(dir, '.aidlc');
-    mkdirSync(aidlcDir, { recursive: true });
+    const adlcDir = join(dir, '.adlc');
+    mkdirSync(adlcDir, { recursive: true });
     // Write a mix of valid JSON and invalid lines
     const content = [
       JSON.stringify({ ts: '2025-01-01', tool: 'test', desc: 'valid entry', category: 'security', severity: 'high', file: 'a.mjs' }),
@@ -70,9 +70,9 @@ test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
       JSON.stringify({ ts: '2025-01-02', tool: 'test', desc: 'another valid', category: 'security', severity: 'high', file: 'b.mjs' }),
       'also bad >>>',
     ].join('\n') + '\n';
-    writeFileSync(join(aidlcDir, 'findings.jsonl'), content, 'utf8');
+    writeFileSync(join(adlcDir, 'findings.jsonl'), content, 'utf8');
 
-    const { findings, skipped } = loadFindings('findings', aidlcDir);
+    const { findings, skipped } = loadFindings('findings', adlcDir);
     assert.strictEqual(findings.length, 2);
     assert.strictEqual(skipped, 2);
   } finally {
@@ -83,10 +83,10 @@ test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
 test('loadFindings: returns empty when ledger missing', () => {
   const dir = makeTempDir();
   try {
-    const aidlcDir = join(dir, '.aidlc');
-    mkdirSync(aidlcDir, { recursive: true });
+    const adlcDir = join(dir, '.adlc');
+    mkdirSync(adlcDir, { recursive: true });
     // No findings.jsonl written
-    const { findings, skipped, filtered } = loadFindings('findings', aidlcDir);
+    const { findings, skipped, filtered } = loadFindings('findings', adlcDir);
     assert.strictEqual(findings.length, 0);
     assert.strictEqual(skipped, 0);
     assert.strictEqual(filtered, 0);
@@ -194,18 +194,48 @@ test('findUnbankedClusters: banked clusters are excluded', () => {
   }
 });
 
-test('findUnbankedClusters: spec-gap cluster is banked if interrogation-template.md exists', () => {
+test('findUnbankedClusters: spec-gap cluster is banked only when its question is in the template', () => {
   const dir = makeTempDir();
   try {
     const outDir = join(dir, 'lessons');
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'interrogation-template.md'), '# template', 'utf8');
+    // Template contains this cluster's specific question marker → banked.
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      '# template\n- [ ] **[unknown]** unclear policy *(recurring in 2 findings, cluster: gap-cluster)*\n',
+      'utf8'
+    );
 
     const clusters = [
       { name: 'gap-cluster', route: 'spec-gap', size: 2, indices: [0, 1] },
     ];
     const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
     assert.strictEqual(unbanked.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// F2 regression: a bare template file must NOT silently defend a brand-new
+// spec-gap cluster whose question isn't actually written into it.
+test('findUnbankedClusters: spec-gap cluster is UNBANKED when template exists but lacks its question', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    // Template exists but only defends a DIFFERENT cluster.
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      '# template\n- [ ] **[unknown]** old issue *(recurring in 3 findings, cluster: some-other-gap)*\n',
+      'utf8'
+    );
+
+    const clusters = [
+      { name: 'new-gap', route: 'spec-gap', size: 2, indices: [0, 1] },
+    ];
+    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+    assert.strictEqual(unbanked.length, 1);
+    assert.strictEqual(unbanked[0].name, 'new-gap');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/model-router",
+  "name": "@adlc/model-router",
   "version": "0.1.0",
   "type": "module",
   "bin": { "model-router": "./bin/model-router.mjs" },

@@ -180,6 +180,6 @@ or screenshots. Documented as future work; not yet implemented. HTTP fixture mod
 ## Core gaps
 
 None. This tool is self-contained and uses only `parseArgs`, `pass`, `gateFail`,
-`opError`, and `printJson` from `@aidlc/core`. Hashing is done locally via
+`opError`, and `printJson` from `@adlc/core`. Hashing is done locally via
 `node:crypto` rather than the core `sha256` helper to avoid coupling the capture
 serialization format to a shared library.

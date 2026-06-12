@@ -150,5 +150,5 @@ the agent.
 ## Core Gaps
 
 None. This tool uses only `parseArgs`, `opError`, `printJson`, `pass`,
-`gateFail`, and `globMatch` from `@aidlc/core`. No LLM, no git, no ledger
+`gateFail`, and `globMatch` from `@adlc/core`. No LLM, no git, no ledger
 writes.

@@ -1,6 +1,6 @@
-# @aidlc/core — FROZEN CONTRACT
+# @adlc/core — FROZEN CONTRACT
 
-Shared library for all AIDLC tools. **This package is frozen during tool
+Shared library for all ADLC tools. **This package is frozen during tool
 builds (rails).** Tools import from it; tools never modify it. If the API is
 insufficient for your tool, work around it inside your own package and note
 the gap in your README — do not edit core.
@@ -11,15 +11,15 @@ Import surface (from a tool at `packages/<name>/`):
 import { complete, fan, extractJson, detectProvider, resolveModel } from '../../core/index.mjs';
 import { git, gitDiff, changedFiles, isDirty, isGitRepo, coChange, pairKey, churn } from '../../core/index.mjs';
 import { parseArgs, pass, gateFail, opError, printJson, readStdin, promptOnly } from '../../core/index.mjs';
-import { AIDLC_DIR, appendEntry, readEntries, ledgerPath, sha256, hashFiles } from '../../core/index.mjs';
+import { ADLC_DIR, appendEntry, readEntries, ledgerPath, sha256, hashFiles } from '../../core/index.mjs';
 import { TICKETS_PATH, loadTickets, validateTicket, topoSort, computeFloat, globMatch, inScope, scopesOverlap } from '../../core/index.mjs';
 import { mutate } from '../../core/index.mjs'; // mutate.generateMutants / applyMutant / changedLinesFromDiff / OPERATORS
 ```
 
 ## llm
 
-- `detectProvider(env?)` → `{ name, apiKey, models } | null`. Order: anthropic, openai, gemini. Force with `AIDLC_PROVIDER`.
-- `resolveModel(provider, { tier, model }, env?)` → model id. Tiers: `cheap | mid | frontier`. Override via `AIDLC_MODEL_CHEAP/MID/FRONTIER`.
+- `detectProvider(env?)` → `{ name, apiKey, models } | null`. Order: anthropic, openai, gemini. Force with `ADLC_PROVIDER`.
+- `resolveModel(provider, { tier, model }, env?)` → model id. Tiers: `cheap | mid | frontier`. Override via `ADLC_MODEL_CHEAP/MID/FRONTIER`.
 - `complete({ tier, model, system, prompt, maxTokens })` → `Promise<string>`. Throws if no provider (tools must catch and offer `--prompt-only`).
 - `fan(opts, n)` → `Promise<[{ ok, value | error }]>` — n independent stateless completions.
 - `extractJson(text)` → parsed JSON value from messy model output. Throws if none.
@@ -39,16 +39,16 @@ import { mutate } from '../../core/index.mjs'; // mutate.generateMutants / apply
 
 **Exit codes are the contract: 0 = gate passes, 1 = operational error, 2 = gate fails.**
 
-## ledger (persistence at `.aidlc/`)
+## ledger (persistence at `.adlc/`)
 
-- `appendEntry(name, entry, dir?)` → appends to `.aidlc/<name>.jsonl`.
+- `appendEntry(name, entry, dir?)` → appends to `.adlc/<name>.jsonl`.
 - `readEntries(name, dir?)` → `{ entries, skipped }` — malformed lines reported, never swallowed.
 - `sha256(content)`, `hashFiles(paths)` → `{ path: hash | null }`.
 
 Well-known ledger names: `manifest` (gate-manifest entries), `findings`
 (prosecution findings: `{ ts, tool, file, line, category, severity, desc, verdict }`).
 
-## tickets (`.aidlc/tickets.json`)
+## tickets (`.adlc/tickets.json`)
 
 Schema (see lib/tickets.mjs header): `{ id, title, body, scope[], rails[], edges[{to, contract}], duration, category, budget }`.
 

@@ -1,4 +1,4 @@
-# @aidlc/model-router
+# @adlc/model-router
 
 Deterministic per-ticket model assignment (ADLC phase D1). No LLM calls.
 Reads the ticket DAG and manifest ledger history, then emits tier + mode
@@ -15,7 +15,7 @@ model-router [--tickets <path>] [--floor <number>] [--json]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tickets <path>` | `.aidlc/tickets.json` | Path to the tickets file |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
 | `--floor <0-1>` | `0.2` | Minimum rail density for cheap-tier assignment |
 | `--json` | off | Machine-readable JSON output (for orchestrators) |
 
@@ -100,11 +100,11 @@ Density of `0` (no rails) means there are no automated gates — any error escap
 
 ### DAG float (CPM)
 
-Classic critical-path-method float from `computeFloat()` in `@aidlc/core`. Float is the amount of time a ticket can slip without delaying the overall delivery (`makespan`). Tickets on the critical path have `float === 0`.
+Classic critical-path-method float from `computeFloat()` in `@adlc/core`. Float is the amount of time a ticket can slip without delaying the overall delivery (`makespan`). Tickets on the critical path have `float === 0`.
 
 ### Priors from the manifest ledger
 
-Every `build`-type entry in `.aidlc/manifest.jsonl` with shape `{ model, category, firstPass: boolean }` is counted. Success rate per model (and per model + category when >= 3 samples exist) is computed with Laplace smoothing:
+Every `build`-type entry in `.adlc/manifest.jsonl` with shape `{ model, category, firstPass: boolean }` is counted. Success rate per model (and per model + category when >= 3 samples exist) is computed with Laplace smoothing:
 
 ```
 rate = (passes + 1) / (n + 2)
@@ -125,4 +125,4 @@ Sibling tools:
 
 ## Core gaps
 
-None. All required APIs (`loadTickets`, `computeFloat`, `readEntries`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`) are available in `@aidlc/core`.
+None. All required APIs (`loadTickets`, `computeFloat`, `readEntries`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`) are available in `@adlc/core`.

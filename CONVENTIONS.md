@@ -1,4 +1,4 @@
-# AIDLC Tool Conventions — READ BEFORE BUILDING
+# ADLC Tool Conventions — READ BEFORE BUILDING
 
 Every tool in `packages/` follows these rules. They are the contract that
 makes 17 independently built tools feel like one product.
@@ -18,7 +18,7 @@ package.json template:
 
 ```json
 {
-  "name": "@aidlc/<name>",
+  "name": "@adlc/<name>",
   "version": "0.1.0",
   "type": "module",
   "bin": { "<name>": "./bin/<name>.mjs" },
@@ -30,13 +30,13 @@ package.json template:
 
 ## Hard rules
 
-1. **Zero runtime dependencies.** Node 18+ built-ins and `@aidlc/core` only.
+1. **Zero runtime dependencies.** Node 18+ built-ins and `@adlc/core` only.
    Import core via relative path: `import { … } from '../../core/index.mjs'`.
 2. **Core is frozen.** Never edit anything under `packages/core/`. If core
    lacks something, implement locally in your `lib/` and note the gap in
    your README under "Core gaps".
 3. **Scope discipline.** Write ONLY inside your own `packages/<name>/`.
-   Never touch other packages, ADLC.md, root files, or `.aidlc/`.
+   Never touch other packages, ADLC.md, root files, or `.adlc/`.
 4. **Exit codes:** 0 = gate passes · 1 = operational error (bad input,
    missing binary, network) · 2 = gate fails. Use `pass/gateFail/opError`
    from core. CI gating depends on this.
@@ -63,9 +63,9 @@ package.json template:
 
 ## Shared data (read via core, never reinvent)
 
-- Tickets: `.aidlc/tickets.json` — `loadTickets()` from core. Schema in
+- Tickets: `.adlc/tickets.json` — `loadTickets()` from core. Schema in
   `packages/core/lib/tickets.mjs` header.
-- Ledgers: `.aidlc/<name>.jsonl` — `appendEntry/readEntries`. Well-known:
+- Ledgers: `.adlc/<name>.jsonl` — `appendEntry/readEntries`. Well-known:
   `manifest` (gate entries), `findings` (prosecution findings:
   `{ ts, tool, file, line, category, severity, desc, verdict }`).
 - Foundation rails: tickets may carry `rails` paths — these are read-only
@@ -78,5 +78,5 @@ package.json template:
 ```
 
 Common flags where applicable: `--base <ref>` (git base, default HEAD),
-`--tickets <path>` (default .aidlc/tickets.json), `--json`, `--prompt-only`,
+`--tickets <path>` (default .adlc/tickets.json), `--json`, `--prompt-only`,
 `--n <int>` (fan width), `--tier cheap|mid|frontier`.

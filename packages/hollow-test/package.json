@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/hollow-test",
+  "name": "@adlc/hollow-test",
   "version": "0.1.0",
   "type": "module",
   "bin": { "hollow-test": "./bin/hollow-test.mjs" },

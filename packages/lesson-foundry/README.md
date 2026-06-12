@@ -8,7 +8,7 @@ Converts prosecution findings into permanent defenses. Every recurring finding i
 
 ## What it does
 
-1. Reads prosecution findings from a JSONL ledger (default: `.aidlc/findings.jsonl`)
+1. Reads prosecution findings from a JSONL ledger (default: `.adlc/findings.jsonl`)
 2. Skips entries with `verdict === 'killed'`; surfaces malformed lines
 3. Clusters findings by semantic similarity (token-set Jaccard >= 0.5)
 4. Routes each cluster of size >= `--min` to its **cheapest permanent defense**:
@@ -26,7 +26,7 @@ lesson-foundry [options]
 Options:
   --ledger <name>    Ledger name to read findings from (default: findings)
   --min <n>          Minimum cluster size to surface (default: 2)
-  --out-dir <path>   Output directory for defense files (default: .aidlc/lessons)
+  --out-dir <path>   Output directory for defense files (default: .adlc/lessons)
   --write            Emit files (default: dry-run — prints what WOULD be written)
   --gate             Exit 2 if any cluster >= --min has no defense file in --out-dir
   --llm              Refine cluster wording via one mid-tier LLM call per cluster
@@ -76,7 +76,7 @@ lesson-foundry --ledger findings --min 2
 
 **Write defense files:**
 ```bash
-lesson-foundry --ledger findings --min 2 --write --out-dir .aidlc/lessons
+lesson-foundry --ledger findings --min 2 --write --out-dir .adlc/lessons
 ```
 
 **Gate in CI (fail if any recurring lesson is unbanked):**
@@ -114,4 +114,4 @@ P7 — the compounding closer. Runs after prosecution findings accumulate across
 
 ## Core gaps
 
-None. All required functionality is available in `@aidlc/core`.
+None. All required functionality is available in `@adlc/core`.

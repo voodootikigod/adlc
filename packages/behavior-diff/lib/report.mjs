@@ -5,6 +5,7 @@
  */
 export function renderReport(result) {
   const { identical, changed, onlyInBefore, onlyInAfter } = result;
+  const unreachable = result.unreachable ?? [];
 
   const totalChanged = changed.length + onlyInBefore.length + onlyInAfter.length;
   const errored = changed.filter((c) => hasErrorDiff(c)).length;
@@ -15,9 +16,15 @@ export function renderReport(result) {
   lines.push(
     `${identical.length} route${identical.length !== 1 ? 's' : ''} identical, ` +
     `${totalChanged} changed, ` +
-    `${errored} errored`
+    `${errored} errored, ` +
+    `${unreachable.length} unreachable (both)`
   );
   lines.push('');
+
+  // Routes unreachable in BOTH snapshots — surfaced, never a silent pass.
+  for (const u of unreachable) {
+    lines.push(`  ! ${u.route}: unreachable in both snapshots (${u.error ?? 'error'})`);
+  }
 
   // Routes only in before
   for (const key of onlyInBefore) {

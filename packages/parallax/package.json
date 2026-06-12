@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/parallax",
+  "name": "@adlc/parallax",
   "version": "0.1.0",
   "type": "module",
   "bin": { "parallax": "./bin/parallax.mjs" },

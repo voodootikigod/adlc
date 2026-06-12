@@ -52,7 +52,7 @@ Default (no --review-cmd, or --dry-run):
 With --review-cmd:
   Runs command per file (spawnSync, shell=true).
   Lines matching /\\S+:\\d+/ or starting with '- ' are parsed as findings.
-  Findings are appended to the .aidlc/findings ledger.
+  Findings are appended to the .adlc/findings ledger.
   Exit code 2 from review-cmd is treated as "findings present" (not an error).
   Exit codes other than 0 or 2 cause operational error (exit 1).
 

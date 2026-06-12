@@ -1,5 +1,5 @@
 // llm.mjs — LLM interaction for vacuous-method detection.
-// Depends on @aidlc/core for complete/extractJson.
+// Depends on @adlc/core for complete/extractJson.
 
 import { complete, extractJson } from '../../core/index.mjs';
 

@@ -4,8 +4,13 @@
  *
  * Usage:
  *   consensus-fix --test-cmd "npm test" --files src/foo.mjs,src/bar.mjs
- *                 [--n 3] [--tier mid] [--apply] [--allow-dirty]
- *                 [--json] [--prompt-only]
+ *                 [--rails "npm test"] [--n 3] [--tier mid] [--apply]
+ *                 [--allow-dirty] [--json] [--prompt-only]
+ *
+ *   --test-cmd is the repro gate (the specific failing test).
+ *   --rails    is the regression gate (the FULL frozen rail suite). A candidate
+ *              survives only if BOTH gates pass. Without --rails, candidates are
+ *              not checked against the rails and a WARNING is printed.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -29,6 +34,7 @@ import { formatReport, formatJson } from '../lib/format.mjs';
 const { values } = parseArgs({
   options: {
     'test-cmd': { type: 'string' },
+    rails: { type: 'string' },
     files: { type: 'string' },
     n: { type: 'string', default: '3' },
     tier: { type: 'string', default: 'mid' },
@@ -44,6 +50,7 @@ if (!values['test-cmd']) opError('--test-cmd is required');
 if (!values['files']) opError('--files is required');
 
 const testCmd = values['test-cmd'];
+const railsCmd = values['rails'] || undefined;
 const filePaths = values['files'].split(',').map((f) => f.trim()).filter(Boolean);
 if (filePaths.length === 0) opError('--files must list at least one file path');
 
@@ -125,6 +132,7 @@ let result;
 try {
   result = await runConsensusFix({
     testCmd,
+    railsCmd,
     files: filePaths,
     n,
     tier,
@@ -145,6 +153,7 @@ const {
   groups,
   allDivergent,
   selectionResult,
+  railsChecked,
 } = result;
 
 // --apply: write winner changes if present, but only when not all-divergent.
@@ -168,6 +177,7 @@ if (values['json']) {
     groups,
     allDivergent,
     selectionResult,
+    railsChecked,
     applied,
   }));
 } else {
@@ -179,6 +189,7 @@ if (values['json']) {
       groups,
       allDivergent,
       selectionResult,
+      railsChecked,
       applied,
       dryRun: !values['apply'],
     })

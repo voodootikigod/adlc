@@ -1,153 +1,125 @@
 // review-calibration/lib/scorer.mjs
-// Scoring and matching logic: determine which planted bugs were caught by the
-// reviewer's output. Pure functions — no I/O.
+// Score reviewer findings against planted defects. A plant is CAUGHT only when
+// a finding LOCATES it AND identifies the defect — verified behaviorally (the
+// finding's own repro discriminates mutant from original) or judged
+// semantically. There is deliberately NO "output contains a substring of the
+// changed line" shortcut: that is exactly what let a line-echoing reviewer
+// score 1.0. Pure aggregation; the hard semantic call is delegated to `judge`.
 
 import { basename } from 'node:path';
 
-/**
- * Regex to find "file:line"-style references in reviewer output.
- * Matches things like: foo.mjs:42, src/bar.js:100, path/to/baz.py:7
- */
-const FILE_LINE_RE = /(?:[\w./\\-]+\.\w+):(\d+)/g;
+const DEFAULT_TOLERANCE = 3;
+
+/** Findings whose file basename matches and line is within tolerance of the plant. */
+export function locatingFindings(plant, findings, tolerance = DEFAULT_TOLERANCE) {
+  const base = basename(plant.file);
+  return findings.filter(
+    (f) => basename(f.file) === base && Math.abs(f.line - plant.line) <= tolerance
+  );
+}
 
 /**
- * Determine whether a single plant was caught by the review output.
+ * Decide whether any locating finding identifies the plant's defect.
+ * Per finding: a runnable repro that discriminates (model-free) wins outright;
+ * otherwise the judge decides. Returns the matching finding or null.
  *
- * A plant is CAUGHT if the review output satisfies ANY of:
- *  1. Mentions its file (basename match is enough) AND contains a line number
- *     within ±3 of the plant's line number.
- *  2. Contains a >= 12-character contiguous substring of the plant's mutated line.
- *
- * @param {string} reviewOutput   - Combined stdout + stderr from review command
- * @param {{ file: string, line: number, mutated: string }} plant
- * @returns {boolean}
+ * @param {object} plant
+ * @param {Array<object>} located         findings that already locate the plant
+ * @param {object} deps
+ * @param {(plant, finding)=>(boolean|Promise<boolean>)} deps.judge
+ * @param {(plant, finding)=>(boolean|Promise<boolean>)} [deps.verifyRepro]  behavioral check for finding.repro
+ * @returns {Promise<object|null>}
  */
-export function isPlantCaught(reviewOutput, plant) {
-  const fileBase = basename(plant.file);
-
-  // Condition 1: file mentioned AND nearby line number.
-  if (reviewOutput.includes(fileBase)) {
-    const lineNumbers = extractLineNumbers(reviewOutput, fileBase);
-    for (const ln of lineNumbers) {
-      if (Math.abs(ln - plant.line) <= 3) return true;
+export async function findIdentifying(plant, located, { judge, verifyRepro }) {
+  for (const f of located) {
+    if (f.repro && verifyRepro) {
+      if (await verifyRepro(plant, f)) return f;
+      continue; // a repro that doesn't discriminate is not a catch
     }
+    if (await judge(plant, f)) return f;
   }
-
-  // Condition 2: >=12-char substring of the mutated line appears in output.
-  const mutatedTrimmed = plant.mutated.trim();
-  if (mutatedTrimmed.length >= 12) {
-    for (let start = 0; start <= mutatedTrimmed.length - 12; start++) {
-      const snippet = mutatedTrimmed.slice(start, start + 12);
-      if (reviewOutput.includes(snippet)) return true;
-    }
-  }
-
-  return false;
+  return null;
 }
 
 /**
- * Extract line numbers mentioned near a filename in the review output.
- * Looks for "basename:NNN" patterns anywhere in the text.
+ * Score the full plant list against parsed findings.
  *
- * @param {string} output
- * @param {string} fileBase - basename of the file to search for
- * @returns {number[]} array of line numbers found
+ * @param {Array<{file,line,operator,category,defect,original,mutated}>} plants
+ * @param {Array<{file,line,description,evidence,repro?}>} findings
+ * @param {object} deps
+ * @param {(plant,finding)=>(boolean|Promise<boolean>)} deps.judge   REQUIRED
+ * @param {(plant,finding)=>(boolean|Promise<boolean>)} [deps.verifyRepro]
+ * @param {number} [deps.tolerance]
+ * @returns {Promise<{
+ *   recall, caught, total,
+ *   precision, truePositives, falsePositives,
+ *   perCategory, results
+ * }>}
  */
-export function extractLineNumbers(output, fileBase) {
-  const numbers = [];
-  // Pattern: <anything ending with fileBase>:<digits>
-  // Use a regex that matches the basename followed by colon and digits.
-  const escaped = fileBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`(?:[\\w./\\\\-]*${escaped}):(\\d+)`, 'g');
-  let m;
-  while ((m = re.exec(output)) !== null) {
-    numbers.push(parseInt(m[1], 10));
+export async function scorePlants(plants, findings, deps) {
+  if (typeof deps?.judge !== 'function') {
+    throw new Error('scorePlants requires a judge function — refusing to fall back to string matching');
   }
-  return numbers;
-}
-
-/**
- * Count "false positive" findings in the review output: file:line references
- * that look like real findings but do not match any plant within ±3 lines.
- *
- * @param {string} reviewOutput
- * @param {Array<{ file: string, line: number }>} plants
- * @returns {number}
- */
-export function countFalsePositives(reviewOutput, plants) {
-  // Build a set of (basename, line) pairs for all plants (with ±3 tolerance).
-  // For each "file:line" in output, check if it matches a plant.
-  const matches = [...reviewOutput.matchAll(FILE_LINE_RE)];
-  let fps = 0;
-
-  for (const match of matches) {
-    const fullMatch = match[0]; // e.g. "foo.mjs:42"
-    const lineNo = parseInt(match[1], 10);
-
-    // Extract the file part (everything before the last colon+digits).
-    const colonIdx = fullMatch.lastIndexOf(':');
-    const filePart = fullMatch.slice(0, colonIdx);
-    const fileBase = basename(filePart);
-
-    // Check whether this finding matches any plant.
-    const matchesPlant = plants.some((p) => {
-      const pBase = basename(p.file);
-      return pBase === fileBase && Math.abs(p.line - lineNo) <= 3;
-    });
-
-    if (!matchesPlant) fps++;
-  }
-
-  return fps;
-}
-
-/**
- * Score the review output against the full plant list.
- *
- * @param {string} reviewOutput
- * @param {Array<{ file: string, line: number, operator: string, original: string, mutated: string }>} plants
- * @returns {{
- *   recall: number,
- *   caught: number,
- *   total: number,
- *   falsePositives: number,
- *   perOperator: { [operator: string]: { caught: number, total: number, recall: number } },
- *   results: Array<{ file, line, operator, caught, original, mutated }>
- * }}
- */
-export function scoreReview(reviewOutput, plants) {
-  const perOperator = {};
+  const tolerance = deps.tolerance ?? DEFAULT_TOLERANCE;
+  const perCategory = {};
   const results = [];
   let caught = 0;
 
   for (const plant of plants) {
-    const wasCaught = isPlantCaught(reviewOutput, plant);
+    const cat = plant.category ?? plant.operator ?? 'unknown';
+    const located = locatingFindings(plant, findings, tolerance);
+    const hit = located.length ? await findIdentifying(plant, located, deps) : null;
+    const wasCaught = hit !== null;
     if (wasCaught) caught++;
 
     results.push({
       file: plant.file,
       line: plant.line,
-      operator: plant.operator,
+      operator: plant.operator ?? cat,
+      category: cat,
       caught: wasCaught,
       original: plant.original,
       mutated: plant.mutated,
     });
 
-    if (!perOperator[plant.operator]) {
-      perOperator[plant.operator] = { caught: 0, total: 0, recall: 0 };
-    }
-    perOperator[plant.operator].total++;
-    if (wasCaught) perOperator[plant.operator].caught++;
+    if (!perCategory[cat]) perCategory[cat] = { caught: 0, total: 0, recall: 0 };
+    perCategory[cat].total++;
+    if (wasCaught) perCategory[cat].caught++;
   }
 
-  // Compute per-operator recall.
-  for (const op of Object.values(perOperator)) {
-    op.recall = op.total > 0 ? op.caught / op.total : 0;
+  for (const c of Object.values(perCategory)) {
+    c.recall = c.total > 0 ? c.caught / c.total : 0;
   }
 
   const total = plants.length;
   const recall = total > 0 ? caught / total : 0;
-  const falsePositives = countFalsePositives(reviewOutput, plants);
 
-  return { recall, caught, total, falsePositives, perOperator, results };
+  // Precision: a finding that locates NO plant (within tolerance) is spurious —
+  // in a clean-base + only-our-plants tree, nothing else is broken.
+  const falsePositives = countFalsePositives(findings, plants, tolerance);
+  const truePositives = caught;
+  const precisionDenom = truePositives + falsePositives;
+  const precision = precisionDenom > 0 ? truePositives / precisionDenom : 1;
+
+  return { recall, caught, total, precision, truePositives, falsePositives, perCategory, results };
+}
+
+/**
+ * Count findings that locate no plant within tolerance (spurious flags).
+ *
+ * @param {Array<{file,line}>} findings
+ * @param {Array<{file,line}>} plants
+ * @param {number} [tolerance]
+ * @returns {number}
+ */
+export function countFalsePositives(findings, plants, tolerance = DEFAULT_TOLERANCE) {
+  let fp = 0;
+  for (const f of findings) {
+    const fBase = basename(f.file);
+    const matches = plants.some(
+      (p) => basename(p.file) === fBase && Math.abs(p.line - f.line) <= tolerance
+    );
+    if (!matches) fp++;
+  }
+  return fp;
 }

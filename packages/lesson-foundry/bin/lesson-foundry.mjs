@@ -2,7 +2,7 @@
 // lesson-foundry — ADLC C9, the compounding closer.
 // Converts prosecution findings into permanent defenses.
 
-import { existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   parseArgs,
@@ -21,7 +21,7 @@ const { values: flags } = parseArgs({
   options: {
     ledger:      { type: 'string',  default: 'findings' },
     min:         { type: 'string',  default: '2' },
-    'out-dir':   { type: 'string',  default: '.aidlc/lessons' },
+    'out-dir':   { type: 'string',  default: '.adlc/lessons' },
     write:       { type: 'boolean', default: false },
     gate:        { type: 'boolean', default: false },
     llm:         { type: 'boolean', default: false },
@@ -38,10 +38,10 @@ if (isNaN(minSize) || minSize < 1) {
   opError(`--min must be a positive integer (got: ${flags.min})`);
 }
 
-// Resolve ledger directory: look in cwd's .aidlc or use the default
+// Resolve ledger directory: look in cwd's .adlc or use the default
 // The ledger name may include a path; core's readEntries uses the dir param.
-// We pass the ledger name as-is and use the default dir (process.cwd() + '/.aidlc').
-const ledgerDir = join(process.cwd(), '.aidlc');
+// We pass the ledger name as-is and use the default dir (process.cwd() + '/.adlc').
+const ledgerDir = join(process.cwd(), '.adlc');
 
 // Load findings
 let findings, skipped, filtered;
@@ -126,13 +126,23 @@ if (flags.write) {
       const fullPath = file.path;
       try {
         if (file.append && existsSync(fullPath)) {
-          // Append only the questions, not the header
+          // Append only NEW questions, not the header, and never re-append a
+          // question already present (dedup so N runs ≠ N copies).
+          const existing = readFileSync(fullPath, 'utf8');
+          const questionMarker = (line) => {
+            const m = line.match(/cluster: ([^)]+)\)/);
+            return m ? `cluster: ${m[1]}` : line.trim();
+          };
           const newLines = file.content
             .split('\n')
             .filter((l) => l.startsWith('- [ ]'))
-            .join('\n');
-          appendFileSync(fullPath, '\n' + newLines + '\n', 'utf8');
-          if (!flags.json) console.log(`  appended: ${fullPath}`);
+            .filter((l) => !existing.includes(questionMarker(l)));
+          if (newLines.length > 0) {
+            appendFileSync(fullPath, '\n' + newLines.join('\n') + '\n', 'utf8');
+            if (!flags.json) console.log(`  appended: ${fullPath}`);
+          } else if (!flags.json) {
+            console.log(`  up-to-date: ${fullPath}`);
+          }
         } else {
           writeFileSync(fullPath, file.content, 'utf8');
           if (!flags.json) console.log(`  wrote: ${fullPath}`);
