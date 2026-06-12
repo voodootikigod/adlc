@@ -7,7 +7,7 @@ memory. Read top to bottom, then start at "Execution plan."
 
 ## 0. Project context
 
-- **Repo:** `/Users/voodootikigod/Projects/aidlc` — the **Agentic Development
+- **Repo:** `/Users/voodootikigod/Projects/adlc` — the **Agentic Development
   Lifecycle (ADLC)** toolkit: ~19 zero-dependency, `npx`-runnable Node ESM CLIs,
   each a CI-shaped gate (exit `0` = pass, `2` = gate fails, `1` = operational
   error). Tests are `node:test` (`node --test packages/<pkg>/test/*.test.mjs`).
@@ -16,16 +16,16 @@ memory. Read top to bottom, then start at "Execution plan."
   Appendix C (the tool catalog), Appendix E (the frontier-free doctrine).
 - **Blog series:** `docs/posts/` (9 posts). Post 9 (`09-the-gates-didnt-hold.md`)
   publicly promises the gate-fuzzing tool — building it is now load-bearing.
-- **Conventions:** `CONVENTIONS.md`. Shared lib is `@aidlc/core`, imported as
+- **Conventions:** `CONVENTIONS.md`. Shared lib is `@adlc/core`, imported as
   `../../core/index.mjs`. Many small files; immutable patterns; zero deps;
   errors via `opError` (exit 1), gates via `pass()` / `gateFail()`.
-- **`@aidlc/core` exports** (`packages/core/index.mjs`): `parseArgs, pass,
+- **`@adlc/core` exports** (`packages/core/index.mjs`): `parseArgs, pass,
   gateFail, opError, printJson` (cli); `complete, fan, extractJson,
   detectProvider, resolveModel` (llm — `complete({tier:'cheap'|'mid'|'frontier',
   system, prompt, maxTokens})`, throws if no provider); `git, gitDiff,
   changedFiles, isDirty, isGitRepo, resolveBase, refExists, coChange, churn,
   pairKey` (git); `appendEntry, readEntries, sha256, hashFiles, withLedgerLock,
-  ledgerPath, AIDLC_DIR` (ledger); `validateTicket, loadTickets, topoSort,
+  ledgerPath, ADLC_DIR` (ledger); `validateTicket, loadTickets, topoSort,
   computeFloat, globMatch, inScope, scopesOverlap` (tickets); `mutate.*`
   (generateMutants, applyMutant, changedLinesFromDiff).
 
@@ -213,9 +213,9 @@ strategies; it should generalize beyond them:
 2. **Committed-vs-working-tree** — a clean working tree hides a committed
    mutation; freeze checks must diff the merge-base, fail closed.
 3. **Provenance forgery** — keyless `sha256` chain is recomputable; forge entries
-   from scratch. (gate-manifest) → fix was HMAC (`AIDLC_MANIFEST_KEY`).
+   from scratch. (gate-manifest) → fix was HMAC (`ADLC_MANIFEST_KEY`).
 4. **Trust agent-supplied data** — an env var (or ticket field) supplies the
-   verdict. (coldstart `AIDLC_GATE_MOCK_RESPONSE`) → gate behind `NODE_ENV=test`.
+   verdict. (coldstart `ADLC_GATE_MOCK_RESPONSE`) → gate behind `NODE_ENV=test`.
 5. **Degenerate-input vacuous pass** — empty diff / red baseline / cyclic DAG →
    exit 0. (hollow-test `--test-cmd false`; merge-forecast cycle).
 6. **Self-referential gate** — a generated gate matches its own pattern string.
@@ -238,7 +238,7 @@ strategies; it should generalize beyond them:
 ## 5. Working rules for the build
 
 - Branch off `fix/adversarial-review-gate-hardening` (or wherever it has merged
-  to by then). Foundation-first if there's a shared `@aidlc/core` change
+  to by then). Foundation-first if there's a shared `@adlc/core` change
   (e.g. the `creates` field): land core first, then dependents.
 - TDD: for every fix/feature, write the failing test first (for gate-fuzzing and
   the measurement fixes, the test should reproduce the gap — e.g. a forecast test

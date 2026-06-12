@@ -45,7 +45,7 @@ function runCLI(args, { cwd, extraEnv = {} } = {}) {
 }
 
 /**
- * Run the CLI with a canned LLM response injected via AIDLC_GATE_MOCK_RESPONSE.
+ * Run the CLI with a canned LLM response injected via ADLC_GATE_MOCK_RESPONSE.
  * Also injects a dummy ANTHROPIC_API_KEY so the provider-detection check passes.
  */
 function runCLIWithMockGate(args, mockGapsJson, { cwd } = {}) {
@@ -53,10 +53,10 @@ function runCLIWithMockGate(args, mockGapsJson, { cwd } = {}) {
     cwd,
     extraEnv: {
       // NODE_ENV=test is REQUIRED: the mock gate seam is only honored in tests.
-      // Without it, AIDLC_GATE_MOCK_RESPONSE is ignored (F5 backdoor closed).
+      // Without it, ADLC_GATE_MOCK_RESPONSE is ignored (F5 backdoor closed).
       NODE_ENV: 'test',
       ANTHROPIC_API_KEY: 'mock-key-for-testing',
-      AIDLC_GATE_MOCK_RESPONSE: JSON.stringify(mockGapsJson),
+      ADLC_GATE_MOCK_RESPONSE: JSON.stringify(mockGapsJson),
     },
   });
 }
@@ -464,7 +464,7 @@ describe('--all aggregation logic (unit)', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI integration tests — exit code 2 and --json flag (via mock gate)
-// Uses AIDLC_GATE_MOCK_RESPONSE to bypass the real LLM call so tests are
+// Uses ADLC_GATE_MOCK_RESPONSE to bypass the real LLM call so tests are
 // fully offline while exercising the full bin/coldstart.mjs code path.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -591,7 +591,7 @@ describe('CLI integration — exit code 2 and --json (mock gate)', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // F5 regression — the mock gate backdoor must be CLOSED outside NODE_ENV=test
-// A vague ticket with a green AIDLC_GATE_MOCK_RESPONSE and a dummy API key must
+// A vague ticket with a green ADLC_GATE_MOCK_RESPONSE and a dummy API key must
 // NOT pass via the mock. The gate must ignore the env var and take the real LLM
 // path (which fails closed without a valid key / network).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -616,7 +616,7 @@ describe('F5 regression — mock gate backdoor closed in production', () => {
       extraEnv: {
         NODE_ENV: 'production',
         ANTHROPIC_API_KEY: 'dummy-key-not-real',
-        AIDLC_GATE_MOCK_RESPONSE: JSON.stringify({ gaps: [] }),
+        ADLC_GATE_MOCK_RESPONSE: JSON.stringify({ gaps: [] }),
       },
     });
 

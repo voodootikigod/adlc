@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/skill-rot",
+  "name": "@adlc/skill-rot",
   "version": "0.1.0",
   "type": "module",
   "bin": { "skill-rot": "./bin/skill-rot.mjs" },

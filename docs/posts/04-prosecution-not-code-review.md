@@ -60,7 +60,7 @@ The fix is the same trick mutation testing plays on test suites, aimed one level
 
 1. Take a real merged diff from your repo's history — real code, real style, real noise.
 2. Plant N realistic bugs in it: mechanical mutation operators plus LLM-authored subtle ones, spread across categories — off-by-one, auth bypass, race condition, contract violation, error-swallowing.
-3. Run your full prosecution stack against the planted diff, exactly as it runs in CI.
+3. Run your full prosecution stack (ours is `npx adversarial-review`) against the planted diff, exactly as it runs in CI.
 4. Score recall and false-positive rate against the known plant list, per category.
 5. Exit 2 if recall falls below threshold.
 

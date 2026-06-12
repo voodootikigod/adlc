@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/preflight",
+  "name": "@adlc/preflight",
   "version": "0.1.0",
   "type": "module",
   "bin": { "preflight": "./bin/preflight.mjs" },

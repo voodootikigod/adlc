@@ -1,6 +1,6 @@
-# @aidlc/merge-forecast
+# @adlc/merge-forecast
 
-**AIDLC phase: D2 — The time dial / fan-out mechanics**
+**ADLC phase: D2 — The time dial / fan-out mechanics**
 
 Conflict forecast + dispatch schedule for parallel ticket execution. Predicts merge conflicts before any agent runs, certifies the safe fan-out width, and emits a foundation-first merge schedule.
 
@@ -10,7 +10,7 @@ Conflict forecast + dispatch schedule for parallel ticket execution. Predicts me
 merge-forecast [options]
 
 Options:
-  --tickets <path>           Path to tickets JSON (default: .aidlc/tickets.json)
+  --tickets <path>           Path to tickets JSON (default: .adlc/tickets.json)
   --width <N>                Desired fan-out width; gate fails (exit 2) if > certifiedWidth
   --build-min <X>            Mean ticket build time in minutes (for backpressure width)
   --merge-min <Y>            Mean merge-rebase-regreen time in minutes
@@ -54,7 +54,7 @@ The schedule is derived from the ticket DAG via Kahn topological waves. All tick
 ## Examples
 
 ```sh
-# Basic forecast (auto-detect .aidlc/tickets.json)
+# Basic forecast (auto-detect .adlc/tickets.json)
 merge-forecast
 
 # Gate against fan-out width
@@ -81,4 +81,4 @@ merge-forecast --co-change-limit 1000
 
 ## Core Gaps
 
-None. All required functionality is available in `@aidlc/core` (`coChange`, `pairKey`, `isGitRepo`, `topoSort`, `globMatch`, `scopesOverlap`, `loadTickets`).
+None. All required functionality is available in `@adlc/core` (`coChange`, `pairKey`, `isGitRepo`, `topoSort`, `globMatch`, `scopesOverlap`, `loadTickets`).

@@ -54,7 +54,7 @@ const SELF = ${JSON.stringify(selfBasename)};
 let output = '';
 try {
   output = execSync(
-    \`grep -rn --include="*.mjs" --include="*.js" --include="*.ts" --include="*.tsx" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.aidlc --exclude=\${JSON.stringify(SELF)} -E \${JSON.stringify(PATTERN)} \${JSON.stringify(ROOT)}\`,
+    \`grep -rn --include="*.mjs" --include="*.js" --include="*.ts" --include="*.tsx" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.adlc --exclude=\${JSON.stringify(SELF)} -E \${JSON.stringify(PATTERN)} \${JSON.stringify(ROOT)}\`,
     { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
 } catch (err) {

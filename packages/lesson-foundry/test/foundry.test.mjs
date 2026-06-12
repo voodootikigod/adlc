@@ -15,10 +15,10 @@ function makeTempDir() {
 }
 
 function writeLedger(dir, name, entries) {
-  const aidlcDir = join(dir, '.aidlc');
-  mkdirSync(aidlcDir, { recursive: true });
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
   const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-  writeFileSync(join(aidlcDir, `${name}.jsonl`), content, 'utf8');
+  writeFileSync(join(adlcDir, `${name}.jsonl`), content, 'utf8');
 }
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ test('loadFindings: reads entries from ledger', () => {
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'convention', severity: 'medium', desc: 'no error handling' },
     ]);
 
-    const { findings, skipped, filtered } = loadFindings('findings', join(dir, '.aidlc'));
+    const { findings, skipped, filtered } = loadFindings('findings', join(dir, '.adlc'));
     assert.strictEqual(findings.length, 2);
     assert.strictEqual(skipped, 0);
     assert.strictEqual(filtered, 0);
@@ -49,7 +49,7 @@ test('loadFindings: skips entries with verdict=killed', () => {
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', category: 'security', severity: 'high', desc: 'false positive', verdict: 'killed' },
     ]);
 
-    const { findings, filtered } = loadFindings('findings', join(dir, '.aidlc'));
+    const { findings, filtered } = loadFindings('findings', join(dir, '.adlc'));
     assert.strictEqual(findings.length, 1);
     assert.strictEqual(filtered, 1);
     assert.strictEqual(findings[0].desc, 'real issue');
@@ -61,8 +61,8 @@ test('loadFindings: skips entries with verdict=killed', () => {
 test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
   const dir = makeTempDir();
   try {
-    const aidlcDir = join(dir, '.aidlc');
-    mkdirSync(aidlcDir, { recursive: true });
+    const adlcDir = join(dir, '.adlc');
+    mkdirSync(adlcDir, { recursive: true });
     // Write a mix of valid JSON and invalid lines
     const content = [
       JSON.stringify({ ts: '2025-01-01', tool: 'test', desc: 'valid entry', category: 'security', severity: 'high', file: 'a.mjs' }),
@@ -70,9 +70,9 @@ test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
       JSON.stringify({ ts: '2025-01-02', tool: 'test', desc: 'another valid', category: 'security', severity: 'high', file: 'b.mjs' }),
       'also bad >>>',
     ].join('\n') + '\n';
-    writeFileSync(join(aidlcDir, 'findings.jsonl'), content, 'utf8');
+    writeFileSync(join(adlcDir, 'findings.jsonl'), content, 'utf8');
 
-    const { findings, skipped } = loadFindings('findings', aidlcDir);
+    const { findings, skipped } = loadFindings('findings', adlcDir);
     assert.strictEqual(findings.length, 2);
     assert.strictEqual(skipped, 2);
   } finally {
@@ -83,10 +83,10 @@ test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
 test('loadFindings: returns empty when ledger missing', () => {
   const dir = makeTempDir();
   try {
-    const aidlcDir = join(dir, '.aidlc');
-    mkdirSync(aidlcDir, { recursive: true });
+    const adlcDir = join(dir, '.adlc');
+    mkdirSync(adlcDir, { recursive: true });
     // No findings.jsonl written
-    const { findings, skipped, filtered } = loadFindings('findings', aidlcDir);
+    const { findings, skipped, filtered } = loadFindings('findings', adlcDir);
     assert.strictEqual(findings.length, 0);
     assert.strictEqual(skipped, 0);
     assert.strictEqual(filtered, 0);

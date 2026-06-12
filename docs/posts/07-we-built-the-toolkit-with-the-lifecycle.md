@@ -10,7 +10,7 @@ description: "Eighteen gate-shaped tools, built by the lifecycle they enforce �
 
 Six posts of doctrine deserve a proof-of-work. Here it is: the toolkit that enforces this lifecycle was built *by* the lifecycle — eighteen tools, constructed in parallel by a deterministic workflow script that pipelined each one through build → prosecute → fix, exactly the loop [posts 2 through 5](./02-two-human-gates.md) describe.
 
-The shape of that run, briefly, because it's the whole series in miniature. A frozen contract came first: a small shared core (`@aidlc/core` — LLM calls, git plumbing, CLI conventions, the findings ledger) was built, tested, and *merged before any fan-out*, then appended read-only to every tool's ticket — the "pinned means merged" rule from [post 5](./05-three-dials-parallel-agents.md), applied literally. Each tool then got a fresh builder agent with its ticket and rails; each build was prosecuted by fresh-context reviewers; verified findings looped back as fix tickets; the orchestrator was a workflow script — control flow as code, judgment as spawned models, no boss agent deciding what happens next. The tools came out the other end zero-dependency, `npx`-runnable, with deterministic exit codes (0 = pass, 2 = gate fails) so every one can sit in CI.
+The shape of that run, briefly, because it's the whole series in miniature. A frozen contract came first: a small shared core (`@adlc/core` — LLM calls, git plumbing, CLI conventions, the findings ledger) was built, tested, and *merged before any fan-out*, then appended read-only to every tool's ticket — the "pinned means merged" rule from [post 5](./05-three-dials-parallel-agents.md), applied literally. Each tool then got a fresh builder agent with its ticket and rails; each build was prosecuted by fresh-context reviewers; verified findings looped back as fix tickets; the orchestrator was a workflow script — control flow as code, judgment as spawned models, no boss agent deciding what happens next. The tools came out the other end zero-dependency, `npx`-runnable, with deterministic exit codes (0 = pass, 2 = gate fails) so every one can sit in CI.
 
 And then the toolkit was aimed at itself: `review-calibration` planted bugs in the toolkit's own diffs to measure whether the prosecution stack that built it would catch them — including a one-line truthiness guard in `gate-manifest`'s own hash-chain verifier that made the provenance tool silently skip verification ([post 4](./04-prosecution-not-code-review.md) shows the diff). Dogfooding doesn't get more circular than calibrating the reviewer against the tool that proves the reviewer ran.
 
@@ -31,7 +31,7 @@ Every tool earns its place the same way every phase did: it traces to a model fl
 
 | Tool | What it gates |
 |------|---------------|
-| `rails-guard` | Mechanical rail freeze: blocks builder edits to test/contract/CI paths, emits the rails-diff-empty proof, greps for new skip/suppress markers |
+| `rails-guard` | Mechanical rail freeze: any builder edit to test/contract/CI paths fails the gate; emits the rails-diff-empty proof; greps for new skip/suppress markers |
 | `hollow-test` | Diff-scoped mutation testing: surviving mutants are proof of hollow coverage. The honest replacement for coverage % |
 | `preflight` | Environment determinism before fan-out: dry-run every operation class the fleet will use, front-load the permission prompts |
 | `merge-forecast` | Partition safety: pairwise conflict scoring (file scope, import radius, co-change history, namespace collisions), float computation, width recommendation |
@@ -102,4 +102,6 @@ None of it requires smarter models. All of it gets *better* with smarter models 
 
 The doctrine is one document and the tools are one repo. Run `npx coldstart` on your next ticket, or `npx review-calibration` against your current review stack — the first calibration number is reliably humbling, and it's the right place to start. Everything here traces to a flaw or an exploit; if you find a phase that doesn't, cut it — and if you find a flaw without a phase, that's the next tool.
 
-*Start of series: [Stop Running the SDLC on Models That Aren't Human →](./01-stop-running-the-sdlc-on-models-that-arent-human.md)*
+One claim in this post deserves more scrutiny than the rest: "the toolkit was aimed at itself." That sentence was doing a lot of work — so we aimed it for real, with the lifecycle's own prosecution phase pointed at the gates themselves. What it found is the next post.
+
+*Next: [The Gates Didn't Hold →](./08-the-gates-didnt-hold.md)*

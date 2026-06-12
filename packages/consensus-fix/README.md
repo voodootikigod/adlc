@@ -1,4 +1,4 @@
-# @aidlc/consensus-fix
+# @adlc/consensus-fix
 
 N-version programming for failing tests. Fan N independent LLM completions at the same broken test, evaluate each candidate, group survivors by agreement, and recommend the smallest fix from the largest consensus group.
 
@@ -143,7 +143,7 @@ consensus-fix --test-cmd "node --test test/*.test.mjs" \
 
 ## LLM provider detection
 
-Inherits from `@aidlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`. Force a provider with `AIDLC_PROVIDER`. Override the model per tier via `AIDLC_MODEL_CHEAP`, `AIDLC_MODEL_MID`, `AIDLC_MODEL_FRONTIER`.
+Inherits from `@adlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`. Force a provider with `ADLC_PROVIDER`. Override the model per tier via `ADLC_MODEL_CHEAP`, `ADLC_MODEL_MID`, `ADLC_MODEL_FRONTIER`.
 
 ---
 
@@ -158,4 +158,4 @@ Inherits from `@aidlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API
 
 ## Core gaps
 
-None. `fan`, `complete`, `extractJson`, `detectProvider`, `resolveModel`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `promptOnly`, and `isDirty` are all provided by `@aidlc/core`.
+None. `fan`, `complete`, `extractJson`, `detectProvider`, `resolveModel`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `promptOnly`, and `isDirty` are all provided by `@adlc/core`.

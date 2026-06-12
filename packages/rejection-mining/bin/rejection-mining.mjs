@@ -20,7 +20,7 @@ const { values: flags } = parseArgs({
   options: {
     limit:        { type: 'string',  default: '50' },
     min:          { type: 'string',  default: '2' },
-    'out-dir':    { type: 'string',  default: '.aidlc/lenses' },
+    'out-dir':    { type: 'string',  default: '.adlc/lenses' },
     write:        { type: 'boolean', default: false },
     llm:          { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },

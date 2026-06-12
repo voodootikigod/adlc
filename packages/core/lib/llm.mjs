@@ -1,17 +1,17 @@
 // LLM provider detection and completion. Zero dependencies, native fetch.
 //
 // Tiers: 'cheap' | 'mid' | 'frontier'. Defaults below are overridable:
-//   AIDLC_PROVIDER        force provider: anthropic | openai | gemini | agy
-//   AIDLC_MODEL_CHEAP     model id for the cheap tier
-//   AIDLC_MODEL_MID       model id for the mid tier
-//   AIDLC_MODEL_FRONTIER  model id for the frontier tier
+//   ADLC_PROVIDER        force provider: anthropic | openai | gemini | agy
+//   ADLC_MODEL_CHEAP     model id for the cheap tier
+//   ADLC_MODEL_MID       model id for the mid tier
+//   ADLC_MODEL_FRONTIER  model id for the frontier tier
 //
 // The 'agy' provider runs completions through the Antigravity CLI
 // (`agy --print`) instead of an HTTP API — quota comes from the user's
-// Antigravity plan, no API key. Opt-in: set AIDLC_AGY=1 (or a path to the
-// agy binary) or force with AIDLC_PROVIDER=agy. Extra knobs:
-//   AIDLC_AGY_TIMEOUT   print-timeout passed to agy (default 300s)
-//   AIDLC_AGY_SANDBOX   set to 1 to pass --sandbox
+// Antigravity plan, no API key. Opt-in: set ADLC_AGY=1 (or a path to the
+// agy binary) or force with ADLC_PROVIDER=agy. Extra knobs:
+//   ADLC_AGY_TIMEOUT   print-timeout passed to agy (default 300s)
+//   ADLC_AGY_SANDBOX   set to 1 to pass --sandbox
 
 import { spawn } from 'node:child_process';
 
@@ -26,7 +26,7 @@ export function isAgyTimeout(out) {
 }
 
 // Env values that explicitly DISABLE a feature flag. 'false'/'0' are truthy
-// strings in JS, so a plain existence check would enable on AIDLC_AGY=false.
+// strings in JS, so a plain existence check would enable on ADLC_AGY=false.
 function envEnabled(v) {
   return v !== undefined && v !== '' && !['0', 'false', 'no', 'off', 'disabled'].includes(v.toLowerCase());
 }
@@ -34,8 +34,8 @@ function envEnabled(v) {
 function agySend({ apiKey, model, system, prompt }, env = process.env) {
   // apiKey carries the binary path ('1'/'true' mean default 'agy').
   const bin = apiKey === '1' || apiKey === 'true' ? 'agy' : apiKey;
-  const args = ['--print', '--print-timeout', env.AIDLC_AGY_TIMEOUT ?? '300s', '--model', model];
-  if (env.AIDLC_AGY_SANDBOX === '1') args.push('--sandbox');
+  const args = ['--print', '--print-timeout', env.ADLC_AGY_TIMEOUT ?? '300s', '--model', model];
+  if (env.ADLC_AGY_SANDBOX === '1') args.push('--sandbox');
   const input = system ? `${system}\n\n---\n\n${prompt}` : prompt;
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -140,9 +140,9 @@ const PROVIDERS = [
   },
   {
     // Antigravity CLI subprocess provider. Last in the list so API-key
-    // providers win during auto-detection; force with AIDLC_PROVIDER=agy.
+    // providers win during auto-detection; force with ADLC_PROVIDER=agy.
     name: 'agy',
-    envKey: 'AIDLC_AGY',
+    envKey: 'ADLC_AGY',
     models: {
       cheap: 'Gemini 3.5 Flash (Medium)',
       mid: 'Claude Sonnet 4.6 (Thinking)',
@@ -153,11 +153,11 @@ const PROVIDERS = [
 ];
 
 /**
- * Detect the first available provider (or the one forced via AIDLC_PROVIDER).
+ * Detect the first available provider (or the one forced via ADLC_PROVIDER).
  * Returns { name, apiKey, models } or null when no key is present.
  */
 export function detectProvider(env = process.env) {
-  const forced = env.AIDLC_PROVIDER;
+  const forced = env.ADLC_PROVIDER;
   const candidates = forced ? PROVIDERS.filter((p) => p.name === forced) : PROVIDERS;
   for (const p of candidates) {
     const apiKey = env[p.envKey];
@@ -176,7 +176,7 @@ export function detectProvider(env = process.env) {
 /** Resolve a tier ('cheap'|'mid'|'frontier') or explicit model id to a model id. */
 export function resolveModel(provider, { tier = 'mid', model } = {}, env = process.env) {
   if (model) return model;
-  const override = env[`AIDLC_MODEL_${tier.toUpperCase()}`];
+  const override = env[`ADLC_MODEL_${tier.toUpperCase()}`];
   if (override) return override;
   const resolved = provider.models[tier];
   if (!resolved) throw new Error(`unknown tier: ${tier}`);

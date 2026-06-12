@@ -31,7 +31,7 @@ export function buildCheckTicket(completeFn, extractJsonFn) {
  * Returns { id, gaps: [{what, why_blocking}] }.
  * Throws on LLM/network errors (caller handles with opError).
  *
- * AIDLC_GATE_MOCK_RESPONSE is a TEST-ONLY seam: it is honored ONLY when
+ * ADLC_GATE_MOCK_RESPONSE is a TEST-ONLY seam: it is honored ONLY when
  * NODE_ENV === 'test'. In that case it is parsed as a JSON string and
  * returned directly (skipping the real LLM call), letting CLI integration
  * tests exercise the full output and exit-code paths without network access.
@@ -42,7 +42,7 @@ export function buildCheckTicket(completeFn, extractJsonFn) {
  * closed when no API key is configured — which is the correct behavior.
  */
 export async function checkTicket(ticket) {
-  const mockEnv = process.env.AIDLC_GATE_MOCK_RESPONSE;
+  const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
   if (mockEnv !== undefined && process.env.NODE_ENV === 'test') {
     const parsed = JSON.parse(mockEnv);
     const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];

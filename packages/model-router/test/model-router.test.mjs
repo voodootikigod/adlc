@@ -21,17 +21,17 @@ function cleanup(dir) {
 }
 
 function writeTickets(dir, tickets) {
-  const aidlc = join(dir, '.aidlc');
-  mkdirSync(aidlc, { recursive: true });
-  writeFileSync(join(aidlc, 'tickets.json'), JSON.stringify({ tickets }));
-  return join(aidlc, 'tickets.json');
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
+  writeFileSync(join(adlc, 'tickets.json'), JSON.stringify({ tickets }));
+  return join(adlc, 'tickets.json');
 }
 
 function writeManifest(dir, entries) {
-  const aidlc = join(dir, '.aidlc');
-  mkdirSync(aidlc, { recursive: true });
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
   const lines = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-  writeFileSync(join(aidlc, 'manifest.jsonl'), lines);
+  writeFileSync(join(adlc, 'manifest.jsonl'), lines);
 }
 
 function runCLI(args, cwd) {
@@ -230,7 +230,7 @@ test('runRouter: critical path ticket gets direct mode', async () => {
         edges: [{ to: 'T2', contract: 'types.ts' }], duration: 1 },
       { id: 'T2', title: 'Dep', category: 'feature', rails: ['c', 'd'], scope: ['c', 'd'], duration: 1 },
     ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, aidlcDir: join(tmp, '.aidlc') });
+    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
     // Both T1 and T2 are on the critical path (linear chain)
     const t1 = result.assignments.find((a) => a.id === 'T1');
     const t2 = result.assignments.find((a) => a.id === 'T2');
@@ -256,7 +256,7 @@ test('runRouter: ticket with float uses ladder mode', async () => {
       { id: 'T3', title: 'Gate', category: 'feature',
         rails: ['i', 'j', 'k', 'l'], scope: ['i', 'j', 'k', 'l'], duration: 1 },
     ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, aidlcDir: join(tmp, '.aidlc') });
+    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
     const t1 = result.assignments.find((a) => a.id === 'T1');
     const t2 = result.assignments.find((a) => a.id === 'T2');
     // T1 has float 2, T2 has float 0 (critical), T3 has float 0
@@ -279,7 +279,7 @@ test('runRouter: cycle → opError', async () => {
       { id: 'T2', title: 'B', category: 'feature', edges: [{ to: 'T1', contract: 'y' }] },
     ]);
     await assert.rejects(
-      () => runRouter({ ticketsPath, floor: 0.2, aidlcDir: join(tmp, '.aidlc') }),
+      () => runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') }),
       (err) => {
         assert.ok(err.message.includes('cycle'), `expected 'cycle' in: ${err.message}`);
         return true;
@@ -306,7 +306,7 @@ test('runRouter: priors influence critical path tier', async () => {
       { id: 'T1', title: 'Solo', category: 'feature',
         rails: ['a', 'b'], scope: ['a', 'b'] },
     ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, aidlcDir: join(tmp, '.aidlc') });
+    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
     const t1 = result.assignments.find((a) => a.id === 'T1');
     // T1 is on critical path (only ticket); priors say 'cheap' is best
     assert.equal(t1.tier, 'cheap');
@@ -321,9 +321,9 @@ test('runRouter: priors influence critical path tier', async () => {
 test('CLI: exit 2 when ticket below floor', () => {
   const tmp = makeTmp();
   try {
-    const aidlc = join(tmp, '.aidlc');
-    mkdirSync(aidlc, { recursive: true });
-    const ticketsPath = join(aidlc, 'tickets.json');
+    const adlc = join(tmp, '.adlc');
+    mkdirSync(adlc, { recursive: true });
+    const ticketsPath = join(adlc, 'tickets.json');
     writeFileSync(ticketsPath, JSON.stringify({
       tickets: [
         { id: 'T1', title: 'Unreiled', category: 'feature', scope: ['a', 'b'] },
@@ -341,9 +341,9 @@ test('CLI: exit 2 when ticket below floor', () => {
 test('CLI: exit 0 when all tickets railed above floor', () => {
   const tmp = makeTmp();
   try {
-    const aidlc = join(tmp, '.aidlc');
-    mkdirSync(aidlc, { recursive: true });
-    const ticketsPath = join(aidlc, 'tickets.json');
+    const adlc = join(tmp, '.adlc');
+    mkdirSync(adlc, { recursive: true });
+    const ticketsPath = join(adlc, 'tickets.json');
     writeFileSync(ticketsPath, JSON.stringify({
       tickets: [
         { id: 'T1', title: 'Railed', category: 'feature',
@@ -360,9 +360,9 @@ test('CLI: exit 0 when all tickets railed above floor', () => {
 test('CLI: exit 0 for frontier category even below floor', () => {
   const tmp = makeTmp();
   try {
-    const aidlc = join(tmp, '.aidlc');
-    mkdirSync(aidlc, { recursive: true });
-    const ticketsPath = join(aidlc, 'tickets.json');
+    const adlc = join(tmp, '.adlc');
+    mkdirSync(adlc, { recursive: true });
+    const ticketsPath = join(adlc, 'tickets.json');
     writeFileSync(ticketsPath, JSON.stringify({
       tickets: [
         // contract category → frontier anyway, no gate fail
@@ -389,9 +389,9 @@ test('CLI: exit 1 on missing tickets file', () => {
 test('CLI: --json flag produces valid JSON', () => {
   const tmp = makeTmp();
   try {
-    const aidlc = join(tmp, '.aidlc');
-    mkdirSync(aidlc, { recursive: true });
-    const ticketsPath = join(aidlc, 'tickets.json');
+    const adlc = join(tmp, '.adlc');
+    mkdirSync(adlc, { recursive: true });
+    const ticketsPath = join(adlc, 'tickets.json');
     writeFileSync(ticketsPath, JSON.stringify({
       tickets: [
         { id: 'T1', title: 'Railed', category: 'feature',
@@ -413,7 +413,7 @@ test('CLI: no-args smoke (missing default tickets file → exit 1)', () => {
   const tmp = makeTmp();
   try {
     const r = runCLI([], tmp);
-    // .aidlc/tickets.json doesn't exist → operational error → exit 1
+    // .adlc/tickets.json doesn't exist → operational error → exit 1
     assert.equal(r.code, 1, `expected exit 1, got ${r.code}`);
   } finally {
     cleanup(tmp);

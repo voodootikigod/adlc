@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/merge-forecast",
+  "name": "@adlc/merge-forecast",
   "version": "0.1.0",
   "type": "module",
   "bin": { "merge-forecast": "./bin/merge-forecast.mjs" },

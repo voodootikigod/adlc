@@ -74,7 +74,7 @@ describe('runChecks all-required-pass', () => {
 
   it('no residue: tmp file absent after run', async () => {
     await runChecks({ cwd: dir });
-    const tmpFile = join(dir, '.aidlc', 'tmp', 'preflight-test');
+    const tmpFile = join(dir, '.adlc', 'tmp', 'preflight-test');
     assert.equal(existsSync(tmpFile), false);
   });
 });
@@ -160,7 +160,7 @@ describe('residue cleanup — pass and fail paths', () => {
   it('no residue after passing run', async () => {
     await runChecks({ cwd: passDir });
 
-    const tmpFile = join(passDir, '.aidlc', 'tmp', 'preflight-test');
+    const tmpFile = join(passDir, '.adlc', 'tmp', 'preflight-test');
     assert.equal(existsSync(tmpFile), false, 'tmp file absent after pass');
 
     const branchList = execFileSync('git', ['branch'], {
@@ -171,7 +171,7 @@ describe('residue cleanup — pass and fail paths', () => {
 
   it('no residue after failing run (non-repo)', async () => {
     await runChecks({ cwd: failDir });
-    const tmpFile = join(failDir, '.aidlc', 'tmp', 'preflight-test');
+    const tmpFile = join(failDir, '.adlc', 'tmp', 'preflight-test');
     assert.equal(existsSync(tmpFile), false, 'tmp file absent after failing run');
   });
 

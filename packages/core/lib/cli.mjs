@@ -1,4 +1,4 @@
-// CLI conventions shared by every AIDLC tool.
+// CLI conventions shared by every ADLC tool.
 // Exit codes: 0 = gate passes, 1 = operational error, 2 = gate fails.
 
 import { parseArgs as nodeParseArgs } from 'node:util';

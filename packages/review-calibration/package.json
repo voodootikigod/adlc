@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/review-calibration",
+  "name": "@adlc/review-calibration",
   "version": "0.1.0",
   "type": "module",
   "bin": { "review-calibration": "./bin/review-calibration.mjs" },

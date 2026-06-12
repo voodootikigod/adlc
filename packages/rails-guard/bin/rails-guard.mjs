@@ -15,7 +15,7 @@ import {
   git,
   globMatch,
   resolveBase,
-  AIDLC_DIR,
+  ADLC_DIR,
 } from '../../core/index.mjs';
 
 import { runChecks } from '../lib/check.mjs';
@@ -44,10 +44,10 @@ Rail-freeze enforcement + suppression-marker gate (ADLC C5).
                      gate fails closed — pass --base explicitly. NEVER defaults to
                      HEAD, which would hide already-committed rail edits.
   --ticket <id>      Ticket ID to load rails and allow-suppression declarations from
-  --tickets <path>   Path to tickets.json (default: .aidlc/tickets.json)
+  --tickets <path>   Path to tickets.json (default: .adlc/tickets.json)
   --rails <glob>     One or more glob patterns declaring frozen rail paths
                      (repeatable; overrides ticket.rails)
-  --record           On a clean pass, append a manifest entry to .aidlc/manifest.jsonl
+  --record           On a clean pass, append a manifest entry to .adlc/manifest.jsonl
   --json             Machine-readable JSON output
   --help             Show this help
 
@@ -67,7 +67,7 @@ if (!isGitRepo()) {
 // --- load ticket if requested ---
 let ticket = null;
 if (values.ticket) {
-  const ticketsPath = values.tickets ?? `${AIDLC_DIR}/tickets.json`;
+  const ticketsPath = values.tickets ?? `${ADLC_DIR}/tickets.json`;
   const { tickets, errors } = loadTickets(ticketsPath);
   if (errors.length > 0 && tickets.length === 0) {
     opError(`could not load tickets from ${ticketsPath}: ${errors[0]}`);

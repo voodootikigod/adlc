@@ -1,4 +1,4 @@
-// @aidlc/core — single import surface for all AIDLC tools.
+// @adlc/core — single import surface for all ADLC tools.
 export * from './lib/llm.mjs';
 export * from './lib/git.mjs';
 export * from './lib/cli.mjs';

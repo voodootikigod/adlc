@@ -1,6 +1,6 @@
-# @aidlc/premortem
+# @adlc/premortem
 
-Failure-first spec stress test — **AIDLC phase C2 / P1 gate**.
+Failure-first spec stress test — **ADLC phase C2 / P1 gate**.
 
 Inverts sycophancy: instead of asking "any problems with this plan?", it tells a
 frontier model the project already failed and asks it to write the postmortem.
@@ -87,8 +87,8 @@ OPENAI_API_KEY      → uses gpt-5.1 at frontier tier
 GEMINI_API_KEY      → uses gemini-2.5-pro at frontier tier
 ```
 
-Force a provider: `AIDLC_PROVIDER=anthropic`
-Override model by tier: `AIDLC_MODEL_FRONTIER=claude-opus-4-8`
+Force a provider: `ADLC_PROVIDER=anthropic`
+Override model by tier: `ADLC_MODEL_FRONTIER=claude-opus-4-8`
 
 Use `--prompt-only` to get the exact prompt for pasting into any harness when no
 key is available.
@@ -98,7 +98,7 @@ key is available.
 ## Core gaps
 
 None.  All required functionality (`complete`, `extractJson`, `detectProvider`,
-`promptOnly`, `opError`, `parseArgs`, `printJson`) is available in `@aidlc/core`.
+`promptOnly`, `opError`, `parseArgs`, `printJson`) is available in `@adlc/core`.
 
 ---
 

@@ -6,7 +6,7 @@
  */
 
 import { loadTickets, computeFloat } from '../../core/index.mjs';
-import { readEntries, AIDLC_DIR } from '../../core/index.mjs';
+import { readEntries, ADLC_DIR } from '../../core/index.mjs';
 import { buildPriors } from './priors.mjs';
 import { assignAll } from './assign.mjs';
 import { FRONTIER_CATEGORIES } from './assign.mjs';
@@ -17,7 +17,7 @@ import { FRONTIER_CATEGORIES } from './assign.mjs';
  * @param {object} opts
  * @param {string} [opts.ticketsPath] - path to tickets.json
  * @param {number} [opts.floor=0.2] - rail density floor
- * @param {string} [opts.aidlcDir] - override .aidlc dir (for tests)
+ * @param {string} [opts.adlcDir] - override .adlc dir (for tests)
  * @returns {{ assignments, p3Findings, ticketErrors, skippedLedger }}
  *   or throws with a message suitable for opError()
  */
@@ -25,7 +25,7 @@ export async function runRouter(opts = {}) {
   const {
     ticketsPath,
     floor = 0.2,
-    aidlcDir = AIDLC_DIR,
+    adlcDir = ADLC_DIR,
   } = opts;
 
   // Load tickets
@@ -45,7 +45,7 @@ export async function runRouter(opts = {}) {
   }
 
   // Load manifest ledger for priors
-  const { entries, skipped: skippedLedger } = readEntries('manifest', aidlcDir);
+  const { entries, skipped: skippedLedger } = readEntries('manifest', adlcDir);
   const priors = buildPriors(entries);
 
   // Assign routes

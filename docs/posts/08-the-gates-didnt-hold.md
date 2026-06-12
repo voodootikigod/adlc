@@ -1,14 +1,14 @@
 ---
 title: "The Gates Didn't Hold"
 series: "The Agentic Development Lifecycle"
-part: 9
+part: 8
 date: 2026-06-11
 description: "We aimed the lifecycle's own prosecution at the toolkit that enforces it. Every gate with an adversarial surface green-passed input it was built to stop — and that failure, reproduced and fixed, is the realer proof-of-work than the one we shipped."
 ---
 
 # The Gates Didn't Hold
 
-[Post 7](./07-we-built-the-toolkit-with-the-lifecycle.md) ended the doctrine with a tidy line: the toolkit was built by the lifecycle, and then "aimed at itself." That sentence was doing a lot of work it hadn't earned. So we aimed it for real — fresh contexts, refute charters, the lifecycle's own [prosecution phase](./04-prosecution-not-code-review.md) pointed at the gates themselves, with one question per gate: *what is the strongest reason this does not hold?*
+[Post 7](./07-we-built-the-toolkit-with-the-lifecycle.md) made a tidy claim: the toolkit was built by the lifecycle, and then "aimed at itself." That sentence was doing a lot of work it hadn't earned. So we aimed it for real — fresh contexts, refute charters, the lifecycle's own [prosecution phase](./04-prosecution-not-code-review.md) pointed at the gates themselves, with one question per gate: *what is the strongest reason this does not hold?*
 
 It went badly, which is the point. Nearly every gate with an adversarial surface green-passed the exact input it existed to stop. The proof-of-work this series actually deserved was never "we built eighteen clean tools." It's this: the process caught its own builder's blind spots, on the author's own code, with a trail you can reproduce. A victory lap proves nothing a skeptic believes. A reproduced failure does.
 
@@ -22,7 +22,7 @@ Three of them, named, because [vague claims get the vague treatment](./03-tests-
 
 ### `rails-guard` — the freeze a `git commit` walks through
 
-The rail freeze is the load-bearing trust anchor of the entire lifecycle: the builder cannot edit its own tests, contracts, or CI config during the build. Post 7's table says `rails-guard` "blocks builder edits." It does not block — it *detects*, after the fact, by diffing the working tree. And it diffed against the wrong thing: the default base was `HEAD`, and `git diff HEAD` cannot see a change that has already been committed.
+The rail freeze is the load-bearing trust anchor of the entire lifecycle: the builder cannot edit its own tests, contracts, or CI config during the build — [post 3](./03-tests-are-the-spec.md) said *cannot*, not *shouldn't*. `rails-guard` is that freeze's enforcement, and it doesn't block writes; it *detects* them, after the fact, by diffing the working tree. Detection is a legitimate design — the gate fails, the merge stops. Except it diffed against the wrong thing: the default base was `HEAD`, and `git diff HEAD` cannot see a change that has already been committed.
 
 So the attack is one command. Edit the frozen test, `git commit` it, run the gate:
 
@@ -59,7 +59,7 @@ Two things made this a proof instead of an LLM grumbling about code.
 
 First, **every finding was reproduced, not asserted** — the doctrine's "[evidence or it didn't happen](./04-prosecution-not-code-review.md)" turned back on the toolkit. The `rails-guard` bypass ran in a shell to exit 0. The `gate-manifest` chain was forged and verified. The echoing reviewer was scored at 1.0. A finding nobody can reproduce is noise that burns fix-agent tokens chasing ghosts; we let none through.
 
-Second, **each fix started from the reproduction as a failing test**. `rails-guard` now resolves its baseline to the merge-base with the trunk and *fails closed* when it can't — a committed rail edit is caught, and the test that proves it is the bypass itself, inverted. `gate-manifest` gained real keyed signing; the forged chain that used to verify `valid` now fails. `review-calibration` was rebuilt to score a plant as caught only when a finding *locates and identifies* it — verified behaviorally or judged semantically, with no substring shortcut — and the echoing-reviewer test was flipped: it now asserts recall **~0**. That inverted test became the control that runs on *every* calibration from here on. The bug that hid in a green assertion is now the assertion that guards against its own return.
+Second, **each fix started from the reproduction as a failing test**. `rails-guard` now resolves its baseline to the merge-base with the trunk and *fails closed* when it can't — a committed rail edit is caught, and the test that proves it is the bypass itself, inverted. `gate-manifest` gained real keyed signing; run with the key, verification now rejects the forged chain — and an unkeyed pass reports `signed: false` instead of implying provenance it can't attest. `review-calibration` was rebuilt to score a plant as caught only when a finding *locates and identifies* it — verified behaviorally or judged semantically, with no substring shortcut — and the echoing-reviewer test was flipped: it now asserts recall **~0**. That inverted test became the control that runs on *every* calibration from here on. The bug that hid in a green assertion is now the assertion that guards against its own return.
 
 The trail is real and ordinary: a frozen-baseline fix to the shared core, a sweep across eleven gates, the calibrator's rebuild — landed as commits, each carrying the regression test that reproduces its exploit, roughly eighty new tests across the toolkit, every package green. Not a narrative. A diff.
 
@@ -83,4 +83,4 @@ That's the real shape of dogfooding. Not "we ate our own cooking and it was deli
 
 You have gates too — the lint config nobody audits, the CI check that's green for reasons no one has verified, the review bot whose recall is unknown. Point a fresh-context, refute-chartered pass at one of them and ask the only question that matters: *what is the strongest reason this does not hold?* Reproduce whatever comes back before you believe it, and turn each reproduction into the test that was missing. The first time is reliably humbling. It is also the cheapest review you will ever run, and the only one that tells you what your gates are actually worth.
 
-*Start of series: [Stop Running the SDLC on Models That Aren't Human →](./01-stop-running-the-sdlc-on-models-that-arent-human.md)*
+*Next: [ADLC vs. the Enterprise SDLC →](./09-adlc-vs-enterprise-sdlc.md)*

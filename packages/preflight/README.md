@@ -1,4 +1,4 @@
-# @aidlc/preflight
+# @adlc/preflight
 
 Permissions and environment preflight check before fan-out (ADLC D2 Phase 0).
 
@@ -51,7 +51,7 @@ preflight --test-cmd "npm test" --gh --llm --worktrees
 |------|---------------|
 | `bash` | `echo preflight-ok` succeeds |
 | `git` | `git status` in cwd succeeds (cwd must be a git repo) |
-| `write` | Write + delete `.aidlc/tmp/preflight-test` (mkdir -p as needed) |
+| `write` | Write + delete `.adlc/tmp/preflight-test` (mkdir -p as needed) |
 | `branch` | Create and delete `preflight-test-branch`; always cleans up in finally |
 
 ### Optional (run only when flag given)
@@ -84,7 +84,7 @@ check      status  detail
 ──────────────────────
 bash       ✓ PASS    echo preflight-ok succeeded
 git        ✓ PASS    git status succeeded
-write      ✓ PASS    .aidlc/tmp/preflight-test written and removed
+write      ✓ PASS    .adlc/tmp/preflight-test written and removed
 branch     ✓ PASS    branch 'preflight-test-branch' created and removed
 worktrees  ✓ PASS    worktree add/remove succeeded
 test-cmd   ✓ PASS    exited 0
@@ -100,7 +100,7 @@ verdict: ALL CHECKS PASSED — environment is ready.
   "checks": [
     { "name": "bash",   "status": "pass", "detail": "echo preflight-ok succeeded", "required": true },
     { "name": "git",    "status": "pass", "detail": "git status succeeded",          "required": true },
-    { "name": "write",  "status": "pass", "detail": ".aidlc/tmp/preflight-test written and removed", "required": true },
+    { "name": "write",  "status": "pass", "detail": ".adlc/tmp/preflight-test written and removed", "required": true },
     { "name": "branch", "status": "pass", "detail": "branch 'preflight-test-branch' created and removed", "required": true }
   ],
   "verdict": "pass",
@@ -128,4 +128,4 @@ fails.
 ## Core gaps
 
 None. All required core APIs (`detectProvider`, `git`, `parseArgs`, `printJson`)
-are available in `@aidlc/core`.
+are available in `@adlc/core`.

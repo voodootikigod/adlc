@@ -3,7 +3,7 @@
 // Sequence numbers must be strictly monotonically increasing.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, ledgerPath, AIDLC_DIR } from '../../core/index.mjs';
+import { sha256, ledgerPath, ADLC_DIR } from '../../core/index.mjs';
 import { getKey, verifyEntrySig } from './sign.mjs';
 
 /**
@@ -21,7 +21,7 @@ import { getKey, verifyEntrySig } from './sign.mjs';
  */
 
 /**
- * Verify the manifest ledger's hash chain — and, when AIDLC_MANIFEST_KEY is
+ * Verify the manifest ledger's hash chain — and, when ADLC_MANIFEST_KEY is
  * set, the HMAC signature of every entry that carries one.
  *
  * Reads raw lines directly (never via readEntries) so that sha256 is computed
@@ -36,10 +36,10 @@ import { getKey, verifyEntrySig } from './sign.mjs';
  *    cannot produce valid signatures, so verify (run WITH the key) returns
  *    valid:false.
  *
- * @param {string} [dir]  ledger directory (default AIDLC_DIR)
+ * @param {string} [dir]  ledger directory (default ADLC_DIR)
  * @returns {VerifyResult}
  */
-export function verify(dir = AIDLC_DIR) {
+export function verify(dir = ADLC_DIR) {
   const lp = ledgerPath('manifest', dir);
   const key = getKey();
 

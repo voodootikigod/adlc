@@ -4,7 +4,7 @@
 // which parses and re-serialises, losing byte-exact fidelity.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, hashFiles, appendEntry, ledgerPath, AIDLC_DIR } from '../../core/index.mjs';
+import { sha256, hashFiles, appendEntry, ledgerPath, ADLC_DIR } from '../../core/index.mjs';
 import { getKey, signEntry } from './sign.mjs';
 
 /**
@@ -88,11 +88,11 @@ export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq
  * @param {string|undefined} opts.ticket
  * @param {string|undefined} opts.rawData   raw --data string (parsed here)
  * @param {string|undefined} opts.rawFiles  raw --files string (parsed here)
- * @param {string} [opts.dir]  ledger directory (default AIDLC_DIR)
+ * @param {string} [opts.dir]  ledger directory (default ADLC_DIR)
  * @returns the recorded entry object
  * @throws Error for malformed --data JSON
  */
-export function record({ gate, ticket, rawData, rawFiles, dir = AIDLC_DIR }) {
+export function record({ gate, ticket, rawData, rawFiles, dir = ADLC_DIR }) {
   const data = parseData(rawData);
   const filePaths = parseFileList(rawFiles);
 

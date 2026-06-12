@@ -4,7 +4,7 @@
 // who can write the ledger file can recompute every `prev` and forge a clean
 // chain from scratch — sha256 is a public function with no secret. To make the
 // chain a real *provenance* signal (in-toto/SLSA-style), each entry is signed
-// with HMAC-SHA256 under a secret key (env AIDLC_MANIFEST_KEY). An attacker
+// with HMAC-SHA256 under a secret key (env ADLC_MANIFEST_KEY). An attacker
 // without the key cannot produce a valid `sig`, so a forged chain fails verify.
 //
 // CANONICAL BYTES SIGNED — must be byte-identical on record and verify:
@@ -19,7 +19,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /** Env var holding the secret signing key. */
-export const KEY_ENV = 'AIDLC_MANIFEST_KEY';
+export const KEY_ENV = 'ADLC_MANIFEST_KEY';
 
 /**
  * Read the signing key from the environment.

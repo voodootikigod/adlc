@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/coldstart",
+  "name": "@adlc/coldstart",
   "version": "0.1.0",
   "type": "module",
   "bin": { "coldstart": "./bin/coldstart.mjs" },

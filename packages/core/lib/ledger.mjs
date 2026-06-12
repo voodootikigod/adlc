@@ -1,13 +1,13 @@
-// Append-only JSONL ledgers under .aidlc/ — the shared persistence layer for
+// Append-only JSONL ledgers under .adlc/ — the shared persistence layer for
 // gate-manifest entries, prosecution findings, routing priors, etc.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
-export const AIDLC_DIR = '.aidlc';
+export const ADLC_DIR = '.adlc';
 
-export function ledgerPath(name, dir = AIDLC_DIR) {
+export function ledgerPath(name, dir = ADLC_DIR) {
   return join(dir, `${name}.jsonl`);
 }
 
@@ -59,7 +59,7 @@ export function withLedgerLock(target, fn) {
 }
 
 /** Append one entry (object) to the named ledger. Creates dir/file as needed. */
-export function appendEntry(name, entry, dir = AIDLC_DIR) {
+export function appendEntry(name, entry, dir = ADLC_DIR) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const p = ledgerPath(name, dir);
   withLedgerLock(p, () => {
@@ -73,7 +73,7 @@ export function appendEntry(name, entry, dir = AIDLC_DIR) {
  * returned in `skipped` with line numbers so callers can surface them.
  * Returns { entries, skipped }.
  */
-export function readEntries(name, dir = AIDLC_DIR) {
+export function readEntries(name, dir = ADLC_DIR) {
   const p = ledgerPath(name, dir);
   if (!existsSync(p)) return { entries: [], skipped: [] };
   const entries = [];

@@ -1,6 +1,6 @@
 # gate-manifest
 
-**ADLC C11 — cross-cutting provenance.** A hash-chained evidence ledger that records what each AIDLC gate verified, proving to auditors (and CI) that agentic code was checked before it shipped. Set `AIDLC_MANIFEST_KEY` to add HMAC-SHA256 signatures so the chain attests *authorship*, not just internal consistency (see [Signing & provenance](#signing--provenance)).
+**ADLC C11 — cross-cutting provenance.** A hash-chained evidence ledger that records what each ADLC gate verified, proving to auditors (and CI) that agentic code was checked before it shipped. Set `ADLC_MANIFEST_KEY` to add HMAC-SHA256 signatures so the chain attests *authorship*, not just internal consistency (see [Signing & provenance](#signing--provenance)).
 
 ## ADLC phase
 
@@ -17,7 +17,7 @@ gate-manifest attest [--ticket id] [--dir path]
 
 ### record
 
-Append one entry to `.aidlc/manifest.jsonl`.
+Append one entry to `.adlc/manifest.jsonl`.
 
 ```sh
 gate-manifest record spec-lint --ticket T-42 --data '{"model":"haiku","pass":true}' --files src/foo.mjs,src/bar.mjs
@@ -34,18 +34,18 @@ The entry stored:
   "data": { "model": "haiku", "pass": true },
   "files": { "src/foo.mjs": "<sha256>", "src/bar.mjs": "<sha256>" },
   "prev": "<sha256 of the previous raw JSONL line, or null>",
-  "sig": "<HMAC-SHA256 over the canonical entry bytes — present only when AIDLC_MANIFEST_KEY is set>"
+  "sig": "<HMAC-SHA256 over the canonical entry bytes — present only when ADLC_MANIFEST_KEY is set>"
 }
 ```
 
-When `AIDLC_MANIFEST_KEY` is set, `record` appends a `sig` (the human output prints `(signed)` / `(unsigned)`). See **Signing & provenance** below.
+When `ADLC_MANIFEST_KEY` is set, `record` appends a `sig` (the human output prints `(signed)` / `(unsigned)`). See **Signing & provenance** below.
 
 | Flag | Description |
 |------|-------------|
 | `--ticket id` | Associate this entry with a ticket id (optional) |
 | `--data '{json}'` | Arbitrary JSON payload (must be valid JSON; malformed → exit 1) |
 | `--files a,b,c` | Comma-separated paths; each is SHA-256 hashed (missing files hash to null) |
-| `--dir path` | Override ledger directory (default `.aidlc`) |
+| `--dir path` | Override ledger directory (default `.adlc`) |
 | `--json` | Print the recorded entry as JSON |
 
 ### verify
@@ -59,7 +59,7 @@ gate-manifest verify --json   # machine-readable
 
 **Exit 0** when valid (or empty manifest). **Exit 2** when the chain is broken — reports the seq and line number of the first break.
 
-When `AIDLC_MANIFEST_KEY` is set, `verify` additionally checks every entry's HMAC signature. A missing sig (`unsigned entry`) or a wrong sig (`signature invalid`) breaks the chain. The JSON result includes `signed: true` only when a key was present and every entry verified cryptographically; otherwise `signed: false`.
+When `ADLC_MANIFEST_KEY` is set, `verify` additionally checks every entry's HMAC signature. A missing sig (`unsigned entry`) or a wrong sig (`signature invalid`) breaks the chain. The JSON result includes `signed: true` only when a key was present and every entry verified cryptographically; otherwise `signed: false`.
 
 | Flag | Description |
 |------|-------------|
@@ -127,7 +127,7 @@ The hash chain alone proves **internal consistency**, not **authorship**. `sha25
 To get real provenance, set a secret signing key:
 
 ```sh
-export AIDLC_MANIFEST_KEY="$(openssl rand -hex 32)"   # store in your CI secret manager, never in the repo
+export ADLC_MANIFEST_KEY="$(openssl rand -hex 32)"   # store in your CI secret manager, never in the repo
 gate-manifest record spec-lint --ticket T-42
 gate-manifest verify --json    # → { ..., "signed": true }
 ```
@@ -146,4 +146,4 @@ Zero-dependency: HMAC comes from Node's built-in `node:crypto`. Key management (
 
 ## Core gaps
 
-None for ledger/CLI primitives — `sha256`, `hashFiles`, `appendEntry`, `readEntries`, `ledgerPath`, `AIDLC_DIR`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson` from `@aidlc/core` cover them. Core exposes `sha256` but no keyed-MAC primitive, so HMAC signing uses Node's built-in `node:crypto` (`createHmac`, `timingSafeEqual`) directly in `lib/sign.mjs` — still zero runtime dependencies.
+None for ledger/CLI primitives — `sha256`, `hashFiles`, `appendEntry`, `readEntries`, `ledgerPath`, `ADLC_DIR`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson` from `@adlc/core` cover them. Core exposes `sha256` but no keyed-MAC primitive, so HMAC signing uses Node's built-in `node:crypto` (`createHmac`, `timingSafeEqual`) directly in `lib/sign.mjs` — still zero runtime dependencies.

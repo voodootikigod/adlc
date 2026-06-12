@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { readEntries, AIDLC_DIR } from '../../core/index.mjs';
+import { readEntries, ADLC_DIR } from '../../core/index.mjs';
 
 const BIN = fileURLToPath(new URL('../bin/rails-guard.mjs', import.meta.url));
 
@@ -66,10 +66,10 @@ describe('--record: bin writes manifest entry on clean pass', () => {
     const result = runBin(['--rails', 'test/**', '--record', '--base', 'HEAD'], dir);
     assert.equal(result.status, 0, `bin exited ${result.status}; stderr: ${result.stderr}`);
 
-    const aidlcDir = join(dir, AIDLC_DIR);
-    assert.ok(existsSync(join(aidlcDir, 'manifest.jsonl')), 'manifest.jsonl should exist after --record');
+    const adlcDir = join(dir, ADLC_DIR);
+    assert.ok(existsSync(join(adlcDir, 'manifest.jsonl')), 'manifest.jsonl should exist after --record');
 
-    const { entries, skipped } = readEntries('manifest', aidlcDir);
+    const { entries, skipped } = readEntries('manifest', adlcDir);
     assert.equal(skipped.length, 0, 'no malformed lines expected');
     assert.ok(entries.length >= 1, 'at least one entry should be written');
 
@@ -92,18 +92,18 @@ describe('--record: bin writes manifest entry on clean pass', () => {
     const result = runBin(['--rails', 'test/**', '--record', '--base', 'HEAD'], dir);
     assert.equal(result.status, 2, `expected exit 2 for violations, got ${result.status}`);
 
-    const aidlcDir = join(dir, AIDLC_DIR);
+    const adlcDir = join(dir, ADLC_DIR);
     // Count entries before — may have entries from prior test, but no new one should be added
-    const before_entries = existsSync(join(aidlcDir, 'manifest.jsonl'))
-      ? readEntries('manifest', aidlcDir).entries.length
+    const before_entries = existsSync(join(adlcDir, 'manifest.jsonl'))
+      ? readEntries('manifest', adlcDir).entries.length
       : 0;
 
     // Run again with the violation present and count
     const result2 = runBin(['--rails', 'test/**', '--record', '--base', 'HEAD'], dir);
     assert.equal(result2.status, 2);
 
-    const after_entries = existsSync(join(aidlcDir, 'manifest.jsonl'))
-      ? readEntries('manifest', aidlcDir).entries.length
+    const after_entries = existsSync(join(adlcDir, 'manifest.jsonl'))
+      ? readEntries('manifest', adlcDir).entries.length
       : 0;
 
     assert.equal(after_entries, before_entries, '--record must not append when violations exist');
@@ -117,8 +117,8 @@ describe('--record: bin writes manifest entry on clean pass', () => {
     const result = runBin(['--rails', 'test/**', '--record', '--base', 'HEAD'], dir);
     assert.equal(result.status, 0, `bin exited ${result.status}; stderr: ${result.stderr}`);
 
-    const aidlcDir = join(dir, AIDLC_DIR);
-    const { entries } = readEntries('manifest', aidlcDir);
+    const adlcDir = join(dir, ADLC_DIR);
+    const { entries } = readEntries('manifest', adlcDir);
     const e = entries[entries.length - 1];
 
     // test/auth.test.ts matches the glob and should have a sha256 entry
@@ -134,16 +134,16 @@ describe('--record: bin writes manifest entry on clean pass', () => {
   });
 
   test('--record accumulates multiple entries across invocations', () => {
-    const aidlcDir = join(dir, AIDLC_DIR);
-    const before_count = existsSync(join(aidlcDir, 'manifest.jsonl'))
-      ? readEntries('manifest', aidlcDir).entries.length
+    const adlcDir = join(dir, ADLC_DIR);
+    const before_count = existsSync(join(adlcDir, 'manifest.jsonl'))
+      ? readEntries('manifest', adlcDir).entries.length
       : 0;
 
     // Two clean-pass invocations
     runBin(['--rails', 'test/**', '--record', '--base', 'HEAD'], dir);
     runBin(['--rails', 'test/**', '--record', '--base', 'HEAD'], dir);
 
-    const { entries } = readEntries('manifest', aidlcDir);
+    const { entries } = readEntries('manifest', adlcDir);
     assert.equal(entries.length, before_count + 2, 'each clean run should append one entry');
   });
 });
@@ -163,9 +163,9 @@ describe('--record: no entry written without --record flag', () => {
     const result = runBin(['--rails', 'test/**', '--base', 'HEAD'], dir);
     assert.equal(result.status, 0);
 
-    const aidlcDir = join(dir, AIDLC_DIR);
+    const adlcDir = join(dir, ADLC_DIR);
     assert.ok(
-      !existsSync(join(aidlcDir, 'manifest.jsonl')),
+      !existsSync(join(adlcDir, 'manifest.jsonl')),
       'manifest.jsonl must not be created without --record'
     );
   });

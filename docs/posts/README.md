@@ -1,6 +1,6 @@
 # The Agentic Development Lifecycle — blog series
 
-Nine posts, drafted from [ADLC.md](../../ADLC.md). Narrative arc: *why → the lifecycle → trust (rails) → judgment (prosecution) → scale (parallelism) → compounding → proof + adoption → enterprise comparison → the gates prosecuted on themselves*. The first seven posts open with a callback to the previous one and close with a teaser for the next — publish in order. Post 8 (enterprise) and post 9 (the dogfood-prosecution proof) run as companion pieces after the core arc.
+Nine posts, drafted from [ADLC.md](../../ADLC.md). Narrative arc: *why → the lifecycle → trust (rails) → judgment (prosecution) → scale (parallelism) → compounding → proof + adoption → the gates prosecuted on themselves → enterprise comparison*. Every post closes with a link to the next (post 9 loops back to the start), and posts 2–9 open with a callback to an earlier post — publish in order.
 
 | # | Post | Big idea | Tools featured |
 |---|------|----------|----------------|
@@ -11,8 +11,8 @@ Nine posts, drafted from [ADLC.md](../../ADLC.md). Narrative arc: *why → the l
 | 5 | [Three Dials: Parallel Agents Without Merge Hell](./05-three-dials-parallel-agents.md) | Cost/wall-clock/accuracy coupling; lanes not boss agent; width formula; measured ambiguity | `merge-forecast`, `model-router`, `parallax`, `preflight` |
 | 6 | [The Lifecycle That Gets Cheaper Every Run](./06-the-lifecycle-that-gets-cheaper.md) | Distill; lessons ledger; skill rot; model ratchet; cost per merged verified change | `lesson-foundry`, `skill-rot`, `model-ratchet`, `rejection-mining` |
 | 7 | [We Built the Toolkit With the Lifecycle](./07-we-built-the-toolkit-with-the-lifecycle.md) | Dogfood story; full toolkit index; frontier-free doctrine; adoption path | all 18 |
-| 8 | [ADLC vs. the Enterprise SDLC](./08-adlc-vs-enterprise-sdlc.md) | Comparison against traditional enterprise SDLC; advantages; disadvantages; overlaps; adoption boundary | — |
-| 9 | [The Gates Didn't Hold](./09-the-gates-didnt-hold.md) | Dogfood prosecution: the lifecycle's own P5 aimed at the toolkit; every adversarial-surface gate green-passed; reproduced + fixed as the real proof-of-work (F2 / E4 / Principle 3) | `rails-guard`, `gate-manifest`, `review-calibration` |
+| 8 | [The Gates Didn't Hold](./08-the-gates-didnt-hold.md) | Dogfood prosecution: the lifecycle's own P5 aimed at the toolkit; every adversarial-surface gate green-passed; reproduced + fixed as the real proof-of-work (F2 / E4 / Principle 3) | `rails-guard`, `gate-manifest`, `review-calibration` |
+| 9 | [ADLC vs. the Enterprise SDLC](./09-adlc-vs-enterprise-sdlc.md) | Comparison against traditional enterprise SDLC; advantages; disadvantages; overlaps; adoption boundary | — |
 
 ## Before publishing
 

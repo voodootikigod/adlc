@@ -100,7 +100,7 @@ describe('freeze baseline: committed rail edits are caught (no --base)', () => {
     const result = runBin(['--rails', 'test/**', '--record'], dir);
     assert.equal(result.status, 0, `expected clean pass; stderr: ${result.stderr}`);
 
-    const manifest = join(dir, '.aidlc', 'manifest.jsonl');
+    const manifest = join(dir, '.adlc', 'manifest.jsonl');
     const lines = execFileSync('cat', [manifest], { encoding: 'utf8' }).trim().split('\n');
     const entry = JSON.parse(lines[lines.length - 1]);
     assert.equal(entry.type, 'rails-check');

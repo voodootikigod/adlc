@@ -16,8 +16,8 @@ This post is the lifecycle that falls out of that rule. Eight phases. Determinis
 
 ```
 P0 Triage → P1 Interrogate → P2 Decompose → P3 Rail → P4 Build → P5 Prosecute → P6 Integrate → P7 Distill
-                │ human gate                    │ RED gate  │ green     │ zero-findings   │ human gate     │ feeds the
-                                                            │ gate      │ gate            │                │ next run
+                │ human gate    │ cold-start     │ RED gate  │ green     │ zero-findings   │ human gate     │ feeds the
+                                │ gate           │           │ gate      │ gate            │                │ next run
 ```
 
 Before walking through it, one principle that governs all the arrows: **an LLM→LLM handoff without a deterministic checkpoint multiplies error rates.** The chain is only as strong as its non-LLM links. Between any two phases there must be something that cannot hallucinate — a compiler, a test suite, a schema validator, a human. Probabilistic components in series compound their error; deterministic gates between them reset it.

@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/rejection-mining",
+  "name": "@adlc/rejection-mining",
   "version": "0.1.0",
   "type": "module",
   "bin": { "rejection-mining": "./bin/rejection-mining.mjs" },

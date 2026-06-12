@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/spec-lint",
+  "name": "@adlc/spec-lint",
   "version": "0.1.0",
   "type": "module",
   "bin": { "spec-lint": "./bin/spec-lint.mjs" },

@@ -17,10 +17,10 @@ function makeTempDir() {
 }
 
 function writeLedger(dir, entries) {
-  const aidlcDir = join(dir, '.aidlc');
-  mkdirSync(aidlcDir, { recursive: true });
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
   const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-  writeFileSync(join(aidlcDir, 'findings.jsonl'), content, 'utf8');
+  writeFileSync(join(adlcDir, 'findings.jsonl'), content, 'utf8');
 }
 
 function runCli(args, cwd) {
@@ -69,7 +69,7 @@ test('CLI exit 0: --gate passes when all clusters are banked', () => {
     ]);
     // Bank the cluster by emitting its real defense files first (this writes the
     // cluster's specific question into the interrogation template).
-    const outDir = join(dir, '.aidlc', 'lessons');
+    const outDir = join(dir, '.adlc', 'lessons');
     const writeRes = runCli(['--write', '--out-dir', outDir], dir);
     assert.strictEqual(writeRes.code, 0, `--write should succeed: ${writeRes.stderr}`);
     const { code } = runCli(['--gate', '--out-dir', outDir], dir);
@@ -218,7 +218,7 @@ test('CLI --write: repeated runs do not duplicate interrogation questions', () =
       { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
     ]);
-    const outDir = join(dir, '.aidlc', 'lessons');
+    const outDir = join(dir, '.adlc', 'lessons');
 
     const first = runCli(['--write', '--out-dir', outDir], dir);
     assert.strictEqual(first.code, 0, `first --write should pass: ${first.stderr}`);
@@ -241,7 +241,7 @@ test('CLI --json --gate: exit 0 with valid JSON when all banked', () => {
       { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
       { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
     ]);
-    const outDir = join(dir, '.aidlc', 'lessons');
+    const outDir = join(dir, '.adlc', 'lessons');
     // Emit real defenses first so the cluster's question is actually banked.
     const writeRes = runCli(['--write', '--out-dir', outDir], dir);
     assert.strictEqual(writeRes.code, 0, `--write should succeed: ${writeRes.stderr}`);

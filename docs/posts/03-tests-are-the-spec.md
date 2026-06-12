@@ -45,7 +45,7 @@ Tests, type stubs, and interface contracts are written from the spec, before any
 
 **2. Freeze the rails during the build — mechanically.**
 
-During P4, the builder cannot edit test files, contract types, or CI config. Not "is instructed not to" — *cannot*. Enforce at the tool layer: a pre-tool-use hook that blocks writes to rail paths, branch protection on test directories, file permissions if that's what you have. In my toolkit this is `npx rails-guard` — declare the rail paths, and it blocks builder edits during the build phase and emits a **rails-diff-empty proof** at the gate: mechanical evidence the builder never touched them.
+During P4, the builder cannot edit test files, contract types, or CI config. Not "is instructed not to" — *cannot*. Enforce at the tool layer: a pre-tool-use hook that blocks writes to rail paths, branch protection on test directories, file permissions if that's what you have. And back whichever blocker you use with a deterministic gate: in my toolkit that's `npx rails-guard` — declare the rail paths, and any builder edit to them fails the gate, which also emits a **rails-diff-empty proof**: mechanical evidence the builder never touched them.
 
 The principle generalizes well beyond tests: **a constraint that lives in the prompt layer is a request; a constraint that lives in the tool layer is a fact.** Agents route around requests.
 

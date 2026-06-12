@@ -57,7 +57,7 @@ test('buildCheckScript: generated gate exits 0 when no REAL occurrences exist (d
   const dir = mkdtempSync(join(tmpdir(), 'foundry-gate-self-'));
   try {
     // A repo with NO genuine occurrence of the pattern in source.
-    const lessonsDir = join(dir, '.aidlc', 'lessons');
+    const lessonsDir = join(dir, '.adlc', 'lessons');
     mkdirSync(lessonsDir, { recursive: true });
     writeFileSync(join(dir, 'src.mjs'), 'export const ok = 1;\n', 'utf8');
     // node_modules copy of the pattern must be ignored too.
@@ -85,7 +85,7 @@ test('buildCheckScript: generated gate exits 0 when no REAL occurrences exist (d
 test('buildCheckScript: generated gate exits 2 when a GENUINE occurrence exists in source', () => {
   const dir = mkdtempSync(join(tmpdir(), 'foundry-gate-real-'));
   try {
-    const lessonsDir = join(dir, '.aidlc', 'lessons');
+    const lessonsDir = join(dir, '.adlc', 'lessons');
     mkdirSync(lessonsDir, { recursive: true });
     // A real source file with the offending pattern.
     writeFileSync(join(dir, 'app.mjs'), 'const x = 1; // TODO fix me later\n', 'utf8');

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * merge-forecast — Conflict forecast + dispatch schedule (AIDLC D2).
+ * merge-forecast — Conflict forecast + dispatch schedule (ADLC D2).
  *
  * Usage: merge-forecast [--tickets path] [--width N]
  *                       [--build-min X --merge-min Y]
@@ -19,7 +19,7 @@ import { formatForecast } from '../lib/output.mjs';
 
 const { values } = parseArgs({
   options: {
-    tickets: { type: 'string', default: '.aidlc/tickets.json' },
+    tickets: { type: 'string', default: '.adlc/tickets.json' },
     width: { type: 'string' },
     'build-min': { type: 'string' },
     'merge-min': { type: 'string' },
@@ -31,13 +31,13 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`merge-forecast — Conflict forecast + dispatch schedule (AIDLC D2)
+  console.log(`merge-forecast — Conflict forecast + dispatch schedule (ADLC D2)
 
 Usage:
   merge-forecast [options]
 
 Options:
-  --tickets <path>           Path to tickets JSON (default: .aidlc/tickets.json)
+  --tickets <path>           Path to tickets JSON (default: .adlc/tickets.json)
   --width <N>                Desired fan-out width; exit 2 if > certifiedWidth
   --build-min <X>            Mean ticket build time in minutes (for backpressure)
   --merge-min <Y>            Mean merge-rebase-regreen time in minutes

@@ -774,7 +774,7 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
       '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--json',
     ], {
       cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: 60000,
-      env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', AIDLC_PROVIDER: '' },
+      env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', ADLC_PROVIDER: '' },
     });
     assert.equal(result.status, 1, `expected fail-closed exit 1, got ${result.status}`);
     assert.ok(/no LLM provider/i.test(result.stderr), result.stderr);

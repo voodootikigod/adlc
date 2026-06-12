@@ -1,4 +1,4 @@
-# @aidlc/review-calibration
+# @adlc/review-calibration
 
 **ADLC phase: P5 meta-gate — "who reviews the reviewer"**
 
@@ -189,4 +189,4 @@ points at a specific reviewer blind spot.
 
 None — all required functionality (`mutate.generateMutants`, `mutate.applyMutant`,
 `isDirty`, `isGitRepo`, `git`, `parseArgs`, `pass`, `gateFail`, `opError`,
-`printJson`) is available in `@aidlc/core`.
+`printJson`) is available in `@adlc/core`.

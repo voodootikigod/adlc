@@ -2,7 +2,7 @@
 // The ticket file is the shared contract between model-router,
 // merge-forecast, coldstart, rails-guard, and flail-detector.
 //
-// .aidlc/tickets.json:
+// .adlc/tickets.json:
 // {
 //   "tickets": [
 //     {
@@ -21,7 +21,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-export const TICKETS_PATH = '.aidlc/tickets.json';
+export const TICKETS_PATH = '.adlc/tickets.json';
 
 /** Validate one ticket. Returns an array of error strings (empty = valid). */
 export function validateTicket(t) {

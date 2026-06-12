@@ -21,7 +21,7 @@ const { values: flags } = parseArgs({
   options: {
     ledger:      { type: 'string',  default: 'findings' },
     min:         { type: 'string',  default: '2' },
-    'out-dir':   { type: 'string',  default: '.aidlc/lessons' },
+    'out-dir':   { type: 'string',  default: '.adlc/lessons' },
     write:       { type: 'boolean', default: false },
     gate:        { type: 'boolean', default: false },
     llm:         { type: 'boolean', default: false },
@@ -38,10 +38,10 @@ if (isNaN(minSize) || minSize < 1) {
   opError(`--min must be a positive integer (got: ${flags.min})`);
 }
 
-// Resolve ledger directory: look in cwd's .aidlc or use the default
+// Resolve ledger directory: look in cwd's .adlc or use the default
 // The ledger name may include a path; core's readEntries uses the dir param.
-// We pass the ledger name as-is and use the default dir (process.cwd() + '/.aidlc').
-const ledgerDir = join(process.cwd(), '.aidlc');
+// We pass the ledger name as-is and use the default dir (process.cwd() + '/.adlc').
+const ledgerDir = join(process.cwd(), '.adlc');
 
 // Load findings
 let findings, skipped, filtered;

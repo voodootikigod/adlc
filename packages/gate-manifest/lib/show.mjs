@@ -1,16 +1,16 @@
 // show.mjs — render manifest entries (with optional ticket filter).
 
-import { readEntries, AIDLC_DIR } from '../../core/index.mjs';
+import { readEntries, ADLC_DIR } from '../../core/index.mjs';
 
 /**
  * Load entries from the manifest ledger, optionally filtered by ticket id.
  *
  * @param {object} opts
  * @param {string|undefined} opts.ticket  filter to entries with this ticket id
- * @param {string} [opts.dir]  ledger directory (default AIDLC_DIR)
+ * @param {string} [opts.dir]  ledger directory (default ADLC_DIR)
  * @returns {{ entries: object[], skipped: object[] }}
  */
-export function loadFiltered({ ticket, dir = AIDLC_DIR } = {}) {
+export function loadFiltered({ ticket, dir = ADLC_DIR } = {}) {
   const { entries, skipped } = readEntries('manifest', dir);
   const filtered = ticket
     ? entries.filter(e => e.ticket === ticket)

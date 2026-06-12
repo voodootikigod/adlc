@@ -171,10 +171,10 @@ test('planLensEmissions: one plan per cluster', () => {
     { slug: 'hardcode-creds', indices: [0, 1], count: 2, prNumbers: new Set([1, 2]) },
     { slug: 'null-check', indices: [2], count: 1, prNumbers: new Set([3]) },
   ];
-  const plans = planLensEmissions(clusters, signals, '.aidlc/lenses');
+  const plans = planLensEmissions(clusters, signals, '.adlc/lenses');
   assert.strictEqual(plans.length, 2);
   assert.strictEqual(plans[0].slug, 'hardcode-creds');
-  assert(plans[0].path.startsWith('.aidlc/lenses/lens-'));
+  assert(plans[0].path.startsWith('.adlc/lenses/lens-'));
   assert(plans[0].path.endsWith('.md'));
   assert(typeof plans[0].content === 'string');
   assert(plans[0].content.length > 0);
@@ -197,6 +197,6 @@ test('planLensEmissions: LLM title used when provided', () => {
     { slug: 'error-exposure', indices: [0], count: 1, prNumbers: new Set([1]) },
   ];
   const llmRefinements = new Map([[0, { title: 'Error Exposure Leak', charter: 'exposing internal errors to callers' }]]);
-  const plans = planLensEmissions(clusters, signals, '.aidlc/lenses', llmRefinements);
+  const plans = planLensEmissions(clusters, signals, '.adlc/lenses', llmRefinements);
   assert(plans[0].content.includes('# Lens: Error Exposure Leak'));
 });

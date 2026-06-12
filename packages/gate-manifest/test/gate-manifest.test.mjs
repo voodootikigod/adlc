@@ -14,7 +14,7 @@ import { canonicalEntryBytes, KEY_ENV } from '../lib/sign.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
 
 // ── key env helper ─────────────────────────────────────────────────────────────
-// Tests mutate process.env[AIDLC_MANIFEST_KEY] (read by record/verify via
+// Tests mutate process.env[ADLC_MANIFEST_KEY] (read by record/verify via
 // sign.getKey). withKey sets it for the duration of fn and always restores,
 // so signing tests stay isolated from one another and from the no-key tests.
 
@@ -474,7 +474,7 @@ describe('seq increments', () => {
 
 // ── HMAC signing (keyed provenance) ───────────────────────────────────────────
 // The hash chain alone is keyless: a writer can recompute every `prev` and
-// forge a clean chain. These tests assert that with AIDLC_MANIFEST_KEY set,
+// forge a clean chain. These tests assert that with ADLC_MANIFEST_KEY set,
 // only entries signed under the secret key verify — defeating that forgery.
 
 const KEY = 'test-secret-key-do-not-ship';

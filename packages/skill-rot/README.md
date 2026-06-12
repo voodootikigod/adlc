@@ -86,5 +86,5 @@ skill-rot --json
 
 ## Core gaps
 
-None. This tool uses only Node 18+ built-ins and `@aidlc/core` for CLI
+None. This tool uses only Node 18+ built-ins and `@adlc/core` for CLI
 utilities (`parseArgs`, `pass`, `gateFail`, `opError`, `printJson`).

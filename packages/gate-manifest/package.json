@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/gate-manifest",
+  "name": "@adlc/gate-manifest",
   "version": "0.1.0",
   "type": "module",
   "bin": { "gate-manifest": "./bin/gate-manifest.mjs" },

@@ -32,7 +32,7 @@ test('extractJson: throws on no JSON', () => {
 });
 
 test('ledger: append + read round-trip, malformed lines reported not swallowed', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'aidlc-ledger-'));
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-ledger-'));
   try {
     appendEntry('findings', { id: 1 }, dir);
     appendEntry('findings', { id: 2 }, dir);
@@ -59,7 +59,7 @@ test('validateTicket: catches missing fields', () => {
 });
 
 test('loadTickets: detects duplicate ids and unknown edges', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'aidlc-tickets-'));
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-tickets-'));
   try {
     const p = join(dir, 'tickets.json');
     writeFileSync(p, JSON.stringify({
@@ -177,6 +177,7 @@ function gitRepo() {
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');
   g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false'); // never depend on the dev's signing setup in a test
   return { dir, g };
 }
 
@@ -227,44 +228,44 @@ test('withLedgerLock: serialises writers so large concurrent lines never interle
 
 import { detectProvider, resolveModel, complete } from '../lib/llm.mjs';
 
-test('agy provider: not auto-detected without AIDLC_AGY', () => {
+test('agy provider: not auto-detected without ADLC_AGY', () => {
   const env = {};
   assert.equal(detectProvider(env), null);
 });
 
-test('agy provider: AIDLC_AGY=1 enables detection, API keys still win', () => {
-  const agyOnly = detectProvider({ AIDLC_AGY: '1' });
+test('agy provider: ADLC_AGY=1 enables detection, API keys still win', () => {
+  const agyOnly = detectProvider({ ADLC_AGY: '1' });
   assert.equal(agyOnly.name, 'agy');
-  const both = detectProvider({ ANTHROPIC_API_KEY: 'sk-x', AIDLC_AGY: '1' });
+  const both = detectProvider({ ANTHROPIC_API_KEY: 'sk-x', ADLC_AGY: '1' });
   assert.equal(both.name, 'anthropic');
 });
 
-test('agy provider: AIDLC_PROVIDER=agy forces without any key', () => {
-  const p = detectProvider({ AIDLC_PROVIDER: 'agy' });
+test('agy provider: ADLC_PROVIDER=agy forces without any key', () => {
+  const p = detectProvider({ ADLC_PROVIDER: 'agy' });
   assert.equal(p.name, 'agy');
   assert.equal(p.apiKey, '1');
 });
 
 test('agy provider: tier map resolves to Antigravity model names', () => {
-  const p = detectProvider({ AIDLC_PROVIDER: 'agy' });
+  const p = detectProvider({ ADLC_PROVIDER: 'agy' });
   assert.equal(resolveModel(p, { tier: 'cheap' }, {}), 'Gemini 3.5 Flash (Medium)');
   assert.equal(resolveModel(p, { tier: 'mid' }, {}), 'Claude Sonnet 4.6 (Thinking)');
   assert.equal(resolveModel(p, { tier: 'frontier' }, {}), 'Claude Opus 4.6 (Thinking)');
   assert.equal(
-    resolveModel(p, { tier: 'cheap' }, { AIDLC_MODEL_CHEAP: 'Gemini 3.5 Flash (Low)' }),
+    resolveModel(p, { tier: 'cheap' }, { ADLC_MODEL_CHEAP: 'Gemini 3.5 Flash (Low)' }),
     'Gemini 3.5 Flash (Low)'
   );
 });
 
 // Live test — opt-in only (burns one Antigravity request per run):
-//   AIDLC_LIVE_AGY=1 node --test test/core.test.mjs
-test('agy provider: live completion round-trip', { skip: process.env.AIDLC_LIVE_AGY !== '1' }, async () => {
-  process.env.AIDLC_PROVIDER = 'agy';
+//   ADLC_LIVE_AGY=1 node --test test/core.test.mjs
+test('agy provider: live completion round-trip', { skip: process.env.ADLC_LIVE_AGY !== '1' }, async () => {
+  process.env.ADLC_PROVIDER = 'agy';
   try {
-    const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: AIDLC-AGY-OK' });
-    assert.match(out, /AIDLC-AGY-OK/);
+    const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: ADLC-AGY-OK' });
+    assert.match(out, /ADLC-AGY-OK/);
   } finally {
-    delete process.env.AIDLC_PROVIDER;
+    delete process.env.ADLC_PROVIDER;
   }
 });
 
@@ -278,10 +279,10 @@ test('isAgyTimeout: matches a bare timeout line, not the phrase inside prose', (
   assert.equal(isAgyTimeout('PONG'), false);
 });
 
-test('agy provider: AIDLC_AGY=false/0 do NOT enable the provider', () => {
-  assert.equal(detectProvider({ AIDLC_AGY: 'false' }), null);
-  assert.equal(detectProvider({ AIDLC_AGY: '0' }), null);
-  assert.equal(detectProvider({ AIDLC_AGY: 'off' }), null);
-  assert.equal(detectProvider({ AIDLC_AGY: '1' })?.name, 'agy');
-  assert.equal(detectProvider({ AIDLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
+test('agy provider: ADLC_AGY=false/0 do NOT enable the provider', () => {
+  assert.equal(detectProvider({ ADLC_AGY: 'false' }), null);
+  assert.equal(detectProvider({ ADLC_AGY: '0' }), null);
+  assert.equal(detectProvider({ ADLC_AGY: 'off' }), null);
+  assert.equal(detectProvider({ ADLC_AGY: '1' })?.name, 'agy');
+  assert.equal(detectProvider({ ADLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
 });

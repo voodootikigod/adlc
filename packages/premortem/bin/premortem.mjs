@@ -17,7 +17,7 @@ const { values, positionals } = parseArgs({
 if (values.help) {
   console.log(`premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only]
 
-Failure-first spec stress test (AIDLC C2).
+Failure-first spec stress test (ADLC C2).
 
   <spec.md>        Path to the spec file to analyse (required)
   --tier           Model tier: cheap | mid | frontier  (default: frontier)

@@ -188,7 +188,7 @@ describe('integration: exclusion rules', () => {
 
 describe('integration: review-cmd findings ledger', () => {
   let tmp;
-  let aidlcDir;
+  let adlcDir;
 
   before(() => {
     const history = [
@@ -200,7 +200,7 @@ describe('integration: review-cmd findings ledger', () => {
       [['src/target.mjs', `export const v = 3;`]],
     ];
     tmp = makeRepo(history);
-    aidlcDir = join(tmp, '.aidlc');
+    adlcDir = join(tmp, '.adlc');
   });
 
   after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -227,8 +227,8 @@ describe('integration: review-cmd findings ledger', () => {
     }
   });
 
-  it('appends findings to .aidlc/findings.jsonl ledger', () => {
-    const ledgerFile = join(aidlcDir, 'findings.jsonl');
+  it('appends findings to .adlc/findings.jsonl ledger', () => {
+    const ledgerFile = join(adlcDir, 'findings.jsonl');
     assert.ok(existsSync(ledgerFile), 'findings.jsonl should exist after review run');
 
     const lines = readFileSync(ledgerFile, 'utf8').split('\n').filter(Boolean);
@@ -244,7 +244,7 @@ describe('integration: review-cmd findings ledger', () => {
   });
 
   it('finding entries have correct schema', () => {
-    const ledgerFile = join(aidlcDir, 'findings.jsonl');
+    const ledgerFile = join(adlcDir, 'findings.jsonl');
     const lines = readFileSync(ledgerFile, 'utf8').split('\n').filter(Boolean);
     for (const line of lines) {
       const entry = JSON.parse(line);

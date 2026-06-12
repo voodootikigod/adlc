@@ -1,5 +1,5 @@
 {
-  "name": "@aidlc/premortem",
+  "name": "@adlc/premortem",
   "version": "0.1.0",
   "type": "module",
   "bin": { "premortem": "./bin/premortem.mjs" },

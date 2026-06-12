@@ -2,7 +2,7 @@
 
 import { verify } from './verify.mjs';
 import { loadFiltered } from './show.mjs';
-import { AIDLC_DIR } from '../../core/index.mjs';
+import { ADLC_DIR } from '../../core/index.mjs';
 
 /**
  * Summarise the `data` field of an entry for the attest table.
@@ -27,10 +27,10 @@ function dataSummary(data) {
  *
  * @param {object} opts
  * @param {string|undefined} opts.ticket  ticket id to filter on (also used in heading)
- * @param {string} [opts.dir]  ledger directory (default AIDLC_DIR)
+ * @param {string} [opts.dir]  ledger directory (default ADLC_DIR)
  * @returns {string}  markdown text
  */
-export function buildAttest({ ticket, dir = AIDLC_DIR } = {}) {
+export function buildAttest({ ticket, dir = ADLC_DIR } = {}) {
   const { entries } = loadFiltered({ ticket, dir });
   const chainResult = verify(dir);
 

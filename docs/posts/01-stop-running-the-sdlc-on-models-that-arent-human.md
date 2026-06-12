@@ -89,6 +89,8 @@ The rest of this series walks through it:
 5. **Parallelism** — the three dials of multi-agent orchestration, and why "3–5 agents" keeps showing up in everyone's field reports.
 6. **Compounding** — the phase that makes run N+1 cheaper than run N, and the economics of cost-per-merged-verified-change.
 7. **The proof** — how the toolkit enforcing this lifecycle was built *by* the lifecycle, and the adoption path that doesn't die in week two.
+8. **The gates, prosecuted** — what happened when the lifecycle's own review phase was aimed at the toolkit that enforces it. (Badly, which is the point.)
+9. **ADLC vs. the enterprise SDLC** — what the old lifecycle still does better, where the two overlap, and where serious adoption starts.
 
 One closing note on stakes. None of the failure modes above are exotic. Every one of them has bitten every team that has run agents for more than a month — usually quietly, discovered in production or in a diff nobody actually read. The teams concluding "agents don't work here" are, almost without exception, teams that pointed sixty years of human-shaped process at a non-human failure profile and were surprised when it caught nothing.
 

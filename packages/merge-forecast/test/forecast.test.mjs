@@ -70,10 +70,10 @@ function gitCommit(dir, files, message) {
   execFileSync('git', ['commit', '-m', message, '--allow-empty'], { cwd: dir, stdio: 'ignore' });
 }
 
-/** Write a tickets file at .aidlc/tickets.json under root. */
+/** Write a tickets file at .adlc/tickets.json under root. */
 function writeTickets(root, tickets) {
-  mkdirSync(join(root, '.aidlc'), { recursive: true });
-  writeFileSync(join(root, '.aidlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2), 'utf8');
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2), 'utf8');
 }
 
 /**
