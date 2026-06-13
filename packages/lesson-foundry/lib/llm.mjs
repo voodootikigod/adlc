@@ -1,7 +1,7 @@
 // LLM refinement helpers for lesson-foundry.
 // Builds prompts and calls complete() for cluster wording refinement.
 
-import { complete, extractJson } from '../../core/index.mjs';
+import { complete, extractJson } from '@adlc/core';
 
 /**
  * Build the refinement prompt for a single cluster.

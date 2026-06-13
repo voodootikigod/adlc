@@ -4,7 +4,7 @@
 // which parses and re-serialises, losing byte-exact fidelity.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, hashFiles, appendEntry, ledgerPath, ADLC_DIR } from '../../core/index.mjs';
+import { sha256, hashFiles, appendEntry, ledgerPath, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 
 /**

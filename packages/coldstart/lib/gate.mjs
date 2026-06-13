@@ -1,7 +1,7 @@
 // Orchestration logic for the coldstart gate.
 // Calls the LLM (or returns prompt for --prompt-only), parses results.
 
-import { complete as coreComplete, extractJson as coreExtractJson } from '../../core/index.mjs';
+import { complete as coreComplete, extractJson as coreExtractJson } from '@adlc/core';
 import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
 
 /**

@@ -2,8 +2,8 @@
 // gate-fuzzing — standing red-team / gate calibration (ADLC C-tool)
 // Exit codes: 0 = no gate defeated (earned clean), 2 = gate defeated, 1 = op error
 
-import { parseArgs, opError, pass, gateFail, printJson } from '../../core/index.mjs';
-import { detectProvider } from '../../core/index.mjs';
+import { parseArgs, opError, pass, gateFail, printJson } from '@adlc/core';
+import { detectProvider } from '@adlc/core';
 import { runLoop } from '../lib/loop.mjs';
 import { classifyCandidate } from '../lib/classify.mjs';
 import { computeVerdict } from '../lib/verdict.mjs';
@@ -180,7 +180,7 @@ const repoRoot = process.cwd();
 // Refuse to run against a dirty tree — a clone of a dirty tree is ambiguous and
 // the candidate diff may not apply cleanly.
 try {
-  const { isGitRepo, isDirty } = await import('../../core/index.mjs');
+  const { isGitRepo, isDirty } = await import('@adlc/core');
   if (!isGitRepo(repoRoot)) {
     opError(`not a git repository: ${repoRoot} (gate-fuzzing clones the repo to run candidates)`);
   }

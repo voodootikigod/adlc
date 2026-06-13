@@ -3,7 +3,7 @@
 // Usage: spec-lint <spec.md> [--llm] [--json] [--prompt-only]
 
 import { readFileSync } from 'node:fs';
-import { parseArgs, pass, gateFail, opError, printJson, promptOnly } from '../../core/index.mjs';
+import { parseArgs, pass, gateFail, opError, printJson, promptOnly } from '@adlc/core';
 import { parseCriteria } from '../lib/parse.mjs';
 import { classifyAll, applyLlmDemotion } from '../lib/classify.mjs';
 import { buildJsonResult, buildHumanReport } from '../lib/report.mjs';

@@ -11,7 +11,7 @@ import {
   opError,
   printJson,
   promptOnly,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 import { loadFindings, buildClusters, findUnbankedClusters } from '../lib/foundry.mjs';
 import { planEmissions } from '../lib/emit.mjs';
 import { buildHumanReport, buildJsonResult } from '../lib/report.mjs';

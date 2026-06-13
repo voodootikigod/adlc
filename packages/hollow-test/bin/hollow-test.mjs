@@ -4,8 +4,8 @@
 // restores them via finally blocks + SIGINT handler.
 
 import { writeFileSync } from 'node:fs';
-import { parseArgs, pass, gateFail, opError, printJson } from '../../core/index.mjs';
-import { gitDiff, isDirty, isGitRepo, resolveBase, mutate } from '../../core/index.mjs';
+import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
+import { gitDiff, isDirty, isGitRepo, resolveBase, mutate } from '@adlc/core';
 import { filterTargetFiles, buildFileTargets, readFileSafe } from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';

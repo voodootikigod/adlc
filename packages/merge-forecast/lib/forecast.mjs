@@ -6,7 +6,7 @@
 import { parallelEligiblePairs, topoWaves, mergeOrder } from './reachability.mjs';
 import { pairScore } from './signals.mjs';
 import { walkTree } from './signals.mjs';
-import { isGitRepo, coChange, topoSort } from '../../core/index.mjs';
+import { isGitRepo, coChange, topoSort } from '@adlc/core';
 
 /**
  * Run the full forecast.

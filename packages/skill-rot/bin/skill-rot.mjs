@@ -11,7 +11,7 @@
  */
 
 import { resolve } from 'node:path';
-import { parseArgs, printJson } from '../../core/index.mjs';
+import { parseArgs, printJson } from '@adlc/core';
 import { DEFAULT_ROOTS, findSkills } from '../lib/find-skills.mjs';
 import { checkSkill } from '../lib/rot-checker.mjs';
 import { formatTable, formatJson } from '../lib/format.mjs';

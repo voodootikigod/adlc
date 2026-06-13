@@ -1,7 +1,7 @@
 // signals.mjs — signal detection logic for flail-detector.
 // All functions are pure and deterministic.
 
-import { globMatch } from '../../core/index.mjs';
+import { globMatch } from '@adlc/core';
 
 // ---------------------------------------------------------------------------
 // Constants

@@ -6,8 +6,8 @@
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { detectProvider } from '../../core/index.mjs';
-import { git } from '../../core/index.mjs';
+import { detectProvider } from '@adlc/core';
+import { git } from '@adlc/core';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

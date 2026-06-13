@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bin/premortem.mjs — thin CLI wrapper for the premortem tool.
 
-import { parseArgs, opError } from '../../core/index.mjs';
+import { parseArgs, opError } from '@adlc/core';
 import { run } from '../lib/run.mjs';
 
 const { values, positionals } = parseArgs({

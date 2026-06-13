@@ -13,7 +13,7 @@
  *   2  gate fails (--width > certifiedWidth, or vetoed pair concurrent)
  */
 
-import { parseArgs, loadTickets, pass, opError, printJson } from '../../core/index.mjs';
+import { parseArgs, loadTickets, pass, opError, printJson } from '@adlc/core';
 import { runForecast } from '../lib/forecast.mjs';
 import { formatForecast } from '../lib/output.mjs';
 

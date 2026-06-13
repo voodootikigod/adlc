@@ -1,7 +1,7 @@
 // gate-fuzzing/lib/candidate.mjs
 // Schema validation (§1.2/§2.4) and pinned dedup hash (§3.3).
 
-import { sha256 } from '../../core/index.mjs';
+import { sha256 } from '@adlc/core';
 
 const DEFAULT_ALLOWED_CMDS = new Set(['node', 'git', 'npm', 'npx']);
 

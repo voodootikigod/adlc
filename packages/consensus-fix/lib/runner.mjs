@@ -8,7 +8,7 @@ import { takeSnapshot, restoreSnapshot, applyChanges } from './snapshot.mjs';
 import { totalChangedLines } from './diff.mjs';
 import { groupByChangeset, selectWinner, isAllDivergent } from './agreement.mjs';
 import { buildPrompt } from './prompt.mjs';
-import { extractJson } from '../../core/index.mjs';
+import { extractJson } from '@adlc/core';
 
 /**
  * Run the given shell command, returning { exitCode, output }.

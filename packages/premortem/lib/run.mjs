@@ -1,7 +1,7 @@
 // lib/run.mjs — orchestrate the full premortem flow (read spec, call LLM, render).
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { complete, extractJson, detectProvider, promptOnly, opError, printJson } from '../../core/index.mjs';
+import { complete, extractJson, detectProvider, promptOnly, opError, printJson } from '@adlc/core';
 import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
 import { renderReport } from './render.mjs';
 

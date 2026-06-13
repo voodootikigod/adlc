@@ -1,9 +1,46 @@
 {
   "name": "@adlc/coldstart",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Ticket executability gate (P2) — a cheap-tier LLM checks whether a ticket is self-contained before a build agent starts.",
   "type": "module",
-  "bin": { "coldstart": "./bin/coldstart.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/coldstart"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/coldstart#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "coldstart",
+    "gate"
+  ],
+  "bin": {
+    "coldstart": "./bin/coldstart.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

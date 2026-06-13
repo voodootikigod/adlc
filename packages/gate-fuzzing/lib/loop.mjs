@@ -3,7 +3,7 @@
 // fan-failure rate tracking, budget estimation.
 // All control flow is code; no model decides when to stop (D0).
 
-import { extractJson } from '../../core/index.mjs';
+import { extractJson } from '@adlc/core';
 import { parseCandidates, normalizeAndHash } from './candidate.mjs';
 
 /**

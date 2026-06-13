@@ -1,9 +1,46 @@
 {
   "name": "@adlc/gate-manifest",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Hash-chained evidence ledger recording what each ADLC gate verified — agentic provenance with optional HMAC signing (C11).",
   "type": "module",
-  "bin": { "gate-manifest": "./bin/gate-manifest.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/gate-manifest"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/gate-manifest#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "gate-manifest",
+    "gate"
+  ],
+  "bin": {
+    "gate-manifest": "./bin/gate-manifest.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

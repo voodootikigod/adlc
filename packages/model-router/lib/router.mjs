@@ -5,8 +5,8 @@
  * Returns { assignments, p3Findings, error? }
  */
 
-import { loadTickets, computeFloat } from '../../core/index.mjs';
-import { readEntries, ADLC_DIR } from '../../core/index.mjs';
+import { loadTickets, computeFloat } from '@adlc/core';
+import { readEntries, ADLC_DIR } from '@adlc/core';
 import { buildPriors } from './priors.mjs';
 import { assignAll } from './assign.mjs';
 import { FRONTIER_CATEGORIES } from './assign.mjs';

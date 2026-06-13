@@ -2,7 +2,7 @@
 // model-ratchet — ADLC C12 scheduled re-prosecution of hot paths.
 // Thin CLI: parse args, call lib, exit with the correct code.
 
-import { parseArgs, opError, printJson, appendEntry, isGitRepo, churn } from '../../core/index.mjs';
+import { parseArgs, opError, printJson, appendEntry, isGitRepo, churn } from '@adlc/core';
 import { walkSourceFiles, computeInDegree } from '../lib/walk.mjs';
 import { computeScores, topN } from '../lib/score.mjs';
 import { runReviewCmd, parseFindingsFromOutput } from '../lib/run-review.mjs';

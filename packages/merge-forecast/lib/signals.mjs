@@ -10,7 +10,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { scopesOverlap, globMatch, pairKey } from '../../core/index.mjs';
+import { scopesOverlap, globMatch, pairKey } from '@adlc/core';
 
 // ─── Signal 1: Declared scope overlap ────────────────────────────────────────
 

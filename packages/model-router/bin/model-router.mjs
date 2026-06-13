@@ -5,7 +5,7 @@
  * Usage: model-router [--tickets <path>] [--floor <number>] [--json]
  */
 
-import { parseArgs, pass, gateFail, opError, printJson } from '../../core/index.mjs';
+import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { runRouter } from '../lib/router.mjs';
 import { formatTable } from '../lib/format.mjs';
 

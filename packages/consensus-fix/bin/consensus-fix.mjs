@@ -25,7 +25,7 @@ import {
   complete,
   resolveModel,
   detectProvider,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 import { runConsensusFix } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
 import { takeSnapshot, restoreSnapshot } from '../lib/snapshot.mjs';

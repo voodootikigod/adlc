@@ -2,13 +2,14 @@
   "name": "adlc",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Agentic Development Lifecycle toolkit — gate-shaped, zero-dependency CLIs",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "test": "for d in packages/*/test; do node --test \"$d\"/*.test.mjs || exit 1; done"
+    "test": "for d in packages/*/test; do node --test \"$d\"/*.test.mjs || exit 1; done",
+    "release": "node scripts/release.mjs"
   },
   "engines": {
     "node": ">=18"

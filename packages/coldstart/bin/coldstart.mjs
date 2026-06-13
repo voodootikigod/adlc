@@ -9,7 +9,7 @@ import {
   promptOnly,
   loadTickets,
   detectProvider,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll } from '../lib/gate.mjs';

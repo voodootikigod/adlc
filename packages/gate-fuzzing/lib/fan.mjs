@@ -3,7 +3,7 @@
 // The adversary is N fanned cheap/mid models (frontier-free, E2).
 // Each call is stateless — fresh contexts by construction.
 
-import { fan as coreFan } from '../../core/index.mjs';
+import { fan as coreFan } from '@adlc/core';
 import { sampleSeeds, NOVEL_SEED } from './seeds.mjs';
 
 /**
@@ -143,7 +143,7 @@ export async function fanAdversary(opts) {
 
   // Real: fan all instances in parallel
   const results = await Promise.allSettled(
-    fanCalls.map((call) => import('../../core/index.mjs').then(({ complete }) => complete(call)))
+    fanCalls.map((call) => import('@adlc/core').then(({ complete }) => complete(call)))
   );
 
   return results.map((r) =>

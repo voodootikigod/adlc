@@ -2,7 +2,7 @@
 // preflight — ADLC D2 Phase 0 environment and permissions check.
 // Usage: preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 
-import { parseArgs, printJson } from '../../core/index.mjs';
+import { parseArgs, printJson } from '@adlc/core';
 import { runChecks } from '../lib/runner.mjs';
 import { renderTable, renderVerdict, computeVerdict } from '../lib/render.mjs';
 

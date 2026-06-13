@@ -3,7 +3,7 @@
 // Sequence numbers must be strictly monotonically increasing.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, ledgerPath, ADLC_DIR } from '../../core/index.mjs';
+import { sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
 import { getKey, verifyEntrySig } from './sign.mjs';
 
 /**

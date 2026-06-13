@@ -3,7 +3,7 @@
 // Surface + claim binding + gate execution + witness discrimination + oracle independence.
 // Fix 5: witnessSource field on all DEFEAT verdicts.
 
-import { globMatch } from '../../core/index.mjs';
+import { globMatch } from '@adlc/core';
 import { discriminateWitness } from './witness.mjs';
 import { checkOracle } from './oracle.mjs';
 

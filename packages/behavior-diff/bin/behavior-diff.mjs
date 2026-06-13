@@ -3,7 +3,7 @@
 // Verbs: capture | compare
 
 import { readFileSync } from 'node:fs';
-import { parseArgs, pass, gateFail, opError, printJson } from '../../core/index.mjs';
+import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { validateConfig, runCapture, writeSnapshot, reachableCount } from '../lib/capture.mjs';
 import { loadSnapshot, compareSnapshots } from '../lib/compare.mjs';
 import { renderReport } from '../lib/report.mjs';

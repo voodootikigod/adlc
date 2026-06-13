@@ -1,9 +1,46 @@
 {
   "name": "@adlc/rejection-mining",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Mines human PR review objections into structured prosecution lenses (C13).",
   "type": "module",
-  "bin": { "rejection-mining": "./bin/rejection-mining.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/rejection-mining"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/rejection-mining#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "rejection-mining",
+    "gate"
+  ],
+  "bin": {
+    "rejection-mining": "./bin/rejection-mining.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

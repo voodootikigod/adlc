@@ -1,9 +1,46 @@
 {
   "name": "@adlc/merge-forecast",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Conflict forecast and dispatch schedule for parallel ticket execution (D2).",
   "type": "module",
-  "bin": { "merge-forecast": "./bin/merge-forecast.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/merge-forecast"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/merge-forecast#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "merge-forecast",
+    "gate"
+  ],
+  "bin": {
+    "merge-forecast": "./bin/merge-forecast.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

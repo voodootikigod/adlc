@@ -1,9 +1,46 @@
 {
   "name": "@adlc/review-calibration",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Measures reviewer recall via planted bugs — who reviews the reviewer (P5 meta-gate).",
   "type": "module",
-  "bin": { "review-calibration": "./bin/review-calibration.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/review-calibration"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/review-calibration#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "review-calibration",
+    "gate"
+  ],
+  "bin": {
+    "review-calibration": "./bin/review-calibration.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

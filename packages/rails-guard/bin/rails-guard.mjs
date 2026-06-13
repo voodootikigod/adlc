@@ -16,7 +16,7 @@ import {
   globMatch,
   resolveBase,
   ADLC_DIR,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 
 import { runChecks } from '../lib/check.mjs';
 import { formatViolations, buildResult } from '../lib/output.mjs';

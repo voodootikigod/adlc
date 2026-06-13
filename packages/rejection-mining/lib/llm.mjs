@@ -1,7 +1,7 @@
 // llm.mjs — LLM refinement for rejection-mining.
 // One mid call per cluster to sharpen title + charter.
 
-import { complete, extractJson } from '../../core/index.mjs';
+import { complete, extractJson } from '@adlc/core';
 
 /**
  * Build the refinement prompt for a single cluster.

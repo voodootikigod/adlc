@@ -2,7 +2,7 @@
 // Reads findings, clusters, routes, and produces emission plans.
 
 import { readFileSync } from 'node:fs';
-import { readEntries } from '../../core/index.mjs';
+import { readEntries } from '@adlc/core';
 import { clusterFindings } from './cluster.mjs';
 import { routeCluster, clusterName } from './route.mjs';
 import { planEmissions } from './emit.mjs';

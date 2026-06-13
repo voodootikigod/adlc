@@ -2,7 +2,7 @@
 
 import { verify } from './verify.mjs';
 import { loadFiltered } from './show.mjs';
-import { ADLC_DIR } from '../../core/index.mjs';
+import { ADLC_DIR } from '@adlc/core';
 
 /**
  * Summarise the `data` field of an entry for the attest table.

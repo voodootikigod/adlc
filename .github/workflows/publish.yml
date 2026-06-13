@@ -1,0 +1,57 @@
+name: Publish @adlc to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 1.0.0, without v prefix)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write   # required for npm provenance + OIDC trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            V="$INPUT_VERSION"
+          else
+            V="${REF_NAME#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Install
+        run: npm install
+
+      - name: Test
+        run: npm test
+
+      - name: Publish (core-first, lockstep)
+        run: node scripts/release.mjs "${{ steps.ver.outputs.version }}" --publish
+        env:
+          # Bootstrap run: set repo secret NPM_TOKEN to create the packages.
+          # After configuring trusted publishing, delete the secret — this var
+          # becomes empty and npm falls through to OIDC provenance publishing.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

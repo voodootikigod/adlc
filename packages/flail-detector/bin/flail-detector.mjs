@@ -3,7 +3,7 @@
 // Thin CLI: parse args, call lib, exit with the correct code.
 
 import { readFileSync, existsSync } from 'node:fs';
-import { parseArgs, opError, printJson } from '../../core/index.mjs';
+import { parseArgs, opError, printJson } from '@adlc/core';
 import { parseLog } from '../lib/parse-log.mjs';
 import { analyze } from '../lib/analyze.mjs';
 import { formatResult } from '../lib/format.mjs';

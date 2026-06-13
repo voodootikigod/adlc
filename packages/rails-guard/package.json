@@ -1,9 +1,46 @@
 {
   "name": "@adlc/rails-guard",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Rail-freeze enforcement and suppression-marker gate — blocks builder edits to frozen paths (C5).",
   "type": "module",
-  "bin": { "rails-guard": "./bin/rails-guard.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/rails-guard"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/rails-guard#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "rails-guard",
+    "gate"
+  ],
+  "bin": {
+    "rails-guard": "./bin/rails-guard.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

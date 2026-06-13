@@ -1,6 +1,6 @@
 // show.mjs — render manifest entries (with optional ticket filter).
 
-import { readEntries, ADLC_DIR } from '../../core/index.mjs';
+import { readEntries, ADLC_DIR } from '@adlc/core';
 
 /**
  * Load entries from the manifest ledger, optionally filtered by ticket id.

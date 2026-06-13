@@ -2,12 +2,12 @@
 // gate-manifest — ADLC C11 hash-chained agentic provenance ledger.
 // Verbs: record | verify | show | attest
 
-import { parseArgs, pass, gateFail, opError, printJson } from '../../core/index.mjs';
+import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { record, parseData } from '../lib/record.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
-import { ADLC_DIR } from '../../core/index.mjs';
+import { ADLC_DIR } from '@adlc/core';
 
 const { values: flags, positionals } = parseArgs({
   options: {

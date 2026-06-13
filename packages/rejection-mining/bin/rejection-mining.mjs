@@ -9,7 +9,7 @@ import {
   opError,
   printJson,
   promptOnly,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 import { checkGhAvailable, runGh } from '../lib/gh.mjs';
 import { fetchSignals, buildClusters } from '../lib/mine.mjs';
 import { planLensEmissions } from '../lib/lens.mjs';

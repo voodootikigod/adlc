@@ -2,7 +2,7 @@
 // These functions handle the LLM orchestration; they are async and have side
 // effects (network calls). Pure logic lives in prompts.mjs and scoring.mjs.
 
-import { fan, complete, extractJson } from '../../core/index.mjs';
+import { fan, complete, extractJson } from '@adlc/core';
 import {
   buildSpecReaderPrompt,
   buildDivergencePrompt,

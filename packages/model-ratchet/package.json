@@ -1,9 +1,46 @@
 {
   "name": "@adlc/model-ratchet",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Scheduled re-prosecution of hot paths — every frontier model release as a free re-audit (C12).",
   "type": "module",
-  "bin": { "model-ratchet": "./bin/model-ratchet.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=18" },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/model-ratchet"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/model-ratchet#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "model-ratchet",
+    "gate"
+  ],
+  "bin": {
+    "model-ratchet": "./bin/model-ratchet.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

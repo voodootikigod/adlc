@@ -14,7 +14,7 @@ import {
   parseArgs, pass, gateFail, opError, printJson,
   git, isDirty, isGitRepo, mutate,
   complete as coreComplete, extractJson as coreExtractJson, detectProvider,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 import { filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mjs';
 import { runWithPlants } from '../lib/runner.mjs';
 import { parseFindings } from '../lib/findings.mjs';

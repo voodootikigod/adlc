@@ -1,8 +1,25 @@
 {
   "name": "@adlc/core",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Shared core for ADLC tools: LLM providers, git helpers, CLI conventions, ledgers, tickets, mutations.",
   "type": "module",
-  "description": "Shared core for ADLC tools: LLM providers, git helpers, CLI conventions, ledgers, tickets, mutations",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/core#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "core"
+  ],
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
@@ -13,11 +30,20 @@
     "./tickets": "./lib/tickets.mjs",
     "./mutate": "./lib/mutate.mjs"
   },
+  "files": [
+    "index.mjs",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test test/"
   },
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

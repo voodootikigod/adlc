@@ -12,7 +12,7 @@ import {
   readStdin,
   promptOnly,
   loadTickets,
-} from '../../core/index.mjs';
+} from '@adlc/core';
 import {
   buildSpecReaderPrompt,
   buildEdgePrompt,

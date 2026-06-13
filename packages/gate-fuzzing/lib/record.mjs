@@ -4,7 +4,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { appendEntry } from '../../core/index.mjs';
+import { appendEntry } from '@adlc/core';
 
 const ADLC_DIR = '.adlc';
 const GATE_DEFEATS_DIR = join(ADLC_DIR, 'gate-defeats');

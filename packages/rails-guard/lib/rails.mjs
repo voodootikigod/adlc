@@ -1,7 +1,7 @@
 // Rail-freeze enforcement: detect edits to frozen rail paths.
 // Rails are declared as globs in ticket.rails or supplied via --rails flags.
 
-import { globMatch } from '../../core/lib/tickets.mjs';
+import { globMatch } from '@adlc/core/tickets';
 
 /**
  * Resolve the full set of rail globs to enforce.
