@@ -40,6 +40,13 @@ for (const name of order) {
   console.log(`set ${pkg.name}@${version}`);
 }
 
+// Keep the (private) root version in lockstep too.
+const rootPj = join(ROOT, 'package.json');
+const root = JSON.parse(readFileSync(rootPj, 'utf8'));
+root.version = version;
+writeFileSync(rootPj, JSON.stringify(root, null, 2) + '\n');
+console.log(`set ${root.name}@${version} (root)`);
+
 if (!publish) {
   console.log(`\nversions set to ${version} (no publish). Commit, tag v${version}, push.`);
   process.exit(0);
