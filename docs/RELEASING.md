@@ -8,18 +8,44 @@ All 20 packages (`@adlc/core` + 19 CLIs) ship under the `@adlc` npm scope on a
 1. **Create the npm org** named `adlc` (the `@adlc` scope requires an org of
    that exact name). Free org = unlimited public packages.
    `https://www.npmjs.com/org/create`
-2. **Bootstrap publish.** Trusted publishing can only be configured on packages
+2. **Create the protected environment.** Run `docs/github-rulesets/apply.sh`
+   (or Settings → Environments) to create **`npm-publish`** with required
+   reviewers and a `v*` deployment-tag policy. The publish job is pinned to it.
+3. **Bootstrap publish.** Trusted publishing can only be configured on packages
    that already exist, so the first release uses a token:
    - Create a granular **automation** token on npm with publish rights to the
      `adlc` scope.
-   - Add it as the repo secret **`NPM_TOKEN`** (Settings → Secrets → Actions).
-3. **First release** — see *Cutting a release* below. The workflow publishes all
-   20 packages using `NPM_TOKEN`.
-4. **Switch to OIDC.** On npmjs.com, configure each package's *Trusted Publisher*
-   to this repo + the `Publish @adlc to npm` workflow (or set it at the org
-   level). Then **delete the `NPM_TOKEN` secret** — the workflow's
-   `NODE_AUTH_TOKEN` becomes empty and npm publishes via OIDC provenance with no
-   stored credential.
+   - Add it as an **environment secret** named **`NPM_TOKEN`** on the
+     `npm-publish` environment (Settings → Environments → npm-publish →
+     Environment secrets) — **not** a repository or organization Actions secret.
+     An environment secret is unreadable from any job that does not run under
+     `npm-publish`, so it cannot be exfiltrated by a modified workflow on a branch.
+   - If a repo- or org-level `NPM_TOKEN` already exists, **delete it** (an org
+     secret scoped to this repo also resolves in `${{ secrets.NPM_TOKEN }}` and
+     would survive outside the environment). Verify all three scopes:
+     ```bash
+     gh secret list                          # repo: must NOT list NPM_TOKEN
+     gh secret list --org <github-org>        # org: must NOT list NPM_TOKEN
+                                              #   (or it must not be scoped to this repo)
+     gh secret list --env npm-publish         # environment: MUST list NPM_TOKEN
+     ```
+4. **First release** — see *Cutting a release* below. The workflow publishes all
+   20 packages using the environment-scoped `NPM_TOKEN`.
+5. **Switch to OIDC.** On npmjs.com, configure each package's *Trusted Publisher*
+   to this repo + the `Publish @adlc to npm` workflow, **and set the Environment
+   field to `npm-publish`.** This binding is mandatory: if the environment field
+   is left blank, npm will accept an OIDC publish from *any* run of `publish.yml`
+   on this repo — including a `v*` tag pointing at an older commit whose workflow
+   predates the `environment:` gate and ancestry guard — bypassing the required
+   reviewer and deployment-ref layers. With the binding set, npm rejects any OIDC
+   identity that did not run under `npm-publish`.
+   - Verify before removing the token: cut a release from a throwaway branch run
+     that is *not* environment-bound (or temporarily blank the env binding on one
+     scratch package) and confirm npm **rejects** the OIDC publish. Restore the
+     binding.
+   - Then **delete the `NPM_TOKEN` environment secret** — the workflow's
+     `NODE_AUTH_TOKEN` becomes empty and npm publishes via OIDC provenance with no
+     stored credential.
 
 ## Cutting a release
 
@@ -40,8 +66,10 @@ The `.github/workflows/publish.yml` workflow then installs, tests, and runs
 (its consumers resolve it) followed by the 19 CLIs — each with
 `--provenance` and `publishConfig.access=public`.
 
-You can also trigger manually via **Actions → Publish @adlc to npm →
-Run workflow** with an explicit version.
+There is no manual trigger: the workflow has no `workflow_dispatch`, so the only
+way to publish is to push a `v*` tag (tag creation is restricted to admins by the
+release-tag ruleset). To re-publish, push a new tag. Each publish still requires
+approval on the `npm-publish` environment.
 
 ## How the wiring works
 
