@@ -1,0 +1,62 @@
+name: 💡 Feature request
+description: Propose a new tool, flag, or improvement
+title: "feat: <short description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! ADLC has one bar for inclusion: every phase, gate, and loop
+        must trace to a specific **model failure mode** it defends against, or a specific
+        **model property** it exploits. Please frame your request that way.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change is this?
+      options:
+        - New tool / package
+        - New flag or option on an existing tool
+        - Behavior change to an existing tool
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / model failure mode
+      description: Which model failure mode or property does this address? What breaks today?
+      placeholder: |
+        Models exhibit <flaw>, which causes <problem>. None of the current tools gate against it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the tool/flag/behavior, including the machine-checkable gate it enforces.
+    validations:
+      required: true
+  - type: textarea
+    id: cli
+    attributes:
+      label: Proposed CLI shape (if applicable)
+      description: Sketch the command form, flags, and exit-code semantics.
+      render: shell
+      placeholder: |
+        my-tool [verb] [--flag] [--json] [--prompt-only]
+        # exit 0 = gate passes, 1 = op error, 2 = gate fails
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed, and why they fall short.
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: Fit with the ADLC contract
+      description: Confirm the proposal can satisfy the package contract (see CONVENTIONS.md).
+      options:
+        - label: It can be built with zero runtime dependencies (Node built-ins + @adlc/core).
+        - label: Any LLM use can run in `--prompt-only` mode (usable with no API keys).
+        - label: I'm willing to help implement it.
