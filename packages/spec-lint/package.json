@@ -1,6 +1,6 @@
 {
   "name": "@adlc/spec-lint",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Audits a spec for acceptance criteria that lack a concrete verification method (C1/P1).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.0"
+    "@adlc/core": "1.0.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

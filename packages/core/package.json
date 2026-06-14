@@ -1,6 +1,6 @@
 {
   "name": "@adlc/core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Shared core for ADLC tools: LLM providers, git helpers, CLI conventions, ledgers, tickets, mutations.",
   "type": "module",
   "license": "MIT",

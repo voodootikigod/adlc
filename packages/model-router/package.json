@@ -1,6 +1,6 @@
 {
   "name": "@adlc/model-router",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Deterministic per-ticket model assignment from the ticket DAG and ledger — no LLM calls (D1).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.0"
+    "@adlc/core": "1.0.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

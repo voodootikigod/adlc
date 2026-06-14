@@ -1,6 +1,6 @@
 {
   "name": "@adlc/review-calibration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Measures reviewer recall via planted bugs — who reviews the reviewer (P5 meta-gate).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.0"
+    "@adlc/core": "1.0.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

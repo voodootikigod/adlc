@@ -1,6 +1,6 @@
 {
   "name": "@adlc/gate-manifest",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Hash-chained evidence ledger recording what each ADLC gate verified — agentic provenance with optional HMAC signing (C11).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.0"
+    "@adlc/core": "1.0.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

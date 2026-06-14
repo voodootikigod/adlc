@@ -1,6 +1,6 @@
 {
   "name": "@adlc/flail-detector",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Session-log flail analysis — mechanical two-strike rule for build agents (C6/P4 supervisor).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.0"
+    "@adlc/core": "1.0.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
