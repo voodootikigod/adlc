@@ -13,8 +13,6 @@ package READMEs.
 - [Toolkit guide](./toolkit.md) explains how the packages fit into the ADLC flow.
 - [Package reference](./package-reference.md) lists every package, binary, phase, and
   primary README source.
-- [Gate fuzzing handoff](./HANDOFF-measurement-and-gate-fuzzing.md) captures current
-  measurement and gate-fuzzing follow-up work.
 
 ## Repository shape
 
