@@ -1,0 +1,91 @@
+name: 🐛 Bug report
+description: Report a defect in an ADLC tool
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out the sections below so we
+        can reproduce and fix it quickly. For security vulnerabilities, do **not** use this
+        form — see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      description: Which tool is affected?
+      options:
+        - "@adlc/behavior-diff"
+        - "@adlc/coldstart"
+        - "@adlc/consensus-fix"
+        - "@adlc/core"
+        - "@adlc/flail-detector"
+        - "@adlc/gate-fuzzing"
+        - "@adlc/gate-manifest"
+        - "@adlc/hollow-test"
+        - "@adlc/lesson-foundry"
+        - "@adlc/merge-forecast"
+        - "@adlc/model-ratchet"
+        - "@adlc/model-router"
+        - "@adlc/parallax"
+        - "@adlc/preflight"
+        - "@adlc/premortem"
+        - "@adlc/rails-guard"
+        - "@adlc/rejection-mining"
+        - "@adlc/review-calibration"
+        - "@adlc/skill-rot"
+        - "@adlc/spec-lint"
+        - "Other / not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including the exact command you ran.
+      placeholder: |
+        I ran `spec-lint ./spec.md --json` and ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps (and a minimal fixture if possible) to reproduce.
+      placeholder: |
+        1. Create a file with `...`
+        2. Run `...`
+        3. Observe `...`
+    validations:
+      required: true
+  - type: input
+    id: exit-code
+    attributes:
+      label: Exit code
+      description: "What exit code did the tool return? (0 = pass, 1 = op error, 2 = gate fail)"
+      placeholder: "1"
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `node --version`, the package version, and your OS.
+      placeholder: |
+        node: v20.x
+        package: @adlc/spec-lint@1.0.0
+        os: macOS 14 / Ubuntu 22.04 / ...
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste any error output. This will be rendered as code.
+      render: shell
