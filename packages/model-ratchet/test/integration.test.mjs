@@ -8,8 +8,13 @@ import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
+
+// import.meta.dirname is only available in Node >= 20.11; derive it so the
+// suite runs on the package's declared floor (engines.node >=18).
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -77,7 +82,7 @@ describe('integration: hot-score math', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('top file is hot.mjs with correct score', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--top', '5', '--json'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -100,7 +105,7 @@ describe('integration: hot-score math', () => {
   });
 
   it('cold.mjs has lower score than hot.mjs', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--top', '10', '--json'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -138,7 +143,7 @@ describe('integration: exclusion rules', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('test files are not in plan output', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--top', '20', '--json'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -154,7 +159,7 @@ describe('integration: exclusion rules', () => {
   });
 
   it('non-source files (md, json) are not in plan output', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--top', '20', '--json'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -169,7 +174,7 @@ describe('integration: exclusion rules', () => {
   });
 
   it('main.mjs inDegree is 0 (test files excluded from graph)', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--top', '5', '--json'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -206,7 +211,7 @@ describe('integration: review-cmd findings ledger', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('runs review-cmd with {file} substituted', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     // Fake review command: prints a finding for the file
     const reviewCmd = `node -e "console.log('- finding in {file}')"`;
     const result = spawnSync('node', [bin, '--top', '3', '--review-cmd', reviewCmd, '--json'], {
@@ -277,7 +282,7 @@ describe('integration: dry-run (plan) mode', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('exits 0 without review-cmd', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--json'], { cwd: tmp, encoding: 'utf8' });
     assert.equal(result.status, 0);
     const out = JSON.parse(result.stdout);
@@ -285,7 +290,7 @@ describe('integration: dry-run (plan) mode', () => {
   });
 
   it('exits 0 with --dry-run even when review-cmd provided', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync(
       'node',
       [bin, '--dry-run', '--review-cmd', 'echo {file}', '--json'],
@@ -311,7 +316,7 @@ describe('integration: non-git-repo error', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('exits 1 when not a git repo', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--json'], { cwd: tmp, encoding: 'utf8' });
     assert.equal(result.status, 1, 'should exit 1 for non-git-repo');
     assert.ok(result.stderr.includes('not a git'), `stderr: ${result.stderr}`);
@@ -345,7 +350,7 @@ describe('integration: --top flag', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('limits output to --top N files', () => {
-    const bin = resolve(import.meta.dirname, '../bin/model-ratchet.mjs');
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const result = spawnSync('node', [bin, '--top', '2', '--json'], {
       cwd: tmp,
       encoding: 'utf8',
