@@ -1,15 +1,15 @@
 name: Publish @adlc to npm
 
+# Publish is triggered ONLY by pushing a v* tag. `workflow_dispatch` is
+# intentionally NOT used: a manual dispatch runs the workflow file from the
+# selected ref, so a contributor could dispatch a branch whose publish.yml drops
+# the environment gate and publish ungated. Tag creation is restricted to admins
+# by the `release tags` ruleset (docs/github-rulesets/), so the only code that can
+# trigger a publish is an admin-controlled tagged commit.
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to publish (e.g. 1.0.0, without v prefix)"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -18,9 +18,30 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Gate the publish behind a protected environment with required reviewers and
+    # a v* deployment-tag policy (provisioned by docs/github-rulesets/apply.sh).
+    # The npm credential below MUST be an environment-scoped secret on this
+    # environment (not a repo-level secret): that way it is unreadable from any
+    # job that does not run under `npm-publish`, closing credential-exfiltration
+    # via a modified workflow on a branch.
+    environment: npm-publish
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the ancestry check below can run
+
+      - name: Verify tag is merged into main
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          # Refuse to publish a tag that points at a commit not reachable from
+          # main — i.e. code that never passed the protected-main PR/CI gates.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::Tag commit $SHA is not an ancestor of origin/main — refusing to publish unmerged code."
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -31,15 +52,10 @@ jobs:
       - name: Resolve version
         id: ver
         env:
-          INPUT_VERSION: ${{ inputs.version }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ -n "$INPUT_VERSION" ]; then
-            V="$INPUT_VERSION"
-          else
-            V="${REF_NAME#v}"
-          fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+          # Only ever runs on a v* tag push (see trigger above).
+          echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install
         run: npm install
@@ -50,8 +66,10 @@ jobs:
       - name: Publish (core-first, lockstep)
         run: node scripts/release.mjs "${{ steps.ver.outputs.version }}" --publish
         env:
-          # Bootstrap run: set repo secret NPM_TOKEN to create the packages.
-          # After configuring trusted publishing, delete the secret — this var
-          # becomes empty and npm falls through to OIDC provenance publishing.
+          # Bootstrap run: set NPM_TOKEN as an ENVIRONMENT secret on `npm-publish`
+          # (Settings > Environments > npm-publish > Secrets), NOT a repo secret,
+          # so it cannot be read outside the gated environment. After configuring
+          # npm trusted publishing, delete the secret — this var becomes empty and
+          # npm falls through to OIDC provenance publishing.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
