@@ -1,6 +1,6 @@
 {
   "name": "@adlc/parallax",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Measured-ambiguity interrogation via sampling diversity — fan N completions, surface only the divergences (D3).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.1"
+    "@adlc/core": "1.0.2"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

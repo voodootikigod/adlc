@@ -49,6 +49,13 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
+      - name: Upgrade npm for OIDC trusted publishing
+        # Node 20 ships npm 10.x, which cannot use OIDC trusted publishing.
+        # npm >= 11.5.1 is required to mint a registry token from the GitHub
+        # id-token (the `id-token: write` permission above). Without this the
+        # publish falls through to needing NODE_AUTH_TOKEN and fails ENEEDAUTH.
+        run: npm install -g npm@latest
+
       - name: Resolve version
         id: ver
         env:

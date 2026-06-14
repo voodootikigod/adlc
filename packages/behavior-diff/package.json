@@ -1,6 +1,6 @@
 {
   "name": "@adlc/behavior-diff",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Behavior-space diff for the P6 human gate — review what changed in behavior, not 5,000-line diffs.",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.1"
+    "@adlc/core": "1.0.2"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

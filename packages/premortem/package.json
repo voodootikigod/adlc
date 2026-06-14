@@ -1,6 +1,6 @@
 {
   "name": "@adlc/premortem",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Failure-first spec stress test — inverts sycophancy to surface failure modes (C2/P1).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.1"
+    "@adlc/core": "1.0.2"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

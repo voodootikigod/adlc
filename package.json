@@ -2,7 +2,7 @@
   "name": "adlc",
   "private": true,
   "type": "module",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Agentic Development Lifecycle toolkit — gate-shaped, zero-dependency CLIs",
   "workspaces": [
     "packages/*"
