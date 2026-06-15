@@ -211,16 +211,24 @@ function flail(input) {
   if (fileSize(tp) > MAX_SCAN_BYTES) {
     const tail = tailBytes(tp, MAX_SCAN_BYTES);
     if (tail == null) return;
-    try {
-      // mkdtempSync makes a fresh 0700 dir with a random suffix — no predictable
-      // path to pre-plant a symlink against.
-      scanDir = mkdtempSync(join(tmpdir(), 'adlc-flail-'));
-      const p = join(scanDir, 'scan.jsonl');
-      writeFileSync(p, tail);
-      scanPath = p;
-    } catch {
-      scanDir = null;
-      scanPath = tp; // fall back to a read-only full scan rather than risk a temp write
+    // Degenerate window: if the 256 KiB tail lands inside one giant record so
+    // that dropping the partial first line leaves nothing, a bounded scan would
+    // be empty and silently suppress flail. Fall back to a read-only full scan
+    // (slower, but correct) rather than lose detection.
+    if (!tail.trim()) {
+      scanPath = tp;
+    } else {
+      try {
+        // mkdtempSync makes a fresh 0700 dir with a random suffix — no predictable
+        // path to pre-plant a symlink against.
+        scanDir = mkdtempSync(join(tmpdir(), 'adlc-flail-'));
+        const p = join(scanDir, 'scan.jsonl');
+        writeFileSync(p, tail);
+        scanPath = p;
+      } catch {
+        scanDir = null;
+        scanPath = tp; // fall back to a read-only full scan rather than risk a temp write
+      }
     }
   }
 
