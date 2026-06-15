@@ -346,61 +346,92 @@ function toRepoRelative(fp) {
   return relative(process.cwd(), abs).split('\\').join('/');
 }
 
-// One quoted ('…' or "…", spaces allowed) or bare path operand. The bare form
-// also accepts backslash-escaped characters (`\ ` etc.) so an escaped space does
-// not truncate the path; those escapes are decoded by pickOperand.
-const OPERAND = `(?:"([^"]*)"|'([^']*)'|((?:\\\\.|[^\\s'"|;&<>])+))`;
-const pickOperand = (m) => m[1] ?? m[2] ?? m[3].replace(/\\(.)/g, '$1');
+/**
+ * A small quote/escape-aware shell lexer. Returns an ordered list of items:
+ * `{ op }` for a control/redirect operator (`|`, `||`, `;`, `&&`, `&`, `>`,
+ * `>>`, `<`) and `{ word }` for a (quote- and escape-decoded) word. Operators
+ * are only recognized OUTSIDE quotes, so a `|`/`;` inside a quoted sed script is
+ * part of the word, not a separator. This is what lets the writer detection
+ * below survive normal shell quoting; it is not a full POSIX shell, but it
+ * covers the unobfuscated write forms (the rails-guard CI diff gate remains the
+ * unbypassable backstop for anything cleverer).
+ */
+function lexBash(cmd) {
+  const items = [];
+  const n = cmd.length;
+  let i = 0;
+  while (i < n) {
+    const ch = cmd[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
+    if (ch === '|') { items.push({ op: cmd[i + 1] === '|' ? '||' : '|' }); i += cmd[i + 1] === '|' ? 2 : 1; continue; }
+    if (ch === '&') { items.push({ op: cmd[i + 1] === '&' ? '&&' : '&' }); i += cmd[i + 1] === '&' ? 2 : 1; continue; }
+    if (ch === ';') { items.push({ op: ';' }); i++; continue; }
+    if (ch === '>') { items.push({ op: cmd[i + 1] === '>' ? '>>' : '>' }); i += cmd[i + 1] === '>' ? 2 : 1; continue; }
+    if (ch === '<') { items.push({ op: '<' }); i++; continue; }
+    // a word: accumulate until an unquoted separator/operator.
+    let word = '';
+    while (i < n) {
+      const c = cmd[i];
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '|' || c === '&' || c === ';' || c === '>' || c === '<') break;
+      if (c === '\\') { if (i + 1 < n) { word += cmd[i + 1]; i += 2; } else i++; continue; }
+      if (c === '"') { i++; while (i < n && cmd[i] !== '"') { if (cmd[i] === '\\' && i + 1 < n) { word += cmd[i + 1]; i += 2; } else { word += cmd[i]; i++; } } i++; continue; }
+      if (c === "'") { i++; while (i < n && cmd[i] !== "'") { word += cmd[i]; i++; } i++; continue; }
+      word += c; i++;
+    }
+    items.push({ word });
+  }
+  return items;
+}
 
-/** Quote-aware tokenizer: a quoted run (incl. spaces) is one token, quotes stripped. */
-function shellTokens(s) {
-  const toks = [];
-  const re = new RegExp(OPERAND, 'g');
-  let m;
-  while ((m = re.exec(s))) toks.push(pickOperand(m));
-  return toks;
+function processSegment(words, targets) {
+  if (words.length === 0) return;
+  for (const w of words) if (w.startsWith('of=')) targets.add(w.slice(3)); // dd of=PATH
+  const c0 = words[0];
+  if (c0 === 'tee') {
+    for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
+  } else if (c0 === 'truncate') {
+    for (let i = 1; i < words.length; i++) {
+      if (words[i] === '-s') { i++; continue; }
+      if (!words[i].startsWith('-')) targets.add(words[i]);
+    }
+  } else if (c0 === 'sed') {
+    const inPlace = words.some((w) => /^--in-place/.test(w) || /^-[a-zA-Z]*i/.test(w));
+    if (inPlace) {
+      const operands = words.slice(1).filter((w) => !w.startsWith('-'));
+      for (const w of operands.slice(1)) targets.add(w); // first operand is the script
+    }
+  }
 }
 
 /**
  * Extract the path operands a shell command WRITES to, in the common,
- * unobfuscated forms: redirection (`>`/`>>`, incl. `./`, absolute, and quoted
- * targets with spaces), `tee`, `dd of=`, `sed -i`, `truncate`. Reads/runs
- * (`cat`, `node`) yield no targets. Targets are returned verbatim; the caller
- * canonicalizes them through the SAME repo-relative matcher used for structured
- * edits, so a `./` prefix, absolute, or quoted spelling cannot dodge a rail.
- * Intentionally a first-line guard, not a sandbox — obfuscated writes still need
- * the rails-guard CI diff gate (the ADLC harness map pairs the PreToolUse hook
- * WITH branch protection in CI).
+ * unobfuscated forms: redirection (`>`/`>>`), `tee`, `dd of=`, `sed -i`,
+ * `truncate` — robust to `./`/absolute spellings and to normal shell quoting and
+ * backslash escaping (a quoted `|`/space, an escaped space). Reads/runs
+ * (`cat`, `node`) yield no targets. Targets are canonicalized by the caller
+ * through the SAME repo-relative matcher as structured edits, so path spelling
+ * cannot dodge a rail. A first-line guard, not a sandbox — the rails-guard CI
+ * diff gate is the unbypassable backstop (PreToolUse hook + branch protection).
  */
 function bashWriteTargets(cmd) {
+  const items = lexBash(cmd);
   const targets = new Set();
-
-  // Redirections: optional fd, > or >>, then a (quoted or bare) path.
-  for (const m of cmd.matchAll(new RegExp(`\\d*>>?\\s*${OPERAND}`, 'g'))) targets.add(pickOperand(m));
-  // dd of=PATH
-  for (const m of cmd.matchAll(new RegExp(`\\bof=${OPERAND}`, 'g'))) targets.add(pickOperand(m));
-
-  // Command-position writers: scan each pipeline/sequence segment, quote-aware.
-  for (const seg of cmd.split(/\||;|&&|\n/)) {
-    const toks = shellTokens(seg);
-    if (toks.length === 0) continue;
-    const c0 = toks[0];
-    if (c0 === 'tee') {
-      for (const t of toks.slice(1)) if (!t.startsWith('-')) targets.add(t);
-    } else if (c0 === 'truncate') {
-      for (let i = 1; i < toks.length; i++) {
-        if (toks[i] === '-s') { i++; continue; }
-        if (!toks[i].startsWith('-')) targets.add(toks[i]);
+  let seg = [];
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (it.op === '>' || it.op === '>>') {
+      const next = items[k + 1];
+      if (next && next.word !== undefined) {
+        targets.add(next.word); // redirect target
+        k++; // consume it so it is not re-read as a segment word
       }
-    } else if (c0 === 'sed') {
-      const inPlace = toks.some((t) => /^--in-place/.test(t) || /^-[a-zA-Z]*i/.test(t));
-      if (inPlace) {
-        // non-flag operands: the first is the script, the rest are files.
-        const operands = toks.slice(1).filter((t) => !t.startsWith('-'));
-        for (const t of operands.slice(1)) targets.add(t);
-      }
+      continue;
     }
+    if (it.op === '<') continue; // input redirect — not a write
+    if (it.op) { processSegment(seg, targets); seg = []; continue; } // | || ; && &
+    if (it.word !== undefined) seg.push(it.word);
   }
+  processSegment(seg, targets);
   return [...targets];
 }
 
