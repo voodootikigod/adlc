@@ -52,25 +52,38 @@ A ticket must be **executable without guesswork** (that is exactly what
 If anything required for a *self-contained* ticket is ambiguous, ask the user
 rather than guessing — a vague ticket fails `coldstart`.
 
-## 2. Append (and wire dependencies) atomically, then validate
+## 2. Apply the change safely, then write
 
-The mutation model has exactly one allowed write to existing data: **adding a
+Ticket authoring (P0) is a serial step — author the backlog before fanning out
+the build. Do not run `/adlc-ticket` concurrently against the same repo. The
+mutation model has exactly one allowed write to existing data: **adding a
 prerequisite→new edge to a prerequisite ticket** (the second case in step 1).
-Nothing else about existing tickets may change.
+Nothing else about an existing ticket may change.
 
-- Build the new ticket object and append it to the `tickets` array (read, copy,
-  add).
-- If the new ticket depends on an existing prerequisite T0, append the single
-  edge `{ "to": "<new id>" }` to **T0's** `edges` array. This is additive only —
-  do not change any other field of T0, and do not reorder tickets.
-- Validate the **entire resulting array** before writing it back:
-  - `id` and `title` are required strings; `scope`, `rails`, `edges` are arrays;
-    `duration` is a positive number.
-  - every `edge.to` (across all tickets) references an existing ticket id, and
-    no id is duplicated.
-  - the dependency graph has **no cycle** (a self-contained sanity check:
-    `adlc merge-forecast --json` reports a cycle in the DAG if one exists).
-- Write the whole file back, preserving 2-space JSON formatting.
+Follow this order — note that validation happens **on the proposed in-memory
+array**, before any write, because the CLI gates read the on-disk file and would
+only see the old state:
+
+1. **Re-read** `.adlc/tickets.json` now (it may have changed since step 0). If the
+   id you picked is no longer free, re-derive the next free `T<n>`.
+2. **Build the proposed array** in memory: append the new ticket; if it depends on
+   an existing prerequisite T0, add the single edge `{ "to": "<new id>" }` to T0's
+   `edges` (additive only — no other field of T0 changes, no reordering).
+3. **Validate the proposed array in memory** (do not write yet):
+   - `id` and `title` are required strings; `scope`/`rails`/`edges` are arrays;
+     `duration` is a positive number.
+   - every `edge.to` across all tickets resolves to an existing id; no id is
+     duplicated.
+   - **no dependency cycle** — trace the edges: no ticket may reach itself by
+     following `edge.to` links. If you find one, fix the edges and re-validate.
+   If any check fails, do not write — report and revise.
+4. **Write atomically**: write the full JSON (2-space indent) to a temp file in
+   `.adlc/` and rename it over `tickets.json`, so a crash never leaves a partial
+   file.
+5. **Confirm post-write**: run `adlc merge-forecast --json`. If `gateFailures`
+   reports a cycle (or the exit code is not 0/2 as expected), the on-disk graph is
+   bad — restore the pre-change contents you read in step 1 and report the
+   failure rather than leaving a corrupt contract.
 
 ## 3. Check executability (coldstart gate)
 
