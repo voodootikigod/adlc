@@ -1,0 +1,59 @@
+# ADLC rail-freeze CI backstop — copy into your repo as
+# .github/workflows/adlc-rails-guard.yml
+#
+# This is the unbypassable commit-time gate the in-session PreToolUse rail hook
+# relies on. The hook blocks Edit/Write/MultiEdit and common Bash writes to
+# frozen rails, but a shell write form it does not recognize (node -e, python,
+# cp, perl -i, …) still lands in the PR diff — this job rejects that PR.
+#
+# It reads every rail glob declared in .adlc/tickets.json and runs the
+# diff-based `adlc rails-guard` gate against the PR base. It no-ops when no rails
+# are declared. Make this a required check in branch protection.
+
+name: ADLC Rails Guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rails-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the diff base resolves
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install the ADLC toolkit
+        run: npm install -g @adlc/cli
+
+      - name: Fetch base ref
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+
+      - name: Rail-freeze gate
+        run: |
+          node -e '
+            const fs = require("fs");
+            const { spawnSync } = require("child_process");
+            const base = "origin/" + (process.env.BASE_REF || "main");
+            const p = ".adlc/tickets.json";
+            if (!fs.existsSync(p)) { console.log("no .adlc/tickets.json — nothing frozen."); process.exit(0); }
+            let rails = [];
+            try {
+              const d = JSON.parse(fs.readFileSync(p, "utf8"));
+              for (const t of d?.tickets ?? []) for (const r of t?.rails ?? []) if (typeof r === "string") rails.push(r);
+            } catch (e) { console.error("cannot read tickets: " + e.message); process.exit(1); }
+            rails = [...new Set(rails)];
+            if (!rails.length) { console.log("no rails declared — nothing frozen."); process.exit(0); }
+            const argv = ["rails-guard", "--base", base, ...rails.flatMap(r => ["--rails", r])];
+            const res = spawnSync("adlc", argv, { stdio: "inherit" });
+            process.exit(typeof res.status === "number" ? res.status : 1);
+          '
+        env:
+          BASE_REF: ${{ github.base_ref }}

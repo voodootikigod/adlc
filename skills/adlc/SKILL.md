@@ -65,8 +65,9 @@ downstream reads this file; nothing else creates it. Author here first.
   rail hook** is the in-session layer: it denies Edit/Write/MultiEdit to declared
   rail paths and best-effort denies Bash writes (redirect/tee/`sed -i`/dd) to
   them, and freezes `.adlc/tickets.json` itself once rails exist. Obfuscated shell
-  writes can evade the in-session hook but not the CI diff gate. Override
-  deliberately with `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
+  writes can evade the in-session hook but not the CI diff gate — wire that gate
+  with the template at `docs/ci/rails-guard.yml` and make it a required check.
+  Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
 
 ### P4 — Build (supervised execution)
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
