@@ -40,19 +40,39 @@ const MODE = process.argv[2];
 // hook into a repeated full-history reparse.
 const MAX_SCAN_BYTES = 256 * 1024;
 
+// Hard ceiling on the hook payload we will buffer. The payload is a single JSON
+// object that must be read whole (truncation makes it unparseable), so we cannot
+// byte-cap mid-stream; instead we bound total allocation and treat anything over
+// the ceiling as a no-op. Any realistic Claude hook payload is far below this.
+const MAX_STDIN_BYTES = 16 * 1024 * 1024;
+
 /**
- * Read the hook payload from stdin (fd 0). The payload is a single JSON object,
- * so it must be read in full — a byte-capped read would truncate the JSON and
- * make it unparseable. This is the user's own session payload (not an untrusted-
- * size network input), and the heavy bounding that matters — the transcript
- * scan — is handled separately by MAX_SCAN_BYTES. Never throws.
+ * Read the full hook payload from stdin (fd 0), bounded to MAX_STDIN_BYTES.
+ * Returns '' (→ no-op) if the payload exceeds the ceiling, so a pathological
+ * oversized payload can never cause unbounded allocation. Never throws.
  */
 function readStdin() {
+  const chunks = [];
+  const buf = Buffer.alloc(65536);
+  let total = 0;
   try {
-    return readFileSync(0, 'utf8');
+    for (;;) {
+      let n = 0;
+      try {
+        n = readSync(0, buf, 0, buf.length, null);
+      } catch (e) {
+        if (e.code === 'EAGAIN') continue; // not ready yet
+        break; // EOF or read error → use what we have
+      }
+      if (n === 0) break; // EOF
+      total += n;
+      if (total > MAX_STDIN_BYTES) return ''; // oversized → bounded no-op
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
   } catch {
-    return '';
+    /* fall through with whatever was read */
   }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 /** Print one advisory JSON object. Caller then exits 0. */
