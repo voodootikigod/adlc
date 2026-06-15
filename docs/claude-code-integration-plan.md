@@ -51,7 +51,7 @@ Two load-bearing decisions fall out of that mapping:
 | Decomposition (P2) | `coldstart`, `model-router`, `merge-forecast` | **Skills** + slash commands | Model-invoked |
 | Hard-bug repair (P4 / C7) | `consensus-fix` | **Slash command** (explicit, expensive) | User-invoked |
 | Prosecution (P5) | `hollow-test`, `behavior-diff`, `review-calibration` | **Subagent** ("prosecutor") + skills | Invoked before merge |
-| Gate evidence (C11) | `gate-manifest` | **Stop / SubagentStop hook** appends manifest | Automatic side effect of finishing |
+| Gate evidence (C11) | `gate-manifest` | **Stop hook** audits the evidence chain (`verify`); the gates themselves `record` | Advisory: warn only if the chain is broken |
 | Distill (P7) | `lesson-foundry`, `rejection-mining` | **Scheduled (cron) loop** | Idle-time, budgeted |
 | Maintenance (C10/C12 + fuzzing) | `skill-rot`, `model-ratchet`, `gate-fuzzing` | **Scheduled (cron) loop** | Idle-time, budgeted |
 | Orchestration lane (D0) | the toolkit's own build pattern | **Workflow script** / `/adlc-run` orchestrator command | Opt-in |
@@ -183,10 +183,13 @@ Phase-by-phase coverage of the integrated surface:
      decouples plugin version from npm version.
    This is an unresolved tradeoff the plan surfaces rather than hides.
 
-3. **`flail-detector` needs a session log; hooks see a transcript path.** The
-   tool reads a log file; Claude Code exposes the transcript path to hooks. A
-   thin shim must adapt the transcript into the shape flail-detector expects.
-   Until that shim exists, flail supervision is not wired.
+3. **`flail-detector` and the session transcript — gap resolved.** Originally
+   this was flagged as needing a transcript→log shim. It does not:
+   `flail-detector`'s `parseLog` already detects JSONL and walks Claude Code
+   transcript tool-use blocks (`input.file_path`, `tool_input`, `edits[]`),
+   emitting synthetic `Writing <path>` lines so the scope/churn/repeat signals
+   fire natively. The PostToolUse hook therefore passes `transcript_path`
+   directly — no shim. (Delivered in Phase C as the advisory `flail` hook.)
 
 4. **Blocking hooks are a footgun — resolved by an asymmetric contract.** A
    `rails-guard` PreToolUse that fails *open* on op-error is no gate at all (F5

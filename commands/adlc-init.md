@@ -39,19 +39,21 @@ Run `adlc --version`.
 ## 3. Separate the contract from the runtime evidence in git
 
 The ticket file is the **source-of-truth contract** between tools and is worth
-committing. The append-only ledgers and gate evidence are **runtime artifacts**
-and should not be. If a `.gitignore` exists (create one if it does not), ensure
-it ignores the evidence but NOT the tickets — add these lines if absent:
+committing. Everything else under `.adlc/` — append-only ledgers, gate evidence,
+the ticket lock, and hook runtime state — is a **runtime artifact** and should
+not be. If a `.gitignore` exists (create one if it does not), ensure it ignores
+all of `.adlc/` *except* the ticket file — add these two lines if absent:
 
 ```
-.adlc/*.jsonl
-.adlc/lessons/
-.adlc/tickets.lock/
+.adlc/*
+!.adlc/tickets.json
 ```
 
-Do not add a blanket `.adlc/` ignore — that would also ignore `tickets.json`. If
-the repo already ignores all of `.adlc/`, point that out and ask the user whether
-they want to track `tickets.json` (recommended) before changing anything.
+This negation keeps `tickets.json` tracked while ignoring all current and future
+runtime files (ledgers, `lessons/`, `tickets.lock/`, `flail-detector.state`, …)
+without you having to enumerate them. If the repo already has a blanket `.adlc/`
+ignore (which would also hide `tickets.json`), point that out and ask the user
+whether they want to track `tickets.json` (recommended) before changing it.
 
 ## 4. Run a preflight check
 

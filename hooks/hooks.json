@@ -1,0 +1,39 @@
+{
+  "description": "ADLC advisory hooks — preflight on session start, flail-detection after edits/commands, and gate-evidence integrity audit on stop. All non-blocking; they no-op unless @adlc/cli is installed and the repo is ADLC-initialized.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" preflight",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" flail",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" manifest",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

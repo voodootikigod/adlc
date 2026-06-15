@@ -1,0 +1,142 @@
+#!/usr/bin/env node
+// ADLC advisory hooks — one helper, three modes:
+//   preflight  (SessionStart)  → environment readiness before fan-out
+//   flail      (PostToolUse)    → flail-detection over the session transcript
+//   manifest   (Stop)           → gate-evidence chain integrity audit
+//
+// CONTRACT: these hooks are ADVISORY ONLY. They must NEVER block a tool call,
+// fail a session, or surface an error of their own. Every path ends in exit 0,
+// and the helper stays SILENT unless there is something worth flagging. If the
+// toolkit is not installed or the repo is not ADLC-initialized, it no-ops.
+//
+// Output: when there is something to say, print ONE JSON object using fields
+// Claude Code recognizes for non-blocking messages (`systemMessage`, and
+// `hookSpecificOutput.additionalContext` for SessionStart). No output = no-op.
+
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const MODE = process.argv[2];
+
+/** Read the entire hook payload from stdin (fd 0). Never throws. */
+function readStdin() {
+  try {
+    return readFileSync(0, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** Print one advisory JSON object. Caller then exits 0. */
+function emit(obj) {
+  try {
+    process.stdout.write(JSON.stringify(obj));
+  } catch {
+    /* ignore — advisory output is best-effort */
+  }
+}
+
+/**
+ * Run an `adlc` subcommand. Returns the spawn result, or null when the toolkit
+ * is not on PATH (ENOENT) — the signal to no-op rather than error.
+ */
+function runAdlc(args) {
+  const r = spawnSync('adlc', args, { encoding: 'utf8' });
+  if (r.error) return null;
+  return r;
+}
+
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function main() {
+  const input = parseJson(readStdin()) ?? {};
+
+  // Operate in the project root so the tools resolve `.adlc/` correctly.
+  const dir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+  try {
+    process.chdir(dir);
+  } catch {
+    return; // cannot reach the project dir — nothing to do
+  }
+
+  if (MODE === 'preflight') return preflight();
+  if (MODE === 'flail') return flail(input);
+  if (MODE === 'manifest') return manifest();
+  // unknown mode → no-op
+}
+
+// SessionStart — surface only genuine environment failures, stay silent when ready.
+function preflight() {
+  if (!existsSync('.adlc')) return; // not an ADLC repo
+  const r = runAdlc(['preflight', '--json']);
+  if (!r || !r.stdout) return; // toolkit absent / no output
+  const res = parseJson(r.stdout);
+  if (!res) return;
+  const failed = res.failedNames ?? [];
+  if (failed.length === 0) return; // ready → silent
+  const msg =
+    `ADLC preflight: ${failed.length} environment check(s) failing before fan-out: ` +
+    `${failed.join(', ')}. Run \`adlc preflight\` for detail.`;
+  emit({
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg },
+    systemMessage: msg,
+  });
+}
+
+// PostToolUse — flag flailing over the transcript; dedupe so the same signal set
+// is not re-reported on every subsequent tool call within a session.
+function flail(input) {
+  const tp = input.transcript_path;
+  if (!tp || !existsSync(tp)) return;
+  const r = runAdlc(['flail-detector', tp, '--json']);
+  if (!r || !r.stdout) return;
+  const res = parseJson(r.stdout);
+  if (!res || res.verdict !== 'flail') return;
+
+  const summary = (res.signals ?? []).map((s) => s.type).join(', ');
+  const stateFile = join('.adlc', 'flail-detector.state');
+  let prev = '';
+  try {
+    prev = readFileSync(stateFile, 'utf8');
+  } catch {
+    /* no prior state */
+  }
+  if (prev.trim() === summary.trim()) return; // already reported this signal set
+  try {
+    writeFileSync(stateFile, summary);
+  } catch {
+    /* state is best-effort; still surface the advisory */
+  }
+
+  const msg =
+    `ADLC flail-detector: possible flailing this session (${summary || 'signals detected'}). ` +
+    `Consider stopping and banking the dead-ends rather than retrying.`;
+  emit({ systemMessage: msg });
+}
+
+// Stop — audit the gate-evidence chain; warn only if it is broken.
+function manifest() {
+  if (!existsSync(join('.adlc', 'manifest.jsonl'))) return; // nothing recorded yet
+  const r = runAdlc(['gate-manifest', 'verify', '--json']);
+  if (!r || !r.stdout) return;
+  const res = parseJson(r.stdout);
+  if (!res || res.valid) return; // intact → silent
+  const msg =
+    `ADLC gate-manifest: evidence chain INVALID — ${res.message}. ` +
+    `The gate ledger may have been tampered with or truncated.`;
+  emit({ systemMessage: msg });
+}
+
+try {
+  main();
+} catch {
+  /* advisory hooks never surface their own errors */
+}
+process.exit(0);
