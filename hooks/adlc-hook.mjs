@@ -22,7 +22,11 @@ import {
   fstatSync,
   readSync,
   closeSync,
-  unlinkSync,
+  mkdtempSync,
+  mkdirSync,
+  lstatSync,
+  chmodSync,
+  rmSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -109,6 +113,39 @@ function preflight() {
 
 // PostToolUse — flag flailing over the transcript; dedupe so the same signal set
 // is not re-reported on every subsequent tool call within a session.
+/**
+ * A private, user-owned 0700 directory under the temp dir for PERSISTENT hook
+ * state (the flail dedupe marker, which must survive across PostToolUse
+ * invocations). Predictable shared-/tmp filenames are a symlink-attack vector;
+ * a 0700 dir owned by the current user blocks other users from planting
+ * symlinks inside it. Returns null (→ skip persistence) if it can't be made
+ * safely — e.g. the path is a symlink or owned by someone else.
+ */
+function privateStateDir() {
+  try {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 'u';
+    const dir = join(tmpdir(), `adlc-hooks-${uid}`);
+    try {
+      mkdirSync(dir, { mode: 0o700 });
+    } catch (e) {
+      if (e.code !== 'EEXIST') return null;
+    }
+    const st = lstatSync(dir); // lstat: a planted symlink is NOT a directory → rejected
+    if (!st.isDirectory()) return null;
+    if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return null;
+    if ((st.mode & 0o077) !== 0) {
+      try {
+        chmodSync(dir, 0o700);
+      } catch {
+        return null;
+      }
+    }
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
 /** File size in bytes, or -1 on error. Closes the fd. */
 function fileSize(path) {
   let fd;
@@ -170,24 +207,27 @@ function flail(input) {
   // copy in the temp dir so cost stays O(MAX_SCAN_BYTES) no matter how long the
   // session runs.
   let scanPath = tp;
-  let tmpScan = null;
+  let scanDir = null;
   if (fileSize(tp) > MAX_SCAN_BYTES) {
     const tail = tailBytes(tp, MAX_SCAN_BYTES);
     if (tail == null) return;
     try {
-      const key = createHash('sha1').update(tp).digest('hex').slice(0, 16);
-      tmpScan = join(tmpdir(), `adlc-flail-scan-${key}.jsonl`);
-      writeFileSync(tmpScan, tail);
-      scanPath = tmpScan;
+      // mkdtempSync makes a fresh 0700 dir with a random suffix — no predictable
+      // path to pre-plant a symlink against.
+      scanDir = mkdtempSync(join(tmpdir(), 'adlc-flail-'));
+      const p = join(scanDir, 'scan.jsonl');
+      writeFileSync(p, tail);
+      scanPath = p;
     } catch {
-      return; // cannot stage the bounded copy — skip rather than full-scan
+      scanDir = null;
+      scanPath = tp; // fall back to a read-only full scan rather than risk a temp write
     }
   }
 
   const r = runAdlc(['flail-detector', scanPath, '--json']);
-  if (tmpScan) {
+  if (scanDir) {
     try {
-      unlinkSync(tmpScan);
+      rmSync(scanDir, { recursive: true, force: true });
     } catch {
       /* best-effort cleanup */
     }
@@ -203,23 +243,27 @@ function flail(input) {
   const payloadHash = createHash('sha1')
     .update(JSON.stringify(res.signals ?? []))
     .digest('hex');
-  // Dedupe state lives in the OS temp dir, NOT the worktree — keyed by the
-  // (per-session) transcript path. This keeps the advisory hook from ever
-  // creating repo-local files, so it cannot dirty the tree regardless of the
-  // project's .gitignore.
-  const key = createHash('sha1').update(tp).digest('hex').slice(0, 16);
-  const stateFile = join(tmpdir(), `adlc-flail-${key}.state`);
-  let prev = '';
-  try {
-    prev = readFileSync(stateFile, 'utf8');
-  } catch {
-    /* no prior state */
-  }
-  if (prev.trim() === payloadHash) return; // already reported this exact evidence
-  try {
-    writeFileSync(stateFile, payloadHash);
-  } catch {
-    /* state is best-effort; still surface the advisory */
+  // Dedupe state lives in a private 0700 temp dir (NOT the worktree, so the hook
+  // never dirties the tree; NOT a predictable shared-/tmp path, so it is not a
+  // symlink target). Keyed by the per-session transcript path. If a safe dir
+  // can't be made, skip dedupe rather than risk an unsafe write — the advisory
+  // still fires, just without suppression.
+  const base = privateStateDir();
+  if (base) {
+    const key = createHash('sha1').update(tp).digest('hex').slice(0, 16);
+    const stateFile = join(base, `flail-${key}.state`);
+    let prev = '';
+    try {
+      prev = readFileSync(stateFile, 'utf8');
+    } catch {
+      /* no prior state */
+    }
+    if (prev.trim() === payloadHash) return; // already reported this exact evidence
+    try {
+      writeFileSync(stateFile, payloadHash);
+    } catch {
+      /* state is best-effort; still surface the advisory */
+    }
   }
 
   const msg =
