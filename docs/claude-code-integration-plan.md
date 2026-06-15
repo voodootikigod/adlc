@@ -45,7 +45,7 @@ Two load-bearing decisions fall out of that mapping:
 | Lifecycle organ (ADLC phase) | CLI(s) | Claude Code primitive | Default posture |
 |---|---|---|---|
 | Preflight (D2 Phase 0) | `preflight` | **SessionStart hook** | Advisory: warn, never block session |
-| Rail freeze (P3 / C5) | `rails-guard` | **PreToolUse hook** on `Edit`/`Write` | Block only paths declared `rails` in a ticket; no-op when none declared |
+| Rail freeze (P3 / C5) | `rails-guard` | **PreToolUse hook** on `Edit`/`Write`/`MultiEdit`/`Bash` (in-session) + the diff-based `rails-guard` gate in CI (commit-time backstop) | Block paths declared `rails` in a ticket (incl. best-effort Bash writes) + freeze the `.adlc/tickets.json` trust root; no-op when none declared. Obfuscated shell writes evade the hook but not the CI gate |
 | Flail supervision (P4 / C6) | `flail-detector` | **PostToolUse hook** reading a bounded recent window of the transcript | Advisory: surface repeat/churn warnings (scope checks need ticket context — future) |
 | Spec interrogation (P1) | `spec-lint`, `premortem`, `parallax` | **Skills** + slash commands, run `--prompt-only` | Model-invoked |
 | Decomposition (P2) | `coldstart`, `model-router`, `merge-forecast` | **Skills** + slash commands | Model-invoked |

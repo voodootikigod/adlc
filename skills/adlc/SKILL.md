@@ -60,10 +60,13 @@ downstream reads this file; nothing else creates it. Author here first.
 
 ### P3 — Rail (frozen paths are protected)
 - `adlc rails-guard --base <ref> --ticket <id>` — diff-based check that no
-  committed change touched a frozen rail (exit 2 = a rail was edited). Run it
-  before review as a backstop. Note: the plugin's **PreToolUse rail hook** also
-  blocks edits to declared rail paths *as you make them* (deny at the tool layer);
-  override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
+  committed change touched a frozen rail (exit 2 = a rail was edited). This is the
+  **unbypassable commit-time backstop**; run it in CI. The plugin's **PreToolUse
+  rail hook** is the in-session layer: it denies Edit/Write/MultiEdit to declared
+  rail paths and best-effort denies Bash writes (redirect/tee/`sed -i`/dd) to
+  them, and freezes `.adlc/tickets.json` itself once rails exist. Obfuscated shell
+  writes can evade the in-session hook but not the CI diff gate. Override
+  deliberately with `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
 
 ### P4 — Build (supervised execution)
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,

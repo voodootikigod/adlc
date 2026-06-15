@@ -81,6 +81,57 @@ test('edit to an exact-file rail → deny', () => {
   assert.equal(runRails(t, 'src/types/api.d.ts').verdict, 'deny');
 });
 
+// ---- Bash branch: deny shell writes to a rail, allow reads/runs ----
+
+function runBash(ticketsJson, command, { env = {} } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, ...env } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    return out.includes('"permissionDecision":"deny"') ? 'deny' : 'allow';
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const RAIL_T = '{"tickets":[{"id":"T1","rails":["test/auth/**","src/types/api.d.ts"]}]}';
+
+for (const [name, cmd, exp] of [
+  ['redirect > rail', 'echo x > test/auth/login.test.mjs', 'deny'],
+  ['append >> rail', 'echo x >> test/auth/login.test.mjs', 'deny'],
+  ['sed -i rail', "sed -i 's/a/b/' test/auth/login.test.mjs", 'deny'],
+  ['tee rail', 'echo x | tee test/auth/login.test.mjs', 'deny'],
+  ['dd of= rail', 'dd if=/dev/null of=src/types/api.d.ts', 'deny'],
+  ['run a rail test (no write)', 'node test/auth/login.test.mjs', 'allow'],
+  ['cat a rail (read)', 'cat test/auth/login.test.mjs', 'allow'],
+  ['write a non-rail', 'echo x > src/app.mjs', 'allow'],
+]) {
+  test(`bash: ${name} → ${exp}`, () => {
+    assert.equal(runBash(RAIL_T, cmd), exp);
+  });
+}
+
+// ---- trust root: tickets.json is frozen once rails exist ----
+
+test('editing .adlc/tickets.json while rails exist → deny (trust root)', () => {
+  assert.equal(runRails(RAIL_T, '.adlc/tickets.json').verdict, 'deny');
+});
+
+test('bash redirect into .adlc/tickets.json while rails exist → deny', () => {
+  assert.equal(runBash(RAIL_T, 'echo "{}" > .adlc/tickets.json'), 'deny');
+});
+
+test('editing .adlc/tickets.json with NO rails declared → allow (authoring the first ticket)', () => {
+  assert.equal(runRails('{"tickets":[]}', '.adlc/tickets.json').verdict, 'allow');
+});
+
 // ---- canonicalization: non-canonical spellings must not dodge a rail ----
 
 for (const [name, raw] of [

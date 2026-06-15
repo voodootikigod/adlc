@@ -346,6 +346,41 @@ function toRepoRelative(fp) {
   return relative(process.cwd(), abs).split('\\').join('/');
 }
 
+function escapeRegExp(s) {
+  return s.replace(/[.+?^${}()|[\]\\*]/g, '\\$&');
+}
+
+/** The literal path prefix of a rail glob (everything before the first wildcard). */
+function railLiteral(glob) {
+  const i = glob.indexOf('*');
+  const lit = i === -1 ? glob : glob.slice(0, i);
+  return lit.length >= 2 ? lit : null; // too short → skip (avoid noise)
+}
+
+/**
+ * Best-effort detection of a shell command that WRITES to a rail path. Targets
+ * the common, unobfuscated write forms (redirect, tee, sed -i, dd of=, truncate)
+ * where the rail literal is the write target — so running or reading a rail
+ * (`node test/x`, `cat test/x`) is NOT flagged. This is intentionally a
+ * first-line guard, not a complete sandbox: an obfuscated shell write can still
+ * evade it, which is why the rails-guard CI diff gate is the unbypassable
+ * commit-time backstop (see the ADLC harness-primitive map: PreToolUse hook +
+ * branch protection in CI).
+ */
+function commandWritesRail(cmd, glob) {
+  const lit = railLiteral(glob);
+  if (!lit || !cmd.includes(lit)) return false;
+  const L = escapeRegExp(lit);
+  const patterns = [
+    new RegExp(`>>?\\s*['"\`]?${L}`), // > rail  /  >> rail
+    new RegExp(`\\btee\\s+(?:-\\S+\\s+)*['"\`]?${L}`),
+    new RegExp(`\\bdd\\b[^\\n]*\\bof=['"\`]?${L}`),
+    new RegExp(`\\bsed\\b[^|\\n]*-i[^|\\n]*${L}`),
+    new RegExp(`\\btruncate\\b[^\\n]*${L}`),
+  ];
+  return patterns.some((re) => re.test(cmd));
+}
+
 /** Emit a PreToolUse deny with a clear reason. */
 function denyRail(reason) {
   emit({
@@ -374,30 +409,36 @@ function recordBypass(relPath, why) {
   return !!r && r.status === 0;
 }
 
-// PreToolUse (Edit/Write/MultiEdit) — the ONE enforcement hook: block edits to
-// frozen rail paths. Asymmetric fail-closed contract (integration plan §4.4):
+// PreToolUse (Edit/Write/MultiEdit/Bash) — the ONE enforcement hook: block
+// mutations of frozen rail paths. Asymmetric fail-closed contract (plan §4.4):
 //   • no .adlc / no tickets file / no rails declared anywhere → ALLOW (no-op),
 //     so installing into a repo that declares no rails can never brick editing;
-//   • target path matches a declared rail glob → DENY;
-//   • tickets file present but unparseable → rails cannot be ruled out → DENY
-//     (fail closed — a broken gate must not silently admit rail edits);
+//   • a structured edit (Edit/Write/MultiEdit) to a rail path → DENY;
+//   • a Bash command that writes a rail path (redirect/tee/sed -i/dd/truncate)
+//     → DENY (best-effort; the rails-guard CI diff gate is the unbypassable
+//     backstop for obfuscated shell writes);
+//   • once any rail exists, `.adlc/tickets.json` is itself an implicit rail —
+//     the trust root can't be edited away to disable enforcement;
+//   • unparseable / schema-invalid tickets → rails can't be ruled out → DENY;
 //   • ADLC_RAILS_BYPASS=1 → ALLOW, but ONLY if the override is durably recorded
 //     to the manifest; an un-auditable bypass is refused (deny).
 function rails(input) {
-  const fp = targetFilePath(input);
-  if (!fp) return; // no file target → nothing to gate
   if (!existsSync('.adlc')) return; // not an ADLC repo
   const ticketsPath = join('.adlc', 'tickets.json');
   if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
 
+  const fp = targetFilePath(input);
+  const cmd = typeof input.tool_input?.command === 'string' ? input.tool_input.command : null;
+  if (!fp && !cmd) return; // nothing to gate
+
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
-  const rel = toRepoRelative(fp);
+  const subject = fp ? toRepoRelative(fp) : '(bash command)';
 
   // A bypass is only honored if it can be AUDITED. If recording fails (adlc
   // missing, .adlc unwritable, record errors), an unaudited override is refused.
   const bypassOrDeny = (tag, denyReason) => {
     if (bypass) {
-      if (recordBypass(rel, tag)) return; // audited override → allow
+      if (recordBypass(subject, tag)) return; // audited override → allow
       return denyRail(
         `ADLC_RAILS_BYPASS is set but the override could not be recorded to the gate-manifest ` +
           `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
@@ -462,12 +503,30 @@ function rails(input) {
   }
   if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
 
-  const hit = railDecls.find((r) => globMatch(r.glob, rel));
+  // The rail config is its own trust root: once rails exist, editing
+  // .adlc/tickets.json to remove them would silently disable enforcement, so
+  // freeze it too (audited bypass still allowed for deliberate changes).
+  railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
+
+  // Bash branch: deny a command that writes to a rail path.
+  if (cmd) {
+    const hit = railDecls.find((r) => commandWritesRail(cmd, r.glob));
+    if (!hit) return; // no rail write detected → allow
+    return bypassOrDeny(
+      `bash-write ${hit.glob} (ticket ${hit.ticket})`,
+      `this shell command appears to write the frozen rail "${hit.glob}" (ticket ${hit.ticket}). ` +
+        `Mutating frozen rails is blocked during build. To override deliberately, set ` +
+        `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
+    );
+  }
+
+  // Structured-edit branch (Edit/Write/MultiEdit).
+  const hit = railDecls.find((r) => globMatch(r.glob, subject));
   if (!hit) return; // not a rail → allow
 
   return bypassOrDeny(
     `rail ${hit.glob} (ticket ${hit.ticket})`,
-    `${rel} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
+    `${subject} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
       `Edits to frozen rails are blocked during build. To override deliberately, set ` +
       `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
   );

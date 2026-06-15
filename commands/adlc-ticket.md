@@ -94,6 +94,13 @@ Run this exact protocol:
    clobber) and report the failure rather than leaving a corrupt contract.
 7. **Release the lock** (`rmdir .adlc/tickets.lock`).
 
+Trust-root note: once any ticket declares `rails`, the plugin's PreToolUse rail
+hook freezes `.adlc/tickets.json` itself (it is the rail trust root, so it can't
+be edited to disable enforcement). If a prior ticket already declares rails, the
+write in step 5 will be denied — run this command with `ADLC_RAILS_BYPASS=1` set,
+which allows the edit and records the change to the gate-manifest. Editing the
+ticket set while rails are frozen is a deliberate, audited action.
+
 Add `.adlc/tickets.lock` to the evidence-ignore set if it is not already covered.
 
 ## 3. Check executability (coldstart gate)
