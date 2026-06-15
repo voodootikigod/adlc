@@ -40,39 +40,22 @@ const MODE = process.argv[2];
 // hook into a repeated full-history reparse.
 const MAX_SCAN_BYTES = 256 * 1024;
 
-// Hard ceiling on the hook payload we will buffer. The payload is a single JSON
-// object that must be read whole (truncation makes it unparseable), so we cannot
-// byte-cap mid-stream; instead we bound total allocation and treat anything over
-// the ceiling as a no-op. Any realistic Claude hook payload is far below this.
-const MAX_STDIN_BYTES = 16 * 1024 * 1024;
-
 /**
- * Read the full hook payload from stdin (fd 0), bounded to MAX_STDIN_BYTES.
- * Returns '' (→ no-op) if the payload exceeds the ceiling, so a pathological
- * oversized payload can never cause unbounded allocation. Never throws.
+ * Read the hook payload from stdin (fd 0). The payload is a single JSON object
+ * and must be read whole — byte-capping truncates it unparseable. `readFileSync`
+ * is the right primitive: it reads to EOF without busy-spinning, and on a
+ * nonblocking-fd EAGAIN it throws once (caught here → no-op) rather than looping.
+ * Manual chunked reads were tried and rejected: a mid-stream byte cap regressed
+ * JSON parsing, and an EAGAIN retry loop could spin. The payload is the user's
+ * own session data (not an untrusted-size input); the bounding that matters —
+ * the transcript scan — is handled by MAX_SCAN_BYTES. Never throws.
  */
 function readStdin() {
-  const chunks = [];
-  const buf = Buffer.alloc(65536);
-  let total = 0;
   try {
-    for (;;) {
-      let n = 0;
-      try {
-        n = readSync(0, buf, 0, buf.length, null);
-      } catch (e) {
-        if (e.code === 'EAGAIN') continue; // not ready yet
-        break; // EOF or read error → use what we have
-      }
-      if (n === 0) break; // EOF
-      total += n;
-      if (total > MAX_STDIN_BYTES) return ''; // oversized → bounded no-op
-      chunks.push(Buffer.from(buf.subarray(0, n)));
-    }
+    return readFileSync(0, 'utf8');
   } catch {
-    /* fall through with whatever was read */
+    return '';
   }
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 /** Print one advisory JSON object. Caller then exits 0. */
