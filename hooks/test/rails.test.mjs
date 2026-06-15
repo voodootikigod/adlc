@@ -125,6 +125,20 @@ for (const [name, cmd, exp] of [
   });
 }
 
+// ---- quoted rail paths containing spaces ----
+
+const SPACE_T = '{"tickets":[{"id":"T1","rails":["docs/frozen file.md"]}]}';
+for (const [name, cmd, exp] of [
+  ['redirect to quoted spaced rail', 'echo x > "docs/frozen file.md"', 'deny'],
+  ['sed -i quoted spaced rail', "sed -i 's/a/b/' 'docs/frozen file.md'", 'deny'],
+  ['tee quoted spaced rail', 'echo x | tee "docs/frozen file.md"', 'deny'],
+  ['read quoted spaced rail', 'cat "docs/frozen file.md"', 'allow'],
+]) {
+  test(`bash (spaces): ${name} → ${exp}`, () => {
+    assert.equal(runBash(SPACE_T, cmd), exp);
+  });
+}
+
 // ---- trust root: tickets.json is frozen once rails exist ----
 
 test('editing .adlc/tickets.json while rails exist → deny (trust root)', () => {

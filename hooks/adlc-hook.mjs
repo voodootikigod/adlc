@@ -346,47 +346,56 @@ function toRepoRelative(fp) {
   return relative(process.cwd(), abs).split('\\').join('/');
 }
 
-function stripQuotes(s) {
-  return s.replace(/^['"]/, '').replace(/['"]$/, '');
+// One quoted ('…' or "…", spaces allowed) or bare path operand.
+const OPERAND = `(?:"([^"]*)"|'([^']*)'|([^\\s'"|;&<>]+))`;
+const pickOperand = (m) => m[1] ?? m[2] ?? m[3];
+
+/** Quote-aware tokenizer: a quoted run (incl. spaces) is one token, quotes stripped. */
+function shellTokens(s) {
+  const toks = [];
+  const re = new RegExp(OPERAND, 'g');
+  let m;
+  while ((m = re.exec(s))) toks.push(pickOperand(m));
+  return toks;
 }
 
 /**
  * Extract the path operands a shell command WRITES to, in the common,
- * unobfuscated forms: redirection (`>`/`>>`, incl. `./` and absolute targets),
- * `tee`, `dd of=`, `sed -i`, `truncate`. Reads/runs (`cat`, `node`) yield no
- * targets. Targets are returned verbatim; the caller canonicalizes them through
- * the SAME repo-relative matcher used for structured edits, so a `./` prefix or
- * absolute spelling cannot dodge a rail. Intentionally a first-line guard, not a
- * sandbox — obfuscated writes still need the rails-guard CI diff gate (the ADLC
- * harness map pairs the PreToolUse hook WITH branch protection in CI).
+ * unobfuscated forms: redirection (`>`/`>>`, incl. `./`, absolute, and quoted
+ * targets with spaces), `tee`, `dd of=`, `sed -i`, `truncate`. Reads/runs
+ * (`cat`, `node`) yield no targets. Targets are returned verbatim; the caller
+ * canonicalizes them through the SAME repo-relative matcher used for structured
+ * edits, so a `./` prefix, absolute, or quoted spelling cannot dodge a rail.
+ * Intentionally a first-line guard, not a sandbox — obfuscated writes still need
+ * the rails-guard CI diff gate (the ADLC harness map pairs the PreToolUse hook
+ * WITH branch protection in CI).
  */
 function bashWriteTargets(cmd) {
   const targets = new Set();
-  const PATHTOK = "([^\\s'\"|;&<>]+)"; // a bare path operand
 
-  // Redirections: optional fd, > or >>, optional opening quote, then the path.
-  for (const m of cmd.matchAll(new RegExp(`\\d*>>?\\s*['"]?${PATHTOK}`, 'g'))) targets.add(m[1]);
+  // Redirections: optional fd, > or >>, then a (quoted or bare) path.
+  for (const m of cmd.matchAll(new RegExp(`\\d*>>?\\s*${OPERAND}`, 'g'))) targets.add(pickOperand(m));
   // dd of=PATH
-  for (const m of cmd.matchAll(new RegExp(`\\bof=['"]?${PATHTOK}`, 'g'))) targets.add(m[1]);
+  for (const m of cmd.matchAll(new RegExp(`\\bof=${OPERAND}`, 'g'))) targets.add(pickOperand(m));
 
-  // Command-position writers: scan each pipeline/sequence segment.
+  // Command-position writers: scan each pipeline/sequence segment, quote-aware.
   for (const seg of cmd.split(/\||;|&&|\n/)) {
-    const toks = seg.trim().split(/\s+/).filter(Boolean);
+    const toks = shellTokens(seg);
     if (toks.length === 0) continue;
     const c0 = toks[0];
     if (c0 === 'tee') {
-      for (const t of toks.slice(1)) if (!t.startsWith('-')) targets.add(stripQuotes(t));
+      for (const t of toks.slice(1)) if (!t.startsWith('-')) targets.add(t);
     } else if (c0 === 'truncate') {
       for (let i = 1; i < toks.length; i++) {
         if (toks[i] === '-s') { i++; continue; }
-        if (!toks[i].startsWith('-')) targets.add(stripQuotes(toks[i]));
+        if (!toks[i].startsWith('-')) targets.add(toks[i]);
       }
     } else if (c0 === 'sed') {
       const inPlace = toks.some((t) => /^--in-place/.test(t) || /^-[a-zA-Z]*i/.test(t));
       if (inPlace) {
         // non-flag operands: the first is the script, the rest are files.
         const operands = toks.slice(1).filter((t) => !t.startsWith('-'));
-        for (const t of operands.slice(1)) targets.add(stripQuotes(t));
+        for (const t of operands.slice(1)) targets.add(t);
       }
     }
   }
