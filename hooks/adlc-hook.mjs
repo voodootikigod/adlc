@@ -346,39 +346,61 @@ function toRepoRelative(fp) {
   return relative(process.cwd(), abs).split('\\').join('/');
 }
 
-function escapeRegExp(s) {
-  return s.replace(/[.+?^${}()|[\]\\*]/g, '\\$&');
-}
-
-/** The literal path prefix of a rail glob (everything before the first wildcard). */
-function railLiteral(glob) {
-  const i = glob.indexOf('*');
-  const lit = i === -1 ? glob : glob.slice(0, i);
-  return lit.length >= 2 ? lit : null; // too short → skip (avoid noise)
+function stripQuotes(s) {
+  return s.replace(/^['"]/, '').replace(/['"]$/, '');
 }
 
 /**
- * Best-effort detection of a shell command that WRITES to a rail path. Targets
- * the common, unobfuscated write forms (redirect, tee, sed -i, dd of=, truncate)
- * where the rail literal is the write target — so running or reading a rail
- * (`node test/x`, `cat test/x`) is NOT flagged. This is intentionally a
- * first-line guard, not a complete sandbox: an obfuscated shell write can still
- * evade it, which is why the rails-guard CI diff gate is the unbypassable
- * commit-time backstop (see the ADLC harness-primitive map: PreToolUse hook +
- * branch protection in CI).
+ * Extract the path operands a shell command WRITES to, in the common,
+ * unobfuscated forms: redirection (`>`/`>>`, incl. `./` and absolute targets),
+ * `tee`, `dd of=`, `sed -i`, `truncate`. Reads/runs (`cat`, `node`) yield no
+ * targets. Targets are returned verbatim; the caller canonicalizes them through
+ * the SAME repo-relative matcher used for structured edits, so a `./` prefix or
+ * absolute spelling cannot dodge a rail. Intentionally a first-line guard, not a
+ * sandbox — obfuscated writes still need the rails-guard CI diff gate (the ADLC
+ * harness map pairs the PreToolUse hook WITH branch protection in CI).
  */
-function commandWritesRail(cmd, glob) {
-  const lit = railLiteral(glob);
-  if (!lit || !cmd.includes(lit)) return false;
-  const L = escapeRegExp(lit);
-  const patterns = [
-    new RegExp(`>>?\\s*['"\`]?${L}`), // > rail  /  >> rail
-    new RegExp(`\\btee\\s+(?:-\\S+\\s+)*['"\`]?${L}`),
-    new RegExp(`\\bdd\\b[^\\n]*\\bof=['"\`]?${L}`),
-    new RegExp(`\\bsed\\b[^|\\n]*-i[^|\\n]*${L}`),
-    new RegExp(`\\btruncate\\b[^\\n]*${L}`),
-  ];
-  return patterns.some((re) => re.test(cmd));
+function bashWriteTargets(cmd) {
+  const targets = new Set();
+  const PATHTOK = "([^\\s'\"|;&<>]+)"; // a bare path operand
+
+  // Redirections: optional fd, > or >>, optional opening quote, then the path.
+  for (const m of cmd.matchAll(new RegExp(`\\d*>>?\\s*['"]?${PATHTOK}`, 'g'))) targets.add(m[1]);
+  // dd of=PATH
+  for (const m of cmd.matchAll(new RegExp(`\\bof=['"]?${PATHTOK}`, 'g'))) targets.add(m[1]);
+
+  // Command-position writers: scan each pipeline/sequence segment.
+  for (const seg of cmd.split(/\||;|&&|\n/)) {
+    const toks = seg.trim().split(/\s+/).filter(Boolean);
+    if (toks.length === 0) continue;
+    const c0 = toks[0];
+    if (c0 === 'tee') {
+      for (const t of toks.slice(1)) if (!t.startsWith('-')) targets.add(stripQuotes(t));
+    } else if (c0 === 'truncate') {
+      for (let i = 1; i < toks.length; i++) {
+        if (toks[i] === '-s') { i++; continue; }
+        if (!toks[i].startsWith('-')) targets.add(stripQuotes(toks[i]));
+      }
+    } else if (c0 === 'sed') {
+      const inPlace = toks.some((t) => /^--in-place/.test(t) || /^-[a-zA-Z]*i/.test(t));
+      if (inPlace) {
+        // non-flag operands: the first is the script, the rest are files.
+        const operands = toks.slice(1).filter((t) => !t.startsWith('-'));
+        for (const t of operands.slice(1)) targets.add(stripQuotes(t));
+      }
+    }
+  }
+  return [...targets];
+}
+
+/** The first rail a Bash command writes to (canonicalized), or null. */
+function bashRailHit(cmd, railDecls) {
+  for (const tok of bashWriteTargets(cmd)) {
+    const rel = toRepoRelative(tok);
+    const hit = railDecls.find((r) => globMatch(r.glob, rel));
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** Emit a PreToolUse deny with a clear reason. */
@@ -510,7 +532,7 @@ function rails(input) {
 
   // Bash branch: deny a command that writes to a rail path.
   if (cmd) {
-    const hit = railDecls.find((r) => commandWritesRail(cmd, r.glob));
+    const hit = bashRailHit(cmd, railDecls);
     if (!hit) return; // no rail write detected → allow
     return bypassOrDeny(
       `bash-write ${hit.glob} (ticket ${hit.ticket})`,

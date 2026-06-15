@@ -88,7 +88,8 @@ function runBash(ticketsJson, command, { env = {} } = {}) {
   try {
     mkdirSync(join(dir, '.adlc'));
     writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
-    const input = JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command } });
+    const cmd = command.replace(/%DIR%/g, dir); // %DIR% → the temp project root
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command: cmd } });
     let out = '';
     try {
       out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, ...env } });
@@ -109,9 +110,15 @@ for (const [name, cmd, exp] of [
   ['sed -i rail', "sed -i 's/a/b/' test/auth/login.test.mjs", 'deny'],
   ['tee rail', 'echo x | tee test/auth/login.test.mjs', 'deny'],
   ['dd of= rail', 'dd if=/dev/null of=src/types/api.d.ts', 'deny'],
+  ['truncate rail', 'truncate -s 0 test/auth/login.test.mjs', 'deny'],
+  ['redirect to ./rail', 'echo x > ./test/auth/login.test.mjs', 'deny'],
+  ['redirect to absolute rail', 'echo x > %DIR%/test/auth/login.test.mjs', 'deny'],
+  ['redirect to quoted rail', 'echo x > "test/auth/login.test.mjs"', 'deny'],
+  ['sed -i ./rail', "sed -i 's/a/b/' ./test/auth/login.test.mjs", 'deny'],
   ['run a rail test (no write)', 'node test/auth/login.test.mjs', 'allow'],
   ['cat a rail (read)', 'cat test/auth/login.test.mjs', 'allow'],
   ['write a non-rail', 'echo x > src/app.mjs', 'allow'],
+  ['grep a rail (read, no write)', 'grep foo test/auth/login.test.mjs', 'allow'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);
