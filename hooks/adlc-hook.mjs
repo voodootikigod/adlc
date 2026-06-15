@@ -40,7 +40,13 @@ const MODE = process.argv[2];
 // hook into a repeated full-history reparse.
 const MAX_SCAN_BYTES = 256 * 1024;
 
-/** Read the entire hook payload from stdin (fd 0). Never throws. */
+/**
+ * Read the hook payload from stdin (fd 0). The payload is a single JSON object,
+ * so it must be read in full — a byte-capped read would truncate the JSON and
+ * make it unparseable. This is the user's own session payload (not an untrusted-
+ * size network input), and the heavy bounding that matters — the transcript
+ * scan — is handled separately by MAX_SCAN_BYTES. Never throws.
+ */
 function readStdin() {
   try {
     return readFileSync(0, 'utf8');
