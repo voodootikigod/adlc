@@ -33,8 +33,12 @@ A ticket must be **executable without guesswork** (that is exactly what
 - **rails** — array of frozen paths that must NOT change during the build (e.g.
   `["test/auth/**"]`). Declaring rails here is what later lets the rail-guard
   gate block edits to them. Default to `[]` if none.
-- **edges** — dependencies on other tickets, each `{ "to": "T2", "contract":
-  "src/types/auth.d.ts" }`. Default `[]`.
+- **edges** — ordering constraints, each `{ "to": "T2", "contract":
+  "src/types/auth.d.ts" }`. Direction is **prerequisite → dependent**: an edge
+  `{ "to": "T2" }` on this ticket means **this ticket must complete before T2**
+  (T2 depends on this one), per the ticket DAG's topological-sort contract. If
+  instead *this* ticket depends on an existing ticket T0, add the edge on **T0**
+  (`{ "to": "<this id>" }`), not here. Default `[]`.
 - **duration** — relative build-time estimate, positive number (default `1`).
 - **category** — free-form routing hint (e.g. `feature`, `bugfix`, `refactor`).
 - **budget** — optional token budget (omit if unknown).
