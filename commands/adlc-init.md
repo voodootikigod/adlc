@@ -46,6 +46,7 @@ it ignores the evidence but NOT the tickets — add these lines if absent:
 ```
 .adlc/*.jsonl
 .adlc/lessons/
+.adlc/tickets.lock/
 ```
 
 Do not add a blanket `.adlc/` ignore — that would also ignore `tickets.json`. If
