@@ -118,10 +118,29 @@ to Claude Code hook semantics:
 - `exit 0` → allow / pass (and for advisory hooks, optionally surface a note).
 - `exit 2` (gate fail) → for `rails-guard` PreToolUse, **deny** the Edit/Write
   with the gate message; for advisory hooks, surface a warning but allow.
-- `exit 1` (op error) → never block the user on a tooling error; log and allow.
+- `exit 1` (op error) → posture is **asymmetric by hook role**, not uniform:
+  - *Advisory hooks* (preflight, flail-detector, gate-manifest): log and allow
+    — a broken advisory tool must never block the user.
+  - *Enforcement hook* (`rails-guard` PreToolUse): the response depends on
+    whether rails are in scope for this edit. **If the ticket declares no `rails`
+    paths**, op-error allows (the hook is a no-op anyway, so a broken binary
+    cannot brick a clean repo). **If rails are declared and the guard cannot
+    produce a trustworthy decision** (missing `adlc` binary, malformed or
+    unreadable `.adlc/tickets.json`, parser/shim failure), the hook **fails
+    closed: deny the edit** with a diagnostic naming the exact cause. A blocking
+    gate that fails open on a broken dependency is not a gate — F5 would simply
+    break the dependency to route around it.
 
-Rail enforcement is the one blocking hook, and it is a no-op until a ticket
-declares `rails` paths — so installing the plugin cannot brick a working repo.
+Recovery from a fail-closed state is an *explicit, auditable* override, never a
+silent allow: an `ADLC_RAILS_BYPASS=1` environment escape hatch (logged to the
+gate-manifest as a recorded bypass) lets a user proceed when the tooling itself
+is broken, so the override leaves evidence rather than a hole.
+
+Rail enforcement is the one blocking hook. When **no rails are declared** it is a
+pure no-op regardless of tool health — so installing the plugin into a repo that
+declares no rails cannot brick editing. The fail-closed behavior activates only
+once a ticket opts in by declaring `rails` paths, which is exactly the moment the
+user has asked for those paths to be unbypassable.
 
 ## 5. Completeness over the ADLC
 
@@ -169,11 +188,25 @@ Phase-by-phase coverage of the integrated surface:
    thin shim must adapt the transcript into the shape flail-detector expects.
    Until that shim exists, flail supervision is not wired.
 
-4. **Blocking hooks are a footgun.** A misconfigured `rails-guard` PreToolUse
-   that fails open is useless; one that fails closed on op-error bricks editing.
-   The contract in §4.4 (op-error always allows, gate-fail blocks only declared
-   rails) is the mitigation, but it must be tested against a dirty tree, a
-   missing binary, and a malformed ticket before shipping.
+4. **Blocking hooks are a footgun — resolved by an asymmetric contract.** A
+   `rails-guard` PreToolUse that fails *open* on op-error is no gate at all (F5
+   breaks the binary to route around it); one that fails *closed* unconditionally
+   bricks editing in any repo with a broken or uninstalled tool. §4.4 resolves
+   this asymmetrically: with **no rails declared** the hook is a no-op and
+   op-errors allow (clean repos can't be bricked); with **rails declared** an
+   untrustworthy decision **fails closed**, with an audited `ADLC_RAILS_BYPASS=1`
+   override that records the bypass to the gate-manifest. This must ship with
+   explicit acceptance tests:
+   - missing `adlc` binary + **no** rails declared → edit allowed (no-op);
+   - missing `adlc` binary + rails declared → edit **denied**, diagnostic names
+     the missing binary;
+   - malformed `.adlc/tickets.json` + rails referenced → edit **denied**;
+   - unreadable/permission-denied ticket file + rails referenced → edit
+     **denied**;
+   - a declared-rails edit with a healthy guard → genuine gate decision (allow
+     non-rail path, deny rail path);
+   - `ADLC_RAILS_BYPASS=1` on a fail-closed state → edit allowed **and** a bypass
+     entry appears in the gate-manifest.
 
 5. **Human gates (P6) cannot be automated** by definition. The plan surfaces
    evidence (`/adlc-status`, gate-manifest) but the integration is a *prompt to
