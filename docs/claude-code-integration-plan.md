@@ -1,0 +1,225 @@
+# Plan: Installing & Integrating ADLC into Claude Code
+
+**Status:** Proposal · **Branch:** `feat/claude-code-integration` · **Date:** 2026-06-14
+
+## 1. Problem
+
+Today ADLC ships as 20 independent `@adlc/*` npm CLIs. They are composable and
+gate-shaped, but to *use* the lifecycle a person must:
+
+1. Know which tool maps to which lifecycle phase (P0–P7, D1–D3).
+2. Install or `npx` each tool individually.
+3. Remember to run the right gate at the right moment, by hand.
+4. Wire exit codes into their own workflow, and (for LLM-backed tools) supply
+   API keys.
+
+That is a toolbox, not a lifecycle. The thesis's own claim is that enforcement
+must live **at the tool layer, not the prompt layer** ("F5 routes around
+instructions; it cannot route around a hook"). A pile of CLIs a human must
+remember to invoke is exactly the prompt-layer dependence ADLC argues against.
+
+**Goal:** one-step install that makes the *whole* ADLC embraceable from inside
+Claude Code, with gates firing automatically at the correct lifecycle moments.
+
+## 2. Design thesis: ship Appendix F as a plugin
+
+ADLC.md Appendix F ("Harness Primitive Map") already maps each lifecycle organ
+to a Claude Code primitive. This plan is the implementation of that table. We do
+not invent new structure — we bind existing CLIs to the primitives the thesis
+already nominated.
+
+Two load-bearing decisions fall out of that mapping:
+
+- **The unit of distribution is a Claude Code plugin** (`.claude-plugin/`,
+  `commands/`, `agents/`, `skills/`, `hooks/`), delivered through a marketplace
+  manifest so install is `/plugin install`.
+- **Inside Claude Code, Claude is the model.** Every LLM-backed CLI already has
+  `--prompt-only`, which prints the exact prompt and exits 0. Skills run the
+  tool with `--prompt-only`, hand the prompt to the agent, and the agent
+  returns the judgment. **No external API keys are required to use the
+  lifecycle.** This is the single biggest reduction in install friction and is
+  only possible because the CLI contract guarantees `--prompt-only` everywhere.
+
+## 3. Primitive mapping (the heart of the plan)
+
+| Lifecycle organ (ADLC phase) | CLI(s) | Claude Code primitive | Default posture |
+|---|---|---|---|
+| Preflight (D2 Phase 0) | `preflight` | **SessionStart hook** | Advisory: warn, never block session |
+| Rail freeze (P3 / C5) | `rails-guard` | **PreToolUse hook** on `Edit`/`Write` | Block only paths declared `rails` in a ticket; no-op when none declared |
+| Flail supervision (P4 / C6) | `flail-detector` | **PostToolUse hook** reading the session transcript | Advisory: surface churn/repeat/scope warnings |
+| Spec interrogation (P1) | `spec-lint`, `premortem`, `parallax` | **Skills** + slash commands, run `--prompt-only` | Model-invoked |
+| Decomposition (P2) | `coldstart`, `model-router`, `merge-forecast` | **Skills** + slash commands | Model-invoked |
+| Hard-bug repair (P4 / C7) | `consensus-fix` | **Slash command** (explicit, expensive) | User-invoked |
+| Prosecution (P5) | `hollow-test`, `behavior-diff`, `review-calibration` | **Subagent** ("prosecutor") + skills | Invoked before merge |
+| Gate evidence (C11) | `gate-manifest` | **Stop / SubagentStop hook** appends manifest | Automatic side effect of finishing |
+| Distill (P7) | `lesson-foundry`, `rejection-mining` | **Scheduled (cron) loop** | Idle-time, budgeted |
+| Maintenance (C10/C12 + fuzzing) | `skill-rot`, `model-ratchet`, `gate-fuzzing` | **Scheduled (cron) loop** | Idle-time, budgeted |
+| Orchestration lane (D0) | the toolkit's own build pattern | **Workflow script** / `/adlc-run` orchestrator command | Opt-in |
+| Knowledge layer (P7) | the skills themselves | **Skills with progressive disclosure** | Always available, lazily loaded |
+
+## 4. What we build
+
+### 4.1 A dispatcher CLI — `@adlc/cli` (NEW package, prerequisite)
+
+Hooks and commands need a *stable, single* command to shell out to. Twenty
+separate bins, or `npx @adlc/<tool>` per call, give an unstable command surface
+(bad for prompt-cache stability — §6 of the thesis) and a slow/networked first
+run.
+
+Introduce one umbrella bin, `adlc`, that dispatches: `adlc spec-lint …`,
+`adlc rails-guard …`, etc. It depends on all 20 packages, so a single
+`npm i -g @adlc/cli` installs the whole suite, and every hook/command calls one
+stable prefix. This is the only new *code* artifact the plan strictly requires;
+everything else is plugin metadata, prompts, and docs.
+
+### 4.2 The plugin layout
+
+```
+.claude-plugin/
+  plugin.json            # manifest: name, version, description
+  marketplace.json       # so `/plugin marketplace add voodootikigod/adlc` works
+commands/
+  adlc-init.md           # bootstrap .adlc/, write tickets.json skeleton
+  adlc-ticket.md         # author/triage a ticket (P0 — fills the gap, see §5)
+  adlc-spec.md           # spec-lint + premortem + parallax over a spec
+  adlc-decompose.md      # coldstart + model-router + merge-forecast
+  adlc-prosecute.md      # invoke the prosecutor subagent
+  adlc-consensus-fix.md  # explicit hard-bug fan-out
+  adlc-run.md            # orchestrator: run a ticket through P1→P7
+  adlc-status.md         # show gate-manifest evidence + open tickets
+agents/
+  prosecutor.md          # P5 reviewer: hollow-test, behavior-diff, calibration
+skills/
+  adlc/SKILL.md          # meta-skill: phase-routing flowchart (discovery)
+  adlc-spec-shaping/
+  adlc-prosecution/
+  ... (one per phase cluster, progressive disclosure)
+hooks/
+  hooks.json             # SessionStart, PreToolUse, PostToolUse, Stop bindings
+  preflight.sh
+  rails-guard.sh
+  flail-detector.sh
+  gate-manifest.sh
+```
+
+### 4.3 The discovery skill
+
+Mirror the `using-agent-skills` meta-skill pattern already present in this
+environment: a single `adlc` skill whose body is a phase-routing flowchart
+("new spec? → adlc-spec-shaping; tests written, pre-merge? → adlc-prosecution;
+…"). This is how the model embraces the lifecycle *in total* without the user
+memorizing 20 tools.
+
+### 4.4 Hook contract
+
+All hooks call the dispatcher with `--json`, parse the exit code, and translate
+to Claude Code hook semantics:
+
+- `exit 0` → allow / pass (and for advisory hooks, optionally surface a note).
+- `exit 2` (gate fail) → for `rails-guard` PreToolUse, **deny** the Edit/Write
+  with the gate message; for advisory hooks, surface a warning but allow.
+- `exit 1` (op error) → never block the user on a tooling error; log and allow.
+
+Rail enforcement is the one blocking hook, and it is a no-op until a ticket
+declares `rails` paths — so installing the plugin cannot brick a working repo.
+
+## 5. Completeness over the ADLC
+
+Phase-by-phase coverage of the integrated surface:
+
+| Phase | Covered by | Status |
+|---|---|---|
+| P0 Triage | `/adlc-ticket` (NEW command) | **Gap filled by plan** |
+| P1 Interrogate | spec-lint, premortem, parallax | ✅ |
+| P2 Decompose | coldstart, model-router, merge-forecast | ✅ |
+| P3 Rail | rails-guard (PreToolUse hook) | ✅ |
+| P4 Build | flail-detector (hook), consensus-fix | ✅ |
+| P5 Prosecute | hollow-test, behavior-diff, review-calibration (subagent) | ✅ |
+| P6 Integrate | gate-manifest + behavior-diff evidence surfaced to the human | ⚠️ partial (human gate is inherently manual; we surface evidence, we don't automate the judgment) |
+| P7 Distill | lesson-foundry, rejection-mining (cron) | ✅ |
+| Maintenance | skill-rot, model-ratchet, gate-fuzzing (cron) | ✅ |
+| D1 cost | model-router | ✅ |
+| D2 time | merge-forecast, preflight, worktrees | ✅ |
+| D3 accuracy | parallax | ✅ |
+
+## 6. Identified gaps & risks
+
+1. **Ticket authoring is missing from the toolkit.** Every downstream tool
+   *reads* `.adlc/tickets.json` (coldstart, model-router, rails-guard,
+   merge-forecast) but **nothing creates it.** Without an authoring step the
+   integrated lifecycle has no entry point. The plan fills this with
+   `/adlc-init` (skeleton) and `/adlc-ticket` (P0 triage), but note these are
+   *new* surface, not a binding of an existing CLI — they are the plan's
+   largest net-new responsibility.
+
+2. **CLI delivery vs. plugins not running `npm install`.** Claude Code plugins
+   do not run a package install step. Hooks must therefore reach a resolvable
+   `adlc` binary. Three options, with the recommendation:
+   - (a) Documented prerequisite `npm i -g @adlc/cli` — **recommended**: one
+     command, stable, offline after first install.
+   - (b) `npx @adlc/cli` per call — zero prerequisite but networked + slow on
+     first call in each session; fragile in air-gapped/CI.
+   - (c) Vendor the (zero-dep) CLIs inside the plugin and call them via
+     `${CLAUDE_PLUGIN_ROOT}` — no prerequisite, but duplicates the suite and
+     decouples plugin version from npm version.
+   This is an unresolved tradeoff the plan surfaces rather than hides.
+
+3. **`flail-detector` needs a session log; hooks see a transcript path.** The
+   tool reads a log file; Claude Code exposes the transcript path to hooks. A
+   thin shim must adapt the transcript into the shape flail-detector expects.
+   Until that shim exists, flail supervision is not wired.
+
+4. **Blocking hooks are a footgun.** A misconfigured `rails-guard` PreToolUse
+   that fails open is useless; one that fails closed on op-error bricks editing.
+   The contract in §4.4 (op-error always allows, gate-fail blocks only declared
+   rails) is the mitigation, but it must be tested against a dirty tree, a
+   missing binary, and a malformed ticket before shipping.
+
+5. **Human gates (P6) cannot be automated** by definition. The plan surfaces
+   evidence (`/adlc-status`, gate-manifest) but the integration is a *prompt to
+   the human*, not a gate the agent passes. This is correct per the thesis but
+   means "embrace the ADLC in total" has a deliberate manual seam.
+
+6. **Cron/scheduled loops require the user's harness to support them** and to
+   budget tokens. If the user's Claude Code lacks scheduling, P7/maintenance
+   degrades to manual commands. The plan should ship both a cron binding *and*
+   `/adlc-distill` / `/adlc-maintain` manual fallbacks.
+
+## 7. Install & use evaluation
+
+**Best-case install (recommended path):**
+
+```sh
+npm i -g @adlc/cli                          # one prerequisite, offline after
+/plugin marketplace add voodootikigod/adlc  # register
+/plugin install adlc@adlc                   # install plugin
+/adlc-init                                   # bootstrap .adlc/ in the repo
+```
+
+Four steps, no API keys (prompt-only ⇒ Claude is the model), no per-tool
+knowledge required (the discovery skill routes). After this, gates fire
+automatically: preflight on session start, rail-guard on edits, gate-manifest on
+stop, and the model reaches for spec/prosecution skills at the right phases.
+
+**Simplicity score:** strong. The friction collapses from "know + install +
+sequence 20 tools + supply keys" to "install once, init once."
+
+**Completeness score:** strong on P1–P5, P7, and the three dials; partial on P0
+(filled by new commands, not existing CLIs) and P6 (inherently human).
+
+## 8. Phased delivery
+
+1. **Phase A — dispatcher.** Ship `@adlc/cli` umbrella bin. Unblocks every hook
+   and command with a stable prefix. (Only net-new code.)
+2. **Phase B — plugin skeleton + discovery skill + `/adlc-init`/`/adlc-ticket`.**
+   Makes the lifecycle reachable and gives it an entry point.
+3. **Phase C — advisory hooks** (SessionStart preflight, PostToolUse flail,
+   Stop gate-manifest). Safe, non-blocking; proves the wiring.
+4. **Phase D — blocking rail-guard hook** + prosecutor subagent. The
+   enforcement teeth, shipped only after the advisory hooks prove stable.
+5. **Phase E — scheduled maintenance** (lesson-foundry, skill-rot,
+   model-ratchet) with manual `/adlc-*` fallbacks.
+6. **Phase F — marketplace publish** + docs.
+
+Each phase is independently shippable and independently useful, matching the
+toolkit's own "every tool is one gate" philosophy.
