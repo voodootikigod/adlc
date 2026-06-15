@@ -197,6 +197,12 @@ function flail(input) {
   if (!res || res.verdict !== 'flail') return;
 
   const summary = (res.signals ?? []).map((s) => s.type).join(', ');
+  // Dedupe on the FULL signal payload (paths, error signatures, counts), not just
+  // the type names — otherwise churn on file A then file B (both `edit-churn`)
+  // would be silently suppressed. Different evidence => different hash => surfaced.
+  const payloadHash = createHash('sha1')
+    .update(JSON.stringify(res.signals ?? []))
+    .digest('hex');
   // Dedupe state lives in the OS temp dir, NOT the worktree — keyed by the
   // (per-session) transcript path. This keeps the advisory hook from ever
   // creating repo-local files, so it cannot dirty the tree regardless of the
@@ -209,9 +215,9 @@ function flail(input) {
   } catch {
     /* no prior state */
   }
-  if (prev.trim() === summary.trim()) return; // already reported this signal set
+  if (prev.trim() === payloadHash) return; // already reported this exact evidence
   try {
-    writeFileSync(stateFile, summary);
+    writeFileSync(stateFile, payloadHash);
   } catch {
     /* state is best-effort; still surface the advisory */
   }
