@@ -35,7 +35,9 @@ function runRails(ticketsJson, relPath, { env = {}, keepDir = false, rawFilePath
     const input = JSON.stringify({ cwd: dir, tool_input: { file_path: filePath } });
     let out = '';
     try {
-      out = execFileSync('node', [HOOK, 'rails'], {
+      // Use the absolute node path so the child always launches, even when a
+      // test overrides PATH to control whether `adlc` is reachable.
+      out = execFileSync(process.execPath, [HOOK, 'rails'], {
         input,
         encoding: 'utf8',
         env: { ...process.env, ...env },
@@ -113,17 +115,27 @@ for (const [name, json] of [
   });
 }
 
-// ---- audited bypass ----
+// ---- audited bypass: allowed ONLY when the override can be durably recorded ----
 
-test('ADLC_RAILS_BYPASS=1 on a rail → allow and record a manifest bypass', () => {
+const NODE_DIR = dirname(process.execPath);
+const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '.bin');
+const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // recorder reachable
+const WITHOUT_ADLC = NODE_DIR; // node only — `adlc` not resolvable
+
+test('bypass on a rail WITH a working recorder → allow + audited entry', () => {
   const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
-  const r = runRails(t, 'test/x.mjs', { env: { ADLC_RAILS_BYPASS: '1' } });
+  const r = runRails(t, 'test/x.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: WITH_ADLC } });
   assert.equal(r.verdict, 'allow');
-  // Recording requires `adlc` on PATH; assert it audited when available.
-  if (r.manifest) assert.match(r.manifest, /rails-bypass/);
+  assert.match(r.manifest, /rails-bypass/);
 });
 
-test('ADLC_RAILS_BYPASS=1 on schema-invalid tickets → allow (override)', () => {
-  const r = runRails('[]', 'src/app.mjs', { env: { ADLC_RAILS_BYPASS: '1' } });
+test('bypass on schema-invalid tickets WITH recorder → allow (audited)', () => {
+  const r = runRails('[]', 'src/app.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: WITH_ADLC } });
   assert.equal(r.verdict, 'allow');
+});
+
+test('bypass with the recorder UNAVAILABLE → deny (an unaudited override is refused)', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
+  const r = runRails(t, 'test/x.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: WITHOUT_ADLC } });
+  assert.equal(r.verdict, 'deny');
 });

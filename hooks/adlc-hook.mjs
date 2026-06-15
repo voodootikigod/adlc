@@ -358,15 +358,20 @@ function denyRail(reason) {
   });
 }
 
-/** Best-effort audit of an ADLC_RAILS_BYPASS override to the gate-manifest. */
+/**
+ * Audit an ADLC_RAILS_BYPASS override to the gate-manifest. Returns true ONLY if
+ * the record was durably written (adlc present and `gate-manifest record` exited
+ * 0). A bypass without a successful audit is not a valid override.
+ */
 function recordBypass(relPath, why) {
-  runAdlc([
+  const r = runAdlc([
     'gate-manifest',
     'record',
     'rails-bypass',
     '--data',
     JSON.stringify({ path: relPath, reason: why }),
   ]);
+  return !!r && r.status === 0;
 }
 
 // PreToolUse (Edit/Write/MultiEdit) — the ONE enforcement hook: block edits to
@@ -376,7 +381,8 @@ function recordBypass(relPath, why) {
 //   • target path matches a declared rail glob → DENY;
 //   • tickets file present but unparseable → rails cannot be ruled out → DENY
 //     (fail closed — a broken gate must not silently admit rail edits);
-//   • ADLC_RAILS_BYPASS=1 → ALLOW, but record an audited bypass to the manifest.
+//   • ADLC_RAILS_BYPASS=1 → ALLOW, but ONLY if the override is durably recorded
+//     to the manifest; an un-auditable bypass is refused (deny).
 function rails(input) {
   const fp = targetFilePath(input);
   if (!fp) return; // no file target → nothing to gate
@@ -387,19 +393,28 @@ function rails(input) {
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
   const rel = toRepoRelative(fp);
 
+  // A bypass is only honored if it can be AUDITED. If recording fails (adlc
+  // missing, .adlc unwritable, record errors), an unaudited override is refused.
+  const bypassOrDeny = (tag, denyReason) => {
+    if (bypass) {
+      if (recordBypass(rel, tag)) return; // audited override → allow
+      return denyRail(
+        `ADLC_RAILS_BYPASS is set but the override could not be recorded to the gate-manifest ` +
+          `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
+      );
+    }
+    return denyRail(denyReason);
+  };
+
   // Fail closed on ANY state where rails cannot be trustworthily determined: an
   // unparseable file, an unexpected envelope, or a malformed rails field. Only a
   // schema-VALID, empty rail set is treated as "no rails declared → allow".
-  const failClosed = (reason, tag) => {
-    if (bypass) {
-      recordBypass(rel, tag);
-      return; // allow, but audited
-    }
-    return denyRail(
+  const failClosed = (reason, tag) =>
+    bypassOrDeny(
+      tag,
       `${reason} rails cannot be verified, so edits are blocked. Fix .adlc/tickets.json, ` +
         `or set ADLC_RAILS_BYPASS=1 to override (the bypass is recorded).`
     );
-  };
 
   let parsed;
   try {
@@ -450,11 +465,8 @@ function rails(input) {
   const hit = railDecls.find((r) => globMatch(r.glob, rel));
   if (!hit) return; // not a rail → allow
 
-  if (bypass) {
-    recordBypass(rel, `rail ${hit.glob} (ticket ${hit.ticket})`);
-    return;
-  }
-  return denyRail(
+  return bypassOrDeny(
+    `rail ${hit.glob} (ticket ${hit.ticket})`,
     `${rel} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
       `Edits to frozen rails are blocked during build. To override deliberately, set ` +
       `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
