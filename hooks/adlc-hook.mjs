@@ -182,7 +182,11 @@ function tailBytes(path, maxBytes) {
     let text = buf.toString('utf8');
     if (start > 0) {
       const nl = text.indexOf('\n');
-      if (nl >= 0) text = text.slice(nl + 1); // drop the partial first line
+      // Drop the partial leading line — but only if real content remains.
+      // If the window lands inside one oversized record whose only newline is at
+      // the very end, dropping would empty the window; keep the raw (truncated)
+      // window instead so the scan stays bounded AND non-empty.
+      if (nl >= 0 && nl + 1 < text.length) text = text.slice(nl + 1);
     }
     return text;
   } catch {
@@ -209,26 +213,22 @@ function flail(input) {
   let scanPath = tp;
   let scanDir = null;
   if (fileSize(tp) > MAX_SCAN_BYTES) {
+    // Keep this frequently-invoked hook strictly O(MAX_SCAN_BYTES): scan only a
+    // bounded recent window, and NEVER fall back to parsing the full transcript.
+    // tailBytes already preserves a non-empty window even for one oversized
+    // record; if it still can't produce usable content, quietly no-op this
+    // invocation rather than do unbounded work.
     const tail = tailBytes(tp, MAX_SCAN_BYTES);
-    if (tail == null) return;
-    // Degenerate window: if the 256 KiB tail lands inside one giant record so
-    // that dropping the partial first line leaves nothing, a bounded scan would
-    // be empty and silently suppress flail. Fall back to a read-only full scan
-    // (slower, but correct) rather than lose detection.
-    if (!tail.trim()) {
-      scanPath = tp;
-    } else {
-      try {
-        // mkdtempSync makes a fresh 0700 dir with a random suffix — no predictable
-        // path to pre-plant a symlink against.
-        scanDir = mkdtempSync(join(tmpdir(), 'adlc-flail-'));
-        const p = join(scanDir, 'scan.jsonl');
-        writeFileSync(p, tail);
-        scanPath = p;
-      } catch {
-        scanDir = null;
-        scanPath = tp; // fall back to a read-only full scan rather than risk a temp write
-      }
+    if (tail == null || !tail.trim()) return;
+    try {
+      // mkdtempSync makes a fresh 0700 dir with a random suffix — no predictable
+      // path to pre-plant a symlink against.
+      scanDir = mkdtempSync(join(tmpdir(), 'adlc-flail-'));
+      const p = join(scanDir, 'scan.jsonl');
+      writeFileSync(p, tail);
+      scanPath = p;
+    } catch {
+      return; // cannot stage the bounded copy — no-op, never full-scan
     }
   }
 
