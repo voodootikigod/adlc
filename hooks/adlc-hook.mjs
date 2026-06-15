@@ -412,16 +412,31 @@ function rails(input) {
     );
   }
 
+  // Validate EVERY entry before trusting it. Any malformed structure where a
+  // rail could be hiding (non-object entry, non-array rails, non-string rail
+  // element) fails closed — never silently read as "no rails".
   const railDecls = [];
   for (const t of parsed.tickets) {
-    if (t && t.rails !== undefined && !Array.isArray(t.rails)) {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) {
+      return failClosed(
+        `.adlc/tickets.json has a ticket entry that is not an object;`,
+        'invalid-ticket-entry-bypass'
+      );
+    }
+    if (t.rails !== undefined && !Array.isArray(t.rails)) {
       return failClosed(
         `a ticket in .adlc/tickets.json has a non-array "rails" field;`,
         'invalid-rails-field-bypass'
       );
     }
-    for (const r of t?.rails ?? []) {
-      if (typeof r === 'string') railDecls.push({ glob: r, ticket: t.id ?? '?' });
+    for (const r of t.rails ?? []) {
+      if (typeof r !== 'string') {
+        return failClosed(
+          `a ticket in .adlc/tickets.json has a non-string rail entry;`,
+          'invalid-rail-entry-bypass'
+        );
+      }
+      railDecls.push({ glob: r, ticket: typeof t.id === 'string' ? t.id : '?' });
     }
   }
   if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
