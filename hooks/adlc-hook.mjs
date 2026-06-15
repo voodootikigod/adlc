@@ -14,12 +14,27 @@
 // `hookSpecificOutput.additionalContext` for SessionStart). No output = no-op.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 const MODE = process.argv[2];
+
+// Flail detection only needs the RECENT window of a session — flailing is a
+// "looping right now" signal, not a whole-history property. Cap the scan so a
+// long session's growing transcript can never turn this synchronous PostToolUse
+// hook into a repeated full-history reparse.
+const MAX_SCAN_BYTES = 256 * 1024;
 
 /** Read the entire hook payload from stdin (fd 0). Never throws. */
 function readStdin() {
@@ -94,11 +109,89 @@ function preflight() {
 
 // PostToolUse — flag flailing over the transcript; dedupe so the same signal set
 // is not re-reported on every subsequent tool call within a session.
+/** File size in bytes, or -1 on error. Closes the fd. */
+function fileSize(path) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    return fstatSync(fd).size;
+  } catch {
+    return -1;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/**
+ * Read at most the last `maxBytes` of a file without loading the whole thing,
+ * dropping a leading partial line so the result is clean JSONL/text. Returns
+ * null on any error (caller then no-ops).
+ */
+function tailBytes(path, maxBytes) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    const { size } = fstatSync(fd);
+    const start = size > maxBytes ? size - maxBytes : 0;
+    const len = size - start;
+    const buf = Buffer.alloc(len);
+    if (len > 0) readSync(fd, buf, 0, len, start);
+    let text = buf.toString('utf8');
+    if (start > 0) {
+      const nl = text.indexOf('\n');
+      if (nl >= 0) text = text.slice(nl + 1); // drop the partial first line
+    }
+    return text;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function flail(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo — same no-op guard as the other modes
   const tp = input.transcript_path;
   if (!tp || !existsSync(tp)) return;
-  const r = runAdlc(['flail-detector', tp, '--json']);
+
+  // Bound the work: scan the original file when small, otherwise a recent-window
+  // copy in the temp dir so cost stays O(MAX_SCAN_BYTES) no matter how long the
+  // session runs.
+  let scanPath = tp;
+  let tmpScan = null;
+  if (fileSize(tp) > MAX_SCAN_BYTES) {
+    const tail = tailBytes(tp, MAX_SCAN_BYTES);
+    if (tail == null) return;
+    try {
+      const key = createHash('sha1').update(tp).digest('hex').slice(0, 16);
+      tmpScan = join(tmpdir(), `adlc-flail-scan-${key}.jsonl`);
+      writeFileSync(tmpScan, tail);
+      scanPath = tmpScan;
+    } catch {
+      return; // cannot stage the bounded copy — skip rather than full-scan
+    }
+  }
+
+  const r = runAdlc(['flail-detector', scanPath, '--json']);
+  if (tmpScan) {
+    try {
+      unlinkSync(tmpScan);
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
   if (!r || !r.stdout) return;
   const res = parseJson(r.stdout);
   if (!res || res.verdict !== 'flail') return;
