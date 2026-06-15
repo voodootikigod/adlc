@@ -381,29 +381,50 @@ function rails(input) {
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
   const rel = toRepoRelative(fp);
 
+  // Fail closed on ANY state where rails cannot be trustworthily determined: an
+  // unparseable file, an unexpected envelope, or a malformed rails field. Only a
+  // schema-VALID, empty rail set is treated as "no rails declared → allow".
+  const failClosed = (reason, tag) => {
+    if (bypass) {
+      recordBypass(rel, tag);
+      return; // allow, but audited
+    }
+    return denyRail(
+      `${reason} rails cannot be verified, so edits are blocked. Fix .adlc/tickets.json, ` +
+        `or set ADLC_RAILS_BYPASS=1 to override (the bypass is recorded).`
+    );
+  };
+
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(ticketsPath, 'utf8'));
   } catch (e) {
-    // Cannot parse → cannot rule out rails → fail closed.
-    if (bypass) {
-      recordBypass(rel, 'unparseable-tickets-bypass');
-      return;
-    }
-    return denyRail(
-      `cannot read .adlc/tickets.json (${e.message}); rails cannot be verified, so edits are blocked. ` +
-        `Fix the ticket file, or set ADLC_RAILS_BYPASS=1 to override (the bypass is recorded).`
+    return failClosed(`cannot read .adlc/tickets.json (${e.message});`, 'unparseable-tickets-bypass');
+  }
+
+  // Valid JSON but wrong shape (e.g. a bare array, or no `tickets` envelope) must
+  // NOT be read as an empty rail set — that would fail open.
+  const isObject = parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  if (!isObject || !Array.isArray(parsed.tickets)) {
+    return failClosed(
+      `.adlc/tickets.json is not in the expected { "tickets": [...] } shape;`,
+      'invalid-tickets-shape-bypass'
     );
   }
 
-  const tickets = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
   const railDecls = [];
-  for (const t of tickets) {
+  for (const t of parsed.tickets) {
+    if (t && t.rails !== undefined && !Array.isArray(t.rails)) {
+      return failClosed(
+        `a ticket in .adlc/tickets.json has a non-array "rails" field;`,
+        'invalid-rails-field-bypass'
+      );
+    }
     for (const r of t?.rails ?? []) {
       if (typeof r === 'string') railDecls.push({ glob: r, ticket: t.id ?? '?' });
     }
   }
-  if (railDecls.length === 0) return; // no rails declared anywhere → no-op
+  if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
 
   const hit = railDecls.find((r) => globMatch(r.glob, rel));
   if (!hit) return; // not a rail → allow
