@@ -16,6 +16,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 const MODE = process.argv[2];
 
@@ -93,6 +95,7 @@ function preflight() {
 // PostToolUse — flag flailing over the transcript; dedupe so the same signal set
 // is not re-reported on every subsequent tool call within a session.
 function flail(input) {
+  if (!existsSync('.adlc')) return; // not an ADLC repo — same no-op guard as the other modes
   const tp = input.transcript_path;
   if (!tp || !existsSync(tp)) return;
   const r = runAdlc(['flail-detector', tp, '--json']);
@@ -101,7 +104,12 @@ function flail(input) {
   if (!res || res.verdict !== 'flail') return;
 
   const summary = (res.signals ?? []).map((s) => s.type).join(', ');
-  const stateFile = join('.adlc', 'flail-detector.state');
+  // Dedupe state lives in the OS temp dir, NOT the worktree — keyed by the
+  // (per-session) transcript path. This keeps the advisory hook from ever
+  // creating repo-local files, so it cannot dirty the tree regardless of the
+  // project's .gitignore.
+  const key = createHash('sha1').update(tp).digest('hex').slice(0, 16);
+  const stateFile = join(tmpdir(), `adlc-flail-${key}.state`);
   let prev = '';
   try {
     prev = readFileSync(stateFile, 'utf8');

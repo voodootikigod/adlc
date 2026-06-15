@@ -50,8 +50,8 @@ all of `.adlc/` *except* the ticket file — add these two lines if absent:
 ```
 
 This negation keeps `tickets.json` tracked while ignoring all current and future
-runtime files (ledgers, `lessons/`, `tickets.lock/`, `flail-detector.state`, …)
-without you having to enumerate them. If the repo already has a blanket `.adlc/`
+runtime files (ledgers, `lessons/`, `tickets.lock/`, …) without you having to
+enumerate them. If the repo already has a blanket `.adlc/`
 ignore (which would also hide `tickets.json`), point that out and ask the user
 whether they want to track `tickets.json` (recommended) before changing it.
 
