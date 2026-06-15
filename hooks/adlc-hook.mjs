@@ -1,17 +1,21 @@
 #!/usr/bin/env node
-// ADLC advisory hooks — one helper, three modes:
-//   preflight  (SessionStart)  → environment readiness before fan-out
-//   flail      (PostToolUse)    → flail-detection over the session transcript
-//   manifest   (Stop)           → gate-evidence chain integrity audit
+// ADLC hooks — one helper, four modes:
+//   preflight  (SessionStart)  → environment readiness before fan-out  [advisory]
+//   flail      (PostToolUse)    → flail-detection over the transcript    [advisory]
+//   manifest   (Stop)           → gate-evidence chain integrity audit    [advisory]
+//   rails      (PreToolUse)     → block edits to frozen rail paths        [ENFORCING]
 //
-// CONTRACT: these hooks are ADVISORY ONLY. They must NEVER block a tool call,
-// fail a session, or surface an error of their own. Every path ends in exit 0,
-// and the helper stays SILENT unless there is something worth flagging. If the
-// toolkit is not installed or the repo is not ADLC-initialized, it no-ops.
+// CONTRACT: the three advisory modes must NEVER block and stay SILENT unless
+// there is something to flag. The `rails` mode is the ONE enforcement hook — it
+// can DENY an Edit/Write (via a permissionDecision in its JSON output, not via
+// exit code). All four modes still ALWAYS exit 0 and never surface their own
+// errors; if the toolkit isn't installed or the repo isn't ADLC-initialized,
+// every mode no-ops. The rails enforcement is itself a no-op until a ticket
+// declares `rails` paths, so installing the plugin can't brick a clean repo.
 //
 // Output: when there is something to say, print ONE JSON object using fields
-// Claude Code recognizes for non-blocking messages (`systemMessage`, and
-// `hookSpecificOutput.additionalContext` for SessionStart). No output = no-op.
+// Claude Code recognizes (`systemMessage`; `hookSpecificOutput.additionalContext`
+// for SessionStart; `hookSpecificOutput.permissionDecision` for PreToolUse).
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -28,7 +32,7 @@ import {
   chmodSync,
   rmSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
@@ -99,6 +103,7 @@ function main() {
   if (MODE === 'preflight') return preflight();
   if (MODE === 'flail') return flail(input);
   if (MODE === 'manifest') return manifest();
+  if (MODE === 'rails') return rails(input);
   // unknown mode → no-op
 }
 
@@ -300,6 +305,118 @@ function manifest() {
     `ADLC gate-manifest: evidence chain INVALID — ${res.message}. ` +
     `The gate ledger may have been tampered with or truncated.`;
   emit({ systemMessage: msg });
+}
+
+// Minimal glob matcher — ported VERBATIM from @adlc/core lib/tickets.mjs
+// `globMatch` (the hook can't resolve @adlc/core at runtime). Supports `*`
+// within a segment and `**` across segments. KEEP IN SYNC with core.
+function globMatch(pattern, path) {
+  const regex = new RegExp(
+    '^' +
+      pattern
+        .split(/(\*\*\/|\*\*|\*)/)
+        .map((part) => {
+          if (part === '**/') return '(?:.*/)?';
+          if (part === '**') return '.*';
+          if (part === '*') return '[^/]*';
+          return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+        })
+        .join('') +
+      '$'
+  );
+  return regex.test(path);
+}
+
+/** The file a write/edit tool is about to touch, or null. */
+function targetFilePath(input) {
+  const ti = input.tool_input ?? input.parameters ?? {};
+  const fp = ti.file_path ?? ti.notebook_path;
+  return typeof fp === 'string' && fp.length > 0 ? fp : null;
+}
+
+/** Repo-relative, forward-slashed path for glob matching against rail globs. */
+function toRepoRelative(fp) {
+  const rel = isAbsolute(fp) ? relative(process.cwd(), fp) : fp;
+  return rel.split('\\').join('/');
+}
+
+/** Emit a PreToolUse deny with a clear reason. */
+function denyRail(reason) {
+  emit({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+    systemMessage: `ADLC rails-guard: ${reason}`,
+  });
+}
+
+/** Best-effort audit of an ADLC_RAILS_BYPASS override to the gate-manifest. */
+function recordBypass(relPath, why) {
+  runAdlc([
+    'gate-manifest',
+    'record',
+    'rails-bypass',
+    '--data',
+    JSON.stringify({ path: relPath, reason: why }),
+  ]);
+}
+
+// PreToolUse (Edit/Write/MultiEdit) — the ONE enforcement hook: block edits to
+// frozen rail paths. Asymmetric fail-closed contract (integration plan §4.4):
+//   • no .adlc / no tickets file / no rails declared anywhere → ALLOW (no-op),
+//     so installing into a repo that declares no rails can never brick editing;
+//   • target path matches a declared rail glob → DENY;
+//   • tickets file present but unparseable → rails cannot be ruled out → DENY
+//     (fail closed — a broken gate must not silently admit rail edits);
+//   • ADLC_RAILS_BYPASS=1 → ALLOW, but record an audited bypass to the manifest.
+function rails(input) {
+  const fp = targetFilePath(input);
+  if (!fp) return; // no file target → nothing to gate
+  if (!existsSync('.adlc')) return; // not an ADLC repo
+  const ticketsPath = join('.adlc', 'tickets.json');
+  if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
+
+  const bypass = process.env.ADLC_RAILS_BYPASS === '1';
+  const rel = toRepoRelative(fp);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(ticketsPath, 'utf8'));
+  } catch (e) {
+    // Cannot parse → cannot rule out rails → fail closed.
+    if (bypass) {
+      recordBypass(rel, 'unparseable-tickets-bypass');
+      return;
+    }
+    return denyRail(
+      `cannot read .adlc/tickets.json (${e.message}); rails cannot be verified, so edits are blocked. ` +
+        `Fix the ticket file, or set ADLC_RAILS_BYPASS=1 to override (the bypass is recorded).`
+    );
+  }
+
+  const tickets = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
+  const railDecls = [];
+  for (const t of tickets) {
+    for (const r of t?.rails ?? []) {
+      if (typeof r === 'string') railDecls.push({ glob: r, ticket: t.id ?? '?' });
+    }
+  }
+  if (railDecls.length === 0) return; // no rails declared anywhere → no-op
+
+  const hit = railDecls.find((r) => globMatch(r.glob, rel));
+  if (!hit) return; // not a rail → allow
+
+  if (bypass) {
+    recordBypass(rel, `rail ${hit.glob} (ticket ${hit.ticket})`);
+    return;
+  }
+  return denyRail(
+    `${rel} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
+      `Edits to frozen rails are blocked during build. To override deliberately, set ` +
+      `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
+  );
 }
 
 try {

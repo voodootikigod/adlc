@@ -245,14 +245,16 @@ sequence 20 tools + supply keys" to "install once, init once."
 
 ## 8. Phased delivery
 
-1. **Phase A — dispatcher.** Ship `@adlc/cli` umbrella bin. Unblocks every hook
-   and command with a stable prefix. (Only net-new code.)
+1. **Phase A — dispatcher.** ✅ Shipped `@adlc/cli` umbrella bin. Unblocks every
+   hook and command with a stable prefix. (Only net-new code.)
 2. **Phase B — plugin skeleton + discovery skill + `/adlc-init`/`/adlc-ticket`.**
-   Makes the lifecycle reachable and gives it an entry point.
+   ✅ Shipped. Makes the lifecycle reachable and gives it an entry point.
 3. **Phase C — advisory hooks** (SessionStart preflight, PostToolUse flail,
-   Stop gate-manifest). Safe, non-blocking; proves the wiring.
-4. **Phase D — blocking rail-guard hook** + prosecutor subagent. The
-   enforcement teeth, shipped only after the advisory hooks prove stable.
+   Stop gate-manifest). ✅ Shipped. Safe, non-blocking; proves the wiring.
+4. **Phase D — blocking rail-guard hook** + prosecutor subagent. ✅ Shipped. The
+   PreToolUse `rails` hook denies edits to declared rail paths (fail-closed per
+   §4.4, `ADLC_RAILS_BYPASS=1` audited override); the `prosecutor` subagent runs
+   the P5 review-evidence gates.
 5. **Phase E — scheduled maintenance** (lesson-foundry, skill-rot,
    model-ratchet) with manual `/adlc-*` fallbacks.
 6. **Phase F — marketplace publish** + docs.

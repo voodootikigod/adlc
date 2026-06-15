@@ -1,6 +1,18 @@
 {
-  "description": "ADLC advisory hooks — preflight on session start, flail-detection after edits/commands, and gate-evidence integrity audit on stop. All non-blocking; they no-op unless @adlc/cli is installed and the repo is ADLC-initialized.",
+  "description": "ADLC hooks — preflight on session start, flail-detection after edits/commands, gate-evidence audit on stop (all advisory), and a blocking rail-guard that denies edits to frozen rail paths declared in tickets. All no-op unless the repo is ADLC-initialized; rail enforcement additionally no-ops until a ticket declares rails.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" rails",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

@@ -59,10 +59,11 @@ downstream reads this file; nothing else creates it. Author here first.
   backpressure. The time dial (D2).
 
 ### P3 — Rail (frozen paths are protected)
-- `adlc rails-guard --base <ref> --ticket <id>` — enforce frozen rails declared
-  on the ticket, declared suppressions, and manifest recording. Exit 2 means an
-  edit touched a rail. (Phase D of the integration wires this as a blocking
-  PreToolUse hook; until then, run it before review.)
+- `adlc rails-guard --base <ref> --ticket <id>` — diff-based check that no
+  committed change touched a frozen rail (exit 2 = a rail was edited). Run it
+  before review as a backstop. Note: the plugin's **PreToolUse rail hook** also
+  blocks edits to declared rail paths *as you make them* (deny at the tool layer);
+  override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
 
 ### P4 — Build (supervised execution)
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
