@@ -132,6 +132,8 @@ for (const [name, cmd, exp] of [
   ['redirect to quoted spaced rail', 'echo x > "docs/frozen file.md"', 'deny'],
   ['sed -i quoted spaced rail', "sed -i 's/a/b/' 'docs/frozen file.md'", 'deny'],
   ['tee quoted spaced rail', 'echo x | tee "docs/frozen file.md"', 'deny'],
+  ['redirect to backslash-escaped spaced rail', 'echo x > docs/frozen\\ file.md', 'deny'],
+  ['sed -i backslash-escaped spaced rail', "sed -i 's/a/b/' docs/frozen\\ file.md", 'deny'],
   ['read quoted spaced rail', 'cat "docs/frozen file.md"', 'allow'],
 ]) {
   test(`bash (spaces): ${name} → ${exp}`, () => {

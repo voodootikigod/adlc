@@ -346,9 +346,11 @@ function toRepoRelative(fp) {
   return relative(process.cwd(), abs).split('\\').join('/');
 }
 
-// One quoted ('…' or "…", spaces allowed) or bare path operand.
-const OPERAND = `(?:"([^"]*)"|'([^']*)'|([^\\s'"|;&<>]+))`;
-const pickOperand = (m) => m[1] ?? m[2] ?? m[3];
+// One quoted ('…' or "…", spaces allowed) or bare path operand. The bare form
+// also accepts backslash-escaped characters (`\ ` etc.) so an escaped space does
+// not truncate the path; those escapes are decoded by pickOperand.
+const OPERAND = `(?:"([^"]*)"|'([^']*)'|((?:\\\\.|[^\\s'"|;&<>])+))`;
+const pickOperand = (m) => m[1] ?? m[2] ?? m[3].replace(/\\(.)/g, '$1');
 
 /** Quote-aware tokenizer: a quoted run (incl. spaces) is one token, quotes stripped. */
 function shellTokens(s) {
