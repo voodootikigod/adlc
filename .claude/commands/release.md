@@ -1,4 +1,4 @@
-Release a new lockstep version of the `@adlc` suite (all 20 packages publish together).
+Release a new lockstep version of the `@adlc` suite (all 21 packages publish together).
 
 ## Arguments
 
@@ -14,7 +14,7 @@ Release a new lockstep version of the `@adlc` suite (all 20 packages publish tog
    - Up to date with remote (`git pull --dry-run` shows no changes)
    - Tests pass (`npm test`)
 
-3. **Bump versions:** run `node scripts/release.mjs <NEW_VERSION>` (no `--publish`). This sets the new version across `@adlc/core` + all 19 CLIs + the root, and repins each CLI's `"@adlc/core"` dependency to match. Do NOT hand-edit package.json files.
+3. **Bump versions:** run `node scripts/release.mjs <NEW_VERSION>` (no `--publish`). This sets the new version across `@adlc/core` + all 19 phase CLIs + the `@adlc/cli` umbrella + the root, and repins **every** `"@adlc/*"` dependency (core *and* the 19 siblings that `@adlc/cli` depends on) to match. Do NOT hand-edit package.json files.
 
 4. **Commit the version bump:**
    ```
@@ -32,9 +32,9 @@ Release a new lockstep version of the `@adlc` suite (all 20 packages publish tog
 7. **Confirm completion.** Print a summary of:
    - Previous version → new version
    - Tag created
-   - Remind the user that the GitHub Actions publish workflow (`.github/workflows/publish.yml`, triggered on `v*` tags) publishes all 20 packages to npm automatically — `@adlc/core` first, then the CLIs, each with `--provenance --access public`.
+   - Remind the user that the GitHub Actions publish workflow (`.github/workflows/publish.yml`, triggered on `v*` tags) publishes all 21 packages to npm automatically — `@adlc/core` first, then the phase CLIs, and the `@adlc/cli` umbrella last (it depends on every other CLI), each with `--provenance --access public`.
 
 ## Notes
 
 - **First release / bootstrap:** the `NPM_TOKEN` repo secret must be set. After the first successful run, configure trusted publishing per package on npmjs.com and delete `NPM_TOKEN` so future releases publish tokenless via OIDC. See `docs/RELEASING.md`.
-- Pushing the tag publishes 20 public packages immediately and is effectively irreversible — confirm the version is right before pushing.
+- Pushing the tag publishes 21 public packages immediately and is effectively irreversible — confirm the version is right before pushing.

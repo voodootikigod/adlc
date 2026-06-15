@@ -8,6 +8,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | Package | Binary | Role | Source |
 | --- | --- | --- | --- |
 | `@adlc/behavior-diff` | `behavior-diff` | Captures and compares HTTP/API behavior snapshots for the P6 human gate. | [`packages/behavior-diff/README.md`](../packages/behavior-diff/README.md) |
+| `@adlc/cli` | `adlc` | Umbrella dispatcher: installs the whole suite and routes `adlc <tool>` to each CLI, propagating the gate exit code. | [`packages/cli/README.md`](../packages/cli/README.md) |
 | `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`packages/coldstart/README.md`](../packages/coldstart/README.md) |
 | `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`packages/consensus-fix/README.md`](../packages/consensus-fix/README.md) |
 | `@adlc/core` | none | Shared LLM, git, CLI, ledger, ticket, and mutation primitives. | [`packages/core/README.md`](../packages/core/README.md) |
@@ -31,6 +32,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 ## Command forms
 
 ```sh
+adlc <tool> [args...]              # umbrella dispatcher; args pass through verbatim
 behavior-diff capture --config behavior.json --out before.json
 behavior-diff compare before.json after.json [--json]
 coldstart <ticket-id> [options]
@@ -94,3 +96,4 @@ Compounding defenses:
 Shared foundation:
 
 - `@adlc/core`
+- `@adlc/cli`
