@@ -491,8 +491,9 @@ function rails(input) {
   const ticketsPath = join('.adlc', 'tickets.json');
   if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
 
+  const ti = input.tool_input ?? input.parameters ?? {}; // accept either payload shape
   const fp = targetFilePath(input);
-  const cmd = typeof input.tool_input?.command === 'string' ? input.tool_input.command : null;
+  const cmd = typeof ti.command === 'string' ? ti.command : null;
   if (!fp && !cmd) return; // nothing to gate
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';

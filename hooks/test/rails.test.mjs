@@ -83,13 +83,14 @@ test('edit to an exact-file rail → deny', () => {
 
 // ---- Bash branch: deny shell writes to a rail, allow reads/runs ----
 
-function runBash(ticketsJson, command, { env = {} } = {}) {
+function runBash(ticketsJson, command, { env = {}, shape = 'tool_input' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {
     mkdirSync(join(dir, '.adlc'));
     writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
     const cmd = command.replace(/%DIR%/g, dir); // %DIR% → the temp project root
-    const input = JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command: cmd } });
+    const payload = { cwd: dir, tool_name: 'Bash', [shape]: { command: cmd } };
+    const input = JSON.stringify(payload);
     let out = '';
     try {
       out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, ...env } });
@@ -128,6 +129,10 @@ for (const [name, cmd, exp] of [
     assert.equal(runBash(RAIL_T, cmd), exp);
   });
 }
+
+test('bash via parameters.command payload shape → deny (rail write)', () => {
+  assert.equal(runBash(RAIL_T, 'echo x > test/auth/login.test.mjs', { shape: 'parameters' }), 'deny');
+});
 
 // ---- quoted rail paths containing spaces ----
 
