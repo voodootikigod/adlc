@@ -1,48 +1,70 @@
 #!/usr/bin/env node
-// CI rail-freeze backstop. This is the unbypassable commit-time gate that the
+// CI rail-freeze backstop. This is the unbypassable commit-time gate the
 // in-session PreToolUse rail hook relies on: a Bash write form the hook does not
 // recognize (node -e, python, cp, perl -i, …) still lands in the diff, and this
 // gate rejects the PR if that diff touches a frozen rail.
 //
-// It reads every rail glob declared in .adlc/tickets.json and runs the
-// diff-based `rails-guard` gate against the base ref.
+// The rail set is read from the TRUSTED BASE version of .adlc/tickets.json (via
+// `git show <base>:…`), never the PR's working tree — otherwise a PR could edit
+// the ticket file to remove rails and self-disable the gate in the same change.
+// Once base rails exist, .adlc/tickets.json itself is also a protected rail, so a
+// PR that edits the rail set is flagged for review. Malformed base tickets fail
+// closed.
 //
 //   node scripts/rails-guard-ci.mjs [base-ref]      (default base: origin/main)
 //
-// Exit: 0 = no rails declared OR no rail touched · 2 = a rail was modified ·
-//       1 = operational error.
+// Exit: 0 = no rails at base OR no rail touched · 2 = a rail was modified ·
+//       1 = operational error / unverifiable rails (fails the CI job).
 
-import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
-const ticketsPath = '.adlc/tickets.json';
 
-if (!existsSync(ticketsPath)) {
-  console.log('rails-guard-ci: no .adlc/tickets.json — nothing frozen.');
-  process.exit(0);
-}
-
-let rails = [];
-try {
-  const data = JSON.parse(readFileSync(ticketsPath, 'utf8'));
-  for (const t of data?.tickets ?? []) {
-    for (const r of t?.rails ?? []) if (typeof r === 'string') rails.push(r);
-  }
-} catch (e) {
-  console.error(`rails-guard-ci: cannot read ${ticketsPath}: ${e.message}`);
+function fail(msg) {
+  console.error(`rails-guard-ci: ${msg}`);
   process.exit(1);
 }
 
-rails = [...new Set(rails)];
-if (rails.length === 0) {
-  console.log('rails-guard-ci: no rails declared — nothing frozen.');
+// Read the trusted base ticket file. A non-zero git status means it did not
+// exist at base — nothing was frozen there, so nothing to enforce.
+const show = spawnSync('git', ['show', `${base}:.adlc/tickets.json`], { encoding: 'utf8' });
+if (show.status !== 0) {
+  console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
   process.exit(0);
 }
 
-const argv = ['--base', base, ...rails.flatMap((r) => ['--rails', r])];
+let data;
+try {
+  data = JSON.parse(show.stdout);
+} catch (e) {
+  fail(`cannot parse ${base}:.adlc/tickets.json (${e.message}) — failing closed.`);
+}
+if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.tickets)) {
+  fail(`${base}:.adlc/tickets.json is not in the { "tickets": [...] } shape — failing closed.`);
+}
+
+const rails = [];
+for (const t of data.tickets) {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) fail('a base ticket entry is not an object — failing closed.');
+  if (t.rails !== undefined && !Array.isArray(t.rails)) fail('a base ticket has a non-array "rails" field — failing closed.');
+  for (const r of t.rails ?? []) {
+    if (typeof r !== 'string') fail('a base ticket has a non-string rail entry — failing closed.');
+    rails.push(r);
+  }
+}
+
+const unique = [...new Set(rails)];
+if (unique.length === 0) {
+  console.log(`rails-guard-ci: no rails declared at ${base} — nothing frozen.`);
+  process.exit(0);
+}
+// Once base rails exist, the ticket file itself is a protected trust root.
+unique.push('.adlc/tickets.json');
+
+const argv = ['--base', base, ...unique.flatMap((r) => ['--rails', r])];
 
 // Prefer the in-repo bin (this repo); fall back to a globally installed `adlc`.
 const localBin = join(
@@ -57,8 +79,5 @@ const result = existsSync(localBin)
   ? spawnSync(process.execPath, [localBin, ...argv], { stdio: 'inherit' })
   : spawnSync('adlc', ['rails-guard', ...argv], { stdio: 'inherit' });
 
-if (result.error) {
-  console.error(`rails-guard-ci: could not run rails-guard: ${result.error.message}`);
-  process.exit(1);
-}
+if (result.error) fail(`could not run rails-guard: ${result.error.message}`);
 process.exit(typeof result.status === 'number' ? result.status : 1);
