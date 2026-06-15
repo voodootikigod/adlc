@@ -33,12 +33,18 @@ A ticket must be **executable without guesswork** (that is exactly what
 - **rails** — array of frozen paths that must NOT change during the build (e.g.
   `["test/auth/**"]`). Declaring rails here is what later lets the rail-guard
   gate block edits to them. Default to `[]` if none.
-- **edges** — ordering constraints, each `{ "to": "T2", "contract":
-  "src/types/auth.d.ts" }`. Direction is **prerequisite → dependent**: an edge
-  `{ "to": "T2" }` on this ticket means **this ticket must complete before T2**
-  (T2 depends on this one), per the ticket DAG's topological-sort contract. If
-  instead *this* ticket depends on an existing ticket T0, add the edge on **T0**
-  (`{ "to": "<this id>" }`), not here. Default `[]`.
+- **edges** — ordering constraints. Direction is **prerequisite → dependent**:
+  an edge `{ "to": "TX", "contract": "src/types/auth.d.ts" }` lives on the
+  *prerequisite* ticket and means **that ticket must complete before TX** (TX
+  depends on it), per the ticket DAG's topological-sort contract. So there are
+  two cases when wiring the new ticket's dependencies:
+  - *Existing tickets depend on the new one* → add `{ "to": "<existing id>" }`
+    edges to the **new** ticket (those ids already exist, so they validate).
+  - *The new ticket depends on an existing prerequisite T0* → the edge must live
+    on **T0** as `{ "to": "<new id>" }`. Do NOT put a reversed edge on the new
+    ticket. Step 2 permits this single additive edit to T0.
+
+  Default `[]` when the ticket has no ordering relationship.
 - **duration** — relative build-time estimate, positive number (default `1`).
 - **category** — free-form routing hint (e.g. `feature`, `bugfix`, `refactor`).
 - **budget** — optional token budget (omit if unknown).
@@ -46,14 +52,25 @@ A ticket must be **executable without guesswork** (that is exactly what
 If anything required for a *self-contained* ticket is ambiguous, ask the user
 rather than guessing — a vague ticket fails `coldstart`.
 
-## 2. Append immutably and validate
+## 2. Append (and wire dependencies) atomically, then validate
 
-- Build the new ticket object. Validate it against the schema before writing:
-  `id` and `title` are required strings; `scope`, `rails`, `edges` are arrays;
-  `duration` is a positive number; every `edge.to` must reference an existing
-  ticket id.
-- Append it to the `tickets` array — read, copy, add, write the whole file back.
-  Never mutate or reorder existing entries. Preserve 2-space JSON formatting.
+The mutation model has exactly one allowed write to existing data: **adding a
+prerequisite→new edge to a prerequisite ticket** (the second case in step 1).
+Nothing else about existing tickets may change.
+
+- Build the new ticket object and append it to the `tickets` array (read, copy,
+  add).
+- If the new ticket depends on an existing prerequisite T0, append the single
+  edge `{ "to": "<new id>" }` to **T0's** `edges` array. This is additive only —
+  do not change any other field of T0, and do not reorder tickets.
+- Validate the **entire resulting array** before writing it back:
+  - `id` and `title` are required strings; `scope`, `rails`, `edges` are arrays;
+    `duration` is a positive number.
+  - every `edge.to` (across all tickets) references an existing ticket id, and
+    no id is duplicated.
+  - the dependency graph has **no cycle** (a self-contained sanity check:
+    `adlc merge-forecast --json` reports a cycle in the DAG if one exists).
+- Write the whole file back, preserving 2-space JSON formatting.
 
 ## 3. Check executability (coldstart gate)
 
