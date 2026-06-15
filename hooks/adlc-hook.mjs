@@ -32,7 +32,7 @@ import {
   chmodSync,
   rmSync,
 } from 'node:fs';
-import { join, relative, isAbsolute } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
@@ -334,10 +334,16 @@ function targetFilePath(input) {
   return typeof fp === 'string' && fp.length > 0 ? fp : null;
 }
 
-/** Repo-relative, forward-slashed path for glob matching against rail globs. */
+/**
+ * Canonical repo-relative, forward-slashed path for glob matching. The tool
+ * input is the trust boundary, so canonicalize it: `resolve` collapses `.`,
+ * `..`, and duplicate separators and anchors a relative input to the project
+ * root, then `relative` expresses it against the repo. A non-canonical spelling
+ * (`./src/x`, `src/../src/x`) thus cannot dodge an exact rail glob.
+ */
 function toRepoRelative(fp) {
-  const rel = isAbsolute(fp) ? relative(process.cwd(), fp) : fp;
-  return rel.split('\\').join('/');
+  const abs = resolve(process.cwd(), fp);
+  return relative(process.cwd(), abs).split('\\').join('/');
 }
 
 /** Emit a PreToolUse deny with a clear reason. */

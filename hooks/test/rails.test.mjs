@@ -22,13 +22,17 @@ const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs'
  * @returns {{ verdict: 'deny'|'allow', out: string, dir: string }}
  *   dir is returned (already removed) only for reference; pass keepDir to inspect.
  */
-function runRails(ticketsJson, relPath, { env = {}, keepDir = false } = {}) {
+function runRails(ticketsJson, relPath, { env = {}, keepDir = false, rawFilePath = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   let manifest = '';
   try {
     mkdirSync(join(dir, '.adlc'));
     if (ticketsJson !== null) writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
-    const input = JSON.stringify({ cwd: dir, tool_input: { file_path: join(dir, relPath) } });
+    // rawFilePath lets a test pass a non-canonical path verbatim (the default
+    // `join` would otherwise normalize it before the hook sees it). `%DIR%` is
+    // substituted with the temp project dir.
+    const filePath = rawFilePath ? rawFilePath.replace('%DIR%', dir) : join(dir, relPath);
+    const input = JSON.stringify({ cwd: dir, tool_input: { file_path: filePath } });
     let out = '';
     try {
       out = execFileSync('node', [HOOK, 'rails'], {
@@ -73,6 +77,24 @@ test('edit to a glob rail → deny', () => {
 test('edit to an exact-file rail → deny', () => {
   const t = '{"tickets":[{"id":"T1","rails":["src/types/api.d.ts"]}]}';
   assert.equal(runRails(t, 'src/types/api.d.ts').verdict, 'deny');
+});
+
+// ---- canonicalization: non-canonical spellings must not dodge a rail ----
+
+for (const [name, raw] of [
+  ['./ prefix', '%DIR%/./src/types/api.d.ts'],
+  ['.. segment', '%DIR%/src/../src/types/api.d.ts'],
+  ['duplicate separator', '%DIR%/src//types/api.d.ts'],
+]) {
+  test(`canonicalize: ${name} still denies the rail`, () => {
+    const t = '{"tickets":[{"id":"T1","rails":["src/types/api.d.ts"]}]}';
+    assert.equal(runRails(t, '', { rawFilePath: raw }).verdict, 'deny');
+  });
+}
+
+test('canonicalize: relative ./ input resolves against the repo and denies', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["src/types/api.d.ts"]}]}';
+  assert.equal(runRails(t, '', { rawFilePath: './src/types/api.d.ts' }).verdict, 'deny');
 });
 
 // ---- fail closed: any state where rails cannot be trusted ----
