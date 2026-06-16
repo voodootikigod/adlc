@@ -54,6 +54,14 @@ the user at `/adlc-maintain` for the decay-driven checks.
 
 This command is idle-time metabolism. To run it automatically, schedule a Claude
 routine (e.g. via `/schedule`) that invokes `/adlc-distill` on a cadence — Claude
-is the model, so no API keys are needed. The deterministic maintenance checks
+is the model, so no API keys are needed.
+
+**Headless runs are advisory by default.** The write steps above require human
+approval, so an unattended scheduled run will *propose* defenses (in its summary)
+without materializing them — that is intentional: auto-writing lint rules/skills
+from clustered findings unattended is risky. A scheduled routine should surface
+the proposals for a human to review and then approve `--write`. Only wire an
+auto-`--write` routine if you have explicitly accepted that the generated
+defenses land without review. The deterministic maintenance checks
 (`/adlc-maintain`) can additionally run in CI on a cron; see
 `docs/ci/adlc-maintenance.yml`.

@@ -3,8 +3,10 @@
 #
 # Idle-time metabolism (ADLC C10/C12): the DETERMINISTIC, keyless maintenance
 # checks on a weekly cron. It reports stale skill metadata and the highest-churn
-# files worth re-prosecuting, into the job summary. It is ADVISORY — it does not
-# fail the run, so it never blocks merges; treat its output as a worklist.
+# files worth re-prosecuting, into the job summary. Findings are ADVISORY — stale
+# skills or hot files keep the run GREEN (treat the summary as a worklist) — but a
+# genuine tool CRASH (command-not-found, regression) FAILS the run so the broken
+# pipeline is not silently swallowed.
 #
 # The LLM-backed parts (lesson-foundry, rejection-mining, gate-fuzzing) are not
 # here because they need a model. Run those via a scheduled Claude routine that
@@ -44,15 +46,16 @@ jobs:
 
       # The two checks below are ADVISORY, but a check that *crashes* must not be
       # mistaken for a clean run. Each captures the tool's real exit code, records
-      # it in the summary, and raises a workflow ::warning:: on an UNEXPECTED exit
-      # (e.g. a CLI/layout regression) — surfaced, never silently green.
+      # it in the summary, and DISTINGUISHES expected advisory states (which keep
+      # the job green) from an UNEXPECTED crash (command-not-found, regression),
+      # which FAILS the step so maintainers get the standard failure alert.
       - name: Skill rot (stale validation metadata)
         run: |
           {
             echo "## Skill rot"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          rc=0
+          crash=0
           for dir in skills .claude/skills; do
             [ -d "$dir" ] || continue
             # Capture in an `if` so an expected nonzero exit (stale=2, info=1) does
@@ -65,14 +68,19 @@ jobs:
               1) if printf '%s' "$out" | grep -q 'nothing to verify'; then
                    echo "($dir: no skills carry validation metadata — informational)" >> "$GITHUB_STEP_SUMMARY"
                  else
-                   echo "::warning title=skill-rot::skill-rot on $dir exited 1 unexpectedly"
-                   echo "($dir: skill-rot errored — see warning)" >> "$GITHUB_STEP_SUMMARY"
+                   echo "::error title=skill-rot::skill-rot on $dir exited 1 unexpectedly (not 'nothing to verify')"
+                   echo "($dir: skill-rot CRASHED — see error)" >> "$GITHUB_STEP_SUMMARY"
+                   crash=1
                  fi ;;
-              *) echo "::warning title=skill-rot::skill-rot on $dir exited $rc unexpectedly"
-                 echo "($dir: skill-rot exited $rc — see warning)" >> "$GITHUB_STEP_SUMMARY" ;;
+              *) echo "::error title=skill-rot::skill-rot on $dir exited $rc unexpectedly"
+                 echo "($dir: skill-rot CRASHED ($rc) — see error)" >> "$GITHUB_STEP_SUMMARY"
+                 crash=1 ;;
             esac
           done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # Advisory states (fresh/stale/no-metadata) stay green; a genuine crash
+          # fails the job so it is not silently swallowed.
+          [ "$crash" -eq 0 ] || exit 1
 
       - name: Model ratchet (hot files to re-prosecute)
         run: |
@@ -85,7 +93,9 @@ jobs:
           echo "$out" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           # model-ratchet --dry-run is a plan, not a gate: exit 0 is the only
-          # expected code. Anything else is a regression — surface it.
+          # expected code. Anything else is a regression — fail so it is not
+          # silently swallowed (the job is advisory, but a crash is not advisory).
           if [ "$rc" -ne 0 ]; then
-            echo "::warning title=model-ratchet::model-ratchet --dry-run exited $rc unexpectedly"
+            echo "::error title=model-ratchet::model-ratchet --dry-run exited $rc unexpectedly"
+            exit 1
           fi
