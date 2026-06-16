@@ -59,10 +59,16 @@ All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
 into a repo with no rails can never block editing.
 
-**Rail bypass.** A frozen-rail edit can be overridden deliberately with
-`ADLC_RAILS_BYPASS=1` — but only if the override is recorded to the gate-manifest
-(an un-auditable bypass is refused). Once any rail is declared, `.adlc/tickets.json`
-itself is frozen so the rail set can't be quietly edited away.
+**Rail bypass — two distinct layers.** `ADLC_RAILS_BYPASS=1` overrides the
+*in-session* PreToolUse hook only, and only if the override is recorded to the
+gate-manifest (an un-auditable bypass is refused). The *commit-time* CI gate is
+deliberately **not** env-bypassable — that is the whole point of an unbypassable
+backstop. A legitimately needed rail change (e.g. updating a frozen test once its
+ticket is complete) is therefore a privileged, human action: a maintainer
+overrides the required `rails-guard` check (admin merge) — which is the correct
+posture, since changing a frozen rail is exactly the kind of decision that should
+require a human, not an environment variable. Once any rail is declared,
+`.adlc/tickets.json` itself is frozen so the rail set can't be quietly edited away.
 
 ## CI backstops (recommended)
 
