@@ -46,6 +46,10 @@ jobs:
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
+            // Confirm the base REF resolves first — git show returns non-zero for
+            // both "bad ref" and "file absent", and conflating them would fail open.
+            const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
+            if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
             // Read the TRUSTED base ticket file, not the PR working tree (which a
             // PR could edit to remove rails and self-disable this gate).
             const show = spawnSync("git", ["show", base + ":.adlc/tickets.json"], { encoding: "utf8" });

@@ -104,3 +104,26 @@ test('malformed base tickets → exit 1 (fail closed)', () => {
   });
   assert.equal(code, 1);
 });
+
+test('unresolvable base ref → exit 1 (fail closed, not fail open)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), RAILED);
+    writeFileSync(join(dir, 'app.mjs'), 'x\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [SCRIPT, 'origin/nonexistent-branch'], { cwd: dir, stdio: 'pipe' });
+    } catch (e) {
+      code = e.status ?? 1;
+    }
+    assert.equal(code, 1); // bad base must NOT be read as "no rails"
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

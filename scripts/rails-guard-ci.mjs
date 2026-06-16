@@ -28,8 +28,19 @@ function fail(msg) {
   process.exit(1);
 }
 
-// Read the trusted base ticket file. A non-zero git status means it did not
-// exist at base — nothing was frozen there, so nothing to enforce.
+// First confirm the base REF resolves. `git show <ref>:<path>` returns non-zero
+// for BOTH "ref does not resolve" and "path absent at ref" — conflating them
+// would fail OPEN (an unfetched/typo'd base would look like "no rails"). An
+// unresolvable base means rails cannot be verified → fail closed.
+const ref = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], {
+  encoding: 'utf8',
+});
+if (ref.status !== 0) {
+  fail(`base ref '${base}' does not resolve — rails cannot be verified. Fetch it (or pass the correct base).`);
+}
+
+// Base resolves, so a non-zero status here means the file is genuinely absent at
+// base — nothing was frozen there, nothing to enforce.
 const show = spawnSync('git', ['show', `${base}:.adlc/tickets.json`], { encoding: 'utf8' });
 if (show.status !== 0) {
   console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
