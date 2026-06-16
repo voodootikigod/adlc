@@ -105,6 +105,30 @@ test('malformed base tickets → exit 1 (fail closed)', () => {
   assert.equal(code, 1);
 });
 
+test('no .adlc/tickets.json at base → exit 0 (genuinely nothing frozen)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    writeFileSync(join(dir, 'app.mjs'), 'x\n'); // base has NO .adlc/ at all
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    writeFileSync(join(dir, 'app.mjs'), 'y\n');
+    git(dir, ['commit', '-qam', 'change']);
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+    } catch (e) {
+      code = e.status ?? 1;
+    }
+    assert.equal(code, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('unresolvable base ref → exit 1 (fail closed, not fail open)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
   try {

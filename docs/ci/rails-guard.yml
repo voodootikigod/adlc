@@ -50,10 +50,14 @@ jobs:
             // both "bad ref" and "file absent", and conflating them would fail open.
             const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
-            // Read the TRUSTED base ticket file, not the PR working tree (which a
-            // PR could edit to remove rails and self-disable this gate).
+            // Distinguish a genuinely absent file from an operational git error:
+            // ls-tree non-zero = operational (fail closed); empty = file absent
+            // (nothing frozen). Read the TRUSTED base file, not the PR working tree.
+            const ls = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], { encoding: "utf8" });
+            if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
+            if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + base + " — nothing frozen."); process.exit(0); }
             const show = spawnSync("git", ["show", base + ":.adlc/tickets.json"], { encoding: "utf8" });
-            if (show.status !== 0) { console.log("no .adlc/tickets.json at " + base + " — nothing frozen."); process.exit(0); }
+            if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
             let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
             if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.tickets)) fail("base tickets not in { tickets: [...] } shape");
             const rails = [];

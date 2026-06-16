@@ -39,12 +39,25 @@ if (ref.status !== 0) {
   fail(`base ref '${base}' does not resolve — rails cannot be verified. Fetch it (or pass the correct base).`);
 }
 
-// Base resolves, so a non-zero status here means the file is genuinely absent at
-// base — nothing was frozen there, nothing to enforce.
-const show = spawnSync('git', ['show', `${base}:.adlc/tickets.json`], { encoding: 'utf8' });
-if (show.status !== 0) {
+// Distinguish "the file is genuinely absent at base" from an operational git
+// error. `git ls-tree` lists the path in the base tree: a non-zero status is an
+// operational failure (lock, IO) → fail closed; empty output means the file is
+// truly absent → nothing was frozen. Only `git show` an existing file, so a
+// failure THERE is also operational → fail closed (never read as "no rails").
+const ls = spawnSync('git', ['ls-tree', '--name-only', base, '--', '.adlc/tickets.json'], {
+  encoding: 'utf8',
+});
+if (ls.status !== 0) {
+  fail(`git ls-tree failed for '${base}' (operational error) — failing closed.`);
+}
+if (!ls.stdout.trim()) {
   console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
   process.exit(0);
+}
+
+const show = spawnSync('git', ['show', `${base}:.adlc/tickets.json`], { encoding: 'utf8' });
+if (show.status !== 0) {
+  fail(`git show failed for an existing base ticket file (operational error) — failing closed.`);
 }
 
 let data;
