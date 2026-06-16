@@ -131,6 +131,14 @@ for (const [name, cmd, exp] of [
   ['cp onto a rail (dest written)', 'cp evil.mjs test/auth/login.test.mjs', 'deny'],
   ['cp a rail as source (read)', 'cp test/auth/login.test.mjs backup.mjs', 'allow'],
   ['rm a non-rail', 'rm src/app.mjs', 'allow'],
+  ['rm -rf the rail parent dir', 'rm -rf test/auth', 'deny'],
+  ['rm -rf a grandparent dir of a rail', 'rm -rf test', 'deny'],
+  ['rm -rf a non-rail dir', 'rm -rf build', 'allow'],
+  ['sudo rm a rail (wrapper)', 'sudo rm test/auth/login.test.mjs', 'deny'],
+  ['env VAR=1 rm a rail (wrapper+assignment)', 'env FOO=1 rm test/auth/login.test.mjs', 'deny'],
+  ['xargs rm a rail (wrapper)', 'xargs rm test/auth/login.test.mjs', 'deny'],
+  ['subshell $(rm rail)', 'echo $(rm test/auth/login.test.mjs)', 'deny'],
+  ['backtick rm rail', 'echo `rm test/auth/login.test.mjs`', 'deny'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);
@@ -173,6 +181,10 @@ test('rm .adlc/tickets.json (disabling the trust root) while rails exist → den
 
 test('mv .adlc/tickets.json away while rails exist → deny', () => {
   assert.equal(runBash(RAIL_T, 'mv .adlc/tickets.json /tmp/t.json'), 'deny');
+});
+
+test('rm -rf .adlc (destroys the trust root) while rails exist → deny', () => {
+  assert.equal(runBash(RAIL_T, 'rm -rf .adlc'), 'deny');
 });
 
 test('editing .adlc/tickets.json with NO rails declared → allow (authoring the first ticket)', () => {

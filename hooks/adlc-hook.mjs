@@ -383,9 +383,27 @@ function lexBash(cmd) {
   return items;
 }
 
+// Command wrappers that delegate to a following command — the real verb is
+// after them (and after any `VAR=val` env assignments or wrapper flags).
+const CMD_WRAPPERS = new Set([
+  'sudo', 'doas', 'env', 'exec', 'nice', 'nohup', 'time', 'command', 'builtin',
+  'xargs', 'setsid', 'stdbuf', 'ionice', 'then', 'else', 'do',
+]);
+
 function processSegment(words, targets) {
   if (words.length === 0) return;
   for (const w of words) if (w.startsWith('of=')) targets.add(w.slice(3)); // dd of=PATH
+  // Strip leading wrappers / env-assignments / flags so `sudo rm x`, `env A=1 rm
+  // x`, `xargs rm x` are seen as the real mutating command.
+  let i = 0;
+  while (
+    i < words.length &&
+    (CMD_WRAPPERS.has(words[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || words[i].startsWith('-'))
+  ) {
+    i++;
+  }
+  words = words.slice(i);
+  if (words.length === 0) return;
   const c0 = words[0];
   if (c0 === 'tee') {
     for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
@@ -423,7 +441,7 @@ function processSegment(words, targets) {
  * cannot dodge a rail. A first-line guard, not a sandbox — the rails-guard CI
  * diff gate is the unbypassable backstop (PreToolUse hook + branch protection).
  */
-function bashWriteTargets(cmd) {
+function bashWriteTargets(cmd, depth = 0) {
   const items = lexBash(cmd);
   const targets = new Set();
   let seg = [];
@@ -442,15 +460,37 @@ function bashWriteTargets(cmd) {
     if (it.word !== undefined) seg.push(it.word);
   }
   processSegment(seg, targets);
+  // Recurse into command substitutions — `$(rm rail)` / backticks — so a write
+  // hidden in a subshell is still seen. Depth-guarded against pathological input.
+  if (depth < 4) {
+    for (const m of cmd.matchAll(/\$\(([^()]*)\)/g)) {
+      for (const t of bashWriteTargets(m[1], depth + 1)) targets.add(t);
+    }
+    for (const m of cmd.matchAll(/`([^`]*)`/g)) {
+      for (const t of bashWriteTargets(m[1], depth + 1)) targets.add(t);
+    }
+  }
   return [...targets];
 }
 
-/** The first rail a Bash command writes to (canonicalized), or null. */
+/** Literal path prefix of a rail glob (everything before the first wildcard),
+ *  trailing slash stripped — used for directory-containment checks. */
+function railLiteralPrefix(glob) {
+  const i = glob.indexOf('*');
+  return (i === -1 ? glob : glob.slice(0, i)).replace(/\/+$/, '');
+}
+
+/** The first rail a Bash command mutates (canonicalized), or null. A target
+ *  matches if it IS a rail (glob) OR is the rail's ancestor DIRECTORY — so
+ *  `rm -rf test/auth` (or `rm -rf .adlc`) that destroys rails within is caught. */
 function bashRailHit(cmd, railDecls) {
   for (const tok of bashWriteTargets(cmd)) {
     const rel = toRepoRelative(tok);
-    const hit = railDecls.find((r) => globMatch(r.glob, rel));
-    if (hit) return hit;
+    for (const r of railDecls) {
+      if (globMatch(r.glob, rel)) return r; // target is/matches a rail
+      const lit = railLiteralPrefix(r.glob);
+      if (lit && (lit === rel || lit.startsWith(rel + '/'))) return r; // target is an ancestor dir of the rail
+    }
   }
   return null;
 }
