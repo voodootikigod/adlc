@@ -24,11 +24,14 @@ jobs:
   maintenance:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to full commit SHAs (not floating tags) for the same
+      # supply-chain reason as the npm pin below. Refresh deliberately (e.g. via
+      # Dependabot/Renovate PRs).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0 # full history so churn (model-ratchet) is meaningful
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
 
@@ -39,23 +42,47 @@ jobs:
         # zero-dependency, so nothing legitimate needs them.)
         run: npm install -g --ignore-scripts @adlc/cli@1.0.2
 
+      # The two checks below are ADVISORY, but a check that *crashes* must not be
+      # mistaken for a clean run. Each captures the tool's real exit code, records
+      # it in the summary, and raises a workflow ::warning:: on an UNEXPECTED exit
+      # (e.g. a CLI/layout regression) — surfaced, never silently green.
       - name: Skill rot (stale validation metadata)
         run: |
           {
             echo "## Skill rot"
             echo '```'
-            # Adjust the path to wherever your skills live (e.g. skills/ or .claude/skills/).
-            for dir in skills .claude/skills; do
-              if [ -d "$dir" ]; then adlc skill-rot "$dir" --json || true; fi
-            done
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          rc=0
+          for dir in skills .claude/skills; do
+            [ -d "$dir" ] || continue
+            out="$(adlc skill-rot "$dir" --json)" ; rc=$?
+            echo "$out" >> "$GITHUB_STEP_SUMMARY"
+            case "$rc" in
+              0) echo "($dir: skills fresh)" >> "$GITHUB_STEP_SUMMARY" ;;
+              2) echo "($dir: STALE skill metadata — re-validate)" >> "$GITHUB_STEP_SUMMARY" ;;
+              1) if printf '%s' "$out" | grep -q 'nothing to verify'; then
+                   echo "($dir: no skills carry validation metadata — informational)" >> "$GITHUB_STEP_SUMMARY"
+                 else
+                   echo "::warning title=skill-rot::skill-rot on $dir exited 1 unexpectedly"
+                   echo "($dir: skill-rot errored — see warning)" >> "$GITHUB_STEP_SUMMARY"
+                 fi ;;
+              *) echo "::warning title=skill-rot::skill-rot on $dir exited $rc unexpectedly"
+                 echo "($dir: skill-rot exited $rc — see warning)" >> "$GITHUB_STEP_SUMMARY" ;;
+            esac
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Model ratchet (hot files to re-prosecute)
         run: |
           {
             echo "## Hot files (re-prosecution candidates)"
             echo '```'
-            adlc model-ratchet --dry-run --json || true
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          out="$(adlc model-ratchet --dry-run --json)" ; rc=$?
+          echo "$out" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # model-ratchet --dry-run is a plan, not a gate: exit 0 is the only
+          # expected code. Anything else is a regression — surface it.
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning title=model-ratchet::model-ratchet --dry-run exited $rc unexpectedly"
+          fi
