@@ -55,7 +55,9 @@ jobs:
           rc=0
           for dir in skills .claude/skills; do
             [ -d "$dir" ] || continue
-            out="$(adlc skill-rot "$dir" --json)" ; rc=$?
+            # Capture in an `if` so an expected nonzero exit (stale=2, info=1) does
+            # NOT abort the step under the Actions shell's `set -e`.
+            if out="$(adlc skill-rot "$dir" --json)"; then rc=0; else rc=$?; fi
             echo "$out" >> "$GITHUB_STEP_SUMMARY"
             case "$rc" in
               0) echo "($dir: skills fresh)" >> "$GITHUB_STEP_SUMMARY" ;;
@@ -78,7 +80,8 @@ jobs:
             echo "## Hot files (re-prosecution candidates)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          out="$(adlc model-ratchet --dry-run --json)" ; rc=$?
+          # `if` capture so a nonzero exit does not abort the step under `set -e`.
+          if out="$(adlc model-ratchet --dry-run --json)"; then rc=0; else rc=$?; fi
           echo "$out" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           # model-ratchet --dry-run is a plan, not a gate: exit 0 is the only
