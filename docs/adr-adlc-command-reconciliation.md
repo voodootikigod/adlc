@@ -1,6 +1,6 @@
 # ADR: Reconciling the `adlc` command across the two integration efforts
 
-**Status:** Proposed (under adversarial review) · **Date:** 2026-06-16
+**Status:** Accepted — Option C (hardened) · **Date:** 2026-06-16
 
 ## Context
 
@@ -28,32 +28,48 @@ already auto-discovers and lockstep-publishes the new packages.
 
 ## Decision
 
-**Option C — unify under one `adlc` command owned by `@adlc/cli`.**
+**Option C (hardened) — unify under one `adlc` command owned by `@adlc/cli`,
+delegating to `@adlc/runner` by *spawning its bin*.**
 
 - `@adlc/cli` remains the sole owner of bin `adlc`.
-- The dispatcher gains a small set of **reserved built-in verbs** — `run` and
-  `accept` — handled *before* tool lookup. They delegate to `@adlc/runner`'s
-  logic (imported as a library, or invoked as a resolved bin), preserving the
-  exact `adlc run <phase>` / `adlc accept …` grammar.
+- The dispatcher reserves a small set of **built-in verbs** — `run` and `accept`
+  — handled *before* tool lookup, preserving the exact `adlc run <phase>` /
+  `adlc accept …` grammar (so codex's existing usage is unchanged).
+- A reserved verb is served by **spawning `@adlc/runner`'s own standalone bin
+  (`adlc-run`) as a child process** — NOT by importing runner as a library. This
+  is identical to how the dispatcher already runs tools: full process isolation
+  and verbatim exit-code propagation (0/1/2). The runner is never loaded into the
+  dispatcher's process.
+- `@adlc/runner` **keeps a non-colliding `adlc-run` bin** (it drops only the
+  colliding `adlc` bin), so it stays independently installable/usable, and the
+  dispatcher has a stable bin to resolve and spawn.
 - Everything else (`adlc <anything-not-a-reserved-verb>`) dispatches to
   `@adlc/<tool>` exactly as today.
-- `@adlc/runner` **drops its `adlc` bin** (it becomes a library the dispatcher
-  consumes, and/or keeps a non-colliding bin such as `adlc-run` for direct use).
-- `@adlc/cli` adds a dependency on `@adlc/runner` (lockstep, like the other 19).
+- `@adlc/cli` adds a dependency on `@adlc/runner` (lockstep, like the other 19),
+  so `adlc-run` is always present alongside `adlc`.
 
 ### Dispatch precedence (the contract)
 
 ```
 adlc <first> [args...]
-  if <first> in {--help,-h,help,--version,-v}  → dispatcher built-in
-  else if <first> in RESERVED_VERBS {run,accept} → runner logic
-  else if <first> is a known tool               → spawn @adlc/<first>
-  else                                          → unknown-tool error (exit 1)
+  if <first> in {--help,-h,help,--version,-v}     → dispatcher built-in
+  else if <first> in RESERVED_VERBS {run,accept}  → spawn `adlc-run` <first> args...
+  else if <first> is a known tool                 → spawn @adlc/<first> args...
+  else                                            → unknown-tool error (exit 1)
 ```
 
-`RESERVED_VERBS` and the tool registry are validated to be **disjoint** at build
-time (a test asserts no tool is named `run`/`accept`), so a reserved verb can
-never shadow a real tool and vice-versa.
+Hardening enforced by tests (so the risks the adversarial review raised cannot
+regress silently):
+
+1. **Disjointness test** — asserts `RESERVED_VERBS` and the tool registry never
+   intersect (no tool may be named `run`/`accept`). A reserved verb can never
+   shadow a real tool, and a new tool with a reserved name fails the test rather
+   than becoming unreachable.
+2. **Spawn, never import** — the runner is invoked only as a spawned child; a
+   test asserts `adlc run …`/`adlc accept …` propagate the child's exit code
+   (0/1/2) verbatim, matching tool dispatch.
+3. **Reserved verbs are a closed set** — adding a verb is a deliberate registry +
+   test change, not an implicit fallthrough.
 
 ## Alternatives considered
 
@@ -72,19 +88,31 @@ never shadow a real tool and vice-versa.
 - **Single entry point** preserved — one command for the whole lifecycle.
 - **New coupling**: `@adlc/cli` now depends on `@adlc/runner`. Both are already
   lockstep-versioned, so this adds no release complexity beyond the existing
-  repin-all behavior.
-- **Reserved-verb surface must be guarded**: a future tool named `run`/`accept`
-  would be unreachable; the disjointness test prevents that landing silently.
+  repin-all behavior. Because the dispatcher *spawns* `adlc-run` rather than
+  importing it, the coupling is a runtime resolve, not a hard module link — the
+  dispatcher does not break if the runner's internals change.
+- **Reserved-verb surface is guarded**: the disjointness test makes a shadowing
+  collision a build failure, not a silent unreachable tool.
 - **Merge ordering**: codex's work is currently uncommitted; it must be committed
   to a stable ref before the unification is implemented against it. This ADR does
   not modify any codex file.
 
-## Open questions for review
+## Resolved questions (from the Gemini-3.5-Flash adversarial review)
 
-1. Is delegating verbs to `@adlc/runner` as a **library import** safer than
-   **spawning its bin**, given the dispatcher otherwise spawns tools as children
-   (process isolation, exit-code fidelity)?
-2. Does reserving `run`/`accept` create ambiguity with any planned tool, or with
-   the existing `gate-manifest record`/`verify` sub-verb style?
-3. Should `RESERVED_VERBS` be a closed set, or should the runner own a single
-   namespace prefix (e.g. `adlc phase …`) to avoid ever colliding with tool names?
+The review of the original (un-hardened) proposal raised coupling, process-
+isolation loss, and shadowing. Resolutions, now folded into the Decision above:
+
+1. **Library import vs spawn → spawn.** The dispatcher spawns `adlc-run` as a
+   child (process isolation + verbatim exit codes), consistent with how it runs
+   every tool. The runner is never imported into the dispatcher process.
+2. **Reserving `run`/`accept` vs an `adlc phase …` prefix → keep bare verbs.** A
+   prefix would change codex's existing `adlc run <phase>` grammar and break its
+   users; bare verbs preserve that grammar, and the disjointness test removes the
+   shadowing risk that motivated the prefix. (`gate-manifest`'s `record`/`verify`
+   are sub-verbs of a *tool*, not top-level `adlc` verbs, so there is no clash.)
+3. **Closed set.** `RESERVED_VERBS = {run, accept}` is closed; expanding it is a
+   deliberate registry + test change.
+
+If the coupling or reserved surface ever proves costly, **Option D** (separate
+`adlc` + `adlc-run` bins) remains the documented fallback — it trades the single
+entry point for zero coupling and zero shadowing.
