@@ -1,6 +1,8 @@
 # ADR: Reconciling the `adlc` command across the two integration efforts
 
-**Status:** Accepted — Option C (hardened) · **Date:** 2026-06-16
+**Status:** Superseded — see the Revision below. Given a multi-harness roadmap
+(Claude Code, Codex, Cursor, opencode, …), the decision flips from Option C
+(unify) to **Option D (separate concern-focused bins)**. · **Date:** 2026-06-16
 
 ## Context
 
@@ -135,3 +137,76 @@ runs tools, so they add no new mechanism:
    `["run","p5"]` — the runner's existing first-positional grammar is unchanged
    (its bin is the old `adlc` bin, only renamed). A test asserts exit-code
    fidelity (0/1/2) and that the verb reaches the runner.
+
+---
+
+## Revision (2026-06-16): multi-harness roadmap → Option D supersedes Option C
+
+### New context
+
+The ADLC integration is not one-off: similar thin plugins are planned for
+**Codex, Cursor, opencode, and more**. The primary callers of the command surface
+are therefore **N independent, thin harness adapters**, not humans typing.
+
+### The layers
+
+Three genuinely distinct concerns, all harness-agnostic:
+
+- **Tools** — the 19 atomic gate bins (`spec-lint`, `rails-guard`, …).
+- **Dispatcher** (`adlc <tool>`) — sugar: one stable prefix over the 19 tools.
+- **Runner** (`adlc run <phase>` / `accept`) — higher-level lifecycle-evidence
+  assertion. A different job than gate dispatch.
+
+Each harness plugin is a thin adapter wiring that harness's native primitives
+(hooks, slash commands) to these commands.
+
+### Decision (supersedes Option C)
+
+**Option D — separate, concern-focused bins.** Do NOT overload one command.
+
+- `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged.
+- `adlc-run <phase>` / `adlc-accept` — runner (`@adlc/runner`), its own bin.
+- No reserved verbs on `adlc`, no `cli → runner` dependency, no disjointness test.
+
+### Why the roadmap flips the decision
+
+Overloading one command — whether "unify under `adlc`" (Option C) or "funnel
+everything through the runner bin" — is the **same anti-pattern**: it puts two
+concerns (gate-dispatch *and* phase-assert) behind one command. Tolerable with
+one caller; a tax on **every** caller when callers multiply:
+
+1. **Ambiguity** — `adlc <x>`: tool or verb? Every plugin author must hold that
+   model. With separate bins, `adlc <x>` is *always* a tool, `adlc-run <x>` is
+   *always* a phase. Zero precedence logic.
+2. **Coupling** — Option C makes `@adlc/cli` depend on `@adlc/runner`; they must
+   move together. Separate bins evolve independently.
+3. **Reserved-surface fragility** — Option C's `run`/`accept` can never collide
+   with a tool name, forever, enforced by a test on every change. Separate bins
+   have no such constraint.
+4. **Minimal deps per plugin** — a harness integration that only runs gates pulls
+   `@adlc/cli`; one that asserts phases pulls `@adlc/runner`. Neither is forced to
+   take both.
+
+Cost: two top-level commands instead of one. Acceptable: the primary callers are
+plugins, for which two unambiguous commands beat one overloaded command; and the
+docs are one sentence per harness ("gates: `adlc <x>`; phases: `adlc-run <x>`").
+This costs the Claude Code side nothing — Phase A–F never calls `run`/`accept`.
+
+### Companion direction: share the harness-agnostic logic, not just the bins
+
+Today the Claude hook (`hooks/adlc-hook.mjs`) and the Codex hook
+(`plugins/adlc-codex/hooks/adlc-rails-guard.mjs`) are **separate implementations
+of the same rails logic**. With N harnesses that is N drifting copies of
+security-critical code. Factor the harness-agnostic decision logic (rails
+parsing, the bash-write lexer, the fail-closed contract) into a **shared library**
+(`@adlc/core` or a new `@adlc/hook-core`). Each harness plugin then keeps only the
+thin native binding: *read this harness's hook payload → call the shared logic →
+emit this harness's response format.* One source of truth for the dangerous
+logic, N thin bindings.
+
+### Open question for review
+
+Does any concrete benefit of a single `adlc` entry point (discoverability via one
+`--help`, human ergonomics) outweigh the per-plugin cost of overloading, once
+there are several harness integrations? Or is the separate-bin contract strictly
+better at N > 1 harnesses?
