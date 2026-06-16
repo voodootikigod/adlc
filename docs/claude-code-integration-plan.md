@@ -261,7 +261,11 @@ sequence 20 tools + supply keys" to "install once, init once."
    (skill-rot + model-ratchet + gate-fuzzing) commands; deterministic checks run
    on a weekly cron via `docs/ci/adlc-maintenance.yml`; LLM-backed checks run via
    a scheduled Claude routine (`/schedule`) — no API keys.
-6. **Phase F — marketplace publish** + docs.
+6. **Phase F — marketplace publish** + docs. ✅ Shipped. The repo is a Claude
+   Code marketplace (`.claude-plugin/marketplace.json` + `plugin.json`);
+   `docs/claude-code.md` is the user adoption guide, linked from the README.
+   "Publish" = pushing the branch to GitHub, where the repo itself serves as the
+   installable marketplace (`/plugin marketplace add voodootikigod/adlc`).
 
 Each phase is independently shippable and independently useful, matching the
 toolkit's own "every tool is one gate" philosophy.
