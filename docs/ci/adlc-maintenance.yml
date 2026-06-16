@@ -1,0 +1,57 @@
+# ADLC scheduled maintenance — copy into your repo as
+# .github/workflows/adlc-maintenance.yml
+#
+# Idle-time metabolism (ADLC C10/C12): the DETERMINISTIC, keyless maintenance
+# checks on a weekly cron. It reports stale skill metadata and the highest-churn
+# files worth re-prosecuting, into the job summary. It is ADVISORY — it does not
+# fail the run, so it never blocks merges; treat its output as a worklist.
+#
+# The LLM-backed parts (lesson-foundry, rejection-mining, gate-fuzzing) are not
+# here because they need a model. Run those via a scheduled Claude routine that
+# invokes /adlc-distill and /adlc-maintain (Claude is the model — no API keys).
+
+name: ADLC Maintenance
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # 06:00 UTC every Monday
+  workflow_dispatch: {} # allow manual runs
+
+permissions:
+  contents: read
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so churn (model-ratchet) is meaningful
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install the ADLC toolkit
+        run: npm install -g @adlc/cli
+
+      - name: Skill rot (stale validation metadata)
+        run: |
+          {
+            echo "## Skill rot"
+            echo '```'
+            # Adjust the path to wherever your skills live (e.g. skills/ or .claude/skills/).
+            for dir in skills .claude/skills; do
+              if [ -d "$dir" ]; then adlc skill-rot "$dir" --json || true; fi
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Model ratchet (hot files to re-prosecute)
+        run: |
+          {
+            echo "## Hot files (re-prosecution candidates)"
+            echo '```'
+            adlc model-ratchet --dry-run --json || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

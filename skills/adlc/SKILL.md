@@ -30,8 +30,8 @@ Mid-build, agent looping or drifting? ───────→ P4  adlc flail-de
 Hard failing test, need a repair? ───────────→ P4  adlc consensus-fix
 Change done, pre-merge prosecution? ─────────→ P5  adlc hollow-test · behavior-diff · review-calibration
 Recording / showing gate evidence? ──────────→ —   adlc gate-manifest
-Repeated review findings to bank? ───────────→ P7  adlc lesson-foundry · rejection-mining
-Idle-time / post-drift maintenance? ─────────→ —   adlc skill-rot · model-ratchet · gate-fuzzing
+Repeated review findings to bank? ───────────→ P7  /adlc-distill (lesson-foundry · rejection-mining)
+Idle-time / post-drift maintenance? ─────────→ —   /adlc-maintain (skill-rot · model-ratchet · gate-fuzzing)
 ```
 
 ## The phases
@@ -89,17 +89,20 @@ This gate is a human decision, not something an agent passes. Surface the
 evidence: `adlc gate-manifest show` and the `behavior-diff compare` output, then
 let the human decide. Record outcomes with `adlc gate-manifest record <gate>`.
 
-### P7 — Distill (turn findings into defenses)
-- `adlc lesson-foundry` — mine repeated findings into deterministic defenses
-  (lint checks, skills).
-- `adlc rejection-mining` — mine review rejections into reusable review lenses.
+### P7 — Distill (turn findings into defenses) → `/adlc-distill`
+- `adlc lesson-foundry --prompt-only` — mine repeated findings into deterministic
+  defenses (lint checks, skills). LLM-backed: answer the printed prompt yourself.
+- `adlc rejection-mining --prompt-only` — mine human PR rejections into reusable
+  review lenses (needs the `gh` CLI). `/adlc-distill` runs both.
 
-### Maintenance (decay-driven, no human trigger)
+### Maintenance (decay-driven, no human trigger) → `/adlc-maintain`
 - `adlc skill-rot [path…]` — flag skill files with stale validation metadata.
-- `adlc model-ratchet [--top <n>]` — identify hot files to re-prosecute after
-  model or repo drift.
-- `adlc gate-fuzzing [--suite <path>]` — run hostile candidates against gate
-  suites to find defeats and calibration gaps.
+- `adlc model-ratchet --dry-run` — identify hot files to re-prosecute after model
+  or repo drift (a plan, not a gate).
+- `adlc gate-fuzzing --suite .adlc/gate-suite.json --prompt-only` — play the
+  adversary against the gate suite to find calibration gaps (needs a suite file).
+- `/adlc-maintain` runs these; the deterministic two also run on a cron
+  (`docs/ci/adlc-maintenance.yml`).
 
 ## Notes
 

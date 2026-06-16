@@ -52,8 +52,8 @@ Two load-bearing decisions fall out of that mapping:
 | Hard-bug repair (P4 / C7) | `consensus-fix` | **Slash command** (explicit, expensive) | User-invoked |
 | Prosecution (P5) | `hollow-test`, `behavior-diff`, `review-calibration` | **Subagent** ("prosecutor") + skills | Invoked before merge |
 | Gate evidence (C11) | `gate-manifest` | **Stop hook** audits the evidence chain (`verify`); the gates themselves `record` | Advisory: warn only if the chain is broken |
-| Distill (P7) | `lesson-foundry`, `rejection-mining` | **Scheduled (cron) loop** | Idle-time, budgeted |
-| Maintenance (C10/C12 + fuzzing) | `skill-rot`, `model-ratchet`, `gate-fuzzing` | **Scheduled (cron) loop** | Idle-time, budgeted |
+| Distill (P7) | `lesson-foundry`, `rejection-mining` | **`/adlc-distill`** (manual) + scheduled Claude routine | Idle-time, budgeted; prompt-only (no keys) |
+| Maintenance (C10/C12 + fuzzing) | `skill-rot`, `model-ratchet`, `gate-fuzzing` | **`/adlc-maintain`** (manual) + **CI cron** for the deterministic checks (`docs/ci/adlc-maintenance.yml`) | Idle-time, budgeted; advisory |
 | Orchestration lane (D0) | the toolkit's own build pattern | **Workflow script** / `/adlc-run` orchestrator command | Opt-in |
 | Knowledge layer (P7) | the skills themselves | **Skills with progressive disclosure** | Always available, lazily loaded |
 
@@ -256,7 +256,11 @@ sequence 20 tools + supply keys" to "install once, init once."
    §4.4, `ADLC_RAILS_BYPASS=1` audited override); the `prosecutor` subagent runs
    the P5 review-evidence gates.
 5. **Phase E — scheduled maintenance** (lesson-foundry, skill-rot,
-   model-ratchet) with manual `/adlc-*` fallbacks.
+   model-ratchet) with manual `/adlc-*` fallbacks. ✅ Shipped. `/adlc-distill`
+   (P7: lesson-foundry + rejection-mining, prompt-only) and `/adlc-maintain`
+   (skill-rot + model-ratchet + gate-fuzzing) commands; deterministic checks run
+   on a weekly cron via `docs/ci/adlc-maintenance.yml`; LLM-backed checks run via
+   a scheduled Claude routine (`/schedule`) — no API keys.
 6. **Phase F — marketplace publish** + docs.
 
 Each phase is independently shippable and independently useful, matching the
