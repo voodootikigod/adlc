@@ -230,13 +230,16 @@ design. All three are folded into the accepted decision:
      message**, not an opaque ENOENT.
 
 3. **An enforcing hook's fail-closed guarantee cannot live only in JS.** If the
-   hook's Node process fails to bootstrap (missing dependency, syntax error,
-   crash), the JS fail-closed logic never runs — so the guarantee must also be
-   enforced at the **host/harness level**: configure each harness so that a hook
-   *crash* (not just a "deny" decision) is treated as **deny** for the enforcing
-   rails hook. This applies to the existing Phase D Claude Code hook too and is
-   tracked as a follow-up: verify Claude Code's PreToolUse hook-crash semantics
-   and add a host-level guard (e.g. a thin shell wrapper that denies on any
-   non-zero/uncaught exit) if the default is fail-open. The shared hook library
+   hook crashes, the JS fail-closed logic never runs. The review proved this was a
+   live bug in the Phase D hook: its global `try/catch … process.exit(0)` swallowed
+   *any* exception in `rails` mode → no deny → exit 0 → the harness allowed the
+   edit (**fail open on crash**). **Fixed**: the global handler is now mode-aware —
+   in `rails` mode a caught exception emits a deny and `exit 2` (Claude Code blocks
+   the PreToolUse call), while the advisory modes still swallow and exit 0. The
+   same pass found that the bash guard ignored `rm`/`mv` (so `rm .adlc/tickets.json`
+   or `rm <rail>` disabled enforcement); **fixed** by treating `rm`/`mv` operands
+   (and `cp`/`install` destinations) as mutation targets. For *other* harnesses,
+   the principle still holds: configure each so a hook *crash* (non-zero/uncaught
+   exit) is treated as deny for the enforcing hook. The shared hook library
    (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
    guarantee is a harness-binding responsibility, documented per harness.

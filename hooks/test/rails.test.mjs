@@ -124,6 +124,13 @@ for (const [name, cmd, exp] of [
   ['cat a rail (read)', 'cat test/auth/login.test.mjs', 'allow'],
   ['write a non-rail', 'echo x > src/app.mjs', 'allow'],
   ['grep a rail (read, no write)', 'grep foo test/auth/login.test.mjs', 'allow'],
+  ['rm a rail (deletion)', 'rm test/auth/login.test.mjs', 'deny'],
+  ['rm -f a rail', 'rm -f test/auth/login.test.mjs', 'deny'],
+  ['mv a rail away (source)', 'mv test/auth/login.test.mjs /tmp/x', 'deny'],
+  ['mv onto a rail (dest)', 'mv /tmp/x test/auth/login.test.mjs', 'deny'],
+  ['cp onto a rail (dest written)', 'cp evil.mjs test/auth/login.test.mjs', 'deny'],
+  ['cp a rail as source (read)', 'cp test/auth/login.test.mjs backup.mjs', 'allow'],
+  ['rm a non-rail', 'rm src/app.mjs', 'allow'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);
@@ -158,6 +165,14 @@ test('editing .adlc/tickets.json while rails exist → deny (trust root)', () =>
 
 test('bash redirect into .adlc/tickets.json while rails exist → deny', () => {
   assert.equal(runBash(RAIL_T, 'echo "{}" > .adlc/tickets.json'), 'deny');
+});
+
+test('rm .adlc/tickets.json (disabling the trust root) while rails exist → deny', () => {
+  assert.equal(runBash(RAIL_T, 'rm .adlc/tickets.json'), 'deny');
+});
+
+test('mv .adlc/tickets.json away while rails exist → deny', () => {
+  assert.equal(runBash(RAIL_T, 'mv .adlc/tickets.json /tmp/t.json'), 'deny');
 });
 
 test('editing .adlc/tickets.json with NO rails declared → allow (authoring the first ticket)', () => {

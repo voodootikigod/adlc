@@ -400,6 +400,16 @@ function processSegment(words, targets) {
       const operands = words.slice(1).filter((w) => !w.startsWith('-'));
       for (const w of operands.slice(1)) targets.add(w); // first operand is the script
     }
+  } else if (c0 === 'rm' || c0 === 'mv') {
+    // DELETION (rm) and MOVE (mv) mutate a frozen rail just as a write does —
+    // and `rm .adlc/tickets.json` would disable enforcement entirely. Every
+    // non-flag operand is a mutation target (for mv, both the moved-away source
+    // and the overwritten destination count).
+    for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
+  } else if (c0 === 'cp' || c0 === 'install') {
+    // Only the DESTINATION (last operand) is written; sources are read.
+    const operands = words.slice(1).filter((w) => !w.startsWith('-'));
+    if (operands.length) targets.add(operands[operands.length - 1]);
   }
 }
 
@@ -599,7 +609,18 @@ function rails(input) {
 
 try {
   main();
-} catch {
-  /* advisory hooks never surface their own errors */
+} catch (err) {
+  // The `rails` mode is ENFORCING — a crash must FAIL CLOSED, never fall through
+  // to exit 0 (which the harness reads as "allow"). Emit a deny and exit 2 so the
+  // PreToolUse call is blocked even if the deny payload is missed. The advisory
+  // modes (preflight/flail/manifest) legitimately swallow their own errors.
+  if (MODE === 'rails') {
+    try {
+      denyRail(`rails hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+    } catch {
+      /* even emit failed — the non-zero exit below still blocks */
+    }
+    process.exit(2);
+  }
 }
 process.exit(0);
