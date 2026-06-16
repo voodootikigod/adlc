@@ -116,3 +116,22 @@ isolation loss, and shadowing. Resolutions, now folded into the Decision above:
 If the coupling or reserved surface ever proves costly, **Option D** (separate
 `adlc` + `adlc-run` bins) remains the documented fallback — it trades the single
 entry point for zero coupling and zero shadowing.
+
+## Implementation notes (cautions from the second review pass)
+
+These are binding on the implementation; each maps to how the dispatcher already
+runs tools, so they add no new mechanism:
+
+1. **Resolve `adlc-run` BY PATH, never via `$PATH`.** On a global install only
+   `@adlc/cli`'s own `adlc` bin lands on the global PATH; its dependency's
+   `adlc-run` does not. The dispatcher must resolve `@adlc/runner`'s declared bin
+   the same way it resolves a tool — `createRequire(...).resolve('@adlc/runner/
+   package.json')` → read `bin` → `spawn(process.execPath, [binPath, ...argv])`.
+   A `spawnSync('adlc-run', …)` PATH lookup would fail under global install.
+2. **Inherit stdio** on the spawned child (`stdio: 'inherit'`), so `adlc run` /
+   `adlc accept` output and any interactivity reach the user unchanged. A test
+   asserts this.
+3. **Forward argv verbatim, verb included.** `adlc run p5` spawns the runner with
+   `["run","p5"]` — the runner's existing first-positional grammar is unchanged
+   (its bin is the old `adlc` bin, only renamed). A test asserts exit-code
+   fidelity (0/1/2) and that the verb reaches the runner.
