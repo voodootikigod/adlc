@@ -23,12 +23,17 @@ adlc lesson-foundry --prompt-only
 - If it prints `(no clusters to refine)`, there are not yet enough repeated
   findings in `.adlc/findings.jsonl` to distill — report that and stop here.
 - Otherwise it prints one prompt per cluster of repeated findings. For each,
-  **answer the prompt yourself**: propose the cheapest *deterministic* defense
-  that would have caught the whole cluster — a lint rule, a skill, or a spec-gap
+  **answer the prompt yourself**: decide the cheapest *deterministic* defense that
+  would have caught the whole cluster — a lint rule, a skill, or a spec-gap
   template — preferring a machine-checkable gate over a prose reminder.
-- Present the proposed defenses. Only after the user approves, re-run with
-  `--write` (and any `--out-dir`) to materialize them; the writer defaults to
-  dry-run, so nothing is created without that flag.
+- Present the proposed defenses. After the user approves, materialize them:
+  1. Run `adlc lesson-foundry --write --out-dir .adlc/lessons` (the writer is
+     dry-run by default, so nothing is created without `--write`). This scaffolds
+     one defense file per cluster from the finding data, with **default wording**.
+  2. **Then edit the scaffolded files** to match the defenses you decided above.
+     `--write` on its own does NOT apply your prompt-only refinement — that is
+     only auto-applied with `--llm` (which needs an API key). So in the keyless
+     in-Claude flow you scaffold with `--write`, then refine the wording yourself.
 
 ## 2. Rejection mining — mine human PR objections (C13)
 
