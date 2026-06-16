@@ -33,7 +33,11 @@ jobs:
           node-version: 20
 
       - name: Install the ADLC toolkit
-        run: npm install -g @adlc/cli
+        # Pinned to an exact, audited version — do not use mutable `@latest` on a
+        # scheduled runner with repo access. Bump deliberately after reviewing the
+        # release. (`--ignore-scripts` blocks install-time scripts; the CLIs are
+        # zero-dependency, so nothing legitimate needs them.)
+        run: npm install -g --ignore-scripts @adlc/cli@1.0.2
 
       - name: Skill rot (stale validation metadata)
         run: |
