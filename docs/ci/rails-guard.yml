@@ -38,7 +38,13 @@ jobs:
         run: npm install -g --ignore-scripts @adlc/cli@1.0.2
 
       - name: Fetch base ref
-        run: git fetch --no-tags origin "${{ github.base_ref }}"
+        # Pass the ref via env (not direct ${{ }} shell interpolation), and use an
+        # explicit refspec so the origin/<base> REMOTE-TRACKING ref is created —
+        # actions/checkout's narrow fetch config does not create it otherwise, and
+        # the gate resolves `origin/<base>`.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
       - name: Rail-freeze gate
         run: |
@@ -71,6 +77,7 @@ jobs:
             u.push(".adlc/tickets.json"); // trust root is frozen once rails exist
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
             const res = spawnSync("adlc", argv, { stdio: "inherit" });
+            if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
             process.exit(typeof res.status === "number" ? res.status : 1);
           '
         env:

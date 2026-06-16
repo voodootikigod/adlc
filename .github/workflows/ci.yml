@@ -51,7 +51,13 @@ jobs:
         run: npm install
 
       - name: Fetch base ref
-        run: git fetch --no-tags origin ${{ github.base_ref || 'main' }}
+        # env (not direct interpolation) + explicit refspec so origin/<base> is
+        # created as a remote-tracking ref the gate can resolve.
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
       - name: Rail-freeze gate
-        run: node scripts/rails-guard-ci.mjs "origin/${{ github.base_ref || 'main' }}"
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
