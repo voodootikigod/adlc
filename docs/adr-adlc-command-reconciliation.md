@@ -1,8 +1,9 @@
 # ADR: Reconciling the `adlc` command across the two integration efforts
 
-**Status:** Superseded — see the Revision below. Given a multi-harness roadmap
-(Claude Code, Codex, Cursor, opencode, …), the decision flips from Option C
-(unify) to **Option D (separate concern-focused bins)**. · **Date:** 2026-06-16
+**Status:** **Accepted — Option D** (separate concern-focused bins), given the
+multi-harness roadmap (Claude Code, Codex, Cursor, opencode, …). Supersedes the
+earlier Option C (unify) decision, preserved below as decision history. See the
+Revision section for the accepted design. · **Date:** 2026-06-16
 
 ## Context
 
@@ -160,12 +161,16 @@ Three genuinely distinct concerns, all harness-agnostic:
 Each harness plugin is a thin adapter wiring that harness's native primitives
 (hooks, slash commands) to these commands.
 
-### Decision (supersedes Option C)
+### Decision (ACCEPTED — supersedes Option C)
 
 **Option D — separate, concern-focused bins.** Do NOT overload one command.
 
 - `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged.
-- `adlc-run <phase>` / `adlc-accept` — runner (`@adlc/runner`), its own bin.
+- `adlc-runner <verb> …` — runner (`@adlc/runner`), a **single** bin with
+  `run` / `accept` subcommands (`adlc-runner run <phase>`,
+  `adlc-runner accept --ticket …`). This is the minimal change to the runner
+  package: its bin already parses `run`/`accept` as the first positional, so it is
+  only renamed `adlc` → `adlc-runner`; the grammar is otherwise unchanged.
 - No reserved verbs on `adlc`, no `cli → runner` dependency, no disjointness test.
 
 ### Why the roadmap flips the decision
@@ -176,8 +181,8 @@ concerns (gate-dispatch *and* phase-assert) behind one command. Tolerable with
 one caller; a tax on **every** caller when callers multiply:
 
 1. **Ambiguity** — `adlc <x>`: tool or verb? Every plugin author must hold that
-   model. With separate bins, `adlc <x>` is *always* a tool, `adlc-run <x>` is
-   *always* a phase. Zero precedence logic.
+   model. With separate bins, `adlc <x>` is *always* a tool, `adlc-runner <x>` is
+   *always* a runner subcommand. Zero precedence logic.
 2. **Coupling** — Option C makes `@adlc/cli` depend on `@adlc/runner`; they must
    move together. Separate bins evolve independently.
 3. **Reserved-surface fragility** — Option C's `run`/`accept` can never collide
@@ -204,9 +209,34 @@ thin native binding: *read this harness's hook payload → call the shared logic
 emit this harness's response format.* One source of truth for the dangerous
 logic, N thin bindings.
 
-### Open question for review
+### Refinements (from the Option D adversarial review)
 
-Does any concrete benefit of a single `adlc` entry point (discoverability via one
-`--help`, human ergonomics) outweigh the per-plugin cost of overloading, once
-there are several harness integrations? Or is the separate-bin contract strictly
-better at N > 1 harnesses?
+The Gemini-3.5-Flash review confirmed separate bins over unify and sharpened the
+design. All three are folded into the accepted decision:
+
+1. **Runner is ONE bin with subcommands, not two top-level commands.** Use
+   `adlc-runner run …` / `adlc-runner accept …`, never separate `adlc-run` +
+   `adlc-accept` bins. Fewer top-level commands, and it matches the runner's
+   existing first-positional grammar (rename only).
+
+2. **Plugins must declare exactly the bins they use** — separate bins move
+   install-correctness onto each adapter, so a plugin calling `adlc-runner` while
+   only `@adlc/cli` is installed gets command-not-found. Mitigations:
+   - each harness plugin's install docs/manifest names its required packages
+     (`@adlc/cli` for gates, `@adlc/runner` for phases);
+   - ship an **`@adlc/all`** convenience meta-package (depends on every bin) for
+     "install the whole suite" flows, so a plugin can require that one package;
+   - a plugin should **detect a missing bin and fail with a clear install
+     message**, not an opaque ENOENT.
+
+3. **An enforcing hook's fail-closed guarantee cannot live only in JS.** If the
+   hook's Node process fails to bootstrap (missing dependency, syntax error,
+   crash), the JS fail-closed logic never runs — so the guarantee must also be
+   enforced at the **host/harness level**: configure each harness so that a hook
+   *crash* (not just a "deny" decision) is treated as **deny** for the enforcing
+   rails hook. This applies to the existing Phase D Claude Code hook too and is
+   tracked as a follow-up: verify Claude Code's PreToolUse hook-crash semantics
+   and add a host-level guard (e.g. a thin shell wrapper that denies on any
+   non-zero/uncaught exit) if the default is fail-open. The shared hook library
+   (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
+   guarantee is a harness-binding responsibility, documented per harness.
