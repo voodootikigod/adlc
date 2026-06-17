@@ -385,6 +385,25 @@ function targetFilePaths(input) {
  * existing parent dir and re-attach the basename. Both repo root and target are
  * realpath'd so a symlinked repo root still compares correctly.
  */
+// Resolve symlinks even for a not-yet-existing path: walk up to the first
+// EXISTING ancestor, realpath it (resolving any symlinked prefix dir), then
+// re-attach the non-existent tail. So `link/new_sub/file.js` where `link` → a
+// rail dir resolves to `<rail>/new_sub/file.js`.
+function realResolve(abs) {
+  let cur = abs;
+  const tail = [];
+  for (;;) {
+    try {
+      return tail.length ? join(realpathSync(cur), ...tail) : realpathSync(cur);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs; // reached the root, nothing resolved → lexical
+      tail.unshift(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
 function toRepoRelative(fp) {
   let root;
   try {
@@ -392,17 +411,7 @@ function toRepoRelative(fp) {
   } catch {
     root = process.cwd();
   }
-  const abs = resolve(process.cwd(), fp);
-  let real;
-  try {
-    real = realpathSync(abs); // existing file/symlink → resolved target
-  } catch {
-    try {
-      real = join(realpathSync(dirname(abs)), basename(abs)); // new file: resolve parent
-    } catch {
-      real = abs; // unresolvable → fall back to the lexical path
-    }
-  }
+  const real = realResolve(resolve(process.cwd(), fp));
   return relative(root, real).split('\\').join('/');
 }
 
@@ -464,10 +473,16 @@ function rails(input) {
   if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
 
   const fps = targetFilePaths(input);
-  if (fps.length === 0) return; // not a structured edit (e.g. Bash) → CI-gate territory
+  // A non-structured-edit tool (e.g. Bash) reaching here has no path to gate →
+  // CI-gate territory, allow. But a STRUCTURED edit tool that yields NO path is
+  // an unrecognized payload shape we can't verify — fail closed below (after we
+  // confirm rails are actually declared, so a no-rails repo still can't brick).
+  const STRUCTURED_EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+  const isStructuredEdit = STRUCTURED_EDIT.has(input.tool_name);
+  if (fps.length === 0 && !isStructuredEdit) return;
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
-  const subject = fps.join(', '); // for the audit record / fail-closed messages
+  const subject = fps.length ? fps.join(', ') : `(unparsed ${input.tool_name ?? 'edit'} target)`;
 
   // A bypass is only honored if it can be AUDITED. If recording fails (adlc
   // missing, .adlc unwritable, record errors), an unaudited override is refused.
@@ -542,6 +557,12 @@ function rails(input) {
   // .adlc/tickets.json to remove them would silently disable enforcement, so
   // freeze it too (audited bypass still allowed for deliberate changes).
   railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
+
+  // A structured edit whose target path we couldn't extract, while rails are
+  // declared, can't be verified → fail closed.
+  if (fps.length === 0) {
+    return failClosed(`could not extract the target path from this ${input.tool_name} payload;`, 'unparsed-edit-target-bypass');
+  }
 
   // Collect EVERY target path that hits a rail (a multi-file edit must be denied
   // if ANY path is a rail, and EACH hit must be audited on bypass).

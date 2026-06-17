@@ -171,6 +171,46 @@ test('editing a symlink that resolves to a rail file → deny', () => {
   }
 });
 
+test('writing a NEW nested file under a symlinked rail dir → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["secret/**"]}]}');
+    mkdirSync(join(dir, 'secret')); // the frozen rail dir
+    symlinkSync(join(dir, 'secret'), join(dir, 'link')); // link → secret
+    // new file in a NEW subdir under the symlink (subdir does not exist yet)
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'link', 'newsub', 'f.js') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('structured edit (Edit) with no extractable path while rails exist → fail closed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["test/**"]}]}');
+    // an Edit tool whose payload has no file_path/edits/files at all
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { foo: 'bar' } });
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      code = e.status;
+    }
+    assert.equal(code, 2); // fail closed
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- fail closed on unreadable/malformed input ----
 
 test('malformed stdin in rails mode → fail closed (deny)', () => {
