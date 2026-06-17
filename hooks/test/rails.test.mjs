@@ -170,6 +170,33 @@ test('hook invoked from a SUBDIR (no CLAUDE_PROJECT_DIR) still gates a rail → 
   }
 });
 
+test('rail on a symlinked dir, editing the REAL path directly → deny (resolved rail form)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    mkdirSync(join(dir, 'real_dir'));
+    symlinkSync(join(dir, 'real_dir'), join(dir, 'symdir')); // symdir → real_dir
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["symdir/**"]}]}');
+    // edit the REAL path directly — must still be caught (rail resolved to real_dir/**)
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'real_dir', 'f.js') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a backslash-spelled rail glob is normalized → deny', () => {
+  // rail "src\\api.d.ts" (JSON-escaped) → normalized to src/api.d.ts
+  const v = runRails('{"tickets":[{"id":"T1","rails":["src\\\\api.d.ts"]}]}', 'src/api.d.ts');
+  assert.equal(v.verdict, 'deny');
+});
+
 test('a rail defined on a symlinked FILE → editing the symlink path → deny (lexical form)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {

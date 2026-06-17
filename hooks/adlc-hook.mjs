@@ -473,6 +473,47 @@ function toRepoRelativeLexical(fp) {
   return relative(cwd, resolve(cwd, fp)).split('\\').join('/');
 }
 
+function repoRoot() {
+  try {
+    return realpathSync(process.cwd());
+  } catch {
+    return process.cwd();
+  }
+}
+
+/**
+ * A rail glob normalized to forward slashes AND with its literal portion
+ * symlink-resolved (repo-relative). For a plain path the whole thing is resolved
+ * (catches a file-level symlink); for a wildcard glob the literal directory
+ * prefix is resolved. Edit targets are matched in both lexical and resolved
+ * forms, and rails in both literal-normalized and this resolved form — so a
+ * symlink on EITHER side, in EITHER spelling, is caught. Returns the normalized
+ * glob unchanged when nothing resolves (or on error → literal-only).
+ */
+function canonRailGlob(glob) {
+  const norm = glob.split('\\').join('/');
+  const wild = norm.search(/[*?[]/);
+  if (wild === -1) {
+    try {
+      return relative(repoRoot(), realResolve(resolve(process.cwd(), norm))).split('\\').join('/') || norm;
+    } catch {
+      return norm;
+    }
+  }
+  const literal = norm.slice(0, wild);
+  const lastSlash = literal.lastIndexOf('/');
+  if (lastSlash < 0) return norm; // wildcard in the first segment → nothing to resolve
+  const dirPart = literal.slice(0, lastSlash);
+  const rest = norm.slice(dirPart.length); // includes the leading '/'
+  let rd;
+  try {
+    rd = relative(repoRoot(), realResolve(resolve(process.cwd(), dirPart))).split('\\').join('/');
+  } catch {
+    return norm;
+  }
+  return rd === '' ? rest.replace(/^\//, '') : rd + rest; // rd '' ⇒ rail dir is the repo root
+}
+
 /**
  * Emit a PreToolUse DENY and exit 2. This is enforcing, so it fails closed two
  * ways: the structured `permissionDecision: deny` payload, AND a non-zero exit
@@ -604,7 +645,11 @@ function rails(input) {
           'invalid-rail-entry-bypass'
         );
       }
-      railDecls.push({ glob: r, ticket: typeof t.id === 'string' ? t.id : '?' });
+      const tid = typeof t.id === 'string' ? t.id : '?';
+      const normGlob = r.split('\\').join('/'); // normalize Windows-style backslashes
+      railDecls.push({ glob: normGlob, ticket: tid });
+      const canon = canonRailGlob(r); // symlink-resolved form, for symmetry with resolved targets
+      if (canon !== normGlob) railDecls.push({ glob: canon, ticket: tid });
     }
   }
   if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
