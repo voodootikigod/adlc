@@ -139,6 +139,12 @@ for (const [name, cmd, exp] of [
   ['xargs rm a rail (wrapper)', 'xargs rm test/auth/login.test.mjs', 'deny'],
   ['subshell $(rm rail)', 'echo $(rm test/auth/login.test.mjs)', 'deny'],
   ['backtick rm rail', 'echo `rm test/auth/login.test.mjs`', 'deny'],
+  ['command grouping { rm rail; }', '{ rm test/auth/login.test.mjs; }', 'deny'],
+  ['bare subshell ( rm rail )', '( rm test/auth/login.test.mjs )', 'deny'],
+  ['glob rm -rf test/*', 'rm -rf test/*', 'deny'],
+  ['glob rm -rf build/* (non-rail)', 'rm -rf build/*', 'allow'],
+  ['cp --target-directory=rail', 'cp --target-directory=test/auth src.mjs', 'deny'],
+  ['mv -t rail dir', 'mv -t test/auth src.mjs', 'deny'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);

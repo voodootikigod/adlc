@@ -390,21 +390,37 @@ const CMD_WRAPPERS = new Set([
   'xargs', 'setsid', 'stdbuf', 'ionice', 'then', 'else', 'do',
 ]);
 
+// `-t DIR` / `--target-directory=DIR` move the real destination off the operand
+// list, so cp/mv/install must read it explicitly.
+function addTargetDirFlags(words, targets) {
+  for (let j = 0; j < words.length; j++) {
+    const w = words[j];
+    if ((w === '-t' || w === '--target-directory') && words[j + 1]) targets.add(words[j + 1]);
+    else if (w.startsWith('--target-directory=')) targets.add(w.slice('--target-directory='.length));
+    else if (/^-t.+/.test(w)) targets.add(w.slice(2)); // -tDIR
+  }
+}
+
 function processSegment(words, targets) {
   if (words.length === 0) return;
   for (const w of words) if (w.startsWith('of=')) targets.add(w.slice(3)); // dd of=PATH
-  // Strip leading wrappers / env-assignments / flags so `sudo rm x`, `env A=1 rm
-  // x`, `xargs rm x` are seen as the real mutating command.
+  // Strip leading wrappers / env-assignments / flags / grouping tokens so
+  // `sudo rm x`, `env A=1 rm x`, `xargs rm x`, `{ rm x; }`, `( rm x )` are all
+  // seen as the real mutating command.
   let i = 0;
   while (
     i < words.length &&
-    (CMD_WRAPPERS.has(words[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || words[i].startsWith('-'))
+    (CMD_WRAPPERS.has(words[i]) ||
+      /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) ||
+      words[i].startsWith('-') ||
+      words[i] === '{' ||
+      words[i] === '(')
   ) {
     i++;
   }
   words = words.slice(i);
   if (words.length === 0) return;
-  const c0 = words[0];
+  const c0 = words[0].replace(/^[({]+/, ''); // also strip attached grouping: (rm, {rm
   if (c0 === 'tee') {
     for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
   } else if (c0 === 'truncate') {
@@ -424,22 +440,32 @@ function processSegment(words, targets) {
     // non-flag operand is a mutation target (for mv, both the moved-away source
     // and the overwritten destination count).
     for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
+    if (c0 === 'mv') addTargetDirFlags(words, targets);
   } else if (c0 === 'cp' || c0 === 'install') {
-    // Only the DESTINATION (last operand) is written; sources are read.
+    // Only the DESTINATION (last operand, or -t DIR) is written; sources are read.
     const operands = words.slice(1).filter((w) => !w.startsWith('-'));
     if (operands.length) targets.add(operands[operands.length - 1]);
+    addTargetDirFlags(words, targets);
   }
 }
 
 /**
- * Extract the path operands a shell command WRITES to, in the common,
- * unobfuscated forms: redirection (`>`/`>>`), `tee`, `dd of=`, `sed -i`,
- * `truncate` — robust to `./`/absolute spellings and to normal shell quoting and
- * backslash escaping (a quoted `|`/space, an escaped space). Reads/runs
- * (`cat`, `node`) yield no targets. Targets are canonicalized by the caller
- * through the SAME repo-relative matcher as structured edits, so path spelling
- * cannot dodge a rail. A first-line guard, not a sandbox — the rails-guard CI
- * diff gate is the unbypassable backstop (PreToolUse hook + branch protection).
+ * Extract the path operands a shell command MUTATES, in the common forms:
+ * redirection (`>`/`>>`), `tee`, `dd of=`, `sed -i`, `truncate`, `rm`/`mv`,
+ * `cp`/`install` destinations (incl. `-t DIR`). Robust to `./`/absolute
+ * spellings, quoting, backslash escapes, command wrappers (`sudo`/`env`/`xargs`),
+ * command grouping (`{ … }` / `( … )`), `$()`/backtick subshells, and ancestor-
+ * directory / wildcard-base targets (`rm -rf test/auth`, `rm -rf test/*`).
+ *
+ * SCOPE (intentional, per the ADLC harness map: PreToolUse hook + branch
+ * protection in CI). This is a BEST-EFFORT in-session guard for the *common*
+ * direct mutation forms — NOT a complete shell sandbox. Bash is Turing-complete;
+ * constructs like `eval`, `find -exec`, process substitution `<()`, variable
+ * indirection `$CMD`, or `base64 | sh` can still mutate a rail without being
+ * recognized here. Those are caught by the **unbypassable rails-guard CI diff
+ * gate** at commit time (`scripts/rails-guard-ci.mjs`), which inspects the
+ * committed change regardless of how it was produced. The structured-edit guard
+ * (Edit/Write/MultiEdit) is, by contrast, complete — no shell parsing involved.
  */
 function bashWriteTargets(cmd, depth = 0) {
   const items = lexBash(cmd);
@@ -480,16 +506,20 @@ function railLiteralPrefix(glob) {
   return (i === -1 ? glob : glob.slice(0, i)).replace(/\/+$/, '');
 }
 
-/** The first rail a Bash command mutates (canonicalized), or null. A target
- *  matches if it IS a rail (glob) OR is the rail's ancestor DIRECTORY — so
- *  `rm -rf test/auth` (or `rm -rf .adlc`) that destroys rails within is caught. */
+/** The first rail a Bash command mutates (canonicalized), or null. A target hits
+ *  a rail if it matches the rail glob, is the rail's ancestor DIRECTORY
+ *  (`rm -rf test/auth`, `rm -rf .adlc`), or is a wildcard whose base dir covers
+ *  the rail (`rm -rf test/*`). */
 function bashRailHit(cmd, railDecls) {
   for (const tok of bashWriteTargets(cmd)) {
     const rel = toRepoRelative(tok);
+    const targetBase = railLiteralPrefix(rel); // strips a wildcard in the target: test/* → test
     for (const r of railDecls) {
-      if (globMatch(r.glob, rel)) return r; // target is/matches a rail
-      const lit = railLiteralPrefix(r.glob);
-      if (lit && (lit === rel || lit.startsWith(rel + '/'))) return r; // target is an ancestor dir of the rail
+      if (globMatch(r.glob, rel)) return r; // target matches the rail glob
+      const railBase = railLiteralPrefix(r.glob);
+      if (!railBase) continue;
+      if (railBase === rel || railBase.startsWith(rel + '/')) return r; // target is the rail or its ancestor
+      if (targetBase && (railBase === targetBase || railBase.startsWith(targetBase + '/'))) return r; // wildcard base covers the rail
     }
   }
   return null;
