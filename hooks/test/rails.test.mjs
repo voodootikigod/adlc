@@ -250,6 +250,28 @@ test('an UNRECOGNIZED matched tool targeting a rail → deny (fail closed by def
   }
 });
 
+test('editing the real target of a symlinked .adlc/tickets.json → deny (trust root via resolved path)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    mkdirSync(join(dir, 'cfg'));
+    // the REAL tickets file lives elsewhere; .adlc/tickets.json is a symlink to it
+    writeFileSync(join(dir, 'cfg', 'real-tickets.json'), '{"tickets":[{"id":"T1","rails":["src/secret.js"]}]}');
+    symlinkSync(join(dir, 'cfg', 'real-tickets.json'), join(dir, '.adlc', 'tickets.json'));
+    // editing the real target would clear the rails → must be denied as the trust root
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'cfg', 'real-tickets.json') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a symlink loop in the target path → fail closed (no infinite resolution)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {

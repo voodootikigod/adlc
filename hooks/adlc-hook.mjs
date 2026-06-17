@@ -572,8 +572,15 @@ function rails(input) {
 
   // The rail config is its own trust root: once rails exist, editing
   // .adlc/tickets.json to remove them would silently disable enforcement, so
-  // freeze it too (audited bypass still allowed for deliberate changes).
+  // freeze it too (audited bypass still allowed for deliberate changes). Freeze
+  // BOTH the literal path AND its resolved path — because edit targets are
+  // symlink-resolved, a tickets.json that is itself a symlink (or its real
+  // target) would otherwise dodge the literal glob.
   railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
+  const ticketsResolved = toRepoRelative(ticketsPath);
+  if (ticketsResolved && ticketsResolved !== '.adlc/tickets.json') {
+    railDecls.push({ glob: ticketsResolved, ticket: '(rail trust root, resolved)' });
+  }
 
   // A structured edit whose target path we couldn't extract, while rails are
   // declared, can't be verified → fail closed.
