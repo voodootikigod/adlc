@@ -432,7 +432,12 @@ function processSegment(words, targets) {
     const inPlace = rest.some((w) => /^--in-place/.test(w) || /^-[a-zA-Z]*i/.test(w));
     if (inPlace) {
       const ops = rest.filter((w) => !w.startsWith('-'));
-      for (const w of ops.slice(1)) targets.add(w); // first operand is the script
+      // The script is the first bare operand ONLY when it was not already given
+      // via -e/-f/--expression/--file; with those flags every bare operand is a file.
+      const scriptViaFlag = rest.some(
+        (w) => /^-e/.test(w) || /^-f/.test(w) || /^--expression/.test(w) || /^--file/.test(w)
+      );
+      for (const w of scriptViaFlag ? ops : ops.slice(1)) targets.add(w);
     }
   } else if (verb === 'cp') {
     const ops = rest.filter((w) => !w.startsWith('-'));
@@ -512,9 +517,16 @@ function bashRailHit(cmd, railDecls) {
       if (!railBase) continue;
       // Target IS the rail's ancestor directory: `rm test/auth`, `rm test`.
       if (railBase === rel || railBase.startsWith(rel + '/')) return r;
-      // Target is a WILDCARD whose expansion would cover the rail: `rm -rf test/*`,
-      // `rm -rf test/aut*` → match the target-as-glob against the rail base.
-      if (rel.includes('*') && globMatch(rel, railBase)) return r;
+      // Target is a WILDCARD whose expansion could cover the rail or ANY of its
+      // ancestor directories: `rm -rf test/*` (covers test/auth), `rm -rf *`
+      // (covers the top segment `test`), `rm -rf test/aut*`. Match the
+      // target-as-glob against every ancestor prefix of the rail base.
+      if (rel.includes('*')) {
+        const parts = railBase.split('/');
+        for (let i = 1; i <= parts.length; i++) {
+          if (globMatch(rel, parts.slice(0, i).join('/'))) return r;
+        }
+      }
     }
   }
   return null;

@@ -151,6 +151,9 @@ for (const [name, cmd, exp] of [
   ['no-space subshell (rm exact-file rail)', '(rm src/types/api.d.ts)', 'deny'],
   ['partial-segment glob rm -rf test/aut*', 'rm -rf test/aut*', 'deny'],
   ['partial glob non-rail rm -rf bui*', 'rm -rf bui*', 'allow'],
+  ['bare star rm -rf * (covers rail ancestor)', 'rm -rf *', 'deny'],
+  ['sed -i -e flag script then rail file', 'sed -i -es/a/b/ test/auth/login.test.mjs', 'deny'],
+  ['sed -i --expression then rail file', 'sed -i --expression=s/a/b/ test/auth/login.test.mjs', 'deny'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);
