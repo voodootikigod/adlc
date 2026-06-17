@@ -97,7 +97,17 @@ function main() {
   try {
     process.chdir(dir);
   } catch {
-    return; // cannot reach the project dir — nothing to do
+    // The enforcing rails hook must FAIL CLOSED if it can't even enter the project
+    // dir (it cannot verify rails). Advisory modes just no-op.
+    if (MODE === 'rails') {
+      try {
+        denyRail('rails hook could not enter the project directory — failing closed');
+      } catch {
+        /* deny emit failed; the exit 2 below still blocks */
+      }
+      process.exit(2);
+    }
+    return;
   }
 
   if (MODE === 'preflight') return preflight();
@@ -327,11 +337,34 @@ function globMatch(pattern, path) {
   return regex.test(path);
 }
 
-/** The file a write/edit tool is about to touch, or null. */
-function targetFilePath(input) {
+/**
+ * Every file path a structured edit tool would touch. Reads the top-level
+ * `file_path`/`notebook_path`/`path`, AND any per-item paths nested in `edits`/
+ * `files` arrays (MultiEdit and batch/multi-file edit shapes — robust across
+ * harnesses). Returns a de-duplicated array; the rails gate checks every one.
+ */
+function targetFilePaths(input) {
   const ti = input.tool_input ?? input.parameters ?? {};
-  const fp = ti.file_path ?? ti.notebook_path;
-  return typeof fp === 'string' && fp.length > 0 ? fp : null;
+  const paths = [];
+  const add = (v) => {
+    if (typeof v === 'string' && v.length > 0) paths.push(v);
+  };
+  add(ti.file_path);
+  add(ti.notebook_path);
+  add(ti.path);
+  for (const key of ['edits', 'files']) {
+    if (Array.isArray(ti[key])) {
+      for (const item of ti[key]) {
+        if (item && typeof item === 'object') {
+          add(item.file_path);
+          add(item.path);
+        } else {
+          add(item); // a `files: ['a','b']` string array
+        }
+      }
+    }
+  }
+  return [...new Set(paths)];
 }
 
 /**
@@ -397,11 +430,11 @@ function rails(input) {
   const ticketsPath = join('.adlc', 'tickets.json');
   if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
 
-  const fp = targetFilePath(input);
-  if (!fp) return; // not a structured edit (e.g. Bash) → CI-gate territory, nothing to gate here
+  const fps = targetFilePaths(input);
+  if (fps.length === 0) return; // not a structured edit (e.g. Bash) → CI-gate territory
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
-  const subject = toRepoRelative(fp);
+  const subject = fps.join(', '); // for the audit record / fail-closed messages
 
   // A bypass is only honored if it can be AUDITED. If recording fails (adlc
   // missing, .adlc unwritable, record errors), an unaudited override is refused.
@@ -477,15 +510,20 @@ function rails(input) {
   // freeze it too (audited bypass still allowed for deliberate changes).
   railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
 
-  const hit = railDecls.find((r) => globMatch(r.glob, subject));
-  if (!hit) return; // not a rail → allow
-
-  return bypassOrDeny(
-    `rail ${hit.glob} (ticket ${hit.ticket})`,
-    `${subject} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
-      `Edits to frozen rails are blocked during build. To override deliberately, set ` +
-      `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
-  );
+  // Check EVERY target path — a multi-file edit must be denied if ANY path is a rail.
+  for (const fp of fps) {
+    const rel = toRepoRelative(fp);
+    const hit = railDecls.find((r) => globMatch(r.glob, rel));
+    if (hit) {
+      return bypassOrDeny(
+        `rail ${hit.glob} (ticket ${hit.ticket})`,
+        `${rel} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
+          `Edits to frozen rails are blocked during build. To override deliberately, set ` +
+          `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
+      );
+    }
+  }
+  // no target path hit a rail → allow
 }
 
 try {

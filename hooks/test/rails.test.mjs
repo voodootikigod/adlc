@@ -100,6 +100,54 @@ test('editing .adlc/tickets.json with NO rails declared → allow (authoring the
   assert.equal(runRails('{"tickets":[]}', '.adlc/tickets.json').verdict, 'allow');
 });
 
+// ---- multi-file / nested-path edit payloads ----
+
+/** Run the hook with an arbitrary tool_input payload; returns 'deny'|'allow'. */
+function runPayload(ticketsJson, toolInput, { env = {}, cwdOverride = null } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
+    const input = JSON.stringify({ cwd: cwdOverride ?? dir, tool_input: toolInput });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], {
+        input,
+        encoding: 'utf8',
+        env: { ...process.env, CLAUDE_PROJECT_DIR: '', ...env },
+      });
+    } catch (e) {
+      if (e.status === 2 && !e.stdout) return 'deny'; // fail-closed exit 2 with no payload
+      out = e.stdout ?? '';
+    }
+    return out.includes('"permissionDecision":"deny"') ? 'deny' : 'allow';
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const RAIL_MF = '{"tickets":[{"id":"T1","rails":["src/types/api.d.ts","test/auth/**"]}]}';
+
+test('edits[] array carrying a rail file_path → deny (MultiEdit-style)', () => {
+  const v = runPayload(RAIL_MF, { edits: [{ file_path: 'src/types/api.d.ts', old_string: 'a', new_string: 'b' }] });
+  assert.equal(v, 'deny');
+});
+
+test('files[] string array containing a rail → deny', () => {
+  const v = runPayload(RAIL_MF, { files: ['src/app.mjs', 'test/auth/x.test.mjs'] });
+  assert.equal(v, 'deny');
+});
+
+test('multi-file edit with NO rail among the paths → allow', () => {
+  const v = runPayload(RAIL_MF, { files: ['src/app.mjs', 'docs/readme.md'] });
+  assert.equal(v, 'allow');
+});
+
+test('chdir failure (unreachable project dir) in rails mode → fail closed', () => {
+  const v = runPayload(RAIL_MF, { file_path: 'src/app.mjs' }, { cwdOverride: '/nonexistent-adlc-xyz-12345' });
+  assert.equal(v, 'deny');
+});
+
 // ---- Bash is intentionally NOT gated in-session (Option C) ----
 
 test('a Bash command targeting a rail is a no-op in-session (CI gate is the backstop)', () => {

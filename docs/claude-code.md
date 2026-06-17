@@ -59,6 +59,12 @@ All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
 into a repo with no rails can never block editing.
 
+**Rails must be tracked files.** The commit-time CI gate inspects the git diff,
+so it only protects files under version control. A gitignored/untracked rail
+mutated via Bash is seen by neither the in-session hook (Bash isn't gated) nor
+the CI diff gate. Declare rails on tracked files (tests, type contracts, configs)
+— which is their normal use.
+
 **Rail bypass — two distinct layers.** `ADLC_RAILS_BYPASS=1` overrides the
 *in-session* PreToolUse hook only, and only if the override is recorded to the
 gate-manifest (an un-auditable bypass is refused). The *commit-time* CI gate is
