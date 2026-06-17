@@ -248,6 +248,26 @@ test('a non-edit tool (named, carrying a path) targeting a rail → allow (not g
   }
 });
 
+test('a symlink loop in the target path → fail closed (no infinite resolution)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["test/**"]}]}');
+    symlinkSync(join(dir, 'b'), join(dir, 'a')); // a → b
+    symlinkSync(join(dir, 'a'), join(dir, 'b')); // b → a  (loop)
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'a', 'x.js') } });
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      code = e.status;
+    }
+    assert.equal(code, 2); // fail closed, not hang/allow
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- fail closed on unreadable/malformed input ----
 
 test('malformed stdin in rails mode → fail closed (deny)', () => {

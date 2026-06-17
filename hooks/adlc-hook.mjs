@@ -395,10 +395,15 @@ function targetFilePaths(input) {
 function realResolve(abs) {
   let cur = abs;
   const tail = [];
-  for (let guard = 0; guard < 4096; guard++) {
+  const seen = new Set();
+  for (let guard = 0; guard < 64; guard++) {
     try {
       return tail.length ? join(realpathSync(cur), ...tail) : realpathSync(cur);
     } catch {
+      // A revisited node means a symlink loop (a → b → a). Throw so the rails
+      // hook's global handler FAILS CLOSED rather than resolving lexically.
+      if (seen.has(cur)) throw new Error('symlink loop in rail path resolution');
+      seen.add(cur);
       // Is `cur` itself a symlink (possibly broken)? Follow it.
       try {
         if (lstatSync(cur).isSymbolicLink()) {
@@ -414,7 +419,8 @@ function realResolve(abs) {
       cur = parent;
     }
   }
-  return abs; // pathological depth → lexical fallback
+  // Pathological depth — fail closed (throwing reaches the global rails handler).
+  throw new Error('symlink resolution too deep in rail path');
 }
 
 function toRepoRelative(fp) {
@@ -493,11 +499,11 @@ function rails(input) {
   const STRUCTURED_EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
   const isStructuredEdit = STRUCTURED_EDIT.has(input.tool_name);
   // If a tool_name is present and it is NOT a structured edit, this is a non-edit
-  // tool (e.g. a reader) that carries a path — not ours to gate; allow. When
-  // tool_name is absent we trust the matcher (which only routes edit tools here)
-  // and gate by the path. Either way a non-edit tool with no path no-ops.
+  // tool (e.g. a reader) that carries a path — not ours to gate; allow. Otherwise
+  // (a structured edit, OR tool_name absent → trust the matcher, which only routes
+  // edit tools here) we proceed; an empty path set then fails closed below (after
+  // confirming rails are declared), since an unparseable edit can't be verified.
   if (input.tool_name && !isStructuredEdit) return;
-  if (fps.length === 0 && !isStructuredEdit) return;
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
   const subject = fps.length ? fps.join(', ') : `(unparsed ${input.tool_name ?? 'edit'} target)`;
