@@ -491,19 +491,12 @@ function rails(input) {
   const ticketsPath = join('.adlc', 'tickets.json');
   if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
 
+  // TRUST THE MATCHER: hooks.json routes only mutating edit tools to this hook,
+  // so any tool that arrives is one we chose to gate — no in-code tool allowlist
+  // (which would drift from the matcher and fail OPEN for a newly-matched tool).
+  // We gate by the target path; a tool that yields NO path while rails are
+  // declared fails closed below (an edit we can't verify is not allowed).
   const fps = targetFilePaths(input);
-  // A non-structured-edit tool (e.g. Bash) reaching here has no path to gate →
-  // CI-gate territory, allow. But a STRUCTURED edit tool that yields NO path is
-  // an unrecognized payload shape we can't verify — fail closed below (after we
-  // confirm rails are actually declared, so a no-rails repo still can't brick).
-  const STRUCTURED_EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-  const isStructuredEdit = STRUCTURED_EDIT.has(input.tool_name);
-  // If a tool_name is present and it is NOT a structured edit, this is a non-edit
-  // tool (e.g. a reader) that carries a path — not ours to gate; allow. Otherwise
-  // (a structured edit, OR tool_name absent → trust the matcher, which only routes
-  // edit tools here) we proceed; an empty path set then fails closed below (after
-  // confirming rails are declared), since an unparseable edit can't be verified.
-  if (input.tool_name && !isStructuredEdit) return;
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
   const subject = fps.length ? fps.join(', ') : `(unparsed ${input.tool_name ?? 'edit'} target)`;
@@ -585,7 +578,7 @@ function rails(input) {
   // A structured edit whose target path we couldn't extract, while rails are
   // declared, can't be verified → fail closed.
   if (fps.length === 0) {
-    return failClosed(`could not extract the target path from this ${input.tool_name} payload;`, 'unparsed-edit-target-bypass');
+    return failClosed(`could not extract the target path from this ${input.tool_name ?? 'edit'} payload;`, 'unparsed-edit-target-bypass');
   }
 
   // Collect EVERY target path that hits a rail (a multi-file edit must be denied

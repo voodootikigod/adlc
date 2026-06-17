@@ -230,19 +230,21 @@ test('writing under a BROKEN symlink that points at a (not-yet-existing) rail di
   }
 });
 
-test('a non-edit tool (named, carrying a path) targeting a rail → allow (not gated)', () => {
+test('an UNRECOGNIZED matched tool targeting a rail → deny (fail closed by default)', () => {
+  // The hook trusts the matcher: any tool routed here is gated by path, with no
+  // in-code allowlist that could drift and fail open for a newly-matched tool.
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {
     mkdirSync(join(dir, '.adlc'));
     writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["test/**"]}]}');
-    const input = JSON.stringify({ cwd: dir, tool_name: 'Read', tool_input: { file_path: join(dir, 'test', 'x.test.mjs') } });
+    const input = JSON.stringify({ cwd: dir, tool_name: 'SomeFutureEditTool', tool_input: { file_path: join(dir, 'test', 'x.test.mjs') } });
     let out = '';
     try {
       out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
-    assert.equal(out.includes('"permissionDecision":"deny"'), false); // a reader is not gated
+    assert.match(out, /"permissionDecision":"deny"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -281,25 +283,19 @@ test('malformed stdin in rails mode → fail closed (deny)', () => {
 });
 
 // ---- Bash is intentionally NOT gated in-session (Option C) ----
+// The hook trusts the matcher, so "Bash is not gated" is enforced at the CONFIG
+// level: the PreToolUse rails matcher must not include Bash. (If Bash were routed
+// here it would fail closed — which is why the guarantee lives in the matcher.)
 
-test('a Bash command targeting a rail is a no-op in-session (CI gate is the backstop)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
-  try {
-    mkdirSync(join(dir, '.adlc'));
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), RAIL_T);
-    // A Bash-shaped payload (command, no file_path) — the rails hook must NOT
-    // try to gate it; it returns no output (allow) and leaves it to the CI gate.
-    const input = JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command: 'rm test/auth/login.test.mjs' } });
-    let out = '';
-    try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8' });
-    } catch (e) {
-      out = e.stdout ?? '';
-    }
-    assert.equal(out.includes('"permissionDecision":"deny"'), false); // not gated in-session
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('the PreToolUse rails matcher excludes Bash (Bash → CI-gate territory)', () => {
+  const hooksJson = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks.json'), 'utf8')
+  );
+  const railsEntry = hooksJson.hooks.PreToolUse.find((e) =>
+    e.hooks.some((h) => h.command.includes('adlc-hook.mjs') && h.command.includes('rails'))
+  );
+  assert.ok(railsEntry, 'a PreToolUse rails hook entry exists');
+  assert.equal(/\bBash\b/.test(railsEntry.matcher), false); // Bash not gated in-session
 });
 
 // ---- canonicalization: non-canonical spellings must not dodge a rail ----
