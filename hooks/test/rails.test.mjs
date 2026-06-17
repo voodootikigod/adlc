@@ -148,6 +148,49 @@ test('chdir failure (unreachable project dir) in rails mode → fail closed', ()
   assert.equal(v, 'deny');
 });
 
+// ---- robustness: subdir invocation + symlinked rail definitions ----
+
+test('hook invoked from a SUBDIR (no CLAUDE_PROJECT_DIR) still gates a rail → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["src/**"]}]}');
+    // cwd is the SUBDIR src/, CLAUDE_PROJECT_DIR unset → must walk up to find .adlc
+    const input = JSON.stringify({ cwd: join(dir, 'src'), tool_name: 'Edit', tool_input: { file_path: join(dir, 'src', 'secret.js') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a rail defined on a SYMLINKED dir matches the resolved target → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    mkdirSync(join(dir, 'real_dir'));
+    symlinkSync(join(dir, 'real_dir'), join(dir, 'symdir')); // symdir → real_dir
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["symdir/**"]}]}');
+    // edit the symlink path → resolves to real_dir/f.js; rail symdir/** must still catch it
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'symdir', 'f.js') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- symlink resolution: editing a symlink that points at a rail → deny ----
 
 test('editing a symlink that resolves to a rail file → deny', () => {

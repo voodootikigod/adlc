@@ -120,6 +120,24 @@ function main() {
     return;
   }
 
+  // The starting dir may be a SUBDIRECTORY of the repo (CLAUDE_PROJECT_DIR unset,
+  // cwd = src/). Walk up to the nearest ancestor that has `.adlc/` and operate
+  // there, so a frozen-rail edit can't slip past just because the hook ran from a
+  // subdir (which would otherwise find no `.adlc/` and no-op = fail open).
+  for (let cur = process.cwd(), i = 0; i < 64; i++) {
+    if (existsSync(join(cur, '.adlc'))) {
+      try {
+        process.chdir(cur);
+      } catch {
+        /* keep current dir */
+      }
+      break;
+    }
+    const parent = dirname(cur);
+    if (parent === cur) break; // reached filesystem root → no .adlc anywhere
+    cur = parent;
+  }
+
   if (MODE === 'preflight') return preflight();
   if (MODE === 'flail') return flail(input);
   if (MODE === 'manifest') return manifest();
@@ -435,6 +453,40 @@ function toRepoRelative(fp) {
 }
 
 /**
+ * A rail glob with its literal DIRECTORY prefix symlink-resolved, or null if it
+ * has no resolvable directory or resolving changes nothing. Edit targets are
+ * symlink-resolved (toRepoRelative), so a rail defined on a symlinked path (e.g.
+ * `symdir/**` where symdir → real_dir) must ALSO be matched in resolved form
+ * (`real_dir/**`) — otherwise the match is asymmetric and the rail is dodged.
+ */
+function resolvedRailGlob(glob) {
+  const wild = glob.indexOf('*');
+  const literal = wild === -1 ? glob : glob.slice(0, wild);
+  const lastSlash = literal.lastIndexOf('/');
+  if (lastSlash < 0) return null; // top-level: no directory to resolve
+  const dirPart = literal.slice(0, lastSlash);
+  const rest = glob.slice(dirPart.length); // '/file.js' | '/**' | '/api.d.ts'
+  let resolvedDir;
+  try {
+    resolvedDir = relative(
+      realpathSyncSafe(process.cwd()),
+      realResolve(resolve(process.cwd(), dirPart))
+    ).split('\\').join('/');
+  } catch {
+    return null;
+  }
+  return resolvedDir && resolvedDir !== dirPart ? resolvedDir + rest : null;
+}
+
+function realpathSyncSafe(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
  * Emit a PreToolUse DENY and exit 2. This is enforcing, so it fails closed two
  * ways: the structured `permissionDecision: deny` payload, AND a non-zero exit
  * (Claude Code blocks a PreToolUse hook that exits 2) — so even if the stdout
@@ -565,7 +617,10 @@ function rails(input) {
           'invalid-rail-entry-bypass'
         );
       }
-      railDecls.push({ glob: r, ticket: typeof t.id === 'string' ? t.id : '?' });
+      const tid = typeof t.id === 'string' ? t.id : '?';
+      railDecls.push({ glob: r, ticket: tid });
+      const rv = resolvedRailGlob(r); // symlinked rail dir → also match the resolved form
+      if (rv) railDecls.push({ glob: rv, ticket: tid });
     }
   }
   if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
