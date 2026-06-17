@@ -145,6 +145,12 @@ for (const [name, cmd, exp] of [
   ['glob rm -rf build/* (non-rail)', 'rm -rf build/*', 'allow'],
   ['cp --target-directory=rail', 'cp --target-directory=test/auth src.mjs', 'deny'],
   ['mv -t rail dir', 'mv -t test/auth src.mjs', 'deny'],
+  ['wrapper with value: sudo -u root rm rail', 'sudo -u root rm test/auth/login.test.mjs', 'deny'],
+  ['wrapper with value: nice -n 10 rm rail', 'nice -n 10 rm test/auth/login.test.mjs', 'deny'],
+  ['git rm a rail', 'git rm test/auth/login.test.mjs', 'deny'],
+  ['no-space subshell (rm exact-file rail)', '(rm src/types/api.d.ts)', 'deny'],
+  ['partial-segment glob rm -rf test/aut*', 'rm -rf test/aut*', 'deny'],
+  ['partial glob non-rail rm -rf bui*', 'rm -rf bui*', 'allow'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);

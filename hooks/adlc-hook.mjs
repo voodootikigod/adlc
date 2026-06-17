@@ -383,13 +383,6 @@ function lexBash(cmd) {
   return items;
 }
 
-// Command wrappers that delegate to a following command — the real verb is
-// after them (and after any `VAR=val` env assignments or wrapper flags).
-const CMD_WRAPPERS = new Set([
-  'sudo', 'doas', 'env', 'exec', 'nice', 'nohup', 'time', 'command', 'builtin',
-  'xargs', 'setsid', 'stdbuf', 'ionice', 'then', 'else', 'do',
-]);
-
 // `-t DIR` / `--target-directory=DIR` move the real destination off the operand
 // list, so cp/mv/install must read it explicitly.
 function addTargetDirFlags(words, targets) {
@@ -401,52 +394,52 @@ function addTargetDirFlags(words, targets) {
   }
 }
 
+// Mutating verbs → canonical handler key. `install` behaves like `cp`.
+const MUTATING_VERB = {
+  rm: 'rm', unlink: 'rm', shred: 'rm',
+  mv: 'mv', cp: 'cp', install: 'cp',
+  tee: 'tee', truncate: 'truncate', sed: 'sed', dd: 'dd',
+};
+
+const stripGrouping = (w) => w.replace(/^[({]+/, '').replace(/[)}]+$/, '');
+
 function processSegment(words, targets) {
   if (words.length === 0) return;
   for (const w of words) if (w.startsWith('of=')) targets.add(w.slice(3)); // dd of=PATH
-  // Strip leading wrappers / env-assignments / flags / grouping tokens so
-  // `sudo rm x`, `env A=1 rm x`, `xargs rm x`, `{ rm x; }`, `( rm x )` are all
-  // seen as the real mutating command.
-  let i = 0;
-  while (
-    i < words.length &&
-    (CMD_WRAPPERS.has(words[i]) ||
-      /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) ||
-      words[i].startsWith('-') ||
-      words[i] === '{' ||
-      words[i] === '(')
-  ) {
-    i++;
+  // Find the mutating verb ANYWHERE in the segment, not just at position 0 — robust
+  // to wrappers AND their option arguments without parsing each wrapper's flag
+  // grammar: `sudo -u root rm x`, `nice -n 10 rm x`, `env A=1 rm x`, `git rm x`,
+  // `{ rm x; }`, `( rm x )` all locate the real verb.
+  let vi = -1, verb = null;
+  for (let j = 0; j < words.length; j++) {
+    const v = MUTATING_VERB[stripGrouping(words[j])];
+    if (v) { vi = j; verb = v; break; }
   }
-  words = words.slice(i);
-  if (words.length === 0) return;
-  const c0 = words[0].replace(/^[({]+/, ''); // also strip attached grouping: (rm, {rm
-  if (c0 === 'tee') {
-    for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
-  } else if (c0 === 'truncate') {
-    for (let i = 1; i < words.length; i++) {
-      if (words[i] === '-s') { i++; continue; }
-      if (!words[i].startsWith('-')) targets.add(words[i]);
+  if (vi === -1) return;
+  // Operands after the verb, grouping chars (`(`/`{` … `)`/`}`) stripped so
+  // `( rm x )` / `(rm x)` extract `x`, not `x)`.
+  const rest = words.slice(vi + 1).map(stripGrouping);
+
+  if (verb === 'rm' || verb === 'mv' || verb === 'tee') {
+    for (const w of rest) if (!w.startsWith('-')) targets.add(w);
+    if (verb === 'mv') addTargetDirFlags(rest, targets);
+  } else if (verb === 'truncate') {
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '-s') { i++; continue; }
+      if (!rest[i].startsWith('-')) targets.add(rest[i]);
     }
-  } else if (c0 === 'sed') {
-    const inPlace = words.some((w) => /^--in-place/.test(w) || /^-[a-zA-Z]*i/.test(w));
+  } else if (verb === 'sed') {
+    const inPlace = rest.some((w) => /^--in-place/.test(w) || /^-[a-zA-Z]*i/.test(w));
     if (inPlace) {
-      const operands = words.slice(1).filter((w) => !w.startsWith('-'));
-      for (const w of operands.slice(1)) targets.add(w); // first operand is the script
+      const ops = rest.filter((w) => !w.startsWith('-'));
+      for (const w of ops.slice(1)) targets.add(w); // first operand is the script
     }
-  } else if (c0 === 'rm' || c0 === 'mv') {
-    // DELETION (rm) and MOVE (mv) mutate a frozen rail just as a write does —
-    // and `rm .adlc/tickets.json` would disable enforcement entirely. Every
-    // non-flag operand is a mutation target (for mv, both the moved-away source
-    // and the overwritten destination count).
-    for (const w of words.slice(1)) if (!w.startsWith('-')) targets.add(w);
-    if (c0 === 'mv') addTargetDirFlags(words, targets);
-  } else if (c0 === 'cp' || c0 === 'install') {
-    // Only the DESTINATION (last operand, or -t DIR) is written; sources are read.
-    const operands = words.slice(1).filter((w) => !w.startsWith('-'));
-    if (operands.length) targets.add(operands[operands.length - 1]);
-    addTargetDirFlags(words, targets);
+  } else if (verb === 'cp') {
+    const ops = rest.filter((w) => !w.startsWith('-'));
+    if (ops.length) targets.add(ops[ops.length - 1]); // destination is last
+    addTargetDirFlags(rest, targets);
   }
+  // `dd` is handled by the `of=` scan above.
 }
 
 /**
@@ -513,13 +506,15 @@ function railLiteralPrefix(glob) {
 function bashRailHit(cmd, railDecls) {
   for (const tok of bashWriteTargets(cmd)) {
     const rel = toRepoRelative(tok);
-    const targetBase = railLiteralPrefix(rel); // strips a wildcard in the target: test/* → test
     for (const r of railDecls) {
       if (globMatch(r.glob, rel)) return r; // target matches the rail glob
       const railBase = railLiteralPrefix(r.glob);
       if (!railBase) continue;
-      if (railBase === rel || railBase.startsWith(rel + '/')) return r; // target is the rail or its ancestor
-      if (targetBase && (railBase === targetBase || railBase.startsWith(targetBase + '/'))) return r; // wildcard base covers the rail
+      // Target IS the rail's ancestor directory: `rm test/auth`, `rm test`.
+      if (railBase === rel || railBase.startsWith(rel + '/')) return r;
+      // Target is a WILDCARD whose expansion would cover the rail: `rm -rf test/*`,
+      // `rm -rf test/aut*` → match the target-as-glob against the rail base.
+      if (rel.includes('*') && globMatch(rel, railBase)) return r;
     }
   }
   return null;
