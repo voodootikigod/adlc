@@ -108,6 +108,12 @@ function main() {
   }
   const input = parsed ?? {};
 
+  // The base for resolving RELATIVE edit targets is the TOOL's working directory
+  // (`input.cwd`), captured BEFORE any chdir. It must NOT be CLAUDE_PROJECT_DIR:
+  // the tool may run in a subdir while CLAUDE_PROJECT_DIR points at the repo root,
+  // and `file_path: "secret.js"` is relative to the tool's cwd, not the root.
+  baseDir = typeof input.cwd === 'string' && input.cwd.length > 0 ? resolve(input.cwd) : process.cwd();
+
   // Operate in the project root so the tools resolve `.adlc/` correctly.
   const dir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
   try {
@@ -125,10 +131,6 @@ function main() {
     }
     return;
   }
-
-  // Capture the invocation dir (for resolving relative edit targets) BEFORE the
-  // walk-up changes cwd to the repo root.
-  baseDir = process.cwd();
 
   // The starting dir may be a SUBDIRECTORY of the repo (CLAUDE_PROJECT_DIR unset,
   // cwd = src/). Find the ADLC root and operate there, so a frozen-rail edit can't

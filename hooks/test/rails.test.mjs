@@ -171,6 +171,26 @@ test('a RELATIVE file_path from a subdir resolves against the invocation dir →
   }
 });
 
+test('RELATIVE file_path with CLAUDE_PROJECT_DIR set to the root resolves against input.cwd → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["src/**"]}]}');
+    mkdirSync(join(dir, 'src'));
+    // CLAUDE_PROJECT_DIR = repo root, but the tool ran in src/ with a relative path
+    const input = JSON.stringify({ cwd: join(dir, 'src'), tool_name: 'Edit', tool_input: { file_path: 'secret.js' } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a nested subdir .adlc does NOT shadow the git-root rail config → deny', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {
