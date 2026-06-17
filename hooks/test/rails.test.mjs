@@ -170,6 +170,27 @@ test('hook invoked from a SUBDIR (no CLAUDE_PROJECT_DIR) still gates a rail → 
   }
 });
 
+test('a rail defined on a symlinked FILE → editing the symlink path → deny (lexical form)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, 'src', 'real_api.d.ts'), 'x\n');
+    symlinkSync(join(dir, 'src', 'real_api.d.ts'), join(dir, 'src', 'api.d.ts')); // api.d.ts → real_api.d.ts
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["src/api.d.ts"]}]}');
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'src', 'api.d.ts') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a rail defined on a SYMLINKED dir matches the resolved target → deny', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {

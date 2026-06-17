@@ -129,7 +129,16 @@ function main() {
       try {
         process.chdir(cur);
       } catch {
-        /* keep current dir */
+        // Found the ADLC root but can't enter it → can't verify rails → fail closed.
+        if (MODE === 'rails') {
+          try {
+            denyRail('rails hook found the ADLC root but could not enter it — failing closed');
+          } catch {
+            /* exit 2 below still blocks */
+          }
+          process.exit(2);
+        }
+        return;
       }
       break;
     }
@@ -453,37 +462,15 @@ function toRepoRelative(fp) {
 }
 
 /**
- * A rail glob with its literal DIRECTORY prefix symlink-resolved, or null if it
- * has no resolvable directory or resolving changes nothing. Edit targets are
- * symlink-resolved (toRepoRelative), so a rail defined on a symlinked path (e.g.
- * `symdir/**` where symdir → real_dir) must ALSO be matched in resolved form
- * (`real_dir/**`) — otherwise the match is asymmetric and the rail is dodged.
+ * LEXICAL repo-relative form (resolves `.`/`..`/dup-separators but NOT symlinks).
+ * Matching an edit target in BOTH this and the symlink-resolved `toRepoRelative`
+ * form against the literal rail globs makes rail matching symmetric without
+ * having to resolve the globs themselves: a symlinked RAIL is caught by the
+ * lexical form, a symlinked TARGET by the resolved form.
  */
-function resolvedRailGlob(glob) {
-  const wild = glob.indexOf('*');
-  const literal = wild === -1 ? glob : glob.slice(0, wild);
-  const lastSlash = literal.lastIndexOf('/');
-  if (lastSlash < 0) return null; // top-level: no directory to resolve
-  const dirPart = literal.slice(0, lastSlash);
-  const rest = glob.slice(dirPart.length); // '/file.js' | '/**' | '/api.d.ts'
-  let resolvedDir;
-  try {
-    resolvedDir = relative(
-      realpathSyncSafe(process.cwd()),
-      realResolve(resolve(process.cwd(), dirPart))
-    ).split('\\').join('/');
-  } catch {
-    return null;
-  }
-  return resolvedDir && resolvedDir !== dirPart ? resolvedDir + rest : null;
-}
-
-function realpathSyncSafe(p) {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
+function toRepoRelativeLexical(fp) {
+  const cwd = process.cwd();
+  return relative(cwd, resolve(cwd, fp)).split('\\').join('/');
 }
 
 /**
@@ -617,10 +604,7 @@ function rails(input) {
           'invalid-rail-entry-bypass'
         );
       }
-      const tid = typeof t.id === 'string' ? t.id : '?';
-      railDecls.push({ glob: r, ticket: tid });
-      const rv = resolvedRailGlob(r); // symlinked rail dir → also match the resolved form
-      if (rv) railDecls.push({ glob: rv, ticket: tid });
+      railDecls.push({ glob: r, ticket: typeof t.id === 'string' ? t.id : '?' });
     }
   }
   if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
@@ -647,9 +631,13 @@ function rails(input) {
   // if ANY path is a rail, and EACH hit must be audited on bypass).
   const hits = [];
   for (const fp of fps) {
-    const rel = toRepoRelative(fp);
-    const hit = railDecls.find((r) => globMatch(r.glob, rel));
-    if (hit) hits.push({ rel, glob: hit.glob, ticket: hit.ticket });
+    // Match BOTH the lexical and the symlink-resolved form so neither a symlinked
+    // rail nor a symlinked target can dodge the literal globs. (realResolve may
+    // throw on a symlink loop → propagates to the global handler → fail closed.)
+    const relLex = toRepoRelativeLexical(fp);
+    const relReal = toRepoRelative(fp);
+    const hit = railDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
+    if (hit) hits.push({ rel: relReal, glob: hit.glob, ticket: hit.ticket });
   }
   if (hits.length === 0) return; // no target path hit a rail → allow
 
