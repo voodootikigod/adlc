@@ -121,30 +121,37 @@ function main() {
   }
 
   // The starting dir may be a SUBDIRECTORY of the repo (CLAUDE_PROJECT_DIR unset,
-  // cwd = src/). Walk up to the nearest ancestor that has `.adlc/` and operate
-  // there, so a frozen-rail edit can't slip past just because the hook ran from a
-  // subdir (which would otherwise find no `.adlc/` and no-op = fail open).
-  for (let cur = process.cwd(), i = 0; i < 64; i++) {
-    if (existsSync(join(cur, '.adlc'))) {
-      try {
-        process.chdir(cur);
-      } catch {
-        // Found the ADLC root but can't enter it → can't verify rails → fail closed.
-        if (MODE === 'rails') {
-          try {
-            denyRail('rails hook found the ADLC root but could not enter it — failing closed');
-          } catch {
-            /* exit 2 below still blocks */
-          }
-          process.exit(2);
-        }
-        return;
-      }
-      break;
-    }
+  // cwd = src/). Find the ADLC root and operate there, so a frozen-rail edit can't
+  // slip past just because the hook ran from a subdir (which would otherwise find
+  // no `.adlc/` and no-op = fail open). Anchor to the GIT ROOT first so a nested
+  // `.adlc/` in a subdirectory can't shadow the repo-wide config; only fall back
+  // to the nearest-ancestor `.adlc/` when there is no enclosing git repo.
+  let adlcRoot = null;
+  let gitRoot = null;
+  for (let cur = process.cwd(), i = 0; i < 256; i++) {
+    if (gitRoot === null && existsSync(join(cur, '.git'))) gitRoot = cur;
+    if (adlcRoot === null && existsSync(join(cur, '.adlc'))) adlcRoot = cur;
     const parent = dirname(cur);
-    if (parent === cur) break; // reached filesystem root → no .adlc anywhere
+    if (parent === cur) break;
     cur = parent;
+  }
+  // Prefer the .adlc at the git root; else the nearest-ancestor .adlc.
+  const root = gitRoot && existsSync(join(gitRoot, '.adlc')) ? gitRoot : adlcRoot;
+  if (root) {
+    try {
+      process.chdir(root);
+    } catch {
+      // Found the ADLC root but can't enter it → can't verify rails → fail closed.
+      if (MODE === 'rails') {
+        try {
+          denyRail('rails hook found the ADLC root but could not enter it — failing closed');
+        } catch {
+          /* exit 2 below still blocks */
+        }
+        process.exit(2);
+      }
+      return;
+    }
   }
 
   if (MODE === 'preflight') return preflight();
@@ -566,6 +573,13 @@ function recordBypass(relPath, why) {
 // via Bash are caught by the UNBYPASSABLE rails-guard CI diff gate at commit
 // time (`scripts/rails-guard-ci.mjs`), which inspects the committed change
 // regardless of how it was produced. See docs/adr-adlc-command-reconciliation.md.
+//
+// Symlink note: rails and targets are matched in both lexical and symlink-
+// resolved forms, and a rail's literal directory PREFIX is symlink-resolved. A
+// rail with a LEADING wildcard whose later, wildcard-matched segments are
+// symlinks (e.g. `*/auth/**` where `auth` is a symlink) is the one residual
+// gap — declare rails with literal directory prefixes for symlink resolution to
+// apply; the CI gate remains the commit-time backstop.
 function rails(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo
   const ticketsPath = join('.adlc', 'tickets.json');
