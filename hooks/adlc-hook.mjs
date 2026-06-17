@@ -32,6 +32,7 @@ import {
   chmodSync,
   rmSync,
   realpathSync,
+  readlinkSync,
 } from 'node:fs';
 import { join, relative, resolve, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -385,23 +386,35 @@ function targetFilePaths(input) {
  * existing parent dir and re-attach the basename. Both repo root and target are
  * realpath'd so a symlinked repo root still compares correctly.
  */
-// Resolve symlinks even for a not-yet-existing path: walk up to the first
-// EXISTING ancestor, realpath it (resolving any symlinked prefix dir), then
-// re-attach the non-existent tail. So `link/new_sub/file.js` where `link` → a
-// rail dir resolves to `<rail>/new_sub/file.js`.
+// Resolve symlinks even for not-yet-existing paths. Walk up toward the first
+// EXISTING ancestor; at each unresolved component, if the component is itself a
+// symlink (even a BROKEN one whose target does not exist yet), follow its target
+// and keep resolving. Otherwise treat it as a non-existent tail segment. So both
+// `link/new_sub/f` (link → existing rail dir) and a broken `link → rail_dir`
+// (rail_dir not yet created) resolve INTO the rail and are caught.
 function realResolve(abs) {
   let cur = abs;
   const tail = [];
-  for (;;) {
+  for (let guard = 0; guard < 4096; guard++) {
     try {
       return tail.length ? join(realpathSync(cur), ...tail) : realpathSync(cur);
     } catch {
+      // Is `cur` itself a symlink (possibly broken)? Follow it.
+      try {
+        if (lstatSync(cur).isSymbolicLink()) {
+          cur = resolve(dirname(cur), readlinkSync(cur));
+          continue;
+        }
+      } catch {
+        /* cur does not exist at all → fall through to walk up */
+      }
       const parent = dirname(cur);
       if (parent === cur) return abs; // reached the root, nothing resolved → lexical
       tail.unshift(basename(cur));
       cur = parent;
     }
   }
+  return abs; // pathological depth → lexical fallback
 }
 
 function toRepoRelative(fp) {
@@ -479,6 +492,11 @@ function rails(input) {
   // confirm rails are actually declared, so a no-rails repo still can't brick).
   const STRUCTURED_EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
   const isStructuredEdit = STRUCTURED_EDIT.has(input.tool_name);
+  // If a tool_name is present and it is NOT a structured edit, this is a non-edit
+  // tool (e.g. a reader) that carries a path — not ours to gate; allow. When
+  // tool_name is absent we trust the matcher (which only routes edit tools here)
+  // and gate by the path. Either way a non-edit tool with no path no-ops.
+  if (input.tool_name && !isStructuredEdit) return;
   if (fps.length === 0 && !isStructuredEdit) return;
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';

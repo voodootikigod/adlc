@@ -211,6 +211,43 @@ test('structured edit (Edit) with no extractable path while rails exist → fail
   }
 });
 
+test('writing under a BROKEN symlink that points at a (not-yet-existing) rail dir → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["rail_dir/**"]}]}');
+    symlinkSync(join(dir, 'rail_dir'), join(dir, 'link')); // link → rail_dir, which does NOT exist yet
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'link', 'new', 'f.js') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a non-edit tool (named, carrying a path) targeting a rail → allow (not gated)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["test/**"]}]}');
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Read', tool_input: { file_path: join(dir, 'test', 'x.test.mjs') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.equal(out.includes('"permissionDecision":"deny"'), false); // a reader is not gated
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- fail closed on unreadable/malformed input ----
 
 test('malformed stdin in rails mode → fail closed (deny)', () => {
