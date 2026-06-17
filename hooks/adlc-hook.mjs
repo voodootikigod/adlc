@@ -394,10 +394,12 @@ function addTargetDirFlags(words, targets) {
   }
 }
 
-// Mutating verbs → canonical handler key. `install` behaves like `cp`.
+// Mutating verbs → canonical handler key. `rm`-like = all operands are targets;
+// `cp`-like = the last operand (destination/link) is the target.
 const MUTATING_VERB = {
-  rm: 'rm', unlink: 'rm', shred: 'rm',
-  mv: 'mv', cp: 'cp', install: 'cp',
+  rm: 'rm', unlink: 'rm', shred: 'rm', touch: 'rm', mkdir: 'rm', rmdir: 'rm',
+  mv: 'mv',
+  cp: 'cp', install: 'cp', ln: 'cp', link: 'cp',
   tee: 'tee', truncate: 'truncate', sed: 'sed', dd: 'dd',
 };
 
@@ -526,6 +528,12 @@ function bashRailHit(cmd, railDecls) {
         for (let i = 1; i <= parts.length; i++) {
           if (globMatch(rel, parts.slice(0, i).join('/'))) return r;
         }
+        // Rail glob with an EARLY wildcard has a short literal base (rail
+        // `test/**/*.test.js` → base `test`); a deeper wildcard target
+        // (`test/auth/*`) won't match the short base's prefixes. Catch the
+        // overlap when the target's own literal base is at/under the rail base.
+        const targetBase = railLiteralPrefix(rel);
+        if (targetBase && (targetBase === railBase || targetBase.startsWith(railBase + '/'))) return r;
       }
     }
   }

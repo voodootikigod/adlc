@@ -154,6 +154,10 @@ for (const [name, cmd, exp] of [
   ['bare star rm -rf * (covers rail ancestor)', 'rm -rf *', 'deny'],
   ['sed -i -e flag script then rail file', 'sed -i -es/a/b/ test/auth/login.test.mjs', 'deny'],
   ['sed -i --expression then rail file', 'sed -i --expression=s/a/b/ test/auth/login.test.mjs', 'deny'],
+  ['touch a rail', 'touch test/auth/login.test.mjs', 'deny'],
+  ['ln -sf over a rail', 'ln -sf /tmp/evil test/auth/login.test.mjs', 'deny'],
+  ['mkdir over a rail path', 'mkdir test/auth', 'deny'],
+  ['touch a non-rail', 'touch src/app.mjs', 'allow'],
 ]) {
   test(`bash: ${name} → ${exp}`, () => {
     assert.equal(runBash(RAIL_T, cmd), exp);
@@ -179,6 +183,16 @@ for (const [name, cmd, exp] of [
     assert.equal(runBash(SPACE_T, cmd), exp);
   });
 }
+
+test('wildcard target overlaps an early-wildcard rail (test/**/*.test.js) → deny', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/**/*.test.js"]}]}';
+  assert.equal(runBash(t, 'rm -rf test/auth/*'), 'deny');
+});
+
+test('non-overlapping deep glob with an early-wildcard rail → allow', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/**/*.test.js"]}]}';
+  assert.equal(runBash(t, 'rm -rf docs/api/*'), 'allow');
+});
 
 // ---- trust root: tickets.json is frozen once rails exist ----
 
