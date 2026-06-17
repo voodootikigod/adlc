@@ -150,6 +150,27 @@ test('chdir failure (unreachable project dir) in rails mode → fail closed', ()
 
 // ---- robustness: subdir invocation + symlinked rail definitions ----
 
+test('a RELATIVE file_path from a subdir resolves against the invocation dir → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.git'));
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["src/**"]}]}');
+    mkdirSync(join(dir, 'src'));
+    // cwd = src/, file_path is RELATIVE "secret.js" → really src/secret.js, must be denied
+    const input = JSON.stringify({ cwd: join(dir, 'src'), tool_name: 'Edit', tool_input: { file_path: 'secret.js' } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a nested subdir .adlc does NOT shadow the git-root rail config → deny', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {

@@ -40,6 +40,12 @@ import { createHash } from 'node:crypto';
 
 const MODE = process.argv[2];
 
+// The tool's invocation directory (where relative `file_path`s are anchored),
+// captured BEFORE we walk up to the repo root. Relative edit targets must resolve
+// against this, not the walked-up cwd, or `secret.js` from `src/` would resolve
+// to repo-root `secret.js` and dodge the `src/**` rail.
+let baseDir = null;
+
 // Flail detection only needs the RECENT window of a session — flailing is a
 // "looping right now" signal, not a whole-history property. Cap the scan so a
 // long session's growing transcript can never turn this synchronous PostToolUse
@@ -119,6 +125,10 @@ function main() {
     }
     return;
   }
+
+  // Capture the invocation dir (for resolving relative edit targets) BEFORE the
+  // walk-up changes cwd to the repo root.
+  baseDir = process.cwd();
 
   // The starting dir may be a SUBDIRECTORY of the repo (CLAUDE_PROJECT_DIR unset,
   // cwd = src/). Find the ADLC root and operate there, so a frozen-rail edit can't
@@ -464,7 +474,7 @@ function toRepoRelative(fp) {
   } catch {
     root = process.cwd();
   }
-  const real = realResolve(resolve(process.cwd(), fp));
+  const real = realResolve(resolve(baseDir ?? process.cwd(), fp));
   return relative(root, real).split('\\').join('/');
 }
 
@@ -476,8 +486,7 @@ function toRepoRelative(fp) {
  * lexical form, a symlinked TARGET by the resolved form.
  */
 function toRepoRelativeLexical(fp) {
-  const cwd = process.cwd();
-  return relative(cwd, resolve(cwd, fp)).split('\\').join('/');
+  return relative(process.cwd(), resolve(baseDir ?? process.cwd(), fp)).split('\\').join('/');
 }
 
 function repoRoot() {
