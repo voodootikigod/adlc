@@ -243,3 +243,29 @@ design. All three are folded into the accepted decision:
    exit) is treated as deny for the enforcing hook. The shared hook library
    (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
    guarantee is a harness-binding responsibility, documented per harness.
+
+---
+
+## Revision 2 (2026-06-17): in-session Bash rail enforcement dropped (Option C)
+
+After refinement 3 above, adversarial review (Gemini-3.5-Flash) kept finding bash
+parse bypasses in the in-session rail hook — wrappers, command grouping, bare
+subshells, glob/wildcard targets, `-t`/`--target-directory`, wrapper option
+values, path-prefixed verbs (`/bin/rm`), `cd &&`, brace expansion, nested
+substitutions, missing verbs (`touch`/`ln`/`mkdir`) — and the patches began
+introducing their OWN bugs (an over-broad wildcard-overlap check). A shell is
+Turing-complete; an in-session guard that tries to parse it has no stable
+terminus, and "common" is a gradient, not a definable set.
+
+**Decision: drop in-session Bash rail enforcement entirely.** The PreToolUse rail
+hook now matches `Edit|Write|MultiEdit` only — the STRUCTURED edit tools, which it
+resolves precisely with zero shell parsing and zero false positives. The bash
+lexer / write-target extraction / verb table are removed. Rail mutations via Bash
+(any spelling) are caught by the **unbypassable rails-guard CI diff gate** at
+commit time, which inspects the committed change regardless of how it was
+produced — so the security guarantee is unchanged.
+
+This is exactly the harness-map split the thesis prescribes (PreToolUse hook for
+what it can gate precisely **+** branch protection in CI for the rest). It also
+deletes a large, bug-prone attack surface from the hook. The in-session bash
+guard was best-effort convenience; it was not — and could not be — the guarantee.

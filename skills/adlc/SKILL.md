@@ -62,12 +62,13 @@ downstream reads this file; nothing else creates it. Author here first.
 - `adlc rails-guard --base <ref> --ticket <id>` — diff-based check that no
   committed change touched a frozen rail (exit 2 = a rail was edited). This is the
   **unbypassable commit-time backstop**; run it in CI. The plugin's **PreToolUse
-  rail hook** is the in-session layer: it denies Edit/Write/MultiEdit to declared
-  rail paths and best-effort denies Bash writes (redirect/tee/`sed -i`/dd) to
-  them, and freezes `.adlc/tickets.json` itself once rails exist. Obfuscated shell
-  writes can evade the in-session hook but not the CI diff gate — wire that gate
-  with the template at `docs/ci/rails-guard.yml` and make it a required check.
-  Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
+  rail hook** is the in-session layer: it precisely denies Edit/Write/MultiEdit to
+  declared rail paths and freezes `.adlc/tickets.json` itself once rails exist.
+  **Bash is not gated in-session** — a shell can't be reliably parsed, so rail
+  mutations via Bash are caught by the CI diff gate (any spelling), not the hook.
+  Wire that gate with the template at `docs/ci/rails-guard.yml` and make it a
+  required check. Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to
+  the manifest).
 
 ### P4 — Build (supervised execution)
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,

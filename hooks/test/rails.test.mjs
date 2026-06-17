@@ -6,6 +6,11 @@
 // Contract (integration plan §4.4): the gate fails CLOSED whenever rails cannot
 // be trustworthily determined, is a no-op when no rails are declared, denies on
 // a rail hit, and honors an audited ADLC_RAILS_BYPASS override.
+//
+// SCOPE: this guards the STRUCTURED edit tools (Edit/Write/MultiEdit), resolved
+// precisely with no shell parsing. Bash is NOT gated in-session — a shell can't
+// be reliably parsed; rail mutations via Bash are caught by the rails-guard CI
+// diff gate at commit time (see scripts/test/rails-guard-ci.test.mjs).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -81,143 +86,40 @@ test('edit to an exact-file rail → deny', () => {
   assert.equal(runRails(t, 'src/types/api.d.ts').verdict, 'deny');
 });
 
-// ---- Bash branch: deny shell writes to a rail, allow reads/runs ----
 
-function runBash(ticketsJson, command, { env = {}, shape = 'tool_input' } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
-  try {
-    mkdirSync(join(dir, '.adlc'));
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
-    const cmd = command.replace(/%DIR%/g, dir); // %DIR% → the temp project root
-    const payload = { cwd: dir, tool_name: 'Bash', [shape]: { command: cmd } };
-    const input = JSON.stringify(payload);
-    let out = '';
-    try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, ...env } });
-    } catch (e) {
-      out = e.stdout ?? '';
-    }
-    return out.includes('"permissionDecision":"deny"') ? 'deny' : 'allow';
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+// ---- trust root: tickets.json is frozen once rails exist (structured edits) ----
 
 const RAIL_T = '{"tickets":[{"id":"T1","rails":["test/auth/**","src/types/api.d.ts"]}]}';
-
-for (const [name, cmd, exp] of [
-  ['redirect > rail', 'echo x > test/auth/login.test.mjs', 'deny'],
-  ['append >> rail', 'echo x >> test/auth/login.test.mjs', 'deny'],
-  ['sed -i rail', "sed -i 's/a/b/' test/auth/login.test.mjs", 'deny'],
-  ['sed -i with pipe delimiter', "sed -i 's|a|b|' test/auth/login.test.mjs", 'deny'],
-  ['sed -i with semicolon in script', "sed -i 's/a/b/;s/c/d/' test/auth/login.test.mjs", 'deny'],
-  ['write after a pipe', 'cat x | tee test/auth/login.test.mjs', 'deny'],
-  ['command chain ; then write', 'echo hi ; echo x > test/auth/login.test.mjs', 'deny'],
-  ['tee rail', 'echo x | tee test/auth/login.test.mjs', 'deny'],
-  ['dd of= rail', 'dd if=/dev/null of=src/types/api.d.ts', 'deny'],
-  ['truncate rail', 'truncate -s 0 test/auth/login.test.mjs', 'deny'],
-  ['redirect to ./rail', 'echo x > ./test/auth/login.test.mjs', 'deny'],
-  ['redirect to absolute rail', 'echo x > %DIR%/test/auth/login.test.mjs', 'deny'],
-  ['redirect to quoted rail', 'echo x > "test/auth/login.test.mjs"', 'deny'],
-  ['sed -i ./rail', "sed -i 's/a/b/' ./test/auth/login.test.mjs", 'deny'],
-  ['run a rail test (no write)', 'node test/auth/login.test.mjs', 'allow'],
-  ['cat a rail (read)', 'cat test/auth/login.test.mjs', 'allow'],
-  ['write a non-rail', 'echo x > src/app.mjs', 'allow'],
-  ['grep a rail (read, no write)', 'grep foo test/auth/login.test.mjs', 'allow'],
-  ['rm a rail (deletion)', 'rm test/auth/login.test.mjs', 'deny'],
-  ['rm -f a rail', 'rm -f test/auth/login.test.mjs', 'deny'],
-  ['mv a rail away (source)', 'mv test/auth/login.test.mjs /tmp/x', 'deny'],
-  ['mv onto a rail (dest)', 'mv /tmp/x test/auth/login.test.mjs', 'deny'],
-  ['cp onto a rail (dest written)', 'cp evil.mjs test/auth/login.test.mjs', 'deny'],
-  ['cp a rail as source (read)', 'cp test/auth/login.test.mjs backup.mjs', 'allow'],
-  ['rm a non-rail', 'rm src/app.mjs', 'allow'],
-  ['rm -rf the rail parent dir', 'rm -rf test/auth', 'deny'],
-  ['rm -rf a grandparent dir of a rail', 'rm -rf test', 'deny'],
-  ['rm -rf a non-rail dir', 'rm -rf build', 'allow'],
-  ['sudo rm a rail (wrapper)', 'sudo rm test/auth/login.test.mjs', 'deny'],
-  ['env VAR=1 rm a rail (wrapper+assignment)', 'env FOO=1 rm test/auth/login.test.mjs', 'deny'],
-  ['xargs rm a rail (wrapper)', 'xargs rm test/auth/login.test.mjs', 'deny'],
-  ['subshell $(rm rail)', 'echo $(rm test/auth/login.test.mjs)', 'deny'],
-  ['backtick rm rail', 'echo `rm test/auth/login.test.mjs`', 'deny'],
-  ['command grouping { rm rail; }', '{ rm test/auth/login.test.mjs; }', 'deny'],
-  ['bare subshell ( rm rail )', '( rm test/auth/login.test.mjs )', 'deny'],
-  ['glob rm -rf test/*', 'rm -rf test/*', 'deny'],
-  ['glob rm -rf build/* (non-rail)', 'rm -rf build/*', 'allow'],
-  ['cp --target-directory=rail', 'cp --target-directory=test/auth src.mjs', 'deny'],
-  ['mv -t rail dir', 'mv -t test/auth src.mjs', 'deny'],
-  ['wrapper with value: sudo -u root rm rail', 'sudo -u root rm test/auth/login.test.mjs', 'deny'],
-  ['wrapper with value: nice -n 10 rm rail', 'nice -n 10 rm test/auth/login.test.mjs', 'deny'],
-  ['git rm a rail', 'git rm test/auth/login.test.mjs', 'deny'],
-  ['no-space subshell (rm exact-file rail)', '(rm src/types/api.d.ts)', 'deny'],
-  ['partial-segment glob rm -rf test/aut*', 'rm -rf test/aut*', 'deny'],
-  ['partial glob non-rail rm -rf bui*', 'rm -rf bui*', 'allow'],
-  ['bare star rm -rf * (covers rail ancestor)', 'rm -rf *', 'deny'],
-  ['sed -i -e flag script then rail file', 'sed -i -es/a/b/ test/auth/login.test.mjs', 'deny'],
-  ['sed -i --expression then rail file', 'sed -i --expression=s/a/b/ test/auth/login.test.mjs', 'deny'],
-  ['touch a rail', 'touch test/auth/login.test.mjs', 'deny'],
-  ['ln -sf over a rail', 'ln -sf /tmp/evil test/auth/login.test.mjs', 'deny'],
-  ['mkdir over a rail path', 'mkdir test/auth', 'deny'],
-  ['touch a non-rail', 'touch src/app.mjs', 'allow'],
-]) {
-  test(`bash: ${name} → ${exp}`, () => {
-    assert.equal(runBash(RAIL_T, cmd), exp);
-  });
-}
-
-test('bash via parameters.command payload shape → deny (rail write)', () => {
-  assert.equal(runBash(RAIL_T, 'echo x > test/auth/login.test.mjs', { shape: 'parameters' }), 'deny');
-});
-
-// ---- quoted rail paths containing spaces ----
-
-const SPACE_T = '{"tickets":[{"id":"T1","rails":["docs/frozen file.md"]}]}';
-for (const [name, cmd, exp] of [
-  ['redirect to quoted spaced rail', 'echo x > "docs/frozen file.md"', 'deny'],
-  ['sed -i quoted spaced rail', "sed -i 's/a/b/' 'docs/frozen file.md'", 'deny'],
-  ['tee quoted spaced rail', 'echo x | tee "docs/frozen file.md"', 'deny'],
-  ['redirect to backslash-escaped spaced rail', 'echo x > docs/frozen\\ file.md', 'deny'],
-  ['sed -i backslash-escaped spaced rail', "sed -i 's/a/b/' docs/frozen\\ file.md", 'deny'],
-  ['read quoted spaced rail', 'cat "docs/frozen file.md"', 'allow'],
-]) {
-  test(`bash (spaces): ${name} → ${exp}`, () => {
-    assert.equal(runBash(SPACE_T, cmd), exp);
-  });
-}
-
-test('wildcard target overlaps an early-wildcard rail (test/**/*.test.js) → deny', () => {
-  const t = '{"tickets":[{"id":"T1","rails":["test/**/*.test.js"]}]}';
-  assert.equal(runBash(t, 'rm -rf test/auth/*'), 'deny');
-});
-
-test('non-overlapping deep glob with an early-wildcard rail → allow', () => {
-  const t = '{"tickets":[{"id":"T1","rails":["test/**/*.test.js"]}]}';
-  assert.equal(runBash(t, 'rm -rf docs/api/*'), 'allow');
-});
-
-// ---- trust root: tickets.json is frozen once rails exist ----
 
 test('editing .adlc/tickets.json while rails exist → deny (trust root)', () => {
   assert.equal(runRails(RAIL_T, '.adlc/tickets.json').verdict, 'deny');
 });
 
-test('bash redirect into .adlc/tickets.json while rails exist → deny', () => {
-  assert.equal(runBash(RAIL_T, 'echo "{}" > .adlc/tickets.json'), 'deny');
-});
-
-test('rm .adlc/tickets.json (disabling the trust root) while rails exist → deny', () => {
-  assert.equal(runBash(RAIL_T, 'rm .adlc/tickets.json'), 'deny');
-});
-
-test('mv .adlc/tickets.json away while rails exist → deny', () => {
-  assert.equal(runBash(RAIL_T, 'mv .adlc/tickets.json /tmp/t.json'), 'deny');
-});
-
-test('rm -rf .adlc (destroys the trust root) while rails exist → deny', () => {
-  assert.equal(runBash(RAIL_T, 'rm -rf .adlc'), 'deny');
-});
 
 test('editing .adlc/tickets.json with NO rails declared → allow (authoring the first ticket)', () => {
   assert.equal(runRails('{"tickets":[]}', '.adlc/tickets.json').verdict, 'allow');
+});
+
+// ---- Bash is intentionally NOT gated in-session (Option C) ----
+
+test('a Bash command targeting a rail is a no-op in-session (CI gate is the backstop)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), RAIL_T);
+    // A Bash-shaped payload (command, no file_path) — the rails hook must NOT
+    // try to gate it; it returns no output (allow) and leaves it to the CI gate.
+    const input = JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command: 'rm test/auth/login.test.mjs' } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8' });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.equal(out.includes('"permissionDecision":"deny"'), false); // not gated in-session
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---- canonicalization: non-canonical spellings must not dodge a rail ----

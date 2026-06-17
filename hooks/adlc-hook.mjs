@@ -346,200 +346,6 @@ function toRepoRelative(fp) {
   return relative(process.cwd(), abs).split('\\').join('/');
 }
 
-/**
- * A small quote/escape-aware shell lexer. Returns an ordered list of items:
- * `{ op }` for a control/redirect operator (`|`, `||`, `;`, `&&`, `&`, `>`,
- * `>>`, `<`) and `{ word }` for a (quote- and escape-decoded) word. Operators
- * are only recognized OUTSIDE quotes, so a `|`/`;` inside a quoted sed script is
- * part of the word, not a separator. This is what lets the writer detection
- * below survive normal shell quoting; it is not a full POSIX shell, but it
- * covers the unobfuscated write forms (the rails-guard CI diff gate remains the
- * unbypassable backstop for anything cleverer).
- */
-function lexBash(cmd) {
-  const items = [];
-  const n = cmd.length;
-  let i = 0;
-  while (i < n) {
-    const ch = cmd[i];
-    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
-    if (ch === '|') { items.push({ op: cmd[i + 1] === '|' ? '||' : '|' }); i += cmd[i + 1] === '|' ? 2 : 1; continue; }
-    if (ch === '&') { items.push({ op: cmd[i + 1] === '&' ? '&&' : '&' }); i += cmd[i + 1] === '&' ? 2 : 1; continue; }
-    if (ch === ';') { items.push({ op: ';' }); i++; continue; }
-    if (ch === '>') { items.push({ op: cmd[i + 1] === '>' ? '>>' : '>' }); i += cmd[i + 1] === '>' ? 2 : 1; continue; }
-    if (ch === '<') { items.push({ op: '<' }); i++; continue; }
-    // a word: accumulate until an unquoted separator/operator.
-    let word = '';
-    while (i < n) {
-      const c = cmd[i];
-      if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '|' || c === '&' || c === ';' || c === '>' || c === '<') break;
-      if (c === '\\') { if (i + 1 < n) { word += cmd[i + 1]; i += 2; } else i++; continue; }
-      if (c === '"') { i++; while (i < n && cmd[i] !== '"') { if (cmd[i] === '\\' && i + 1 < n) { word += cmd[i + 1]; i += 2; } else { word += cmd[i]; i++; } } i++; continue; }
-      if (c === "'") { i++; while (i < n && cmd[i] !== "'") { word += cmd[i]; i++; } i++; continue; }
-      word += c; i++;
-    }
-    items.push({ word });
-  }
-  return items;
-}
-
-// `-t DIR` / `--target-directory=DIR` move the real destination off the operand
-// list, so cp/mv/install must read it explicitly.
-function addTargetDirFlags(words, targets) {
-  for (let j = 0; j < words.length; j++) {
-    const w = words[j];
-    if ((w === '-t' || w === '--target-directory') && words[j + 1]) targets.add(words[j + 1]);
-    else if (w.startsWith('--target-directory=')) targets.add(w.slice('--target-directory='.length));
-    else if (/^-t.+/.test(w)) targets.add(w.slice(2)); // -tDIR
-  }
-}
-
-// Mutating verbs → canonical handler key. `rm`-like = all operands are targets;
-// `cp`-like = the last operand (destination/link) is the target.
-const MUTATING_VERB = {
-  rm: 'rm', unlink: 'rm', shred: 'rm', touch: 'rm', mkdir: 'rm', rmdir: 'rm',
-  mv: 'mv',
-  cp: 'cp', install: 'cp', ln: 'cp', link: 'cp',
-  tee: 'tee', truncate: 'truncate', sed: 'sed', dd: 'dd',
-};
-
-const stripGrouping = (w) => w.replace(/^[({]+/, '').replace(/[)}]+$/, '');
-
-function processSegment(words, targets) {
-  if (words.length === 0) return;
-  for (const w of words) if (w.startsWith('of=')) targets.add(w.slice(3)); // dd of=PATH
-  // Find the mutating verb ANYWHERE in the segment, not just at position 0 — robust
-  // to wrappers AND their option arguments without parsing each wrapper's flag
-  // grammar: `sudo -u root rm x`, `nice -n 10 rm x`, `env A=1 rm x`, `git rm x`,
-  // `{ rm x; }`, `( rm x )` all locate the real verb.
-  let vi = -1, verb = null;
-  for (let j = 0; j < words.length; j++) {
-    const v = MUTATING_VERB[stripGrouping(words[j])];
-    if (v) { vi = j; verb = v; break; }
-  }
-  if (vi === -1) return;
-  // Operands after the verb, grouping chars (`(`/`{` … `)`/`}`) stripped so
-  // `( rm x )` / `(rm x)` extract `x`, not `x)`.
-  const rest = words.slice(vi + 1).map(stripGrouping);
-
-  if (verb === 'rm' || verb === 'mv' || verb === 'tee') {
-    for (const w of rest) if (!w.startsWith('-')) targets.add(w);
-    if (verb === 'mv') addTargetDirFlags(rest, targets);
-  } else if (verb === 'truncate') {
-    for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === '-s') { i++; continue; }
-      if (!rest[i].startsWith('-')) targets.add(rest[i]);
-    }
-  } else if (verb === 'sed') {
-    const inPlace = rest.some((w) => /^--in-place/.test(w) || /^-[a-zA-Z]*i/.test(w));
-    if (inPlace) {
-      const ops = rest.filter((w) => !w.startsWith('-'));
-      // The script is the first bare operand ONLY when it was not already given
-      // via -e/-f/--expression/--file; with those flags every bare operand is a file.
-      const scriptViaFlag = rest.some(
-        (w) => /^-e/.test(w) || /^-f/.test(w) || /^--expression/.test(w) || /^--file/.test(w)
-      );
-      for (const w of scriptViaFlag ? ops : ops.slice(1)) targets.add(w);
-    }
-  } else if (verb === 'cp') {
-    const ops = rest.filter((w) => !w.startsWith('-'));
-    if (ops.length) targets.add(ops[ops.length - 1]); // destination is last
-    addTargetDirFlags(rest, targets);
-  }
-  // `dd` is handled by the `of=` scan above.
-}
-
-/**
- * Extract the path operands a shell command MUTATES, in the common forms:
- * redirection (`>`/`>>`), `tee`, `dd of=`, `sed -i`, `truncate`, `rm`/`mv`,
- * `cp`/`install` destinations (incl. `-t DIR`). Robust to `./`/absolute
- * spellings, quoting, backslash escapes, command wrappers (`sudo`/`env`/`xargs`),
- * command grouping (`{ … }` / `( … )`), `$()`/backtick subshells, and ancestor-
- * directory / wildcard-base targets (`rm -rf test/auth`, `rm -rf test/*`).
- *
- * SCOPE (intentional, per the ADLC harness map: PreToolUse hook + branch
- * protection in CI). This is a BEST-EFFORT in-session guard for the *common*
- * direct mutation forms — NOT a complete shell sandbox. Bash is Turing-complete;
- * constructs like `eval`, `find -exec`, process substitution `<()`, variable
- * indirection `$CMD`, or `base64 | sh` can still mutate a rail without being
- * recognized here. Those are caught by the **unbypassable rails-guard CI diff
- * gate** at commit time (`scripts/rails-guard-ci.mjs`), which inspects the
- * committed change regardless of how it was produced. The structured-edit guard
- * (Edit/Write/MultiEdit) is, by contrast, complete — no shell parsing involved.
- */
-function bashWriteTargets(cmd, depth = 0) {
-  const items = lexBash(cmd);
-  const targets = new Set();
-  let seg = [];
-  for (let k = 0; k < items.length; k++) {
-    const it = items[k];
-    if (it.op === '>' || it.op === '>>') {
-      const next = items[k + 1];
-      if (next && next.word !== undefined) {
-        targets.add(next.word); // redirect target
-        k++; // consume it so it is not re-read as a segment word
-      }
-      continue;
-    }
-    if (it.op === '<') continue; // input redirect — not a write
-    if (it.op) { processSegment(seg, targets); seg = []; continue; } // | || ; && &
-    if (it.word !== undefined) seg.push(it.word);
-  }
-  processSegment(seg, targets);
-  // Recurse into command substitutions — `$(rm rail)` / backticks — so a write
-  // hidden in a subshell is still seen. Depth-guarded against pathological input.
-  if (depth < 4) {
-    for (const m of cmd.matchAll(/\$\(([^()]*)\)/g)) {
-      for (const t of bashWriteTargets(m[1], depth + 1)) targets.add(t);
-    }
-    for (const m of cmd.matchAll(/`([^`]*)`/g)) {
-      for (const t of bashWriteTargets(m[1], depth + 1)) targets.add(t);
-    }
-  }
-  return [...targets];
-}
-
-/** Literal path prefix of a rail glob (everything before the first wildcard),
- *  trailing slash stripped — used for directory-containment checks. */
-function railLiteralPrefix(glob) {
-  const i = glob.indexOf('*');
-  return (i === -1 ? glob : glob.slice(0, i)).replace(/\/+$/, '');
-}
-
-/** The first rail a Bash command mutates (canonicalized), or null. A target hits
- *  a rail if it matches the rail glob, is the rail's ancestor DIRECTORY
- *  (`rm -rf test/auth`, `rm -rf .adlc`), or is a wildcard whose base dir covers
- *  the rail (`rm -rf test/*`). */
-function bashRailHit(cmd, railDecls) {
-  for (const tok of bashWriteTargets(cmd)) {
-    const rel = toRepoRelative(tok);
-    for (const r of railDecls) {
-      if (globMatch(r.glob, rel)) return r; // target matches the rail glob
-      const railBase = railLiteralPrefix(r.glob);
-      if (!railBase) continue;
-      // Target IS the rail's ancestor directory: `rm test/auth`, `rm test`.
-      if (railBase === rel || railBase.startsWith(rel + '/')) return r;
-      // Target is a WILDCARD whose expansion could cover the rail or ANY of its
-      // ancestor directories: `rm -rf test/*` (covers test/auth), `rm -rf *`
-      // (covers the top segment `test`), `rm -rf test/aut*`. Match the
-      // target-as-glob against every ancestor prefix of the rail base.
-      if (rel.includes('*')) {
-        const parts = railBase.split('/');
-        for (let i = 1; i <= parts.length; i++) {
-          if (globMatch(rel, parts.slice(0, i).join('/'))) return r;
-        }
-        // Rail glob with an EARLY wildcard has a short literal base (rail
-        // `test/**/*.test.js` → base `test`); a deeper wildcard target
-        // (`test/auth/*`) won't match the short base's prefixes. Catch the
-        // overlap when the target's own literal base is at/under the rail base.
-        const targetBase = railLiteralPrefix(rel);
-        if (targetBase && (targetBase === railBase || targetBase.startsWith(railBase + '/'))) return r;
-      }
-    }
-  }
-  return null;
-}
-
 /** Emit a PreToolUse deny with a clear reason. */
 function denyRail(reason) {
   emit({
@@ -568,31 +374,34 @@ function recordBypass(relPath, why) {
   return !!r && r.status === 0;
 }
 
-// PreToolUse (Edit/Write/MultiEdit/Bash) — the ONE enforcement hook: block
-// mutations of frozen rail paths. Asymmetric fail-closed contract (plan §4.4):
+// PreToolUse (Edit/Write/MultiEdit) — the ONE enforcement hook: block edits to
+// frozen rail paths. Asymmetric fail-closed contract (plan §4.4):
 //   • no .adlc / no tickets file / no rails declared anywhere → ALLOW (no-op),
 //     so installing into a repo that declares no rails can never brick editing;
 //   • a structured edit (Edit/Write/MultiEdit) to a rail path → DENY;
-//   • a Bash command that writes a rail path (redirect/tee/sed -i/dd/truncate)
-//     → DENY (best-effort; the rails-guard CI diff gate is the unbypassable
-//     backstop for obfuscated shell writes);
 //   • once any rail exists, `.adlc/tickets.json` is itself an implicit rail —
 //     the trust root can't be edited away to disable enforcement;
 //   • unparseable / schema-invalid tickets → rails can't be ruled out → DENY;
 //   • ADLC_RAILS_BYPASS=1 → ALLOW, but ONLY if the override is durably recorded
 //     to the manifest; an un-auditable bypass is refused (deny).
+//
+// SCOPE: this hook gates the STRUCTURED edit tools (Edit/Write/MultiEdit), which
+// it can resolve precisely with zero shell parsing. Bash is intentionally NOT
+// matched: a shell is Turing-complete and cannot be reliably parsed in-session
+// (every guard leaks — wrappers, subshells, globs, cd, eval, …). Rail mutations
+// via Bash are caught by the UNBYPASSABLE rails-guard CI diff gate at commit
+// time (`scripts/rails-guard-ci.mjs`), which inspects the committed change
+// regardless of how it was produced. See docs/adr-adlc-command-reconciliation.md.
 function rails(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo
   const ticketsPath = join('.adlc', 'tickets.json');
   if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
 
-  const ti = input.tool_input ?? input.parameters ?? {}; // accept either payload shape
   const fp = targetFilePath(input);
-  const cmd = typeof ti.command === 'string' ? ti.command : null;
-  if (!fp && !cmd) return; // nothing to gate
+  if (!fp) return; // not a structured edit (e.g. Bash) → CI-gate territory, nothing to gate here
 
   const bypass = process.env.ADLC_RAILS_BYPASS === '1';
-  const subject = fp ? toRepoRelative(fp) : '(bash command)';
+  const subject = toRepoRelative(fp);
 
   // A bypass is only honored if it can be AUDITED. If recording fails (adlc
   // missing, .adlc unwritable, record errors), an unaudited override is refused.
@@ -668,19 +477,6 @@ function rails(input) {
   // freeze it too (audited bypass still allowed for deliberate changes).
   railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
 
-  // Bash branch: deny a command that writes to a rail path.
-  if (cmd) {
-    const hit = bashRailHit(cmd, railDecls);
-    if (!hit) return; // no rail write detected → allow
-    return bypassOrDeny(
-      `bash-write ${hit.glob} (ticket ${hit.ticket})`,
-      `this shell command appears to write the frozen rail "${hit.glob}" (ticket ${hit.ticket}). ` +
-        `Mutating frozen rails is blocked during build. To override deliberately, set ` +
-        `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
-    );
-  }
-
-  // Structured-edit branch (Edit/Write/MultiEdit).
   const hit = railDecls.find((r) => globMatch(r.glob, subject));
   if (!hit) return; // not a rail → allow
 

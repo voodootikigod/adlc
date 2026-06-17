@@ -53,7 +53,7 @@ evidence-backed verdict.
 | preflight | SessionStart | Advisory: warns if the environment isn't ready for fan-out. |
 | flail-detection | PostToolUse | Advisory: flags repeated-error / churn loops over a bounded recent window of the transcript. |
 | gate-manifest audit | Stop | Advisory: warns only if the gate-evidence chain is broken. |
-| **rails-guard** | PreToolUse | **Enforcing**: denies edits (Edit/Write/MultiEdit and best-effort Bash writes) to frozen rail paths declared in tickets. |
+| **rails-guard** | PreToolUse | **Enforcing**: denies structured edits (Edit/Write/MultiEdit) to frozen rail paths declared in tickets. Bash is not gated in-session (a shell can't be reliably parsed); Bash rail mutations are caught by the CI diff gate at commit time. |
 
 All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
