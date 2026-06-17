@@ -14,7 +14,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +148,41 @@ test('chdir failure (unreachable project dir) in rails mode → fail closed', ()
   assert.equal(v, 'deny');
 });
 
+// ---- symlink resolution: editing a symlink that points at a rail → deny ----
+
+test('editing a symlink that resolves to a rail file → deny', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["src/api.d.ts"]}]}');
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, 'src', 'api.d.ts'), 'rail\n');
+    symlinkSync(join(dir, 'src', 'api.d.ts'), join(dir, 'src', 'link.d.ts')); // link → rail
+    const input = JSON.stringify({ cwd: dir, tool_input: { file_path: join(dir, 'src', 'link.d.ts') } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.match(out, /"permissionDecision":"deny"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- fail closed on unreadable/malformed input ----
+
+test('malformed stdin in rails mode → fail closed (deny)', () => {
+  let code = 0;
+  try {
+    execFileSync(process.execPath, [HOOK, 'rails'], { input: 'not json at all', encoding: 'utf8' });
+  } catch (e) {
+    code = e.status;
+  }
+  assert.equal(code, 2); // fail-closed exit
+});
+
 // ---- Bash is intentionally NOT gated in-session (Option C) ----
 
 test('a Bash command targeting a rail is a no-op in-session (CI gate is the backstop)', () => {
@@ -227,4 +262,27 @@ test('bypass with the recorder UNAVAILABLE → deny (an unaudited override is re
   const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
   const r = runRails(t, 'test/x.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: WITHOUT_ADLC } });
   assert.equal(r.verdict, 'deny');
+});
+
+test('bypass on a multi-file edit hitting two rails → allow + BOTH audited', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["a/**"]},{"id":"T2","rails":["b/**"]}]}');
+    const input = JSON.stringify({ cwd: dir, tool_input: { files: ['a/x.mjs', 'b/y.mjs'] } });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'rails'], {
+        input, encoding: 'utf8', env: { ...process.env, ADLC_RAILS_BYPASS: '1', PATH: WITH_ADLC, CLAUDE_PROJECT_DIR: '' },
+      });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.equal(out.includes('"permissionDecision":"deny"'), false); // audited bypass → allow
+    const manifest = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8');
+    const bypassEntries = manifest.split('\n').filter((l) => l.includes('rails-bypass')).length;
+    assert.equal(bypassEntries, 2); // BOTH rail hits audited, not just the first
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

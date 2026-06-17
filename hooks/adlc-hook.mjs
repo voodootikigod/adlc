@@ -31,8 +31,9 @@ import {
   lstatSync,
   chmodSync,
   rmSync,
+  realpathSync,
 } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
@@ -90,7 +91,15 @@ function parseJson(text) {
 }
 
 function main() {
-  const input = parseJson(readStdin()) ?? {};
+  const parsed = parseJson(readStdin());
+  // The enforcing rails hook must FAIL CLOSED if it cannot even read/parse its own
+  // input (empty stdin, malformed JSON) — it cannot verify rails. Advisory modes
+  // tolerate a missing payload and no-op.
+  if (MODE === 'rails' && parsed === null) {
+    denyRail('rails hook received unreadable/malformed input — failing closed');
+    return; // unreachable: denyRail exits 2
+  }
+  const input = parsed ?? {};
 
   // Operate in the project root so the tools resolve `.adlc/` correctly.
   const dir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
@@ -369,17 +378,40 @@ function targetFilePaths(input) {
 
 /**
  * Canonical repo-relative, forward-slashed path for glob matching. The tool
- * input is the trust boundary, so canonicalize it: `resolve` collapses `.`,
- * `..`, and duplicate separators and anchors a relative input to the project
- * root, then `relative` expresses it against the repo. A non-canonical spelling
- * (`./src/x`, `src/../src/x`) thus cannot dodge an exact rail glob.
+ * input is the trust boundary, so canonicalize it: `resolve` collapses `.`/`..`/
+ * dup-separators and anchors relative input to the project root; `realpathSync`
+ * then resolves SYMLINKS so an edit to a symlink that points at a rail cannot
+ * dodge the glob. A brand-new file (Write) has no realpath, so we resolve its
+ * existing parent dir and re-attach the basename. Both repo root and target are
+ * realpath'd so a symlinked repo root still compares correctly.
  */
 function toRepoRelative(fp) {
+  let root;
+  try {
+    root = realpathSync(process.cwd());
+  } catch {
+    root = process.cwd();
+  }
   const abs = resolve(process.cwd(), fp);
-  return relative(process.cwd(), abs).split('\\').join('/');
+  let real;
+  try {
+    real = realpathSync(abs); // existing file/symlink → resolved target
+  } catch {
+    try {
+      real = join(realpathSync(dirname(abs)), basename(abs)); // new file: resolve parent
+    } catch {
+      real = abs; // unresolvable → fall back to the lexical path
+    }
+  }
+  return relative(root, real).split('\\').join('/');
 }
 
-/** Emit a PreToolUse deny with a clear reason. */
+/**
+ * Emit a PreToolUse DENY and exit 2. This is enforcing, so it fails closed two
+ * ways: the structured `permissionDecision: deny` payload, AND a non-zero exit
+ * (Claude Code blocks a PreToolUse hook that exits 2) — so even if the stdout
+ * write is swallowed/blocked, the edit is still denied. Does not return.
+ */
 function denyRail(reason) {
   emit({
     hookSpecificOutput: {
@@ -389,6 +421,7 @@ function denyRail(reason) {
     },
     systemMessage: `ADLC rails-guard: ${reason}`,
   });
+  process.exit(2);
 }
 
 /**
@@ -510,20 +543,36 @@ function rails(input) {
   // freeze it too (audited bypass still allowed for deliberate changes).
   railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
 
-  // Check EVERY target path — a multi-file edit must be denied if ANY path is a rail.
+  // Collect EVERY target path that hits a rail (a multi-file edit must be denied
+  // if ANY path is a rail, and EACH hit must be audited on bypass).
+  const hits = [];
   for (const fp of fps) {
     const rel = toRepoRelative(fp);
     const hit = railDecls.find((r) => globMatch(r.glob, rel));
-    if (hit) {
-      return bypassOrDeny(
-        `rail ${hit.glob} (ticket ${hit.ticket})`,
-        `${rel} is a frozen rail declared by ticket ${hit.ticket} (rails: "${hit.glob}"). ` +
-          `Edits to frozen rails are blocked during build. To override deliberately, set ` +
-          `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
-      );
-    }
+    if (hit) hits.push({ rel, glob: hit.glob, ticket: hit.ticket });
   }
-  // no target path hit a rail → allow
+  if (hits.length === 0) return; // no target path hit a rail → allow
+
+  if (bypass) {
+    // Honor the override only if EVERY hit is durably audited; otherwise refuse.
+    let allRecorded = true;
+    for (const h of hits) {
+      if (!recordBypass(h.rel, `rail ${h.glob} (ticket ${h.ticket})`)) allRecorded = false;
+    }
+    if (allRecorded) return; // every bypass recorded → allow
+    return denyRail(
+      `ADLC_RAILS_BYPASS is set but a rail override could not be recorded to the gate-manifest ` +
+        `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
+    );
+  }
+
+  const h = hits[0];
+  return denyRail(
+    `${h.rel} is a frozen rail declared by ticket ${h.ticket} (rails: "${h.glob}")` +
+      `${hits.length > 1 ? ` (+${hits.length - 1} more rail path(s) in this edit)` : ''}. ` +
+      `Edits to frozen rails are blocked during build. To override deliberately, set ` +
+      `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
+  );
 }
 
 try {
