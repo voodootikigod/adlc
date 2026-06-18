@@ -1,0 +1,20 @@
+{
+  "name": "adlc",
+  "interface": {
+    "displayName": "ADLC"
+  },
+  "plugins": [
+    {
+      "name": "adlc-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/adlc-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

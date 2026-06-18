@@ -13,6 +13,8 @@ package READMEs.
 - [Toolkit guide](./toolkit.md) explains how the packages fit into the ADLC flow.
 - [Package reference](./package-reference.md) lists every package, binary, phase, and
   primary README source.
+- [ADR 0001](./adr/0001-codex-native-adlc-integration.md) records the Codex-native
+  integration plan and dispatcher contract.
 
 ## Repository shape
 
@@ -31,4 +33,3 @@ package's `bin` field, and the root test script runs each package test suite wit
 ```sh
 npm test
 ```
-

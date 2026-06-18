@@ -1,0 +1,66 @@
+{
+  "name": "@adlc/cli",
+  "version": "1.0.2",
+  "description": "Umbrella dispatcher for the @adlc suite - one install, one `adlc <tool>` command surface.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/cli#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "dispatcher",
+    "gate"
+  ],
+  "bin": {
+    "adlc": "./bin/adlc.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/behavior-diff": "1.0.2",
+    "@adlc/coldstart": "1.0.2",
+    "@adlc/consensus-fix": "1.0.2",
+    "@adlc/flail-detector": "1.0.2",
+    "@adlc/gate-fuzzing": "1.0.2",
+    "@adlc/gate-manifest": "1.0.2",
+    "@adlc/hollow-test": "1.0.2",
+    "@adlc/lesson-foundry": "1.0.2",
+    "@adlc/merge-forecast": "1.0.2",
+    "@adlc/model-ratchet": "1.0.2",
+    "@adlc/model-router": "1.0.2",
+    "@adlc/parallax": "1.0.2",
+    "@adlc/preflight": "1.0.2",
+    "@adlc/premortem": "1.0.2",
+    "@adlc/prosecute": "1.0.2",
+    "@adlc/rails-guard": "1.0.2",
+    "@adlc/rejection-mining": "1.0.2",
+    "@adlc/review-calibration": "1.0.2",
+    "@adlc/runner": "1.0.2",
+    "@adlc/skill-rot": "1.0.2",
+    "@adlc/spec-lint": "1.0.2"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

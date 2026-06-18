@@ -1,6 +1,6 @@
 # Releasing the `@adlc` suite
 
-All 20 packages (`@adlc/core` + 19 CLIs) ship under the `@adlc` npm scope on a
+All 23 packages (`@adlc/core` + 22 CLIs) ship under the `@adlc` npm scope on a
 **single lockstep version** — one tag releases the whole suite.
 
 ## One-time setup
@@ -30,7 +30,7 @@ All 20 packages (`@adlc/core` + 19 CLIs) ship under the `@adlc` npm scope on a
      gh secret list --env npm-publish         # environment: MUST list NPM_TOKEN
      ```
 4. **First release** — see *Cutting a release* below. The workflow publishes all
-   20 packages using the environment-scoped `NPM_TOKEN`.
+   23 packages using the environment-scoped `NPM_TOKEN`.
 5. **Switch to OIDC.** On npmjs.com, configure each package's *Trusted Publisher*
    to this repo + the `Publish @adlc to npm` workflow, **and set the Environment
    field to `npm-publish`.** This binding is mandatory: if the environment field
@@ -52,7 +52,7 @@ All 20 packages (`@adlc/core` + 19 CLIs) ship under the `@adlc` npm scope on a
 Lockstep: bump every package to the same version, tag, push.
 
 ```bash
-# 1. set the version across all 20 manifests (also repins @adlc/core deps)
+# 1. set the version across all package manifests and repin internal @adlc/* deps
 node scripts/release.mjs 1.1.0
 
 # 2. commit + tag + push — the tag triggers the publish workflow
@@ -63,7 +63,8 @@ git push && git push --tags
 
 The `.github/workflows/publish.yml` workflow then installs, tests, and runs
 `scripts/release.mjs <version> --publish`, which publishes **`@adlc/core` first**
-(its consumers resolve it) followed by the 19 CLIs — each with
+(its consumers resolve it), then the routed tools, and **`@adlc/cli` last**
+because it depends on the dispatcher targets. Each package publishes with
 `--provenance` and `publishConfig.access=public`.
 
 There is no manual trigger: the workflow has no `workflow_dispatch`, so the only
@@ -73,9 +74,9 @@ approval on the `npm-publish` environment.
 
 ## How the wiring works
 
-- Every CLI declares `"@adlc/core": "<exact version>"`. `scripts/release.mjs`
-  repins this on each bump, so a published `@adlc/foo@1.1.0` always requires
-  `@adlc/core@1.1.0`.
+- Every internal dependency declared as `"@adlc/*": "<exact version>"` is
+  repinned by `scripts/release.mjs` on each bump, so a published
+  `@adlc/foo@1.1.0` always depends on the matching lockstep `@adlc` packages.
 - Inside the repo, npm **workspaces** symlink `@adlc/core` into `node_modules`,
   so source imports (`import { pass } from '@adlc/core'`) resolve in dev/test
   exactly as they will once published.

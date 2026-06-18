@@ -8,55 +8,90 @@
 // temporary NPM_TOKEN for the bootstrap run. Every package carries
 // publishConfig.access=public, so no per-call --access is required.
 
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PKGS = join(ROOT, 'packages');
 
-const version = process.argv[2];
-const publish = process.argv.includes('--publish');
-
-if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
-  console.error('usage: release.mjs <semver> [--publish]');
-  process.exit(1);
+function readJson(path) {
+  return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-// core publishes first because every CLI depends on it.
-const names = readdirSync(PKGS).filter((n) => n !== 'core');
-const order = ['core', ...names];
+function writeJson(path, value) {
+  writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
+}
 
-// 1. Set version everywhere; repin the @adlc/core dependency to match (lockstep).
-for (const name of order) {
-  const pj = join(PKGS, name, 'package.json');
-  const pkg = JSON.parse(readFileSync(pj, 'utf8'));
-  pkg.version = version;
-  if (pkg.dependencies?.['@adlc/core']) {
-    pkg.dependencies['@adlc/core'] = version;
+export function packagePublishOrder(names) {
+  const unique = Array.from(new Set(names)).sort();
+  return [
+    ...unique.filter((name) => name === 'core'),
+    ...unique.filter((name) => name !== 'core' && name !== 'cli'),
+    ...unique.filter((name) => name === 'cli'),
+  ];
+}
+
+export function repinInternalDependencies(pkg, version) {
+  const next = structuredClone(pkg);
+  for (const dependencyKind of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    if (!next[dependencyKind]) continue;
+    for (const name of Object.keys(next[dependencyKind])) {
+      if (name.startsWith('@adlc/')) next[dependencyKind][name] = version;
+    }
   }
-  writeFileSync(pj, JSON.stringify(pkg, null, 2) + '\n');
-  console.log(`set ${pkg.name}@${version}`);
+  next.version = version;
+  return next;
 }
 
-// Keep the (private) root version in lockstep too.
-const rootPj = join(ROOT, 'package.json');
-const root = JSON.parse(readFileSync(rootPj, 'utf8'));
-root.version = version;
-writeFileSync(rootPj, JSON.stringify(root, null, 2) + '\n');
-console.log(`set ${root.name}@${version} (root)`);
-
-if (!publish) {
-  console.log(`\nversions set to ${version} (no publish). Commit, tag v${version}, push.`);
-  process.exit(0);
+function workspacePackageNames(packagesDir) {
+  return readdirSync(packagesDir).filter((name) => existsSync(join(packagesDir, name, 'package.json')));
 }
 
-// 2. Publish in dependency order. core must land before its consumers resolve it.
-for (const name of order) {
-  const dir = join(PKGS, name);
-  const { name: pkgName } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-  console.log(`\npublishing ${pkgName}@${version} ...`);
-  execFileSync('npm', ['publish', '--provenance'], { cwd: dir, stdio: 'inherit' });
+export function releaseMain(argv = process.argv.slice(2), { root = ROOT, packagesDir = PKGS } = {}) {
+  const version = argv[0];
+  const publish = argv.includes('--publish');
+
+  if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
+    console.error('usage: release.mjs <semver> [--publish]');
+    return 1;
+  }
+
+  // core publishes first; cli publishes last because it depends on every routed tool.
+  const order = packagePublishOrder(workspacePackageNames(packagesDir));
+
+  // 1. Set version everywhere and repin every internal @adlc/* dependency to match.
+  for (const name of order) {
+    const pj = join(packagesDir, name, 'package.json');
+    const pkg = repinInternalDependencies(readJson(pj), version);
+    writeJson(pj, pkg);
+    console.log(`set ${pkg.name}@${version}`);
+  }
+
+  // Keep the (private) root version in lockstep too.
+  const rootPj = join(root, 'package.json');
+  const rootPkg = readJson(rootPj);
+  rootPkg.version = version;
+  writeJson(rootPj, rootPkg);
+  console.log(`set ${rootPkg.name}@${version} (root)`);
+
+  if (!publish) {
+    console.log(`\nversions set to ${version} (no publish). Commit, tag v${version}, push.`);
+    return 0;
+  }
+
+  // 2. Publish in dependency order.
+  for (const name of order) {
+    const dir = join(packagesDir, name);
+    const { name: pkgName } = readJson(join(dir, 'package.json'));
+    console.log(`\npublishing ${pkgName}@${version} ...`);
+    execFileSync('npm', ['publish', '--provenance'], { cwd: dir, stdio: 'inherit' });
+  }
+  console.log(`\npublished @adlc suite @ ${version}`);
+  return 0;
 }
-console.log(`\npublished @adlc suite @ ${version}`);
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(releaseMain());
+}

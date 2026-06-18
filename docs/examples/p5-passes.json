@@ -1,0 +1,61 @@
+{
+  "target": "feature branch",
+  "provenance": {
+    "reviewer": "local-reviewer",
+    "session": "docs-fixture-session",
+    "command": "npx adversarial-review --scope working-tree --include-files",
+    "transcript": ".omo/evidence/p5-review.txt"
+  },
+  "review_packet": {
+    "prompt": ".omo/evidence/p5-prompt.txt",
+    "prompt_hash": "086ada917eb0c8ba6905d617447bfe472c2dd36bbf4daf37746ac25d24818b2a",
+    "inputs": ".omo/evidence/p5-inputs.txt",
+    "inputs_hash": "9faa929a2253953619c4f281754b21859c8fef3135ec864ff450453fdfdcd26a",
+    "clean_worktree": "docs-example-revision"
+  },
+  "no_findings_attestation": {
+    "reason": "the reviewer found no verified findings after refutation",
+    "method": "manual transcript review",
+    "evidence": ".omo/evidence/p5-review.txt"
+  },
+  "passes": [
+    {
+      "lens": "security",
+      "findings": [
+        {
+          "id": "F1",
+          "severity": "medium",
+          "category": "security",
+          "file": "src/auth.mjs",
+          "line_start": 12,
+          "line_end": 12,
+          "evidence": "return true",
+          "claim": "authorization bypass",
+          "recommendation": "check the caller role before returning",
+          "confidence": 0.8,
+          "verified_status": "killed",
+          "verification": {
+            "reason": "the quoted code is inside a test fixture and is not reachable from production auth",
+            "method": "manual source trace plus test run",
+            "evidence": "npm test"
+          }
+        }
+      ]
+    },
+    {
+      "lens": "correctness",
+      "findings": [],
+      "dry_evidence": "review transcript reports no verified correctness findings"
+    },
+    {
+      "lens": "tests",
+      "findings": [],
+      "dry_evidence": "review transcript reports no verified test-integrity findings"
+    },
+    {
+      "lens": "behavior",
+      "findings": [],
+      "dry_evidence": "review transcript reports no verified behavior findings"
+    }
+  ]
+}
