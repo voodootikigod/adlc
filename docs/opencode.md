@@ -27,6 +27,9 @@ npm install -g @adlc/cli
 The plugin initialization check will verify that both `adlc` and `adlc-runner` bins are available on PATH and output a clear installation error if missing.
 
 ### 2. Install the OpenCode Plugin
+> [!NOTE]
+> The plugin manager command (`opencode plugin add`) and configuration file format (`opencode.json` plugin registry mapping) described below are target specifications that must be verified against the official OpenCode SDK specification during implementation (L7).
+
 You can install the plugin either by adding the published npm package `@adlc/opencode-plugin` directly via OpenCode's plugin manager:
 
 ```sh
@@ -116,7 +119,7 @@ OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling th
 
 #### Rail Gating Safety & Bypasses
 - **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook behaves as a safe no-op.
-- **Isolated Prompting & Cascading:** Prompts from LLM-backed gates are queried in isolated, transient sub-contexts to avoid polluting the active chat session transcript. Multi-sample, multi-round, and grandchild prompts from the dispatcher and runner are bubbled up to the plugin using the structured Two-Phase Stdio JSON Cascade Protocol to prevent multiplexing collisions.
+- **Isolated Prompting & Cascading:** Prompts from LLM-backed gates are queried in isolated, transient sub-contexts to avoid polluting the active chat session transcript. Multi-sample, multi-round, and grandchild prompts from the dispatcher and runner are bubbled up to the plugin using the structured Two-Phase Stdio JSON Cascade Protocol (holding a persistent stdio session via the proposed `--prompt-session` flag to pass prompts and responses keylessly, H1) to prevent multiplexing collisions.
 - **Frontier-Free Scaling:** Local models that fail dynamic calibrations are scaled up to N-pass parallel checks (ADLC Exploit E1 sampling diversity) and require consensus thresholds, instead of being blocked.
 - **Bypass hatch:** Setting `ADLC_RAILS_BYPASS=1` overrides the in-session hook, but requires human approval in the TUI (via the proposed plugin UI API) and logs the bypass event to `.adlc/manifest.jsonl` for audit compliance. Bypass is refused (fails closed) in headless sessions.
 - **CI/CD / Local Backstop:** Shell-based rail mutations are blocked at commit-time via GitHub workflows or the local pre-commit hook. The local hook reads the union of rail declarations from `HEAD` and the staged index to ensure local new-rail locking. The CI rails-guard workflow enforces a union strategy (reading rail declarations from both the trunk base ref and head branch) to be deletion-proof against existing base rails while remaining new-rail-aware for newly declared rails in the same PR. Local hooks are best-effort and must be backstopped by branch protection in CI/CD.
