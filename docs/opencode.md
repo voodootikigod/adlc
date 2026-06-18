@@ -1,6 +1,6 @@
 # Adopt the ADLC in OpenCode
 
-The `@adlc/*` toolkit is a set of gate-shaped CLIs. This plugin makes the whole **Agentic Development Lifecycle** usable natively from inside OpenCode: the gates fire at the right lifecycle moments — some automatically — and the model reaches for the right gate without you memorizing 20 separate tools.
+The `@adlc/*` toolkit is a set of gate-shaped CLIs. This plugin makes the whole **Agentic Development Lifecycle** usable natively from inside OpenCode: the gates fire at the right lifecycle moments — some automatically — and the model reaches for the right gate without you memorizing 19 separate tools.
 
 Following **Option D (separate, concern-focused bins)** from the Command Reconciliation ADR:
 - `adlc` is the dispatcher (`@adlc/cli`) for executing individual gate tools.
@@ -48,7 +48,7 @@ Bootstrap the ADLC workspace context in your repository by typing the following 
 /adlc-init
 ```
 
-This creates the `.adlc/` workspace configuration directory, templates the `.adlc/tickets.json` structure, appends runtime logs and temp directories idempotently to your `.gitignore`, and sets up a local pre-commit hook (`.git/hooks/pre-commit`) for environments that lack CI runners.
+This creates the `.adlc/` workspace configuration directory, templates the `.adlc/config.json` and `.adlc/tickets.json` structures, appends runtime logs and temp directories idempotently to your `.gitignore`, and sets up a local pre-commit hook (`.git/hooks/pre-commit`) for environments that lack CI runners.
 
 ---
 
@@ -60,22 +60,22 @@ Trigger these directly within the OpenCode TUI interface:
 
 | Command | Phase | Description |
 | --- | --- | --- |
-| `/adlc-init` | — | Bootstrap `.adlc/` workspace, configure gitignore (idempotently), configure local pre-commit git hooks, and check environment readiness. |
+| `/adlc-init` | — | Bootstrap `.adlc/` workspace, configure config.json defaults, configure gitignore (idempotently), configure local pre-commit git hooks, and check environment readiness. |
 | `/adlc-ticket` | P0 | Author a schema-valid ticket defining the ticket contract (which files are gated and where the rails are). |
 | `/adlc-spec` | P1 | Runs `spec-lint`, `premortem`, and `parallax` to shape and audit the spec, blocking build start until spec approval (`adlc-runner run p1`). |
-| `/adlc-decompose` | P2 | Runs `coldstart` and `merge-forecast` to split tickets and verify contract boundaries (`adlc-runner run p2`). |
+| `/adlc-decompose` | P2 | Runs `coldstart`, `model-router`, and `merge-forecast` to split tickets and verify contract boundaries (`adlc-runner run p2`). |
 | `/adlc-rail-write` | P3 | Invokes the `rail-writer` agent to write tests and stubs in an isolated context before building (`adlc-runner run p3`). |
 | `/adlc-consensus-fix` | P4 | Runs consensus repair by fanning out candidate fixes to resolve a hard failing test (`adlc consensus-fix`). |
 | `/adlc-prosecute` | P5 | Run the pre-merge hostile prosecution subagent loops (`adlc-runner run p5`). |
 | `/adlc-accept` | P6 | Finalizes the Phase 6 human gate. Signs the manifest and records behavioral acceptance (`adlc-runner accept --ticket <id>`). |
-| `/adlc-distill` | P7 | Mines findings (`adlc-runner run p7`) and runs the **Simplify** pass to deduplicate and clean code. |
+| `/adlc-distill` | P7 | Mines findings (`adlc-runner run p7`) via lesson foundry and rejection mining. Post-merge Simplify pass is run in CI. |
 | `/adlc-maintain` | C10/C12 | Run decay-driven checks: stale skills, hot files, and gate calibration (`adlc skill-rot` and `adlc model-ratchet`). |
 
 ---
 
-### The Router Agent (Discovery Skill)
+### The Router Skill (Discovery Skill)
 
-The `adlc-router` agent acts as a native phase-routing flowchart. Instead of prompting the model to remember 19 CLI tools, the router identifies your current activity ("shape this spec", "verify this bugfix") and instructs OpenCode to reach for the correct ADLC tool or slash command.
+The `adlc` router skill acts as a native phase-routing flowchart. Instead of prompting the model to remember 19 CLI tools, the router identifies your current activity ("shape this spec", "verify this bugfix") and instructs OpenCode to reach for the correct ADLC tool or slash command.
 
 ---
 
@@ -99,38 +99,13 @@ OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling th
 | Hook Event | Trigger Event | Posture | Behavior |
 | --- | --- | --- | --- |
 | **preflight** | `session.created` | Advisory | Warns the user if Node/Bun runtimes, git trees, or providers are misconfigured. Runs model benchmarking for local models. |
-| **rails-guard** | `tool.execute.before` | **Enforcing** | Intercepts structured editing tools using a default-deny approach (gates all tool calls with path parameters, excluding read-only tools). Denies edits to paths declared as `rails` and locks `.adlc/`, `.opencode/`, `.git/`, `.github/`, and `tickets.json` files. Resolves target paths segment-by-segment to prevent symlink bypasses. |
-| **flail-detection** | `tool.execute.after` | **Enforcing** | Scans execution outputs for repeated loop errors, scope drift, or excessive logs. Terminates the active builder subagent on a second strike and triggers workspace rollback (`git reset --hard` + `git clean -fd`) strictly inside the isolated ticket worktree. |
+| **rails-guard** | `tool.execute.before` | **Enforcing** | Intercepts structured editing tools using a default-deny approach (gates all tool calls with path parameters, excluding read-only tools). Denies edits to paths declared as `rails` and locks `.adlc/`, `.opencode/`, `.git/`, `.github/`, and `tickets.json` files. Parses `apply_patch` payloads. Traverses path segments to block symlink creation bypasses. |
+| **flail-detection** | `tool.execute.after` | **Enforcing** | Scans outputs for repeated loop errors, scope drift, or excessive logs. Strike 1: advisory warning and subagent restart. Strike 2: builder subagent termination and workspace rollback (`git reset --hard` + `git clean -fd`) strictly inside the isolated ticket worktree (aborts with warning if in main checkout). |
 | **manifest-audit** | `session.ended` | Advisory | Runs `gate-manifest verify` to confirm the integrity of the append-only evidence chain on session close. |
 
 #### Rail Gating Safety & Bypasses
 - **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook is a complete no-op (fails open).
 - **Isolated Prompting & Cascading:** Prompts from LLM-backed gates are queried in isolated, transient sub-contexts to avoid polluting the active chat session transcript. Grandchild prompts from the runner are bubbled up to the plugin using a structured cascade protocol with correlation IDs to prevent multiplexing collisions.
-- **Frontier-Free Scaling:** Local models that fail capability benchmarks are scaled up to N-pass parallel checks (ADLC Appendix E sampling diversity) instead of being blocked.
+- **Frontier-Free Scaling:** Local models that fail capability benchmarks are scaled up to N-pass parallel checks (ADLC Appendix E sampling diversity) and require consensus thresholds, instead of being blocked.
 - **Bypass hatch:** Setting `ADLC_RAILS_BYPASS=1` overrides the in-session hook, but requires human approval in the TUI and logs the bypass event to `.adlc/manifest.jsonl` for audit compliance.
 - **CI/CD / Local Backstop:** Shell-based rail mutations are blocked at commit-time via GitHub workflows or the local pre-commit hook. The local hook is hardened to read `.adlc/tickets.json` from `HEAD` (`git show HEAD:.adlc/tickets.json`) to prevent staging commits that disable their own rails. Local hooks are best-effort and must be backstopped by branch protection in CI/CD.
-
----
-
-## CI/CD Backstops (Required)
-
-Always pair the in-session hook with a commit-time check. Copy these configurations into your `.github/workflows/` directory:
-
-- **`ci/rails-guard.yml`** — Rejects any Pull Request whose diff touches a frozen rail. The rails are read from the **base** ref, ensuring a PR cannot remove rails to pass the check.
-- **`ci/adlc-maintenance.yml`** — A weekly advisory workflow that runs the maintenance suite (`skill-rot`, `model-ratchet`, `gate-fuzzing`) and publishes the health report to the job summary.
-
----
-
-## ADLC Phase Coverage
-
-| Lifecycle Phase | Mapping Point | Execution Method |
-| --- | --- | --- |
-| **P0 Triage** | `/adlc-ticket` command | Triage risk × blast radius; create ticket contract. |
-| **P1 Interrogate** | `/adlc-spec` command | Runs `spec-lint`/`premortem`/`parallax` on frontier models. approved via `adlc-runner run p1`. |
-| **P2 Decompose** | `/adlc-decompose` command | Splits tickets; runs `coldstart` & `merge-forecast` via `adlc-runner run p2`. Configures dynamic model routing. |
-| **P3 Rail** | `/adlc-rail-write` & hook | Writes tests and stubs. Runs `hollow-test` to verify tests before freeze via `adlc-runner run p3`. |
-| **P4 Build** | `flail-detector` (hook) / `consensus-fix` | Developer agent writes code; two-strike subagent termination and git rollback in isolated worktree. |
-| **P5 Prosecute** | `/adlc-prosecute` command | Hostile fanned-out subagents (5 lenses) + verifier loop via `adlc-runner run p5`. |
-| **P6 Integrate** | `/adlc-accept` command | Summary card displayed in TUI. Human Gate 2 manually signed off via `adlc-runner accept --ticket <id>`. |
-| **P7 Distill** | `/adlc-distill` command | Runs `lesson-foundry`/`rejection-mining` via `adlc-runner run p7` and executes code **Simplify** pass. |
-| **Maintenance** | `/adlc-maintain` / CI Actions | calibrates reviewers, checks skill-rot and model-ratchet via `adlc skill-rot`/`adlc model-ratchet`. |
