@@ -31,6 +31,7 @@ Hard failing test, need a repair? ───────────→ P4  adlc 
 Change done, pre-merge prosecution? ─────────→ P5  adlc hollow-test · behavior-diff · review-calibration
 Recording / showing gate evidence? ──────────→ —   adlc gate-manifest
 Repeated review findings to bank? ───────────→ P7  /adlc-distill (lesson-foundry · rejection-mining)
+Mine the repo for reusable skills? ──────────→ P7  skill-mining (npx skills add voodootikigod/skill-mining)
 Idle-time / post-drift maintenance? ─────────→ —   /adlc-maintain (skill-rot · model-ratchet · gate-fuzzing)
 ```
 
@@ -95,6 +96,18 @@ let the human decide. Record outcomes with `adlc gate-manifest record <gate>`.
   defenses (lint checks, skills). LLM-backed: answer the printed prompt yourself.
 - `adlc rejection-mining --prompt-only` — mine human PR rejections into reusable
   review lenses (needs the `gh` CLI). `/adlc-distill` runs both.
+
+P7 has a second, complementary axis — mining the *codebase itself* (not its review
+findings) for reusable capabilities:
+- **skill-mining** (`npx skills add voodootikigod/skill-mining`, then "mine this
+  repo for skills") — surveys git churn/conventions/patterns, scores candidates on
+  a five-axis rubric, dedups against installed skills + the `skills.sh` registry,
+  red-teams each authored `SKILL.md` with a fresh-context agent (Gate B), and emits
+  a `SKILLS_MINED.md` report. It is an agentic skill, not a deterministic `adlc`
+  gate (no `--prompt-only`/exit codes). Two uses: (a) standalone, to bootstrap a
+  repo's skill portfolio; (b) as the validation/registry step for `SKILL.md` stubs
+  that `/adlc-distill`'s lesson-foundry scaffolds — dedup + Gate B before they PR.
+  lesson-foundry emits stubs; skill-mining manages the registry.
 
 ### Maintenance (decay-driven, no human trigger) → `/adlc-maintain`
 - `adlc skill-rot [path…]` — flag skill files with stale validation metadata.

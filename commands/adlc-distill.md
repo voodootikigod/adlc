@@ -34,6 +34,67 @@ adlc lesson-foundry --prompt-only
      `--write` on its own does NOT apply your prompt-only refinement — that is
      only auto-applied with `--llm` (which needs an API key). So in the keyless
      in-Claude flow you scaffold with `--write`, then refine the wording yourself.
+  3. **For any defense that is a *skill* (a `SKILL.md`), validate it before PR.**
+     lesson-foundry only scaffolds the stub; it does not dedup against the public
+     ecosystem or confirm the skill is usable cold. Hand the scaffolded `SKILL.md`
+     to **skill-mining** for the registry-management half of P7 (see ADLC.md §P7):
+
+     ```
+     npx skills add voodootikigod/skill-mining   # once per machine
+     ```
+     Then hand it the scaffolded stub with a **scoped** request — point it at the
+     specific staged file rather than asking for a full-repo mine, e.g.:
+
+     > "Validate the scaffolded skill at `.adlc/lessons/<name>.SKILL.md`: dedup it
+     > against installed skills and the skills.sh registry, then run Gate B on it.
+     > Report REUSE/EXTEND/BUILD/REJECT and SHIP/FIX/REJECT — do not mine the rest
+     > of the repo."
+
+     (lesson-foundry writes a **flat** file, `.adlc/lessons/<name>.SKILL.md` — not
+     a `<name>/SKILL.md` directory. The skills CLI expects a skill *directory*
+     containing a `SKILL.md`, so to install it you first move the flat file into
+     its own subdir: `<name>/SKILL.md`.)
+
+     Validation reads the **file content** — Gate B hands a fresh agent the
+     `SKILL.md` text directly, so it works on the flat staged file and does **not**
+     require the skill to be installed/discoverable first. Lifecycle, in order:
+
+     1. **Validate the staged flat file** (`.adlc/lessons/<name>.SKILL.md`):
+        - **dedup** against installed skills + the `skills.sh` registry (via its
+          `find-skills` subagent) → REUSE / EXTEND / BUILD / REJECT. If a maintained
+          public skill already covers it, install that and drop the stub.
+        - **Gate B** (artifact red-team): a fresh-context agent gets only the
+          `SKILL.md` and attempts a real repo task → SHIP / FIX / REJECT, proving
+          the skill carries specific commands/paths/invariants, not generic prose.
+     2. **Only for a SHIP verdict, install it** so it becomes live. `.adlc/lessons/`
+        is a staging area, **not** on the skill-discovery path — a `SKILL.md` left
+        there is inert. The skills CLI expects a skill *directory*, so move the flat
+        file into `<name>/SKILL.md`, then let **skill-mining's author step** (or the
+        skills CLI) place it in the correct location for the active harness. Don't
+        hand-guess the path or the exact subcommand — run `npx skills --help` for
+        the install verb your CLI version uses; skill-mining's author step does this
+        for you.
+     3. **Verify by outcome, then PR** — the skill is installed correctly only when
+        the **agent can actually discover it** (it shows up in the harness's
+        available-skills list / can be invoked). Confirm that, not a specific CLI
+        string. Then PR only the installed, SHIP-verdict skill, and remove the
+        leftover flat `.adlc/lessons/<name>.SKILL.md` staging copy so it isn't
+        committed twice.
+
+     (skill-mining today is repo-wide by design; a single-stub scoped mode is a
+     desired enhancement — until then, constrain it via the prompt above.)
+
+     Lint-rule and spec-gap defenses do not go through skill-mining — PR them
+     directly from `.adlc/lessons/`.
+
+     This step is **keyless** (skill-mining is agentic — Claude is the agent, no
+     API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
+     contract, and `npx skills add` is an interactive, once-per-machine developer
+     action — never run it from a scheduled/headless `/adlc-distill` (see
+     "Scheduling"). If skill-mining is unavailable, **do not PR the skill stubs** —
+     hold them for explicit human review rather than landing default-worded,
+     un-deduped, cold-untested skills. Report them as held-unvalidated in the
+     summary so the coverage stays honest.
 
 ## 2. Rejection mining — mine human PR objections (C13)
 
@@ -52,8 +113,11 @@ adlc rejection-mining --prompt-only
 
 Report: how many finding clusters and rejection lenses were found, the concrete
 defenses proposed, which were written (if any), and which gates were skipped
-(e.g. rejection-mining when `gh` is unavailable) so the coverage is honest. Point
-the user at `/adlc-maintain` for the decay-driven checks.
+(e.g. rejection-mining when `gh` is unavailable) so the coverage is honest. For
+any *skill* defense, report its skill-mining verdict (REUSE/EXTEND/BUILD/REJECT +
+Gate B SHIP/FIX/REJECT), or flag it as **held for human review (not PR'd)** if
+skill-mining was not run. Point the user at `/adlc-maintain` for the decay-driven
+checks.
 
 ## Scheduling
 
@@ -67,6 +131,8 @@ without materializing them — that is intentional: auto-writing lint rules/skil
 from clustered findings unattended is risky. A scheduled routine should surface
 the proposals for a human to review and then approve `--write`. Only wire an
 auto-`--write` routine if you have explicitly accepted that the generated
-defenses land without review. The deterministic maintenance checks
-(`/adlc-maintain`) can additionally run in CI on a cron; see
-`docs/ci/adlc-maintenance.yml`.
+defenses land without review. The skill-mining handoff (step 1.3) is likewise
+**interactive only** — a headless run must never `npx skills add` or auto-validate
+skills; it surfaces the scaffolded stubs for a human to validate later. The
+deterministic maintenance checks (`/adlc-maintain`) can additionally run in CI on
+a cron; see `docs/ci/adlc-maintenance.yml`.
