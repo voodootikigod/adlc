@@ -14,10 +14,14 @@ Following **Option D (separate, concern-focused bins)** from the Command Reconci
 ## Install
 
 ### 1. Install the ADLC CLI Tools
-The plugin needs both the ADLC dispatcher and runner binaries globally resolvable in your PATH (requires merging `@adlc/runner` from Codex branch first):
+The plugin needs both the ADLC dispatcher and runner binaries globally resolvable in your PATH:
 
 ```sh
-npm install -g @adlc/cli @adlc/runner
+npm install -g @adlc/cli
+# Note: @adlc/runner is a pending-merge dependency from the sibling Codex branch.
+# Until it is merged and published, you can install it locally from the Codex branch
+# or mock its bin in your PATH. Once published:
+# npm install -g @adlc/runner
 ```
 
 The plugin initialization check will verify that both `adlc` and `adlc-runner` bins are available on PATH and output a clear installation error if missing.
@@ -67,7 +71,7 @@ Trigger these directly within the OpenCode TUI interface:
 | `/adlc-decompose` | P2 | Runs `adlc coldstart`, `adlc model-router`, and `adlc merge-forecast` to split the ticket and verify contract boundaries. Runs `adlc-runner run p2` to assert evidence. |
 | `/adlc-rail-write` | P3 | Invokes the `rail-writer` agent to write tests and stubs in an isolated context, and runs `adlc hollow-test` to verify tests fail on implementation deletion before freeze. Runs `adlc-runner run p3` to assert rail evidence exists. |
 | `/adlc-consensus-fix` | P4 | Runs consensus repair by fanning out candidate fixes to resolve a hard failing test (`adlc consensus-fix`). |
-| `/adlc-prosecute` | P5 | Runs the pre-merge hostile prosecution subagent loops (5 lenses and a verifier agent). Runs `adlc-runner run p5` to assert that prosecution ran dry (no active findings). |
+| `/adlc-prosecute` | P5 | Runs the pre-merge hostile prosecution subagent loops (5 lenses and a verifier agent) for up to 5 rounds (convergence budget). Runs `adlc-runner run p5` to assert: (1) no findings remain, (2) tests pass, and (3) the rails-diff-empty proof exists in the manifest. |
 | `/adlc-accept` | P6 | Finalizes the Phase 6 human gate G2 (behavioral acceptance). Runs `adlc behavior-diff compare` to gather evidence, prompts the developer to verify the demo, and signs the manifest (`adlc-runner accept --ticket <id>`). |
 | `/adlc-distill` | P7 | Mines findings (`adlc lesson-foundry`, `adlc rejection-mining`) and runs `adlc-runner run p7` to assert distillation evidence. Post-merge Simplify pass is run in CI. |
 | `/adlc-maintain` | C10/C12 | Run decay-driven checks: stale skills, hot files, and gate calibration (`adlc skill-rot`, `adlc model-ratchet`, and `adlc gate-fuzzing`). |
@@ -89,7 +93,7 @@ Pre-merge prosecution fanned out across five independent, fresh-context, single-
 4. **`diff`**: Compares implementation against the spec to verify all criteria are met.
 5. **`tests`**: Audits unit tests added by the builder during the build phase (ensuring they assert behavior instead of mocking reality).
 
-Findings are verified by a separate `prosecutor-verifier` reproducer agent. The loop runs until two consecutive passes are dry.
+Findings are verified by a separate `prosecutor-verifier` reproducer agent. The loop executes for a maximum convergence budget of 5 rounds, stopping and escalating to the developer (spec or partition repair) if findings do not run dry.
 
 ---
 
