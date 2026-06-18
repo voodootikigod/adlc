@@ -14,7 +14,7 @@ Following **Option D (separate, concern-focused bins)** from the Command Reconci
 ## Install
 
 ### 1. Install the ADLC CLI Tools
-The plugin needs both the ADLC dispatcher and runner binaries globally resolvable in your PATH:
+The plugin needs both the ADLC dispatcher and runner binaries globally resolvable in your PATH (requires merging `@adlc/runner` from Codex branch first):
 
 ```sh
 npm install -g @adlc/cli @adlc/runner
@@ -27,8 +27,8 @@ Copy or link the plugin files to your project-local `.opencode` directory:
 
 ```sh
 mkdir -p .opencode/plugins/
-# Copy or symlink the integration code:
-ln -s /path/to/adlc/plugins/adlc-opencode/ .opencode/plugins/adlc-opencode
+# Copy or symlink the integration code (link to plugins/ directory parent):
+ln -s /path/to/adlc/plugins/adlc-opencode/ .opencode/plugins/
 ```
 
 Alternatively, register it globally in your `~/.config/opencode/opencode.json`:
@@ -69,7 +69,7 @@ Trigger these directly within the OpenCode TUI interface:
 | `/adlc-prosecute` | P5 | Run the pre-merge hostile prosecution subagent loops (`adlc-runner run p5`). |
 | `/adlc-accept` | P6 | Finalizes the Phase 6 human gate. Signs the manifest and records behavioral acceptance (`adlc-runner accept --ticket <id>`). |
 | `/adlc-distill` | P7 | Mines findings (`adlc-runner run p7`) via lesson foundry and rejection mining. Post-merge Simplify pass is run in CI. |
-| `/adlc-maintain` | C10/C12 | Run decay-driven checks: stale skills, hot files, and gate calibration (`adlc skill-rot` and `adlc model-ratchet`). |
+| `/adlc-maintain` | C10/C12 | Run decay-driven checks: stale skills, hot files, and gate calibration (`adlc skill-rot`, `adlc model-ratchet`, and `adlc gate-fuzzing`). |
 
 ---
 
@@ -94,18 +94,18 @@ Findings are verified by a separate `prosecutor-verifier` reproducer agent. The 
 
 ### In-Process Hooks
 
-OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling the shared harness-agnostic hook core `@adlc/core/hooks` on specific event triggers:
+OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling the self-contained hook checker helper `plugins/adlc-opencode/rails-checker.ts` on specific event triggers:
 
 | Hook Event | Trigger Event | Posture | Behavior |
 | --- | --- | --- | --- |
 | **preflight** | `session.created` | Advisory | Warns the user if Node/Bun runtimes, git trees, or providers are misconfigured. Runs model benchmarking for local models. |
 | **rails-guard** | `tool.execute.before` | **Enforcing** | Intercepts structured editing tools using a default-deny approach (gates all tool calls with path parameters, excluding read-only tools). Denies edits to paths declared as `rails` and locks `.adlc/`, `.opencode/`, `.git/`, `.github/`, and `tickets.json` files. Parses `apply_patch` payloads. Traverses path segments to block symlink creation bypasses. |
-| **flail-detection** | `tool.execute.after` | **Enforcing** | Scans outputs for repeated loop errors, scope drift, or excessive logs. Strike 1: advisory warning and subagent restart. Strike 2: builder subagent termination and workspace rollback (`git reset --hard` + `git clean -fd`) strictly inside the isolated ticket worktree (aborts with warning if in main checkout). |
+| **flail-detection** | `tool.execute.after` | **Enforcing** | Scans outputs for repeated loop errors, scope drift, or excessive logs. Strike 1: advisory warning and subagent restart. Strike 2: builder subagent termination and workspace rollback (`git reset --hard` + `git clean -fd`) strictly inside the isolated ticket worktree (stashes instead of cleaning if in main checkout). |
 | **manifest-audit** | `session.ended` | Advisory | Runs `gate-manifest verify` to confirm the integrity of the append-only evidence chain on session close. |
 
 #### Rail Gating Safety & Bypasses
-- **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook is a complete no-op (fails open).
+- **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook behaves as a safe no-op.
 - **Isolated Prompting & Cascading:** Prompts from LLM-backed gates are queried in isolated, transient sub-contexts to avoid polluting the active chat session transcript. Grandchild prompts from the runner are bubbled up to the plugin using a structured cascade protocol with correlation IDs to prevent multiplexing collisions.
-- **Frontier-Free Scaling:** Local models that fail capability benchmarks are scaled up to N-pass parallel checks (ADLC Appendix E sampling diversity) and require consensus thresholds, instead of being blocked.
-- **Bypass hatch:** Setting `ADLC_RAILS_BYPASS=1` overrides the in-session hook, but requires human approval in the TUI and logs the bypass event to `.adlc/manifest.jsonl` for audit compliance.
+- **Frontier-Free Scaling:** Local models that fail dynamic calibrations are scaled up to N-pass parallel checks (ADLC Appendix E sampling diversity) and require consensus thresholds, instead of being blocked.
+- **Bypass hatch:** Setting `ADLC_RAILS_BYPASS=1` overrides the in-session hook, but requires human approval in the TUI and logs the bypass event to `.adlc/manifest.jsonl` for audit compliance. हेडलेस सेशन में बाईपास रिफ्यूज (फेल-क्लोज) किया जाता है।
 - **CI/CD / Local Backstop:** Shell-based rail mutations are blocked at commit-time via GitHub workflows or the local pre-commit hook. The local hook is hardened to read `.adlc/tickets.json` from `HEAD` (`git show HEAD:.adlc/tickets.json`) to prevent staging commits that disable their own rails. Local hooks are best-effort and must be backstopped by branch protection in CI/CD.

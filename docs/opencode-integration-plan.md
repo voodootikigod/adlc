@@ -35,14 +35,17 @@ Following **Option D (separate, concern-focused bins)** from the Command Reconci
 - `adlc <tool>` is the dispatcher (`@adlc/cli`) for executing individual gate tools.
 - `adlc-runner <verb>` is the runner (`@adlc/runner`) for phase-evidence assertions (`adlc-runner run <phase>` and `adlc-runner accept --ticket <id>`).
 
+> [!IMPORTANT]
+> The `@adlc/runner` package is a **pending-merge dependency** developed in the sibling `feat/codex-integration-codex` branch. Integrating it requires merging its binaries into the shared main branch.
+
 | Lifecycle Organ (ADLC Phase) | CLI Tool(s) & Bins | OpenCode Native Primitive | Default Behavior & Integration Details |
 |---|---|---|---|
 | **Preflight** (SessionStart Check) | `adlc preflight` | `session.created` / `session.start` | **Advisory**: Checks system requirements, Node/Bun runtimes, and git state. Logs warnings but never blocks the session. Runs local benchmark. |
-| **P0 Triage** | `/adlc-ticket` | **Slash Command** | Triages incoming tasks by risk × blast radius. Routes to: (a) *Trivial*: Direct to P5, (b) *Bounded*: Skip to P3 rails, (c) *Substantial/Architectural*: Full lifecycle loop. |
+| **P0 Triage** | `/adlc-ticket` | **Slash Command** | Triages incoming tasks by risk × blast radius: (a) *Trivial*: Direct edit + existing rails + single prosecution pass, (b) *Bounded*: Skip to P3 rails (write test first), (c) *Substantial*: Full lifecycle loop, (d) *Architectural*: Full loop + P1 design alternatives judge panel. |
 | **Spec Interrogation** (P1) | `adlc-runner run p1` (calls `spec-lint`, `premortem`, `parallax`) | **Custom Skill** / `/adlc-spec` | Model-guided spec shaping via `/adlc-spec`. Human Gate 1 (spec approval) runs `adlc-runner run p1` to verify and freeze the spec. Transition to P2 (Decompose) is blocked until spec is approved. |
 | **Decomposition** (P2) | `adlc-runner run p2` (calls `coldstart`, `model-router`, `merge-forecast`) | **Custom Skill** / `/adlc-decompose` | Splits spec into atomic, typed ticket partitions. Verifies that `coldstart` passes on each ticket and `merge-forecast` certifies execution width. Routes the recommended model selection to a ticket-specific configuration file. |
 | **Rail Authoring & Freeze** (P3 / C5) | `/adlc-rail-write` (calls `rail-writer` agent) and `adlc-runner run p3` (calls `hollow-test` + `rails-guard`) | **Slash Command** / `/adlc-rail-write` & `tool.execute.before` (PreToolUse) | Gated subagent `rail-writer` writes tests and stubs in an isolated context. Runs `adlc-runner run p3` to verify `hollow-test` (model-free validation ensuring tests fail on implementation deletion before freeze). Hook intercepts structured edits. Blocks writes to rail paths declared in active tickets + freezes the `.adlc/tickets.json` trust root. |
-| **Flail Supervision** (P4 / C6) | `adlc flail-detector` | `tool.execute.after` (PostToolUse) | **Enforcing (ADLC C6 Alignment)**: Scans tool logs for flailing. Strike 1: Advisory; terminates builder subagent, stashes uncommitted work, and restarts builder in a fresh context. Strike 2: Enforcing; builder subagent is terminated, staged work is rolled back (`git reset --hard` + `git clean -fd`) strictly inside the isolated ticket worktree (aborts with warning if in main checkout), and ticket is escalated back to Phase 2 (Decompose). |
+| **Flail Supervision** (P4 / C6) | `adlc flail-detector` | `tool.execute.after` (PostToolUse) | **Enforcing (ADLC C6 Alignment)**: Scans tool logs for flailing. Strike 1 (Enforcing, Non-Destructive): terminates builder subagent, stashes uncommitted work safely, and restarts builder in a fresh context. Strike 2 (Enforcing, Destructive): builder subagent is terminated, staged work is rolled back (`git reset --hard` + `git clean -fd`) strictly inside the isolated ticket worktree (stashes instead of cleaning if in main checkout), and ticket is escalated back to Phase 2 (Decompose). |
 | **Hard-Bug Repair** (P4 / C7) | `adlc consensus-fix` | **Slash Command** (`/adlc-consensus-fix`) | User-invoked. Runs parallel candidate repairs and merges the consensus winner; escalates to human if candidates diverge. |
 | **Prosecution** (P5) | `adlc-runner run p5` (calls `hollow-test`, `behavior-diff`, `review-calibration`) | **Hostile Subagents** (Prosecution Fan-out) | Pre-merge prosecution fanned out across independent, fresh-context, single-lens subagents (security, correctness, contract, diff, tests). Findings are verified by a separate verifier agent. Loops until 2 consecutive passes are dry. |
 | **Integrate** (P6) | `adlc-runner accept --ticket <id>` | **Slash Command** / `/adlc-accept` | Human Gate 2 (behavioral acceptance). Prompts the developer to run the demo. Running `/adlc-accept` records the human acceptance hash and signs the manifest. |
@@ -65,6 +68,7 @@ We will implement the integration inside a project-level `.opencode/` folder or 
     adlc-opencode/
       index.ts            # Entrypoint exporting Plugin thin binding
       package.json        # Plugin dependencies (declares @adlc/cli, @adlc/runner)
+      rails-checker.ts    # Self-contained rails validation and path helper
   commands/
     adlc-init.md          # Slash command to bootstrap .adlc/
     adlc-ticket.md        # Slash command to triage/create a ticket (P0)
@@ -90,12 +94,12 @@ We will implement the integration inside a project-level `.opencode/` folder or 
 
 ### 4.2. In-Process Hook Contract (Fail-Closed & Path Hardening)
 
-To prevent duplication and code drift on safety-critical checks (conforming to the ADR companion direction), the OpenCode plugin does **NOT** reimplement path canonicalization, `apply_patch` parsing, or block evaluation. Instead, the plugin's `index.ts` is a **thin adapter** that imports and calls the shared core hook library: `@adlc/core/hooks` (or `@adlc/hook-core`).
+To prevent runtime resolution failures and logic drift, the plugin does **not** load external `@adlc/core` modules directly at hook execution time. Instead, it vendors the core rails-checking, path-resolution, and patch-parsing helper functions into a self-contained, zero-dependency helper file `plugins/adlc-opencode/rails-checker.ts`.
 
 The hook executes with an **asymmetric fail-closed contract**:
 - **No Rails Declared:** If `.adlc/tickets.json` is empty or no rails are declared in the active ticket, the hook behaves as a **no-op** and immediately permits the tool call (no-op safety: clean repos cannot be bricked).
 - **In-Session Direct Checks:** To avoid the performance overhead and nondeterministic failure risks of spawning shell commands or LLM calls on every tool use, the hook resolves and reads `.adlc/tickets.json` **directly via Node `fs`**.
-- **Default-Deny Gating on Structured Tools:** Instead of gating an explicit allowlist of tool names, the hook utilizes a **default-deny** approach for structured tools: it intercepts *all* tool calls that accept path arguments, blocklisting mutations, and allowlisting only explicitly safe read-only tools (`read`, `view`, `glob`, `search`, `grep`).
+- **Default-Deny Path Filter:** Instead of an allowlist of tool names, the hook utilizes a **default-deny** approach for structured tools: it intercepts *all* tool calls except for an explicit allowlist of read-only tools (`read`, `view`, `glob`, `search`, `grep`).
 - **Path Protection & Symlink Hardening:** The hook canonicalizes target paths. To prevent directory traversal and symlink bypasses on new file creation (where the file does not exist yet), the hook resolves symlinks on the *staged target path itself*, walking from the root directory segment-by-segment to verify that no path segment is a symlink resolving into a restricted directory.
   - At startup, the plugin resolves its own physical path using `fs.realpathSync(__filename)`. It locks this resolved canonical root path, protecting the plugin code from edits regardless of whether it is globally installed, locally copied, or symlinked.
   - It specifically denies edits to:
@@ -106,7 +110,7 @@ The hook executes with an **asymmetric fail-closed contract**:
     5. The `.github/` and CI config directories (preventing editing of workflows like `ci/rails-guard.yml`).
 - **`apply_patch` Payload Parsing:** The shared core's path extractor parses patch payloads (inspecting unified diff markers) to identify target files and evaluate them against protected paths.
 - **OpenCode Fail-Closed Return:** If the hook determines an edit is blocked or encounters an operational error, the plugin catches it and returns a native OpenCode block payload (e.g. `{ allow: false, reason: "..." }`) rather than failing open. If running in a subprocess hook environment, it exits the subprocess with `exit 2`. Any hook crash or operational error while rails are declared **fails closed**.
-- **Auditable Bypass:** Setting `ADLC_RAILS_BYPASS=1` is only permitted if the environment variable is validated through a secure human-in-the-loop prompt in the TUI, appending an audited bypass entry to `.adlc/manifest.jsonl`.
+- **Auditable Bypass:** Setting `ADLC_RAILS_BYPASS=1` is only permitted if the environment variable is validated through a secure human-in-the-loop prompt in the TUI, appending an audited bypass entry to `.adlc/manifest.jsonl`. In non-interactive/headless runs (where no TUI is available), the bypass is **refused (fails closed)**.
 
 ### 4.3. Keyless LLM-Gate Dispatch (The Bridge & Grandchild Cascading)
 
@@ -135,9 +139,9 @@ To prevent sycophancy (F2) and same-model self-review (Principle 3 / E4), the pl
 - **Model Routing Configuration:** The plugin reads a configuration file `.adlc/config.json` defining model routing tiers (frontier, mid, cheap).
 - **Dynamic Model Routing for Builders:** During Phase 2, `adlc-runner run p2` executes `model-router`, which writes the recommended model selection to a ticket-specific routing file (`.adlc/routing/<ticket-id>.json`). When OpenCode spawns the builder agent, the plugin intercepts the agent creation via the native `agent.resolve` resolver hook and dynamically sets the agent's model configuration (`model` property) to match the recommended tier.
 - **Frontier Isolation for Gates:** For critical gates requiring a frontier model (Phase 1 Interrogate, Phase 3 hollow-test, Phase 5 Prosecute), the plugin bridge intercepts `runKeylessGate` and requests the configured frontier model endpoint from OpenCode (e.g. `context.client.prompt({ message: promptText, model: config.frontierModel, isolated: true })`).
-- **Frontier-Free Scaling for Local Models:**
-  - If OpenCode's active model name does not match standard cloud provider routing schemas, the plugin executes a **runtime evaluation benchmark gate** (a logical constraint test) on session startup.
-  - If the benchmark fails, the gate **continues to block**. Conforming to ADLC Appendix E (Frontier-Free Doctrine), the plugin scales up verification by activating **Multi-Pass Search Verification (N-Pass Loop-Until-Dry)**: it runs the gate prompt $N$ times in parallel (sampling diversity exploit, E1). The gate only passes if fanned-out candidates reach a consensus threshold (e.g., unanimous agreement) verifying correctness. The system warns the user that validation depth has been scaled up to N-passes to maintain gate recall on the local model, preserving the zero-key thesis.
+- **Frontier-Free Scaling via Dynamic Calibration:**
+  - If OpenCode's active model name does not match standard cloud provider routing schemas, the plugin executes a startup benchmark using the `review-calibration` tool to evaluate the active model's planted-bug recall.
+  - If the calibration recall score falls below the required threshold, **the gate continues to block**. Conforming to ADLC Appendix E (Frontier-Free Doctrine), the plugin dynamically calculates the required $N$ parallel passes necessary to meet the target recall and activates **Multi-Pass Search Verification (N-Pass Loop-Until-Dry)**: it runs the gate prompt $N$ times in parallel (sampling diversity exploit, E1). The gate only passes if fanned-out candidates reach a consensus threshold (e.g., unanimous agreement) verifying correctness. The system warns the user that validation depth has been scaled up to N-passes to maintain gate recall on the local model, preserving the zero-key thesis.
 
 ---
 
@@ -166,9 +170,9 @@ All 8 phases of the ADLC are represented in this plan, but three specific bounda
 
 We propose a six-phase delivery plan, mirroring the successful Claude Code implementation. Each phase will be subjected to an adversarial counter-review loop to check for bypasses:
 
-* **Phase A — Dependency & Commands:** Configure package mappings for `adlc` and `adlc-runner`. Implement `/adlc-init`, `/adlc-ticket` (P0), and gated slash commands for `/adlc-spec` (P1) and `/adlc-decompose` (P2) to ensure the lifecycle has an entry point.
+* **Phase A — Dependency & Commands:** Configure package mappings for `adlc` and `adlc-runner` (pending merge). Implement `/adlc-init`, `/adlc-ticket` (P0), and gated slash commands for `/adlc-spec` (P1) and `/adlc-decompose` (P2) to ensure the lifecycle has an entry point.
 * **Phase B — The Keyless Bridge:** Write the plugin SDK hook that intercepts `--prompt-only` stdin/stdout, prevents deadlock via streaming, cascades prompts to grandchild processes using correlation IDs, and routes prompts to the configured model tier in isolated contexts.
 * **Phase C — In-Process Advisory Hooks:** Implement `session.created` (runs `preflight` and benchmarking) and `session.ended` (runs `gate-manifest verify`).
-* **Phase D — Enforcing Rail-Guard Hook:** Deploy the `tool.execute.before` hook thin adapter (calling the shared hook core) gating structured file edits with parent/segment canonicalization, canonical plugin root path protection, and fail-closed return contracts.
+* **Phase D — Enforcing Rail-Guard Hook:** Deploy the `tool.execute.before` hook thin adapter (calling the self-contained `rails-checker.ts`) gating structured file edits with parent/segment canonicalization, canonical plugin root path protection, and fail-closed return contracts.
 * **Phase E — Prosecutor Subagents & Distill:** Configure the fanned-out prosecution subagents (5 lenses), the verifier/reproducer agent, and loop orchestration. Wire `/adlc-distill` for lesson mining.
 * **Phase F — CI Templates & Adoption Guide:** Deliver `.github/workflows` configurations, pre-commit hook scripts (hardened via `HEAD`), and publish `docs/opencode.md` for users.
