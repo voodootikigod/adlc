@@ -45,10 +45,15 @@ adlc lesson-foundry --prompt-only
      Then hand it the scaffolded stub with a **scoped** request — point it at the
      specific staged file rather than asking for a full-repo mine, e.g.:
 
-     > "Validate the scaffolded skill at `.adlc/lessons/<name>/SKILL.md`: dedup it
+     > "Validate the scaffolded skill at `.adlc/lessons/<name>.SKILL.md`: dedup it
      > against installed skills and the skills.sh registry, then run Gate B on it.
      > Report REUSE/EXTEND/BUILD/REJECT and SHIP/FIX/REJECT — do not mine the rest
      > of the repo."
+
+     (lesson-foundry writes a **flat** file, `.adlc/lessons/<name>.SKILL.md` — not
+     a `<name>/SKILL.md` directory. The skills CLI expects a skill *directory*
+     containing a `SKILL.md`, so to install it you first move the flat file into
+     its own subdir: `<name>/SKILL.md`.)
 
      It runs:
      - **dedup** against installed skills + the `skills.sh` registry (via its
@@ -66,11 +71,11 @@ adlc lesson-foundry --prompt-only
      skill defense only becomes live once it is installed into a discoverable
      skills directory. Do not hand-guess that path — let the **skills CLI** place
      it (`npx skills add`, or skill-mining's author step, which targets the correct
-     location for the active harness), then **verify discovery** before PR (e.g.
-     the skill shows up in `/help`/skill list, or `npx skills` reports it
-     installed). Only PR the `SKILL.md` defenses that survive (verdict SHIP) **and**
-     are confirmed discoverable. Lint-rule and spec-gap defenses do not go through
-     skill-mining — PR them directly from `.adlc/lessons/`.
+     location for the active harness), then **verify discovery** before PR with a
+     real skills-CLI verb (`npx skills check`, or `npx skills find <name>` to
+     confirm it resolves). Only PR the `SKILL.md` defenses that survive (verdict
+     SHIP) **and** are confirmed discoverable. Lint-rule and spec-gap defenses do
+     not go through skill-mining — PR them directly from `.adlc/lessons/`.
 
      This step is **keyless** (skill-mining is agentic — Claude is the agent, no
      API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
