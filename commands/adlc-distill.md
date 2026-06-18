@@ -51,10 +51,16 @@ adlc lesson-foundry --prompt-only
        specific commands/paths/invariants, not generic prose.
 
      Only PR the `SKILL.md` defenses that survive (verdict SHIP). Lint-rule and
-     spec-gap defenses do not go through skill-mining — PR them directly. This step
-     is agentic, not a deterministic gate, so it has no `--prompt-only`/exit-code
-     contract; if skill-mining is unavailable, note that the skill defenses landed
-     **unvalidated** so the coverage stays honest.
+     spec-gap defenses do not go through skill-mining — PR them directly.
+
+     This step is **keyless** (skill-mining is agentic — Claude is the agent, no
+     API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
+     contract, and `npx skills add` is an interactive, once-per-machine developer
+     action — never run it from a scheduled/headless `/adlc-distill` (see
+     "Scheduling"). If skill-mining is unavailable, **do not PR the skill stubs** —
+     hold them for explicit human review rather than landing default-worded,
+     un-deduped, cold-untested skills. Report them as held-unvalidated in the
+     summary so the coverage stays honest.
 
 ## 2. Rejection mining — mine human PR objections (C13)
 
@@ -75,8 +81,9 @@ Report: how many finding clusters and rejection lenses were found, the concrete
 defenses proposed, which were written (if any), and which gates were skipped
 (e.g. rejection-mining when `gh` is unavailable) so the coverage is honest. For
 any *skill* defense, report its skill-mining verdict (REUSE/EXTEND/BUILD/REJECT +
-Gate B SHIP/FIX/REJECT), or flag it as landed **unvalidated** if skill-mining was
-not run. Point the user at `/adlc-maintain` for the decay-driven checks.
+Gate B SHIP/FIX/REJECT), or flag it as **held for human review (not PR'd)** if
+skill-mining was not run. Point the user at `/adlc-maintain` for the decay-driven
+checks.
 
 ## Scheduling
 
@@ -90,6 +97,8 @@ without materializing them — that is intentional: auto-writing lint rules/skil
 from clustered findings unattended is risky. A scheduled routine should surface
 the proposals for a human to review and then approve `--write`. Only wire an
 auto-`--write` routine if you have explicitly accepted that the generated
-defenses land without review. The deterministic maintenance checks
-(`/adlc-maintain`) can additionally run in CI on a cron; see
-`docs/ci/adlc-maintenance.yml`.
+defenses land without review. The skill-mining handoff (step 1.3) is likewise
+**interactive only** — a headless run must never `npx skills add` or auto-validate
+skills; it surfaces the scaffolded stubs for a human to validate later. The
+deterministic maintenance checks (`/adlc-maintain`) can additionally run in CI on
+a cron; see `docs/ci/adlc-maintenance.yml`.
