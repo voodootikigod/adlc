@@ -74,16 +74,16 @@ Trigger these directly within the OpenCode TUI interface:
 | Command | Phase | Description |
 | --- | --- | --- |
 | `/adlc-init` | — | Bootstrap `.adlc/` workspace, scaffold `.opencode/` structure (linking/copying commands, agents, and skills from the plugin), template `.adlc/config.json` defaults, configure gitignore (idempotently), configure local pre-commit git hooks, and check environment readiness. |
-| `/adlc-ticket` | P0 | Runs an interactive triage interview to evaluate task risk × blast radius (categorizing it as Trivial, Bounded, Substantial, or Architectural) and authors a schema-valid ticket contract in `.adlc/tickets.json`. Dispatcher (`adlc`) mechanical blast-radius overrides upgrade classifications if diffs violate bounds; `adlc-runner run p0` asserts this triage evidence. |
+| `/adlc-ticket` | P0 | Runs an interactive triage interview to evaluate task risk × blast radius (categorizing it as Trivial, Bounded, Substantial, or Architectural) and authors a schema-valid ticket contract in `.adlc/tickets.json`. Dispatcher (`adlc`) mechanical blast-radius overrides upgrade classifications if diffs violate bounds; `adlc-runner run p0` asserts this triage evidence without requiring a separate human approval signature (M2). |
 | `/adlc-spec` | P1 | Runs `adlc spec-lint`, `adlc premortem`, and `adlc parallax` to shape and audit the spec. |
-| `/adlc-approve-spec` | P1 | Finalizes the Phase 1 human gate G1 (spec approval). Signs the manifest and records the spec approval hash. `adlc-runner run p1` is then run to assert both spec audit evidence and G1 signature exist. |
+| `/adlc-approve-spec` | P1 | Finalizes the Phase 1 human gate Human Gate 1 (spec approval). Signs the manifest and records the spec approval hash. `adlc-runner run p1` is then run to assert both spec audit evidence and Human Gate 1 signature exist. |
 | `/adlc-decompose` | P2 | Runs `adlc coldstart`, `adlc model-router`, and `adlc merge-forecast` to split the ticket and verify contract boundaries. Runs `adlc-runner run p2` to assert evidence. |
 | `/adlc-rail-write` | P3 | Invokes the `rail-writer` agent to write tests and stubs in an isolated context, and runs `adlc hollow-test` to verify tests fail on implementation deletion before freeze. Runs `adlc-runner run p3` to assert rail evidence exists. |
 | `/adlc-consensus-fix` | P4 | Runs consensus repair by fanning out candidate fixes to resolve a hard failing test (`adlc consensus-fix`). |
-| `/adlc-prosecute` | P5 | Verifies the G4 build gate (`adlc-runner run p4` asserting green tests/lints/compiles) and runs the pre-merge hostile prosecution subagent loops (5 lenses and a verifier agent). The loop runs until two consecutive passes are dry, up to the maximum convergence budget $R_{\text{max}}$ read from `.adlc/config.json`. Runs `adlc-runner run p5` to assert: (1) no findings remain, (2) tests pass, and (3) the rails-diff-empty proof exists in the manifest. |
-| `/adlc-accept` | P6 | Finalizes the Phase 6 human gate G2 (behavioral acceptance). Runs `adlc behavior-diff compare` to gather evidence, prompts the developer to verify the demo, and signs the manifest (`adlc-runner accept --ticket <id>`). Trivial tickets skip G2 entirely. |
+| `/adlc-prosecute` | P5 | Verifies the deterministic build gate (`adlc-runner run p4` asserting green tests/lints/compiles) and runs the pre-merge hostile prosecution subagent loops (5 lenses and a verifier agent). The loop runs until two consecutive passes are dry (zero verified findings), up to the maximum convergence budget $R_{\text{max}}$ read from `.adlc/config.json`. Runs `adlc-runner run p5` to assert: (1) no findings remain, (2) tests pass, and (3) the rails-diff-empty proof exists in the manifest (L8). |
+| `/adlc-accept` | P6 | Finalizes the Phase 6 human gate Human Gate 2 (behavioral acceptance). Runs `adlc behavior-diff compare` to gather evidence, prompts the developer to verify the demo, and signs the manifest (`adlc-runner accept --ticket <id>`). Trivial tickets skip Human Gate 2 entirely. |
 | `/adlc-distill` | P7 | Mines findings (`adlc lesson-foundry`, `adlc rejection-mining`) and runs `adlc-runner run p7` to assert distillation evidence. Post-merge Simplify pass is run in CI, or can be run locally on-demand via `/adlc-distill --simplify` if the repository lacks CI workflows. |
-| `/adlc-maintain` | C10/C12 | Run decay-driven checks: stale skills, hot files, and gate calibration (`adlc skill-rot`, `adlc model-ratchet`, and `adlc gate-fuzzing`). |
+| `/adlc-maintain` | C10/C12 | Run safe decay-driven checks locally: stale skills and model-ratchet (`adlc skill-rot` and `adlc model-ratchet`). `adlc gate-fuzzing` runs strictly in CI/CD or VM sandboxed environments to prevent unsandboxed code execution on dev hosts (H3). |
 
 ---
 
@@ -108,7 +108,7 @@ Findings are verified by a separate `prosecutor-verifier` reproducer agent. The 
 
 ### In-Process Hooks
 
-OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling the hook checker helper thin adapter `plugin/adlc-opencode/rails-checker.ts` (which delegates to the shared `@adlc/core` validation library) on specific event triggers:
+OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling the hook checker helper pre-bundled index `plugin/adlc-opencode/dist/index.js` (which packages the rails adapter wrapping `@adlc/core`, L2) on specific event triggers:
 
 | Hook Event | Trigger Event | Posture | Behavior |
 | --- | --- | --- | --- |
@@ -118,7 +118,7 @@ OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling th
 | **manifest-audit** | `session.ended` | Advisory | Runs `gate-manifest verify` to confirm the integrity of the append-only evidence chain on session close. |
 
 #### Rail Gating Safety & Bypasses
-- **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook behaves as a safe no-op.
+- **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook behaves as a safe no-op. *Note on Hook Posture (onFailure Caveat):* The fail-closed behavior on operational error holds true during JavaScript execution. However, if the OpenCode harness does not support a native `onFailure: deny` plugin configuration (failing closed on loading errors or hook crashes), any hook startup exception, syntax error, or plugin loading crash will default to fail-open (H2). In such environments, the rail safety guarantee relies entirely on the CI/CD rails-guard union check backstop.
 - **Isolated Prompting & Cascading:** Prompts from LLM-backed gates are queried in isolated, transient sub-contexts to avoid polluting the active chat session transcript. Multi-sample, multi-round, and grandchild prompts from the dispatcher and runner are bubbled up to the plugin using the structured Two-Phase Stdio JSON Cascade Protocol (holding a persistent stdio session via the proposed `--prompt-session` flag to pass prompts and responses keylessly, H1) to prevent multiplexing collisions.
 - **Frontier-Free Scaling:** Local models that fail dynamic calibrations are scaled up to N-pass parallel checks (ADLC Exploit E1 sampling diversity) and require consensus thresholds, instead of being blocked.
 - **Bypass hatch:** Setting `ADLC_RAILS_BYPASS=1` overrides the in-session hook, but requires human approval in the TUI (via the proposed plugin UI API) and logs the bypass event to `.adlc/manifest.jsonl` for audit compliance. Bypass is refused (fails closed) in headless sessions.

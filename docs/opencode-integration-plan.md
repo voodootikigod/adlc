@@ -11,7 +11,7 @@ Today, the `@adlc/*` toolkit ships as 19 independent, gate-shaped CLI packages, 
 2. Manually execute the appropriate tool at the correct moment.
 3. Manage exit codes, environment files, and LLM API keys for model-backed gates.
 
-ADLC dictates that **enforcement must live at the tool layer, not the prompt layer** (as detailed in [ADLC.md](file:///home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/opencode-integration/ADLC.md): *"F5 reward-hacking routes around instructions; it cannot route around a tool hook"*). Relying on a human or an agent to remember to run a validation command defeats the lifecycle's structural safety guarantees.
+ADLC dictates that **enforcement must live at the tool layer, not the prompt layer** (as detailed in [ADLC.md](file:///home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/opencode-integration/ADLC.md): *"F5 routes around instructions; it cannot route around a hook"*). Relying on a human or an agent to remember to run a validation command defeats the lifecycle's structural safety guarantees.
 
 **Goal:** Provide a native, deeply integrated OpenCode plugin that enforces the ADLC automatically at correct lifecycle boundaries. The model should discover the lifecycle natively, safety-critical gates must run automatically, and no external API keys should be required.
 
@@ -42,7 +42,7 @@ Following **Option D (separate, concern-focused bins)** from the Command Reconci
 | Lifecycle Organ (ADLC Phase) | CLI Tool(s) & Bins | OpenCode Native Primitive | Default Behavior & Integration Details |
 |---|---|---|---|
 | **Preflight** (SessionStart Check) | `adlc preflight` | `session.created` / `session.start` | **Advisory**: Checks system requirements, Node/Bun runtimes, and git state. Logs warnings but never blocks the session. Reads cached benchmark configuration from `.adlc/config.json` (runs calibration benchmark only if cache is missing or model configuration changes). |
-| **P0 Triage** | `/adlc-ticket` (runs interactive interview to write ticket triage class to `.adlc/tickets.json`) | **Slash Command** | Triages incoming tasks by risk × blast radius: (a) *Trivial*: Direct edit + existing rails + single prosecution pass, (b) *Bounded*: Skip to P3 rails (write test first), (c) *Substantial*: Full lifecycle loop, (d) *Architectural*: Full loop + P1 design alternatives judge panel. Writes triage categorization to `.adlc/tickets.json`. `adlc-runner run p0` asserts that: (1) a valid ticket is active, (2) the triage class in `.adlc/tickets.json` has human sign-off, and (3) a dispatcher check verifies the active diff has not violated the blast radius restrictions for the declared triage class. |
+| **P0 Triage** | `/adlc-ticket` (runs interactive interview to write ticket triage class to `.adlc/tickets.json`) | **Slash Command** | Triages incoming tasks by risk × blast radius: (a) *Trivial*: Direct edit + existing rails + single prosecution pass, (b) *Bounded*: Skip to P3 rails (write test first), (c) *Substantial*: Full lifecycle loop, (d) *Architectural*: Full loop + P1 design alternatives judge panel. Writes triage categorization to `.adlc/tickets.json`. `adlc-runner run p0` asserts that: (1) a valid ticket metadata entry exists, and (2) a dispatcher check verifies the active diff has not violated the blast radius restrictions for the declared triage class. No human sign-off is required at P0 (retaining the Appendix B two-mandatory-moments doctrine, M2). |
 | **Spec Interrogation** (P1) | `/adlc-spec` (runs `adlc spec-lint`, `adlc premortem`, `adlc parallax`) + `/adlc-approve-spec` (signs manifest) + `adlc-runner run p1` (assertion) | **Slash Commands** / `/adlc-spec` & `/adlc-approve-spec` | Model-guided spec shaping via `/adlc-spec`. Human Gate 1 (spec approval) runs `/adlc-approve-spec` to record the human approval signature in the manifest. `adlc-runner run p1` is called to assert that both spec audit evidence and Human Gate 1 signature exist. Transition to P2 (Decompose) is blocked until `adlc-runner run p1` passes. |
 | **Decomposition** (P2) | `/adlc-decompose` (runs `adlc coldstart`, `adlc model-router`, `adlc merge-forecast`) + `adlc-runner run p2` (assertion) | **Slash Command** / `/adlc-decompose` | Splits spec into atomic, typed ticket partitions. Verifies that `coldstart` passes on each ticket and `merge-forecast` certifies execution width. Routes the recommended model selection to a ticket-specific configuration file. `adlc-runner run p2` asserts decomposition evidence exists. |
 | **Rail Authoring & Freeze** (P3 / C5) | `/adlc-rail-write` (calls `rail-writer` agent, `adlc hollow-test`, `adlc rails-guard`) + `adlc-runner run p3` (assertion) | **Slash Command** / `/adlc-rail-write` & `tool.execute.before` (PreToolUse) | Gated subagent `rail-writer` writes tests and stubs in an isolated context. Runs `adlc hollow-test` to verify tests fail on implementation deletion before freeze. Hook intercepts structured edits. Blocks writes to rail paths declared in active tickets + freezes the `.adlc/tickets.json` trust root. `adlc-runner run p3` asserts rail-freeze evidence exists. |
@@ -53,7 +53,7 @@ Following **Option D (separate, concern-focused bins)** from the Command Reconci
 | **Integrate** (P6) | `/adlc-accept` (runs `adlc behavior-diff compare` + `adlc-runner accept --ticket <id>`) | **Slash Command** / `/adlc-accept` | Human Gate 2 (behavioral acceptance). Gathers diff evidence. Prompts the developer to run the demo. Running `/adlc-accept` records the human acceptance hash and signs the manifest via `adlc-runner accept` (L2). |
 | **Gate Evidence** (C11) | `adlc gate-manifest verify` | `session.ended` / `session.terminated` | **Advisory**: Runs `adlc gate-manifest verify` on session end to check the integrity of the `.adlc/manifest.jsonl` append-only chain. |
 | **Distill** (P7) | `/adlc-distill` (runs `adlc lesson-foundry`, `adlc rejection-mining`) + `adlc-runner run p7` (assertion) | **Slash Command** (`/adlc-distill`) | Runs lesson mining to harvest skills/lints. `adlc-runner run p7` asserts distillation evidence. **Simplify pass is strictly post-merge**: runs in the CI/CD pipeline under green tests, automatically opening a new pull request for final merging. |
-| **Maintenance** (C10/C12) | `adlc skill-rot`, `adlc model-ratchet`, `adlc gate-fuzzing` | **Slash Command** (`/adlc-maintain`) + CI Action | Advisory. Runs checks on repository drift, stale skills, and gate bypasses. |
+| **Maintenance** (C10/C12) | `adlc skill-rot`, `adlc model-ratchet`, `adlc gate-fuzzing` | **Slash Command** (`/adlc-maintain`) + CI Action | Advisory. Runs safe checks on repository drift and model/skill decay locally. `gate-fuzzing` is strictly restricted to CI/CD or VM sandboxed execution to prevent unsandboxed code execution on dev hosts (H3). |
 
 ---
 
@@ -159,15 +159,13 @@ To resolve the install resolution and unpublished runner package constraints, th
 4. **Feed Completions via Stdin (For `--prompt-session` Mode):** Under persistent `--prompt-session` mode, the bridge writes the completions back to the child process's stdin as structured JSON responses:
    `{"type": "prompt_response", "id": "session-uuid", "sample": 0, "round": 1, "response": "..."}`
    The bridge loops stream-drain and stdin-feed operations until the process exits. (For standard `--prompt-only` fallback, the process has already exited, and the bridge simply stashes the completion to be supplied in Phase 2).
-5. **Wait for Exit:** The bridge waits for the process to exit with code `0`, completing prompt extraction.
+5. **Wait for Exit:** The bridge waits for the process to exit. If it exits with code `0`, prompt extraction completes successfully. If it exits with a non-zero code (exit 1 or 2), prompt extraction has failed; the bridge aborts the session, blocks execution, and logs the exit code and stderr error output (L5).
 
-#### Phase 2: Execution & Gating
-1. **Spawn Execution Process:** The bridge spawns the absolute CLI path *again* in execution mode (without the `--prompt-only` flag): `adlc <toolName> <args>` (or `adlc-runner run <phase>`).
-2. **Supply Saved Responses:** During execution mode, the bridge supplies the cached completions generated during Phase 1 to the child process's stdin (or via temporary parameters), resolving the gate keylessly.
-3. **Capture and Propagate Exit Code:** The bridge waits for the tool to complete and propagates the exit code:
-   - `exit 0` (Pass): The gate passes, and the execution is permitted.
-   - `exit 2` (Fail): The gate rejects, blocking the build or merge.
-   - `exit 1` (Operational Error): Fails closed on all enforcing gates (P1 Interrogate, P3 Rail, P4 Build Gate, P5 Prosecute) and fails open (logs warning) on advisory gates.
+#### Phase 2: Verdict Resolution & Recording (H1)
+1. **Direct Verdict Extraction:** For standard single-shot gates, the bridge does **not** re-spawn the CLI tool in Phase 2. Instead, the bridge/agent parses the model's completion response captured in Phase 1 directly to extract the structured verdict (pass/fail).
+2. **Record Verdict to Manifest:** The bridge records this verdict as a keyless gate audit event and appends the evidence/metadata directly to `.adlc/manifest.jsonl` using the `adlc-runner record` protocol (L2).
+3. **Enforce Gate Outcome:** If the model's completion indicates the gate failed (e.g., spec-lint rejected), the bridge sets the execution outcome to blocked (failing closed for enforcing gates like P1, P3, P4, P5, and logging warnings for advisory gates) and aborts the execution.
+4. **Proposed `--prompt-session` Cascade Execution (H1):** For multi-sample or multi-round tools executing under the proposed `--prompt-session` protocol, the tool stays alive during Phase 1 and consumes responses incrementally via `stdin`. In Phase 2, the tool writes its final aggregated JSON verdict directly to its output, which the bridge captures, records to `.adlc/manifest.jsonl`, and enforces. If the process exits with `exit 2` (Fail) or `exit 1` (Error), it fails closed.
 
 ---
 
@@ -207,6 +205,7 @@ All 8 phases of the ADLC are represented in this plan (with Phase 4 (Build) real
 * **Mitigation (H3, M5):**
   - **CI/CD Rails-Guard Union Strategy:** Any bash-based modifications to frozen rails are caught at commit time using an unbypassable **CI/CD rails-guard check** (`docs/ci/rails-guard.yml` or script `scripts/rails-guard-ci.mjs`) which diffs the branch against the trunk base. Crucially, to prevent deletion bypasses and protect new rails introduced in the same PR (M-4), the CI check evaluates the **union of rail declarations** from both the trunk base branch (e.g., `git show origin/main:.adlc/tickets.json` or target base ref) and the current head ref (PR branch). Any rail path present in the base branch `tickets.json` is strictly locked and cannot be deleted or modified by the PR commits (deletion-proof), while any new rail paths declared in the PR branch's `tickets.json` are also enforced as frozen for all implementation changes within that PR (new-rail-aware).
   - **Local-Only / Non-CI Simplify Fallback (M5):** Since repositories without CI/CD workflows cannot execute the post-merge Simplify pass automatically, the plugin expands the `/adlc-distill` command: running `/adlc-distill --simplify` executes the Simplify pass locally on-demand once all tests are green, protecting the repository against code bloat.
+  - **Gate-Fuzzing Sandbox Safety Isolation (H3):** Since `adlc gate-fuzzing` executes untrusted adversary-generated setup and witness code requiring an OS-level sandbox (`bwrap`/`sandbox-exec`), it is **strictly blocked from running on the developer host** during `/adlc-maintain` execution. The plugin TUI command only runs safe model/skill decay checks. `gate-fuzzing` is strictly restricted to execution in CI/CD pipelines (e.g. `ci/adlc-maintenance.yml`) or disposable VM containers where sandboxing is guaranteed.
 * **Local-only / GitLab / Pre-commit Hook Hardening:** For repositories without GitHub workflows, a pre-commit git hook (`.git/hooks/pre-commit`) is written during `/adlc-init`. To prevent self-modification bypasses, the pre-commit hook executes `adlc rails-guard` reading the union of rail declarations from `HEAD` (`git show HEAD:.adlc/tickets.json`) and the staged index, ensuring new rails are locked locally. We explicitly note that local git hooks are best-effort (as the agent can delete `.git/hooks/pre-commit` via a bash terminal execution) and must be backstopped by branch protection in CI/CD.
 
 ### 6.3. Background Scheduling (Partial)
@@ -217,6 +216,16 @@ All 8 phases of the ADLC are represented in this plan (with Phase 4 (Build) real
 ### 6.4. Keyless Prompting & Creator/Critic SDK Dependencies (Partial, H2)
 * **Status:** ⚠️ Partial Implementation / Dependent on SDK Extensions
 * **Reason:** The keyless prompt extraction bridge, isolated sub-contexts, flail-detector builder restart, and creator/critic model separation rely on proposed OpenCode SDK extension interfaces (`context.client.prompt({ isolated, model })` and `agent.resolve` hooks). Until these APIs are implemented in the harness, the plugin uses fresh-context isolation on the active session model, and requires manual `ADLC_API_KEY` configuration or manual copy-pasting for gate queries.
+
+### 6.5. Local-Only / Non-CI Security Degradation Summary (M3)
+* **Status:** ⚠️ Advisory
+* **Reason:** In workspaces configured without CI/CD branch protection pipelines, the safety contract decays due to the composition of the following four limitations:
+  1. **In-Session Bash Exclusion:** Bash shell commands are not gated in-session, allowing edits to rails via standard terminal tools.
+  2. **Harness Fail-Open Exceptions:** If the OpenCode harness lacks native `onFailure: deny` support, plug-in loading errors or crashes fail open.
+  3. **Agent-Deletable Hooks:** Local pre-commit git hooks are best-effort and can be bypassed or deleted by the agent.
+  4. **No Remote Backstop:** Repositories without CI have no secondary trunk-base diff validation to catch bypassed edits.
+
+  Under this composite, there is **zero mechanical rail enforcement** during development. Local-only developers must manually inspect hook logs and execute `adlc gate-manifest verify` before merging (M3).
 
 ---
 
