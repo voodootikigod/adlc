@@ -34,6 +34,27 @@ adlc lesson-foundry --prompt-only
      `--write` on its own does NOT apply your prompt-only refinement — that is
      only auto-applied with `--llm` (which needs an API key). So in the keyless
      in-Claude flow you scaffold with `--write`, then refine the wording yourself.
+  3. **For any defense that is a *skill* (a `SKILL.md`), validate it before PR.**
+     lesson-foundry only scaffolds the stub; it does not dedup against the public
+     ecosystem or confirm the skill is usable cold. Hand the scaffolded `SKILL.md`
+     to **skill-mining** for the registry-management half of P7 (see ADLC.md §P7):
+
+     ```
+     npx skills add voodootikigod/skill-mining   # once per machine
+     ```
+     Then ask it to validate the scaffolded skill — it runs:
+     - **dedup** against installed skills + the `skills.sh` registry (via its
+       `find-skills` subagent) → REUSE / EXTEND / BUILD / REJECT. If a maintained
+       public skill already covers it, install that instead of landing a duplicate.
+     - **Gate B** (artifact red-team): a fresh-context agent gets only your
+       `SKILL.md` and attempts a real repo task — proving the skill carries
+       specific commands/paths/invariants, not generic prose.
+
+     Only PR the `SKILL.md` defenses that survive (verdict SHIP). Lint-rule and
+     spec-gap defenses do not go through skill-mining — PR them directly. This step
+     is agentic, not a deterministic gate, so it has no `--prompt-only`/exit-code
+     contract; if skill-mining is unavailable, note that the skill defenses landed
+     **unvalidated** so the coverage stays honest.
 
 ## 2. Rejection mining — mine human PR objections (C13)
 
@@ -52,8 +73,10 @@ adlc rejection-mining --prompt-only
 
 Report: how many finding clusters and rejection lenses were found, the concrete
 defenses proposed, which were written (if any), and which gates were skipped
-(e.g. rejection-mining when `gh` is unavailable) so the coverage is honest. Point
-the user at `/adlc-maintain` for the decay-driven checks.
+(e.g. rejection-mining when `gh` is unavailable) so the coverage is honest. For
+any *skill* defense, report its skill-mining verdict (REUSE/EXTEND/BUILD/REJECT +
+Gate B SHIP/FIX/REJECT), or flag it as landed **unvalidated** if skill-mining was
+not run. Point the user at `/adlc-maintain` for the decay-driven checks.
 
 ## Scheduling
 
