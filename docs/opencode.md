@@ -27,12 +27,18 @@ npm install -g @adlc/cli
 The plugin initialization check will verify that both `adlc` and `adlc-runner` bins are available on PATH and output a clear installation error if missing.
 
 ### 2. Install the OpenCode Plugin
-Copy or link the plugin files to your project-local `.opencode` directory:
+You can install the plugin either by adding the published npm package `@adlc/opencode-plugin` directly via OpenCode's plugin manager:
+
+```sh
+opencode plugin add @adlc/opencode-plugin
+```
+
+Alternatively, for local development, copy or symlink the plugin source directory (`plugin/adlc-opencode`) to your project-local `.opencode/` directory:
 
 ```sh
 mkdir -p .opencode/plugin/
-# Copy or symlink the integration code (link to plugin/ directory parent):
-ln -s /path/to/adlc/plugin/adlc-opencode/ .opencode/plugin/
+# Copy or symlink the integration code:
+ln -s /path/to/adlc/plugin/adlc-opencode/ .opencode/plugin/adlc-opencode
 ```
 
 Alternatively, register it globally in your `~/.config/opencode/opencode.json`:
@@ -71,9 +77,9 @@ Trigger these directly within the OpenCode TUI interface:
 | `/adlc-decompose` | P2 | Runs `adlc coldstart`, `adlc model-router`, and `adlc merge-forecast` to split the ticket and verify contract boundaries. Runs `adlc-runner run p2` to assert evidence. |
 | `/adlc-rail-write` | P3 | Invokes the `rail-writer` agent to write tests and stubs in an isolated context, and runs `adlc hollow-test` to verify tests fail on implementation deletion before freeze. Runs `adlc-runner run p3` to assert rail evidence exists. |
 | `/adlc-consensus-fix` | P4 | Runs consensus repair by fanning out candidate fixes to resolve a hard failing test (`adlc consensus-fix`). |
-| `/adlc-prosecute` | P5 | Runs the pre-merge hostile prosecution subagent loops (5 lenses and a verifier agent) for up to 5 rounds (convergence budget). Runs `adlc-runner run p5` to assert: (1) no findings remain, (2) tests pass, and (3) the rails-diff-empty proof exists in the manifest. |
+| `/adlc-prosecute` | P5 | Runs the pre-merge hostile prosecution subagent loops (5 lenses and a verifier agent). The loop runs until two consecutive passes are dry, up to the maximum convergence budget read from `.adlc/config.json`. Runs `adlc-runner run p5` to assert: (1) no findings remain, (2) tests pass, and (3) the rails-diff-empty proof exists in the manifest. |
 | `/adlc-accept` | P6 | Finalizes the Phase 6 human gate G2 (behavioral acceptance). Runs `adlc behavior-diff compare` to gather evidence, prompts the developer to verify the demo, and signs the manifest (`adlc-runner accept --ticket <id>`). |
-| `/adlc-distill` | P7 | Mines findings (`adlc lesson-foundry`, `adlc rejection-mining`) and runs `adlc-runner run p7` to assert distillation evidence. Post-merge Simplify pass is run in CI. |
+| `/adlc-distill` | P7 | Mines findings (`adlc lesson-foundry`, `adlc rejection-mining`) and runs `adlc-runner run p7` to assert distillation evidence. Post-merge Simplify pass is run in CI, or can be run locally on-demand via `/adlc-distill --simplify` if the repository lacks CI workflows. |
 | `/adlc-maintain` | C10/C12 | Run decay-driven checks: stale skills, hot files, and gate calibration (`adlc skill-rot`, `adlc model-ratchet`, and `adlc gate-fuzzing`). |
 
 ---
@@ -93,7 +99,7 @@ Pre-merge prosecution fanned out across five independent, fresh-context, single-
 4. **`diff`**: Compares implementation against the spec to verify all criteria are met.
 5. **`tests`**: Audits unit tests added by the builder during the build phase (ensuring they assert behavior instead of mocking reality).
 
-Findings are verified by a separate `prosecutor-verifier` reproducer agent. The loop executes for a maximum convergence budget of 5 rounds, stopping and escalating to the developer (spec or partition repair) if findings do not run dry.
+Findings are verified by a separate `prosecutor-verifier` reproducer agent. The loop executes until two consecutive passes run completely dry (zero verified findings) to certify coverage, up to the maximum convergence budget $N$ read dynamically from the workspace configuration (`.adlc/config.json`). If the budget is exhausted without drying out, the loop terminates and escalates to the developer to revise the specification or implementation partition.
 
 ---
 
@@ -111,6 +117,6 @@ OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling th
 #### Rail Gating Safety & Bypasses
 - **Fail-Closed Guarantee:** If a ticket declares rails, but the plugin encounters an operational error, the hook **fails closed (blocks editing)** to prevent bypassing verification. If no rails are declared, the hook behaves as a safe no-op.
 - **Isolated Prompting & Cascading:** Prompts from LLM-backed gates are queried in isolated, transient sub-contexts to avoid polluting the active chat session transcript. Grandchild prompts from the runner are bubbled up to the plugin using a structured cascade protocol with correlation IDs to prevent multiplexing collisions.
-- **Frontier-Free Scaling:** Local models that fail dynamic calibrations are scaled up to N-pass parallel checks (ADLC Appendix E2 sampling diversity) and require consensus thresholds, instead of being blocked.
+- **Frontier-Free Scaling:** Local models that fail dynamic calibrations are scaled up to N-pass parallel checks (ADLC Exploit E1 sampling diversity) and require consensus thresholds, instead of being blocked.
 - **Bypass hatch:** Setting `ADLC_RAILS_BYPASS=1` overrides the in-session hook, but requires human approval in the TUI (via the proposed plugin UI API) and logs the bypass event to `.adlc/manifest.jsonl` for audit compliance. Bypass is refused (fails closed) in headless sessions.
 - **CI/CD / Local Backstop:** Shell-based rail mutations are blocked at commit-time via GitHub workflows or the local pre-commit hook. The local hook is hardened to read `.adlc/tickets.json` from `HEAD` (`git show HEAD:.adlc/tickets.json`) to prevent staging commits that disable their own rails. The CI rails-guard workflow strictly reads `.adlc/tickets.json` from the trunk base ref (e.g., `git show origin/main:.adlc/tickets.json` or target base ref) to prevent self-modification bypass. Local hooks are best-effort and must be backstopped by branch protection in CI/CD.
