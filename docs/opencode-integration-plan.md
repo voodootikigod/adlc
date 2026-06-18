@@ -106,30 +106,36 @@ The hook executes with an **asymmetric fail-closed contract**:
   - It specifically denies edits to:
     1. Declared `rails` paths.
     2. The `.adlc/` directory (preventing editing of `tickets.json` or `manifest.jsonl`).
-    3. The canonical plugin root path and entire `.opencode/` directory (preventing modification of the plugin code, configs, commands, skills, or agents).
+    3. The canonical plugin root path and the entire `.opencode/` directory, including the `plugin/`, `command/`, `agent/`, and `skill/` subdirectories and the `config.json` configuration file (preventing builder agents from altering plugin behavior, commands, skills, or agents in-session to bypass verification).
     4. The `.git/` directory (preventing deletion or manipulation of hooks, except for initial setup during `/adlc-init` execution).
     5. The `.github/` and CI config directories (preventing editing of workflows like `ci/rails-guard.yml`).
 - **`apply_patch` Payload Parsing:** The helper parses patch payloads (inspecting unified diff markers) to identify target files and evaluate them against protected paths.
 - **OpenCode Fail-Closed Return:** If the hook determines an edit is blocked or encounters an operational error, the plugin catches it and returns a native OpenCode block payload (e.g. `{ allow: false, reason: "..." }`) rather than failing open. If running in a subprocess hook environment, it exits the subprocess with `exit 2`. Any hook crash or operational error while rails are declared **fails closed**.
 - **Auditable Bypass:** Setting `ADLC_RAILS_BYPASS=1` is only permitted if the environment variable is validated through a secure human-in-the-loop prompt in the TUI (via the plugin UI API). In non-interactive/headless runs (where no TUI is available), the bypass is **refused (fails closed)**.
 
-### 4.3. Keyless LLM-Gate Dispatch (The Bridge & Grandchild Cascading)
+### 4.3. Keyless LLM-Gate Dispatch (Two-Phase Bridge & Grandchild Cascading)
 
-The plugin implements a bridge function `runKeylessGate(toolName: string, args: string[])`:
-1. Spawns the CLI: `adlc <toolName> <args> --prompt-only`.
-2. Concurrently streams and drains the stdout stream of the child process. This avoids pipe buffer deadlocks.
-3. If the process remains open waiting for input, it captures the prompt from stdout.
-4. **Isolated Prompting (No Transcript Contamination):** To prevent polluting the active session's transcript and accelerating context rot (F3), the plugin invokes the prompt in an **isolated conversation sub-context** using the OpenCode API: `await context.client.prompt({ message: promptText, isolated: true })`.
-5. Writes the model's reply back to the child process's stdin.
-6. Propagates the final exit code:
-   - `exit 0` for pass, `exit 2` for fail.
+Because `@adlc/*` CLI tools comply with the `--prompt-only` execution contract, they print the generated prompt to `stdout` and **exit immediately with code 0** (rather than holding stdin open or waiting for interaction). To resolve this, the plugin bridge implements a **two-phase execution protocol**:
+
+#### Phase 1: Prompt Extraction
+1. **Spawn Extraction Process:** The bridge spawns the CLI command: `adlc <toolName> <args> --prompt-only`.
+2. **Capture and Drain Prompt:** The bridge concurrently streams and captures the prompt output from the child process's `stdout` to avoid buffer deadlocks.
+3. **Wait for Exit:** The bridge waits for the process to exit with code `0`. Stdin is never written to in this phase.
+4. **Isolated Model Invocation:** To prevent polluting the active session's transcript and accelerating context rot (F3), the bridge forwards the captured prompt text to OpenCode's active model client within a transient, isolated conversation sub-context:
+   `const completion = await context.client.prompt({ message: promptText, isolated: true });`
+
+#### Phase 2: Execution & Gating
+1. **Spawn Execution Process:** The bridge spawns the CLI tool *again* in execution mode (without the `--prompt-only` flag): `adlc <toolName> <args>`.
+2. **Provide Model Completion:** The bridge writes the `completion` string directly to the process's `stdin` (or supplies it via a temporary parameter file if specified by the tool) and closes `stdin` to signal completion of input.
+3. **Capture and Propagate Exit Code:** The bridge waits for the tool to complete and propagates the deterministic exit code:
+   - `exit 0` (Pass): The gate passes, and the execution is permitted.
+   - `exit 2` (Fail): The gate rejects, blocking the build or merge.
    - `exit 1` (Operational Error): Fails closed on all enforcing gates (P1 Interrogate, P3 Rail, P5 Prosecute) and fails open (logs warning) on advisory gates.
 
 #### Grandchild Process Cascading (`adlc-runner`):
-To enable keyless execution for the phase runner (`adlc-runner`), the runner is updated to support a `--prompt-only-cascade` flag:
-- When `adlc-runner run <phase>` is spawned, it forwards this flag to its fanned-out grandchildren processes.
-- If a grandchild outputs a prompt, the runner bubbles up the prompt request to the parent plugin process wrapped in a structured JSON envelope containing a correlation ID: `{"type": "prompt_request", "id": "grandchild-session-uuid", "prompt": "..."}`.
-- The parent plugin process intercepts this envelope, queries the model via the isolated context, and writes the response back to `adlc-runner`'s stdin using the correlation ID envelope: `{"type": "prompt_response", "id": "grandchild-session-uuid", "response": "..."}`. This correlation protocol prevents stdin/stdout multiplexing collisions during concurrent grandchild executions.
+To enable keyless execution for the phase runner (`adlc-runner`), the runner is updated to bubble up fanned-out grandchildren prompts in a structured two-phase manner:
+- **Phase 1 (Bubble):** When `adlc-runner run <phase>` spawns grandchildren, it passes the `--prompt-only` flag to them. If a grandchild outputs a prompt and exits `0`, the runner captures the prompt and bubbles it to the parent plugin process wrapped in a structured JSON envelope containing a correlation ID: `{"type": "prompt_request", "id": "grandchild-session-uuid", "prompt": "..."}`.
+- **Phase 2 (Inject):** The parent plugin process queries the model in an isolated context and writes the response back to `adlc-runner`'s `stdin`: `{"type": "prompt_response", "id": "grandchild-session-uuid", "response": "..."}`. The runner then re-spawns the grandchild in execution mode, supplying this response, and aggregates the resulting exit code. This correlation protocol ensures concurrent execution paths do not experience stdin/stdout multiplexing collisions.
 
 ---
 
@@ -138,11 +144,13 @@ To enable keyless execution for the phase runner (`adlc-runner`), the runner is 
 To prevent sycophancy (F2) and same-model self-review (Principle 3 / E4), the plugin isolates the active builder model from the gate models:
 
 - **Model Routing Configuration:** The plugin reads a configuration file `.adlc/config.json` (autogenerated on `/adlc-init` if missing) defining model routing tiers (frontier, mid, cheap).
-- **Dynamic Model Routing for Builders:** During Phase 2, `adlc-runner run p2` executes `model-router`, which writes the recommended model selection to a ticket-specific routing file (`.adlc/routing/<ticket-id>.json`). When OpenCode spawns the builder agent, the plugin intercepts the agent creation via the target `agent.resolve` resolver hook and dynamically sets the agent's model configuration (`model` property) to match the recommended tier.
-- **Frontier Isolation for Gates:** For critical gates requiring a frontier model (Phase 1 Interrogate, Phase 3 hollow-test, Phase 5 Prosecute), the plugin bridge intercepts `runKeylessGate` and requests the configured frontier model endpoint from OpenCode (e.g. `context.client.prompt({ message: promptText, model: config.frontierModel, isolated: true })`).
+- **Dynamic Model Routing for Builders (Proposed SDK Extension Specification):** During Phase 2, `adlc-runner run p2` executes `model-router`, which writes the recommended model selection to a ticket-specific routing file (`.adlc/routing/<ticket-id>.json`). When OpenCode spawns the builder agent, the plugin intercepts the agent creation via the proposed `agent.resolve` resolver hook interface and dynamically sets the agent's model configuration (`model` property) to match the recommended tier.
+- **Frontier Isolation for Gates (Proposed SDK Extension Specification):** For critical gates requiring a frontier model (Phase 1 Interrogate, Phase 3 hollow-test, Phase 5 Prosecute), the plugin bridge intercepts `runKeylessGate` and requests the configured frontier model endpoint from OpenCode via `context.client.prompt({ message: promptText, model: config.frontierModel, isolated: true })`.
 - **Frontier-Free Scaling via Dynamic Calibration:**
-  - If OpenCode's active model name does not match standard cloud provider routing schemas, the plugin executes a startup benchmark using the `review-calibration` tool to evaluate the active model's planted-bug recall.
-  - If the calibration recall score falls below the required threshold, **the gate continues to block**. Conforming to ADLC Appendix E2 (Search replaces insight), the plugin dynamically calculates the required $N$ parallel passes necessary to meet the target recall and activates **Multi-Pass Search Verification (N-Pass Loop-Until-Dry)**: it runs the gate prompt $N$ times in parallel (sampling diversity exploit, E1). The gate only passes if fanned-out candidates reach a consensus threshold (e.g., unanimous agreement) verifying correctness. The system warns the user that validation depth has been scaled up to N-passes to maintain gate recall on the local model, preserving the zero-key thesis.
+  - If the active model name does not match standard cloud provider routing schemas (e.g. running a local model via Ollama), the plugin runs a startup benchmark using `adlc review-calibration`. This tool plants synthetic bugs into the target codebase and checks if the local model detects them, yielding a planted-bug recall score $R$ (where $0 < R \le 1$).
+  - If the recall score $R$ falls below the required threshold for enforcing gates (e.g., $95\%$), the gate is not allowed to run in low-accuracy mode. Instead, conforming to ADLC Appendix E2 (Search replaces insight), the plugin dynamically calculates the required number of parallel sampling passes $N$ necessary to achieve the target detection probability $D = 0.95$ using the formula:
+    $$N = \left\lceil \frac{\ln(1 - D)}{\ln(1 - R)} \right\rceil$$
+  - The plugin then activates **Multi-Pass Search Verification (N-Pass Loop-Until-Dry)**: it runs the gate prompt $N$ times in parallel using high-temperature sampling diversity (E1). The gate only passes if the fanned-out runs reach consensus (e.g., unanimous agreement) verifying correctness. The system warns the user that validation depth has been scaled up to $N$ passes to maintain gate recall on the local model, preserving the zero-key thesis.
 
 ---
 

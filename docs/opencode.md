@@ -28,15 +28,15 @@ Copy or link the plugin files to your project-local `.opencode` directory:
 ```sh
 mkdir -p .opencode/plugin/
 # Copy or symlink the integration code (link to plugin/ directory parent):
-ln -s /path/to/adlc/plugins/adlc-opencode/ .opencode/plugin/
+ln -s /path/to/adlc/plugin/adlc-opencode/ .opencode/plugin/
 ```
 
 Alternatively, register it globally in your `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugins": [
-    "/path/to/adlc/plugins/adlc-opencode"
+  "plugin": [
+    "/path/to/adlc/plugin/adlc-opencode"
   ]
 }
 ```
