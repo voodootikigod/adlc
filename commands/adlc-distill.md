@@ -62,13 +62,15 @@ adlc lesson-foundry --prompt-only
      desired enhancement — until then, constrain it via the prompt above.)
 
      **Placement matters.** `.adlc/lessons/` is a scaffold staging area — it is
-     **not** on Claude Code's skill-discovery path, so a `SKILL.md` left there is
-     inert. A skill defense only becomes live once skill-mining's author step (or
-     `npx skills add`) installs it into the repo's skill directory (e.g. the
-     plugin/workspace `skills/` root). Only PR the `SKILL.md` defenses that survive
-     (verdict SHIP) **and have been placed in a discoverable skills directory**.
-     Lint-rule and spec-gap defenses do not go through skill-mining — PR them
-     directly from `.adlc/lessons/`.
+     **not** on the skill-discovery path, so a `SKILL.md` left there is inert. A
+     skill defense only becomes live once it is installed into a discoverable
+     skills directory. Do not hand-guess that path — let the **skills CLI** place
+     it (`npx skills add`, or skill-mining's author step, which targets the correct
+     location for the active harness), then **verify discovery** before PR (e.g.
+     the skill shows up in `/help`/skill list, or `npx skills` reports it
+     installed). Only PR the `SKILL.md` defenses that survive (verdict SHIP) **and**
+     are confirmed discoverable. Lint-rule and spec-gap defenses do not go through
+     skill-mining — PR them directly from `.adlc/lessons/`.
 
      This step is **keyless** (skill-mining is agentic — Claude is the agent, no
      API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
