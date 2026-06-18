@@ -69,13 +69,17 @@ adlc lesson-foundry --prompt-only
      2. **Only for a SHIP verdict, install it** so it becomes live. `.adlc/lessons/`
         is a staging area, **not** on the skill-discovery path — a `SKILL.md` left
         there is inert. The skills CLI expects a skill *directory*, so move the flat
-        file into `<name>/SKILL.md` and let the **skills CLI** place it (`npx skills
-        add`, or skill-mining's author step, which targets the correct location for
-        the active harness — don't hand-guess the path).
-     3. **Verify discovery, then PR** — confirm with a real skills-CLI verb (`npx
-        skills check`, or `npx skills find <name>`) that it resolves, then PR only
-        the installed, SHIP-verdict skill. Remove the leftover flat
-        `.adlc/lessons/<name>.SKILL.md` staging copy so it isn't committed twice.
+        file into `<name>/SKILL.md`, then let **skill-mining's author step** (or the
+        skills CLI) place it in the correct location for the active harness. Don't
+        hand-guess the path or the exact subcommand — run `npx skills --help` for
+        the install verb your CLI version uses; skill-mining's author step does this
+        for you.
+     3. **Verify by outcome, then PR** — the skill is installed correctly only when
+        the **agent can actually discover it** (it shows up in the harness's
+        available-skills list / can be invoked). Confirm that, not a specific CLI
+        string. Then PR only the installed, SHIP-verdict skill, and remove the
+        leftover flat `.adlc/lessons/<name>.SKILL.md` staging copy so it isn't
+        committed twice.
 
      (skill-mining today is repo-wide by design; a single-stub scoped mode is a
      desired enhancement — until then, constrain it via the prompt above.)
