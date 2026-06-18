@@ -55,27 +55,33 @@ adlc lesson-foundry --prompt-only
      containing a `SKILL.md`, so to install it you first move the flat file into
      its own subdir: `<name>/SKILL.md`.)
 
-     It runs:
-     - **dedup** against installed skills + the `skills.sh` registry (via its
-       `find-skills` subagent) → REUSE / EXTEND / BUILD / REJECT. If a maintained
-       public skill already covers it, install that instead of landing a duplicate.
-     - **Gate B** (artifact red-team): a fresh-context agent gets only your
-       `SKILL.md` and attempts a real repo task — proving the skill carries
-       specific commands/paths/invariants, not generic prose.
+     Validation reads the **file content** — Gate B hands a fresh agent the
+     `SKILL.md` text directly, so it works on the flat staged file and does **not**
+     require the skill to be installed/discoverable first. Lifecycle, in order:
+
+     1. **Validate the staged flat file** (`.adlc/lessons/<name>.SKILL.md`):
+        - **dedup** against installed skills + the `skills.sh` registry (via its
+          `find-skills` subagent) → REUSE / EXTEND / BUILD / REJECT. If a maintained
+          public skill already covers it, install that and drop the stub.
+        - **Gate B** (artifact red-team): a fresh-context agent gets only the
+          `SKILL.md` and attempts a real repo task → SHIP / FIX / REJECT, proving
+          the skill carries specific commands/paths/invariants, not generic prose.
+     2. **Only for a SHIP verdict, install it** so it becomes live. `.adlc/lessons/`
+        is a staging area, **not** on the skill-discovery path — a `SKILL.md` left
+        there is inert. The skills CLI expects a skill *directory*, so move the flat
+        file into `<name>/SKILL.md` and let the **skills CLI** place it (`npx skills
+        add`, or skill-mining's author step, which targets the correct location for
+        the active harness — don't hand-guess the path).
+     3. **Verify discovery, then PR** — confirm with a real skills-CLI verb (`npx
+        skills check`, or `npx skills find <name>`) that it resolves, then PR only
+        the installed, SHIP-verdict skill. Remove the leftover flat
+        `.adlc/lessons/<name>.SKILL.md` staging copy so it isn't committed twice.
 
      (skill-mining today is repo-wide by design; a single-stub scoped mode is a
      desired enhancement — until then, constrain it via the prompt above.)
 
-     **Placement matters.** `.adlc/lessons/` is a scaffold staging area — it is
-     **not** on the skill-discovery path, so a `SKILL.md` left there is inert. A
-     skill defense only becomes live once it is installed into a discoverable
-     skills directory. Do not hand-guess that path — let the **skills CLI** place
-     it (`npx skills add`, or skill-mining's author step, which targets the correct
-     location for the active harness), then **verify discovery** before PR with a
-     real skills-CLI verb (`npx skills check`, or `npx skills find <name>` to
-     confirm it resolves). Only PR the `SKILL.md` defenses that survive (verdict
-     SHIP) **and** are confirmed discoverable. Lint-rule and spec-gap defenses do
-     not go through skill-mining — PR them directly from `.adlc/lessons/`.
+     Lint-rule and spec-gap defenses do not go through skill-mining — PR them
+     directly from `.adlc/lessons/`.
 
      This step is **keyless** (skill-mining is agentic — Claude is the agent, no
      API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
