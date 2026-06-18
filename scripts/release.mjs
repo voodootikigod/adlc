@@ -8,7 +8,7 @@
 // temporary NPM_TOKEN for the bootstrap run. Every package carries
 // publishConfig.access=public, so no per-call --access is required.
 
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -24,17 +24,24 @@ if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
   process.exit(1);
 }
 
-// core publishes first because every CLI depends on it.
-const names = readdirSync(PKGS).filter((n) => n !== 'core');
-const order = ['core', ...names];
+// Publish order: core first (every CLI depends on it); the `cli` umbrella last
+// (it depends on every other CLI). Everything else in between.
+const rest = readdirSync(PKGS).filter((n) => n !== 'core' && n !== 'cli');
+const order = ['core', ...rest, 'cli'].filter((n) => existsSync(join(PKGS, n, 'package.json')));
 
-// 1. Set version everywhere; repin the @adlc/core dependency to match (lockstep).
+// 1. Set version everywhere; repin EVERY @adlc/* dependency to match (lockstep).
+//    Not just @adlc/core — the `cli` umbrella pins all 19 siblings, and those
+//    pins must move in lockstep too or a release ships a broken dependency set.
 for (const name of order) {
   const pj = join(PKGS, name, 'package.json');
   const pkg = JSON.parse(readFileSync(pj, 'utf8'));
   pkg.version = version;
-  if (pkg.dependencies?.['@adlc/core']) {
-    pkg.dependencies['@adlc/core'] = version;
+  for (const depField of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    const deps = pkg[depField];
+    if (!deps) continue;
+    for (const dep of Object.keys(deps)) {
+      if (dep.startsWith('@adlc/')) deps[dep] = version;
+    }
   }
   writeFileSync(pj, JSON.stringify(pkg, null, 2) + '\n');
   console.log(`set ${pkg.name}@${version}`);

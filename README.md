@@ -23,7 +23,7 @@ full thesis in [ADLC.md](./ADLC.md).
 
 Each tool is a small CLI that enforces one machine-checkable gate. They share a runtime
 convention (`.adlc/` for tickets, ledgers, and gate evidence) and a common contract
-(see [CONVENTIONS.md](./CONVENTIONS.md)) so 20 independently built tools feel like one
+(see [CONVENTIONS.md](./CONVENTIONS.md)) so 21 independently built tools feel like one
 product.
 
 ## Install
@@ -37,6 +37,10 @@ npm install -g @adlc/spec-lint
 
 # or run without installing
 npx @adlc/spec-lint <spec.md>
+
+# or install the whole suite behind one `adlc <tool>` command
+npm install -g @adlc/cli
+adlc spec-lint <spec.md>
 ```
 
 ## The toolkit
@@ -47,11 +51,27 @@ npx @adlc/spec-lint <spec.md>
 | **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) |
 | **Review evidence & calibration** | [`behavior-diff`](./packages/behavior-diff) · [`gate-manifest`](./packages/gate-manifest) · [`hollow-test`](./packages/hollow-test) · [`review-calibration`](./packages/review-calibration) · [`model-ratchet`](./packages/model-ratchet) · [`gate-fuzzing`](./packages/gate-fuzzing) |
 | **Compounding defenses** | [`lesson-foundry`](./packages/lesson-foundry) · [`rejection-mining`](./packages/rejection-mining) · [`skill-rot`](./packages/skill-rot) |
-| **Shared foundation** | [`@adlc/core`](./packages/core) |
+| **Shared foundation** | [`@adlc/core`](./packages/core) · [`@adlc/cli`](./packages/cli) |
 
 See [docs/package-reference.md](./docs/package-reference.md) for binaries, command forms,
 and per-package detail, and [docs/toolkit.md](./docs/toolkit.md) for how the packages fit
 the ADLC flow.
+
+## Use it in Claude Code
+
+This repo is also a Claude Code plugin — it makes the whole lifecycle usable from
+inside the editor (phase-routing skill, ticket/distill/maintain commands, a
+prosecutor subagent, and hooks that fire the gates automatically), with no API
+keys (Claude is the model via `--prompt-only`):
+
+```sh
+npm install -g @adlc/cli
+/plugin marketplace add voodootikigod/adlc
+/plugin install adlc@adlc
+/adlc-init
+```
+
+See **[docs/claude-code.md](./docs/claude-code.md)** for the full adoption guide.
 
 ## Design principles
 
@@ -79,6 +99,7 @@ Requires **Node.js 18 or newer**.
 ## Documentation
 
 - [ADLC.md](./ADLC.md) — the full lifecycle thesis and flaw inventory.
+- [docs/claude-code.md](./docs/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
 - [docs/](./docs/README.md) — toolkit guide, package reference, and the narrative essays.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the contract every package follows.
 

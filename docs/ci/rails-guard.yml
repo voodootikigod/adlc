@@ -1,0 +1,84 @@
+# ADLC rail-freeze CI backstop — copy into your repo as
+# .github/workflows/adlc-rails-guard.yml
+#
+# This is the unbypassable commit-time gate the in-session PreToolUse rail hook
+# relies on. The hook blocks Edit/Write/MultiEdit and common Bash writes to
+# frozen rails, but a shell write form it does not recognize (node -e, python,
+# cp, perl -i, …) still lands in the PR diff — this job rejects that PR.
+#
+# It reads every rail glob declared in .adlc/tickets.json and runs the
+# diff-based `adlc rails-guard` gate against the PR base. It no-ops when no rails
+# are declared. Make this a required check in branch protection.
+
+name: ADLC Rails Guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rails-guard:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history so the diff base resolves
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Install the ADLC toolkit
+        # Pinned to an exact, audited version (not mutable `@latest`) on a runner
+        # with repo access. Bump deliberately after reviewing the release.
+        # `--ignore-scripts` blocks install-time scripts; the CLIs are zero-dep.
+        run: npm install -g --ignore-scripts @adlc/cli@1.0.2
+
+      - name: Fetch base ref
+        # Pass the ref via env (not direct ${{ }} shell interpolation), and use an
+        # explicit refspec so the origin/<base> REMOTE-TRACKING ref is created —
+        # actions/checkout's narrow fetch config does not create it otherwise, and
+        # the gate resolves `origin/<base>`.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Rail-freeze gate
+        run: |
+          node -e '
+            const { spawnSync } = require("child_process");
+            const base = "origin/" + (process.env.BASE_REF || "main");
+            const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
+            // Confirm the base REF resolves first — git show returns non-zero for
+            // both "bad ref" and "file absent", and conflating them would fail open.
+            const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
+            if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
+            // Distinguish a genuinely absent file from an operational git error:
+            // ls-tree non-zero = operational (fail closed); empty = file absent
+            // (nothing frozen). Read the TRUSTED base file, not the PR working tree.
+            const ls = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], { encoding: "utf8" });
+            if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
+            if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + base + " — nothing frozen."); process.exit(0); }
+            const show = spawnSync("git", ["show", base + ":.adlc/tickets.json"], { encoding: "utf8" });
+            if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
+            let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
+            if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.tickets)) fail("base tickets not in { tickets: [...] } shape");
+            const rails = [];
+            for (const t of d.tickets) {
+              if (!t || typeof t !== "object" || Array.isArray(t)) fail("malformed base ticket entry");
+              if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array base rails");
+              for (const r of t.rails ?? []) { if (typeof r !== "string") fail("non-string base rail"); rails.push(r); }
+            }
+            const u = [...new Set(rails)];
+            if (!u.length) { console.log("no rails declared at base — nothing frozen."); process.exit(0); }
+            u.push(".adlc/tickets.json"); // trust root is frozen once rails exist
+            const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
+            const res = spawnSync("adlc", argv, { stdio: "inherit" });
+            if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
+            process.exit(typeof res.status === "number" ? res.status : 1);
+          '
+        env:
+          BASE_REF: ${{ github.base_ref }}
