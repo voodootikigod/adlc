@@ -42,7 +42,15 @@ adlc lesson-foundry --prompt-only
      ```
      npx skills add voodootikigod/skill-mining   # once per machine
      ```
-     Then ask it to validate the scaffolded skill — it runs:
+     Then hand it the scaffolded stub with a **scoped** request — point it at the
+     specific staged file rather than asking for a full-repo mine, e.g.:
+
+     > "Validate the scaffolded skill at `.adlc/lessons/<name>/SKILL.md`: dedup it
+     > against installed skills and the skills.sh registry, then run Gate B on it.
+     > Report REUSE/EXTEND/BUILD/REJECT and SHIP/FIX/REJECT — do not mine the rest
+     > of the repo."
+
+     It runs:
      - **dedup** against installed skills + the `skills.sh` registry (via its
        `find-skills` subagent) → REUSE / EXTEND / BUILD / REJECT. If a maintained
        public skill already covers it, install that instead of landing a duplicate.
@@ -50,8 +58,17 @@ adlc lesson-foundry --prompt-only
        `SKILL.md` and attempts a real repo task — proving the skill carries
        specific commands/paths/invariants, not generic prose.
 
-     Only PR the `SKILL.md` defenses that survive (verdict SHIP). Lint-rule and
-     spec-gap defenses do not go through skill-mining — PR them directly.
+     (skill-mining today is repo-wide by design; a single-stub scoped mode is a
+     desired enhancement — until then, constrain it via the prompt above.)
+
+     **Placement matters.** `.adlc/lessons/` is a scaffold staging area — it is
+     **not** on Claude Code's skill-discovery path, so a `SKILL.md` left there is
+     inert. A skill defense only becomes live once skill-mining's author step (or
+     `npx skills add`) installs it into the repo's skill directory (e.g. the
+     plugin/workspace `skills/` root). Only PR the `SKILL.md` defenses that survive
+     (verdict SHIP) **and have been placed in a discoverable skills directory**.
+     Lint-rule and spec-gap defenses do not go through skill-mining — PR them
+     directly from `.adlc/lessons/`.
 
      This step is **keyless** (skill-mining is agentic — Claude is the agent, no
      API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
