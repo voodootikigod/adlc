@@ -204,7 +204,7 @@ Today the Claude hook (`hooks/adlc-hook.mjs`) and the Codex hook
 of the same rails logic**. With N harnesses that is N drifting copies of
 security-critical code. Factor the harness-agnostic decision logic (rails
 parsing, the bash-write lexer, the fail-closed contract) into a **shared library**
-(`@adlc/core` or a new `@adlc/hook-core`). Each harness plugin then keeps only the
+(`@adlc/core`). Each harness plugin then keeps only the
 thin native binding: *read this harness's hook payload → call the shared logic →
 emit this harness's response format.* One source of truth for the dangerous
 logic, N thin bindings.
