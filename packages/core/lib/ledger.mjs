@@ -94,6 +94,22 @@ export function sha256(content) {
   return createHash('sha256').update(content).digest('hex');
 }
 
+function canonicalizeJsonValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalizeJsonValue(value[key])])
+    );
+  }
+  return value;
+}
+
+export function canonicalJson(value) {
+  return JSON.stringify(canonicalizeJsonValue(value));
+}
+
 /** Hash a list of files → { path: sha256 }. Missing files hash to null. */
 export function hashFiles(paths, readFile = (p) => readFileSync(p)) {
   const out = {};

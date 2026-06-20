@@ -21,17 +21,23 @@
     "core"
   ],
   "main": "index.mjs",
+  "types": "index.d.ts",
   "exports": {
-    ".": "./index.mjs",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
     "./llm": "./lib/llm.mjs",
     "./git": "./lib/git.mjs",
     "./cli": "./lib/cli.mjs",
     "./ledger": "./lib/ledger.mjs",
+    "./revision": "./lib/revision.mjs",
     "./tickets": "./lib/tickets.mjs",
     "./mutate": "./lib/mutate.mjs"
   },
   "files": [
     "index.mjs",
+    "index.d.ts",
     "lib/",
     "README.md",
     "LICENSE"

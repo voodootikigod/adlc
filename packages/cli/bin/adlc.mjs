@@ -1,18 +1,10 @@
 #!/usr/bin/env node
-// adlc — umbrella dispatcher for the @adlc suite.
-// Thin entry: classify the first arg, then route to a tool or to built-in
-// help/version. Everything after the tool name is forwarded untouched.
-//
-//   adlc <tool> [args...]   run a tool (exit code mirrors the tool: 0/1/2)
-//   adlc --help | help      list tools
-//   adlc --version          print dispatcher version
-
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
-import { dispatch } from '../lib/dispatch.mjs';
+import { fileURLToPath } from 'node:url';
+import { dispatch, dispatchRunner } from '../lib/dispatch.mjs';
 import { renderHelp } from '../lib/help.mjs';
+import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -28,15 +20,20 @@ function version() {
 const argv = process.argv.slice(2);
 const first = argv[0];
 
-// Built-ins. Only a BARE --help/--version is the dispatcher's; once a tool name
-// is seen, every following flag (including --help) belongs to the tool.
 if (!first || first === '--help' || first === '-h' || first === 'help') {
   console.log(renderHelp(version()));
   process.exit(0);
 }
+
 if (first === '--version' || first === '-v') {
   console.log(version());
   process.exit(0);
+}
+
+if (first === 'run' || first === 'accept') {
+  const { code, error } = dispatchRunner(argv);
+  if (error) console.error(`error: ${error}`);
+  process.exit(code);
 }
 
 if (!isTool(first)) {

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(apply_patch|functions\\.apply_patch|write|Write|edit|Edit|multi_edit|multiedit|MultiEdit|Bash|bash|Shell|shell|exec|exec_command|run_command|functions\\.exec_command)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-rails-guard.mjs\"",
+            "timeout": 10,
+            "statusMessage": "ADLC: Checking frozen rails"
+          }
+        ]
+      }
+    ]
+  }
+}
