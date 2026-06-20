@@ -30,3 +30,34 @@ jobs:
 
       - name: Test
         run: npm test
+
+  rails-guard:
+    # The unbypassable commit-time backstop for the in-session rail hook: rejects
+    # a PR whose diff touches a frozen rail, including via shell write forms the
+    # hook does not recognize. No-ops when no rails are declared.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history so the diff base resolves
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm install
+
+      - name: Fetch base ref
+        # env (not direct interpolation) + explicit refspec so origin/<base> is
+        # created as a remote-tracking ref the gate can resolve.
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Rail-freeze gate
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: node scripts/rails-guard-ci.mjs "origin/$BASE_REF"

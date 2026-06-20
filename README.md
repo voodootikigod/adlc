@@ -23,7 +23,7 @@ full thesis in [ADLC.md](./ADLC.md).
 
 Each tool is a small CLI that enforces one machine-checkable gate. They share a runtime
 convention (`.adlc/` for tickets, ledgers, and gate evidence) and a common contract
-(see [CONVENTIONS.md](./CONVENTIONS.md)) so 20 independently built tools feel like one
+(see [CONVENTIONS.md](./CONVENTIONS.md)) so 21 independently built tools feel like one
 product.
 
 ## Install
@@ -56,6 +56,22 @@ See [docs/package-reference.md](./docs/package-reference.md) for binaries, comma
 and per-package detail, and [docs/toolkit.md](./docs/toolkit.md) for how the packages fit
 the ADLC flow.
 
+## Use it in Claude Code
+
+This repo is also a Claude Code plugin — it makes the whole lifecycle usable from
+inside the editor (phase-routing skill, ticket/distill/maintain commands, a
+prosecutor subagent, and hooks that fire the gates automatically), with no API
+keys (Claude is the model via `--prompt-only`):
+
+```sh
+npm install -g @adlc/cli
+/plugin marketplace add voodootikigod/adlc
+/plugin install adlc@adlc
+/adlc-init
+```
+
+See **[docs/claude-code.md](./docs/claude-code.md)** for the full adoption guide.
+
 ## Design principles
 
 Every tool follows the same contract ([CONVENTIONS.md](./CONVENTIONS.md)):
@@ -82,6 +98,8 @@ Requires **Node.js 18 or newer**.
 ## Documentation
 
 - [ADLC.md](./ADLC.md) — the full lifecycle thesis and flaw inventory.
+- [docs/claude-code.md](./docs/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
+- [docs/codex-integration.md](./docs/codex-integration.md) — native Codex integration guide.
 - [docs/](./docs/README.md) — toolkit guide, package reference, ADRs, and narrative essays.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the contract every package follows.
 
