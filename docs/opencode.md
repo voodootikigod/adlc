@@ -14,7 +14,13 @@ Following **Option D (separate, concern-focused bins)** from the Command Reconci
 ## Install
 
 ### 1. Install the ADLC CLI Tools
-The plugin needs both the ADLC dispatcher and runner binaries globally resolvable in your PATH:
+The plugin needs both the ADLC dispatcher and runner binaries globally resolvable in your PATH. You can install the complete tool suite convenience package (L2):
+
+```sh
+npm install -g @adlc/all
+```
+
+Alternatively, you can install the dispatcher and runner packages separately:
 
 ```sh
 npm install -g @adlc/cli
@@ -81,7 +87,7 @@ Trigger these directly within the OpenCode TUI interface:
 | `/adlc-rail-write` | P3 | Invokes the `rail-writer` agent to write tests and stubs in an isolated context, and runs `adlc hollow-test` to verify tests fail on implementation deletion before freeze (locked to the `rail-writer` agent context to defend creator/critic isolation; if harness APIs prevent dynamic agent identity verification in-session, validation defaults to `hollow-test` + post-build manifest auditing). Runs `adlc-runner run p3` to assert rail evidence exists. |
 | `/adlc-consensus-fix` | P4 | Runs consensus repair by fanning out candidate fixes to resolve a hard failing test (`adlc consensus-fix`). |
 | `/adlc-prosecute` | P5 | Verifies the build gate (`adlc-runner run p4`). Triggers `adlc review-calibration` on model change ([ADLC-C8]). **Bounded run runs prosecute-lite**: 2 lenses (correctness and diff) for exactly 1 pass to limit friction. **Substantial/Architectural runs full prosecution**: 5 lenses fanned out and looping until 2 consecutive passes run dry, up to $R_{\text{max}}$ rounds. Runs `adlc-runner run p5` to assert evidence. |
-| `/adlc-accept` | P6 | Finalizes the Phase 6 human gate Human Gate 2 (behavioral acceptance). Runs `adlc behavior-diff compare` to gather evidence, prompts the developer to verify the demo, and signs the manifest (`adlc-runner accept --ticket <id>`). Trivial tickets skip Human Gate 2 entirely. |
+| `/adlc-accept` | P6 | Finalizes the Phase 6 human gate Human Gate 2 (behavioral acceptance). Runs `adlc behavior-diff compare` to gather evidence, prompts the developer to verify the demo, and signs the manifest (`adlc-runner accept --ticket <id>`). Trivial tickets also route through P6, requiring the developer to execute `/adlc-accept` to sign the change before merge. |
 | `/adlc-distill` | P7 | Mines findings (`adlc lesson-foundry`, `adlc rejection-mining`) and runs `adlc-runner run p7` to assert distillation evidence. Post-merge Simplify runs in CI; local `/adlc-distill --simplify` runs locally on-demand, temporarily re-locking and freezing the target completed ticket's rail paths during execution to preserve ADLC P7 invariants. |
 | `/adlc-maintain` | C10/C12 | Run safe decay-driven checks locally: stale skills and model-ratchet (`adlc skill-rot` and `adlc model-ratchet`). `adlc gate-fuzzing` runs strictly in CI/CD or VM sandboxed environments to prevent unsandboxed code execution on dev hosts (H3). |
 
@@ -114,7 +120,7 @@ OpenCode runs the plugin in-process inside its Bun JavaScript engine, calling th
 | --- | --- | --- | --- |
 | **preflight** | `session.created` | Advisory | Warns the user if Node/Bun runtimes, git trees, or providers are misconfigured (environment determinism check, [ADLC Appendix F / D2]). |
 | **rails-guard** | `tool.execute.before` | **Enforcing** (Requires SDK support; else advisory + CI backstop) | Intercepts structured editing tools using default-intercept (gates all tools with path parameters, excluding safe read-only tools like `read`, `view`, `glob`, `search`, `grep`, or custom read tools declared in `.opencode/config.json`'s `allowedReadTools`, L1). Denies edits to paths declared as `rails`. During build sessions, pending rails are blocked entirely; pending rails can only be written during a dedicated `/adlc-rail-write` invocation state to defend creator/critic isolation ([ADLC Principle 5]). Once Phase 3 is asserted, rails transition to Frozen (fully blocked). Locks `.adlc/`, `.opencode/`, `.git/`, `.github/`, and `tickets.json` files, parses patches, and scans for unauthorized skips/suppressions (Goodhart defense). Hook strictly returns structured block payloads `{ allow: false, reason: "..." }` rather than throwing exceptions to ensure deterministic gating (L5). |
-| **flail-detection** | `tool.execute.after` | **Enforcing** (Requires SDK support; else advisory) | (Proposed SDK Extension Specification). Scans outputs for flailing. Strike 1: terminates builder subagent, stashes uncommitted changes safely (scoped using `git stash push --pathspec <ticket.domains>` to target only the active ticket's declared file domain, protecting unrelated changes, L3), appends logs to `.adlc/tickets.json` history, and restarts builder. Strike 2: terminates builder, stashes staged work, and escalates ticket back to Phase 2 (Decompose) for ticket partition repair. |
+| **flail-detection** | `tool.execute.after` | **Enforcing** (Requires SDK support; else advisory) | (Proposed SDK Extension Specification). Scans outputs for flailing. Strike 1: terminates builder subagent, stashes uncommitted changes safely (scoped using `git stash push -- <ticket.domains>...` to target only the active ticket's declared file domain, protecting unrelated changes, L1/L3), appends logs to `.adlc/tickets.json` history, and restarts builder. Strike 2: terminates builder, stashes staged work, and escalates ticket back to Phase 2 (Decompose) for ticket partition repair (or escalates directly to the human developer to manually decompose or revise the spec if the ticket is Bounded/Trivial and skipped Phase 2, M2). |
 | **manifest-audit** | `session.ended` | Advisory | Runs `gate-manifest verify` to confirm the integrity of the append-only evidence chain on session close. |
 
 #### Rail Gating Safety & Bypasses
