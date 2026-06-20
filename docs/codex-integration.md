@@ -1,91 +1,145 @@
 # Codex Integration
 
-This repository ships ADLC as deterministic CLIs first and a Codex plugin second.
-Codex skills should guide the workflow; ADLC CLIs and `.adlc/manifest.jsonl` decide
-whether a phase passes.
+This page is the landing doc for the Codex-native ADLC surface. It explains how to
+install it, how to use it, and where the current implementation still falls short of the
+formal ADLC doctrine.
 
-The Codex-native integration plan is recorded in
-[ADR 0001](./adr/0001-codex-native-adlc-integration.md).
+The integration is described in more detail in [ADR 0001](./adr/0001-codex-native-adlc-integration.md).
 
-## Local marketplace status
+## Install
 
-The offline smoke test validates the local marketplace entry, plugin manifest, skill
-sentinels, and standalone hook:
+Local verification:
 
 ```sh
 node scripts/codex-install-smoke.mjs .
 ```
 
-The actual Codex install commands are planned but unsupported until an isolated
-`CODEX_HOME` transcript proves Codex accepts the marketplace and plugin schema without
-mutating the real `~/.codex`:
+That smoke test validates the local marketplace entry, plugin manifest, bundled hooks,
+and skill sentinels. It does not run `codex` or exercise the rail hook.
+
+Maintainer-only install path:
+
+> Run this only in a disposable environment. It uses `ADLC_CODEX_LIVE_INSTALL=1` to
+> exercise the isolated install path and verify the plugin, hooks, and skills.
 
 ```sh
-codex plugin marketplace add .
-codex plugin add adlc-codex --marketplace adlc
+ADLC_CODEX_LIVE_INSTALL=1 node scripts/codex-install-smoke.mjs .
 ```
 
-Git-backed install is planned but unsupported until sparse payload proof is recorded.
+There is no published-package fallback in this checkout yet.
+Out-of-repo invocation is currently unsupported in this doc.
 
-## No-install CLI fallback
+Git-backed marketplace install is not yet supported.
 
-Use the dispatcher outside this repository:
+## Usage
+
+Use `adlc` as the stable public prefix. The dispatcher routes to the tool packages and
+keeps the command surface consistent across Codex skills, hooks, CI, and humans.
+
+In this checkout, bare `adlc` resolves to `node packages/cli/bin/adlc.mjs`. Outside this
+checkout, there is no supported invocation path documented yet.
+
+Example usage in this checkout:
 
 ```sh
-npx @adlc/cli@<ADLC_CLI_VERSION> spec-lint spec.md --json
-npx @adlc/cli@<ADLC_CLI_VERSION> rails-guard --ticket T1 --tickets .adlc/tickets.json --record --json
+node packages/cli/bin/adlc.mjs --help
+node packages/cli/bin/adlc.mjs spec-lint spec.md --json
+node packages/cli/bin/adlc.mjs run p5 --ticket T1 --dir .adlc --json
+node packages/cli/bin/adlc.mjs accept --ticket T1 --packet .adlc/packet.json --before .adlc/before.json --after .adlc/after.json --dir .adlc --json
+node packages/cli/bin/adlc.mjs rails-guard --ticket T1 --tickets .adlc/tickets.json --record --json
 ```
 
-Inside this repository, prefer the workspace-linked `adlc <tool>` dispatcher.
+These are templates. They require an existing `spec.md`, a populated `.adlc/` ticket set,
+and recorded evidence for the `T1` examples.
 
-## Strict ADLC status
+Typical flow:
 
-- P0-P4 and P7 have strong deterministic coverage.
-- P5 records reviewer-produced evidence; `adlc prosecute` does not run the reviewer.
-  Its transcript must name the ticket and reviewed revision that will be recorded, and
-  its review packet must hash the prompt and reviewed input artifacts.
-- P6 strict mode requires ticket- and revision-scoped P5 completion evidence plus a
-  behavior acceptance packet. `adlc accept` carries forward the recorded P5 revision by
-  default so behavior artifacts created after P5 do not change the reviewed target.
+1. Run `adlc preflight` before fan-out.
+2. Shape the work with `adlc spec-lint`, `adlc premortem`, and `adlc parallax`.
+3. Decompose with `adlc coldstart`, `adlc merge-forecast`, and `adlc model-router`.
+4. Build rails with `adlc hollow-test`, `adlc rails-guard`, and `adlc flail-detector`.
+5. Prosecute with `adlc prosecute`, then record behavior evidence with `adlc accept`.
+6. Distill repeated findings with `adlc lesson-foundry`, `adlc rejection-mining`, and
+   `adlc skill-rot`.
 
-## Core commands
-
-For normal git worktree use, do not pass `--revision`; P5 and P6 will use the current
-content fingerprint and fail closed if reviewed content changes before P6. The transcript
-referenced by the P5 input must include the ticket id and the resolved `git-worktree:<hash>`
-revision. `adlc prosecute` excludes that transcript path from the fingerprint so the
-binding is achievable for in-repo transcripts. The P5 input must also include
-`review_packet.prompt`, `review_packet.prompt_hash`, `review_packet.inputs`,
-`review_packet.inputs_hash`, and `review_packet.clean_worktree`.
-
-P3, P4, P5, and P6 phase assertions are ticket-scoped. Explicit `--revision` on P5/P6 is
-an offline selector for recorded manifest and artifact evidence; it does not compare
-against the live git worktree.
+Phase-scoped assertions that matter for the formal lifecycle:
 
 ```sh
-adlc prosecute --input .adlc/p5-passes.json --ticket T1 --dir .adlc --json
+adlc run p3 --ticket T1 --dir .adlc --json
+adlc run p4 --ticket T1 --dir .adlc --json
 adlc run p5 --ticket T1 --dir .adlc --json
-adlc accept --ticket T1 --packet .adlc/packet.json --before .adlc/before.json --after .adlc/after.json --dir .adlc --json
 adlc run p6 --ticket T1 --dir .adlc --json
 ```
 
-P6 packet and snapshot paths inside the worktree must live under `.adlc/` or
-`.omo/evidence/`, so they cannot be mistaken for reviewed source files.
+Notes:
 
-The bundled `docs/examples/p5-passes.json` fixture is pinned to
-`docs-example-revision`; use `--revision docs-example-revision` only when exercising that
-static fixture outside the git-worktree staleness check.
+- `p3`, `p4`, `p5`, and `p6` require `--ticket`.
+- `p5` and `p6` use the current git worktree fingerprint unless `--revision` is supplied.
+- Without `--revision`, `p5` and `p6` fail closed if reviewed content changes before
+  `p6` completes.
+- Explicit `--revision` is an offline selector for recorded evidence, not a live worktree
+  comparison.
+- `adlc prosecute` records reviewer-produced evidence; it does not run the reviewer.
+- `adlc accept` records the behavior-diff packet and snapshot evidence for P6.
 
-## P4 rail hook
+Bundled P5 fixture:
 
-The Codex hook is assistive only. It activates only when:
+- `docs/examples/p5-passes.json` is pinned to `docs-example-revision`.
+- When you use that fixture, keep `--revision docs-example-revision` on the prosecution
+  command so the recorded evidence matches the fixture's reviewed revision.
+- Requires a `.adlc/tickets.json` that defines ticket `T1`.
+- Example:
 
 ```sh
-ADLC_P4_ENFORCEMENT=1
+adlc prosecute --input docs/examples/p5-passes.json --ticket T1 --revision docs-example-revision --dir .adlc --json
 ```
 
-It resolves the active ticket from `ADLC_TICKET`, with `.adlc/current-ticket.json` as a
-local fallback. The bundled `PreToolUse` hook covers structured edit tools and common
-shell write forms; mutating shell payloads fail closed when target paths cannot be
-identified, when they change cwd, or when they rely on shell expansion. `adlc rails-guard`
-remains the deterministic proof after shell-capable steps.
+Evidence boundaries that stay part of the formal map:
+
+- P6 packet and snapshot artifacts must live under `.adlc/` or `.omo/evidence/`, so
+  they are not confused with reviewed source files.
+- `review_packet` requires `prompt`, `prompt_hash`, `inputs`, `inputs_hash`, and
+  `clean_worktree` fields when prosecution evidence is asserted.
+- The P4 rail hook fails closed on mutating shell payloads; it is an enforcement aid, not
+  a replacement for `rails-guard`.
+
+> Warning: The maintainer-only live path gated by `ADLC_CODEX_LIVE_INSTALL=1` runs in
+> throwaway `CODEX_HOME`, `HOME`, and XDG roots under `/tmp`. Use it as a maintainer
+> verification step in a disposable environment.
+
+There is no user-facing end-to-end install verification users can trust yet. The default
+`node scripts/codex-install-smoke.mjs .` path does not mutate `~/.codex` or exercise the
+rail hook. The same script has a maintainer-only live path gated by
+`ADLC_CODEX_LIVE_INSTALL=1`.
+
+## Formal ADLC Coverage
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| P0 | Strong | `adlc preflight` and the router skill provide the deterministic startup gate. |
+| P1 | Strong | `adlc spec-lint` and `adlc premortem` force executable acceptance criteria. |
+| P2 | Strong | `adlc coldstart`, `adlc merge-forecast`, and `adlc model-router` cover ticket shaping. |
+| P3 | Strong | `adlc rails-guard`, `adlc hollow-test`, and the rail hook protect frozen rails. |
+| P4 | Strong | Ticket-scoped rail assertions and the hook give deterministic build supervision. |
+| P5 | Partial | Review evidence is machine-checkable, but there is still no first-party deterministic prosecution orchestrator that fans out lenses and loops until dry automatically. |
+| P6 | Conditional | P6 is strong when backed by valid P5 evidence and a matching acceptance packet. |
+| P7 | Strong | `adlc lesson-foundry`, `adlc rejection-mining`, `adlc skill-rot`, and `adlc model-ratchet` support maintenance. |
+
+## Gaps
+
+Current gaps relative to the formal ADLC doctrine:
+
+1. P5 is still not fully automated. The repo can record and assert prosecution evidence, but
+   the formal orchestration loop for fan-out, finding verification, and dry-pass convergence
+   is not yet a single deterministic first-party gate.
+2. Git-backed sparse marketplace install remains unsupported until payload proof is
+   recorded.
+3. Codex hooks assist P4 rail protection, but they do not replace `rails-guard` or the
+   repository's other deterministic checks.
+
+## Boundary
+
+- `.adlc/` is the runtime state area for tickets, manifests, and gate evidence.
+- `.omo/` is for Codex planning and operator artifacts.
+- The docs in this directory are the canonical high-level map; package READMEs remain the
+  source of truth for exact flags, schemas, and exit codes.
