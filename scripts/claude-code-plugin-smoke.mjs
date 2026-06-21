@@ -84,9 +84,11 @@ const hookSource = readFileSync(hookPath, 'utf8');
 const strippedHookSource = hookSource
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/\/\/[^\n]*/g, '');
-// Detect static imports (from '@adlc/'), CJS require(), and dynamic import() of @adlc/* packages.
+// Detect all forms of @adlc/* imports: static (with or without from clause),
+// side-effect (import '@adlc/...'), CJS require(), and dynamic import().
 if (
   /from\s+['"]@adlc\//.test(strippedHookSource) ||
+  /import\s+['"]@adlc\//.test(strippedHookSource) ||
   /require\s*\(\s*['"]@adlc\//.test(strippedHookSource) ||
   /import\s*\(\s*['"]@adlc\//.test(strippedHookSource)
 ) {
