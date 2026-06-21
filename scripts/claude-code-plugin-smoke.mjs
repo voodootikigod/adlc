@@ -105,10 +105,23 @@ for (const cmd of requiredCommands) {
 // --- agents ---
 if (!existsSync(join(repo, 'agents/prosecutor.md'))) fail('missing agents/prosecutor.md');
 
-// --- skills/adlc/SKILL.md + sentinel ---
+// --- skills/adlc/SKILL.md + frontmatter + sentinel ---
 const skillPath = join(repo, 'skills/adlc/SKILL.md');
 if (!existsSync(skillPath)) fail('missing skills/adlc/SKILL.md');
 const skillSource = readFileSync(skillPath, 'utf8');
+// Verify YAML frontmatter is well-formed: starts with ---, has a closing ---
+// before the body, and contains required metadata fields.
+const skillLines = skillSource.split('\n');
+if (skillLines[0]?.trim() !== '---') {
+  fail('skills/adlc/SKILL.md must begin with a YAML frontmatter opening separator (---)');
+}
+const closingIdx = skillLines.slice(1).findIndex((l) => l.trim() === '---');
+if (closingIdx === -1) {
+  fail('skills/adlc/SKILL.md YAML frontmatter is unclosed — missing closing separator (---)');
+}
+const frontmatter = skillLines.slice(1, closingIdx + 1).join('\n');
+if (!/^name:\s*\S/m.test(frontmatter)) fail('skills/adlc/SKILL.md frontmatter missing "name" field');
+if (!/^description:\s*\S/m.test(frontmatter)) fail('skills/adlc/SKILL.md frontmatter missing "description" field');
 if (!skillSource.includes('ADLC_CC_SENTINEL_PHASE_ROUTER_V1')) {
   fail('skills/adlc/SKILL.md missing sentinel ADLC_CC_SENTINEL_PHASE_ROUTER_V1');
 }
