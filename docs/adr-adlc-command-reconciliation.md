@@ -125,7 +125,7 @@ entry point for zero coupling and zero shadowing.
 These are binding on the implementation; each maps to how the dispatcher already
 runs tools, so they add no new mechanism:
 
-1. **Resolve `adlc-run` BY PATH, never via `$PATH`.** On a global install only
+1. **Resolve `adlc-run` BY PATH, never via `$PATH`.** *(RESCISSION NOTICE: Option D has superseded Option C; under Option D, the runner is installed as `@adlc/runner` which registers the `adlc-runner` binary globally. Therefore, the runner is resolved via `$PATH` rather than a local physical path lookup. This item is superseded.)* On a global install only
    `@adlc/cli`'s own `adlc` bin lands on the global PATH; its dependency's
    `adlc-run` does not. The dispatcher must resolve `@adlc/runner`'s declared bin
    the same way it resolves a tool — `createRequire(...).resolve('@adlc/runner/
