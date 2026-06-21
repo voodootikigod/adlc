@@ -86,11 +86,12 @@ const strippedHookSource = hookSource
   .replace(/\/\/[^\n]*/g, '');
 // Detect all forms of @adlc/* imports: static (with or without from clause),
 // side-effect (import '@adlc/...'), CJS require(), and dynamic import().
+// Quote character class includes backticks to catch template literal imports.
 if (
-  /from\s+['"]@adlc\//.test(strippedHookSource) ||
-  /import\s+['"]@adlc\//.test(strippedHookSource) ||
-  /require\s*\(\s*['"]@adlc\//.test(strippedHookSource) ||
-  /import\s*\(\s*['"]@adlc\//.test(strippedHookSource)
+  /from\s+['"`]@adlc\//.test(strippedHookSource) ||
+  /import\s+['"`]@adlc\//.test(strippedHookSource) ||
+  /require\s*\(\s*['"`]@adlc\//.test(strippedHookSource) ||
+  /import\s*\(\s*['"`]@adlc\//.test(strippedHookSource)
 ) {
   fail('hooks/adlc-hook.mjs must not import @adlc/* packages (hook must remain zero-dependency)');
 }
