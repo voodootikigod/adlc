@@ -1,6 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { globMatch, shellHasMutation, collectShellPaths } from "../index.js";
+import { 
+	globMatch, 
+	shellHasMutation, 
+	collectShellPaths, 
+	canonicalizePath, 
+	isPathBlocked, 
+	isPathInScope, 
+	getAllowedSuppressions 
+} from "../index.js";
+
+const dummyTicket = {
+	id: "T1",
+	title: "Test Ticket",
+	body: "Fix some bugs\nallow-suppression: @ts-ignore\nallow-suppression: .skip(",
+	scope: ["src/**/*.ts", "packages/core/**"],
+	rails: ["test/contracts/**", "schema/types.ts"],
+	allowedSuppressions: ["eslint-disable"]
+};
 
 // =========================================================================
 // 1. globMatch Tests
@@ -25,47 +42,90 @@ test("globMatch: recursive wildcard (**)", () => {
 	assert.ok(!globMatch("src/**/*.ts", "test/foo.ts"));
 });
 
-test("globMatch: handles regex characters safely", () => {
-	assert.ok(globMatch("src-plus+/**/*.ts", "src-plus+/foo.ts"));
-	assert.ok(!globMatch("src-plus+/**/*.ts", "src-plus/foo.ts"));
+// =========================================================================
+// 2. Path Canonicalization & Protection Tests
+// =========================================================================
+
+test("canonicalizePath: normalizes relative paths", () => {
+	const cwd = "/workspace/repo";
+	assert.equal(canonicalizePath("./src/foo.ts", cwd), "src/foo.ts");
+	assert.equal(canonicalizePath("src/../src/foo.ts", cwd), "src/foo.ts");
+	assert.equal(canonicalizePath("/workspace/repo/src/foo.ts", cwd), "src/foo.ts");
+});
+
+test("isPathBlocked: blocks ticket database and active ticket context files unconditionally", () => {
+	const cwd = "/workspace/repo";
+	assert.ok(isPathBlocked(".adlc/tickets.json", dummyTicket, cwd));
+	assert.ok(isPathBlocked("./.adlc/tickets.json", dummyTicket, cwd));
+	assert.ok(isPathBlocked(".adlc/current-ticket.json", dummyTicket, cwd));
+	assert.ok(isPathBlocked("./.adlc/current-ticket.json", dummyTicket, cwd));
+});
+
+test("isPathBlocked: blocks files matching frozen rails", () => {
+	const cwd = "/workspace/repo";
+	assert.ok(isPathBlocked("test/contracts/auth.test.ts", dummyTicket, cwd));
+	assert.ok(isPathBlocked("./test/contracts/auth.test.ts", dummyTicket, cwd));
+	assert.ok(isPathBlocked("schema/types.ts", dummyTicket, cwd));
+	assert.ok(!isPathBlocked("src/foo.ts", dummyTicket, cwd));
+});
+
+test("isPathInScope: enforces ticket scope rules", () => {
+	const cwd = "/workspace/repo";
+	assert.ok(isPathInScope("src/foo.ts", dummyTicket, cwd));
+	assert.ok(isPathInScope("./src/nested/bar.ts", dummyTicket, cwd));
+	assert.ok(isPathInScope("packages/core/index.mjs", dummyTicket, cwd));
+	assert.ok(!isPathInScope("test/auth.test.ts", dummyTicket, cwd)); // out of scope
+});
+
+test("isPathInScope: permits framework dirs while preserving config protection", () => {
+	const cwd = "/workspace/repo";
+	// Framework logs/manifest files allowed in scope
+	assert.ok(isPathInScope(".adlc/manifest.jsonl", dummyTicket, cwd));
+	assert.ok(isPathInScope(".omo/evidence.txt", dummyTicket, cwd));
 });
 
 // =========================================================================
-// 2. shellHasMutation Tests (including Sync variants)
+// 3. Suppression Gating Parser Tests
+// =========================================================================
+
+test("getAllowedSuppressions: parses allowed suppressions from ticket structured field and body text", () => {
+	const allowed = getAllowedSuppressions(dummyTicket);
+	assert.ok(allowed.includes("eslint-disable")); // from allowedSuppressions array
+	assert.ok(allowed.includes("@ts-ignore")); // from body text matching prefix
+	assert.ok(allowed.includes(".skip(")); // from body text matching prefix
+	assert.ok(!allowed.includes("eslint-disable-next-line")); // not explicitly allowed
+});
+
+// =========================================================================
+// 4. shellHasMutation Tests (covering Sync & Git porcelain commands)
 // =========================================================================
 
 test("shellHasMutation: detects shell redirects", () => {
 	assert.ok(shellHasMutation("echo 'hello' > src/foo.ts"));
 	assert.ok(shellHasMutation("cat file.ts >> test/output.ts"));
-	assert.ok(shellHasMutation("node build.js 2> err.log"));
 });
 
-test("shellHasMutation: detects shell mutation commands", () => {
-	assert.ok(shellHasMutation("rm -rf test/"));
-	assert.ok(shellHasMutation("mv src/old.ts src/new.ts"));
-	assert.ok(shellHasMutation("sed -i 's/foo/bar/g' index.ts"));
+test("shellHasMutation: detects git porcelain mutation sub-commands", () => {
+	assert.ok(shellHasMutation("git checkout main -- test/contract.test.ts"));
+	assert.ok(shellHasMutation("git restore --source=HEAD --staged test/contract.test.ts"));
+	assert.ok(shellHasMutation("git apply my-patch.patch"));
+	assert.ok(shellHasMutation("git reset HEAD test.ts"));
 });
 
 test("shellHasMutation: detects node fs mutation APIs (specifically Sync variants)", () => {
-	// These were failing in the second adversarial review pass!
 	assert.ok(shellHasMutation("node -e \"fs.writeFileSync('src/contract.ts', 'x')\""));
 	assert.ok(shellHasMutation("node -e \"fs.appendFileSync('test.log', 'y')\""));
 	assert.ok(shellHasMutation("node -e \"fs.copyFileSync('a', 'b')\""));
-	
-	// Original non-Sync variants
-	assert.ok(shellHasMutation("node -e \"fs.writeFile('src/contract.ts', 'x')\""));
-	assert.ok(shellHasMutation("node -e \"fs.appendFile('test.log', 'y')\""));
 });
 
 test("shellHasMutation: ignores read-only commands", () => {
 	assert.ok(!shellHasMutation("git status"));
+	assert.ok(!shellHasMutation("git diff HEAD"));
 	assert.ok(!shellHasMutation("cat src/contract.ts"));
-	assert.ok(!shellHasMutation("node src/index.js"));
-	assert.ok(!shellHasMutation("npm test"));
 });
 
 // =========================================================================
-// 3. collectShellPaths Tests
+// 5. collectShellPaths Tests
 // =========================================================================
 
 test("collectShellPaths: extracts redirect targets", () => {

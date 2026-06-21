@@ -12,7 +12,7 @@ export interface Ticket {
 }
 
 // =========================================================================
-// Helper Functions (Exported for Unit Testing)
+// Pure Helper Functions (Exported for Unit Testing)
 // =========================================================================
 
 // Glob match helper (* and ** support)
@@ -33,12 +33,75 @@ export function globMatch(pattern: string, filePath: string): boolean {
 	return regex.test(filePath);
 }
 
-// Check if a shell command contains mutations (including *Sync variants, python, etc.)
+// Canonicalize a file path relative to the current workspace root
+export function canonicalizePath(filePath: string, cwd: string): string {
+	const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+	const relativePath = path.relative(cwd, absolute);
+	return relativePath.replace(/\\/g, "/");
+}
+
+// Check if a path targets a frozen rail or critical ADLC configuration
+export function isPathBlocked(filePath: string, ticket: Ticket | undefined, cwd: string): boolean {
+	const canonical = canonicalizePath(filePath, cwd);
+	
+	// Unconditionally block changes to ADLC config files (F5 Self-Modification protection)
+	if (
+		canonical === ".adlc/tickets.json" ||
+		canonical === ".adlc/current-ticket.json"
+	) {
+		return true;
+	}
+
+	if (!ticket || !ticket.rails) return false;
+	return ticket.rails.some((rail) => globMatch(rail, canonical));
+}
+
+// Check if a path is within the ticket's allowed scope
+export function isPathInScope(filePath: string, ticket: Ticket | undefined, cwd: string): boolean {
+	const canonical = canonicalizePath(filePath, cwd);
+	
+	// Configuration files are NEVER in scope for agent modifications (F5 protection)
+	if (
+		canonical === ".adlc/tickets.json" ||
+		canonical === ".adlc/current-ticket.json"
+	) {
+		return false;
+	}
+
+	if (!ticket || !ticket.scope || ticket.scope.length === 0) return true;
+	
+	// Allow framework directories (except configurations blocked above)
+	if (
+		canonical.startsWith(".adlc/") ||
+		canonical.startsWith(".omo/")
+	) {
+		return true;
+	}
+	return ticket.scope.some((pattern) => globMatch(pattern, canonical));
+}
+
+// Parse suppressions using strict prefix matching in ticket body
+export function getAllowedSuppressions(ticket: Ticket | undefined): string[] {
+	const allowed = new Set<string>(ticket?.allowedSuppressions || []);
+	if (ticket?.body) {
+		const lines = ticket.body.split(/\r?\n/);
+		for (const line of lines) {
+			const match = line.match(/^allow-suppression:\s*(\S+)/);
+			if (match) {
+				allowed.add(match[1]);
+			}
+		}
+	}
+	return Array.from(allowed);
+}
+
+// Check if a shell command contains mutations (including *Sync variants, git checkout/apply, python, etc.)
 export function shellHasMutation(text: string): boolean {
 	return (
 		/(^|[\s;&|])(?:>>?|[0-9]>>?|[0-9]>)\s*\S+/.test(text) ||
 		/\b(tee|touch|rm|mv|cp|install|dd|truncate|rsync)\b/.test(text) ||
 		/\b(sed|perl|awk)\b/.test(text) ||
+		/\b(checkout|restore|apply|merge|rebase|am|cherry-pick|reset)\b/.test(text) ||
 		/\b(writeFile|writeFileSync|appendFile|appendFileSync|rmSync|renameSync|copyFile|copyFileSync|truncateSync|mkdirSync|write_text|write_bytes|openSync|open)\b/.test(text)
 	);
 }
@@ -75,6 +138,7 @@ export function collectShellPaths(text: string): string[] {
 export default function (pi: ExtensionAPI) {
 	let activeTicketId: string | undefined;
 	let activeTicket: Ticket | undefined;
+	let activeCwd = process.cwd();
 	let loadError = false;
 	let loadErrorMessage = "";
 
@@ -95,6 +159,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 
 	function loadActiveTicket(cwd: string) {
+		activeCwd = cwd;
 		const envTicket = process.env.ADLC_TICKET;
 		let fileTicket: string | undefined;
 		loadError = false;
@@ -134,41 +199,6 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	function isPathBlocked(filePath: string): boolean {
-		if (!activeTicket || !activeTicket.rails) return false;
-		const normalized = filePath.replace(/\\/g, "/");
-		return activeTicket.rails.some((rail) => globMatch(rail, normalized));
-	}
-
-	function isPathInScope(filePath: string): boolean {
-		if (!activeTicket || !activeTicket.scope || activeTicket.scope.length === 0) return true;
-		const normalized = filePath.replace(/\\/g, "/");
-		
-		// Only allow framework-owned state directories (never .git/ or node_modules/)
-		if (
-			normalized.startsWith(".adlc/") ||
-			normalized.startsWith(".omo/")
-		) {
-			return true;
-		}
-		return activeTicket.scope.some((pattern) => globMatch(pattern, normalized));
-	}
-
-	// Parse suppressions using strict prefix matching in ticket body
-	function getAllowedSuppressions(): string[] {
-		const allowed = new Set<string>(activeTicket?.allowedSuppressions || []);
-		if (activeTicket?.body) {
-			const lines = activeTicket.body.split(/\r?\n/);
-			for (const line of lines) {
-				const match = line.match(/^allow-suppression:\s*(\S+)/);
-				if (match) {
-					allowed.add(match[1]);
-				}
-			}
-		}
-		return Array.from(allowed);
-	}
-
 	// =========================================================================
 	// 2. Lifecycle Handlers
 	// =========================================================================
@@ -195,15 +225,15 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (!activeTicket) return {};
 
-		const scopeStr = activeTicket.scope?.join(", ") || "No restrictions";
-		const railsStr = activeTicket.rails?.join(", ") || "None declared";
+		// Sanitise each element individually to prevent newline prompt injections
+		const sanitizeElement = (el: string) => el.replace(/[\r\n]/g, " ").replace(/=== ADLC/gi, "").trim();
 
-		// Strip sentinel headers to prevent prompt injection
-		const cleanId = activeTicket.id.replace(/[\r\n]/g, " ").replace(/=== ADLC/gi, "");
-		const cleanTitle = activeTicket.title.replace(/[\r\n]/g, " ").replace(/=== ADLC/gi, "");
-		const cleanScope = scopeStr.replace(/=== ADLC/gi, "");
-		const cleanRails = railsStr.replace(/=== ADLC/gi, "");
-		const cleanBody = activeTicket.body.replace(/```/g, "''"); // escape backticks
+		const cleanId = sanitizeElement(activeTicket.id);
+		const cleanTitle = sanitizeElement(activeTicket.title);
+		
+		const cleanScope = (activeTicket.scope || []).map(sanitizeElement).join(", ") || "No restrictions";
+		const cleanRails = (activeTicket.rails || []).map(sanitizeElement).join(", ") || "None declared";
+		const cleanBody = activeTicket.body.replace(/```/g, "''").replace(/=== ADLC/gi, "[REDACTED]"); // escape backticks & headers
 
 		return {
 			systemPrompt: `
@@ -248,11 +278,11 @@ ${cleanBody}
 		// Intercept direct file modifications
 		if (event.toolName === "write" || event.toolName === "edit") {
 			const filePath = event.input.path as string;
-			if (isPathBlocked(filePath)) {
+			if (isPathBlocked(filePath, activeTicket, activeCwd)) {
 				ctx.ui.notify(`Blocked direct edit to frozen rail: ${filePath}`, "error");
 				return { block: true, reason: `Blocked edit: "${filePath}" matches frozen rail glob in ticket ${activeTicketId}` };
 			}
-			if (!isPathInScope(filePath)) {
+			if (!isPathInScope(filePath, activeTicket, activeCwd)) {
 				ctx.ui.notify(`Blocked out-of-scope edit: ${filePath}`, "error");
 				return { block: true, reason: `Blocked edit: "${filePath}" is out of scope for ticket ${activeTicketId}` };
 			}
@@ -265,7 +295,7 @@ ${cleanBody}
 				const paths = collectShellPaths(command);
 				
 				// Check rails
-				const blocked = paths.filter((p) => isPathBlocked(p));
+				const blocked = paths.filter((p) => isPathBlocked(p, activeTicket, activeCwd));
 				if (blocked.length > 0) {
 					ctx.ui.notify(`Blocked shell mutation editing frozen rails: ${blocked.join(", ")}`, "error");
 					return {
@@ -275,7 +305,7 @@ ${cleanBody}
 				}
 
 				// Check scope
-				const outOfScope = paths.filter((p) => !isPathInScope(p));
+				const outOfScope = paths.filter((p) => !isPathInScope(p, activeTicket, activeCwd));
 				if (outOfScope.length > 0) {
 					ctx.ui.notify(`Blocked shell mutation out of scope: ${outOfScope.join(", ")}`, "error");
 					return {
@@ -289,7 +319,7 @@ ${cleanBody}
 		return undefined;
 	});
 
-	// Reactive Gating in tool_result (P3/P4 Suppression Marker Gate)
+	// Reactive Gating in tool_result (P3/P4 Suppression Marker Gate & Diff Path Protection)
 	pi.on("tool_result", async (event, ctx) => {
 		if (activeTicketId && (loadError || !activeTicket)) {
 			return {
@@ -302,8 +332,34 @@ ${cleanBody}
 			return undefined;
 		}
 
-		// Fetch workspace diff to inspect newly added lines
+		// Fetch workspace diff to inspect newly added lines and file paths
 		try {
+			// Make untracked files visible to git diff (intent-to-add)
+			await pi.exec("git", ["add", "-N", "."]);
+
+			// Get all files changed in git diff (handles arbitrary git command mutations and untracked files)
+			const { stdout: filesText } = await pi.exec("git", ["diff", "HEAD", "--name-only"]);
+			const modifiedFiles = filesText.split(/\r?\n/).map((f) => f.trim()).filter(Boolean);
+
+			// Check if any modified file is a blocked rail or critical config
+			const railViolations = modifiedFiles.filter((f) => isPathBlocked(f, activeTicket, activeCwd));
+			if (railViolations.length > 0) {
+				ctx.ui.notify(`Blocked modifications to frozen rails: ${railViolations.join(", ")}`, "error");
+				for (const f of railViolations) {
+					await pi.exec("git", ["checkout", "HEAD", "--", f]);
+					await pi.exec("git", ["reset", "HEAD", f]);
+				}
+				return {
+					isError: true,
+					content: [
+						{
+							type: "text",
+							text: `GATE FAILED: You modified frozen rails: ${railViolations.join(", ")}. These modifications have been automatically reverted.`,
+						},
+					],
+				};
+			}
+
 			const { stdout: diffText } = await pi.exec("git", ["diff", "HEAD"]);
 			if (!diffText.trim()) return undefined;
 
@@ -311,7 +367,7 @@ ${cleanBody}
 			const violations: Array<{ file: string; lineNo: number; marker: string; content: string }> = [];
 			let currentFile = "";
 			let lineCount = 0;
-			const allowedSuppressions = getAllowedSuppressions();
+			const allowedSuppressions = getAllowedSuppressions(activeTicket);
 
 			for (const line of diffText.split(/\r?\n/)) {
 				if (line.startsWith("+++ b/")) {
@@ -412,7 +468,7 @@ ${cleanBody}
 			console.log(`\n\x1b[1mTicket ${activeTicket.id}: ${activeTicket.title}\x1b[0m`);
 			console.log(`Scope: ${activeTicket.scope?.join(", ") || "No restrictions"}`);
 			console.log(`Rails: ${activeTicket.rails?.join(", ") || "None declared"}`);
-			console.log(`Allowed Suppressions: ${getAllowedSuppressions().join(", ") || "None allowed"}`);
+			console.log(`Allowed Suppressions: ${getAllowedSuppressions(activeTicket).join(", ") || "None allowed"}`);
 			console.log(`\n\x1b[2mBody:\x1b[0m\n${activeTicket.body}\n`);
 		},
 	});
