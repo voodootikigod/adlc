@@ -17,6 +17,17 @@ npm install -g @adlc/cli                     # the toolkit, behind one `adlc <to
 /adlc-init                                    # bootstrap .adlc/ in your repo (once)
 ```
 
+Local install verification:
+
+```sh
+node scripts/claude-code-plugin-smoke.mjs .
+```
+
+That smoke test validates the plugin manifest, marketplace entry, hook
+registrations (all four event types), hook zero-dependency guarantee, command
+files, prosecutor subagent, and skill sentinel. It does not exercise the rail
+hook or interact with Claude Code.
+
 **No API keys.** Every LLM-backed gate supports `--prompt-only`: inside Claude
 Code, *Claude is the model* — the gate prints its prompt, Claude answers it, and
 the judgment is applied. The only prerequisite is `adlc` on your PATH (the npm
@@ -29,7 +40,7 @@ install above) and Node 18+.
 | Command | Phase | What it does |
 | --- | --- | --- |
 | `/adlc-init` | — | Bootstrap `.adlc/`, split the committable ticket contract from runtime evidence in `.gitignore`, run preflight. |
-| `/adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. |
+| `/adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](./ticket-authoring.md). |
 | `/adlc-distill` | P7 | Mine repeated findings and PR rejections into deterministic defenses (lint rules, skills, review lenses). |
 | `/adlc-maintain` | C10/C12 | Decay-driven checks: stale skills, hot files to re-prosecute, gate calibration. |
 
@@ -93,17 +104,71 @@ deliberately after reviewing a release.
 
 ## Lifecycle coverage
 
-| Phase | Wired via |
-| --- | --- |
-| P0 Triage | `/adlc-ticket` |
-| P1 Interrogate | `spec-lint`, `premortem`, `parallax` (via the `adlc` skill) |
-| P2 Decompose | `coldstart`, `model-router`, `merge-forecast` |
-| P3 Rail | rails-guard PreToolUse hook + CI backstop |
-| P4 Build | flail-detection hook, `consensus-fix` |
-| P5 Prosecute | `prosecutor` subagent |
-| P6 Integrate | gate-manifest evidence surfaced for the human gate |
-| P7 Distill | `/adlc-distill` |
-| Maintenance | `/adlc-maintain` + CI cron |
+| Phase | Coverage | Wired via |
+| --- | --- | --- |
+| P0 Triage | Strong | `/adlc-ticket` |
+| P1 Interrogate | Strong | `spec-lint`, `premortem`, `parallax` (via the `adlc` skill) |
+| P2 Decompose | Strong | `coldstart`, `model-router`, `merge-forecast` |
+| P3 Rail | Strong | rails-guard PreToolUse hook + CI backstop |
+| P4 Build | Strong | flail-detection hook, `consensus-fix` |
+| P5 Prosecute | Partial | `prosecutor` subagent runs the gates; formal phase assertion (`adlc run p5`) is not available on the CC path — see Gaps below. |
+| P6 Integrate | Conditional | gate-manifest evidence surfaced for the human gate; strong when backed by valid P5 evidence. |
+| P7 Distill | Strong | `/adlc-distill` |
+| Maintenance | Strong | `/adlc-maintain` + CI cron |
 
 P6 is a human decision by design; the plugin surfaces the evidence, it does not
 automate the judgment.
+
+After a prosecution that returns CLEAR, record informal evidence with
+`adlc gate-manifest record prosecution --files <changed files>`. This entry is
+useful for provenance auditing but does **not** satisfy `adlc run p5` — see the
+Gaps section below for the full explanation and the Codex path for formal phase
+assertion.
+
+## Using with Codex
+
+The Claude Code plugin and the Codex plugin are designed to coexist. A common
+setup uses Claude Code for interactive sessions (commands, hooks, skill routing)
+and Codex for CI workers (skill invocations, phase-assertion hooks). Both write
+to the same `.adlc/` workspace and read the same tickets.
+
+Command separation is by design (ADR 0002):
+- `adlc <tool>` — gate dispatcher, used by both harnesses.
+- `adlc-runner <verb>` — phase-assertion runner, used by the Codex path.
+
+Formal phase assertions (`adlc run p5`, `adlc accept`) are part of the Codex
+surface. See [`codex-integration.md`](./codex-integration.md) and
+[ADR 0002](./adr/0002-adlc-command-reconciliation.md) for the full command
+reconciliation rationale.
+
+## Gaps
+
+Current gaps relative to the formal ADLC doctrine:
+
+1. **P5 formal assertion is not available on the CC path.** The `prosecutor`
+   subagent runs `hollow-test`, `behavior-diff`, and `review-calibration` and
+   returns an evidence-backed verdict. After a CLEAR verdict, `adlc gate-manifest
+   record prosecution` records provenance evidence — but this entry carries
+   `gate: "prosecution"`, which does not satisfy `adlc run p5`. The runner
+   requires `type: "p5-complete"` plus provenance, transcript hashes, and a
+   completed dry-pass convergence chain that the `gate-manifest` command does not
+   produce. Formal P5 phase assertion requires the Codex path
+   (`adlc prosecute` → `adlc run p5`). There is no example fixture for the CC
+   path comparable to `docs/examples/p5-passes.json`; the Codex fixture is the
+   authoritative reference.
+2. **In-session Bash rail enforcement is absent (intentional).** A shell is
+   Turing-complete and cannot be reliably parsed for mutation targets; every
+   parser attempted had further bypasses. Rail mutations via Bash are caught at
+   commit time by the unbypassable `rails-guard` CI diff gate. See
+   [ADR 0003](./adr/0003-adlc-claude-code-plugin.md) for the full rationale.
+3. **Skill discovery depends on description matching.** The `adlc` phase router
+   is one skill with a broad trigger set, but a poorly-phrased request may not
+   match the description and will not route through the lifecycle.
+
+## Boundary
+
+- `.adlc/` is the runtime state area for tickets, manifests, and gate evidence.
+- `.omo/` is for operator planning artifacts (Codex-specific; CC planning files
+  currently live under `docs/` by convention).
+- The docs in this directory are the high-level map; package READMEs are the
+  source of truth for exact flags, schemas, and exit codes.

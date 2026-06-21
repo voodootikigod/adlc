@@ -76,5 +76,15 @@ End with an explicit, evidence-backed verdict:
   which did not apply, so the coverage is honest.
 
 Never return a CLEAR verdict by skipping a gate silently. Missing coverage is
-itself a finding. After a clean prosecution, the evidence can be banked with
-`adlc gate-manifest record prosecution --files <changed files>`.
+itself a finding.
+
+After a clean prosecution, record informal provenance with:
+
+```
+adlc gate-manifest record prosecution --files <changed files>
+```
+
+**Limitation:** this entry carries `gate: "prosecution"` and does **not** satisfy
+`adlc run p5`. Formal P5 phase assertion requires the Codex path (`adlc prosecute`
+→ `adlc run p5`). If P5 formal assertion is required, use the Codex integration
+or document the assertion gap explicitly.

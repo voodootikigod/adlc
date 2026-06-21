@@ -37,7 +37,13 @@ A reader entering via `docs/` finds the Codex integration but not the Claude Cod
 ADR search patterns (file-system, grep, docs-index) miss the CC architectural decisions. A reader who finds ADR 0001 has no path to the CC ADR. Over time, the flat naming and location will diverge further from the Codex pattern.
 
 ### Proposed fix
-Move CC ADRs to `docs/adr/0002-adlc-claude-code-plugin.md` and `docs/adr/0003-adlc-command-reconciliation.md`. Update `docs/README.md` to list all three ADRs. Before assigning numbers, verify chronological order via `git log --follow -- docs/adr-adlc-claude-code-plugin.md docs/adr-adlc-command-reconciliation.md docs/adr/0001-codex-native-adlc-integration.md` — ADR numbers should reflect creation order, not alphabetical sort.
+Move CC ADRs to `docs/adr/0002-adlc-claude-code-plugin.md` and `docs/adr/0003-adlc-command-reconciliation.md`. Update `docs/README.md` to list all three ADRs. Before assigning numbers, verify chronological order — ADR numbers should reflect creation order, not alphabetical sort. Run separate per-file commands (git does not support `--follow` with multiple pathspecs):
+
+```sh
+git log --oneline --follow -- docs/adr-adlc-claude-code-plugin.md
+git log --oneline --follow -- docs/adr-adlc-command-reconciliation.md
+git log --oneline --follow -- docs/adr/0001-codex-native-adlc-integration.md
+```
 
 ---
 
@@ -219,7 +225,7 @@ Low, but a reader who finds `docs/claude-code-integration-plan.md` may read it a
 Codex `plugins/adlc-codex/.codex-plugin/plugin.json`'s `homepage` is not the canonical adoption doc entry point — users install via marketplace. But the CC `plugin.json` is displayed to marketplace users when they browse or install the plugin.
 
 ### What CC has
-`.claude-plugin/plugin.json`: `"homepage": "https://github.com/voodootikigod/adlc/tree/main/docs/claude-code-integration-plan.md"`
+`.claude-plugin/plugin.json`: `"homepage": "https://github.com/voodootikigod/adlc/blob/main/docs/claude-code-integration-plan.md"`
 
 This URL points to `docs/claude-code-integration-plan.md` — a pre-decision planning document with `Status: Proposal` that contains superseded design options. Every marketplace user who clicks through from the Claude Code plugin browser lands on a stale proposal, not the adoption guide.
 
@@ -227,7 +233,7 @@ This URL points to `docs/claude-code-integration-plan.md` — a pre-decision pla
 The authoritative adoption guide is `docs/claude-code.md`. The planning doc is not. This affects every user who discovers the plugin through the Claude Code marketplace and follows the `homepage` link. It also elevates Gap 11 (stale planning doc in `docs/`) from LOW to MEDIUM because the doc is actively linked from the plugin manifest.
 
 ### Proposed fix
-Update `plugin.json` `homepage` to `https://github.com/voodootikigod/adlc/tree/main/docs/claude-code.md`.
+Update `plugin.json` `homepage` to `https://github.com/voodootikigod/adlc/blob/main/docs/claude-code.md`.
 
 ---
 
