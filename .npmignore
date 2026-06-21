@@ -1,0 +1,4 @@
+node_modules/
+.worktrees/
+.adlc/*
+!.adlc/tickets.example.json
