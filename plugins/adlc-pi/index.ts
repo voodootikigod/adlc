@@ -8,11 +8,15 @@ interface Ticket {
 	body: string;
 	scope?: string[];
 	rails?: string[];
+	allowedSuppressions?: string[];
 }
 
 export default function (pi: ExtensionAPI) {
 	let activeTicketId: string | undefined;
 	let activeTicket: Ticket | undefined;
+	let loadError = false;
+	let loadErrorMessage = "";
+
 	const suppressionsList = [
 		"@ts-ignore",
 		"@ts-expect-error",
@@ -26,12 +30,14 @@ export default function (pi: ExtensionAPI) {
 	];
 
 	// =========================================================================
-	// 1. Core State & Ticket Loader
+	// 1. Core State & Ticket Loader (Fail-Closed, Non-Silent Errors)
 	// =========================================================================
 
 	function loadActiveTicket(cwd: string) {
 		const envTicket = process.env.ADLC_TICKET;
 		let fileTicket: string | undefined;
+		loadError = false;
+		loadErrorMessage = "";
 
 		try {
 			const currentPath = path.join(cwd, ".adlc", "current-ticket.json");
@@ -39,8 +45,9 @@ export default function (pi: ExtensionAPI) {
 				const current = JSON.parse(fs.readFileSync(currentPath, "utf-8"));
 				fileTicket = current.id ?? current.ticket ?? current.ticketId;
 			}
-		} catch (e) {
-			// Silently fail or log
+		} catch (e: any) {
+			loadError = true;
+			loadErrorMessage = `Failed to read active ticket state: ${e.message}`;
 		}
 
 		activeTicketId = envTicket ?? fileTicket;
@@ -48,13 +55,21 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			const ticketsPath = process.env.ADLC_TICKETS ?? path.join(cwd, ".adlc", "tickets.json");
-			if (fs.existsSync(ticketsPath)) {
-				const data = JSON.parse(fs.readFileSync(ticketsPath, "utf-8"));
-				const tickets = data.tickets || [];
-				activeTicket = tickets.find((t: Ticket) => t.id === activeTicketId);
+			if (!fs.existsSync(ticketsPath)) {
+				loadError = true;
+				loadErrorMessage = `Tickets file not found at: ${ticketsPath}`;
+				return;
 			}
-		} catch (e) {
-			// Silently fail or log
+			const data = JSON.parse(fs.readFileSync(ticketsPath, "utf-8"));
+			const tickets = data.tickets || [];
+			activeTicket = tickets.find((t: Ticket) => t.id === activeTicketId);
+			if (!activeTicket) {
+				loadError = true;
+				loadErrorMessage = `Active ticket "${activeTicketId}" not found in tickets list.`;
+			}
+		} catch (e: any) {
+			loadError = true;
+			loadErrorMessage = `Failed to load ticket database: ${e.message}`;
 		}
 	}
 
@@ -80,6 +95,36 @@ export default function (pi: ExtensionAPI) {
 		if (!activeTicket || !activeTicket.rails) return false;
 		const normalized = filePath.replace(/\\/g, "/");
 		return activeTicket.rails.some((rail) => globMatch(rail, normalized));
+	}
+
+	function isPathInScope(filePath: string): boolean {
+		if (!activeTicket || !activeTicket.scope || activeTicket.scope.length === 0) return true;
+		const normalized = filePath.replace(/\\/g, "/");
+		// Always allow files under .adlc, .omo, or similar framework dirs
+		if (
+			normalized.startsWith(".adlc/") ||
+			normalized.startsWith(".omo/") ||
+			normalized.startsWith(".git/") ||
+			normalized.startsWith("node_modules/")
+		) {
+			return true;
+		}
+		return activeTicket.scope.some((pattern) => globMatch(pattern, normalized));
+	}
+
+	// Parse suppressions using strict prefix matching in ticket body
+	function getAllowedSuppressions(): string[] {
+		const allowed = new Set<string>(activeTicket?.allowedSuppressions || []);
+		if (activeTicket?.body) {
+			const lines = activeTicket.body.split(/\r?\n/);
+			for (const line of lines) {
+				const match = line.match(/^allow-suppression:\s*(\S+)/);
+				if (match) {
+					allowed.add(match[1]);
+				}
+			}
+		}
+		return Array.from(allowed);
 	}
 
 	// Simple shell parser to extract literal paths/files targeted by mutated commands
@@ -128,13 +173,23 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		loadActiveTicket(ctx.cwd);
 		if (activeTicketId) {
-			ctx.ui.setStatus("adlc-ticket", `🎟️ Ticket: \x1b[33m${activeTicketId}\x1b[0m`);
-			ctx.ui.notify(`ADLC Session Active: Ticket ${activeTicketId} loaded.`, "info");
+			if (loadError) {
+				ctx.ui.setStatus("adlc-ticket", `🎟️ Ticket: \x1b[31m${activeTicketId} (ERROR)\x1b[0m`);
+				ctx.ui.notify(`ADLC Error: ${loadErrorMessage}`, "error");
+			} else {
+				ctx.ui.setStatus("adlc-ticket", `🎟️ Ticket: \x1b[33m${activeTicketId}\x1b[0m`);
+				ctx.ui.notify(`ADLC Session Active: Ticket ${activeTicketId} loaded.`, "info");
+			}
 		}
 	});
 
 	// Append ADLC guidelines & ticket context directly to System Prompt (Defends F3/F1)
 	pi.on("before_agent_start", async (_event, _ctx) => {
+		if (loadError && activeTicketId) {
+			return {
+				systemPrompt: `\n\n=== ADLC CRITICAL ENFORCEMENT ERROR ===\nEnforcement was requested for Ticket "${activeTicketId}" but configuration loading failed: ${loadErrorMessage}.\nAll tool mutations are blocked until this is resolved.\n`,
+			};
+		}
 		if (!activeTicket) return {};
 
 		const scopeStr = activeTicket.scope?.join(", ") || "No restrictions";
@@ -164,8 +219,15 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 		};
 	});
 
-	// Proactive Gating in tool_call (P4 Rail Guard)
+	// Proactive Gating in tool_call (P4 Rail Guard & Scope Enforcement)
 	pi.on("tool_call", async (event, ctx) => {
+		// Fail-closed enforcement on ticket configuration load errors
+		if (activeTicketId && (loadError || !activeTicket)) {
+			return {
+				block: true,
+				reason: `ADLC Locked: Enforcement context failed to load for "${activeTicketId}". Error: ${loadErrorMessage}`,
+			};
+		}
 		if (!activeTicket) return undefined;
 
 		// Intercept direct file modifications
@@ -175,19 +237,35 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 				ctx.ui.notify(`Blocked direct edit to frozen rail: ${filePath}`, "error");
 				return { block: true, reason: `Blocked edit: "${filePath}" matches frozen rail glob in ticket ${activeTicketId}` };
 			}
+			if (!isPathInScope(filePath)) {
+				ctx.ui.notify(`Blocked out-of-scope edit: ${filePath}`, "error");
+				return { block: true, reason: `Blocked edit: "${filePath}" is out of scope for ticket ${activeTicketId}` };
+			}
 		}
 
-		// Intercept shell mutations matching frozen rails
+		// Intercept shell mutations matching frozen rails or scope
 		if (event.toolName === "bash") {
 			const command = event.input.command as string;
 			if (shellHasMutation(command)) {
 				const paths = collectShellPaths(command);
+				
+				// Check rails
 				const blocked = paths.filter((p) => isPathBlocked(p));
 				if (blocked.length > 0) {
 					ctx.ui.notify(`Blocked shell mutation editing frozen rails: ${blocked.join(", ")}`, "error");
 					return {
 						block: true,
 						reason: `Blocked command: edits frozen rails (${blocked.join(", ")}) in ticket ${activeTicketId}`,
+					};
+				}
+
+				// Check scope
+				const outOfScope = paths.filter((p) => !isPathInScope(p));
+				if (outOfScope.length > 0) {
+					ctx.ui.notify(`Blocked shell mutation out of scope: ${outOfScope.join(", ")}`, "error");
+					return {
+						block: true,
+						reason: `Blocked command: modifies out-of-scope paths (${outOfScope.join(", ")}) in ticket ${activeTicketId}`,
 					};
 				}
 			}
@@ -198,6 +276,12 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 
 	// Reactive Gating in tool_result (P3/P4 Suppression Marker Gate)
 	pi.on("tool_result", async (event, ctx) => {
+		if (activeTicketId && (loadError || !activeTicket)) {
+			return {
+				isError: true,
+				content: [{ type: "text", text: `ADLC Locked: Enforcement context failed to load. Tool changes rejected.` }],
+			};
+		}
 		if (!activeTicket) return undefined;
 		if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "bash") {
 			return undefined;
@@ -212,6 +296,7 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 			const violations: Array<{ file: string; lineNo: number; marker: string; content: string }> = [];
 			let currentFile = "";
 			let lineCount = 0;
+			const allowedSuppressions = getAllowedSuppressions();
 
 			for (const line of diffText.split(/\r?\n/)) {
 				if (line.startsWith("+++ b/")) {
@@ -230,9 +315,8 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 					const addedContent = line.slice(1);
 					for (const marker of suppressionsList) {
 						if (addedContent.includes(marker)) {
-							// Check if this marker is allowed in the ticket body (e.g., "allow-suppression: @ts-ignore")
-							const allowedStr = `allow-suppression: ${marker}`;
-							if (!activeTicket.body.includes(allowedStr)) {
+							// Check if this marker is allowed
+							if (!allowedSuppressions.includes(marker)) {
 								violations.push({
 									file: currentFile,
 									lineNo: lineCount,
@@ -250,10 +334,11 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 			if (violations.length > 0) {
 				ctx.ui.notify(`Blocked unallowed suppression marker: ${violations[0].marker}`, "error");
 
-				// Revert violating files to preserve frozen rail integrity
+				// Revert violating files completely from HEAD and reset index (bulletproof revert)
 				const uniqueFiles = Array.from(new Set(violations.map((v) => v.file)));
 				for (const f of uniqueFiles) {
-					await pi.exec("git", ["checkout", "--", f]);
+					await pi.exec("git", ["checkout", "HEAD", "--", f]);
+					await pi.exec("git", ["reset", "HEAD", f]);
 				}
 
 				// Override tool result with error, sending feedback to LLM
@@ -262,9 +347,9 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 					content: [
 						{
 							type: "text",
-							text: `GATE FAILED: You introduced unallowed suppression markers. The following changes have been automatically REVERTED:\n${violations
+							text: `GATE FAILED: You introduced unallowed suppression markers. The following changes have been automatically REVERTED from HEAD:\n${violations
 								.map((v) => `- ${v.file}:${v.lineNo} -> introduced marker "${v.marker}" in "${v.content}"`)
-								.join("\n")}\nTo use this marker, request authorization in the ticket body via: "allow-suppression: ${violations[0].marker}"`,
+								.join("\n")}\nTo use this marker, request authorization in the ticket body via: "allow-suppression: ${violations[0].marker}" or add it to allowedSuppressions in tickets.json`,
 						},
 					],
 				};
@@ -290,6 +375,11 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 				return;
 			}
 
+			if (loadError) {
+				ctx.ui.notify(`Ticket configuration failed to load: ${loadErrorMessage}`, "error");
+				return;
+			}
+
 			if (!activeTicket) {
 				ctx.ui.notify(`Ticket ${activeTicketId} not found in tickets.json`, "error");
 				return;
@@ -299,6 +389,7 @@ You are STRICTLY FORBIDDEN from editing or deleting files matching these pattern
 			console.log(`\n\x1b[1mTicket ${activeTicket.id}: ${activeTicket.title}\x1b[0m`);
 			console.log(`Scope: ${activeTicket.scope?.join(", ") || "No restrictions"}`);
 			console.log(`Rails: ${activeTicket.rails?.join(", ") || "None declared"}`);
+			console.log(`Allowed Suppressions: ${getAllowedSuppressions().join(", ") || "None allowed"}`);
 			console.log(`\n\x1b[2mBody:\x1b[0m\n${activeTicket.body}\n`);
 		},
 	});
