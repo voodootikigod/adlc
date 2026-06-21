@@ -103,7 +103,7 @@ Trigger these directly within the OpenCode TUI interface:
 | Command | Phase | Description |
 | --- | --- | --- |
 | `/adlc-init` | — | Bootstrap `.adlc/` workspace and scaffold `.opencode/` structure locally at the active repository root (linking/copying commands, agents, and skills from the plugin, regardless of whether installed globally or locally), template `.adlc/config.json` defaults, configure gitignore (idempotently), configure local pre-commit git hooks, and check environment readiness. |
-| `/adlc-ticket` | P0 | Runs an interactive triage interview to evaluate risk × blast radius (or parses non-interactively in headless runs via arguments/environment variables) and authors a ticket contract. The activation flow strictly validates the ticket DAG: it blocks activating a ticket if any of its parent/foundation dependencies are unresolved, enforcing that foundation tickets are completed and merged first. Dispatcher (`adlc`) mechanical blast-radius overrides act as the primary unbypassable F5-defense control (upgrading Trivial tickets automatically if target tests are missing, hollow, or if the diff exceeds limits); `adlc-runner run p0` (Proposed `@adlc/runner` Extension) asserts triage evidence. **Note:** /adlc-ticket executes a quick pre-triage test suite and hollow-test execution to verify pre-existing coverage, which introduces latency depending on test suite size. Trivial ticket builders run strictly on cheap/low-tier models to minimize execution cost. |
+| `/adlc-ticket` | P0 | Runs an interactive triage interview to evaluate risk × blast radius (or parses non-interactively in headless runs via arguments/environment variables) and authors a ticket contract. The activation flow strictly validates the ticket DAG: it blocks activating a ticket if any of its parent/foundation dependencies are unresolved, enforcing that foundation tickets are completed and merged first. Dispatcher (`adlc`) mechanical blast-radius overrides act as the primary unbypassable F5-defense control (upgrading Trivial tickets automatically if target tests are missing, hollow, or if the diff exceeds limits); `adlc-runner run p0` (Proposed `@adlc/runner` Extension) asserts triage evidence (including validating that `triageCommit` is present in `.adlc/tickets.json` and is a valid commit reachable in git history). **Note:** /adlc-ticket executes a quick pre-triage test suite and hollow-test execution to verify pre-existing coverage, which introduces latency depending on test suite size. Trivial ticket builders run strictly on cheap/low-tier models to minimize execution cost. |
 | `/adlc-spec` | P1 | Runs the spec interrogation flow. The command executes a structured "grillme" Q&A interview to extract requirements from the developer's head, requiring a frontier model configuration. If the ticket class is Architectural, it runs `adlc design-alternatives` with explicit anchored system prompts (MVP-first, risk-first, and ops-first anchors) to generate 2–3 perspective-diverse spec drafts. Once a spec draft is established, it runs `adlc spec-lint` to validate it and `adlc premortem` to stress-test it (with `adlc parallax` reserved strictly for measuring spec ambiguity), ensuring a coherent build-start flow. |
 | `/adlc-approve-spec` | P1 | Finalizes the Phase 1 human gate Human Gate 1 (spec approval). Signs the manifest and records the spec approval hash. `adlc-runner run p1` is then run to assert both spec audit evidence and Human Gate 1 signature exist. |
 | `/adlc-decompose` | P2 | Runs `adlc coldstart`, `adlc model-router`, and `adlc merge-forecast` to split the ticket and verify contract boundaries. Runs `adlc-runner run p2` to assert evidence. |
@@ -132,7 +132,7 @@ Under the concern-focused separate binary architecture (**Option D**), while the
   - Performs startup validation to reject the private key and fail closed if POSIX permissions are wider than owner-only, or if the file owner UID does not match the active shell execution context.
   - *Fallback:* If the subcommand is unavailable, the `/adlc-init` bootstrapper falls back to Node's native `crypto` module to generate the keys with identical permissions and paths.
 
-##### `adlc-runner rotate-developer-keys [--recover --admin-key <path>]`
+##### `adlc-runner rotate-developer-keys [--recover --admin-key <path>]` (Proposed `@adlc/runner` Extension)
 * **Description:** Rotates the active developer cryptographic key pair while maintaining manifest chain of trust integrity.
 * **Standard Rotation:** Generates a new developer key pair, appends the new public key fingerprint to `.adlc/config.json`, and signs a `key_rotation` transition event in the manifest using the old key.
 * **Key Loss Recovery (`--recover --admin-key <path>`):** In the event of post-initialization key loss (where the runner fails closed, blocking edits), this recovery path generates a new developer key pair, authorized via an out-of-band admin override key stored at `~/.config/opencode/keys/admin.override` (isolated from the repository). It verifies the admin key signature against the frozen public key fingerprint committed in the base repository history, updates `.adlc/config.json` with the new public key, and appends a signed rotation event to the manifest (exemption: this recovery command is explicitly permitted to write to the manifest in the fail-closed state since it is authorized by the verified admin key).
@@ -142,7 +142,7 @@ Under the concern-focused separate binary architecture (**Option D**), while the
 ##### `adlc-runner run <phase>`
 * **Description:** Assert that a specific lifecycle phase's requirements and evidence are satisfied and recorded in the manifest.
 * **Phases:**
-  * **`p0` (Triage):** Asserts that: (1) a valid ticket entry exists in `.adlc/tickets.json`, (2) active diffs do not violate mechanical triage classification limits (e.g. 3 files / 50 lines for Trivial), and (3) all parent/foundation ticket dependencies are resolved and merged first, blocking ticket activation if parent tickets remain incomplete.
+  * **`p0` (Triage):** Asserts that: (1) a valid ticket entry exists in `.adlc/tickets.json`, (2) the `triageCommit` is present in `.adlc/tickets.json` and is a valid, reachable commit in the repository's git history, (3) active diffs do not violate mechanical triage classification limits (e.g. 3 files / 50 lines for Trivial), and (4) all parent/foundation ticket dependencies are resolved and merged first, blocking ticket activation if parent tickets remain incomplete.
   * **`p1` (Spec Interrogate):** Asserts that the spec audit evidence and Human Gate 1 (spec approval) signature are recorded.
   * **`p2` (Decomposition):** Asserts that atomic, typed ticket partitions exist.
   * **`p3` (Rail Freeze):** Asserts and verifies that the rail-freeze evidence (logs and outputs of `hollow-test`, `test-audit`, and compiler typechecks completed during `/adlc-rail-write`) is present and valid in the workspace and manifest, and that the rail files are now frozen.
@@ -150,24 +150,25 @@ Under the concern-focused separate binary architecture (**Option D**), while the
   * **`p5` (Prosecution):** Asserts that prosecution loops ran dry and verifies the signed G4/P4 build record in the manifest instead of re-running the test suite.
   * **`p7` (Distill):** Asserts that Phase 7 distillation evidence (lesson foundry outputs) is present.
 
-##### `adlc-runner record --entry <payload>`
+##### `adlc-runner record --entry <payload>` (Proposed `@adlc/runner` Extension)
 * **Description:** Cryptographically signs and appends a structured evidence or execution log entry to `.adlc/manifest.jsonl`.
 * **Details:**
   - Loads `developer.key` (enforcing POSIX permission checks), signs the payload, and appends the entry.
   - Serves as the underlying cryptographic signature engine for both the runner and the dispatcher fallback utility (`adlc gate-manifest record --phase <x> --status pass`).
   - Implements a hash-chained structure where each entry contains its own signature, the developer's public key fingerprint, and the SHA-256 hash of the preceding entry.
   - Serializes all writes to `.adlc/manifest.jsonl` using a platform-agnostic file lock on `.adlc/manifest.lock` via `proper-lockfile` to prevent interleaved write concurrency hash corruption.
+  - *Absent Runner Fallback:* If the runner package is completely absent under Option D, the plugin writes *unsigned fallback entries* (containing an empty signature `""` and an `"unsigned_fallback": true` flag) to `.adlc/manifest.jsonl` using a simple node helper (`node .opencode/commands/unsigned-record.js`) which serializes the file writes via `proper-lockfile`. This warns reviewers/CI but permits advisory local execution, preserving minimal-dependency guarantees.
 
-##### `adlc-runner upgrade --ticket <id> --key <path>`
+##### `adlc-runner upgrade --ticket <id> --key <path>` (Proposed `@adlc/runner` Extension)
 * **Description:** Records a signed triage upgrade event in the manifest.
 * **Usage:** Invoked automatically by the plugin's `triage-upgrade.js` script when a Trivial/Bounded ticket exceeds its mechanical diff limits or fails post-edit validation (e.g., hollow-test failures).
 * **Details:** Signs the upgrade using `developer.key`, updates the triage class to Substantial in `.adlc/tickets.json`, stashes active changes programmatically, and routes the ticket back to Phase 1 spec synthesis. This invalidates prior Trivial records in the manifest, forcing the verification state machine to require full Substantial phase evidence.
 
-##### `adlc-runner accept --ticket <id>`
+##### `adlc-runner accept --ticket <id>` (Proposed `@adlc/runner` Extension)
 * **Description:** Finalizes the Phase 6 Human Gate 2 (behavioral acceptance) ceremony and appends the human acceptance signature to the manifest.
 * **Details:**
   - Verifies that valid, signed Phase 5 prosecution evidence exists matching the active commit.
-  - Verifies that the behavioral diff evidence (generated by `adlc behavior-diff compare`) is complete, matching the active head commit and baseline `triageCommit` (with `behavior-diff compare` itself executing dynamically inside a temporary git worktree or isolated directory clone to prevent workspace clobbering and data loss).
+  - Verifies that the behavioral diff evidence previously generated and written to `.adlc/` by `adlc behavior-diff compare` is complete, matching the active head commit and baseline `triageCommit`. Note that the runner itself does NOT execute `behavior-diff compare`; it only verifies the completeness and integrity of the pre-existing behavior diff logs/evidence.
   - Prompts the developer to verify the demo and records the human signature in `.adlc/manifest.jsonl`.
 
 ---
