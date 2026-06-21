@@ -1,0 +1,15 @@
+{
+  "name": "@adlc/pi-package",
+  "version": "1.0.2",
+  "description": "ADLC integration for Pi terminal coding agent",
+  "main": "./index.ts",
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills/"]
+  },
+  "dependencies": {
+    "@adlc/core": "^1.0.2",
+    "@adlc/rails-guard": "^1.0.2"
+  }
+}
