@@ -165,11 +165,11 @@ Each harness plugin is a thin adapter wiring that harness's native primitives
 
 **Option D — separate, concern-focused bins.** Do NOT overload one command.
 
-- `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged.
+- `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged. Note that under Option D, the dispatcher tool `adlc` contains no `record` subcommand. The `gate-manifest` tool (called via `adlc gate-manifest verify` or directly) is only responsible for verify/rebuild operations. The historical reference to `gate-manifest record` in the Option C analysis is superseded: under Option D, recording manifest entries is strictly a runner responsibility performed via `adlc-runner record --entry <payload>` (or direct fallback file write scripts when the runner is absent), ensuring that only the cryptographic runner can append signed entries to the manifest.
 - `adlc-runner <verb> …` — runner (`@adlc/runner`), a **single** bin with
-  `run` / `accept` subcommands (`adlc-runner run <phase>`,
-  `adlc-runner accept --ticket …`). This is the minimal change to the runner
-  package: its bin already parses `run`/`accept` as the first positional, so it is
+  `run` / `accept` / `record` / `upgrade` / `init-developer-keys` / `rotate-developer-keys` subcommands (`adlc-runner run <phase>`,
+  `adlc-runner accept --ticket …`, `adlc-runner record --entry …`, `adlc-runner upgrade --ticket …`, `adlc-runner init-developer-keys`, `adlc-runner rotate-developer-keys`). This is the minimal change to the runner
+  package: its bin already parses `run`/`accept`/`record`/`upgrade`/`init-developer-keys`/`rotate-developer-keys` as the first positional, so it is
   only renamed `adlc` → `adlc-runner`; the grammar is otherwise unchanged.
 - No reserved verbs on `adlc`, no `cli → runner` dependency, no disjointness test.
 
@@ -194,7 +194,7 @@ one caller; a tax on **every** caller when callers multiply:
 
 Cost: two top-level commands instead of one. Acceptable: the primary callers are
 plugins, for which two unambiguous commands beat one overloaded command; and the
-docs are one sentence per harness ("gates: `adlc <x>`; phases: `adlc-run <x>`").
+docs are one sentence per harness ("gates: `adlc <x>`; phases: `adlc-runner <x>`").
 This costs the Claude Code side nothing — Phase A–F never calls `run`/`accept`.
 
 ### Companion direction: share the harness-agnostic logic, not just the bins
@@ -240,9 +240,11 @@ design. All three are folded into the accepted decision:
    or `rm <rail>` disabled enforcement); **fixed** by treating `rm`/`mv` operands
    (and `cp`/`install` destinations) as mutation targets. For *other* harnesses,
    the principle still holds: configure each so a hook *crash* (non-zero/uncaught
-   exit) is treated as deny for the enforcing hook. The shared hook library
-   (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
-   guarantee is a harness-binding responsibility, documented per harness.
+    exit) is treated as deny for the enforcing hook. The shared hook library
+    (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
+    guarantee is a harness-binding responsibility, documented per harness.
+
+4. **Key management is a runner responsibility.** Because `adlc-runner` is the security-critical asserter containing the cryptographic signature verification and generation logic (relying on `developer.key` and `admin.pub`), any subcommands that generate, rotate, or recover these keys (such as `adlc-runner init-developer-keys` and `adlc-runner rotate-developer-keys`) fall strictly under its domain. The `@adlc/cli` dispatcher remains fully modular, thin, and keyless.
 
 ---
 
