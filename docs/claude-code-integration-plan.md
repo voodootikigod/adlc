@@ -1,6 +1,6 @@
 # Plan: Installing & Integrating ADLC into Claude Code
 
-**Status:** Proposal · **Branch:** `feat/claude-code-integration` · **Date:** 2026-06-14
+**Status:** Superseded — see [`docs/adr/0003-adlc-claude-code-plugin.md`](./adr/0003-adlc-claude-code-plugin.md) for the accepted design record. · **Original Status:** Proposal · **Branch:** `feat/claude-code-integration` · **Date:** 2026-06-14
 
 ## 1. Problem
 

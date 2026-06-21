@@ -13,10 +13,28 @@ package READMEs.
 - [Toolkit guide](./toolkit.md) explains how the packages fit into the ADLC flow.
 - [Codex integration](./codex-integration.md) explains installation, usage, and the
   current gaps against the formal ADLC doctrine.
+- [Claude Code integration](./claude-code.md) explains how to install and use the
+  Claude Code plugin, including lifecycle coverage and known gaps.
 - [Package reference](./package-reference.md) lists every package, binary, phase, and
   primary README source.
-- [ADR 0001](./adr/0001-codex-native-adlc-integration.md) records the Codex-native
-  integration plan and dispatcher contract.
+- [Ticket authoring](./ticket-authoring.md) defines the canonical ticket schema that
+  all gates and both integrations read.
+
+## Architecture decision records
+
+- [ADR 0001](./adr/0001-codex-native-adlc-integration.md) — Codex-native integration
+  plan and dispatcher contract.
+- [ADR 0002](./adr/0002-adlc-command-reconciliation.md) — `adlc` command
+  reconciliation across integrations (Option D: separate concern-focused bins).
+- [ADR 0003](./adr/0003-adlc-claude-code-plugin.md) — Claude Code plugin design,
+  hook strategy, and rail-guard enforcement model.
+
+## CI templates
+
+- [`ci/rails-guard.yml`](./ci/rails-guard.yml) — required check blocking PRs that
+  touch frozen rails. Works with both integrations.
+- [`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) — weekly advisory cron for
+  skill-rot, model-ratchet, and gate-fuzzing checks.
 
 ## Repository shape
 

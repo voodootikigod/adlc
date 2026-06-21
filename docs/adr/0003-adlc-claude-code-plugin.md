@@ -3,7 +3,7 @@
 **Status:** **Accepted — shipped.** Phases A–F merged to `main` via PR #6
 (2026-06-18). The P7 skill-mining wiring is accepted and in review (PR #7). The
 `adlc` command-name reconciliation with the Codex effort is a separate, related
-decision — see [`adr-adlc-command-reconciliation.md`](./adr-adlc-command-reconciliation.md)
+decision — see [`0002-adlc-command-reconciliation.md`](./0002-adlc-command-reconciliation.md)
 (Accepted — Option D).
 
 **Date:** 2026-06-18

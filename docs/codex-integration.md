@@ -5,6 +5,7 @@ install it, how to use it, and where the current implementation still falls shor
 formal ADLC doctrine.
 
 The integration is described in more detail in [ADR 0001](./adr/0001-codex-native-adlc-integration.md).
+The canonical ticket schema all gates read is in [ticket-authoring.md](./ticket-authoring.md).
 
 ## Install
 
@@ -57,7 +58,7 @@ Typical flow:
 1. Run `adlc preflight` before fan-out.
 2. Shape the work with `adlc spec-lint`, `adlc premortem`, and `adlc parallax`.
 3. Decompose with `adlc coldstart`, `adlc merge-forecast`, and `adlc model-router`.
-4. Build rails with `adlc hollow-test`, `adlc rails-guard`, and `adlc flail-detector`.
+4. Build rails with `adlc rails-guard` and supervise execution with `adlc flail-detector`.
 5. Prosecute with `adlc prosecute`, then record behavior evidence with `adlc accept`.
 6. Distill repeated findings with `adlc lesson-foundry`, `adlc rejection-mining`, and
    `adlc skill-rot`.
@@ -136,6 +137,27 @@ Current gaps relative to the formal ADLC doctrine:
    recorded.
 3. Codex hooks assist P4 rail protection, but they do not replace `rails-guard` or the
    repository's other deterministic checks.
+
+For Claude Code–specific gaps (in-session Bash enforcement, P5 formal assertion on the CC
+path), see [`claude-code.md` — Gaps](./claude-code.md#gaps).
+
+## Using with Claude Code
+
+The Codex plugin and the Claude Code plugin are designed to coexist. A common
+setup uses Codex for CI workers (skill invocations, phase-assertion hooks) and
+Claude Code for interactive sessions (commands, hooks, skill routing). Both write
+to the same `.adlc/` workspace and read the same tickets.
+
+The ticket schema that all gates and both integrations read is documented in
+[`ticket-authoring.md`](./ticket-authoring.md).
+
+Command separation:
+- `adlc <tool>` — gate dispatcher; used by both harnesses.
+- `adlc-runner <verb>` — phase-assertion runner; used by this Codex path.
+
+See [`claude-code.md`](./claude-code.md) for the Claude Code integration and
+[ADR 0002](./adr/0002-adlc-command-reconciliation.md) for the full command
+reconciliation rationale.
 
 ## Boundary
 
