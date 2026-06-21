@@ -48,14 +48,18 @@ const hooks = hooksConfig.hooks ?? {};
 if (!Array.isArray(hooks.PreToolUse) || hooks.PreToolUse.length === 0) {
   fail('hooks/hooks.json must register at least one PreToolUse hook');
 }
-if (!Array.isArray(hooks.SessionStart) || hooks.SessionStart.length === 0) {
-  fail('hooks/hooks.json must register at least one SessionStart hook');
-}
-if (!Array.isArray(hooks.PostToolUse) || hooks.PostToolUse.length === 0) {
-  fail('hooks/hooks.json must register at least one PostToolUse hook');
-}
-if (!Array.isArray(hooks.Stop) || hooks.Stop.length === 0) {
-  fail('hooks/hooks.json must register at least one Stop hook');
+// SessionStart, PostToolUse, and Stop must each have at least one entry invoking adlc-hook.mjs
+for (const eventType of ['SessionStart', 'PostToolUse', 'Stop']) {
+  const entries = hooks[eventType];
+  if (!Array.isArray(entries) || entries.length === 0) {
+    fail(`hooks/hooks.json must register at least one ${eventType} hook`);
+  }
+  const hasHookCmd = entries.some(
+    (e) => Array.isArray(e.hooks) && e.hooks.some((h) => h.command?.includes('adlc-hook.mjs'))
+  );
+  if (!hasHookCmd) {
+    fail(`hooks/hooks.json ${eventType} must contain at least one hook invoking adlc-hook.mjs`);
+  }
 }
 
 // rails PreToolUse hook must match the structured-edit tools
@@ -75,10 +79,18 @@ if (!railsHookCmd) {
 const hookPath = join(repo, 'hooks/adlc-hook.mjs');
 if (!existsSync(hookPath)) fail('missing hooks/adlc-hook.mjs');
 const hookSource = readFileSync(hookPath, 'utf8');
-// Check import statement lines only (not comments or string literals)
-const illegalImport = hookSource.split('\n').find((line) => /^import\s+.*@adlc\//.test(line));
-if (illegalImport) {
-  fail(`hooks/adlc-hook.mjs must not import @adlc/* packages (found: ${illegalImport.trim()})`);
+// Strip block comments and line comments before checking for @adlc/* imports so
+// that multi-line imports are found and comment text does not cause false positives.
+const strippedHookSource = hookSource
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/[^\n]*/g, '');
+// Detect static imports (from '@adlc/'), CJS require(), and dynamic import() of @adlc/* packages.
+if (
+  /from\s+['"]@adlc\//.test(strippedHookSource) ||
+  /require\s*\(\s*['"]@adlc\//.test(strippedHookSource) ||
+  /import\s*\(\s*['"]@adlc\//.test(strippedHookSource)
+) {
+  fail('hooks/adlc-hook.mjs must not import @adlc/* packages (hook must remain zero-dependency)');
 }
 
 // --- commands ---
