@@ -39,24 +39,24 @@ delegating to `@adlc/runner` by *spawning its bin*.**
   — handled *before* tool lookup, preserving the exact `adlc run <phase>` /
   `adlc accept …` grammar (so codex's existing usage is unchanged).
 - A reserved verb is served by **spawning `@adlc/runner`'s own standalone bin
-  (`adlc-run`) as a child process** — NOT by importing runner as a library. This
+  (`adlc-runner`) as a child process** — NOT by importing runner as a library. This
   is identical to how the dispatcher already runs tools: full process isolation
   and verbatim exit-code propagation (0/1/2). The runner is never loaded into the
   dispatcher's process.
-- `@adlc/runner` **keeps a non-colliding `adlc-run` bin** (it drops only the
+- `@adlc/runner` **keeps a non-colliding `adlc-runner` bin** (it drops only the
   colliding `adlc` bin), so it stays independently installable/usable, and the
   dispatcher has a stable bin to resolve and spawn.
 - Everything else (`adlc <anything-not-a-reserved-verb>`) dispatches to
   `@adlc/<tool>` exactly as today.
 - `@adlc/cli` adds a dependency on `@adlc/runner` (lockstep, like the other 19),
-  so `adlc-run` is always present alongside `adlc`.
+  so `adlc-runner` is always present alongside `adlc`.
 
 ### Dispatch precedence (the contract)
 
 ```
 adlc <first> [args...]
   if <first> in {--help,-h,help,--version,-v}     → dispatcher built-in
-  else if <first> in RESERVED_VERBS {run,accept}  → spawn `adlc-run` <first> args...
+  else if <first> in RESERVED_VERBS {run,accept}  → spawn `adlc-runner` <first> args...
   else if <first> is a known tool                 → spawn @adlc/<first> args...
   else                                            → unknown-tool error (exit 1)
 ```
@@ -80,7 +80,7 @@ regress silently):
   Phase A–F artifact (hooks, slash commands, discovery skill, CI scripts) calls
   `adlc <tool>`; renaming breaks all of them.
 - **D — keep both bins under different names** (`adlc` for the dispatcher,
-  `adlc-run` for the runner). Lower effort and zero shadowing risk, but ships two
+  `adlc-runner` for the runner). Lower effort and zero shadowing risk, but ships two
   top-level commands and loses the single-entry-point property the dispatcher was
   created for. Acceptable fallback if unification proves costly.
 
@@ -91,7 +91,7 @@ regress silently):
 - **Single entry point** preserved — one command for the whole lifecycle.
 - **New coupling**: `@adlc/cli` now depends on `@adlc/runner`. Both are already
   lockstep-versioned, so this adds no release complexity beyond the existing
-  repin-all behavior. Because the dispatcher *spawns* `adlc-run` rather than
+  repin-all behavior. Because the dispatcher *spawns* `adlc-runner` rather than
   importing it, the coupling is a runtime resolve, not a hard module link — the
   dispatcher does not break if the runner's internals change.
 - **Reserved-verb surface is guarded**: the disjointness test makes a shadowing
@@ -105,7 +105,7 @@ regress silently):
 The review of the original (un-hardened) proposal raised coupling, process-
 isolation loss, and shadowing. Resolutions, now folded into the Decision above:
 
-1. **Library import vs spawn → spawn.** The dispatcher spawns `adlc-run` as a
+1. **Library import vs spawn → spawn.** The dispatcher spawns `adlc-runner` as a
    child (process isolation + verbatim exit codes), consistent with how it runs
    every tool. The runner is never imported into the dispatcher process.
 2. **Reserving `run`/`accept` vs an `adlc phase …` prefix → keep bare verbs.** A
@@ -117,7 +117,7 @@ isolation loss, and shadowing. Resolutions, now folded into the Decision above:
    deliberate registry + test change.
 
 If the coupling or reserved surface ever proves costly, **Option D** (separate
-`adlc` + `adlc-run` bins) remains the documented fallback — it trades the single
+`adlc` + `adlc-runner` bins) remains the documented fallback — it trades the single
 entry point for zero coupling and zero shadowing.
 
 ## Implementation notes (cautions from the second review pass)
@@ -125,12 +125,12 @@ entry point for zero coupling and zero shadowing.
 These are binding on the implementation; each maps to how the dispatcher already
 runs tools, so they add no new mechanism:
 
-1. **Resolve `adlc-run` BY PATH, never via `$PATH`.** *(RESCISSION NOTICE: Option D has superseded Option C; under Option D, the runner is installed as `@adlc/runner` which registers the `adlc-runner` binary globally. Therefore, the runner is resolved via `$PATH` rather than a local physical path lookup. This item is superseded.)* On a global install only
+1. **Resolve `adlc-runner` BY PATH, never via `$PATH`.** *(RESCISSION NOTICE: Option D has superseded Option C; under Option D, the runner is installed as `@adlc/runner` which registers the `adlc-runner` binary globally. Therefore, the runner is resolved via `$PATH` rather than a local physical path lookup. This item is superseded.)* On a global install only
    `@adlc/cli`'s own `adlc` bin lands on the global PATH; its dependency's
-   `adlc-run` does not. The dispatcher must resolve `@adlc/runner`'s declared bin
+   `adlc-runner` does not. The dispatcher must resolve `@adlc/runner`'s declared bin
    the same way it resolves a tool — `createRequire(...).resolve('@adlc/runner/
    package.json')` → read `bin` → `spawn(process.execPath, [binPath, ...argv])`.
-   A `spawnSync('adlc-run', …)` PATH lookup would fail under global install.
+   A `spawnSync('adlc-runner', …)` PATH lookup would fail under global install.
 2. **Inherit stdio** on the spawned child (`stdio: 'inherit'`), so `adlc run` /
    `adlc accept` output and any interactivity reach the user unchanged. A test
    asserts this.
@@ -215,8 +215,8 @@ The Gemini-3.5-Flash review confirmed separate bins over unify and sharpened the
 design. All three are folded into the accepted decision:
 
 1. **Runner is ONE bin with subcommands, not two top-level commands.** Use
-   `adlc-runner run …` / `adlc-runner accept …`, never separate `adlc-run` +
-   `adlc-accept` bins. Fewer top-level commands, and it matches the runner's
+   `adlc-runner run …` / `adlc-runner accept …`, never separate `adlc-runner run` +
+   `adlc-runner accept` subcommands into separate bins. Fewer top-level commands, and it matches the runner's
    existing first-positional grammar (rename only).
 
 2. **Plugins must declare exactly the bins they use** — separate bins move
