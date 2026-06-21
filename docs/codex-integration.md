@@ -58,7 +58,7 @@ Typical flow:
 1. Run `adlc preflight` before fan-out.
 2. Shape the work with `adlc spec-lint`, `adlc premortem`, and `adlc parallax`.
 3. Decompose with `adlc coldstart`, `adlc merge-forecast`, and `adlc model-router`.
-4. Build rails with `adlc hollow-test`, `adlc rails-guard`, and `adlc flail-detector`.
+4. Build rails with `adlc rails-guard` and supervise execution with `adlc flail-detector`.
 5. Prosecute with `adlc prosecute`, then record behavior evidence with `adlc accept`.
 6. Distill repeated findings with `adlc lesson-foundry`, `adlc rejection-mining`, and
    `adlc skill-rot`.

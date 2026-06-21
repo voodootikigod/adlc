@@ -31,6 +31,11 @@ already auto-discovers and lockstep-publishes the new packages.
 
 ## Decision
 
+> **⚠ This section records Option C (hardened), which was the initial decision.
+> It was superseded by Option D in the Revision section below. Jump to
+> [Revision (2026-06-16): multi-harness roadmap → Option D supersedes Option C](#revision-2026-06-16-multi-harness-roadmap--option-d-supersedes-option-c)
+> for the accepted design.**
+
 **Option C (hardened) — unify under one `adlc` command owned by `@adlc/cli`,
 delegating to `@adlc/runner` by *spawning its bin*.**
 

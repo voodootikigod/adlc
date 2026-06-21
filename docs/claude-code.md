@@ -5,7 +5,7 @@ The `@adlc/*` toolkit is a set of gate-shaped CLIs. This plugin makes the whole
 at the right lifecycle moments — some automatically — and the model reaches for
 the right gate without you memorizing 20 tools.
 
-> Design and rationale: [`claude-code-integration-plan.md`](./claude-code-integration-plan.md).
+> Design and rationale: [ADR 0003 — Bringing the ADLC to Claude Code as a plugin](./adr/0003-adlc-claude-code-plugin.md).
 > The full thesis: [`../ADLC.md`](../ADLC.md).
 
 ## Install
@@ -133,8 +133,10 @@ and Codex for CI workers (skill invocations, phase-assertion hooks). Both write
 to the same `.adlc/` workspace and read the same tickets.
 
 Command separation is by design (ADR 0002):
-- `adlc <tool>` — gate dispatcher, used by both harnesses.
-- `adlc-runner <verb>` — phase-assertion runner, used by the Codex path.
+- `adlc <tool>` — gate dispatcher; routes tool invocations and, via reserved
+  verbs, phase-assertion commands (`adlc run <phase>`, `adlc accept`).
+- `adlc-runner` — the underlying runner binary (`@adlc/runner`); invoked by
+  the dispatcher, not called directly in normal workflows.
 
 Formal phase assertions (`adlc run p5`, `adlc accept`) are part of the Codex
 surface. See [`codex-integration.md`](./codex-integration.md) and
