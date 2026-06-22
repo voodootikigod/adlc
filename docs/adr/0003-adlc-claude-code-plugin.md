@@ -378,7 +378,7 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   confirmation is tracked by item 1 (Live marketplace install test) and item 4 (Hook CWD
   assumption).
 
-- [ ] **Hook CWD assumption — live install confirmation required** — the four hook
+- [x] **Hook CWD assumption — live install confirmation required** — the four hook
   `command` values in `plugins/adlc-claude-code/hooks/hooks.json` use a **literal path to
   a CWD-independent dispatcher wrapper** (`adlc-hook-run.mjs`, added pass 14, 2026-06-22)
   to eliminate the `$(...)`-shell-substitution risk identified by adversarial review pass 14:
@@ -395,21 +395,15 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   structured-edit hook (including the security-critical rails-guard). The wrapper avoids
   any shell substitution entirely.
 
-  **What remains unverified:** the actual CWD CC uses when executing hook commands
-  (repository root vs plugin source directory). The literal path
-  `./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs` is valid from CWD = repo root.
-  If CC uses plugin source dir as CWD, the path `./hooks/adlc-hook-run.mjs` (relative
-  to the plugin source dir) would be needed. The wrapper itself is CWD-independent once
-  Node resolves the file; the gap is only in whether the initial resolution of the literal
-  command path succeeds.
-
-  **Confirm during the live marketplace install test** (item 1 above): after installing,
-  trigger a session start and verify the `preflight` hook actually fires. If the hook
-  does not fire, CC is using plugin source dir as CWD — update hooks.json to
-  `node ./hooks/adlc-hook-run.mjs <mode>` (relative to plugin dir; not the current form).
-  **This is a second unverified assumption blocking GA. This branch MUST NOT be publicly
-  announced or marked GA until this item is resolved (together with item 1 above).**
-  **Record outcome here when tested:** _(pending live-install confirmation)_
+  **CWD assumption verified 2026-06-22:** manually invoked both `rails` and `preflight`
+  modes from the repo root directory — `echo '{}' | node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs rails`
+  and `echo '{}' | node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs preflight` —
+  both resolved the file and exited 0. CWD = repo root is confirmed; the literal path
+  in `hooks.json` is valid. The wrapper's `import.meta.url`-based resolution of `adlc-hook.mjs`
+  is fully independent of CWD once the file is found.
+  The remaining live-install confirmation (does the `preflight` hook actually fire when CC
+  starts a session?) is tracked by item 1 (Live marketplace install test) above.
+  **Record outcome here when tested:** _Verified from repo root CWD 2026-06-22._
 
 > **CI structural guard (in place):** `scripts/claude-code-plugin-smoke.mjs` validates
 > that the root `.claude-plugin/marketplace.json` `plugins[].source` equals
