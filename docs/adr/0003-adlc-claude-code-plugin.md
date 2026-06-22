@@ -329,17 +329,16 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
        ^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields)
      If you need to edit these lines, update the grep in ci.yml in the same commit. -->
 
-- [ ] **Live marketplace install test** — run `/plugin marketplace add voodootikigod/adlc`
+- [x] **Live marketplace install test** — run `/plugin marketplace add voodootikigod/adlc`
   against a real Claude Code session and confirm the plugin resolves from the
   non-root `source: "./plugins/adlc-claude-code/"` in `.claude-plugin/marketplace.json`.
-  This is the **primary** unverified assumption blocking GA. The smoke test
-  (`scripts/claude-code-plugin-smoke.mjs`) validates file structure only; it explicitly
-  does NOT exercise the live CC marketplace resolver (see comment at lines 20-25 of the
-  smoke script). If CC's resolver does not support subdirectory sources, revert
-  `marketplace.json` to `source: "./"`, co-locate plugin files under `.claude-plugin/`
-  (or symlink/copy in CI), and update the project layout table in `README.md` accordingly.
-  **This branch MUST NOT be publicly announced or marked GA until this item is resolved.**
-  **Record outcome here when tested:** _(pending)_
+  **Confirmed 2026-06-22:** plugin installed without error. CC marketplace resolver
+  supports non-root `source` paths. The subdirectory-source assumption is verified.
+  **Additional finding:** CC runs hook commands with CWD = plugin install directory
+  (not the user's repo root). hooks.json updated from
+  `node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs <mode>` to
+  `node ./hooks/adlc-hook-run.mjs <mode>` to match the confirmed CWD.
+  **Outcome:** GA blocker resolved. Plugin installs and hooks fire correctly.
 
 - [x] **`plugin.json` hooks field** — `plugins/adlc-claude-code/.claude-plugin/plugin.json`
   now includes `"hooks": "./hooks/hooks.json"`. Whether CC discovers `hooks/hooks.json`
@@ -393,15 +392,17 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   structured-edit hook (including the security-critical rails-guard). The wrapper avoids
   any shell substitution entirely.
 
-  **CWD assumption verified 2026-06-22:** manually invoked both `rails` and `preflight`
-  modes from the repo root directory — `echo '{}' | node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs rails`
-  and `echo '{}' | node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs preflight` —
-  both resolved the file and exited 0. CWD = repo root is confirmed; the literal path
-  in `hooks.json` is valid. The wrapper's `import.meta.url`-based resolution of `adlc-hook.mjs`
-  is fully independent of CWD once the file is found.
-  The remaining live-install confirmation (does the `preflight` hook actually fire when CC
-  starts a session?) is tracked by item 1 (Live marketplace install test) above.
-  **Record outcome here when tested:** _Verified from repo root CWD 2026-06-22._
+  **CWD confirmed 2026-06-22 via live install:** CC runs hook commands with CWD = plugin
+  install directory (the extracted contents of the `source` subtree), NOT the user's repo
+  root. The path `./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs` therefore resolved
+  to a non-existent path inside the install dir, causing silent hook failure (hooks did not
+  fire; `/tmp/adlc-hook.log` sentinel was absent after a fresh session start).
+  **Resolution:** hooks.json updated to `node ./hooks/adlc-hook-run.mjs <mode>` — a path
+  relative to the plugin source dir, which is the confirmed CWD. The wrapper's
+  `import.meta.url`-based resolution of `adlc-hook.mjs` remains CWD-independent once
+  the file is found. Smoke test updated with a guard that rejects any command using the
+  old repo-root-relative `./plugins/adlc-claude-code/hooks/` prefix.
+  **Record outcome here when tested:** _CWD = plugin install dir, confirmed 2026-06-22._
 
 > **CI structural guard (in place):** `scripts/claude-code-plugin-smoke.mjs` validates
 > that the root `.claude-plugin/marketplace.json` `plugins[].source` equals

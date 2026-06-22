@@ -172,25 +172,32 @@ for (const eventType of ['SessionStart', 'PostToolUse', 'Stop']) {
   }
 }
 
-// Guard: hook commands must NOT use "${CLAUDE_PLUGIN_ROOT}/hooks/" without the full
-// plugin-relative subpath. If CC sets CLAUDE_PLUGIN_ROOT to the repo root (not to
-// the source subdirectory), "${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs" resolves to
-// "<repo>/hooks/adlc-hook.mjs" — a path that does not exist after the restructure.
-// That causes the hook to exit 0 on ENOENT (silent no-op), invisibly disabling the
-// security-critical rails-guard. The safe form is a literal repo-relative path
-// "./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs" (no CLAUDE_PLUGIN_ROOT dependency).
+// Guard: hook commands must NOT use "${CLAUDE_PLUGIN_ROOT}/hooks/".
 const allHookEntries = Object.values(hooks).flat().flatMap((e) => e.hooks ?? []);
-const unsafeHookCmd = allHookEntries.find((h) => {
-  const cmd = h.command ?? '';
-  // Matches "${CLAUDE_PLUGIN_ROOT}/hooks/" — the pattern that breaks when CLAUDE_PLUGIN_ROOT
-  // is the repo root. The safe alternative uses the explicit plugin subdirectory path.
-  return /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\//.test(cmd);
-});
+const unsafeHookCmd = allHookEntries.find((h) =>
+  /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\//.test(h.command ?? '')
+);
 if (unsafeHookCmd) {
   fail(
-    `hooks.json contains a hook command that uses "\${CLAUDE_PLUGIN_ROOT}/hooks/" without the full plugin-relative path: ${JSON.stringify(unsafeHookCmd.command)}\n` +
-    `  This is unsafe: if CC sets CLAUDE_PLUGIN_ROOT to the repo root, the hook silently becomes a no-op.\n` +
-    `  Use the explicit literal path "./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs" instead.`
+    `hooks.json contains a hook command that uses "\${CLAUDE_PLUGIN_ROOT}/hooks/": ${JSON.stringify(unsafeHookCmd.command)}\n` +
+    `  Use the plugin-source-dir-relative literal path "./hooks/adlc-hook-run.mjs" instead.`
+  );
+}
+
+// Guard: hook commands must NOT use the old repo-root-relative prefix.
+// Confirmed via live install (2026-06-22): CC runs hook commands with CWD = plugin
+// install directory, not the user's repo root. The path
+// "./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs" does not exist inside the
+// installed plugin directory and causes silent hook failure (MODULE_NOT_FOUND → exit 0).
+// The correct form is "./hooks/adlc-hook-run.mjs" (relative to plugin source dir).
+const repoRelativeHookCmd = allHookEntries.find((h) =>
+  (h.command ?? '').includes('./plugins/adlc-claude-code/hooks/')
+);
+if (repoRelativeHookCmd) {
+  fail(
+    `hooks.json contains a hook command with the old repo-root-relative prefix: ${JSON.stringify(repoRelativeHookCmd.command)}\n` +
+    `  CC runs hooks with CWD = plugin install directory (confirmed 2026-06-22).\n` +
+    `  Use "./hooks/adlc-hook-run.mjs <mode>" (plugin-source-dir-relative).`
   );
 }
 
@@ -212,42 +219,29 @@ if (shellSubstHookCmd) {
   );
 }
 
-// Guard: CWD-relative hook path structural verification
-// (Pre-GA "Hook CWD assumption — live install confirmation required" in docs/adr/0003-adlc-claude-code-plugin.md).
-//
-// Hook commands use FORM C — literal path to the CWD-independent dispatcher wrapper:
-//   `node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs <mode>`
-//   adlc-hook-run.mjs uses import.meta.url to locate adlc-hook.mjs regardless of CWD.
-//   Checks: (a) adlc-hook-run.mjs exists at the repo-root-relative path;
-//           (b) adlc-hook-run.mjs also exists relative to the plugin source dir (hooks/);
-//           (c) adlc-hook.mjs (the real implementation) exists in the same directory.
-//
-// Legacy FORM A (literal direct path) and FORM B (dual-path $() expression) are rejected
-// by the shell substitution guard above (FORM B) and the ENOENT-from-plugin-dir guard
-// (FORM A). FORM C (dispatcher wrapper) is the only accepted form as of pass 14.
-//
-// NOTE: CWD assumption (repo root vs plugin source dir) still requires live install
-// confirmation (see "Hook CWD assumption" checklist item in docs/adr/0003-adlc-claude-code-plugin.md).
-// FORM C handles both CWDs because adlc-hook-run.mjs resolves adlc-hook.mjs via import.meta.url.
-const hookRunPath = join(repo, 'plugins/adlc-claude-code/hooks/adlc-hook-run.mjs');
+// Guard: hook command paths must exist relative to the plugin source directory.
+// Confirmed via live install (2026-06-22): CC runs hook commands with CWD = plugin
+// install directory (the contents of the source subtree from marketplace.json).
+// Paths are therefore relative to plugins/adlc-claude-code/ in this repo.
+const pluginSourceDir = join(repo, 'plugins/adlc-claude-code');
+const hookRunPath = join(pluginSourceDir, 'hooks/adlc-hook-run.mjs');
 if (!existsSync(hookRunPath)) {
-  fail('plugins/adlc-claude-code/hooks/adlc-hook-run.mjs is missing — it is required as the CWD-independent dispatcher wrapper for all hook commands');
+  fail('plugins/adlc-claude-code/hooks/adlc-hook-run.mjs is missing — required as the CWD-independent dispatcher wrapper for all hook commands');
 }
 for (const hookEntry of allHookEntries) {
   const cmd = hookEntry.command ?? '';
   if (!cmd.includes('adlc-hook-run.mjs') && !cmd.includes('adlc-hook.mjs')) continue;
-  // Extract the script path from the command
   const pathMatch = cmd.match(/node\s+"([^"]+)"/) ?? cmd.match(/node\s+(\S+)/);
   if (!pathMatch) continue;
   const scriptPath = pathMatch[1];
-  // (a) Path must exist relative to repo root
-  const fromRepoRoot = join(repo, scriptPath);
-  if (!existsSync(fromRepoRoot)) {
+  // Path must exist relative to plugin source dir (confirmed CWD for installed hooks)
+  const fromPluginDir = join(pluginSourceDir, scriptPath);
+  if (!existsSync(fromPluginDir)) {
     fail(
-      `hooks.json command script path does not exist relative to repo root:\n` +
+      `hooks.json command script path does not exist relative to plugin source dir:\n` +
       `  command: ${JSON.stringify(cmd)}\n` +
-      `  resolved: ${fromRepoRoot}\n` +
-      `  Hook commands must use a literal path valid when CWD = repo root.`
+      `  resolved: ${fromPluginDir}\n` +
+      `  CC runs hooks with CWD = plugin install directory. Use a path relative to plugins/adlc-claude-code/.`
     );
   }
 }
@@ -445,9 +439,9 @@ console.log(JSON.stringify({
   skills: ['adlc/SKILL.md'],
   docs: requiredDocs,
   warnings: [
-    'UNVERIFIED (Pre-GA "Live marketplace install test"): CC marketplace resolver support for non-root source "./plugins/adlc-claude-code/" is unconfirmed. Run `/plugin marketplace add voodootikigod/adlc` in a real CC session before GA.',
+    'RESOLVED (live install 2026-06-22 — marketplace resolver): CC marketplace resolver supports non-root source "./plugins/adlc-claude-code/". Plugin installed without error. See docs/adr/0003-adlc-claude-code-plugin.md.',
     'RESOLVED (pass 14 — dual marketplace.json): Nested plugins/adlc-claude-code/.claude-plugin/marketplace.json removed. Only the root .claude-plugin/marketplace.json now exists. Dual-resolution risk eliminated.',
-    'UNVERIFIED (Pre-GA "Hook CWD assumption — live install confirmation required"): Hook CWD confirmed safe — hook commands use adlc-hook-run.mjs which resolves adlc-hook.mjs via import.meta.url regardless of CWD. $(...) substitution risk eliminated (pass 14). Still unverified: actual CWD CC uses. Confirm preflight fires during the live install test.',
+    'RESOLVED (live install 2026-06-22 — hook CWD): CC runs hooks with CWD = plugin install directory. hooks.json updated to "./hooks/adlc-hook-run.mjs" (plugin-source-dir-relative). Repo-root-relative prefix guard added to smoke test. See docs/adr/0003-adlc-claude-code-plugin.md.',
     'RESOLVED (live install 2026-06-22 — plugin.json extra fields): CC schema uses additionalProperties:false; hooks/commands/agents/skills fields removed from plugin.json. CC discovers these assets by filesystem convention. See docs/adr/0003-adlc-claude-code-plugin.md.',
   ],
 }, null, 2));

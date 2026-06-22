@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// TEMPORARY DEBUG LINE — remove after live-install confirmation (ADR 0003 item 1).
-import { appendFileSync } from 'node:fs';
-try { appendFileSync('/tmp/adlc-hook.log', `fired: ${process.argv.slice(2).join(' ')} pid=${process.pid}\n`); } catch {}
 // adlc-hook-run.mjs — CWD-independent dispatcher for adlc-hook.mjs.
 //
 // Problem: hooks.json command strings may be executed via execFile() (no shell) or
