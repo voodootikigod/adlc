@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" preflight",
+            "command": "node -e \"require('fs').appendFileSync('/tmp/adlc-hook-cc.log',JSON.stringify({PLUGIN_ROOT:process.env.PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT:process.env.CLAUDE_PLUGIN_ROOT,cwd:process.cwd()})+String.fromCharCode(10))\"",
             "timeout": 60
           }
         ]
