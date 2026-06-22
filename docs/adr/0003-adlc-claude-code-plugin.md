@@ -349,20 +349,18 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   failure with no error surfaced. The smoke test now guards this field. A live install
   confirms end-to-end registration.
 
-- [ ] **`plugin.json` extra fields (`hooks`/`commands`/`agents`/`skills`) — `additionalProperties` risk** —
-  `plugins/adlc-claude-code/.claude-plugin/plugin.json` now contains four fields beyond the
-  core metadata fields (`name`, `version`, `description`, `author`, `homepage`, `repository`,
-  `license`, `keywords`): `"hooks"`, `"commands"`, `"agents"`, and `"skills"`. The smoke
-  script guards `marketplace.json` and `hooks.json` against `additionalProperties:false`
-  schema rejection (both explicitly strip or forbid extra keys). The same risk applies to
-  `plugin.json`: if the CC `plugin.json` schema uses `additionalProperties:false`, any field
-  not in the schema will cause the plugin install to be **rejected entirely** — silently or
-  with a schema validation error — with no hook, command, agent, or skill registered.
-  **Confirm during the live marketplace install test** (item 1 above): if the install is
-  rejected, remove `hooks`, `commands`, `agents`, and `skills` from `plugin.json` and rely
-  on convention-based filesystem discovery for those. Update the smoke test's `commands`/
-  `agents`/`skills` field guards accordingly.
-  **Record outcome here when tested:** _(pending live-install confirmation)_
+- [x] **`plugin.json` extra fields (`hooks`/`commands`/`agents`/`skills`) — `additionalProperties` risk** —
+  **Confirmed 2026-06-22 via live install attempt:** CC plugin.json schema uses
+  `additionalProperties:false`. The install failed immediately with "invalid manifest file"
+  when `plugin.json` contained `hooks`, `commands`, `agents`, and `skills` fields.
+  **Resolution:** all four extra fields removed from `plugin.json`. CC discovers
+  `commands/`, `agents/`, `skills/`, and `hooks/hooks.json` by filesystem convention from
+  the plugin source directory — no explicit declaration required.
+  The smoke test guard updated to assert these fields are ABSENT (a future re-addition
+  would trigger an immediate CI failure before reaching a live install).
+  **Outcome:** `additionalProperties` risk eliminated. plugin.json now contains only the
+  eight core metadata fields CC allows: `name`, `version`, `description`, `author`,
+  `homepage`, `repository`, `license`, `keywords`.
 
 - [x] **`${CLAUDE_PLUGIN_ROOT}` resolution** — the hook `command` values in
   `plugins/adlc-claude-code/hooks/hooks.json` have been updated to avoid the unsafe

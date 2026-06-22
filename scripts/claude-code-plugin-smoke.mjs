@@ -107,51 +107,22 @@ if (!plugin.homepage) fail('plugin.json missing "homepage" field');
 if (!plugin.homepage.includes('docs/integrations/claude-code.md')) {
   fail(`plugin.json "homepage" must point at docs/integrations/claude-code.md (got ${JSON.stringify(plugin.homepage)})`);
 }
-// Guard: plugin.json must include an explicit "hooks" field pointing at hooks/hooks.json.
-// Whether CC discovers hooks by filesystem convention or by an explicit field is unverified,
-// but the Codex plugin uses an explicit field and the CC docs do not guarantee auto-discovery.
-// An absent field risks hooks never being registered — a complete enforcement failure.
-if (!plugin.hooks) {
-  fail('plugins/adlc-claude-code/.claude-plugin/plugin.json missing "hooks" field — add "hooks": "./hooks/hooks.json" to ensure CC registers the hook definitions');
-}
-if (plugin.hooks !== './hooks/hooks.json') {
-  fail(`plugins/adlc-claude-code/.claude-plugin/plugin.json "hooks" must be "./hooks/hooks.json" (got ${JSON.stringify(plugin.hooks)})`);
-}
-
-// Guard: plugin.json must include explicit "commands", "agents", and "skills" fields.
-// Whether CC discovers these directories by filesystem convention or requires explicit
-// field declarations is unverified. Missing fields risk slash commands, the prosecutor
-// subagent, and the skill being silently unregistered. The Codex plugin uses explicit
-// fields as a precedent; defensive explicit declarations are safer than relying on
-// convention-based discovery whose behavior under non-root source is unknown.
-//
-// IMPORTANT: additionalProperties risk (Pre-GA blocking item) —
-// The four new fields below (hooks/commands/agents/skills) were NOT present in the
-// original plugin.json. If the CC plugin.json schema uses additionalProperties:false,
-// any field not in the schema will cause the plugin install to be rejected entirely,
-// silently or with a schema validation error. This is the same risk that led to removing
-// `description` from hooks.json (pass 14). The guards below enforce the fields are
-// present; a live install test is required to confirm CC does not reject plugin.json
-// with these extra fields. See "plugin.json extra fields" checklist item in
-// docs/adr/0003-adlc-claude-code-plugin.md. If rejected, remove these four fields and
-// rely on convention-based filesystem discovery; update these guards accordingly.
-if (!plugin.commands) {
-  fail('plugins/adlc-claude-code/.claude-plugin/plugin.json missing "commands" field — add "commands": "./commands/" to ensure CC registers the slash commands');
-}
-if (plugin.commands !== './commands/') {
-  fail(`plugins/adlc-claude-code/.claude-plugin/plugin.json "commands" must be "./commands/" (got ${JSON.stringify(plugin.commands)})`);
-}
-if (!plugin.agents) {
-  fail('plugins/adlc-claude-code/.claude-plugin/plugin.json missing "agents" field — add "agents": "./agents/" to ensure CC registers the prosecutor subagent');
-}
-if (plugin.agents !== './agents/') {
-  fail(`plugins/adlc-claude-code/.claude-plugin/plugin.json "agents" must be "./agents/" (got ${JSON.stringify(plugin.agents)})`);
-}
-if (!plugin.skills) {
-  fail('plugins/adlc-claude-code/.claude-plugin/plugin.json missing "skills" field — add "skills": "./skills/" to ensure CC registers the adlc skill');
-}
-if (plugin.skills !== './skills/') {
-  fail(`plugins/adlc-claude-code/.claude-plugin/plugin.json "skills" must be "./skills/" (got ${JSON.stringify(plugin.skills)})`);
+// Guard: plugin.json must NOT contain extra fields beyond the CC-allowed core set.
+// Confirmed via live install test (2026-06-22): CC plugin.json schema uses
+// additionalProperties:false — any field beyond the core metadata fields causes an
+// "invalid manifest" rejection. The fields hooks/commands/agents/skills were removed;
+// CC discovers these assets by filesystem convention from the plugin source directory.
+const allowedPluginJsonKeys = new Set([
+  'name', 'version', 'description', 'author', 'homepage',
+  'repository', 'license', 'keywords',
+]);
+const extraPluginJsonKeys = Object.keys(plugin).filter((k) => !allowedPluginJsonKeys.has(k));
+if (extraPluginJsonKeys.length > 0) {
+  fail(
+    `plugin.json contains extra fields that will cause CC to reject the install with "invalid manifest": ${extraPluginJsonKeys.join(', ')}\n` +
+    `  CC plugin.json schema uses additionalProperties:false. Only these fields are allowed: ${[...allowedPluginJsonKeys].join(', ')}\n` +
+    `  Remove the extra fields and rely on filesystem convention for hooks/commands/agents/skills discovery.`
+  );
 }
 
 // --- plugins/adlc-claude-code/hooks/hooks.json ---
@@ -477,6 +448,6 @@ console.log(JSON.stringify({
     'UNVERIFIED (Pre-GA "Live marketplace install test"): CC marketplace resolver support for non-root source "./plugins/adlc-claude-code/" is unconfirmed. Run `/plugin marketplace add voodootikigod/adlc` in a real CC session before GA.',
     'RESOLVED (pass 14 — dual marketplace.json): Nested plugins/adlc-claude-code/.claude-plugin/marketplace.json removed. Only the root .claude-plugin/marketplace.json now exists. Dual-resolution risk eliminated.',
     'UNVERIFIED (Pre-GA "Hook CWD assumption — live install confirmation required"): Hook CWD confirmed safe — hook commands use adlc-hook-run.mjs which resolves adlc-hook.mjs via import.meta.url regardless of CWD. $(...) substitution risk eliminated (pass 14). Still unverified: actual CWD CC uses. Confirm preflight fires during the live install test.',
-    'UNVERIFIED (Pre-GA "plugin.json extra fields — additionalProperties risk"): plugin.json contains four extra fields (hooks/commands/agents/skills) not present in the base CC plugin.json schema. If CC uses additionalProperties:false, the install will be rejected entirely. Confirm during the live marketplace install test. See docs/adr/0003-adlc-claude-code-plugin.md.',
+    'RESOLVED (live install 2026-06-22 — plugin.json extra fields): CC schema uses additionalProperties:false; hooks/commands/agents/skills fields removed from plugin.json. CC discovers these assets by filesystem convention. See docs/adr/0003-adlc-claude-code-plugin.md.',
   ],
 }, null, 2));
