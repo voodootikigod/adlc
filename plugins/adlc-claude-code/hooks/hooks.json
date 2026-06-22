@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/adlc-hook-run.mjs rails",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" rails",
             "timeout": 15
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/adlc-hook-run.mjs preflight",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" preflight",
             "timeout": 60
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/adlc-hook-run.mjs flail",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" flail",
             "timeout": 30
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/adlc-hook-run.mjs manifest",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" manifest",
             "timeout": 30
           }
         ]

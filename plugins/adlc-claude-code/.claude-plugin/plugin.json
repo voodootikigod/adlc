@@ -9,7 +9,6 @@
   "homepage": "https://github.com/voodootikigod/adlc/blob/main/docs/integrations/claude-code.md",
   "repository": "https://github.com/voodootikigod/adlc",
   "license": "MIT",
-  "hooks": "./hooks/hooks.json",
   "keywords": [
     "adlc",
     "agentic",
