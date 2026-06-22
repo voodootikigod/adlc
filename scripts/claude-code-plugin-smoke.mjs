@@ -112,9 +112,12 @@ if (!plugin.homepage.includes('docs/integrations/claude-code.md')) {
 // additionalProperties:false — any field beyond the core metadata fields causes an
 // "invalid manifest" rejection. The fields hooks/commands/agents/skills were removed;
 // CC discovers these assets by filesystem convention from the plugin source directory.
+// CC plugin.json schema uses additionalProperties:false (confirmed live install 2026-06-22).
+// 'hooks' is tentatively re-added to test whether it is a recognized CC field — if
+// install fails again with "invalid manifest", remove it and rely on convention discovery.
 const allowedPluginJsonKeys = new Set([
   'name', 'version', 'description', 'author', 'homepage',
-  'repository', 'license', 'keywords',
+  'repository', 'license', 'keywords', 'hooks',
 ]);
 const extraPluginJsonKeys = Object.keys(plugin).filter((k) => !allowedPluginJsonKeys.has(k));
 if (extraPluginJsonKeys.length > 0) {
@@ -123,6 +126,9 @@ if (extraPluginJsonKeys.length > 0) {
     `  CC plugin.json schema uses additionalProperties:false. Only these fields are allowed: ${[...allowedPluginJsonKeys].join(', ')}\n` +
     `  Remove the extra fields and rely on filesystem convention for hooks/commands/agents/skills discovery.`
   );
+}
+if (!plugin.hooks || plugin.hooks !== './hooks/hooks.json') {
+  fail(`plugin.json "hooks" must be "./hooks/hooks.json" (got ${JSON.stringify(plugin.hooks)})`);
 }
 
 // --- plugins/adlc-claude-code/hooks/hooks.json ---
