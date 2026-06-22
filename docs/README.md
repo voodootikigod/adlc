@@ -11,10 +11,12 @@ package READMEs.
 ## Start here
 
 - [Toolkit guide](./toolkit.md) explains how the packages fit into the ADLC flow.
-- [Codex integration](./codex-integration.md) explains installation, usage, and the
+- [Codex integration](./integrations/codex.md) explains installation, usage, and the
   current gaps against the formal ADLC doctrine.
-- [Claude Code integration](./claude-code.md) explains how to install and use the
-  Claude Code plugin, including lifecycle coverage and known gaps.
+- [Claude Code integration](./integrations/claude-code.md) explains how to install and
+  use the Claude Code plugin, including lifecycle coverage and known gaps.
+- [Pi integration](./integrations/pi.md) explains the Raspberry Pi harness integration.
+- [opencode integration](./integrations/opencode.md) [planned]
 - [Package reference](./package-reference.md) lists every package, binary, phase, and
   primary README source.
 - [Ticket authoring](./ticket-authoring.md) defines the canonical ticket schema that
@@ -40,6 +42,9 @@ package READMEs.
 
 - `packages/*` contains one npm workspace package per tool.
 - `packages/core` contains shared primitives used by the CLIs.
+- `plugins/adlc-claude-code/` contains the Claude Code plugin (skill, commands, hooks, subagent).
+- `plugins/adlc-codex/` contains the Codex integration (hooks and skills).
+- `plugins/adlc-pi/` contains the Pi harness integration (TypeScript, skills, tests).
 - `.adlc/` is the runtime convention used by several tools for tickets, ledgers, lessons,
   and gate evidence.
 - `docs/` contains toolkit-level documentation and long-form lifecycle material.
@@ -53,3 +58,7 @@ package's `bin` field, and the root test script runs each package test suite wit
 ```sh
 npm test
 ```
+
+## Archive
+
+- [archive/](./archive/README.md) — superseded proposals retained for historical reference.

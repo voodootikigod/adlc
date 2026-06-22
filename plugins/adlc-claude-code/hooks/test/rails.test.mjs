@@ -467,7 +467,11 @@ test('the PreToolUse rails matcher excludes Bash (Bash → CI-gate territory)', 
     readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks.json'), 'utf8')
   );
   const railsEntry = hooksJson.hooks.PreToolUse.find((e) =>
-    e.hooks.some((h) => h.command.includes('adlc-hook.mjs') && h.command.includes('rails'))
+    e.hooks.some(
+      (h) =>
+        (h.command.includes('adlc-hook-run.mjs') || h.command.includes('adlc-hook.mjs')) &&
+        h.command.includes('rails')
+    )
   );
   assert.ok(railsEntry, 'a PreToolUse rails hook entry exists');
   assert.equal(/\bBash\b/.test(railsEntry.matcher), false); // Bash not gated in-session
@@ -510,7 +514,7 @@ for (const [name, json] of [
 // ---- audited bypass: allowed ONLY when the override can be durably recorded ----
 
 const NODE_DIR = dirname(process.execPath);
-const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '.bin');
+const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
 const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // recorder reachable
 const WITHOUT_ADLC = NODE_DIR; // node only — `adlc` not resolvable
 

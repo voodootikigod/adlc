@@ -31,6 +31,74 @@ jobs:
       - name: Test
         run: npm test
 
+  pre-ga-gate:
+    # Explicit CI gate that fails with a clear message while either of the two
+    # unverified Pre-GA assumptions documented in docs/adr/0003-adlc-claude-code-plugin.md
+    # remain open (marked [ ] in the checklist).
+    #
+    # This job exists specifically to prevent "CI is green → GA-ready" confusion:
+    # the test and rails-guard jobs pass on structural correctness; this job is the
+    # ONLY machine-enforced block on announcing GA before the live install tests are done.
+    #
+    # ============================================================
+    # ACTION REQUIRED — GITHUB REPOSITORY SETTINGS
+    # ============================================================
+    # This job MUST be added as a required status check in GitHub repository
+    # Settings > Branches > Branch protection rules for the main branch.
+    #
+    #   Steps:
+    #     1. Go to: Settings → Branches → Branch protection rules → main (or add new rule)
+    #     2. Enable "Require status checks to pass before merging"
+    #     3. Search for and add "pre-ga-gate" to the required status checks list
+    #     4. Save the rule
+    #
+    # WITHOUT this step, this job can fail and still NOT block a merge.
+    # The gate is only effective as a hard enforcement wall when it is a
+    # required check. A failing-but-not-required pre-ga-gate is theatre.
+    # See docs/adr/0003-adlc-claude-code-plugin.md § "Pre-GA checklist" for details.
+    # ============================================================
+    #
+    # To resolve and remove this gate: complete both live install tests (Pre-GA
+    # checklist items 1, 3, and 4 in the ADR), update the ADR checkboxes from [ ] to [x],
+    # then remove or disable this job.
+    #
+    # NOTE: There is currently no automated check that "pre-ga-gate" and "rails-guard"
+    # have been added as required status checks in GitHub repository settings. A failing
+    # but non-required pre-ga-gate is theatre — it will not block a merge. To verify that
+    # branch protection is configured correctly, query the GitHub API:
+    #   gh api repos/{owner}/{repo}/branches/main/protection
+    # and confirm both jobs appear in required_status_checks.contexts. This step must be
+    # completed manually before merging any branch that depends on these gates.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Pre-GA live install tests not yet confirmed
+        shell: bash
+        run: |
+          ADR="docs/adr/0003-adlc-claude-code-plugin.md"
+          # Count lines that contain an open Pre-GA checklist item:
+          #   "- [ ] **Live marketplace"         — item 1: live /plugin marketplace add test
+          #   "- [ ] **Hook CWD assumption"      — item 4: hook CWD live confirmation
+          #   "- [ ] **`plugin.json` extra fields" — item 3: additionalProperties rejection risk
+          # All three items block GA. Update this pattern whenever a new blocking item is added
+          # or an existing item is resolved and removed from the checklist.
+          OPEN_ITEMS=$(grep -cE '^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields)' "$ADR" || true)
+          if [ "$OPEN_ITEMS" -gt 0 ]; then
+            echo "::error file=$ADR::Pre-GA live install tests not yet confirmed ($OPEN_ITEMS item(s) open in ADR 0003 checklist)."
+            echo ""
+            echo "  Failing items in $ADR:"
+            grep -nE '^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields)' "$ADR" || true
+            echo ""
+            echo "  To unblock: complete both live install tests, update the checklist"
+            echo "  items from [ ] to [x], and push. This job will then pass automatically."
+            echo ""
+            echo "  See the Pre-GA checklist in $ADR for full details."
+            exit 1
+          fi
+          echo "All Pre-GA live install checklist items are confirmed. pre-ga-gate passes."
+
   rails-guard:
     # The unbypassable commit-time backstop for the in-session rail hook: rejects
     # a PR whose diff touches a frozen rail, including via shell write forms the

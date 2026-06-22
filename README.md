@@ -70,7 +70,21 @@ npm install -g @adlc/cli
 /adlc-init
 ```
 
-See **[docs/claude-code.md](./docs/claude-code.md)** for the full adoption guide.
+See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** for the full adoption guide.
+
+## Project layout
+
+| Directory | Contents |
+|---|---|
+| `packages/` | The toolkit: 21 zero-dependency, gate-shaped CLIs |
+| `plugins/adlc-claude-code/` | Claude Code integration (skill, commands, hooks, subagent) |
+| `plugins/adlc-codex/` | Codex integration (hooks and skills; no TypeScript package) |
+| `plugins/adlc-pi/` | Pi harness integration package (TypeScript, skills, tests) |
+| `docs/` | Lifecycle thesis, integration guides, ADRs, CI templates |
+| `.claude/commands/` | Maintainer commands for this repo (release workflow) |
+| `scripts/` | Release, smoke test, and CI helper scripts (not published; run by `npm test` and CI) |
+| `.adlc/` | Runtime data directory (tickets, gate evidence — gitignored except example) |
+| `.claude-plugin/` | Repo-root marketplace manifest (`marketplace.json`) used by `/plugin marketplace add voodootikigod/adlc`. See [ADR 0003](./docs/adr/0003-adlc-claude-code-plugin.md) for the subdirectory-source assumption and Pre-GA checklist. |
 
 ## Design principles
 
@@ -98,8 +112,9 @@ Requires **Node.js 18 or newer**.
 ## Documentation
 
 - [ADLC.md](./ADLC.md) — the full lifecycle thesis and flaw inventory.
-- [docs/claude-code.md](./docs/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
-- [docs/codex-integration.md](./docs/codex-integration.md) — native Codex integration guide.
+- [docs/integrations/claude-code.md](./docs/integrations/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
+- [docs/integrations/codex.md](./docs/integrations/codex.md) — native Codex integration guide.
+- [docs/integrations/pi.md](./docs/integrations/pi.md) — Raspberry Pi harness integration guide.
 - [docs/](./docs/README.md) — toolkit guide, package reference, ADRs, and narrative essays.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the contract every package follows.
 

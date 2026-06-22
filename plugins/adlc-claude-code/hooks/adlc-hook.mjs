@@ -80,8 +80,14 @@ function emit(obj) {
 }
 
 /**
- * Run an `adlc` subcommand. Returns the spawn result, or null when the toolkit
- * is not on PATH (ENOENT) — the signal to no-op rather than error.
+ * Run an ADLC toolkit command via the `adlc` umbrella dispatcher. `args` are
+ * the subcommand and its arguments (e.g. ['preflight', '--json'],
+ * ['gate-manifest', 'verify', '--json']). Routes through the single `adlc`
+ * binary that `npm install -g @adlc/cli` provides, so individual package bins
+ * do NOT need to be installed separately.
+ *
+ * Returns the spawn result, or null when `adlc` is not on PATH (ENOENT) —
+ * the signal to no-op rather than error.
  */
 function runAdlc(args) {
   const r = spawnSync('adlc', args, { encoding: 'utf8' });
@@ -583,7 +589,7 @@ function recordBypass(relPath, why) {
 // (every guard leaks — wrappers, subshells, globs, cd, eval, …). Rail mutations
 // via Bash are caught by the UNBYPASSABLE rails-guard CI diff gate at commit
 // time (`scripts/rails-guard-ci.mjs`), which inspects the committed change
-// regardless of how it was produced. See docs/adr-adlc-command-reconciliation.md.
+// regardless of how it was produced. See docs/adr/0002-adlc-command-reconciliation.md.
 //
 // Symlink note: rails and targets are matched in both lexical and symlink-
 // resolved forms, and a rail's literal directory PREFIX is symlink-resolved. A

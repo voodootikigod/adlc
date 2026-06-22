@@ -1,6 +1,6 @@
 # Plan: Installing & Integrating ADLC into Claude Code
 
-**Status:** Superseded — see [`docs/adr/0003-adlc-claude-code-plugin.md`](./adr/0003-adlc-claude-code-plugin.md) for the accepted design record. · **Original Status:** Proposal · **Branch:** `feat/claude-code-integration` · **Date:** 2026-06-14
+**Status:** Superseded — see [`docs/adr/0003-adlc-claude-code-plugin.md`](../adr/0003-adlc-claude-code-plugin.md) for the accepted design record. · **Original Status:** Proposal · **Branch:** `feat/claude-code-integration` · **Date:** 2026-06-14
 
 ## 1. Problem
 
@@ -263,7 +263,7 @@ sequence 20 tools + supply keys" to "install once, init once."
    a scheduled Claude routine (`/schedule`) — no API keys.
 6. **Phase F — marketplace publish** + docs. ✅ Shipped. The repo is a Claude
    Code marketplace (`.claude-plugin/marketplace.json` + `plugin.json`);
-   `docs/claude-code.md` is the user adoption guide, linked from the README.
+   `docs/integrations/claude-code.md` is the user adoption guide, linked from the README.
    "Publish" = pushing the branch to GitHub, where the repo itself serves as the
    installable marketplace (`/plugin marketplace add voodootikigod/adlc`).
 
