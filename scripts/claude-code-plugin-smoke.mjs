@@ -177,36 +177,37 @@ for (const eventType of ['SessionStart', 'PostToolUse', 'Stop']) {
   }
 }
 
-// Guard: hook commands must use ${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs.
-// CC injects PLUGIN_ROOT = absolute path to the plugin's install directory.
-// This is the only CWD-independent way to reference plugin files — confirmed
-// by the Codex plugin convention and live install testing (2026-06-22):
-//   - "./plugins/adlc-claude-code/hooks/" prefix → silent failure (not in install dir)
-//   - "./hooks/" relative path → silent failure (CWD = user project, not install dir)
-//   - CC auto-loads hooks/hooks.json by convention; no "hooks" field needed in plugin.json
-//   - "${PLUGIN_ROOT}/hooks/" → absolute path, CWD-independent, correct form
+// Guard: hook commands must use ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs.
+// CC injects CLAUDE_PLUGIN_ROOT = absolute path to the plugin's install directory.
+// Confirmed by research across 20+ production CC marketplace plugins (Dev-GOM/claude-code-marketplace,
+// ruvnet/ruflo). All use the unquoted form: node ${CLAUDE_PLUGIN_ROOT}/scripts/foo.js
+// Bad forms that were tried and failed (2026-06-22 live install testing):
+//   - "./plugins/adlc-claude-code/hooks/" → not present in plugin install dir
+//   - "./hooks/" → CWD is user's project dir, not plugin install dir
+//   - "${PLUGIN_ROOT}/" → wrong var name, not set by CC (Codex uses PLUGIN_ROOT; CC uses CLAUDE_PLUGIN_ROOT)
+//   - "node \"${CLAUDE_PLUGIN_ROOT}/...\"" with quotes → may interfere with CC's variable substitution
 const allHookEntries = Object.values(hooks).flat().flatMap((e) => e.hooks ?? []);
 const badPrefixCmd = allHookEntries.find((h) => {
   const cmd = h.command ?? '';
   return (
     cmd.includes('./plugins/adlc-claude-code/hooks/') ||
     /node ["']?\.\/hooks\//.test(cmd) ||
-    /\$\{CLAUDE_PLUGIN_ROOT\}/.test(cmd)
+    cmd.includes('${PLUGIN_ROOT}')
   );
 });
 if (badPrefixCmd) {
   fail(
-    `hooks.json command uses an unsafe path form: ${JSON.stringify(badPrefixCmd.command)}\n` +
-    `  Use '\${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs' — CC injects PLUGIN_ROOT as the absolute install path.`
+    `hooks.json command uses a bad path form: ${JSON.stringify(badPrefixCmd.command)}\n` +
+    `  Use 'node \${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode>' (unquoted, CLAUDE_PLUGIN_ROOT).`
   );
 }
-const missingPluginRootCmd = allHookEntries.find(
-  (h) => (h.command ?? '').includes('adlc-hook-run.mjs') && !(h.command ?? '').includes('${PLUGIN_ROOT}')
+const missingClaudePluginRootCmd = allHookEntries.find(
+  (h) => (h.command ?? '').includes('adlc-hook-run.mjs') && !(h.command ?? '').includes('${CLAUDE_PLUGIN_ROOT}')
 );
-if (missingPluginRootCmd) {
+if (missingClaudePluginRootCmd) {
   fail(
-    `hooks.json adlc-hook-run.mjs command does not use \${PLUGIN_ROOT}: ${JSON.stringify(missingPluginRootCmd.command)}\n` +
-    `  Correct form: node "\${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs" <mode>`
+    `hooks.json adlc-hook-run.mjs command does not use \${CLAUDE_PLUGIN_ROOT}: ${JSON.stringify(missingClaudePluginRootCmd.command)}\n` +
+    `  Correct form: node \${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode>`
   );
 }
 

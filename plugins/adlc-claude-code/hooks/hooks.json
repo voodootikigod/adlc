@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" rails",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs rails",
             "timeout": 15
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"require('fs').appendFileSync('/tmp/adlc-hook-cc.log',JSON.stringify({PLUGIN_ROOT:process.env.PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT:process.env.CLAUDE_PLUGIN_ROOT,cwd:process.cwd()})+String.fromCharCode(10))\"",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs preflight",
             "timeout": 60
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" flail",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs flail",
             "timeout": 30
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs\" manifest",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs manifest",
             "timeout": 30
           }
         ]
