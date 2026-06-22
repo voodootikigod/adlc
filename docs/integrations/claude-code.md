@@ -5,8 +5,8 @@ The `@adlc/*` toolkit is a set of gate-shaped CLIs. This plugin makes the whole
 at the right lifecycle moments — some automatically — and the model reaches for
 the right gate without you memorizing 20 tools.
 
-> Design and rationale: [ADR 0003 — Bringing the ADLC to Claude Code as a plugin](./adr/0003-adlc-claude-code-plugin.md).
-> The full thesis: [`../ADLC.md`](../ADLC.md).
+> Design and rationale: [ADR 0003 — Bringing the ADLC to Claude Code as a plugin](../adr/0003-adlc-claude-code-plugin.md).
+> The full thesis: [`../../ADLC.md`](../../ADLC.md).
 
 ## Install
 
@@ -40,7 +40,7 @@ install above) and Node 18+.
 | Command | Phase | What it does |
 | --- | --- | --- |
 | `/adlc-init` | — | Bootstrap `.adlc/`, split the committable ticket contract from runtime evidence in `.gitignore`, run preflight. |
-| `/adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](./ticket-authoring.md). |
+| `/adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](../ticket-authoring.md). |
 | `/adlc-distill` | P7 | Mine repeated findings and PR rejections into deterministic defenses (lint rules, skills, review lenses). |
 | `/adlc-maintain` | C10/C12 | Decay-driven checks: stale skills, hot files to re-prosecute, gate calibration. |
 
@@ -93,10 +93,10 @@ The in-session rail hook is best-effort for Bash; pair it with the commit-time
 gate so obfuscated shell writes are still caught. Copy these into
 `.github/workflows/`:
 
-- [`ci/rails-guard.yml`](./ci/rails-guard.yml) — rejects a PR whose diff touches a
+- [`ci/rails-guard.yml`](../ci/rails-guard.yml) — rejects a PR whose diff touches a
   frozen rail. Make it a required check. The rail set is read from the **base**
   ref, so a PR can't remove rails to disable the gate.
-- [`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) — a weekly advisory cron
+- [`ci/adlc-maintenance.yml`](../ci/adlc-maintenance.yml) — a weekly advisory cron
   running the deterministic maintenance checks into the job summary.
 
 Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
@@ -139,8 +139,8 @@ Command separation is by design (ADR 0002):
   the dispatcher, not called directly in normal workflows.
 
 Formal phase assertions (`adlc run p5`, `adlc accept`) are part of the Codex
-surface. See [`codex-integration.md`](./codex-integration.md) and
-[ADR 0002](./adr/0002-adlc-command-reconciliation.md) for the full command
+surface. See [`codex.md`](./codex.md) and
+[ADR 0002](../adr/0002-adlc-command-reconciliation.md) for the full command
 reconciliation rationale.
 
 ## Gaps
@@ -162,7 +162,7 @@ Current gaps relative to the formal ADLC doctrine:
    Turing-complete and cannot be reliably parsed for mutation targets; every
    parser attempted had further bypasses. Rail mutations via Bash are caught at
    commit time by the unbypassable `rails-guard` CI diff gate. See
-   [ADR 0003](./adr/0003-adlc-claude-code-plugin.md) for the full rationale.
+   [ADR 0003](../adr/0003-adlc-claude-code-plugin.md) for the full rationale.
 3. **Skill discovery depends on description matching.** The `adlc` phase router
    is one skill with a broad trigger set, but a poorly-phrased request may not
    match the description and will not route through the lifecycle.

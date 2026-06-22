@@ -4,8 +4,8 @@ This page is the landing doc for the Codex-native ADLC surface. It explains how 
 install it, how to use it, and where the current implementation still falls short of the
 formal ADLC doctrine.
 
-The integration is described in more detail in [ADR 0001](./adr/0001-codex-native-adlc-integration.md).
-The canonical ticket schema all gates read is in [ticket-authoring.md](./ticket-authoring.md).
+The integration is described in more detail in [ADR 0001](../adr/0001-codex-native-adlc-integration.md).
+The canonical ticket schema all gates read is in [ticket-authoring.md](../ticket-authoring.md).
 
 ## Install
 
@@ -139,7 +139,7 @@ Current gaps relative to the formal ADLC doctrine:
    repository's other deterministic checks.
 
 For Claude Code–specific gaps (in-session Bash enforcement, P5 formal assertion on the CC
-path), see [`claude-code.md` — Gaps](./claude-code.md#gaps).
+path), see [Claude Code integration — Gaps](./claude-code.md#gaps).
 
 ## Using with Claude Code
 
@@ -149,14 +149,14 @@ Claude Code for interactive sessions (commands, hooks, skill routing). Both writ
 to the same `.adlc/` workspace and read the same tickets.
 
 The ticket schema that all gates and both integrations read is documented in
-[`ticket-authoring.md`](./ticket-authoring.md).
+[`ticket-authoring.md`](../ticket-authoring.md).
 
 Command separation:
 - `adlc <tool>` — gate dispatcher; used by both harnesses.
 - `adlc-runner <verb>` — phase-assertion runner; used by this Codex path.
 
-See [`claude-code.md`](./claude-code.md) for the Claude Code integration and
-[ADR 0002](./adr/0002-adlc-command-reconciliation.md) for the full command
+See [Claude Code integration](./claude-code.md) for the Claude Code integration and
+[ADR 0002](../adr/0002-adlc-command-reconciliation.md) for the full command
 reconciliation rationale.
 
 ## Boundary

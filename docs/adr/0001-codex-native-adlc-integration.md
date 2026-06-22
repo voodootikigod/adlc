@@ -7,11 +7,10 @@ Date: 2026-06-18
 ## Context
 
 ADLC is a toolkit of deterministic, gate-shaped CLIs plus doctrine for running
-agentic software development. The Claude Code integration in the sibling
-`../cc-integration` worktree is further along and proves useful lifecycle
-patterns, but Codex has different native surfaces: plugins, progressive
-disclosure skills, lifecycle hooks, app automations, and explicit subagent
-workflows.
+agentic software development. The Claude Code integration (now living at `plugins/adlc-claude-code/` in this
+repo) is further along and proves useful lifecycle patterns, but Codex has
+different native surfaces: plugins, progressive disclosure skills, lifecycle
+hooks, app automations, and explicit subagent workflows.
 
 The Codex integration must implement the ADLC doctrine, not mechanically port
 Claude Code's command and agent file layout. The core doctrine is:
@@ -93,7 +92,7 @@ manifest-backed completion rule.
 
 ### Rails
 
-- Ship plugin-bundled `hooks/hooks.json`; do not leave hook scripts orphaned.
+- Ship plugin-bundled hooks metadata (e.g. `plugins/adlc-codex/hooks/hooks.json` for the Codex plugin); do not leave hook scripts orphaned.
 - Use an enforcing `PreToolUse` hook for structured file-editing tools that can
   identify target paths and shell-capable tools whose command payload can mutate
   files.

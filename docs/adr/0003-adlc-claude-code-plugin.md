@@ -1,6 +1,6 @@
 # ADR: Bringing the ADLC to Claude Code as a plugin
 
-**Status:** **Accepted — shipped.** Phases A–F merged to `main` via PR #6
+**Status:** **Accepted — shipped (pre-GA: live marketplace install test pending).** Phases A–F merged to `main` via PR #6
 (2026-06-18). The P7 skill-mining wiring is accepted and in review (PR #7). The
 `adlc` command-name reconciliation with the Codex effort is a separate, related
 decision — see [`0002-adlc-command-reconciliation.md`](./0002-adlc-command-reconciliation.md)
@@ -51,6 +51,29 @@ keys. This is the "ship Appendix F as a plugin" thesis from `ADLC.md`.
 Ship the ADLC as a **Claude Code plugin** that maps each ADLC primitive onto the
 native Claude Code extension point that fits it, fronted by a single umbrella CLI.
 
+> **Layout note (restructuring 2026-06-22):** This ADR was originally written
+> against the pre-restructuring layout. Sections 2, 3, 5, and the Verification section have been updated
+> with current paths. All sections now use current paths or contain no file references. All plugin source files now live under
+> `plugins/adlc-claude-code/`. The root `.claude-plugin/` holds only
+> `marketplace.json`. Moved paths include:
+> - `.claude-plugin/plugin.json` → `plugins/adlc-claude-code/.claude-plugin/plugin.json`
+> - `commands/` → `plugins/adlc-claude-code/commands/`
+> - `skills/adlc/SKILL.md` → `plugins/adlc-claude-code/skills/adlc/SKILL.md`
+> - `agents/prosecutor.md` → `plugins/adlc-claude-code/agents/prosecutor.md`
+> - `hooks/adlc-hook.mjs` → `plugins/adlc-claude-code/hooks/adlc-hook.mjs`
+> - `hooks/hooks.json` → `plugins/adlc-claude-code/hooks/hooks.json`
+>
+> The root `marketplace.json` `plugins[].source` field (`"./plugins/adlc-claude-code/"`)
+> tells the CC marketplace protocol where to resolve `plugin.json`.
+>
+> **Unverified assumption (blocks GA):** The CC marketplace resolver supports a
+> non-root subdirectory as the `source` value. The smoke test validates all file
+> paths but does **not** exercise the live CC marketplace API. A live
+> `/plugin marketplace add voodootikigod/adlc` test is required before GA —
+> see the Pre-GA checklist in the **Verification** section below.
+>
+> See [../integrations/claude-code.md](../integrations/claude-code.md) for the current adoption guide.
+
 ### 1. Umbrella dispatcher — `@adlc/cli` (`adlc <tool>`)
 
 A new package exposing one bin, `adlc`, that dispatches to the 20 gates
@@ -60,13 +83,32 @@ bins. Prerequisite for everything else; only net-new code in the effort.
 
 ### 2. Plugin layout
 
-A standard Claude Code plugin: `.claude-plugin/plugin.json` + `marketplace.json`
-(the repo *is* its own marketplace — `/plugin marketplace add voodootikigod/adlc`),
-plus `commands/`, `agents/`, `skills/`, `hooks/`.
+A standard Claude Code plugin: `plugins/adlc-claude-code/.claude-plugin/plugin.json`
++ root `.claude-plugin/marketplace.json` (the repo *is* its own marketplace —
+`/plugin marketplace add voodootikigod/adlc`), plus
+`plugins/adlc-claude-code/commands/`, `plugins/adlc-claude-code/agents/`,
+`plugins/adlc-claude-code/skills/`, `plugins/adlc-claude-code/hooks/`.
+
+> **Historical note:** Before the 2026-06-22 restructuring, all plugin files lived
+> directly under `.claude-plugin/` at the repo root. They now live under
+> `plugins/adlc-claude-code/`; only `marketplace.json` remains at the root. See
+> the layout note in the **Decision** section above for the full path mapping.
+>
+> **Dual marketplace.json note (resolved, pass 14):** As of adversarial review pass 14
+> (2026-06-22), there is only **one** `marketplace.json` in this repo:
+> **root `.claude-plugin/marketplace.json`** — the sole authoritative file used by
+> `/plugin marketplace add voodootikigod/adlc`; its `plugins[].source` field is
+> `"./plugins/adlc-claude-code/"`. The previously present local-dev convenience copy at
+> `plugins/adlc-claude-code/.claude-plugin/marketplace.json` was removed because it
+> introduced a dual-resolution risk: a CC resolver reading the nested directory after
+> resolving `source` could re-process it, causing recursive resolution, silent
+> double-install, or outright install rejection. The smoke test now guards that the
+> nested copy does **not** exist.
 
 ### 3. Discovery skill — one phase-router, not 20 skills
 
-A single `skills/adlc/SKILL.md` is a phase-routing flowchart ("where am I → which
+A single `skills/adlc/SKILL.md` (now at `plugins/adlc-claude-code/skills/adlc/SKILL.md`)
+is a phase-routing flowchart ("where am I → which
 gate"). **Decision: one router skill, not one skill per gate.** A skill per gate
 would bloat discovery, and harness skill-lists truncate/omit large sets — the
 router could fall off the list, leaving the model unable to find *any* gate. One
@@ -86,7 +128,8 @@ shape that embraces the lifecycle "in total."
 
 ### 5. Prosecutor subagent (P5)
 
-`agents/prosecutor.md` — a hostile pre-merge reviewer that runs `hollow-test`,
+`plugins/adlc-claude-code/agents/prosecutor.md` (formerly `agents/prosecutor.md`) —
+a hostile pre-merge reviewer that runs `hollow-test`,
 `behavior-diff`, and `review-calibration` and returns an evidence-backed verdict.
 
 ### 6. Hooks — advisory by default, one enforcing gate
@@ -174,7 +217,7 @@ Each phase was independently shippable and looped through `/adversarial-review`
 - **Phase C — advisory hooks** (preflight/flail/manifest).
 - **Phase D — enforcing rail-guard hook + prosecutor subagent + CI backstop.**
 - **Phase E — `/adlc-distill` + `/adlc-maintain` + maintenance cron.**
-- **Phase F — marketplace publish + adoption docs** (`docs/claude-code.md`).
+- **Phase F — marketplace publish + adoption docs** (`docs/integrations/claude-code.md`).
 
 ---
 
@@ -220,6 +263,16 @@ Each phase was independently shippable and looped through `/adversarial-review`
   no rails declared → never blocks; audited `ADLC_RAILS_BYPASS=1` escape hatch.
 - **The CI gate must be configured as a required check** to be a real backstop;
   shipping the template doesn't enforce it. Documented as a required step.
+- **`pre-ga-gate` must be added as a required status check** in GitHub repository
+  Settings > Branches > Branch protection rules for the `main` branch. Without
+  this GitHub configuration, the `pre-ga-gate` job can fail without blocking a
+  merge — the gate is only effective when it is a required status check. The same
+  applies to the `rails-guard` job. There is no automated check that this branch
+  protection configuration has been applied. To verify, query the GitHub API:
+  `gh api repos/{owner}/{repo}/branches/main/protection` and confirm both
+  `pre-ga-gate` and `rails-guard` appear in `required_status_checks.contexts`.
+  This manual step must be completed before merging this branch or any branch that
+  depends on these gates.
 - **Discovery depends on the skill description matching** the user's phrasing; a
   poorly-triggered router silently does nothing. Mitigation: broad trigger set +
   the flowchart body.
@@ -251,3 +304,148 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   in-session hook denies an Edit to a declared rail and freezes the trust root; a
   Bash mutation slips the hook (by design) and is caught by the CI diff gate; free
   (non-rail) files are never blocked by either layer.
+
+### Pre-GA checklist
+
+> **CRITICAL — GitHub branch protection required:** The `pre-ga-gate` CI job fails
+> while the two open checklist items below remain unchecked, but it will NOT block a
+> merge unless it has been added as a **required status check** in GitHub repository
+> Settings → Branches → Branch protection rules for `main`. Without that one-time
+> repository settings step, a maintainer can merge this branch despite `pre-ga-gate`
+> failing — the entire enforcement model silently collapses. This step must be
+> completed **before** any merge of this branch or any branch that depends on it.
+>
+> To add the required check:
+> 1. Go to: Settings → Branches → Branch protection rules → `main`
+> 2. Enable "Require status checks to pass before merging"
+> 3. Search for and add `pre-ga-gate` to the required checks list
+> 4. Save
+
+<!-- CI-GATE-SENTINEL: The pre-ga-gate job in .github/workflows/ci.yml searches for the
+     EXACT pattern "- [ ] **(Live marketplace", "- [ ] **(Hook CWD assumption", and
+     "- [ ] **(`plugin.json` extra fields" to count open items. DO NOT reformat, line-wrap,
+     change the asterisk count, or alter the lead text of the three open checklist lines
+     below. The grep pattern is:
+       ^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields)
+     If you need to edit these lines, update the grep in ci.yml in the same commit. -->
+
+- [ ] **Live marketplace install test** — run `/plugin marketplace add voodootikigod/adlc`
+  against a real Claude Code session and confirm the plugin resolves from the
+  non-root `source: "./plugins/adlc-claude-code/"` in `.claude-plugin/marketplace.json`.
+  This is the **primary** unverified assumption blocking GA. The smoke test
+  (`scripts/claude-code-plugin-smoke.mjs`) validates file structure only; it explicitly
+  does NOT exercise the live CC marketplace resolver (see comment at lines 20-25 of the
+  smoke script). If CC's resolver does not support subdirectory sources, revert
+  `marketplace.json` to `source: "./"`, co-locate plugin files under `.claude-plugin/`
+  (or symlink/copy in CI), and update the project layout table in `README.md` accordingly.
+  **This branch MUST NOT be publicly announced or marked GA until this item is resolved.**
+  **Record outcome here when tested:** _(pending)_
+
+- [x] **`plugin.json` hooks field** — `plugins/adlc-claude-code/.claude-plugin/plugin.json`
+  now includes `"hooks": "./hooks/hooks.json"`. Whether CC discovers `hooks/hooks.json`
+  by filesystem convention or requires an explicit `hooks` field is unverified (the Codex
+  plugin uses an explicit field; the CC docs do not guarantee auto-discovery by convention).
+  Without this field, all four hooks could be silently unregistered — a complete enforcement
+  failure with no error surfaced. The smoke test now guards this field. A live install
+  confirms end-to-end registration.
+
+- [ ] **`plugin.json` extra fields (`hooks`/`commands`/`agents`/`skills`) — `additionalProperties` risk** —
+  `plugins/adlc-claude-code/.claude-plugin/plugin.json` now contains four fields beyond the
+  core metadata fields (`name`, `version`, `description`, `author`, `homepage`, `repository`,
+  `license`, `keywords`): `"hooks"`, `"commands"`, `"agents"`, and `"skills"`. The smoke
+  script guards `marketplace.json` and `hooks.json` against `additionalProperties:false`
+  schema rejection (both explicitly strip or forbid extra keys). The same risk applies to
+  `plugin.json`: if the CC `plugin.json` schema uses `additionalProperties:false`, any field
+  not in the schema will cause the plugin install to be **rejected entirely** — silently or
+  with a schema validation error — with no hook, command, agent, or skill registered.
+  **Confirm during the live marketplace install test** (item 1 above): if the install is
+  rejected, remove `hooks`, `commands`, `agents`, and `skills` from `plugin.json` and rely
+  on convention-based filesystem discovery for those. Update the smoke test's `commands`/
+  `agents`/`skills` field guards accordingly.
+  **Record outcome here when tested:** _(pending live-install confirmation)_
+
+- [x] **`${CLAUDE_PLUGIN_ROOT}` resolution** — the hook `command` values in
+  `plugins/adlc-claude-code/hooks/hooks.json` have been updated to avoid the unsafe
+  `${CLAUDE_PLUGIN_ROOT}/hooks/` pattern. If CC sets `CLAUDE_PLUGIN_ROOT` to the repo
+  root, `${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs` would resolve to
+  `<repo>/hooks/adlc-hook.mjs` (a path that does not exist after the restructure),
+  causing all four hooks to exit 0 on ENOENT — invisible enforcement failure. The smoke
+  test now includes a structural guard that rejects any hook command using the unsafe
+  `${CLAUDE_PLUGIN_ROOT}/hooks/` pattern.
+  **Status:** Structural smoke-test guard is in place and CI-enforced. Live end-to-end
+  confirmation (preflight fires at session start) is pending the live install test (item 1).
+  This item is checked because the structural defense is complete; the remaining live
+  confirmation is tracked by item 1 (Live marketplace install test) and item 4 (Hook CWD
+  assumption).
+
+- [ ] **Hook CWD assumption — live install confirmation required** — the four hook
+  `command` values in `plugins/adlc-claude-code/hooks/hooks.json` use a **literal path to
+  a CWD-independent dispatcher wrapper** (`adlc-hook-run.mjs`, added pass 14, 2026-06-22)
+  to eliminate the `$(...)`-shell-substitution risk identified by adversarial review pass 14:
+
+  ```
+  node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs <mode>
+  ```
+
+  `adlc-hook-run.mjs` locates `adlc-hook.mjs` via `import.meta.url` (its own file URL),
+  which is always the absolute path of the wrapper itself — independent of CWD. This
+  eliminates the previous risk: if CC uses `execFile()` instead of a POSIX shell, a
+  `$(...) ` expression in the command string would not be expanded and `node` would fail
+  with `MODULE_NOT_FOUND` on a file literally named `$([ -f ...])`, blocking every
+  structured-edit hook (including the security-critical rails-guard). The wrapper avoids
+  any shell substitution entirely.
+
+  **What remains unverified:** the actual CWD CC uses when executing hook commands
+  (repository root vs plugin source directory). The literal path
+  `./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs` is valid from CWD = repo root.
+  If CC uses plugin source dir as CWD, the path `./hooks/adlc-hook-run.mjs` (relative
+  to the plugin source dir) would be needed. The wrapper itself is CWD-independent once
+  Node resolves the file; the gap is only in whether the initial resolution of the literal
+  command path succeeds.
+
+  **Confirm during the live marketplace install test** (item 1 above): after installing,
+  trigger a session start and verify the `preflight` hook actually fires. If the hook
+  does not fire, CC is using plugin source dir as CWD — update hooks.json to
+  `node ./hooks/adlc-hook-run.mjs <mode>` (relative to plugin dir; not the current form).
+  **This is a second unverified assumption blocking GA. This branch MUST NOT be publicly
+  announced or marked GA until this item is resolved (together with item 1 above).**
+  **Record outcome here when tested:** _(pending live-install confirmation)_
+
+> **CI structural guard (in place):** `scripts/claude-code-plugin-smoke.mjs` validates
+> that the root `.claude-plugin/marketplace.json` `plugins[].source` equals
+> `"./plugins/adlc-claude-code/"`, that `plugins/adlc-claude-code/.claude-plugin/plugin.json`
+> exists, is well-formed, and contains `"hooks": "./hooks/hooks.json"`, that no hook
+> command uses the unsafe `${CLAUDE_PLUGIN_ROOT}/hooks/` pattern (the silent no-op
+> failure mode), that no hook command uses `$(...) ` shell substitution (the
+> `execFile()`-blocking failure mode fixed in pass 14), and that all key docs files under
+> `docs/integrations/` and `docs/archive/` exist. The smoke script is wrapped as a Node
+> test in `scripts/test/claude-code-plugin-smoke.test.mjs` and runs as part of `npm test`
+> → `node --test scripts/test/*.test.mjs`. It runs on every CI push via the `test` job in
+> `.github/workflows/ci.yml`.
+>
+> **Hook dispatcher wrapper guard (pass 14):** Hook commands now invoke
+> `adlc-hook-run.mjs` (a thin wrapper that uses `import.meta.url` to locate
+> `adlc-hook.mjs` regardless of CWD). The smoke script guards that
+> `adlc-hook-run.mjs` exists at the expected path and that all hook command paths
+> resolve from repo root. The `$(...) ` substitution and dual-path expression forms
+> are explicitly rejected by the smoke test.
+>
+> **Dual marketplace.json guard (resolved, pass 14):** The nested
+> `plugins/adlc-claude-code/.claude-plugin/marketplace.json` was removed (pass 14).
+> The smoke script now guards that this nested copy does NOT exist (to prevent
+> accidental re-introduction) and that only `plugin.json` lives under
+> `plugins/adlc-claude-code/.claude-plugin/`.
+>
+> **Cross-doc link guard (in place):** The smoke script now validates internal cross-doc
+> relative links in `docs/integrations/` files — if a referenced file is moved, the smoke
+> test fails rather than shipping a dead link silently.
+>
+> **Pre-GA CI gate (in place):** A dedicated `pre-ga-gate` job in `.github/workflows/ci.yml`
+> fails with a clear diagnostic message while either of the two open Pre-GA checklist items
+> (Live marketplace install test, Hook CWD assumption) remain unchecked in this ADR. This
+> ensures that a green `test` + `rails-guard` run cannot be misread as GA-ready.
+> The grep pattern used by the gate is anchored to the exact text of the two open checklist
+> lines — see the `CI-GATE-SENTINEL` comment above the checklist for the format constraint.
+>
+> **Important:** A passing CI run does not confirm the live install assumptions. The two
+> open checklist items above remain required before GA.

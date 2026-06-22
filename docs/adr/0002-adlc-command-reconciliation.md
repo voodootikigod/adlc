@@ -204,7 +204,7 @@ This costs the Claude Code side nothing — Phase A–F never calls `run`/`accep
 
 ### Companion direction: share the harness-agnostic logic, not just the bins
 
-Today the Claude hook (`hooks/adlc-hook.mjs`) and the Codex hook
+Today the Claude hook (`plugins/adlc-claude-code/hooks/adlc-hook.mjs`) and the Codex hook
 (`plugins/adlc-codex/hooks/adlc-rails-guard.mjs`) are **separate implementations
 of the same rails logic**. With N harnesses that is N drifting copies of
 security-critical code. Factor the harness-agnostic decision logic (rails

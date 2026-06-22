@@ -1,5 +1,4 @@
 {
-  "description": "ADLC hooks — preflight on session start, flail-detection after edits/commands, gate-evidence audit on stop (all advisory), and a blocking rail-guard that denies edits to frozen rail paths declared in tickets. All no-op unless the repo is ADLC-initialized; rail enforcement additionally no-ops until a ticket declares rails.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" rails",
+            "command": "node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs rails",
             "timeout": 15
           }
         ]
@@ -18,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" preflight",
+            "command": "node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs preflight",
             "timeout": 60
           }
         ]
@@ -30,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" flail",
+            "command": "node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs flail",
             "timeout": 30
           }
         ]
@@ -41,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook.mjs\" manifest",
+            "command": "node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs manifest",
             "timeout": 30
           }
         ]

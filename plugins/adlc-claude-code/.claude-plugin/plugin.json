@@ -6,9 +6,13 @@
     "name": "Chris Williams",
     "url": "https://github.com/voodootikigod"
   },
-  "homepage": "https://github.com/voodootikigod/adlc/blob/main/docs/claude-code.md",
+  "homepage": "https://github.com/voodootikigod/adlc/blob/main/docs/integrations/claude-code.md",
   "repository": "https://github.com/voodootikigod/adlc",
   "license": "MIT",
+  "hooks": "./hooks/hooks.json",
+  "commands": "./commands/",
+  "agents": "./agents/",
+  "skills": "./skills/",
   "keywords": [
     "adlc",
     "agentic",

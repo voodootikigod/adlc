@@ -1,5 +1,29 @@
 # Gap Analysis: Claude Code Integration vs. Codex Integration
 
+> **Archive note:** This document was written before the docs restructuring (2026-06-22).
+> File paths in this document reflect the **pre-restructuring layout**. Key path
+> changes applied during restructuring:
+> - `docs/claude-code.md` → `docs/integrations/claude-code.md`
+> - `docs/codex-integration.md` → `docs/integrations/codex.md`
+> - Plugin files (`.claude-plugin/`, `hooks/`, `commands/`, `agents/`, `skills/`)
+>   moved to `plugins/adlc-claude-code/` (e.g. `hooks/adlc-hook.mjs` →
+>   `plugins/adlc-claude-code/hooks/adlc-hook.mjs`).
+> - `skills/adlc/SKILL.md` → `plugins/adlc-claude-code/skills/adlc/SKILL.md`
+> - `agents/prosecutor.md` → `plugins/adlc-claude-code/agents/prosecutor.md`
+> - `docs/claude-code-integration-plan.md` → `docs/archive/claude-code-plan.md` (Gap 11 resolved by move)
+>
+> Additionally, the CC ADRs were renamed (commit ad09a03, 2026-06-21, before the
+> restructuring) — references in this document to `adr-adlc-claude-code-plugin.md`
+> and `adr-adlc-command-reconciliation.md` should be resolved as:
+> - `docs/adr-adlc-claude-code-plugin.md` → `docs/adr/0003-adlc-claude-code-plugin.md`
+> - `docs/adr-adlc-command-reconciliation.md` → `docs/adr/0002-adlc-command-reconciliation.md`
+>
+> Also: the root `.claude-plugin/marketplace.json` `source` field changed from `"./"` to
+> `"./plugins/adlc-claude-code/"` during the restructuring. The previously mentioned nested
+> `plugins/adlc-claude-code/.claude-plugin/marketplace.json` (local-dev convenience copy)
+> was removed in adversarial review pass 14 to eliminate CC resolver dual-resolution risk —
+> it no longer exists and the smoke test guards against its reintroduction.
+
 **Date:** 2026-06-21  
 **Branch:** `feat/gap-analysis-cc-vs-codex`  
 **Scope:** Identify every meaningful gap between the Claude Code plugin (`.claude-plugin/`, `hooks/`, `commands/`, `agents/`, `skills/`) and the Codex integration (`plugins/adlc-codex/`, `packages/runner/`, `packages/prosecute/`) — covering documentation, functional surface, verification, and cross-integration concerns.
@@ -8,11 +32,18 @@
 
 ## Summary
 
-The Claude Code integration shipped a complete plugin (Phases A–F, PR #6) and P7 wiring (PR #7). The Codex integration shipped a complete plugin plus formal phase-assertion packages (`@adlc/runner`, `@adlc/prosecute`). Both integrations are high-quality. The gaps below vary from trivial (a stale URL) to a confirmed functional defect: the `prosecutor` subagent's closing instruction directs CC users to `adlc gate-manifest record prosecution`, but that command's output is structurally incompatible with `adlc run p5` — meaning CC has no working path to formal P5 phase assertion today. The most actionable fixes are: correcting the `prosecutor.md` closing instruction (or wiring it to `adlc prosecute`), updating the `plugin.json` homepage URL, adding a `## Gaps` section to `docs/claude-code.md`, and updating `docs/README.md` to surface the CC integration.
+The Claude Code integration shipped a complete plugin (Phases A–F, PR #6) and P7 wiring (PR #7). The Codex integration shipped a complete plugin plus formal phase-assertion packages (`@adlc/runner`, `@adlc/prosecute`). Both integrations are high-quality. The gaps below vary from trivial (a stale URL) to a confirmed functional defect: the `prosecutor` subagent's closing instruction directs CC users to `adlc gate-manifest record prosecution`, but that command's output is structurally incompatible with `adlc run p5` — meaning CC has no working path to formal P5 phase assertion today. The most actionable fixes are: correcting the `prosecutor.md` closing instruction (or wiring it to `adlc prosecute`), updating the `plugin.json` homepage URL, adding a `## Gaps` section to `docs/integrations/claude-code.md`, and updating `docs/README.md` to surface the CC integration.
 
 ---
 
 ## Gap 1 — `docs/README.md` does not reference the Claude Code integration [HIGH]
+
+> **Status: RESOLVED** — `docs/README.md` was updated during the 2026-06-22
+> restructuring to list the CC integration, the renamed ADRs (`docs/adr/0003-adlc-claude-code-plugin.md`,
+> `docs/adr/0002-adlc-command-reconciliation.md`), CI templates, and
+> `docs/ticket-authoring.md`. The body below reflects the pre-restructuring state;
+> the CC integration is now equally surfaced alongside the Codex integration in the
+> docs index.
 
 ### What Codex has
 `docs/README.md` "Start here" section links to `codex-integration.md` and `adr/0001-codex-native-adlc-integration.md` as first-class entries.
@@ -47,26 +78,36 @@ git log --oneline --follow -- docs/adr/0001-codex-native-adlc-integration.md
 
 ---
 
-## Gap 3 — `docs/claude-code.md` missing explicit "Gaps" section [HIGH]
+## Gap 3 — `docs/integrations/claude-code.md` missing explicit "Gaps" section [HIGH]
+
+> **Status: RESOLVED** — `docs/integrations/claude-code.md` now has a `## Gaps` section
+> (three items: P5 formal assertion not available on CC path, in-session Bash rail
+> enforcement absent by design, skill discovery depends on description matching). The body
+> below reflects the pre-restructuring state.
 
 ### What Codex has
-`docs/codex-integration.md` ends with a `## Gaps` section that enumerates three known limitations with honesty:
+`docs/integrations/codex.md` ends with a `## Gaps` section that enumerates three known limitations with honesty:
 1. P5 not fully automated (orchestration loop missing).
 2. Git-backed sparse marketplace install unsupported.
 3. Hooks assist P4 but do not replace `rails-guard`.
 
 ### What CC has
-`docs/claude-code.md` has no "Gaps" section. Real limitations exist (see Gap 5, Gap 6 below) but are not surfaced in the adoption doc.
+`docs/integrations/claude-code.md` has no "Gaps" section. Real limitations exist (see Gap 5, Gap 6 below) but are not surfaced in the adoption doc.
 
 ### Impact
 Adopters get an incomplete picture. The ADR documents risks in its "Consequences" section, but that is not the adoption doc. The policy of honesty about gaps — present in `codex-integration.md` — is absent here.
 
 ---
 
-## Gap 4 — `docs/claude-code.md` missing "Boundary" section [LOW]
+## Gap 4 — `docs/integrations/claude-code.md` missing "Boundary" section [LOW]
+
+> **Status: RESOLVED** — `docs/integrations/claude-code.md` now has a `## Boundary`
+> section defining `.adlc/` vs `.omo/` conventions and establishing that package READMEs
+> are authoritative for flags, schemas, and exit codes. The body below reflects the
+> pre-restructuring state.
 
 ### What Codex has
-`docs/codex-integration.md` ends with `## Boundary` defining `.adlc/` vs `.omo/` directory conventions and establishing that package READMEs are authoritative for flags and schemas.
+`docs/integrations/codex.md` ends with `## Boundary` defining `.adlc/` vs `.omo/` directory conventions and establishing that package READMEs are authoritative for flags and schemas.
 
 ### What CC has
 No `## Boundary` section. The same directory conventions apply to CC users (they write to `.adlc/` the same way) but are not stated.
@@ -83,7 +124,7 @@ Minor; the CC doc is shorter. But users who read both docs encounter a structura
 - **Offline** (`node scripts/codex-install-smoke.mjs .`): validates marketplace JSON, plugin manifest, hook structure, and skill sentinel strings. Any user can run this.
 - **Live** (`ADLC_CODEX_LIVE_INSTALL=1 ...`): exercises an isolated `CODEX_HOME` install.
 
-`docs/codex-integration.md` leads with both invocations. The CI suite runs the offline path.
+`docs/integrations/codex.md` leads with both invocations. The CI suite runs the offline path.
 
 ### What CC has
 Nothing. The CC adoption doc leads with four installation commands (`npm install -g`, `/plugin marketplace add`, `/plugin install`, `/adlc-init`) but provides no way to verify the plugin was installed correctly, that `hooks.json` registers the right tools, that `commands/*.md` are present, or that the `skills/adlc/SKILL.md` sentinel is intact.
@@ -94,7 +135,7 @@ A user who misconfigures or partially installs the CC plugin has no local verifi
 ### Proposed fix
 Create `scripts/claude-code-plugin-smoke.mjs` that validates:
 - `.claude-plugin/plugin.json` metadata fields (`name`, `version`, `description`, `homepage`). Note: unlike `plugins/adlc-codex/.codex-plugin/plugin.json`, the CC `plugin.json` does NOT declare path fields for skills/hooks/commands/agents — those are discovered by Claude Code's own convention. Validate the metadata fields that are present, not fields that don't exist.
-- `.claude-plugin/marketplace.json` schema and plugin entry with correct `"source": "./"`.
+- `.claude-plugin/marketplace.json` schema and plugin entry with correct `"source": "./"` [pre-restructuring value; now `"./plugins/adlc-claude-code/"` in the root `marketplace.json`].
 - `hooks/hooks.json` registers all four hook types (`PreToolUse`, `SessionStart`, `PostToolUse`, `Stop`) with correct matchers.
 - `hooks/adlc-hook.mjs` exists and has zero `@adlc/*` import statements (the file may reference `@adlc/*` in comments or strings — the check must target `import` statement lines only, e.g. `grep -E '^import.*@adlc' hooks/adlc-hook.mjs` should return empty).
 - `commands/adlc-init.md`, `adlc-ticket.md`, `adlc-distill.md`, `adlc-maintain.md` all present.
@@ -132,7 +173,7 @@ The CC integration has no valid path to formal P5 phase assertion. The `prosecut
 ### Required action
 Choose one of:
 1. **Wire `prosecutor` to call `adlc prosecute`** — after the gates pass, produce a normalized input JSON matching `@adlc/prosecute`'s schema and call `adlc prosecute --input <file> ...`. This closes the gap fully.
-2. **Document the limitation explicitly** — state in `docs/claude-code.md` that `adlc run p5` is not available on the CC path, and that prosecution evidence is recorded informally via `gate-manifest` for provenance only, not phase assertion.
+2. **Document the limitation explicitly** — state in `docs/integrations/claude-code.md` that `adlc run p5` is not available on the CC path, and that prosecution evidence is recorded informally via `gate-manifest` for provenance only, not phase assertion.
 3. **Fix `prosecutor.md`** — at minimum, remove or correct the closing instruction that sends users to `adlc gate-manifest record prosecution` without warning them it cannot satisfy `adlc run p5`.
 
 ---
@@ -151,17 +192,22 @@ No example fixtures for the CC prosecution path. There is no example of what a v
 
 ---
 
-## Gap 8 — `docs/claude-code.md` lifecycle coverage table lacks quality ratings [MEDIUM]
+## Gap 8 — `docs/integrations/claude-code.md` lifecycle coverage table lacks quality ratings [MEDIUM]
+
+> **Status: RESOLVED** — `docs/integrations/claude-code.md` now has a three-column
+> `## Lifecycle coverage` table: Phase, Coverage (Strong/Partial/Conditional), and
+> Wired via. All phases have explicit ratings. The body below reflects the
+> pre-restructuring state.
 
 ### What Codex has
-`docs/codex-integration.md` uses a `## Formal ADLC Coverage` table with Strong / Partial / Conditional ratings per phase, with explanatory notes.
+`docs/integrations/codex.md` uses a `## Formal ADLC Coverage` table with Strong / Partial / Conditional ratings per phase, with explanatory notes.
 
 ```
 | P5 | Partial | Review evidence is machine-checkable, but there is still no first-party deterministic prosecution orchestrator... |
 ```
 
 ### What CC has
-`docs/claude-code.md` uses a `## Lifecycle coverage` table with a "Wired via" column only — no quality rating. Users cannot tell which phases are fully enforced vs. advisory vs. intentionally partial.
+`docs/integrations/claude-code.md` uses a `## Lifecycle coverage` table with a "Wired via" column only — no quality rating. Users cannot tell which phases are fully enforced vs. advisory vs. intentionally partial.
 
 ### Proposed fix
 Add a "Coverage" column (Strong / Partial / Conditional / Advisory) to match the Codex doc's level of honesty.
@@ -170,11 +216,16 @@ Add a "Coverage" column (Strong / Partial / Conditional / Advisory) to match the
 
 ## Gap 9 — Neither adoption doc links to `docs/ticket-authoring.md` [MEDIUM]
 
+> **Status: RESOLVED** — `docs/integrations/claude-code.md` now links to
+> `docs/ticket-authoring.md` in the commands table (the `/adlc-ticket` row reads:
+> "Ticket schema: `docs/ticket-authoring.md`"). The body below reflects the
+> pre-restructuring state.
+
 ### What exists
 `docs/ticket-authoring.md` is the canonical ticket schema reference (fields: `id`, `title`, `body`, `scope`, `rails`, `edges`, `duration`, `category`, `budget`). It is the contract that P3 rails, P4 build supervision, and P5/P6 evidence all read. Codex skills reference ticket fields directly (`rails`, `scope`, `edges`) and the ticket-authoring doc exists as a standalone reference for all ADLC users.
 
 ### What both integration adoption docs have
-Neither `docs/claude-code.md` nor `docs/codex-integration.md` links to `docs/ticket-authoring.md`. A user of either integration who wants to understand the ticket schema must discover that doc independently. This is an omission in both adoption docs, not a CC-specific gap.
+Neither `docs/integrations/claude-code.md` nor `docs/integrations/codex.md` links to `docs/ticket-authoring.md`. A user of either integration who wants to understand the ticket schema must discover that doc independently. This is an omission in both adoption docs, not a CC-specific gap.
 
 ### Why CC is the priority
 `/adlc-ticket` is the primary CC mechanism for authoring tickets. The CC adoption doc describes the command as "Author a self-contained, schema-valid ticket" but provides no pointer to where the schema is defined. The gap is equally present in the Codex doc but is more prominent in the CC context because `/adlc-ticket` is an explicit user-facing command.
@@ -184,38 +235,45 @@ Neither `docs/claude-code.md` nor `docs/codex-integration.md` links to `docs/tic
 ## Gap 10 — No cross-references between the two integration docs [MEDIUM]
 
 ### What exists
-`docs/adr-adlc-command-reconciliation.md` explains the command-bin reconciliation between the two integrations. But neither `docs/claude-code.md` nor `docs/codex-integration.md` mentions the other integration's existence or links to it.
+`docs/adr-adlc-command-reconciliation.md` explains the command-bin reconciliation between the two integrations. But neither `docs/integrations/claude-code.md` nor `docs/integrations/codex.md` mentions the other integration's existence or links to it.
 
 ### Impact
 A team using both integrations (e.g., Claude Code for interactive sessions, Codex for CI workers) has no authoritative statement that coexistence is supported or how it works. The command reconciliation ADR answers this but is not referenced from either adoption doc.
 
 ### Proposed fix
-Add a brief "Using with Codex" note to `docs/claude-code.md` and a brief "Using with Claude Code" note to `docs/codex-integration.md`. Both should reference the command reconciliation ADR.
+Add a brief "Using with Codex" note to `docs/integrations/claude-code.md` and a brief "Using with Claude Code" note to `docs/integrations/codex.md`. Both should reference the command reconciliation ADR.
 
 ---
 
 ## Gap 11 — `docs/claude-code-integration-plan.md` is a stale planning artifact filed in `docs/` [LOW]
 
+> **Status: RESOLVED** — `docs/claude-code-integration-plan.md` was moved to
+> `docs/archive/claude-code-plan.md` during the 2026-06-22 restructuring. The
+> descriptions below reflect the pre-restructuring state. No further action needed
+> on this gap.
+
 ### What Codex has
 The equivalent planning artifact lives in `.omo/plans/codex-adlc-integration.md` — operator artifacts directory, not `docs/`.
 
 ### What CC has
-`docs/claude-code-integration-plan.md` is a pre-decision plan document (Status: Proposal) filed in `docs/` alongside canonical user-facing docs. It contains superseded design options and is not the authoritative architectural reference (the ADR is).
+`docs/claude-code-integration-plan.md` was a pre-decision plan document (Status: Proposal) filed in `docs/` alongside canonical user-facing docs. It contained superseded design options and was not the authoritative architectural reference (the ADR is).
 
 ### Impact
-Low, but a reader who finds `docs/claude-code-integration-plan.md` may read it as current design when it was a proposal. The ADR is the accepted record; the plan should either be moved to `.omo/plans/` or marked `Status: Superseded` with a pointer to the ADR.
+~~Low, but a reader who finds `docs/claude-code-integration-plan.md` may read it as current design when it was a proposal. The ADR is the accepted record; the plan should either be moved to `.omo/plans/` or marked `Status: Superseded` with a pointer to the ADR.~~
+
+**Resolved:** The file was moved to `docs/archive/claude-code-plan.md`. The archive header at the top of this document notes this resolution. The `plugin.json` `homepage` link was corrected to point at `docs/integrations/claude-code.md` (Gap 13 fix).
 
 ---
 
-## Gap 12 — `docs/claude-code.md` does not document the prosecutor evidence banking step [MEDIUM]
+## Gap 12 — `docs/integrations/claude-code.md` does not document the prosecutor evidence banking step [MEDIUM]
 
 > Note: this gap is superseded in severity by Gap 6. The evidence banking step the prosecutor subagent currently instructs is definitively broken. The fix to Gap 6 renders this gap either resolved (if `prosecutor` is wired to call `adlc prosecute`) or explicitly documented (if the limitation is stated in the adoption doc). Address Gap 6 first.
 
 ### What Codex has
-`docs/codex-integration.md` has a "Typical flow" section that explicitly covers what happens after each phase, including P5 prosecution evidence recording (`adlc prosecute`) and assertion (`adlc run p5`).
+`docs/integrations/codex.md` has a "Typical flow" section that explicitly covers what happens after each phase, including P5 prosecution evidence recording (`adlc prosecute`) and assertion (`adlc run p5`).
 
 ### What CC has
-`docs/claude-code.md` lists "P5 Prosecute | prosecutor subagent" in the lifecycle table with no follow-on step. A user who runs the prosecutor subagent and gets a CLEAR verdict doesn't know what to do next to formally close P5.
+`docs/integrations/claude-code.md` lists "P5 Prosecute | prosecutor subagent" in the lifecycle table with no follow-on step. A user who runs the prosecutor subagent and gets a CLEAR verdict doesn't know what to do next to formally close P5.
 
 ---
 
@@ -230,10 +288,10 @@ Codex `plugins/adlc-codex/.codex-plugin/plugin.json`'s `homepage` is not the can
 This URL points to `docs/claude-code-integration-plan.md` — a pre-decision planning document with `Status: Proposal` that contains superseded design options. Every marketplace user who clicks through from the Claude Code plugin browser lands on a stale proposal, not the adoption guide.
 
 ### Impact
-The authoritative adoption guide is `docs/claude-code.md`. The planning doc is not. This affects every user who discovers the plugin through the Claude Code marketplace and follows the `homepage` link. It also elevates Gap 11 (stale planning doc in `docs/`) from LOW to MEDIUM because the doc is actively linked from the plugin manifest.
+The authoritative adoption guide is `docs/integrations/claude-code.md`. The planning doc is not. This affects every user who discovers the plugin through the Claude Code marketplace and follows the `homepage` link. It also elevates Gap 11 (stale planning doc in `docs/`) from LOW to MEDIUM because the doc is actively linked from the plugin manifest.
 
 ### Proposed fix
-Update `plugin.json` `homepage` to `https://github.com/voodootikigod/adlc/blob/main/docs/claude-code.md`.
+Update `plugin.json` `homepage` to `https://github.com/voodootikigod/adlc/blob/main/docs/integrations/claude-code.md`.
 
 ---
 
@@ -256,15 +314,15 @@ For completeness, these are deliberate design differences between the two integr
 | # | Gap | Priority | Effort | Notes |
 |---|---|---|---|---|
 | 6 | Fix P5 evidence chain — `prosecutor` → `adlc prosecute` or document limitation | HIGH | Medium | Definitively broken; misleads users |
-| 13 | Fix `plugin.json` `homepage` URL | HIGH | Trivial | Marketplace users land on stale proposal |
-| 5 | Create `scripts/claude-code-plugin-smoke.mjs` | HIGH | Large | No install verification exists |
+| 13 | ~~Fix `plugin.json` `homepage` URL~~ | ~~HIGH~~ | ~~Trivial~~ | **RESOLVED** — `homepage` now points at `docs/integrations/claude-code.md` (restructuring 2026-06-22) |
+| 5 | ~~Create `scripts/claude-code-plugin-smoke.mjs`~~ | ~~HIGH~~ | ~~Large~~ | **RESOLVED** — smoke script created and wired into CI |
 | 1 | Update `docs/README.md` to list CC integration, ADRs, CI templates, ticket-authoring | HIGH | Small | CC invisible from docs index |
-| 3 | Add `## Gaps` section to `docs/claude-code.md` | HIGH | Small | Parity with Codex doc honesty policy |
-| 2 | Move CC ADRs to `docs/adr/0002` and `0003` (verify order first) | MEDIUM | Small | Discoverability and consistency |
-| 8 | Add coverage ratings to CC lifecycle table | MEDIUM | Small | Users can't assess enforcement quality |
-| 9 | Link `ticket-authoring.md` from CC adoption doc | MEDIUM | Small | Ticket schema undiscoverable for CC users |
+| 3 | ~~Add `## Gaps` section to `docs/integrations/claude-code.md`~~ | ~~HIGH~~ | ~~Small~~ | **RESOLVED** — `## Gaps` section added (restructuring 2026-06-22); see Gap 3 body above |
+| 2 | ~~Move CC ADRs to `docs/adr/0002` and `0003`~~ | ~~MEDIUM~~ | ~~Small~~ | **RESOLVED** — ADRs now at `docs/adr/0002-adlc-command-reconciliation.md` and `docs/adr/0003-adlc-claude-code-plugin.md` |
+| 8 | ~~Add coverage ratings to CC lifecycle table~~ | ~~MEDIUM~~ | ~~Small~~ | **RESOLVED** — Coverage column (Strong/Partial/Conditional) added to `## Lifecycle coverage` table (restructuring 2026-06-22); see Gap 8 body above |
+| 9 | ~~Link `ticket-authoring.md` from CC adoption doc~~ | ~~MEDIUM~~ | ~~Small~~ | **RESOLVED** — `/adlc-ticket` row in the commands table now links to `docs/ticket-authoring.md` (restructuring 2026-06-22); see Gap 9 body above |
 | 10 | Add cross-references between CC and Codex adoption docs | MEDIUM | Small | Coexistence undocumented |
 | 7 | Add example fixtures for CC P5 path | MEDIUM | Medium | Only after Gap 6 resolved |
 | 12 | Document prosecutor evidence banking | MEDIUM | Small | Resolved by Gap 6 fix |
-| 4 | Add `## Boundary` section to `docs/claude-code.md` | LOW | Small | Structural parity |
-| 11 | Mark `docs/claude-code-integration-plan.md` as superseded | MEDIUM | Trivial | Elevated: actively linked from plugin.json |
+| 4 | ~~Add `## Boundary` section to `docs/integrations/claude-code.md`~~ | ~~LOW~~ | ~~Small~~ | **RESOLVED** — `## Boundary` section added (restructuring 2026-06-22); see Gap 4 body above |
+| 11 | ~~Mark `docs/claude-code-integration-plan.md` as superseded~~ | ~~MEDIUM~~ | ~~Trivial~~ | **RESOLVED** — file moved to `docs/archive/claude-code-plan.md` (restructuring 2026-06-22); see Gap 11 body above |
