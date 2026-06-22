@@ -329,16 +329,14 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
        ^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields)
      If you need to edit these lines, update the grep in ci.yml in the same commit. -->
 
-- [x] **Live marketplace install test** — run `/plugin marketplace add voodootikigod/adlc`
-  against a real Claude Code session and confirm the plugin resolves from the
-  non-root `source: "./plugins/adlc-claude-code/"` in `.claude-plugin/marketplace.json`.
+- [x] **Live marketplace install test** — full install sequence is two steps:
+  1. `/plugin marketplace add voodootikigod/adlc` — registers the plugin source
+  2. `/plugin install adlc@adlc` — actually installs the plugin files
   **Confirmed 2026-06-22:** plugin installed without error. CC marketplace resolver
   supports non-root `source` paths. The subdirectory-source assumption is verified.
-  **Additional finding:** CC runs hook commands with CWD = plugin install directory
-  (not the user's repo root). hooks.json updated from
-  `node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs <mode>` to
-  `node ./hooks/adlc-hook-run.mjs <mode>` to match the confirmed CWD.
-  **Outcome:** GA blocker resolved. Plugin installs and hooks fire correctly.
+  **Additional findings (ongoing):** hook command path resolution is still being
+  confirmed — `${PLUGIN_ROOT}` does not expand (CC likely uses execFile, not shell).
+  Diagnostic in progress to identify the correct path mechanism.
 
 - [x] **`plugin.json` hooks field** — `plugins/adlc-claude-code/.claude-plugin/plugin.json`
   now includes `"hooks": "./hooks/hooks.json"`. Whether CC discovers `hooks/hooks.json`
