@@ -1,6 +1,6 @@
 {
   "name": "@adlc/consensus-fix",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "N-version programming for failing tests — fan N LLM completions, group by agreement, recommend the smallest consensus fix (C7/P4).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.2"
+    "@adlc/core": "1.1.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
