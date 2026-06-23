@@ -154,6 +154,19 @@ This happens because a failed or partial install can leave a flat directory at `
 
 ---
 
+## Hook Matcher Asymmetry (PreToolUse vs PostToolUse)
+
+This is a load-bearing invariant worth noting explicitly because it is non-obvious and has a dedicated regression test.
+
+- **PreToolUse** rails matcher: `Edit|Write|MultiEdit|NotebookEdit` — **Bash is deliberately excluded**.
+- **PostToolUse** flail matcher: `Edit|Write|MultiEdit|NotebookEdit|Bash` — Bash is included.
+
+Bash is excluded from PreToolUse because a shell is Turing-complete and cannot be reliably parsed for "which file will this mutate" — any in-session parser has a bypass (wrappers, subshells, globs, `eval`, etc.). Rail mutations via Bash are instead caught by the unbypassable CI diff gate at commit time (`adlc rails-guard`). The PostToolUse flail hook's Bash inclusion is unrelated to rail enforcement — it just needs to see all tool calls to detect looping.
+
+**The rails test suite has a dedicated test asserting Bash is NOT in the PreToolUse matcher.** If Bash were accidentally added to that matcher, the hook would start routing all shell calls through the rail gate — which cannot parse them — and would either fail open (allow all Bash) or incorrectly block legitimate commands.
+
+---
+
 ## Gotchas Summary
 
 | Gotcha | What happens | Correct approach |
@@ -165,3 +178,4 @@ This happens because a failed or partial install can leave a flat directory at `
 | Stale plugin cache | EINVAL rename error on reinstall | `rm -rf ~/.claude/plugins/cache/<name>` |
 | Relative `./hooks/` path | Silent failure — CWD is user's project, not plugin dir | Use `${CLAUDE_PLUGIN_ROOT}` |
 | Only doing `/plugin marketplace add` | Plugin source registered but not installed | Also run `/plugin install <name>@<name>` |
+| Adding Bash to PreToolUse rails matcher | Hook cannot parse shell; fails open or blocks incorrectly | Keep Bash out of PreToolUse; CI gate handles it |

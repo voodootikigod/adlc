@@ -373,6 +373,17 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   confirmation is tracked by item 1 (Live marketplace install test) and item 4 (Hook CWD
   assumption).
 
+  **Correction (2026-06-23):** The concern above was based on an incorrect assumption that
+  `CLAUDE_PLUGIN_ROOT` points to the repo root. Live install testing (item 1, confirmed
+  2026-06-22) showed that CC sets `CLAUDE_PLUGIN_ROOT` to the plugin's **install directory**
+  (`~/.claude/plugins/cache/adlc/<version>/`), not the repo root. `${CLAUDE_PLUGIN_ROOT}/hooks/`
+  therefore correctly resolves to the installed copy of `adlc-hook-run.mjs`. The smoke test
+  was updated accordingly: it now **requires** `${CLAUDE_PLUGIN_ROOT}` in hook commands and
+  **rejects** CWD-relative forms (`./hooks/`, `./plugins/.../hooks/`). The current
+  `hooks.json` uses `node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode>`, which is
+  the confirmed correct form. See `docs/integrations/claude-code-plugin-hooks-investigation.md`
+  for the full account of what was tried and why.
+
 - [x] **Hook CWD assumption — live install confirmation required** — the four hook
   `command` values in `plugins/adlc-claude-code/hooks/hooks.json` use a **literal path to
   a CWD-independent dispatcher wrapper** (`adlc-hook-run.mjs`, added pass 14, 2026-06-22)
@@ -390,17 +401,19 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   structured-edit hook (including the security-critical rails-guard). The wrapper avoids
   any shell substitution entirely.
 
-  **CWD confirmed 2026-06-22 via live install:** CC runs hook commands with CWD = plugin
-  install directory (the extracted contents of the `source` subtree), NOT the user's repo
-  root. The path `./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs` therefore resolved
-  to a non-existent path inside the install dir, causing silent hook failure (hooks did not
-  fire; `/tmp/adlc-hook.log` sentinel was absent after a fresh session start).
-  **Resolution:** hooks.json updated to `node ./hooks/adlc-hook-run.mjs <mode>` — a path
-  relative to the plugin source dir, which is the confirmed CWD. The wrapper's
-  `import.meta.url`-based resolution of `adlc-hook.mjs` remains CWD-independent once
-  the file is found. Smoke test updated with a guard that rejects any command using the
-  old repo-root-relative `./plugins/adlc-claude-code/hooks/` prefix.
-  **Record outcome here when tested:** _CWD = plugin install dir, confirmed 2026-06-22._
+  **CWD confirmed 2026-06-22 via live install:** CC runs hook commands with CWD = the
+  user's **project directory**, NOT the plugin install dir. (An early read of the live
+  install output was mis-interpreted as "CWD = plugin install dir"; subsequent testing
+  clarified it is the project dir.) An intermediate resolution used
+  `node ./hooks/adlc-hook-run.mjs <mode>` but this also fails because `./hooks/` does
+  not exist in the user's project.
+  **Final resolution (2026-06-23):** hooks.json uses `node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode>`.
+  CC injects `CLAUDE_PLUGIN_ROOT` = absolute path to the plugin install dir. This is
+  the form used by every production CC marketplace plugin (confirmed by research across
+  20+ plugins in Dev-GOM/claude-code-marketplace and ruvnet/ruflo). The wrapper's
+  `import.meta.url`-based resolution of `adlc-hook.mjs` then works CWD-independently.
+  Smoke test requires `${CLAUDE_PLUGIN_ROOT}` and rejects all relative-path forms.
+  See `docs/integrations/claude-code-plugin-hooks-investigation.md` for the full account.
 
 > **CI structural guard (in place):** `scripts/claude-code-plugin-smoke.mjs` validates
 > that the root `.claude-plugin/marketplace.json` `plugins[].source` equals

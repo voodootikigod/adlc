@@ -1,28 +1,15 @@
 #!/usr/bin/env node
-// TEMPORARY DEBUG — remove after hook-firing confirmed. See ADR 0003 item 3.
-import { appendFileSync } from 'node:fs';
-try { appendFileSync('/tmp/adlc-hook.log', `fired: ${process.argv.slice(2).join(' ')} pid=${process.pid}\n`); } catch {}
 // adlc-hook-run.mjs — CWD-independent dispatcher for adlc-hook.mjs.
 //
-// Problem: hooks.json command strings may be executed via execFile() (no shell) or
-// via a POSIX shell. If Claude Code uses execFile(), $(...) shell substitutions in the
-// command string are not expanded — the node process would try to open a file literally
-// named "$([ -f ...])" and exit MODULE_NOT_FOUND, blocking every Edit/Write/MultiEdit
-// hook. This wrapper avoids any shell substitution entirely.
-//
-// Solution: import.meta.url is always the URL of this file itself, regardless of CWD.
-// We derive adlc-hook.mjs's absolute path from __dirname-equivalent and exec it with
-// the same arguments. This file is referenced by a literal relative path in hooks.json:
-//   "node ./plugins/adlc-claude-code/hooks/adlc-hook-run.mjs <mode>"
-// which is resolved from CWD = repo root (the assumed CC hook execution CWD).
-// If CC uses plugin-source-dir as CWD the path "./hooks/adlc-hook-run.mjs" also works
-// because this file lives in the same hooks/ directory as adlc-hook.mjs.
-//
-// Pre-GA note: The assumed CWD (repo root) must be confirmed during the live install
-// test (see "Hook CWD assumption — live install confirmation required" checklist item
-// in docs/adr/0003-adlc-claude-code-plugin.md). This wrapper eliminates the $(...) risk
-// entirely — once the CWD is confirmed, the literal path in hooks.json can be locked
-// down definitively.
+// Invoked via: node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode>
+// CC injects CLAUDE_PLUGIN_ROOT = the absolute path to the plugin's install directory
+// (~/.claude/plugins/cache/adlc/<version>/), confirmed by live install (2026-06-22).
+// CWD during hook execution = the user's project directory, NOT the plugin install dir,
+// so a CWD-relative path cannot reach this file. The ${CLAUDE_PLUGIN_ROOT} form is the
+// correct pattern (see docs/integrations/claude-code-plugin-hooks-investigation.md).
+// Once node loads this file via that absolute path, import.meta.url gives us this
+// file's own URL, letting us locate adlc-hook.mjs in the same hooks/ directory
+// without any further CWD or path assumptions.
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

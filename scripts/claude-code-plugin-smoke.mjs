@@ -230,8 +230,8 @@ if (shellSubstHookCmd) {
 }
 
 // Guard: adlc-hook-run.mjs must exist in the plugin source hooks/ directory.
-// CC injects PLUGIN_ROOT pointing at the install dir; hooks.json references
-// "${PLUGIN_ROOT}/hooks/adlc-hook-run.mjs" which maps to this file at install time.
+// CC injects CLAUDE_PLUGIN_ROOT pointing at the install dir; hooks.json references
+// "${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs" which maps to this file at install time.
 const pluginSourceDir = join(repo, 'plugins/adlc-claude-code');
 const hookRunPath = join(pluginSourceDir, 'hooks/adlc-hook-run.mjs');
 if (!existsSync(hookRunPath)) {
@@ -433,7 +433,7 @@ console.log(JSON.stringify({
   warnings: [
     'RESOLVED (live install 2026-06-22 — marketplace resolver): CC marketplace resolver supports non-root source "./plugins/adlc-claude-code/". Plugin installed without error. See docs/adr/0003-adlc-claude-code-plugin.md.',
     'RESOLVED (pass 14 — dual marketplace.json): Nested plugins/adlc-claude-code/.claude-plugin/marketplace.json removed. Only the root .claude-plugin/marketplace.json now exists. Dual-resolution risk eliminated.',
-    'RESOLVED (live install 2026-06-22 — hook CWD): CC runs hooks with CWD = plugin install directory. hooks.json updated to "./hooks/adlc-hook-run.mjs" (plugin-source-dir-relative). Repo-root-relative prefix guard added to smoke test. See docs/adr/0003-adlc-claude-code-plugin.md.',
+    'RESOLVED (live install 2026-06-22 — hook CWD): CC runs hooks with CWD = user project dir (not plugin install dir). Hook commands use node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode> — CC injects CLAUDE_PLUGIN_ROOT as the absolute plugin install path. Confirmed correct by research across 20+ production CC plugins. See docs/integrations/claude-code-plugin-hooks-investigation.md.',
     'RESOLVED (live install 2026-06-22 — plugin.json extra fields): CC schema uses additionalProperties:false; hooks/commands/agents/skills fields removed from plugin.json. CC discovers these assets by filesystem convention. See docs/adr/0003-adlc-claude-code-plugin.md.',
   ],
 }, null, 2));
