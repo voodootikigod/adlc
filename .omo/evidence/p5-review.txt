@@ -1,8 +1,0 @@
-Fixture skeptical-review transcript for docs/examples/p5-passes.json.
-ticket: T1
-reviewed revision: docs-example-revision
-
-security: one medium finding was reviewed and killed because the quoted code is a
-non-production fixture path. correctness: no verified findings. tests: no verified
-test-integrity findings. behavior: no verified behavior findings. This file exists only
-to exercise the evidence contract.

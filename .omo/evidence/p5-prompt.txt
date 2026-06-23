@@ -1,1 +1,0 @@
-Review ticket T1 at docs-example-revision with security, correctness, tests, and behavior lenses.

@@ -1,2 +1,0 @@
-Fixture input packet for ticket T1 at docs-example-revision.
-Includes src/auth.mjs as a non-production fixture path with the quoted line `return true`.
