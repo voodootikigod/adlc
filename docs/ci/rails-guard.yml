@@ -35,7 +35,7 @@ jobs:
         # Pinned to an exact, audited version (not mutable `@latest`) on a runner
         # with repo access. Bump deliberately after reviewing the release.
         # `--ignore-scripts` blocks install-time scripts; the CLIs are zero-dep.
-        run: npm install -g --ignore-scripts @adlc/cli@1.0.2
+        run: npm install -g --ignore-scripts @adlc/cli@1.1.0
 
       - name: Fetch base ref
         # Pass the ref via env (not direct ${{ }} shell interpolation), and use an

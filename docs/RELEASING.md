@@ -53,11 +53,11 @@ Lockstep: bump every package to the same version, tag, push.
 
 ```bash
 # 1. set the version across all package manifests and repin internal @adlc/* deps
-node scripts/release.mjs 1.1.0
+node scripts/release.mjs X.Y.Z
 
 # 2. commit + tag + push — the tag triggers the publish workflow
-git commit -am "release: v1.1.0"
-git tag v1.1.0
+git commit -m "chore: bump version to X.Y.Z"
+git tag vX.Y.Z
 git push && git push --tags
 ```
 
