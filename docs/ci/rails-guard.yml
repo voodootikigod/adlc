@@ -103,6 +103,18 @@ jobs:
             process.on("SIGINT", () => process.exit(1));
             process.on("SIGTERM", () => process.exit(1));
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
+            const workflowHasCodeowners = () => {
+              for (const file of ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]) {
+                if (!fs.existsSync(file)) continue;
+                const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).map(line => line.replace(/\s+#.*$/, "").trim()).filter(line => line && !line.startsWith("#"));
+                for (const line of lines) {
+                  const pattern = line.split(/\s+/)[0];
+                  if (pattern === ".github/workflows/adlc-rails-guard.yml" || pattern === "/.github/workflows/adlc-rails-guard.yml" || pattern === ".github/workflows/*" || pattern === "/.github/workflows/*") return true;
+                }
+              }
+              return false;
+            };
+            if (!workflowHasCodeowners()) fail("missing CODEOWNERS entry protecting .github/workflows/adlc-rails-guard.yml; configure trusted-owner review before enabling this required check");
             const git = (args, label) => {
               const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
               if (res.error) fail(label + " failed: " + res.error.message);

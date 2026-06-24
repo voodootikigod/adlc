@@ -218,6 +218,34 @@ test('standalone semantic gate blocks new approver signer grants → exit 1', ()
   assert.equal(code, 1);
 });
 
+test('standalone semantic gate blocks undeclared fields on new signers → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: { ...JSON.parse(VALID_CONFIG).signers, bob: { role: 'builder', canBypassRails: true } } })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks undeclared fields on existing signers → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: { alice: { role: 'builder', adminOverride: true } } })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
 test('legit: a non-rail change with base rails → exit 0', () => {
   const code = runScenario({
     baseTickets: RAILED,

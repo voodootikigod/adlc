@@ -76,10 +76,14 @@ function assertArraySuperset(name, trustedValue, headValue) {
 function validateNewSigners(trustedSigners, headSigners) {
   if (!headSigners || typeof headSigners !== 'object' || Array.isArray(headSigners)) return;
   const allowedNewRoles = new Set(['builder', 'critic']);
+  const allowedNewFields = new Set(['role', 'roles']);
   for (const key of Object.keys(headSigners)) {
     if (trustedSigners && Object.prototype.hasOwnProperty.call(trustedSigners, key)) continue;
     const entry = headSigners[key];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(`new signer ${key} must be an object`);
+    for (const field of Object.keys(entry)) {
+      if (!allowedNewFields.has(field)) fail(`new signer ${key} has undeclared property ${field}`);
+    }
     if (entry.role === undefined && entry.roles === undefined) fail(`new signer ${key} must declare a role or roles field`);
     if (entry.role !== undefined && entry.roles !== undefined) fail(`new signer ${key} must use either role or roles, not both`);
     const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
@@ -122,6 +126,11 @@ function validateConfigIntegrity() {
     for (const key of Object.keys(trusted.signers)) {
       const trustedRoles = signerRoles(trusted.signers[key], key);
       const headRoles = signerRoles(head.signers[key], key);
+      for (const field of Object.keys(head.signers[key])) {
+        if (!Object.prototype.hasOwnProperty.call(trusted.signers[key], field)) {
+          fail(`signers.${key}.${field} is an undeclared signer property`);
+        }
+      }
       if (trustedRoles.size !== headRoles.size) fail(`existing signer ${key} roles cannot change`);
       for (const role of trustedRoles) {
         if (!headRoles.has(role)) fail(`existing signer ${key} roles cannot change`);

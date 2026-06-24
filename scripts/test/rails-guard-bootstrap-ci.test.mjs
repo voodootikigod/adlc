@@ -99,6 +99,8 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
     git(dir, ['init', '-q', '-b', 'main']);
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.github'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'CODEOWNERS'), '.github/workflows/adlc-rails-guard.yml @adlc-admins\n');
     if (baseConfig === null) {
       writeFileSync(join(dir, 'README.md'), 'bootstrap\n');
     } else {
@@ -199,6 +201,16 @@ test('clean unsigned-fallback PR with unchanged config exits 0', () => {
     headConfig: BASE_UNSIGNED,
   });
   assert.equal(result.status, 0);
+});
+
+test('bootstrap step requires CODEOWNERS protection for the deployed workflow', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) => writeFileSync(join(dir, '.github', 'CODEOWNERS'), '# missing workflow owner\n'),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
 });
 
 test('new signer entries reject undeclared properties', () => {
