@@ -15,6 +15,12 @@
 //
 // Exit: 0 = no rails at base OR no rail touched · 2 = a rail was modified ·
 //       1 = operational error / unverifiable rails (fails the CI job).
+//
+// WARNING: this standalone script performs only the rail-glob diff gate. The
+// signer monotonicity, signed-mode runner-pool, downgrade-prevention, and
+// bootstrap-acknowledgement checks live in docs/ci/rails-guard.yml. Non-GitHub
+// CI integrations that call this file directly must port that bootstrap step too
+// if they need the full config-integrity gate.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';

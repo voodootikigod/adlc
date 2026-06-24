@@ -37,6 +37,14 @@ function extractNodeScript(marker) {
   return script;
 }
 
+function extractStepYaml(marker) {
+  const workflow = readFileSync(WORKFLOW, 'utf8');
+  const markerAt = workflow.indexOf(marker);
+  assert.notEqual(markerAt, -1, `${marker} marker exists`);
+  const nextStep = workflow.indexOf('\n      - name:', markerAt + marker.length);
+  return workflow.slice(markerAt, nextStep === -1 ? undefined : nextStep);
+}
+
 function extractBootstrapScript() {
   const script = extractNodeScript('- name: Verify ADLC bootstrap acknowledgement');
   assert.match(script, /assertExistingSignerRolesExact\(trusted\.signers, head\.signers\)/);
@@ -56,6 +64,14 @@ function extractRailFreezeScript() {
 
 const BOOTSTRAP_SCRIPT = extractBootstrapScript();
 const RAIL_FREEZE_SCRIPT = extractRailFreezeScript();
+
+test('bootstrap workflow env maps signed-mode values from the expected GitHub contexts', () => {
+  const step = extractStepYaml('- name: Verify ADLC bootstrap acknowledgement');
+  assert.match(step, /BASE_REF:\s*\$\{\{\s*github\.base_ref\s*\}\}/);
+  assert.match(step, /ADLC_RUNNER_PATH:\s*\$\{\{\s*secrets\.ADLC_RUNNER_PATH\s*\}\}/);
+  assert.match(step, /ADLC_SIGNED_RUNNER_POOL:\s*\$\{\{\s*vars\.ADLC_SIGNED_RUNNER_POOL\s*\}\}/);
+  assert.match(step, /RUNNER_ENVIRONMENT:\s*\$\{\{\s*runner\.environment\s*\}\}/);
+});
 
 function git(cwd, args) {
   execFileSync('git', args, { cwd, stdio: 'pipe' });
