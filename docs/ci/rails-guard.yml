@@ -24,6 +24,9 @@
 # Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH secret
 # pointing to an audited adlc-runner binary by absolute path. This template
 # intentionally does not install the unpublished @adlc/runner package from npm.
+#
+# New approver-role signer grants are intentionally blocked in PRs. Grant them
+# through a protected-base admin ceremony countersigned by an existing approver.
 
 name: ADLC Rails Guard
 
@@ -73,7 +76,7 @@ jobs:
             const base = "origin/" + (process.env.BASE_REF || "main");
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const git = (args, label) => {
-              const res = spawnSync("git", args, { encoding: "utf8", timeout: 30000 });
+              const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
               if (res.error) fail(label + " failed: " + res.error.message);
               if (res.signal) fail(label + " timed out or was killed by " + res.signal);
               return res;
@@ -120,7 +123,7 @@ jobs:
                 const entry = headSigners[key];
                 if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("new signer " + key + " must be an object");
                 const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
-                if (!roles.length || roles.some(r => typeof r !== "string" || !allowedNewRoles.has(r))) fail("new signer " + key + " can only use builder or critic roles in this CI path");
+                if (!roles.length || roles.some(r => typeof r !== "string" || !allowedNewRoles.has(r))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
               }
             };
             const assertExistingSignerRolesExact = (trustedSigners, headSigners) => {
@@ -175,6 +178,7 @@ jobs:
           '
         env:
           BASE_REF: ${{ github.base_ref }}
+          ADLC_RUNNER_PATH: ${{ secrets.ADLC_RUNNER_PATH }}
 
       - name: Rail-freeze gate
         run: |
@@ -183,7 +187,7 @@ jobs:
             const base = "origin/" + (process.env.BASE_REF || "main");
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const git = (args, label) => {
-              const res = spawnSync("git", args, { encoding: "utf8", timeout: 30000 });
+              const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
               if (res.error) fail(label + " failed: " + res.error.message);
               if (res.signal) fail(label + " timed out or was killed by " + res.signal);
               return res;
