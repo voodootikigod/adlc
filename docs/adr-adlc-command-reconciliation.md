@@ -125,12 +125,10 @@ entry point for zero coupling and zero shadowing.
 These are binding on the implementation; each maps to how the dispatcher already
 runs tools, so they add no new mechanism:
 
-1. **Resolve `adlc-runner` BY PATH, never via `$PATH`.** *(RESCISSION NOTICE: Option D has superseded Option C; under Option D, the runner is installed as `@adlc/runner` which registers the `adlc-runner` binary globally. Therefore, the runner is resolved via `$PATH` rather than a local physical path lookup. This item is superseded.)* On a global install only
-   `@adlc/cli`'s own `adlc` bin lands on the global PATH; its dependency's
-   `adlc-runner` does not. The dispatcher must resolve `@adlc/runner`'s declared bin
-   the same way it resolves a tool — `createRequire(...).resolve('@adlc/runner/
-   package.json')` → read `bin` → `spawn(process.execPath, [binPath, ...argv])`.
-   A `spawnSync('adlc-runner', …)` PATH lookup would fail under global install.
+1. **Superseded Option C physical-path resolution.** Under accepted Option D,
+   `adlc-runner` is a separate globally installed bin registered by
+   `@adlc/runner`; harness adapters resolve it through the user's `$PATH`.
+   `createRequire`-based physical-path lookup through `@adlc/cli` is not used.
 2. **Inherit stdio** on the spawned child (`stdio: 'inherit'`), so `adlc run` /
    `adlc accept` output and any interactivity reach the user unchanged. A test
    asserts this.
@@ -167,9 +165,9 @@ Each harness plugin is a thin adapter wiring that harness's native primitives
 
 - `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged. Note that under Option D, the dispatcher tool `adlc` contains no `record` subcommand. The `gate-manifest` tool (called via `adlc gate-manifest verify` or directly) is only responsible for verify/rebuild operations. The historical reference to `gate-manifest record` in the Option C analysis is superseded: under Option D, recording manifest entries is strictly a runner responsibility performed via `adlc-runner record --entry <payload>` (or direct fallback file write scripts when the runner is absent), ensuring that only the cryptographic runner can append signed entries to the manifest.
 - `adlc-runner <verb> …` — runner (`@adlc/runner`), a **single** bin with
-  `run` / `accept` / `record` / `upgrade` / `init-developer-keys` / `rotate-developer-keys` subcommands (`adlc-runner run <phase>`,
-  `adlc-runner accept --ticket …`, `adlc-runner record --entry …`, `adlc-runner upgrade --ticket …`, `adlc-runner init-developer-keys`, `adlc-runner rotate-developer-keys`). This is the minimal change to the runner
-  package: its bin already parses `run`/`accept`/`record`/`upgrade`/`init-developer-keys`/`rotate-developer-keys` as the first positional, so it is
+  `run` / `accept` / `record` / `upgrade` / `init-developer-keys` / `init-admin-keys` / `rotate-developer-keys` subcommands (`adlc-runner run <phase>`,
+  `adlc-runner accept --ticket …`, `adlc-runner record --entry …`, `adlc-runner upgrade --ticket …`, `adlc-runner init-developer-keys`, `adlc-runner init-admin-keys`, `adlc-runner rotate-developer-keys`). This is the minimal change to the runner
+  package: its bin already parses `run`/`accept`/`record`/`upgrade`/`init-developer-keys`/`init-admin-keys`/`rotate-developer-keys` as the first positional, so it is
   only renamed `adlc` → `adlc-runner`; the grammar is otherwise unchanged.
 - No reserved verbs on `adlc`, no `cli → runner` dependency, no disjointness test.
 
@@ -244,7 +242,7 @@ design. All three are folded into the accepted decision:
     (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
     guarantee is a harness-binding responsibility, documented per harness.
 
-4. **Key management is a runner responsibility.** Because `adlc-runner` is the security-critical asserter containing the cryptographic signature verification and generation logic (relying on `developer.key` and `admin.pub`), any subcommands that generate, rotate, or recover these keys (such as `adlc-runner init-developer-keys` and `adlc-runner rotate-developer-keys`) fall strictly under its domain. The `@adlc/cli` dispatcher remains fully modular, thin, and keyless.
+4. **Key management is a runner responsibility.** Because `adlc-runner` is the security-critical asserter containing the cryptographic signature verification and generation logic (relying on `developer.key`, `admin.override`, and `admin.pub`), any subcommands that generate, rotate, or recover these keys (such as `adlc-runner init-developer-keys`, `adlc-runner init-admin-keys`, and `adlc-runner rotate-developer-keys`) fall strictly under its domain. The `@adlc/cli` dispatcher remains fully modular, thin, and keyless.
 
 ---
 
