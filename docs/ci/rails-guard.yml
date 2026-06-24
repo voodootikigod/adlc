@@ -26,9 +26,9 @@
 # intentionally does not install the unpublished @adlc/runner package from npm.
 # Signed mode also requires `runnerBinarySha256` in .adlc/config.json.
 # Run signed mode only on the dedicated `adlc-signed` self-hosted runner pool,
-# with ADLC_SIGNED_RUNNER_POOL=1 set in that runner's environment. Shared
-# self-hosted runners must not be able to write to ADLC_RUNNER_PATH or its
-# temporary execution copy.
+# with ADLC_SIGNED_RUNNER_POOL=1 set as an Actions variable for that protected
+# runner environment. Shared self-hosted runners must not be able to write to
+# ADLC_RUNNER_PATH or its temporary execution copy.
 #
 # New approver-role signer grants are intentionally blocked in PRs. Grant them
 # through a protected-base admin ceremony countersigned by an existing approver.
@@ -48,7 +48,7 @@ jobs:
   rails-guard:
     # Unsigned-fallback bootstrap can run on GitHub-hosted runners. Signed mode
     # fast-fails below unless this job is moved to [self-hosted, adlc-signed]
-    # with ADLC_SIGNED_RUNNER_POOL=1 in that runner's environment.
+    # with ADLC_SIGNED_RUNNER_POOL=1 exposed through the step env below.
     runs-on: ubuntu-latest
     steps:
       # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
@@ -236,6 +236,7 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           ADLC_RUNNER_PATH: ${{ secrets.ADLC_RUNNER_PATH }}
+          ADLC_SIGNED_RUNNER_POOL: ${{ vars.ADLC_SIGNED_RUNNER_POOL }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
 
       - name: Rail-freeze gate

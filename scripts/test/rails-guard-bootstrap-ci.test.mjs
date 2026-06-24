@@ -31,6 +31,9 @@ function extractBootstrapScript() {
     .join('\n');
   assert.ok(script.length > 500, 'bootstrap script extraction produced a non-trivial script');
   assert.doesNotThrow(() => new vm.Script(script), 'bootstrap script extraction produced valid JavaScript');
+  assert.match(script, /assertExistingSignerRolesExact\(trusted\.signers, head\.signers\)/);
+  assert.match(script, /bootstrap mode: base has no \.adlc tree/);
+  assert.match(script, /ADLC_SIGNED_RUNNER_POOL/);
   return script;
 }
 
@@ -347,6 +350,15 @@ test('first bootstrap mode rejects pre-populated manifest evidence', () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+});
+
+test('first bootstrap mode accepts a clean unsigned-fallback config', () => {
+  const result = runBootstrapScenario({
+    baseConfig: null,
+    headConfig: BASE_UNSIGNED,
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /bootstrap mode: base has no \.adlc tree/);
 });
 
 test('first bootstrap mode rejects signed security mode before runner infrastructure is validated', () => {
