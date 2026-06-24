@@ -244,6 +244,27 @@ test('bootstrap step rejects CODEOWNERS catch-all negated for the deployed workf
   assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
 });
 
+test('bootstrap step follows GitHub CODEOWNERS file priority', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '* @adlc-admins\n',
+    mutateBase: (dir) => writeFileSync(join(dir, 'CODEOWNERS'), 'src/** @app-team\n'),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
+test('bootstrap step rejects workflow CODEOWNERS entries with no owners', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '.github/workflows/adlc-rails-guard.yml\n',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
 test('new signer entries reject undeclared properties', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,

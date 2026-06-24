@@ -130,6 +130,14 @@ function validateConfigIntegrity() {
     for (const key of Object.keys(trusted.signers)) {
       const trustedRoles = signerRoles(trusted.signers[key], key);
       const headRoles = signerRoles(head.signers[key], key);
+      for (const field of Object.keys(trusted.signers[key])) {
+        if (!Object.prototype.hasOwnProperty.call(head.signers[key], field)) {
+          fail(`signers.${key}.${field} cannot remove trusted signer property`);
+        }
+        if (stable(head.signers[key][field]) !== stable(trusted.signers[key][field])) {
+          fail(`signers.${key}.${field} cannot change trusted signer property`);
+        }
+      }
       for (const field of Object.keys(head.signers[key])) {
         if (!Object.prototype.hasOwnProperty.call(trusted.signers[key], field)) {
           fail(`signers.${key}.${field} is an undeclared signer property`);

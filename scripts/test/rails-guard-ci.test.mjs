@@ -260,6 +260,25 @@ test('standalone semantic gate blocks undeclared fields on existing signers → 
   assert.equal(code, 1);
 });
 
+test('standalone semantic gate blocks trusted signer field removal → exit 1', () => {
+  const baseConfig = JSON.stringify({
+    acknowledgedNewRailBypass: true,
+    securityMode: 'unsigned-fallback',
+    signers: { alice: { role: 'builder', publicKey: 'abc123' } },
+  });
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${baseConfig}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ acknowledgedNewRailBypass: true, securityMode: 'unsigned-fallback', signers: { alice: { role: 'builder' } } })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
 test('standalone semantic gate rejects null signers field → exit 1', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
