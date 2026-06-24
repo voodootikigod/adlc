@@ -59,6 +59,9 @@ const VALID_CONFIG = JSON.stringify({
   acknowledgedNewRailBypass: true,
   securityMode: 'unsigned-fallback',
   signers: { alice: { role: 'builder' } },
+  revokedKeys: ['old-key'],
+  securitySensitivePatterns: ['src/security/**'],
+  maxBundleAgeDays: 14,
 });
 const SIGNED_CONFIG = JSON.stringify({
   acknowledgedNewRailBypass: true,
@@ -154,6 +157,62 @@ test('standalone semantic gate blocks existing signer deletion → exit 1', () =
       writeFileSync(
         join(d, '.adlc', 'config.json'),
         `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: {} })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks revokedKeys removal → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), revokedKeys: [] })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks securitySensitivePatterns removal → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), securitySensitivePatterns: [] })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks maxBundleAgeDays increase → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), maxBundleAgeDays: 30 })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks new approver signer grants → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: { ...JSON.parse(VALID_CONFIG).signers, bob: { role: 'approver' } } })}\n`
       ),
   });
   assert.equal(code, 1);

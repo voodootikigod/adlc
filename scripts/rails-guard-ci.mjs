@@ -16,13 +16,11 @@
 // Exit: 0 = no rails at base OR no rail touched · 2 = a rail was modified ·
 //       1 = operational error / unverifiable rails (fails the CI job).
 //
-// WARNING: this standalone script performs only the rail-glob diff gate. It
-// blocks changes to ADLC trust-root files as rails, but it does not make semantic
-// allow/deny decisions about signer monotonicity, signed-mode runner pools,
-// securityMode downgrades, or bootstrap acknowledgement. Those checks live in
-// docs/ci/rails-guard.yml. Non-GitHub CI integrations that call this file
-// directly must port that bootstrap step too if they need the full
-// config-integrity gate.
+// WARNING: this standalone script performs the rail-glob diff gate plus the
+// config-integrity checks that can run without GitHub Actions context. Signed
+// runner-pool probing and first-bootstrap acknowledgement remain exclusive to
+// docs/ci/rails-guard.yml; non-GitHub CI integrations that need those checks
+// must port that bootstrap step too.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -56,6 +54,39 @@ function signerRoles(entry, key) {
     fail(`signer ${key} must remain an object`);
   }
   return new Set((Array.isArray(entry.roles) ? entry.roles : [entry.role]).filter((role) => role !== undefined));
+}
+
+function stable(value) {
+  if (Array.isArray(value)) return JSON.stringify(value.map((item) => JSON.parse(stable(item))));
+  if (value && typeof value === 'object') {
+    return JSON.stringify(Object.fromEntries(Object.keys(value).sort().map((key) => [key, JSON.parse(stable(value[key]))])));
+  }
+  return JSON.stringify(value);
+}
+
+function assertArraySuperset(name, trustedValue, headValue) {
+  if (!Array.isArray(trustedValue)) return;
+  if (!Array.isArray(headValue)) fail(`${name} must remain an array`);
+  const headSet = new Set(headValue.map(stable));
+  for (const item of trustedValue) {
+    if (!headSet.has(stable(item))) fail(`${name} cannot remove trusted entry ${stable(item)}`);
+  }
+}
+
+function validateNewSigners(trustedSigners, headSigners) {
+  if (!headSigners || typeof headSigners !== 'object' || Array.isArray(headSigners)) return;
+  const allowedNewRoles = new Set(['builder', 'critic']);
+  for (const key of Object.keys(headSigners)) {
+    if (trustedSigners && Object.prototype.hasOwnProperty.call(trustedSigners, key)) continue;
+    const entry = headSigners[key];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(`new signer ${key} must be an object`);
+    if (entry.role === undefined && entry.roles === undefined) fail(`new signer ${key} must declare a role or roles field`);
+    if (entry.role !== undefined && entry.roles !== undefined) fail(`new signer ${key} must use either role or roles, not both`);
+    const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
+    if (!roles.length || roles.some((role) => typeof role !== 'string' || !allowedNewRoles.has(role))) {
+      fail(`new signer ${key} can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony`);
+    }
+  }
 }
 
 function validateConfigIntegrity() {
@@ -96,6 +127,12 @@ function validateConfigIntegrity() {
         if (!headRoles.has(role)) fail(`existing signer ${key} roles cannot change`);
       }
     }
+  }
+  if (head.signers !== undefined) validateNewSigners(trusted.signers ?? {}, head.signers);
+  assertArraySuperset('revokedKeys', trusted.revokedKeys, head.revokedKeys);
+  assertArraySuperset('securitySensitivePatterns', trusted.securitySensitivePatterns, head.securitySensitivePatterns);
+  if (typeof trusted.maxBundleAgeDays === 'number' && (typeof head.maxBundleAgeDays !== 'number' || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) {
+    fail('maxBundleAgeDays can only decrease or stay the same');
   }
 }
 
@@ -165,7 +202,15 @@ for (const t of data.tickets) {
 }
 
 const trustRoots = rails.length || baseHasConfig
-  ? ['.adlc/tickets.json', '.adlc/config.json', '.adlc/manifest.jsonl', '.github/workflows/adlc-rails-guard.yml']
+  ? [
+      '.adlc/tickets.json',
+      '.adlc/config.json',
+      '.adlc/manifest.jsonl',
+      '.github/workflows/adlc-rails-guard.yml',
+      'docs/ci/rails-guard.yml',
+      'scripts/rails-guard-ci.mjs',
+      'scripts/test/rails-guard-workflow-hashes.json',
+    ]
   : [];
 const unique = [...new Set([...rails, ...trustRoots])];
 if (unique.length === 0) {

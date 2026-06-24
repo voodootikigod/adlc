@@ -59,7 +59,7 @@ function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
   assert.match(script, /bootstrap validation was handled by the previous step/);
-  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl", "\.github\/workflows\/adlc-rails-guard\.yml"\]/);
+  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl", "\.github\/workflows\/adlc-rails-guard\.yml", "docs\/ci\/rails-guard\.yml", "scripts\/rails-guard-ci\.mjs", "scripts\/test\/rails-guard-workflow-hashes\.json"\]/);
   assert.match(script, /new Set\(\[...rails, ...trustRoots\]\)/);
   return script;
 }
@@ -662,6 +662,12 @@ test('rail-freeze gate protects trust roots when base tickets declare no rails',
       '.adlc/manifest.jsonl',
       '--rails',
       '.github/workflows/adlc-rails-guard.yml',
+      '--rails',
+      'docs/ci/rails-guard.yml',
+      '--rails',
+      'scripts/rails-guard-ci.mjs',
+      '--rails',
+      'scripts/test/rails-guard-workflow-hashes.json',
     ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -710,6 +716,12 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
       '.adlc/manifest.jsonl',
       '--rails',
       '.github/workflows/adlc-rails-guard.yml',
+      '--rails',
+      'docs/ci/rails-guard.yml',
+      '--rails',
+      'scripts/rails-guard-ci.mjs',
+      '--rails',
+      'scripts/test/rails-guard-workflow-hashes.json',
     ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
