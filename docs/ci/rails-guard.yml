@@ -20,6 +20,10 @@
 # newly frozen paths. /adlc-init must require --acknowledge-new-rail-bypass
 # (headless) or an interactive TUI confirmation before scaffolding this template
 # as a required check until Phase F new-rail-aware structural CI hardening ships.
+#
+# Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH pointing to
+# an audited adlc-runner binary. This template intentionally does not install the
+# unpublished @adlc/runner package from npm.
 
 name: ADLC Rails Guard
 
@@ -107,6 +111,17 @@ jobs:
                 }
               }
             };
+            const validateNewSigners = (trustedSigners, headSigners) => {
+              if (!headSigners || typeof headSigners !== "object" || Array.isArray(headSigners)) fail("signers must remain an object");
+              const allowedNewRoles = new Set(["builder", "critic"]);
+              for (const key of Object.keys(headSigners)) {
+                if (trustedSigners && Object.prototype.hasOwnProperty.call(trustedSigners, key)) continue;
+                const entry = headSigners[key];
+                if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("new signer " + key + " must be an object");
+                const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
+                if (!roles.length || roles.some(r => typeof r !== "string" || !allowedNewRoles.has(r))) fail("new signer " + key + " can only use builder or critic roles in this CI path");
+              }
+            };
             if (!fs.existsSync(".adlc/config.json")) fail("missing .adlc/config.json; run /adlc-init before enabling this required check");
             const head = parse(fs.readFileSync(".adlc/config.json", "utf8"), "head .adlc/config.json");
             if (head.acknowledgedNewRailBypass !== true) fail("missing acknowledgedNewRailBypass: true; acknowledge the new-rail limitation before using this as a required check");
@@ -114,14 +129,11 @@ jobs:
             if (head.securityMode === "unsigned-fallback" && head.signedEvidenceRequired === true) fail("signedEvidenceRequired cannot be true in unsigned-fallback mode");
             if (head.securityMode === "signed" || head.signedEvidenceRequired === true) {
               const runnerPath = process.env.ADLC_RUNNER_PATH;
-              if (!runnerPath) {
-                console.log("::warning::signed mode requested, but ADLC_RUNNER_PATH is not configured; add a repository-managed runner after audited publication to enforce signed evidence in CI.");
-              } else {
-                const runner = spawnSync(runnerPath, ["--version"], { encoding: "utf8", timeout: 30000 });
-                if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
-                if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
-                if (runner.status !== 0) fail("signed mode requires ADLC_RUNNER_PATH --version to exit 0");
-              }
+              if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
+              const runner = spawnSync(runnerPath, ["--version"], { encoding: "utf8", timeout: 30000 });
+              if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
+              if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
+              if (runner.status !== 0) fail("signed mode requires ADLC_RUNNER_PATH --version to exit 0");
             }
             const ref = git(["rev-parse", "--verify", "--quiet", base + "^{commit}"], "git rev-parse base");
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — bootstrap cannot be verified");
@@ -142,7 +154,7 @@ jobs:
             if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
             // New signer additions are allowed for team onboarding, but existing
             // signer entries cannot be removed or weakened by a PR.
-            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); }
+            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); validateNewSigners(trusted.signers, head.signers); }
             if (Array.isArray(trusted.revokedKeys)) assertSuperset(trusted.revokedKeys, head.revokedKeys, "revokedKeys");
             if (Array.isArray(trusted.securitySensitivePatterns)) assertSuperset(trusted.securitySensitivePatterns, head.securitySensitivePatterns, "securitySensitivePatterns");
             if (typeof trusted.maxBundleAgeDays === "number" && (typeof head.maxBundleAgeDays !== "number" || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) fail("maxBundleAgeDays can only decrease or stay the same");
