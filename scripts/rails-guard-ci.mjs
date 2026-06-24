@@ -16,11 +16,12 @@
 // Exit: 0 = no rails at base OR no rail touched · 2 = a rail was modified ·
 //       1 = operational error / unverifiable rails (fails the CI job).
 //
-// WARNING: this standalone script performs the rail-glob diff gate plus the
-// config-integrity checks that can run without GitHub Actions context. Signed
-// runner-pool probing and first-bootstrap acknowledgement remain exclusive to
-// docs/ci/rails-guard.yml; non-GitHub CI integrations that need those checks
-// must port that bootstrap step too.
+// WARNING: this standalone script is not a security-complete replacement for
+// docs/ci/rails-guard.yml. It performs the rail-glob diff gate plus the
+// config-integrity checks that can run without GitHub Actions context, but it
+// DOES NOT verify CODEOWNERS self-protection, signed runner-pool probing, or the
+// first-bootstrap acknowledgement ceremony. Non-GitHub CI integrations must
+// port the YAML bootstrap step before treating this as an enforcement boundary.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -110,6 +111,12 @@ function validateConfigIntegrity() {
   }
   if (head.acknowledgedNewRailBypass !== true) {
     fail('missing acknowledgedNewRailBypass: true');
+  }
+  if (!['signed', 'unsigned-fallback'].includes(trusted.securityMode)) {
+    fail('base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety');
+  }
+  if (!['signed', 'unsigned-fallback'].includes(head.securityMode)) {
+    fail('head .adlc/config.json has an unrecognized securityMode');
   }
   if (trusted.securityMode === 'signed' && head.securityMode !== 'signed') {
     fail('cannot downgrade securityMode from signed to unsigned-fallback');

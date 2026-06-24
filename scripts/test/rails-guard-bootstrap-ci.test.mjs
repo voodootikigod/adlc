@@ -244,12 +244,68 @@ test('bootstrap step rejects CODEOWNERS catch-all negated for the deployed workf
   assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
 });
 
+test('bootstrap step accepts CODEOWNERS negation before later catch-all owners', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '!.github/workflows/adlc-rails-guard.yml\n* @adlc-admins\n',
+  });
+  assert.equal(result.status, 0);
+});
+
+test('bootstrap step accepts CODEOWNERS wildcard owners for the deployed workflow', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '.github/workflows/*.yml @adlc-admins\n',
+  });
+  assert.equal(result.status, 0);
+});
+
 test('bootstrap step follows GitHub CODEOWNERS file priority', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
     codeownersContent: '* @adlc-admins\n',
     mutateBase: (dir) => writeFileSync(join(dir, 'CODEOWNERS'), 'src/** @app-team\n'),
+  });
+  assert.equal(result.status, 0);
+});
+
+test('bootstrap step treats root CODEOWNERS as higher priority than docs CODEOWNERS', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    withCodeowners: false,
+    mutateBase: (dir) => {
+      writeFileSync(join(dir, 'CODEOWNERS'), 'src/** @app-team\n');
+      mkdirSync(join(dir, 'docs'), { recursive: true });
+      writeFileSync(join(dir, 'docs', 'CODEOWNERS'), '* @adlc-admins\n');
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
+test('bootstrap step treats .github CODEOWNERS as higher priority than docs CODEOWNERS', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '* @adlc-admins\n',
+    mutateBase: (dir) => {
+      mkdirSync(join(dir, 'docs'), { recursive: true });
+      writeFileSync(join(dir, 'docs', 'CODEOWNERS'), 'src/** @app-team\n');
+    },
+  });
+  assert.equal(result.status, 0);
+});
+
+test('bootstrap step treats .github CODEOWNERS as higher priority than root CODEOWNERS', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '!.github/workflows/adlc-rails-guard.yml\n',
+    mutateBase: (dir) => writeFileSync(join(dir, 'CODEOWNERS'), '* @adlc-admins\n'),
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
@@ -260,6 +316,26 @@ test('bootstrap step rejects workflow CODEOWNERS entries with no owners', () => 
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
     codeownersContent: '.github/workflows/adlc-rails-guard.yml\n',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
+test('bootstrap step rejects no-owner CODEOWNERS override after catch-all owners', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '.github/ @adlc-admins\n.github/workflows/adlc-rails-guard.yml\n',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
+test('bootstrap step rejects wildcard no-owner override after catch-all owners', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '* @adlc-admins\n.github/workflows/*.yml\n',
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);

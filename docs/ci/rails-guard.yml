@@ -25,7 +25,9 @@
 # protect the deployed .github/workflows/adlc-rails-guard.yml with CODEOWNERS or
 # a branch ruleset requiring trusted-owner approval. GitHub pull_request events
 # from same-repository branches run the PR branch's workflow file, so this script
-# cannot defend itself if a PR removes the gate.
+# cannot defend itself if a PR removes the gate. The effective CODEOWNERS file
+# must not leave the deployed workflow path ownerless through a later no-owner or
+# negation entry, even when a broader earlier pattern names trusted owners.
 #
 # Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH secret
 # pointing to an audited adlc-runner binary by absolute path. This template
@@ -104,7 +106,35 @@ jobs:
             process.on("SIGTERM", () => process.exit(1));
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const workflowHasCodeowners = () => {
-              for (const file of ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]) {
+              const workflowPath = ".github/workflows/adlc-rails-guard.yml";
+              const escapeRegex = (s) => s.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+              const globToRegex = (pattern) => {
+                let out = "";
+                for (let i = 0; i < pattern.length; i += 1) {
+                  const c = pattern[i];
+                  if (c === "*") {
+                    if (pattern[i + 1] === "*") {
+                      out += ".*";
+                      i += 1;
+                    } else {
+                      out += "[^/]*";
+                    }
+                  } else {
+                    out += escapeRegex(c);
+                  }
+                }
+                return new RegExp("^" + out + "$");
+              };
+              const codeownersPatternMatches = (rawPattern) => {
+                let pattern = rawPattern.replace(/^\/+/, "");
+                if (!pattern) return false;
+                if (pattern === "*") return true;
+                if (pattern.endsWith("/")) pattern += "**";
+                const candidates = pattern.includes("/") ? [workflowPath] : [path.basename(workflowPath)];
+                const matcher = globToRegex(pattern);
+                return candidates.some(candidate => matcher.test(candidate));
+              };
+              for (const file of [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]) {
                 const show = spawnSync("git", ["show", base + ":" + file], { encoding: "utf8", timeout: 60000 });
                 if (show.error) fail("git show base CODEOWNERS failed: " + show.error.message);
                 if (show.signal) fail("git show base CODEOWNERS timed out or was killed by " + show.signal);
@@ -116,10 +146,8 @@ jobs:
                   const pattern = parts[0];
                   const negated = pattern.startsWith("!");
                   const normalized = negated ? pattern.slice(1) : pattern;
-                  if (["*", "/*", ".github/", "/.github/", ".github/**", "/.github/**", ".github/workflows/*", "/.github/workflows/*", ".github/workflows/**", "/.github/workflows/**", ".github/workflows/adlc-rails-guard.yml", "/.github/workflows/adlc-rails-guard.yml"].includes(normalized)) {
-                    if (negated) return false;
-                    if (parts.length < 2) continue;
-                    protectedByCodeowners = true;
+                  if (codeownersPatternMatches(normalized)) {
+                    protectedByCodeowners = !negated && parts.length >= 2;
                   }
                 }
                 return protectedByCodeowners;
