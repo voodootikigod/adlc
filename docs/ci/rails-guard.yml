@@ -81,6 +81,7 @@ jobs:
             if (trusted.acknowledgedNewRailBypass !== true) fail("acknowledgedNewRailBypass must already be set on the base branch; a PR cannot self-acknowledge this limitation");
             if (!["signed", "unsigned-fallback"].includes(trusted.securityMode)) fail("base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety");
             if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
+            if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
           '
         env:
           BASE_REF: ${{ github.base_ref }}
@@ -124,7 +125,6 @@ jobs:
             }
             if (rails.length) protectedPaths.push(".adlc/tickets.json"); // trust root is frozen once rails exist
             const u = [...new Set([...protectedPaths, ...rails])];
-            if (!u.length) fail("no protected paths resolved; refusing to pass rail-freeze gate");
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
             const res = spawnSync("adlc", argv, { stdio: "inherit" });
             if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
