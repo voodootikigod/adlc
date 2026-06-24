@@ -16,11 +16,13 @@
 // Exit: 0 = no rails at base OR no rail touched · 2 = a rail was modified ·
 //       1 = operational error / unverifiable rails (fails the CI job).
 //
-// WARNING: this standalone script performs only the rail-glob diff gate. The
-// signer monotonicity, signed-mode runner-pool, downgrade-prevention, and
-// bootstrap-acknowledgement checks live in docs/ci/rails-guard.yml. Non-GitHub
-// CI integrations that call this file directly must port that bootstrap step too
-// if they need the full config-integrity gate.
+// WARNING: this standalone script performs only the rail-glob diff gate. It
+// blocks changes to ADLC trust-root files as rails, but it does not make semantic
+// allow/deny decisions about signer monotonicity, signed-mode runner pools,
+// securityMode downgrades, or bootstrap acknowledgement. Those checks live in
+// docs/ci/rails-guard.yml. Non-GitHub CI integrations that call this file
+// directly must port that bootstrap step too if they need the full
+// config-integrity gate.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';

@@ -56,7 +56,7 @@ function extractBootstrapScript() {
 function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
-  assert.match(script, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+  assert.match(script, /bootstrap validation was handled by the previous step/);
   assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl"\]/);
   assert.match(script, /new Set\(\[...rails, ...trustRoots\]\)/);
   return script;
@@ -550,14 +550,14 @@ test('base config must already acknowledge the new-rail limitation', () => {
   assert.match(result.stderr, /acknowledgedNewRailBypass must already be set on the base branch/);
 });
 
-test('rail-freeze bootstrap mode rejects pre-populated manifest evidence', () => {
+test('rail-freeze bootstrap mode defers manifest validation to the bootstrap step', () => {
   const result = runRailFreezeScenario({
     baseConfig: null,
     headConfig: BASE_UNSIGNED,
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n'),
   });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /bootstrap validation was handled by the previous step/);
 });
 
 test('rail-freeze gate fails closed when base .adlc exists without config acknowledgement', () => {

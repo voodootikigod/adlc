@@ -199,6 +199,8 @@ jobs:
             if (typeof trusted.runnerBinarySha256 === "string" && head.runnerBinarySha256 !== trusted.runnerBinarySha256) fail("runnerBinarySha256 cannot change in a PR; rotate it through the protected-base runner ceremony");
             if ((head.securityMode === "signed" || head.signedEvidenceRequired === true) && trusted.securityMode !== "signed" && trusted.signedEvidenceRequired !== true) fail("signed mode upgrade requires a protected-base runner ceremony");
             if (trusted.securityMode === "signed" || trusted.signedEvidenceRequired === true) {
+              // Defense-in-depth signal only: the authoritative boundary is the
+              // adlc-signed runner-pool label plus branch/workflow protection.
               if (process.env.RUNNER_ENVIRONMENT !== "self-hosted" || process.env.ADLC_SIGNED_RUNNER_POOL !== "1") fail("signed mode requires the dedicated adlc-signed self-hosted runner pool with ADLC_SIGNED_RUNNER_POOL=1");
               const runnerPath = process.env.ADLC_RUNNER_PATH;
               if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
@@ -273,9 +275,10 @@ jobs:
             if (baseAdlc.status !== 0) fail("git ls-tree failed for " + base + " .adlc (operational) — failing closed");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
-              const fs = require("fs");
-              if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
-              console.log("bootstrap mode: base has no .adlc tree — no frozen rails exist yet.");
+              // The bootstrap acknowledgement step above is authoritative for
+              // first-bootstrap manifest/config validation. This step only owns
+              // base-branch rail diff enforcement.
+              console.log("bootstrap mode: base has no .adlc tree — no frozen rails exist yet; bootstrap validation was handled by the previous step.");
               process.exit(0);
             }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
