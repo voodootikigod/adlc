@@ -285,7 +285,7 @@ All 8 phases of the ADLC are represented in this plan (with Phase 4 (Build) real
 
 ### 6.5. Local-Only / Non-CI Security Degradation Summary
 * **Status:** ⚠️ Advisory
-* **Reason:** In workspaces configured without CI/CD branch protection pipelines, the safety contract decays due to the composition of the following seven limitations:
+* **Reason:** In workspaces configured without CI/CD branch protection pipelines, the safety contract decays due to the composition of the following eight limitations:
   1. **In-Session Bash Exclusion:** Bash shell commands are not gated in-session, allowing edits to rails via standard terminal tools.
   2. **Harness Fail-Open Exceptions:** If the OpenCode harness lacks native `onFailure: deny` support, plug-in loading errors or crashes fail open.
   3. **Agent-Deletable Hooks:** Local pre-commit git hooks are best-effort and can be bypassed or deleted by the agent.
@@ -293,6 +293,7 @@ All 8 phases of the ADLC are represented in this plan (with Phase 4 (Build) real
   5. **Temporal Isolation Bypass:** If the proposed TUI suspension API is absent, builder agents cannot be suspended during `/adlc-rail-write` execution or during triage class upgrade transition windows (Trivial/Bounded → Substantial), allowing concurrent builder agents to write to pending/unfrozen rails during these temporal windows.
   6. **Evidence Tampering via Bash:** Local evidence files in `.adlc/` are writable via the terminal, enabling agents to falsify unsigned test/build logs locally. Phase 6 behavioral acceptance evidence is excluded from this pre-signing forgery class: `adlc-runner accept --ticket <id>` re-runs behavior-diff internally under `.adlc/behavior-diff.lock`, atomically overwrites `.adlc/behavior-diff.json`, hashes the freshly generated file, and signs that hash before releasing the lock. Any behavior-diff JSON produced outside the runner is non-authoritative preview output only.
   7. **Admin Public Key Replacement Attack:** Without trunk protection, an adversary or compromised agent can perform interactive history rewriting (git rebase) to modify the initial commit, replace the admin public key fingerprint (`.adlc/admin.pub`), forge a matching admin override token, and rebuild the manifest chain with arbitrary signatures. This completely compromises the cryptographic root of trust for key recovery, highlighting why trunk protection on base branches is a mandatory security control.
+  8. **Security Mode Downgrade via Bash:** The repository-local `.adlc/config.json.securityMode` declaration is writable through terminal commands outside in-session hook control. The CI template protects the base config file and rejects signed-to-unsigned downgrades, but local-only workflows must manually audit config diffs before trusting signed evidence.
 
   Under this composite, there is **zero complete or guaranteed mechanical rail enforcement** during development. Local-only developers must manually audit git logs for edits to `.adlc/` and run direct path comparisons against the base branch to verify rail compliance before merging.
 

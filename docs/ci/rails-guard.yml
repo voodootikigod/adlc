@@ -57,6 +57,33 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
+      - name: Verify ADLC bootstrap acknowledgement
+        run: |
+          node -e '
+            const fs = require("fs");
+            const { spawnSync } = require("child_process");
+            const base = "origin/" + (process.env.BASE_REF || "main");
+            const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
+            const parse = (s, label) => { try { return JSON.parse(s); } catch (e) { fail("cannot parse " + label + ": " + e.message); } };
+            if (!fs.existsSync(".adlc/config.json")) fail("missing .adlc/config.json; run /adlc-init before enabling this required check");
+            const head = parse(fs.readFileSync(".adlc/config.json", "utf8"), "head .adlc/config.json");
+            if (head.acknowledgedNewRailBypass !== true) fail("missing acknowledgedNewRailBypass: true; acknowledge the new-rail limitation before using this as a required check");
+            if (!["signed", "unsigned-fallback"].includes(head.securityMode)) fail("securityMode must be signed or unsigned-fallback");
+            if (head.securityMode === "unsigned-fallback" && head.signedEvidenceRequired === true) fail("signedEvidenceRequired cannot be true in unsigned-fallback mode");
+            const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
+            if (ref.status !== 0) fail("base ref " + base + " does not resolve — bootstrap cannot be verified");
+            const baseConfig = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/config.json"], { encoding: "utf8" });
+            if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
+            if (baseConfig.stdout.trim()) {
+              const showConfig = spawnSync("git", ["show", base + ":.adlc/config.json"], { encoding: "utf8" });
+              if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");
+              const trusted = parse(showConfig.stdout, "base .adlc/config.json");
+              if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
+            }
+          '
+        env:
+          BASE_REF: ${{ github.base_ref }}
+
       - name: Rail-freeze gate
         run: |
           node -e '
@@ -67,12 +94,23 @@ jobs:
             // both "bad ref" and "file absent", and conflating them would fail open.
             const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
+            const protectedPaths = [];
+            const baseConfig = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/config.json"], { encoding: "utf8" });
+            if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
+            if (baseConfig.stdout.trim()) protectedPaths.push(".adlc/config.json");
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
             // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.
             const ls = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], { encoding: "utf8" });
             if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
-            if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + base + " — nothing frozen."); process.exit(0); }
+            if (!ls.stdout.trim() && !protectedPaths.length) { console.log("no base ADLC config or tickets at " + base + " — nothing frozen."); process.exit(0); }
+            if (!ls.stdout.trim()) console.log("no .adlc/tickets.json at " + base + " — checking protected config only.");
+            if (!ls.stdout.trim()) {
+              const argv = ["rails-guard", "--base", base, ...protectedPaths.flatMap(r => ["--rails", r])];
+              const res = spawnSync("adlc", argv, { stdio: "inherit" });
+              if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
+              process.exit(typeof res.status === "number" ? res.status : 1);
+            }
             const show = spawnSync("git", ["show", base + ":.adlc/tickets.json"], { encoding: "utf8" });
             if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
             let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
@@ -83,9 +121,9 @@ jobs:
               if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array base rails");
               for (const r of t.rails ?? []) { if (typeof r !== "string") fail("non-string base rail"); rails.push(r); }
             }
-            const u = [...new Set(rails)];
-            if (!u.length) { console.log("no rails declared at base — nothing frozen."); process.exit(0); }
-            u.push(".adlc/tickets.json"); // trust root is frozen once rails exist
+            if (rails.length) protectedPaths.push(".adlc/tickets.json"); // trust root is frozen once rails exist
+            const u = [...new Set([...protectedPaths, ...rails])];
+            if (!u.length) { console.log("no rails or protected config declared at base — nothing frozen."); process.exit(0); }
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
             const res = spawnSync("adlc", argv, { stdio: "inherit" });
             if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
