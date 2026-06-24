@@ -46,13 +46,18 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
     git(dir, ['init', '-q', '-b', 'main']);
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeJson(join(dir, '.adlc', 'config.json'), baseConfig);
+    if (baseConfig === null) {
+      writeFileSync(join(dir, 'README.md'), 'bootstrap\n');
+    } else {
+      mkdirSync(join(dir, '.adlc'), { recursive: true });
+      writeJson(join(dir, '.adlc', 'config.json'), baseConfig);
+    }
     mutateBase?.(dir);
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'base']);
     git(dir, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     git(dir, ['checkout', '-q', '-b', 'feat']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
     writeJson(join(dir, '.adlc', 'config.json'), headConfig ?? baseConfig);
     mutateHead?.(dir);
     git(dir, ['add', '-A']);
@@ -177,4 +182,108 @@ test('signed mode rejects runner hash mismatches before executing the runner', (
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256/);
+});
+
+test('revokedKeys entries cannot be removed in a PR', () => {
+  const result = runBootstrapScenario({
+    baseConfig: { ...BASE_UNSIGNED, revokedKeys: ['old-key', 'compromised-key'] },
+    headConfig: { ...BASE_UNSIGNED, revokedKeys: ['old-key'] },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /revokedKeys cannot remove trusted entry/);
+});
+
+test('securitySensitivePatterns entries cannot be removed in a PR', () => {
+  const result = runBootstrapScenario({
+    baseConfig: {
+      ...BASE_UNSIGNED,
+      securitySensitivePatterns: ['src/security/**', 'packages/gate-manifest/**'],
+    },
+    headConfig: {
+      ...BASE_UNSIGNED,
+      securitySensitivePatterns: ['src/security/**'],
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /securitySensitivePatterns cannot remove trusted entry/);
+});
+
+test('maxBundleAgeDays can only decrease or stay the same', () => {
+  const result = runBootstrapScenario({
+    baseConfig: { ...BASE_UNSIGNED, maxBundleAgeDays: 14 },
+    headConfig: { ...BASE_UNSIGNED, maxBundleAgeDays: 30 },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /maxBundleAgeDays can only decrease or stay the same/);
+});
+
+test('signedEvidenceRequired cannot be removed when it is trusted true', () => {
+  const signedRequiredBase = {
+    ...BASE_UNSIGNED,
+    securityMode: 'signed',
+    signedEvidenceRequired: true,
+    runnerBinarySha256: '0'.repeat(64),
+  };
+  const result = runBootstrapScenario({
+    baseConfig: signedRequiredBase,
+    headConfig: {
+      ...signedRequiredBase,
+      signedEvidenceRequired: false,
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot remove signedEvidenceRequired/);
+});
+
+test('runnerBinarySha256 cannot change in a PR', () => {
+  const signedBase = {
+    ...BASE_UNSIGNED,
+    securityMode: 'signed',
+    runnerBinarySha256: '0'.repeat(64),
+  };
+  const result = runBootstrapScenario({
+    baseConfig: signedBase,
+    headConfig: {
+      ...signedBase,
+      runnerBinarySha256: '1'.repeat(64),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /runnerBinarySha256 cannot change in a PR/);
+});
+
+test('existing signer roles cannot change in a PR', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      signers: {
+        alice: { role: 'critic' },
+      },
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /signers\.alice\.role cannot change trusted value/);
+});
+
+test('HEAD config must acknowledge the new-rail limitation', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      acknowledgedNewRailBypass: false,
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing acknowledgedNewRailBypass: true/);
+});
+
+test('first bootstrap mode rejects pre-populated manifest evidence', () => {
+  const result = runBootstrapScenario({
+    baseConfig: null,
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n'),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
 });

@@ -199,7 +199,15 @@ jobs:
               const runnerCopy = path.join(runnerTmpDir, "adlc-runner");
               fs.writeFileSync(runnerCopy, runnerBytes, { mode: 0o500 });
               fs.chmodSync(runnerCopy, 0o500);
-              const runnerEnv = { PATH: process.env.PATH || "" };
+              // Keep the probe environment narrow, but preserve the basic OS
+              // variables legitimate binaries commonly need for homedir and temp
+              // resolution. Secrets and repo-controlled variables stay excluded.
+              const runnerEnv = {
+                PATH: process.env.PATH || "",
+                HOME: process.env.HOME || "",
+                TMPDIR: process.env.TMPDIR || os.tmpdir(),
+                USER: process.env.USER || "",
+              };
               const runner = spawnSync(runnerCopy, ["--version"], { encoding: "utf8", timeout: 30000, env: runnerEnv });
               if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
               if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
