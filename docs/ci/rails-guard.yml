@@ -2,10 +2,11 @@
 # .github/workflows/adlc-rails-guard.yml
 # OpenCode /adlc-init template source: docs/ci/rails-guard.yml
 #
-# This is the unbypassable commit-time gate the in-session PreToolUse rail hook
-# relies on. The hook blocks Edit/Write/MultiEdit and common Bash writes to
-# frozen rails, but a shell write form it does not recognize (node -e, python,
-# cp, perl -i, …) still lands in the PR diff — this job rejects that PR.
+# This is the base-branch commit-time gate backing the in-session PreToolUse rail
+# hook. The hook blocks Edit/Write/MultiEdit and common Bash writes to frozen
+# rails, but a shell write form it does not recognize (node -e, python, cp,
+# perl -i, …) still lands in the PR diff — this job rejects that PR when the rail
+# was already frozen on the base branch.
 #
 # It reads every rail glob declared in the trusted base .adlc/tickets.json and
 # runs the diff-based `adlc rails-guard` gate against the PR base. It no-ops when
