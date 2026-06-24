@@ -171,7 +171,8 @@ jobs:
             if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
             // New signer additions are allowed for team onboarding, but existing
             // signer entries cannot be removed or weakened by a PR.
-            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); assertExistingSignerRolesExact(trusted.signers, head.signers); validateNewSigners(trusted.signers, head.signers); }
+            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); assertExistingSignerRolesExact(trusted.signers, head.signers); }
+            if (head.signers !== undefined) validateNewSigners(trusted.signers ?? {}, head.signers);
             if (Array.isArray(trusted.revokedKeys)) assertSuperset(trusted.revokedKeys, head.revokedKeys, "revokedKeys");
             if (Array.isArray(trusted.securitySensitivePatterns)) assertSuperset(trusted.securitySensitivePatterns, head.securitySensitivePatterns, "securitySensitivePatterns");
             if (typeof trusted.maxBundleAgeDays === "number" && (typeof head.maxBundleAgeDays !== "number" || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) fail("maxBundleAgeDays can only decrease or stay the same");
