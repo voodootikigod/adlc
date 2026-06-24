@@ -78,7 +78,10 @@ regress silently):
 3. **Reserved verbs are a closed set** — adding a verb is a deliberate registry +
    test change, not an implicit fallthrough.
 
-## Alternatives considered
+## Alternatives Considered Under Original Option C Decision
+
+> This section records the Option C-era analysis. Option D is now the accepted
+> decision; see the revision section below for the current rationale.
 
 - **B — `@adlc/runner` keeps `adlc`, rename `@adlc/cli`'s bin.** Rejected: every
   Phase A–F artifact (hooks, slash commands, discovery skill, CI scripts) calls
@@ -86,7 +89,9 @@ regress silently):
 - **D — keep both bins under different names** (`adlc` for the dispatcher,
   `adlc-runner` for the runner). Lower effort and zero shadowing risk, but ships two
   top-level commands and loses the single-entry-point property the dispatcher was
-  created for. Acceptable fallback if unification proves costly.
+  created for. Acceptable fallback if unification proves costly. **Historical note:**
+  Option D is now the accepted decision, not a fallback; this bullet preserves the
+  superseded Option C-era evaluation.
 
 ## Consequences
 
@@ -217,8 +222,9 @@ The Gemini-3.5-Flash review confirmed separate bins over unify and sharpened the
 design. All three are folded into the accepted decision:
 
 1. **Runner is ONE bin with subcommands, not two top-level commands.** Use
-   `adlc-runner run …` / `adlc-runner accept …`, never separate `adlc-runner run` +
-   `adlc-runner accept` subcommands into separate bins. Fewer top-level commands, and it matches the runner's
+   `adlc-runner run …` / `adlc-runner accept …` as subcommands of one
+   `adlc-runner` executable; never split them into separate top-level executables
+   such as `adlc-runner-run` and `adlc-runner-accept`. Fewer top-level commands, and it matches the runner's
    existing first-positional grammar (rename only).
 
 2. **Plugins must declare exactly the bins they use** — separate bins move
