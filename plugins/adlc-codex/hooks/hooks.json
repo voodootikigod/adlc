@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(apply_patch|functions\\.apply_patch|write|Write|edit|Edit|multi_edit|multiedit|MultiEdit|Bash|bash|Shell|shell|exec|exec_command|run_command|functions\\.exec_command)$",
+        "matcher": "^(apply_patch|functions\\.apply_patch|write|Write|edit|Edit|multi_edit|multiedit|MultiEdit|Bash|bash|Shell|shell|exec|exec_command|run_command|functions\\.exec_command|write_stdin|functions\\.write_stdin|multi_tool_use\\.parallel)$",
         "hooks": [
           {
             "type": "command",
