@@ -1,5 +1,6 @@
 # ADLC rail-freeze CI backstop — copy into your repo as
 # .github/workflows/adlc-rails-guard.yml
+# OpenCode /adlc-init template source: docs/ci/rails-guard.yml
 #
 # This is the unbypassable commit-time gate the in-session PreToolUse rail hook
 # relies on. The hook blocks Edit/Write/MultiEdit and common Bash writes to

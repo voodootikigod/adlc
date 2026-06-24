@@ -36,6 +36,10 @@ already auto-discovers and lockstep-publishes the new packages.
 > This Option C decision is retained as historical context only. The accepted
 > OpenCode integration decision is Option D below: separate concern-focused bins,
 > with `adlc` remaining the dispatcher and `adlc-runner` owning runner verbs.
+> Editorial note: older Option C drafts used `adlc-run` for the standalone runner
+> bin. This preserved section uses the normalized `adlc-runner` label so the
+> historical comparison and accepted Option D terminology can be read side by
+> side without introducing a third runner-bin spelling.
 
 **Option C (hardened) — unify under one `adlc` command owned by `@adlc/cli`,
 delegating to `@adlc/runner` by *spawning its bin*.**
