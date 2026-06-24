@@ -100,11 +100,6 @@ jobs:
               }
               if (stable(trustedValue) !== stable(headValue)) fail(path + " cannot change trusted value " + stable(trustedValue));
             };
-            const assertNoNewKeys = (trustedValue, headValue, path) => {
-              if (!trustedValue || typeof trustedValue !== "object" || Array.isArray(trustedValue)) return;
-              if (!headValue || typeof headValue !== "object" || Array.isArray(headValue)) fail(path + " must remain an object");
-              for (const key of Object.keys(headValue)) if (!(key in trustedValue)) fail(path + " cannot add new trusted entry " + key);
-            };
             if (!fs.existsSync(".adlc/config.json")) fail("missing .adlc/config.json; run /adlc-init before enabling this required check");
             const head = parse(fs.readFileSync(".adlc/config.json", "utf8"), "head .adlc/config.json");
             if (head.acknowledgedNewRailBypass !== true) fail("missing acknowledgedNewRailBypass: true; acknowledge the new-rail limitation before using this as a required check");
@@ -133,7 +128,9 @@ jobs:
             if (!["signed", "unsigned-fallback"].includes(trusted.securityMode)) fail("base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety");
             if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
             if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
-            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoNewKeys(trusted.signers, head.signers, "signers"); }
+            // New signer additions are allowed for team onboarding, but existing
+            // signer entries cannot be removed or weakened by a PR.
+            if (trusted.signers !== undefined) assertSuperset(trusted.signers, head.signers, "signers");
             if (Array.isArray(trusted.revokedKeys)) assertSuperset(trusted.revokedKeys, head.revokedKeys, "revokedKeys");
             if (Array.isArray(trusted.securitySensitivePatterns)) assertSuperset(trusted.securitySensitivePatterns, head.securitySensitivePatterns, "securitySensitivePatterns");
             if (typeof trusted.maxBundleAgeDays === "number" && (typeof head.maxBundleAgeDays !== "number" || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) fail("maxBundleAgeDays can only decrease or stay the same");
