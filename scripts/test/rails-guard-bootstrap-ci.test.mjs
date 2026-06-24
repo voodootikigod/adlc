@@ -6,38 +6,51 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = join(ROOT, 'docs', 'ci', 'rails-guard.yml');
 
-function extractBootstrapScript() {
+function extractNodeScript(marker) {
   const workflow = readFileSync(WORKFLOW, 'utf8');
-  const marker = '- name: Verify ADLC bootstrap acknowledgement';
   const markerAt = workflow.indexOf(marker);
-  assert.notEqual(markerAt, -1, 'bootstrap step marker exists');
+  assert.notEqual(markerAt, -1, `${marker} marker exists`);
   const startToken = "node -e '\n";
   const start = workflow.indexOf(startToken, markerAt);
-  assert.notEqual(start, -1, 'bootstrap node -e block exists');
+  assert.notEqual(start, -1, `${marker} node -e block exists`);
   const codeStart = start + startToken.length;
   const end = workflow.indexOf("\n          '", codeStart);
-  assert.notEqual(end, -1, 'bootstrap node -e block terminates');
+  assert.notEqual(end, -1, `${marker} node -e block terminates`);
   const script = workflow
     .slice(codeStart, end)
     .split('\n')
     .map((line) => (line.startsWith('            ') ? line.slice(12) : line))
     .join('\n');
-  assert.ok(script.length > 500, 'bootstrap script extraction produced a non-trivial script');
-  assert.doesNotThrow(() => new vm.Script(script), 'bootstrap script extraction produced valid JavaScript');
+  assert.ok(script.length > 500, `${marker} extraction produced a non-trivial script`);
+  assert.doesNotThrow(() => new vm.Script(script), `${marker} extraction produced valid JavaScript`);
+  return script;
+}
+
+function extractBootstrapScript() {
+  const script = extractNodeScript('- name: Verify ADLC bootstrap acknowledgement');
   assert.match(script, /assertExistingSignerRolesExact\(trusted\.signers, head\.signers\)/);
   assert.match(script, /bootstrap mode: base has no \.adlc tree/);
   assert.match(script, /ADLC_SIGNED_RUNNER_POOL/);
   return script;
 }
 
+function extractRailFreezeScript() {
+  const script = extractNodeScript('- name: Rail-freeze gate');
+  assert.match(script, /adlc rails-guard/);
+  assert.match(script, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+  assert.match(script, /rails\.push\("\.adlc\/tickets\.json"\)/);
+  return script;
+}
+
 const BOOTSTRAP_SCRIPT = extractBootstrapScript();
+const RAIL_FREEZE_SCRIPT = extractRailFreezeScript();
 
 function git(cwd, args) {
   execFileSync('git', args, { cwd, stdio: 'pipe' });
@@ -84,6 +97,49 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
       },
     });
     return {
+      status: result.status ?? 1,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function runRailFreezeScenario({ baseConfig = BASE_UNSIGNED, baseTickets, headConfig, env = {}, mutateBase, mutateHead }) {
+  const dir = mkdtempSync(join(tmpdir(), 'rg-rail-freeze-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    if (baseConfig === null) {
+      writeFileSync(join(dir, 'README.md'), 'bootstrap\n');
+    } else {
+      mkdirSync(join(dir, '.adlc'), { recursive: true });
+      if (baseConfig !== false) writeJson(join(dir, '.adlc', 'config.json'), baseConfig);
+      if (baseTickets !== undefined) writeJson(join(dir, '.adlc', 'tickets.json'), baseTickets);
+    }
+    mutateBase?.(dir);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    if (headConfig !== undefined) {
+      mkdirSync(join(dir, '.adlc'), { recursive: true });
+      writeJson(join(dir, '.adlc', 'config.json'), headConfig);
+    }
+    mutateHead?.(dir);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '--allow-empty', '-qm', 'change']);
+
+    const scenarioEnv = typeof env === 'function' ? env(dir) : env;
+    const result = spawnSync(process.execPath, ['-e', RAIL_FREEZE_SCRIPT], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: { ...process.env, BASE_REF: 'main', ...scenarioEnv },
+    });
+    return {
+      cwd: dir,
       status: result.status ?? 1,
       stdout: result.stdout,
       stderr: result.stderr,
@@ -390,4 +446,106 @@ test('signed mode requires the dedicated self-hosted runner pool sentinel', () =
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /dedicated adlc-signed self-hosted runner pool/);
+});
+
+test('signed mode rejects self-hosted runners missing the signed-pool sentinel', () => {
+  const signedBase = {
+    ...BASE_UNSIGNED,
+    securityMode: 'signed',
+    runnerBinarySha256: '0'.repeat(64),
+  };
+  const result = runBootstrapScenario({
+    baseConfig: signedBase,
+    headConfig: signedBase,
+    env: {
+      RUNNER_ENVIRONMENT: 'self-hosted',
+      ADLC_SIGNED_RUNNER_POOL: '',
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /dedicated adlc-signed self-hosted runner pool/);
+});
+
+test('base config must already acknowledge the new-rail limitation', () => {
+  const result = runBootstrapScenario({
+    baseConfig: {
+      ...BASE_UNSIGNED,
+      acknowledgedNewRailBypass: false,
+    },
+    headConfig: BASE_UNSIGNED,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /acknowledgedNewRailBypass must already be set on the base branch/);
+});
+
+test('rail-freeze bootstrap mode rejects pre-populated manifest evidence', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: null,
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n'),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+});
+
+test('rail-freeze gate fails closed when base .adlc exists without config acknowledgement', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: false,
+    baseTickets: { tickets: [] },
+    headConfig: BASE_UNSIGNED,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /base \.adlc\/config\.json is absent/);
+});
+
+test('rail-freeze gate exits 0 when base tickets declare no rails', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    headConfig: BASE_UNSIGNED,
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /no rails declared at base/);
+});
+
+test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'rg-adlc-bin-'));
+  try {
+    const binDir = join(tmp, 'bin');
+    const capturePath = join(tmp, 'argv.json');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, 'adlc'),
+      [
+        '#!/usr/bin/env node',
+        "import { writeFileSync } from 'node:fs';",
+        'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));',
+        'process.exit(0);',
+        '',
+      ].join('\n'),
+      { mode: 0o700 }
+    );
+    const result = runRailFreezeScenario({
+      baseConfig: BASE_UNSIGNED,
+      baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] },
+      headConfig: BASE_UNSIGNED,
+      env: {
+        PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
+        CAPTURE_PATH: capturePath,
+      },
+    });
+    assert.equal(result.status, 0);
+    const argv = JSON.parse(readFileSync(capturePath, 'utf8'));
+    assert.deepEqual(argv, [
+      'rails-guard',
+      '--base',
+      'origin/main',
+      '--rails',
+      'src/critical/**',
+      '--rails',
+      '.adlc/tickets.json',
+    ]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
