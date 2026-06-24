@@ -13,6 +13,7 @@ import vm from 'node:vm';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = join(ROOT, 'docs', 'ci', 'rails-guard.yml');
+const HASH_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'rails-guard-workflow-hashes.json');
 
 function extractNodeScript(marker) {
   const workflow = readFileSync(WORKFLOW, 'utf8');
@@ -65,6 +66,16 @@ function extractRailFreezeScript() {
 
 const BOOTSTRAP_SCRIPT = extractBootstrapScript();
 const RAIL_FREEZE_SCRIPT = extractRailFreezeScript();
+
+function sha256(text) {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+test('workflow inline script hashes match the checked-in fixture', () => {
+  const fixture = JSON.parse(readFileSync(HASH_FIXTURE, 'utf8'));
+  assert.equal(sha256(BOOTSTRAP_SCRIPT), fixture.bootstrap);
+  assert.equal(sha256(RAIL_FREEZE_SCRIPT), fixture.railFreeze);
+});
 
 test('bootstrap workflow env maps signed-mode values from the expected GitHub contexts', () => {
   const step = extractStepYaml('- name: Verify ADLC bootstrap acknowledgement');

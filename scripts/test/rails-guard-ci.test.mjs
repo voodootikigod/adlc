@@ -25,7 +25,7 @@ function git(cwd, args) {
  * `seedFiles` path, then apply `mutate(dir)` on a feature branch. Returns the
  * script's exit code when run with base=main.
  */
-function runScenario({ baseTickets, seedFiles, mutate }) {
+function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) {
   const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
   try {
     git(dir, ['init', '-q', '-b', 'main']);
@@ -35,7 +35,7 @@ function runScenario({ baseTickets, seedFiles, mutate }) {
     writeFileSync(join(dir, '.adlc', 'tickets.json'), baseTickets);
     for (const f of seedFiles) {
       mkdirSync(join(dir, dirname(f)), { recursive: true });
-      writeFileSync(join(dir, f), 'orig\n');
+      writeFileSync(join(dir, f), seedFileContents[f] ?? 'orig\n');
     }
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'base']);
@@ -55,6 +55,18 @@ function runScenario({ baseTickets, seedFiles, mutate }) {
 }
 
 const RAILED = JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] });
+const VALID_CONFIG = JSON.stringify({
+  acknowledgedNewRailBypass: true,
+  securityMode: 'unsigned-fallback',
+  signers: { alice: { role: 'builder' } },
+});
+const SIGNED_CONFIG = JSON.stringify({
+  acknowledgedNewRailBypass: true,
+  securityMode: 'signed',
+  signedEvidenceRequired: true,
+  runnerBinarySha256: '0'.repeat(64),
+  signers: { alice: { roles: ['builder'] } },
+});
 
 test('ATTACK: PR empties rails AND edits a formerly-frozen file → exit 2 (base rails enforced)', () => {
   const code = runScenario({
@@ -109,9 +121,42 @@ test('trust root: PR edits .adlc/config.json even when no ticket rails exist →
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
-    mutate: (d) => writeFileSync(join(d, '.adlc', 'config.json'), '{"skipRailEnforcement":true}\n'),
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), skipRailEnforcement: true })}\n`
+      ),
   });
   assert.equal(code, 2);
+});
+
+test('standalone semantic gate blocks signed securityMode downgrade → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${SIGNED_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(SIGNED_CONFIG), securityMode: 'unsigned-fallback', signedEvidenceRequired: false })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks existing signer deletion → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: {} })}\n`
+      ),
+  });
+  assert.equal(code, 1);
 });
 
 test('legit: a non-rail change with base rails → exit 0', () => {
@@ -172,11 +217,11 @@ test('base config without tickets still protects config.json trust root → exit
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
     mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'config.json'), '{"securityMode":"unsigned-fallback"}\n');
+    writeFileSync(join(dir, '.adlc', 'config.json'), `${VALID_CONFIG}\n`);
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'base']);
     git(dir, ['checkout', '-q', '-b', 'feat']);
-    writeFileSync(join(dir, '.adlc', 'config.json'), '{"securityMode":"signed"}\n');
+    writeFileSync(join(dir, '.adlc', 'config.json'), `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), extraField: true })}\n`);
     git(dir, ['commit', '-qam', 'change']);
     let code = 0;
     try {

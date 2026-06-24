@@ -43,6 +43,62 @@ function git(args, label) {
   return result;
 }
 
+function parseJson(text, label) {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    fail(`cannot parse ${label}: ${err.message}`);
+  }
+}
+
+function signerRoles(entry, key) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    fail(`signer ${key} must remain an object`);
+  }
+  return new Set((Array.isArray(entry.roles) ? entry.roles : [entry.role]).filter((role) => role !== undefined));
+}
+
+function validateConfigIntegrity() {
+  if (!baseHasConfig) return;
+  const baseConfig = git(['show', `${base}:.adlc/config.json`], 'git show base config');
+  if (baseConfig.status !== 0) {
+    fail(`git show failed for an existing base config file (operational error) — failing closed.`);
+  }
+  if (!existsSync('.adlc/config.json')) {
+    fail('missing .adlc/config.json; standalone config-integrity gate cannot verify downgrade safety');
+  }
+  const trusted = parseJson(baseConfig.stdout, `${base}:.adlc/config.json`);
+  const head = parseJson(readFileSync('.adlc/config.json', 'utf8'), 'head .adlc/config.json');
+  if (trusted.acknowledgedNewRailBypass !== true) {
+    fail('acknowledgedNewRailBypass must already be set on the base branch');
+  }
+  if (head.acknowledgedNewRailBypass !== true) {
+    fail('missing acknowledgedNewRailBypass: true');
+  }
+  if (trusted.securityMode === 'signed' && head.securityMode !== 'signed') {
+    fail('cannot downgrade securityMode from signed to unsigned-fallback');
+  }
+  if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) {
+    fail('cannot remove signedEvidenceRequired from a base config that requires it');
+  }
+  if (typeof trusted.runnerBinarySha256 === 'string' && head.runnerBinarySha256 !== trusted.runnerBinarySha256) {
+    fail('runnerBinarySha256 cannot change in a PR');
+  }
+  if (trusted.signers && typeof trusted.signers === 'object' && !Array.isArray(trusted.signers)) {
+    if (!head.signers || typeof head.signers !== 'object' || Array.isArray(head.signers)) {
+      fail('signers must remain an object');
+    }
+    for (const key of Object.keys(trusted.signers)) {
+      const trustedRoles = signerRoles(trusted.signers[key], key);
+      const headRoles = signerRoles(head.signers[key], key);
+      if (trustedRoles.size !== headRoles.size) fail(`existing signer ${key} roles cannot change`);
+      for (const role of trustedRoles) {
+        if (!headRoles.has(role)) fail(`existing signer ${key} roles cannot change`);
+      }
+    }
+  }
+}
+
 // First confirm the base REF resolves. `git show <ref>:<path>` returns non-zero
 // for BOTH "ref does not resolve" and "path absent at ref" — conflating them
 // would fail OPEN (an unfetched/typo'd base would look like "no rails"). An
@@ -57,6 +113,7 @@ if (configLs.status !== 0) {
   fail(`git ls-tree failed for '${base}' config (operational error) — failing closed.`);
 }
 const baseHasConfig = Boolean(configLs.stdout.trim());
+validateConfigIntegrity();
 
 // Distinguish "the file is genuinely absent at base" from an operational git
 // error. `git ls-tree` lists the path in the base tree: a non-zero status is an
