@@ -183,6 +183,21 @@ test('new signer entries reject undeclared properties', () => {
   assert.match(result.stderr, /new signer bob has undeclared property canApproveIf/);
 });
 
+test('new signer entries must declare role information', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      signers: {
+        ...BASE_UNSIGNED.signers,
+        bob: {},
+      },
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /new signer bob must declare a role or roles field/);
+});
+
 test('new signer entries may add only builder or critic roles', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,

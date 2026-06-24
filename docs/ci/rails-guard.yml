@@ -21,6 +21,12 @@
 # (headless) or an interactive TUI confirmation before scaffolding this template
 # as a required check until Phase F new-rail-aware structural CI hardening ships.
 #
+# SELF-PROTECTION REQUIREMENT: before configuring this as a required check,
+# protect the deployed .github/workflows/adlc-rails-guard.yml with CODEOWNERS or
+# a branch ruleset requiring trusted-owner approval. GitHub pull_request events
+# from same-repository branches run the PR branch's workflow file, so this script
+# cannot defend itself if a PR removes the gate.
+#
 # Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH secret
 # pointing to an audited adlc-runner binary by absolute path. This template
 # intentionally does not install the unpublished @adlc/runner package from npm.
@@ -29,6 +35,10 @@
 # with ADLC_SIGNED_RUNNER_POOL=1 set as an Actions variable for that protected
 # runner environment. Shared self-hosted runners must not be able to write to
 # ADLC_RUNNER_PATH or its temporary execution copy.
+#
+# Signed-mode PR checks execute the audited runner probe during pull_request.
+# Runner-host filesystem integrity is a prerequisite; if that execution surface
+# is unacceptable, split the signed runner probe into a protected-base push job.
 #
 # New approver-role signer grants are intentionally blocked in PRs. Grant them
 # through a protected-base admin ceremony countersigned by an existing approver.
@@ -141,6 +151,7 @@ jobs:
                 const entry = headSigners[key];
                 if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("new signer " + key + " must be an object");
                 for (const field of Object.keys(entry)) if (!allowedNewFields.has(field)) fail("new signer " + key + " has undeclared property " + field);
+                if (entry.role === undefined && entry.roles === undefined) fail("new signer " + key + " must declare a role or roles field");
                 if (entry.role !== undefined && entry.roles !== undefined) fail("new signer " + key + " must use either role or roles, not both");
                 if (entry.role !== undefined && (typeof entry.role !== "string" || !allowedNewRoles.has(entry.role))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
                 const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
