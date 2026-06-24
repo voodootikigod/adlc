@@ -48,6 +48,17 @@ jobs:
         # `--ignore-scripts` blocks install-time scripts; the CLIs are zero-dep.
         run: npm install -g --ignore-scripts @adlc/cli@1.0.2
 
+      - name: Install the ADLC runner when published
+        # Signed mode requires `adlc-runner --version` below. Until @adlc/runner is
+        # published, signed-mode repositories fail closed and unsigned-fallback
+        # repositories can still run the base rail/config diff check.
+        run: |
+          if npm view @adlc/runner@1.0.2 version >/dev/null 2>&1; then
+            npm install -g --ignore-scripts @adlc/runner@1.0.2
+          else
+            echo "::warning::@adlc/runner@1.0.2 is not published; signed mode will fail closed."
+          fi
+
       - name: Fetch base ref
         # Pass the ref via env (not direct ${{ }} shell interpolation), and use an
         # explicit refspec so the origin/<base> REMOTE-TRACKING ref is created —
