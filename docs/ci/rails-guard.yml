@@ -58,6 +58,9 @@ jobs:
         run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
       - name: Verify ADLC bootstrap acknowledgement
+        # Bootstrap ordering: enable this workflow as a required check only after the
+        # initial .adlc/config.json acknowledgement has landed on the base branch.
+        # The only allowed first-PR escape is a base branch with no .adlc tree at all.
         run: |
           node -e '
             const fs = require("fs");
@@ -86,15 +89,31 @@ jobs:
               }
               if (stable(trustedValue) !== stable(headValue)) fail(path + " cannot change trusted value " + stable(trustedValue));
             };
+            const assertNoNewKeys = (trustedValue, headValue, path) => {
+              if (!trustedValue || typeof trustedValue !== "object" || Array.isArray(trustedValue)) return;
+              if (!headValue || typeof headValue !== "object" || Array.isArray(headValue)) fail(path + " must remain an object");
+              for (const key of Object.keys(headValue)) if (!(key in trustedValue)) fail(path + " cannot add new trusted entry " + key);
+            };
             if (!fs.existsSync(".adlc/config.json")) fail("missing .adlc/config.json; run /adlc-init before enabling this required check");
             const head = parse(fs.readFileSync(".adlc/config.json", "utf8"), "head .adlc/config.json");
             if (head.acknowledgedNewRailBypass !== true) fail("missing acknowledgedNewRailBypass: true; acknowledge the new-rail limitation before using this as a required check");
             if (!["signed", "unsigned-fallback"].includes(head.securityMode)) fail("securityMode must be signed or unsigned-fallback");
             if (head.securityMode === "unsigned-fallback" && head.signedEvidenceRequired === true) fail("signedEvidenceRequired cannot be true in unsigned-fallback mode");
+            if (head.securityMode === "signed" || head.signedEvidenceRequired === true) {
+              const runner = spawnSync("adlc-runner", ["--version"], { encoding: "utf8", timeout: 30000 });
+              if (runner.error) fail("signed mode requires adlc-runner --version in CI: " + runner.error.message);
+              if (runner.signal) fail("adlc-runner --version timed out or was killed by " + runner.signal);
+              if (runner.status !== 0) fail("signed mode requires adlc-runner --version to exit 0");
+            }
             const ref = git(["rev-parse", "--verify", "--quiet", base + "^{commit}"], "git rev-parse base");
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — bootstrap cannot be verified");
+            const baseAdlc = git(["ls-tree", "--name-only", base, "--", ".adlc"], "git ls-tree base .adlc");
             const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
+            if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
+              console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required.");
+              process.exit(0);
+            }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; merge bootstrap config before enabling this required check");
             const showConfig = git(["show", base + ":.adlc/config.json"], "git show base config");
             if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");
@@ -103,7 +122,7 @@ jobs:
             if (!["signed", "unsigned-fallback"].includes(trusted.securityMode)) fail("base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety");
             if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
             if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
-            if (trusted.signers !== undefined) assertSuperset(trusted.signers, head.signers, "signers");
+            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoNewKeys(trusted.signers, head.signers, "signers"); }
             if (Array.isArray(trusted.revokedKeys)) assertSuperset(trusted.revokedKeys, head.revokedKeys, "revokedKeys");
             if (Array.isArray(trusted.securitySensitivePatterns)) assertSuperset(trusted.securitySensitivePatterns, head.securitySensitivePatterns, "securitySensitivePatterns");
             if (typeof trusted.maxBundleAgeDays === "number" && (typeof head.maxBundleAgeDays !== "number" || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) fail("maxBundleAgeDays can only decrease or stay the same");
@@ -128,8 +147,13 @@ jobs:
             const ref = git(["rev-parse", "--verify", "--quiet", base + "^{commit}"], "git rev-parse base");
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
             const protectedPaths = [];
+            const baseAdlc = git(["ls-tree", "--name-only", base, "--", ".adlc"], "git ls-tree base .adlc");
             const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
+            if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
+              console.log("bootstrap mode: base has no .adlc tree — no frozen rails exist yet.");
+              process.exit(0);
+            }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
             protectedPaths.push(".adlc/config.json");
             // Distinguish a genuinely absent file from an operational git error:
