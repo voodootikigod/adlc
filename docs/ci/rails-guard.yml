@@ -24,9 +24,13 @@
 # Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH secret
 # pointing to an audited adlc-runner binary by absolute path. This template
 # intentionally does not install the unpublished @adlc/runner package from npm.
+# Signed mode also requires `runnerBinarySha256` in .adlc/config.json.
 #
 # New approver-role signer grants are intentionally blocked in PRs. Grant them
 # through a protected-base admin ceremony countersigned by an existing approver.
+#
+# First-time bootstrap PRs must not introduce pre-populated manifest evidence;
+# `.adlc/manifest.jsonl` must be absent or empty until reviewed post-bootstrap.
 
 name: ADLC Rails Guard
 
@@ -71,6 +75,7 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
+            const crypto = require("crypto");
             const path = require("path");
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
@@ -149,6 +154,7 @@ jobs:
             const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
+              if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
               console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required.");
               process.exit(0);
             }
@@ -165,10 +171,19 @@ jobs:
               const runnerPath = process.env.ADLC_RUNNER_PATH;
               if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
               if (!path.isAbsolute(runnerPath)) fail("ADLC_RUNNER_PATH must be an absolute path");
+              if (typeof trusted.runnerBinarySha256 !== "string" || !/^[a-f0-9]{64}$/i.test(trusted.runnerBinarySha256)) fail("signed mode requires runnerBinarySha256 in base .adlc/config.json");
+              const digest = crypto.createHash("sha256").update(fs.readFileSync(runnerPath)).digest("hex");
+              if (digest.toLowerCase() !== trusted.runnerBinarySha256.toLowerCase()) fail("ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256");
               const runner = spawnSync(runnerPath, ["--version"], { encoding: "utf8", timeout: 30000 });
               if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
               if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
               if (runner.status !== 0) fail("signed mode requires ADLC_RUNNER_PATH --version to exit 0");
+              for (const subcommand of ["record", "run", "accept"]) {
+                const probe = spawnSync(runnerPath, [subcommand, "--help"], { encoding: "utf8", timeout: 30000 });
+                if (probe.error) fail("adlc-runner " + subcommand + " probe failed: " + probe.error.message);
+                if (probe.signal) fail("adlc-runner " + subcommand + " probe timed out or was killed by " + probe.signal);
+                if (probe.status !== 0) fail("signed mode requires adlc-runner " + subcommand + " --help to exit 0");
+              }
             }
             // New signer additions are allowed for team onboarding, but existing
             // signer entries cannot be removed or weakened by a PR.
@@ -202,6 +217,8 @@ jobs:
             const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
+              const fs = require("fs");
+              if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
               console.log("bootstrap mode: base has no .adlc tree — no frozen rails exist yet.");
               process.exit(0);
             }
