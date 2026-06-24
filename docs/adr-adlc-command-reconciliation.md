@@ -29,7 +29,11 @@ Code vs Codex), `@adlc/prosecute` uses a distinct bin (`adlc-prosecute`), the
 Codex plugin and the Claude Code plugin coexist, and this branch's `release.mjs`
 already auto-discovers and lockstep-publishes the new packages.
 
-## Decision
+## Original Decision (SUPERSEDED — see Option D Revision)
+
+> This Option C decision is retained as historical context only. The accepted
+> OpenCode integration decision is Option D below: separate concern-focused bins,
+> with `adlc` remaining the dispatcher and `adlc-runner` owning runner verbs.
 
 **Option C (hardened) — unify under one `adlc` command owned by `@adlc/cli`,
 delegating to `@adlc/runner` by *spawning its bin*.**
