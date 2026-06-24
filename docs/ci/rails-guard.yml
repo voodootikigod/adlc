@@ -21,9 +21,9 @@
 # (headless) or an interactive TUI confirmation before scaffolding this template
 # as a required check until Phase F new-rail-aware structural CI hardening ships.
 #
-# Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH pointing to
-# an audited adlc-runner binary. This template intentionally does not install the
-# unpublished @adlc/runner package from npm.
+# Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH secret
+# pointing to an audited adlc-runner binary by absolute path. This template
+# intentionally does not install the unpublished @adlc/runner package from npm.
 
 name: ADLC Rails Guard
 
@@ -68,6 +68,7 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
+            const path = require("path");
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
@@ -122,6 +123,18 @@ jobs:
                 if (!roles.length || roles.some(r => typeof r !== "string" || !allowedNewRoles.has(r))) fail("new signer " + key + " can only use builder or critic roles in this CI path");
               }
             };
+            const assertExistingSignerRolesExact = (trustedSigners, headSigners) => {
+              const roleSet = (entry) => {
+                if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("signer entry must remain an object");
+                return new Set((Array.isArray(entry.roles) ? entry.roles : [entry.role]).filter(r => r !== undefined));
+              };
+              for (const key of Object.keys(trustedSigners)) {
+                const trustedRoles = roleSet(trustedSigners[key]);
+                const headRoles = roleSet(headSigners[key]);
+                if (trustedRoles.size !== headRoles.size) fail("existing signer " + key + " roles cannot change");
+                for (const role of trustedRoles) if (!headRoles.has(role)) fail("existing signer " + key + " roles cannot change");
+              }
+            };
             if (!fs.existsSync(".adlc/config.json")) fail("missing .adlc/config.json; run /adlc-init before enabling this required check");
             const head = parse(fs.readFileSync(".adlc/config.json", "utf8"), "head .adlc/config.json");
             if (head.acknowledgedNewRailBypass !== true) fail("missing acknowledgedNewRailBypass: true; acknowledge the new-rail limitation before using this as a required check");
@@ -130,6 +143,7 @@ jobs:
             if (head.securityMode === "signed" || head.signedEvidenceRequired === true) {
               const runnerPath = process.env.ADLC_RUNNER_PATH;
               if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
+              if (!path.isAbsolute(runnerPath)) fail("ADLC_RUNNER_PATH must be an absolute path");
               const runner = spawnSync(runnerPath, ["--version"], { encoding: "utf8", timeout: 30000 });
               if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
               if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
@@ -154,7 +168,7 @@ jobs:
             if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
             // New signer additions are allowed for team onboarding, but existing
             // signer entries cannot be removed or weakened by a PR.
-            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); validateNewSigners(trusted.signers, head.signers); }
+            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); assertExistingSignerRolesExact(trusted.signers, head.signers); validateNewSigners(trusted.signers, head.signers); }
             if (Array.isArray(trusted.revokedKeys)) assertSuperset(trusted.revokedKeys, head.revokedKeys, "revokedKeys");
             if (Array.isArray(trusted.securitySensitivePatterns)) assertSuperset(trusted.securitySensitivePatterns, head.securitySensitivePatterns, "securitySensitivePatterns");
             if (typeof trusted.maxBundleAgeDays === "number" && (typeof head.maxBundleAgeDays !== "number" || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) fail("maxBundleAgeDays can only decrease or stay the same");
