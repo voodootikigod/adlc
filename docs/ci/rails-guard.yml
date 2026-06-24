@@ -112,12 +112,11 @@ jobs:
                 const lines = show.stdout.split(/\r?\n/).map(line => line.replace(/\s+#.*$/, "").trim()).filter(line => line && !line.startsWith("#"));
                 for (const line of lines) {
                   const pattern = line.split(/\s+/)[0];
-                  if (pattern === ".github/workflows/adlc-rails-guard.yml" || pattern === "/.github/workflows/adlc-rails-guard.yml" || pattern === ".github/workflows/*" || pattern === "/.github/workflows/*") return true;
+                  if (["*", "/*", ".github/", "/.github/", ".github/**", "/.github/**", ".github/workflows/*", "/.github/workflows/*", ".github/workflows/**", "/.github/workflows/**", ".github/workflows/adlc-rails-guard.yml", "/.github/workflows/adlc-rails-guard.yml"].includes(pattern)) return true;
                 }
               }
               return false;
             };
-            if (!workflowHasCodeowners()) fail("missing CODEOWNERS entry protecting .github/workflows/adlc-rails-guard.yml; configure trusted-owner review before enabling this required check");
             const git = (args, label) => {
               const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
               if (res.error) fail(label + " failed: " + res.error.message);
@@ -201,9 +200,10 @@ jobs:
               if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
               if (head.securityMode === "signed") fail("bootstrap with securityMode signed requires the adlc-signed runner pool and ADLC_SIGNED_RUNNER_POOL=1 before enabling this as a required check; bootstrap in unsigned-fallback first, then upgrade through the protected-base runner ceremony");
               if (head.signers !== undefined) validateNewSigners({}, head.signers);
-              console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required.");
+              console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required, then configure CODEOWNERS protection before marking the check required.");
               process.exit(0);
             }
+            if (!workflowHasCodeowners()) fail("missing CODEOWNERS entry protecting .github/workflows/adlc-rails-guard.yml; configure trusted-owner review before enabling this required check");
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; merge bootstrap config before enabling this required check");
             const showConfig = git(["show", base + ":.adlc/config.json"], "git show base config");
             if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");

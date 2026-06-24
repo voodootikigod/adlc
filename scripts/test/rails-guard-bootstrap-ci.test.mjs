@@ -93,7 +93,7 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mutateHead, withCodeowners = true }) {
+function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mutateHead, withCodeowners = true, codeownersContent = '.github/workflows/adlc-rails-guard.yml @adlc-admins\n' }) {
   const dir = mkdtempSync(join(tmpdir(), 'rg-bootstrap-'));
   try {
     git(dir, ['init', '-q', '-b', 'main']);
@@ -101,7 +101,7 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
     git(dir, ['config', 'user.name', 'x']);
     if (withCodeowners) {
       mkdirSync(join(dir, '.github'), { recursive: true });
-      writeFileSync(join(dir, '.github', 'CODEOWNERS'), '.github/workflows/adlc-rails-guard.yml @adlc-admins\n');
+      writeFileSync(join(dir, '.github', 'CODEOWNERS'), codeownersContent);
     }
     if (baseConfig === null) {
       writeFileSync(join(dir, 'README.md'), 'bootstrap\n');
@@ -213,6 +213,25 @@ test('bootstrap step requires CODEOWNERS protection for the deployed workflow', 
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
+test('first bootstrap can land before CODEOWNERS is present on base', () => {
+  const result = runBootstrapScenario({
+    baseConfig: null,
+    headConfig: BASE_UNSIGNED,
+    withCodeowners: false,
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /configure CODEOWNERS protection before marking the check required/);
+});
+
+test('bootstrap step accepts catch-all CODEOWNERS protection', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '* @adlc-admins\n',
+  });
+  assert.equal(result.status, 0);
 });
 
 test('new signer entries reject undeclared properties', () => {

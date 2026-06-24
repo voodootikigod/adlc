@@ -74,7 +74,8 @@ function assertArraySuperset(name, trustedValue, headValue) {
 }
 
 function validateNewSigners(trustedSigners, headSigners) {
-  if (!headSigners || typeof headSigners !== 'object' || Array.isArray(headSigners)) return;
+  if (headSigners === undefined) return;
+  if (!headSigners || typeof headSigners !== 'object' || Array.isArray(headSigners)) fail('signers must be an object or absent');
   const allowedNewRoles = new Set(['builder', 'critic']);
   const allowedNewFields = new Set(['role', 'roles']);
   for (const key of Object.keys(headSigners)) {
