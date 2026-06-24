@@ -79,6 +79,7 @@ jobs:
             if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");
             const trusted = parse(showConfig.stdout, "base .adlc/config.json");
             if (trusted.acknowledgedNewRailBypass !== true) fail("acknowledgedNewRailBypass must already be set on the base branch; a PR cannot self-acknowledge this limitation");
+            if (!["signed", "unsigned-fallback"].includes(trusted.securityMode)) fail("base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety");
             if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
           '
         env:
@@ -97,13 +98,13 @@ jobs:
             const protectedPaths = [];
             const baseConfig = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/config.json"], { encoding: "utf8" });
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
-            if (baseConfig.stdout.trim()) protectedPaths.push(".adlc/config.json");
+            if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
+            protectedPaths.push(".adlc/config.json");
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
             // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.
             const ls = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], { encoding: "utf8" });
             if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
-            if (!ls.stdout.trim() && !protectedPaths.length) { console.log("no base ADLC config or tickets at " + base + " — nothing frozen."); process.exit(0); }
             if (!ls.stdout.trim()) console.log("no .adlc/tickets.json at " + base + " — checking protected config only.");
             if (!ls.stdout.trim()) {
               const argv = ["rails-guard", "--base", base, ...protectedPaths.flatMap(r => ["--rails", r])];
@@ -123,7 +124,7 @@ jobs:
             }
             if (rails.length) protectedPaths.push(".adlc/tickets.json"); // trust root is frozen once rails exist
             const u = [...new Set([...protectedPaths, ...rails])];
-            if (!u.length) { console.log("no rails or protected config declared at base — nothing frozen."); process.exit(0); }
+            if (!u.length) fail("no protected paths resolved; refusing to pass rail-freeze gate");
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
             const res = spawnSync("adlc", argv, { stdio: "inherit" });
             if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
