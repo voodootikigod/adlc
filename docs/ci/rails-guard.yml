@@ -44,6 +44,9 @@ permissions:
 
 jobs:
   rails-guard:
+    # Unsigned-fallback bootstrap can run on GitHub-hosted runners. Signed mode
+    # must switch this to a dedicated pool, for example:
+    # runs-on: [self-hosted, adlc-signed]
     runs-on: ubuntu-latest
     steps:
       # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
@@ -128,10 +131,12 @@ jobs:
             const validateNewSigners = (trustedSigners, headSigners) => {
               if (!headSigners || typeof headSigners !== "object" || Array.isArray(headSigners)) fail("signers must remain an object");
               const allowedNewRoles = new Set(["builder", "critic"]);
+              const allowedNewFields = new Set(["role", "roles"]);
               for (const key of Object.keys(headSigners)) {
                 if (trustedSigners && Object.prototype.hasOwnProperty.call(trustedSigners, key)) continue;
                 const entry = headSigners[key];
                 if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("new signer " + key + " must be an object");
+                for (const field of Object.keys(entry)) if (!allowedNewFields.has(field)) fail("new signer " + key + " has undeclared property " + field);
                 if (entry.role !== undefined && entry.roles !== undefined) fail("new signer " + key + " must use either role or roles, not both");
                 if (entry.role !== undefined && (typeof entry.role !== "string" || !allowedNewRoles.has(entry.role))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
                 const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
@@ -181,7 +186,13 @@ jobs:
               if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
               if (!path.isAbsolute(runnerPath)) fail("ADLC_RUNNER_PATH must be an absolute path");
               if (typeof trusted.runnerBinarySha256 !== "string" || !/^[a-f0-9]{64}$/i.test(trusted.runnerBinarySha256)) fail("signed mode requires runnerBinarySha256 in base .adlc/config.json");
-              const runnerBytes = fs.readFileSync(runnerPath);
+              let runnerBytes;
+              try {
+                runnerBytes = fs.readFileSync(runnerPath);
+              } catch (e) {
+                if (e && e.code === "ENOENT") fail("ADLC_RUNNER_PATH " + runnerPath + " does not exist; is this job running on the dedicated signed-mode runner pool?");
+                fail("cannot read ADLC_RUNNER_PATH " + runnerPath + ": " + e.message);
+              }
               const digest = crypto.createHash("sha256").update(runnerBytes).digest("hex");
               if (digest.toLowerCase() !== trusted.runnerBinarySha256.toLowerCase()) fail("ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256");
               runnerTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "adlc-runner-"));
