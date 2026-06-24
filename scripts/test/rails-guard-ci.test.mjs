@@ -156,6 +156,57 @@ test('no .adlc/tickets.json at base → exit 0 (genuinely nothing frozen)', () =
   }
 });
 
+test('base config without tickets still protects config.json trust root → exit 2', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'config.json'), '{"securityMode":"unsigned-fallback"}\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), '{"securityMode":"signed"}\n');
+    git(dir, ['commit', '-qam', 'change']);
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+    } catch (e) {
+      code = e.status ?? 1;
+    }
+    assert.equal(code, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('standalone bootstrap rejects pre-populated manifest evidence → exit 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    writeFileSync(join(dir, 'app.mjs'), 'x\n'); // base has NO .adlc/ at all
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'change']);
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+    } catch (e) {
+      code = e.status ?? 1;
+    }
+    assert.equal(code, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('unresolvable base ref → exit 1 (fail closed, not fail open)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
   try {

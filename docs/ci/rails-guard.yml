@@ -217,21 +217,22 @@ jobs:
               const runnerCopy = path.join(runnerTmpDir, "adlc-runner");
               fs.writeFileSync(runnerCopy, runnerBytes, { mode: 0o500 });
               fs.chmodSync(runnerCopy, 0o500);
-              // Keep the probe environment narrow, but preserve the basic OS
-              // variables legitimate binaries commonly need for homedir and temp
-              // resolution. Secrets and repo-controlled variables stay excluded.
+              // Keep the probe environment and cwd narrow, while preserving the
+              // basic OS variables legitimate binaries commonly need for homedir
+              // and temp resolution. Secrets and repo-controlled files stay
+              // excluded from the probe context.
               const runnerEnv = {
                 PATH: process.env.PATH || "",
                 HOME: process.env.HOME || "",
                 TMPDIR: process.env.TMPDIR || os.tmpdir(),
                 USER: process.env.USER || "",
               };
-              const runner = spawnSync(runnerCopy, ["--version"], { encoding: "utf8", timeout: 30000, env: runnerEnv });
+              const runner = spawnSync(runnerCopy, ["--version"], { encoding: "utf8", timeout: 30000, env: runnerEnv, cwd: runnerTmpDir });
               if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
               if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
               if (runner.status !== 0) fail("signed mode requires ADLC_RUNNER_PATH --version to exit 0");
               for (const subcommand of ["record", "run", "accept", "upgrade"]) {
-                const probe = spawnSync(runnerCopy, [subcommand, "--help"], { encoding: "utf8", timeout: 30000, env: runnerEnv });
+                const probe = spawnSync(runnerCopy, [subcommand, "--help"], { encoding: "utf8", timeout: 30000, env: runnerEnv, cwd: runnerTmpDir });
                 if (probe.error) fail("adlc-runner " + subcommand + " probe failed: " + probe.error.message);
                 if (probe.signal) fail("adlc-runner " + subcommand + " probe timed out or was killed by " + probe.signal);
                 if (probe.status !== 0) fail("signed mode requires adlc-runner " + subcommand + " --help to exit 0");

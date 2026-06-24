@@ -23,7 +23,7 @@
 // if they need the full config-integrity gate.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -69,6 +69,9 @@ if (!ls.stdout.trim()) {
   if (baseHasConfig) {
     console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — protecting ADLC trust roots only.`);
   } else {
+    if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
+      fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
+    }
     console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
     process.exit(0);
   }
