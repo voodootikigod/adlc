@@ -321,6 +321,20 @@ test('signedEvidenceRequired cannot be removed when it is trusted true', () => {
   assert.match(result.stderr, /cannot remove signedEvidenceRequired/);
 });
 
+test('signedEvidenceRequired cannot be added in a PR without the protected-base runner ceremony', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      securityMode: 'signed',
+      signedEvidenceRequired: true,
+      runnerBinarySha256: '0'.repeat(64),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /signed mode upgrade requires a protected-base runner ceremony/);
+});
+
 test('runnerBinarySha256 cannot change in a PR', () => {
   const signedBase = {
     ...BASE_UNSIGNED,
@@ -518,7 +532,7 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
       join(binDir, 'adlc'),
       [
         '#!/usr/bin/env node',
-        "import { writeFileSync } from 'node:fs';",
+        "const { writeFileSync } = require('fs');",
         'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));',
         'process.exit(0);',
         '',
