@@ -8,9 +8,9 @@
   },
   "review_packet": {
     "prompt": ".omo/evidence/p5-prompt.txt",
-    "prompt_hash": "086ada917eb0c8ba6905d617447bfe472c2dd36bbf4daf37746ac25d24818b2a",
+    "prompt_hash": "4075a912d2a56950da9a76a02c91b2c73c61cbffacfb06d8607c88577423d6a7",
     "inputs": ".omo/evidence/p5-inputs.txt",
-    "inputs_hash": "9faa929a2253953619c4f281754b21859c8fef3135ec864ff450453fdfdcd26a",
+    "inputs_hash": "93d4727a3f1ab2746104ef0d3a6238a6422dca1622cc62882c84f25e01f61df4",
     "clean_worktree": "docs-example-revision"
   },
   "no_findings_attestation": {

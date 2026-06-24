@@ -274,6 +274,83 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
+  it('blocks edits to the ticket trust root while rails are active', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: .adlc/tickets.json',
+      '@@',
+      '-{"tickets":[]}',
+      '+{"tickets":[]}',
+      '*** End Patch',
+    ].join('\n');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'apply_patch',
+        tool_input: { command: patch },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /blocked rail edit/);
+  });
+
+  it('blocks nested edits from Codex multi_tool_use wrapper payloads', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: test/a.test.mjs',
+      '@@',
+      '+test("rail", () => {});',
+      '*** End Patch',
+    ].join('\n');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'multi_tool_use.parallel',
+        tool_uses: [
+          {
+            recipient_name: 'functions.apply_patch',
+            parameters: { command: patch },
+          },
+        ],
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /blocked rail edit/);
+  });
+
+  it('blocks nested shell writes from Codex multi_tool_use wrapper payloads', () => {
+    const dir = fixture();
+    mkdirSync(join(dir, 'test'), { recursive: true });
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'multi_tool_use.parallel',
+        tool_uses: [
+          {
+            recipient_name: 'functions.exec_command',
+            parameters: {
+              cmd: 'cat > a.test.mjs <<EOF\nchanged\nEOF',
+              workdir: join(dir, 'test'),
+            },
+          },
+        ],
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /blocked rail edit/);
+  });
+
   it('blocks shell-based writes to rail paths', () => {
     const dir = fixture();
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
@@ -288,6 +365,57 @@ describe('adlc rails hook', () => {
     });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /blocked rail edit/);
+  });
+
+  it('blocks shell writes relative to a Codex command workdir', () => {
+    const dir = fixture();
+    mkdirSync(join(dir, 'test'), { recursive: true });
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'functions.exec_command',
+        tool_input: {
+          command: 'cat > a.test.mjs <<EOF\nchanged\nEOF',
+          workdir: join(dir, 'test'),
+        },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /blocked rail edit/);
+  });
+
+  it('fails closed on non-empty interactive shell stdin during active P4', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'functions.write_stdin',
+        tool_input: { chars: 'cat > test/a.test.mjs <<EOF\nchanged\nEOF\n' },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /interactive shell stdin/);
+  });
+
+  it('allows empty interactive shell stdin polling during active P4', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'functions.write_stdin',
+        tool_input: { chars: '' },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0);
   });
 
   it('blocks Python interpreter writes to rail paths', () => {
@@ -407,6 +535,7 @@ describe('adlc rails hook', () => {
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     for (const command of [
       'truncate -s 0 test/a.test.mjs',
+      'cp src/a.mjs test',
       'rsync src/a.mjs test/a.test.mjs',
       'awk -i inplace \'{ print }\' test/a.test.mjs',
     ]) {
@@ -437,7 +566,45 @@ describe('adlc rails hook', () => {
       encoding: 'utf8',
     });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /known read-only command/);
+    assert.match(result.stderr, /blocked rail edit/);
+  });
+
+  it('blocks project-root destructive shell targets because they overlap every rail', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    for (const command of [
+      'find . -type f -delete',
+      'find .. -type f -delete',
+      'rm -rf .',
+    ]) {
+      const result = spawnSync(process.execPath, [hook], {
+        cwd: dir,
+        env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+        input: JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command },
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 2, command);
+      assert.match(result.stderr, /blocked rail edit/, command);
+    }
+  });
+
+  it('fails closed on opaque shell mutators even when they mention a patch file', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: dir,
+      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+      input: JSON.stringify({
+        tool_name: 'functions.exec_command',
+        tool_input: { command: 'git apply /tmp/rail.patch' },
+      }),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /opaque command/);
   });
 
   it('blocks sed write scripts to rail paths', () => {
@@ -469,7 +636,7 @@ describe('adlc rails hook', () => {
       encoding: 'utf8',
     });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /known read-only command/);
+    assert.match(result.stderr, /known read-only command nor a path-transparent mutation/);
   });
 
   it('allows read-only shell commands with no editable paths', () => {
@@ -485,6 +652,27 @@ describe('adlc rails hook', () => {
       encoding: 'utf8',
     });
     assert.equal(result.status, 0);
+  });
+
+  it('fails closed when allowlisted read-only shell commands use output options', () => {
+    const dir = fixture();
+    const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+    for (const command of [
+      'git diff --output=test/a.test.mjs',
+      'node --test --test-reporter-destination=test/a.test.mjs',
+    ]) {
+      const result = spawnSync(process.execPath, [hook], {
+        cwd: dir,
+        env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
+        input: JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command },
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 2, command);
+      assert.match(result.stderr, /output option/, command);
+    }
   });
 
   it('allows required P4 gate and test commands with no editable paths', () => {

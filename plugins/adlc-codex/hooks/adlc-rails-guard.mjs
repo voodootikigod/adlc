@@ -111,7 +111,7 @@ function collectCommandText(value, out = []) {
     return out;
   }
   for (const [key, child] of Object.entries(value)) {
-    if (['command', 'cmd', 'input', 'script'].includes(key) && typeof child === 'string') {
+    if (['command', 'cmd', 'input', 'script', 'chars'].includes(key) && typeof child === 'string') {
       out.push(child);
     } else {
       collectCommandText(child, out);
@@ -150,6 +150,10 @@ function looksPathLike(value) {
   );
 }
 
+function looksBarePathLike(value) {
+  return !value.startsWith('-') && !value.includes('=') && /^[A-Za-z0-9_./@+-]+$/.test(value);
+}
+
 function keyValuePath(value) {
   const match = value.match(/^(?:--?[A-Za-z0-9_-]+|[A-Za-z_][A-Za-z0-9_-]*)=(.+)$/);
   if (!match) return null;
@@ -161,13 +165,22 @@ function shellHasMutation(text) {
   return (
     /(^|[\s;&|])(?:>>?|[0-9]>>?|[0-9]>)\s*\S+/.test(text) ||
     /\b(?:tee|touch|rm|mv|cp|install|dd|truncate|rsync)\b/.test(text) ||
+    /\bgit\s+(?:apply|am|checkout|restore|reset|clean|merge|rebase|cherry-pick|stash|commit)\b/.test(text) ||
+    /\b(?:patch|tar|unzip)\b/.test(text) ||
     /\bfind\b[^;&|]*(?:-delete|-exec(?:dir)?\b|-ok(?:dir)?\b)/.test(text) ||
     /\b(?:sed|perl)\s+[^;&|]*-(?:i|p?i)\b/.test(text) ||
     /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s+\S+[^"\n]*"|'[^'\n]*\bw\s+\S+[^'\n]*')/.test(text) ||
-    /\bawk\s+[^;&|]*\s-i(?:\s|=)/.test(text) ||
+    /\bawk\b[^;&|]*(?:\s-i(?:\s|=)|\s--in-place\b)/.test(text) ||
     /\b(?:node|python3?|ruby)\b[^;&|]*(?:writeFile|appendFile|rmSync|renameSync|copyFile|truncateSync|mkdirSync|write_text|write_bytes)/.test(text) ||
     /\bopen\s*\([^)]*,\s*['"][^'"]*[wax+][^'"]*['"]/.test(text) ||
     /\bFile\.(?:write|open)\b/.test(text)
+  );
+}
+
+function shellHasOpaqueMutation(text) {
+  return (
+    /\bgit\s+(?:apply|am|checkout|restore|reset|clean|merge|rebase|cherry-pick|stash|commit)\b/.test(text) ||
+    /\b(?:patch|tar|unzip)\b/.test(text)
   );
 }
 
@@ -177,6 +190,29 @@ function shellIsPositivelyReadOnly(text) {
     normalized === '' ||
     /^(?:git\s+(?:status|diff|show|log|rev-parse|branch|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/.test(normalized)
   );
+}
+
+function shellHasWriteOption(text) {
+  return /\s--(?:output|output-file|test-reporter-destination|reporter-destination)(?:=|\s+)\S+/.test(text);
+}
+
+function firstShellWorkdir(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = firstShellWorkdir(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (['workdir', 'cwd', 'workingDirectory', 'working_directory'].includes(key) && typeof child === 'string') {
+      return child;
+    }
+    const found = firstShellWorkdir(child);
+    if (found) return found;
+  }
+  return null;
 }
 
 function shellChangesCwd(text) {
@@ -212,15 +248,42 @@ function collectShellPaths(text, out) {
     const path = keyValuePath(token);
     if (path) out.add(path);
     else if (looksPathLike(token)) out.add(token);
+    else if (looksBarePathLike(token)) out.add(token);
   }
 }
 
+function railMatchesPath(rail, path) {
+  if (path === '' || path === '.') return true;
+  if (path === '..' || path.startsWith('../')) return true;
+  if (globMatch(rail, path)) return true;
+  if (rail.endsWith('/**')) return path === rail.slice(0, -3);
+  return false;
+}
+
 function toolName(payload) {
-  return payload.tool_name ?? payload.toolName ?? payload.tool ?? payload.name ?? '';
+  return payload.tool_name ?? payload.toolName ?? payload.tool ?? payload.name ?? payload.recipient_name ?? '';
 }
 
 function isShellToolName(name) {
-  return /(^|\.)(bash|shell|exec|exec_command|run_command)$/i.test(String(name));
+  return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
+}
+
+function collectShellInvocations(value, out = []) {
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectShellInvocations(item, out);
+    return out;
+  }
+  if (isShellToolName(toolName(value))) {
+    const name = String(toolName(value));
+    const workdir = firstShellWorkdir(value);
+    for (const commandText of collectCommandText(value)) {
+      out.push({ commandText, workdir, name });
+    }
+    return out;
+  }
+  for (const child of Object.values(value)) collectShellInvocations(child, out);
+  return out;
 }
 
 async function stdinText() {
@@ -243,6 +306,13 @@ function resolveActiveTicketId() {
   return envTicket ?? fileTicket;
 }
 
+function normalizePath(path, baseCwd = process.cwd()) {
+  const normalized = path.replaceAll('\\', '/');
+  const absolute = isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized);
+  const projectRelative = relative(process.cwd(), absolute).replaceAll('\\', '/');
+  return projectRelative.startsWith('..') ? normalized : projectRelative;
+}
+
 if (process.env.ADLC_P4_ENFORCEMENT !== '1') {
   notice('P4 rail hook inactive');
   process.exit(0);
@@ -255,8 +325,10 @@ const tickets = loadTickets(process.env.ADLC_TICKETS ?? '.adlc/tickets.json');
 
 const ticket = tickets.find((t) => t.id === ticketId);
 if (!ticket) fail(`unknown active ticket: ${ticketId}`);
-const rails = ticket.rails ?? [];
-if (rails.length === 0) fail(`ticket ${ticketId} has no rails`);
+const ticketsPath = process.env.ADLC_TICKETS ?? '.adlc/tickets.json';
+const declaredRails = ticket.rails ?? [];
+if (declaredRails.length === 0) fail(`ticket ${ticketId} has no rails`);
+const rails = [...declaredRails, normalizePath(ticketsPath), '.adlc/current-ticket.json'];
 
 let payload = {};
 const raw = await stdinText();
@@ -268,25 +340,43 @@ if (raw.trim()) {
   }
 }
 
-function normalizePath(path) {
-  const normalized = path.replaceAll('\\', '/');
-  const absolute = isAbsolute(normalized) ? normalized : resolve(process.cwd(), normalized);
-  const projectRelative = relative(process.cwd(), absolute).replaceAll('\\', '/');
-  return projectRelative.startsWith('..') ? normalized : projectRelative;
-}
-
 const rawPaths = collectPaths(payload);
-const shellTool = isShellToolName(toolName(payload));
+const paths = Array.from(rawPaths).map((path) => normalizePath(path));
+const shellInvocations = collectShellInvocations(payload);
+const shellTool = shellInvocations.length > 0;
 let shellMutating = false;
 let cwdChangingShellMutation = false;
 let expandingShellMutation = false;
-const commandTexts = shellTool ? collectCommandText(payload) : [];
 if (shellTool) {
-  for (const commandText of commandTexts) {
-    if (shellHasMutation(commandText)) shellMutating = true;
-    if (shellHasMutation(commandText) && shellChangesCwd(commandText)) cwdChangingShellMutation = true;
-    if (shellHasMutation(commandText) && shellHasExpansion(commandText)) expandingShellMutation = true;
-    collectShellPaths(commandText, rawPaths);
+  for (const { commandText, workdir, name } of shellInvocations) {
+    if (/(^|\.)write_stdin$/i.test(name)) {
+      if (commandText.trim() === '') continue;
+      fail('interactive shell stdin payload cannot be verified during active P4');
+    }
+    const commandMutating = shellHasMutation(commandText);
+    if (!commandMutating && shellIsPositivelyReadOnly(commandText)) {
+      if (shellHasWriteOption(commandText)) {
+        fail('read-only shell payload uses an output option; use a structured edit tool or literal path-transparent mutation');
+      }
+      continue;
+    }
+
+    if (!commandMutating) {
+      fail('shell payload is neither a known read-only command nor a path-transparent mutation');
+    }
+    if (shellHasOpaqueMutation(commandText)) {
+      fail('mutating shell payload uses an opaque command; use a structured edit tool or literal path-transparent mutation');
+    }
+    shellMutating = true;
+    if (shellChangesCwd(commandText)) cwdChangingShellMutation = true;
+    if (shellHasExpansion(commandText)) expandingShellMutation = true;
+    const commandPaths = new Set();
+    collectShellPaths(commandText, commandPaths);
+    if (commandPaths.size === 0) {
+      fail('mutating shell payload did not include literal editable paths');
+    }
+    const shellBaseCwd = workdir ? resolve(process.cwd(), workdir) : process.cwd();
+    for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
   }
 }
 
@@ -297,15 +387,14 @@ if (expandingShellMutation) {
   fail('mutating shell payload uses shell expansion; use a structured edit tool or literal project-relative shell target paths');
 }
 
-const paths = Array.from(rawPaths).map(normalizePath);
 if (paths.length === 0) {
-  if (shellTool && !shellMutating && commandTexts.length > 0 && commandTexts.every(shellIsPositivelyReadOnly)) {
+  if (shellTool && !shellMutating && shellInvocations.length > 0 && shellInvocations.every(({ commandText }) => shellIsPositivelyReadOnly(commandText))) {
     notice('shell command has no editable rail targets');
     process.exit(0);
   }
   fail(shellTool ? 'shell payload did not include literal editable paths or a known read-only command' : 'active hook payload did not include any editable paths');
 }
-const blocked = paths.filter((path) => rails.some((rail) => globMatch(rail, path)));
+const blocked = paths.filter((path) => rails.some((rail) => railMatchesPath(rail, path)));
 if (blocked.length > 0) fail(`blocked rail edit for ${ticketId}: ${blocked.join(', ')}`);
 
 process.exit(0);
