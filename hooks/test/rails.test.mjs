@@ -512,7 +512,7 @@ for (const [name, json] of [
 const NODE_DIR = dirname(process.execPath);
 const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '.bin');
 const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // recorder reachable
-const WITHOUT_ADLC = NODE_DIR; // node only — `adlc` not resolvable
+const WITHOUT_ADLC = '/nonexistent-adlc-recorder-path'; // hook uses absolute node; `adlc` not resolvable
 
 test('bypass on a rail WITH a working recorder → allow + audited entry', () => {
   const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
