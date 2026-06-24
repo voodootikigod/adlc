@@ -96,6 +96,15 @@ test('trust root: PR edits .adlc/manifest.jsonl while base rails exist → exit 
   assert.equal(code, 2);
 });
 
+test('trust root: PR edits deployed rails guard workflow while base rails exist → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.github/workflows/adlc-rails-guard.yml'],
+    mutate: (d) => writeFileSync(join(d, '.github/workflows/adlc-rails-guard.yml'), 'jobs: {}\n'),
+  });
+  assert.equal(code, 2);
+});
+
 test('trust root: PR edits .adlc/config.json even when no ticket rails exist → exit 2', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),

@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -57,7 +58,7 @@ function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
   assert.match(script, /bootstrap validation was handled by the previous step/);
-  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl"\]/);
+  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl", "\.github\/workflows\/adlc-rails-guard\.yml"\]/);
   assert.match(script, /new Set\(\[...rails, ...trustRoots\]\)/);
   return script;
 }
@@ -304,6 +305,46 @@ test('signed mode rejects runner hash mismatches before executing the runner', (
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256/);
+});
+
+test('signed mode accepts a matching runner that passes all probes', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'adlc-runner-ok-'));
+  try {
+    const runnerPath = join(tmp, 'adlc-runner');
+    writeFileSync(
+      runnerPath,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then exit 0; fi',
+        'if [ "$2" = "--help" ]; then',
+        '  case "$1" in',
+        '    record|run|accept|upgrade) exit 0 ;;',
+        '  esac',
+        'fi',
+        'exit 1',
+        '',
+      ].join('\n'),
+      { mode: 0o700 }
+    );
+    const digest = createHash('sha256').update(readFileSync(runnerPath)).digest('hex');
+    const signedBase = {
+      ...BASE_UNSIGNED,
+      securityMode: 'signed',
+      runnerBinarySha256: digest,
+    };
+    const result = runBootstrapScenario({
+      baseConfig: signedBase,
+      headConfig: signedBase,
+      env: {
+        ADLC_RUNNER_PATH: runnerPath,
+        RUNNER_ENVIRONMENT: 'self-hosted',
+        ADLC_SIGNED_RUNNER_POOL: '1',
+      },
+    });
+    assert.equal(result.status, 0);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('revokedKeys entries cannot be removed in a PR', () => {
@@ -608,6 +649,8 @@ test('rail-freeze gate protects trust roots when base tickets declare no rails',
       '.adlc/config.json',
       '--rails',
       '.adlc/manifest.jsonl',
+      '--rails',
+      '.github/workflows/adlc-rails-guard.yml',
     ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -654,6 +697,8 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
       '.adlc/config.json',
       '--rails',
       '.adlc/manifest.jsonl',
+      '--rails',
+      '.github/workflows/adlc-rails-guard.yml',
     ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

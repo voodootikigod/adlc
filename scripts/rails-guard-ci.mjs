@@ -107,7 +107,9 @@ for (const t of data.tickets) {
   }
 }
 
-const trustRoots = rails.length || baseHasConfig ? ['.adlc/tickets.json', '.adlc/config.json', '.adlc/manifest.jsonl'] : [];
+const trustRoots = rails.length || baseHasConfig
+  ? ['.adlc/tickets.json', '.adlc/config.json', '.adlc/manifest.jsonl', '.github/workflows/adlc-rails-guard.yml']
+  : [];
 const unique = [...new Set([...rails, ...trustRoots])];
 if (unique.length === 0) {
   console.log(`rails-guard-ci: no rails declared at ${base} — nothing frozen.`);
