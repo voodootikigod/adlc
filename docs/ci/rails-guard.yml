@@ -74,12 +74,12 @@ jobs:
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — bootstrap cannot be verified");
             const baseConfig = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/config.json"], { encoding: "utf8" });
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
-            if (baseConfig.stdout.trim()) {
-              const showConfig = spawnSync("git", ["show", base + ":.adlc/config.json"], { encoding: "utf8" });
-              if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");
-              const trusted = parse(showConfig.stdout, "base .adlc/config.json");
-              if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
-            }
+            if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; merge bootstrap config before enabling this required check");
+            const showConfig = spawnSync("git", ["show", base + ":.adlc/config.json"], { encoding: "utf8" });
+            if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");
+            const trusted = parse(showConfig.stdout, "base .adlc/config.json");
+            if (trusted.acknowledgedNewRailBypass !== true) fail("acknowledgedNewRailBypass must already be set on the base branch; a PR cannot self-acknowledge this limitation");
+            if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
           '
         env:
           BASE_REF: ${{ github.base_ref }}
