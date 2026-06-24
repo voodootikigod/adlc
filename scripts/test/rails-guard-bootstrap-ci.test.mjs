@@ -101,6 +101,14 @@ const BASE_UNSIGNED = {
   maxBundleAgeDays: 14,
 };
 
+test('clean unsigned-fallback PR with unchanged config exits 0', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+  });
+  assert.equal(result.status, 0);
+});
+
 test('new signer entries reject undeclared properties', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,
@@ -339,6 +347,19 @@ test('first bootstrap mode rejects pre-populated manifest evidence', () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+});
+
+test('first bootstrap mode rejects signed security mode before runner infrastructure is validated', () => {
+  const result = runBootstrapScenario({
+    baseConfig: null,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      securityMode: 'signed',
+      runnerBinarySha256: '0'.repeat(64),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /bootstrap with securityMode signed requires the adlc-signed runner pool/);
 });
 
 test('signed mode requires the dedicated self-hosted runner pool sentinel', () => {

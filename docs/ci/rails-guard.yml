@@ -46,9 +46,10 @@ permissions:
 
 jobs:
   rails-guard:
-    # Signed-safe default. Repositories that permanently use unsigned-fallback
-    # and never set ADLC_RUNNER_PATH may replace this with ubuntu-latest.
-    runs-on: [self-hosted, adlc-signed]
+    # Unsigned-fallback bootstrap can run on GitHub-hosted runners. Signed mode
+    # fast-fails below unless this job is moved to [self-hosted, adlc-signed]
+    # with ADLC_SIGNED_RUNNER_POOL=1 in that runner's environment.
+    runs-on: ubuntu-latest
     steps:
       # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -87,7 +88,9 @@ jobs:
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
             let runnerTmpDir = "";
-            process.on("exit", () => { if (runnerTmpDir) { try { fs.rmSync(runnerTmpDir, { recursive: true, force: true }); } catch (_) {} } });
+            const cleanupRunner = () => { if (runnerTmpDir) { try { fs.rmSync(runnerTmpDir, { recursive: true, force: true }); } catch (_) {} } };
+            process.on("exit", cleanupRunner);
+            process.on("SIGTERM", () => process.exit(1));
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const git = (args, label) => {
               const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
@@ -168,6 +171,7 @@ jobs:
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
               if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
+              if (head.securityMode === "signed") fail("bootstrap with securityMode signed requires the adlc-signed runner pool and ADLC_SIGNED_RUNNER_POOL=1 before enabling this as a required check; bootstrap in unsigned-fallback first, then upgrade through the protected-base runner ceremony");
               if (head.signers !== undefined) validateNewSigners({}, head.signers);
               console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required.");
               process.exit(0);
