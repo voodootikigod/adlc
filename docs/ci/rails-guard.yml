@@ -25,6 +25,8 @@
 # pointing to an audited adlc-runner binary by absolute path. This template
 # intentionally does not install the unpublished @adlc/runner package from npm.
 # Signed mode also requires `runnerBinarySha256` in .adlc/config.json.
+# Run signed mode only on a dedicated runner pool; shared self-hosted runners
+# must not be able to write to ADLC_RUNNER_PATH or its temporary execution copy.
 #
 # New approver-role signer grants are intentionally blocked in PRs. Grant them
 # through a protected-base admin ceremony countersigned by an existing approver.
@@ -76,6 +78,7 @@ jobs:
           node -e '
             const fs = require("fs");
             const crypto = require("crypto");
+            const os = require("os");
             const path = require("path");
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
@@ -127,6 +130,8 @@ jobs:
                 if (trustedSigners && Object.prototype.hasOwnProperty.call(trustedSigners, key)) continue;
                 const entry = headSigners[key];
                 if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("new signer " + key + " must be an object");
+                if (entry.role !== undefined && entry.roles !== undefined) fail("new signer " + key + " must use either role or roles, not both");
+                if (entry.role !== undefined && (typeof entry.role !== "string" || !allowedNewRoles.has(entry.role))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
                 const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
                 if (!roles.length || roles.some(r => typeof r !== "string" || !allowedNewRoles.has(r))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
               }
@@ -166,20 +171,26 @@ jobs:
             if (!["signed", "unsigned-fallback"].includes(trusted.securityMode)) fail("base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety");
             if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
             if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
+            if (typeof trusted.runnerBinarySha256 === "string" && head.runnerBinarySha256 !== trusted.runnerBinarySha256) fail("runnerBinarySha256 cannot change in a PR; rotate it through the protected-base runner ceremony");
             if ((head.securityMode === "signed" || head.signedEvidenceRequired === true) && trusted.securityMode !== "signed" && trusted.signedEvidenceRequired !== true) fail("signed mode upgrade requires a protected-base runner ceremony");
             if (trusted.securityMode === "signed" || trusted.signedEvidenceRequired === true) {
               const runnerPath = process.env.ADLC_RUNNER_PATH;
               if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
               if (!path.isAbsolute(runnerPath)) fail("ADLC_RUNNER_PATH must be an absolute path");
               if (typeof trusted.runnerBinarySha256 !== "string" || !/^[a-f0-9]{64}$/i.test(trusted.runnerBinarySha256)) fail("signed mode requires runnerBinarySha256 in base .adlc/config.json");
-              const digest = crypto.createHash("sha256").update(fs.readFileSync(runnerPath)).digest("hex");
+              const runnerBytes = fs.readFileSync(runnerPath);
+              const digest = crypto.createHash("sha256").update(runnerBytes).digest("hex");
               if (digest.toLowerCase() !== trusted.runnerBinarySha256.toLowerCase()) fail("ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256");
-              const runner = spawnSync(runnerPath, ["--version"], { encoding: "utf8", timeout: 30000 });
+              const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "adlc-runner-"));
+              const runnerCopy = path.join(tmpDir, "adlc-runner");
+              fs.writeFileSync(runnerCopy, runnerBytes, { mode: 0o500 });
+              fs.chmodSync(runnerCopy, 0o500);
+              const runner = spawnSync(runnerCopy, ["--version"], { encoding: "utf8", timeout: 30000 });
               if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
               if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
               if (runner.status !== 0) fail("signed mode requires ADLC_RUNNER_PATH --version to exit 0");
               for (const subcommand of ["record", "run", "accept"]) {
-                const probe = spawnSync(runnerPath, [subcommand, "--help"], { encoding: "utf8", timeout: 30000 });
+                const probe = spawnSync(runnerCopy, [subcommand, "--help"], { encoding: "utf8", timeout: 30000 });
                 if (probe.error) fail("adlc-runner " + subcommand + " probe failed: " + probe.error.message);
                 if (probe.signal) fail("adlc-runner " + subcommand + " probe timed out or was killed by " + probe.signal);
                 if (probe.status !== 0) fail("signed mode requires adlc-runner " + subcommand + " --help to exit 0");
