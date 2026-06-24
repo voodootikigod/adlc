@@ -14,9 +14,11 @@ Two parallel efforts each added an `adlc` command, in separate branches:
   CLIs (`adlc spec-lint …`, `adlc rails-guard …`). The whole Claude Code
   integration — hooks, slash commands, the discovery skill, the CI scripts —
   calls `adlc <tool>`.
-- **`feat/codex-integration-codex`** ships `@adlc/runner` with bin `adlc`, an
-  **artifact-asserting phase runner**: `adlc run <phase>` and `adlc accept
-  --ticket …` assert that required `.adlc/` phase evidence exists.
+- **`feat/codex-integration-codex`** originally shipped `@adlc/runner` with bin
+  `adlc`, an **artifact-asserting phase runner**: `adlc run <phase>` and
+  `adlc accept --ticket …` asserted that required `.adlc/` phase evidence exists.
+  Under the accepted Option D revision below, that runner bin is renamed to
+  `adlc-runner`.
 
 Both packages declare bin `adlc`. npm cannot install two packages that claim the
 same global bin (and in the monorepo, `node_modules/.bin/adlc` links to whichever
@@ -93,7 +95,10 @@ regress silently):
   Option D is now the accepted decision, not a fallback; this bullet preserves the
   superseded Option C-era evaluation.
 
-## Consequences
+## Original Consequences (SUPERSEDED — Option C)
+
+> These consequences apply only to the superseded Option C single-bin dispatcher
+> design. The accepted Option D consequences are listed in the revision section.
 
 - **Backward compatible both ways**: `adlc spec-lint …` and `adlc run p5` /
   `adlc accept …` all keep working; no caller changes.
@@ -109,10 +114,15 @@ regress silently):
   to a stable ref before the unification is implemented against it. This ADR does
   not modify any codex file.
 
-## Resolved questions (from the Gemini-3.5-Flash adversarial review)
+## Resolved Questions Under Original Option C Decision
+
+> This section records how the original Option C proposal answered the first
+> review pass. The accepted Option D revision supersedes the coupling and
+> reserved-verb conclusions below.
 
 The review of the original (un-hardened) proposal raised coupling, process-
-isolation loss, and shadowing. Resolutions, now folded into the Decision above:
+isolation loss, and shadowing. Resolutions were folded into the superseded
+Option C decision above:
 
 1. **Library import vs spawn → spawn.** The dispatcher spawns `adlc-runner` as a
    child (process isolation + verbatim exit codes), consistent with how it runs
@@ -125,26 +135,25 @@ isolation loss, and shadowing. Resolutions, now folded into the Decision above:
 3. **Closed set.** `RESERVED_VERBS = {run, accept}` is closed; expanding it is a
    deliberate registry + test change.
 
-If the coupling or reserved surface ever proves costly, **Option D** (separate
-`adlc` + `adlc-runner` bins) remains the documented fallback — it trades the single
-entry point for zero coupling and zero shadowing.
+This fallback framing is superseded: **Option D** is now the accepted decision.
 
-## Implementation notes (cautions from the second review pass)
+## Original Implementation Notes (SUPERSEDED — Option C cautions from the second review pass)
 
-These are binding on the implementation; each maps to how the dispatcher already
-runs tools, so they add no new mechanism:
+These notes were binding on the superseded Option C implementation. Under
+accepted Option D, `adlc` and `adlc-runner` are invoked directly as independent
+bins by harness adapters; `adlc` does not spawn `adlc-runner`.
 
 1. **Superseded Option C physical-path resolution.** Under accepted Option D,
    `adlc-runner` is a separate globally installed bin registered by
    `@adlc/runner`; harness adapters resolve it through the user's `$PATH`.
    `createRequire`-based physical-path lookup through `@adlc/cli` is not used.
-2. **Inherit stdio** on the spawned child (`stdio: 'inherit'`), so `adlc run` /
-   `adlc accept` output and any interactivity reach the user unchanged. A test
-   asserts this.
-3. **Forward argv verbatim, verb included.** `adlc run p5` spawns the runner with
-   `["run","p5"]` — the runner's existing first-positional grammar is unchanged
-   (its bin is the old `adlc` bin, only renamed). A test asserts exit-code
-   fidelity (0/1/2) and that the verb reaches the runner.
+2. **Superseded Option C stdio inheritance.** There is no dispatcher-spawned
+   child under accepted Option D, so the `stdio: 'inherit'` contract is vacuous.
+   Harness adapters invoke `adlc-runner` directly and inherit or capture stdio
+   according to that harness's native command execution contract.
+3. **Superseded Option C argv forwarding.** `adlc` no longer forwards
+   `["run","p5"]` to the runner. Callers invoke `adlc-runner run p5` directly,
+   preserving the runner's first-positional grammar without a dispatcher wrapper.
 
 ---
 
@@ -162,7 +171,7 @@ Three genuinely distinct concerns, all harness-agnostic:
 
 - **Tools** — the 19 atomic gate bins (`spec-lint`, `rails-guard`, …).
 - **Dispatcher** (`adlc <tool>`) — sugar: one stable prefix over the 19 tools.
-- **Runner** (`adlc run <phase>` / `accept`) — higher-level lifecycle-evidence
+- **Runner** (`adlc-runner run <phase>` / `accept`) — higher-level lifecycle-evidence
   assertion. A different job than gate dispatch.
 
 Each harness plugin is a thin adapter wiring that harness's native primitives
@@ -179,6 +188,20 @@ Each harness plugin is a thin adapter wiring that harness's native primitives
   package: its bin already parses `run`/`accept`/`record`/`upgrade`/`init-developer-keys`/`init-admin-keys`/`rotate-developer-keys` as the first positional, so it is
   only renamed `adlc` → `adlc-runner`; the grammar is otherwise unchanged.
 - No reserved verbs on `adlc`, no `cli → runner` dependency, no disjointness test.
+
+### Consequences (ACCEPTED — Option D)
+
+- **Dispatcher callers are unchanged**: `adlc <tool> …` remains the stable entry
+  point for gate tools such as `adlc spec-lint …` and `adlc rails-guard …`.
+- **Runner callers use the runner bin directly**: phase assertions and manifest
+  operations use `adlc-runner <verb> …`, for example `adlc-runner run p5` and
+  `adlc-runner accept --ticket …`; `adlc run …` and `adlc accept …` are not
+  compatibility targets under Option D.
+- **Two top-level commands are intentional**: the design trades away the original
+  single-entry-point property to keep gate dispatch and phase assertion
+  separate.
+- **No dispatcher-runner coupling**: `@adlc/cli` has no runtime dependency on
+  `@adlc/runner`, does not reserve `run`/`accept`, and does not spawn the runner.
 
 ### Why the roadmap flips the decision
 
