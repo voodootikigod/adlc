@@ -7,9 +7,10 @@
 # frozen rails, but a shell write form it does not recognize (node -e, python,
 # cp, perl -i, …) still lands in the PR diff — this job rejects that PR.
 #
-# It reads every rail glob declared in .adlc/tickets.json and runs the
-# diff-based `adlc rails-guard` gate against the PR base. It no-ops when no rails
-# are declared. Make this a required check in branch protection.
+# It reads every rail glob declared in the union of base and PR-head
+# .adlc/tickets.json files and runs the diff-based `adlc rails-guard` gate
+# against the PR base. It no-ops only when neither side declares rails. Make this
+# a required check in branch protection.
 
 name: ADLC Rails Guard
 
@@ -57,24 +58,25 @@ jobs:
             // both "bad ref" and "file absent", and conflating them would fail open.
             const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
-            // Distinguish a genuinely absent file from an operational git error:
-            // ls-tree non-zero = operational (fail closed); empty = file absent
-            // (nothing frozen). Read the TRUSTED base file, not the PR working tree.
-            const ls = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], { encoding: "utf8" });
-            if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
-            if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + base + " — nothing frozen."); process.exit(0); }
-            const show = spawnSync("git", ["show", base + ":.adlc/tickets.json"], { encoding: "utf8" });
-            if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
-            let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
-            if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.tickets)) fail("base tickets not in { tickets: [...] } shape");
             const rails = [];
-            for (const t of d.tickets) {
-              if (!t || typeof t !== "object" || Array.isArray(t)) fail("malformed base ticket entry");
-              if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array base rails");
-              for (const r of t.rails ?? []) { if (typeof r !== "string") fail("non-string base rail"); rails.push(r); }
-            }
+            const collectRails = (refName, label) => {
+              const ls = spawnSync("git", ["ls-tree", "--name-only", refName, "--", ".adlc/tickets.json"], { encoding: "utf8" });
+              if (ls.status !== 0) fail("git ls-tree failed for " + label + " (operational) — failing closed");
+              if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + label); return; }
+              const show = spawnSync("git", ["show", refName + ":.adlc/tickets.json"], { encoding: "utf8" });
+              if (show.status !== 0) fail("git show failed for an existing " + label + " ticket file (operational) — failing closed");
+              let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse " + label + " tickets: " + e.message); }
+              if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.tickets)) fail(label + " tickets not in { tickets: [...] } shape");
+              for (const t of d.tickets) {
+                if (!t || typeof t !== "object" || Array.isArray(t)) fail("malformed " + label + " ticket entry");
+                if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array " + label + " rails");
+                for (const r of t.rails ?? []) { if (typeof r !== "string") fail("non-string " + label + " rail"); rails.push(r); }
+              }
+            };
+            collectRails(base, "base " + base);
+            collectRails("HEAD", "PR head");
             const u = [...new Set(rails)];
-            if (!u.length) { console.log("no rails declared at base — nothing frozen."); process.exit(0); }
+            if (!u.length) { console.log("no rails declared at base or PR head — nothing frozen."); process.exit(0); }
             u.push(".adlc/tickets.json"); // trust root is frozen once rails exist
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
             const res = spawnSync("adlc", argv, { stdio: "inherit" });
