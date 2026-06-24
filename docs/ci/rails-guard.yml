@@ -15,9 +15,9 @@
 # SECURITY LIMITATION: this template does not protect rails introduced for the
 # first time in the same PR. New rails are enforced only after they land on the
 # base branch. Do not treat this workflow as complete rail-freeze enforcement for
-# newly frozen paths. /adlc-init must require explicit operator acknowledgement
-# before scaffolding this template as a required check until Phase F new-rail-aware
-# structural CI hardening ships.
+# newly frozen paths. /adlc-init must require --acknowledge-new-rail-bypass
+# (headless) or an interactive TUI confirmation before scaffolding this template
+# as a required check until Phase F new-rail-aware structural CI hardening ships.
 
 name: ADLC Rails Guard
 
