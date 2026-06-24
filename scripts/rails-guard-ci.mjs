@@ -116,6 +116,9 @@ function validateConfigIntegrity() {
   if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) {
     fail('cannot remove signedEvidenceRequired from a base config that requires it');
   }
+  if ((head.securityMode === 'signed' || head.signedEvidenceRequired === true) && trusted.securityMode !== 'signed' && trusted.signedEvidenceRequired !== true) {
+    fail('signed mode upgrade requires a protected-base runner ceremony');
+  }
   if (typeof trusted.runnerBinarySha256 === 'string' && head.runnerBinarySha256 !== trusted.runnerBinarySha256) {
     fail('runnerBinarySha256 cannot change in a PR');
   }
@@ -216,6 +219,9 @@ const trustRoots = rails.length || baseHasConfig
       '.adlc/config.json',
       '.adlc/manifest.jsonl',
       '.github/workflows/adlc-rails-guard.yml',
+      'CODEOWNERS',
+      '.github/CODEOWNERS',
+      'docs/CODEOWNERS',
       'docs/ci/rails-guard.yml',
       'scripts/rails-guard-ci.mjs',
       'scripts/test/rails-guard-workflow-hashes.json',

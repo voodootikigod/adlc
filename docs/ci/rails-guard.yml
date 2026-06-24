@@ -105,8 +105,11 @@ jobs:
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const workflowHasCodeowners = () => {
               for (const file of ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]) {
-                if (!fs.existsSync(file)) continue;
-                const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).map(line => line.replace(/\s+#.*$/, "").trim()).filter(line => line && !line.startsWith("#"));
+                const show = spawnSync("git", ["show", base + ":" + file], { encoding: "utf8", timeout: 60000 });
+                if (show.error) fail("git show base CODEOWNERS failed: " + show.error.message);
+                if (show.signal) fail("git show base CODEOWNERS timed out or was killed by " + show.signal);
+                if (show.status !== 0) continue;
+                const lines = show.stdout.split(/\r?\n/).map(line => line.replace(/\s+#.*$/, "").trim()).filter(line => line && !line.startsWith("#"));
                 for (const line of lines) {
                   const pattern = line.split(/\s+/)[0];
                   if (pattern === ".github/workflows/adlc-rails-guard.yml" || pattern === "/.github/workflows/adlc-rails-guard.yml" || pattern === ".github/workflows/*" || pattern === "/.github/workflows/*") return true;
@@ -295,7 +298,7 @@ jobs:
               process.exit(0);
             }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
-            const trustRoots = [".adlc/tickets.json", ".adlc/config.json", ".adlc/manifest.jsonl", ".github/workflows/adlc-rails-guard.yml", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
+            const trustRoots = [".adlc/tickets.json", ".adlc/config.json", ".adlc/manifest.jsonl", ".github/workflows/adlc-rails-guard.yml", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
             // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.

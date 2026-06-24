@@ -59,7 +59,7 @@ function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
   assert.match(script, /bootstrap validation was handled by the previous step/);
-  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl", "\.github\/workflows\/adlc-rails-guard\.yml", "docs\/ci\/rails-guard\.yml", "scripts\/rails-guard-ci\.mjs", "scripts\/test\/rails-guard-workflow-hashes\.json"\]/);
+  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl", "\.github\/workflows\/adlc-rails-guard\.yml", "CODEOWNERS", "\.github\/CODEOWNERS", "docs\/CODEOWNERS", "docs\/ci\/rails-guard\.yml", "scripts\/rails-guard-ci\.mjs", "scripts\/test\/rails-guard-workflow-hashes\.json"\]/);
   assert.match(script, /new Set\(\[...rails, ...trustRoots\]\)/);
   return script;
 }
@@ -93,14 +93,16 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mutateHead }) {
+function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mutateHead, withCodeowners = true }) {
   const dir = mkdtempSync(join(tmpdir(), 'rg-bootstrap-'));
   try {
     git(dir, ['init', '-q', '-b', 'main']);
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.github'), { recursive: true });
-    writeFileSync(join(dir, '.github', 'CODEOWNERS'), '.github/workflows/adlc-rails-guard.yml @adlc-admins\n');
+    if (withCodeowners) {
+      mkdirSync(join(dir, '.github'), { recursive: true });
+      writeFileSync(join(dir, '.github', 'CODEOWNERS'), '.github/workflows/adlc-rails-guard.yml @adlc-admins\n');
+    }
     if (baseConfig === null) {
       writeFileSync(join(dir, 'README.md'), 'bootstrap\n');
     } else {
@@ -207,7 +209,7 @@ test('bootstrap step requires CODEOWNERS protection for the deployed workflow', 
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateHead: (dir) => writeFileSync(join(dir, '.github', 'CODEOWNERS'), '# missing workflow owner\n'),
+    withCodeowners: false,
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
@@ -675,6 +677,12 @@ test('rail-freeze gate protects trust roots when base tickets declare no rails',
       '--rails',
       '.github/workflows/adlc-rails-guard.yml',
       '--rails',
+      'CODEOWNERS',
+      '--rails',
+      '.github/CODEOWNERS',
+      '--rails',
+      'docs/CODEOWNERS',
+      '--rails',
       'docs/ci/rails-guard.yml',
       '--rails',
       'scripts/rails-guard-ci.mjs',
@@ -728,6 +736,12 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
       '.adlc/manifest.jsonl',
       '--rails',
       '.github/workflows/adlc-rails-guard.yml',
+      '--rails',
+      'CODEOWNERS',
+      '--rails',
+      '.github/CODEOWNERS',
+      '--rails',
+      'docs/CODEOWNERS',
       '--rails',
       'docs/ci/rails-guard.yml',
       '--rails',

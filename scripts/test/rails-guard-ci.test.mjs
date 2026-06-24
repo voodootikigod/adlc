@@ -148,6 +148,20 @@ test('standalone semantic gate blocks signed securityMode downgrade → exit 1',
   assert.equal(code, 1);
 });
 
+test('standalone semantic gate blocks signed securityMode upgrade without ceremony → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), securityMode: 'signed', signedEvidenceRequired: true, runnerBinarySha256: '0'.repeat(64) })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
 test('standalone semantic gate blocks existing signer deletion → exit 1', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
