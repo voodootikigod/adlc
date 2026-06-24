@@ -104,6 +104,7 @@ jobs:
             process.on("SIGTERM", () => process.exit(1));
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const workflowHasCodeowners = () => {
+              let protectedByCodeowners = false;
               for (const file of ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]) {
                 const show = spawnSync("git", ["show", base + ":" + file], { encoding: "utf8", timeout: 60000 });
                 if (show.error) fail("git show base CODEOWNERS failed: " + show.error.message);
@@ -112,10 +113,15 @@ jobs:
                 const lines = show.stdout.split(/\r?\n/).map(line => line.replace(/\s+#.*$/, "").trim()).filter(line => line && !line.startsWith("#"));
                 for (const line of lines) {
                   const pattern = line.split(/\s+/)[0];
-                  if (["*", "/*", ".github/", "/.github/", ".github/**", "/.github/**", ".github/workflows/*", "/.github/workflows/*", ".github/workflows/**", "/.github/workflows/**", ".github/workflows/adlc-rails-guard.yml", "/.github/workflows/adlc-rails-guard.yml"].includes(pattern)) return true;
+                  const negated = pattern.startsWith("!");
+                  const normalized = negated ? pattern.slice(1) : pattern;
+                  if (["*", "/*", ".github/", "/.github/", ".github/**", "/.github/**", ".github/workflows/*", "/.github/workflows/*", ".github/workflows/**", "/.github/workflows/**", ".github/workflows/adlc-rails-guard.yml", "/.github/workflows/adlc-rails-guard.yml"].includes(normalized)) {
+                    if (negated) return false;
+                    protectedByCodeowners = true;
+                  }
                 }
               }
-              return false;
+              return protectedByCodeowners;
             };
             const git = (args, label) => {
               const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });

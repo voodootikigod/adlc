@@ -234,6 +234,16 @@ test('bootstrap step accepts catch-all CODEOWNERS protection', () => {
   assert.equal(result.status, 0);
 });
 
+test('bootstrap step rejects CODEOWNERS catch-all negated for the deployed workflow', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    codeownersContent: '* @adlc-admins\n!.github/workflows/adlc-rails-guard.yml\n',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing CODEOWNERS entry protecting \.github\/workflows\/adlc-rails-guard\.yml/);
+});
+
 test('new signer entries reject undeclared properties', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,
