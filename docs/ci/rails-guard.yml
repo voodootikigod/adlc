@@ -25,8 +25,10 @@
 # pointing to an audited adlc-runner binary by absolute path. This template
 # intentionally does not install the unpublished @adlc/runner package from npm.
 # Signed mode also requires `runnerBinarySha256` in .adlc/config.json.
-# Run signed mode only on a dedicated runner pool; shared self-hosted runners
-# must not be able to write to ADLC_RUNNER_PATH or its temporary execution copy.
+# Run signed mode only on the dedicated `adlc-signed` self-hosted runner pool,
+# with ADLC_SIGNED_RUNNER_POOL=1 set in that runner's environment. Shared
+# self-hosted runners must not be able to write to ADLC_RUNNER_PATH or its
+# temporary execution copy.
 #
 # New approver-role signer grants are intentionally blocked in PRs. Grant them
 # through a protected-base admin ceremony countersigned by an existing approver.
@@ -44,10 +46,9 @@ permissions:
 
 jobs:
   rails-guard:
-    # Unsigned-fallback bootstrap can run on GitHub-hosted runners. Signed mode
-    # must switch this to a dedicated pool, for example:
-    # runs-on: [self-hosted, adlc-signed]
-    runs-on: ubuntu-latest
+    # Signed-safe default. Repositories that permanently use unsigned-fallback
+    # and never set ADLC_RUNNER_PATH may replace this with ubuntu-latest.
+    runs-on: [self-hosted, adlc-signed]
     steps:
       # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -182,6 +183,7 @@ jobs:
             if (typeof trusted.runnerBinarySha256 === "string" && head.runnerBinarySha256 !== trusted.runnerBinarySha256) fail("runnerBinarySha256 cannot change in a PR; rotate it through the protected-base runner ceremony");
             if ((head.securityMode === "signed" || head.signedEvidenceRequired === true) && trusted.securityMode !== "signed" && trusted.signedEvidenceRequired !== true) fail("signed mode upgrade requires a protected-base runner ceremony");
             if (trusted.securityMode === "signed" || trusted.signedEvidenceRequired === true) {
+              if (process.env.RUNNER_ENVIRONMENT !== "self-hosted" || process.env.ADLC_SIGNED_RUNNER_POOL !== "1") fail("signed mode requires the dedicated adlc-signed self-hosted runner pool with ADLC_SIGNED_RUNNER_POOL=1");
               const runnerPath = process.env.ADLC_RUNNER_PATH;
               if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
               if (!path.isAbsolute(runnerPath)) fail("ADLC_RUNNER_PATH must be an absolute path");
@@ -230,6 +232,7 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           ADLC_RUNNER_PATH: ${{ secrets.ADLC_RUNNER_PATH }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
 
       - name: Rail-freeze gate
         run: |

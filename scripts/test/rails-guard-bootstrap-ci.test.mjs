@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = join(ROOT, 'docs', 'ci', 'rails-guard.yml');
@@ -23,11 +24,14 @@ function extractBootstrapScript() {
   const codeStart = start + startToken.length;
   const end = workflow.indexOf("\n          '", codeStart);
   assert.notEqual(end, -1, 'bootstrap node -e block terminates');
-  return workflow
+  const script = workflow
     .slice(codeStart, end)
     .split('\n')
     .map((line) => (line.startsWith('            ') ? line.slice(12) : line))
     .join('\n');
+  assert.ok(script.length > 500, 'bootstrap script extraction produced a non-trivial script');
+  assert.doesNotThrow(() => new vm.Script(script), 'bootstrap script extraction produced valid JavaScript');
+  return script;
 }
 
 const BOOTSTRAP_SCRIPT = extractBootstrapScript();
@@ -67,7 +71,14 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
     const result = spawnSync(process.execPath, ['-e', BOOTSTRAP_SCRIPT], {
       cwd: dir,
       encoding: 'utf8',
-      env: { ...process.env, BASE_REF: 'main', ADLC_RUNNER_PATH: '', ...scenarioEnv },
+      env: {
+        ...process.env,
+        BASE_REF: 'main',
+        ADLC_RUNNER_PATH: '',
+        RUNNER_ENVIRONMENT: 'github-hosted',
+        ADLC_SIGNED_RUNNER_POOL: '',
+        ...scenarioEnv,
+      },
     });
     return {
       status: result.status ?? 1,
@@ -161,7 +172,11 @@ test('signed mode reports a clear error when ADLC_RUNNER_PATH is absent on the r
   const result = runBootstrapScenario({
     baseConfig: signedBase,
     headConfig: signedBase,
-    env: { ADLC_RUNNER_PATH: missingRunner },
+    env: {
+      ADLC_RUNNER_PATH: missingRunner,
+      RUNNER_ENVIRONMENT: 'self-hosted',
+      ADLC_SIGNED_RUNNER_POOL: '1',
+    },
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /ADLC_RUNNER_PATH .* does not exist/);
@@ -178,7 +193,11 @@ test('signed mode rejects runner hash mismatches before executing the runner', (
     baseConfig: signedBase,
     headConfig: signedBase,
     mutateHead: (dir) => writeFileSync(join(dir, 'runner.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o700 }),
-    env: (dir) => ({ ADLC_RUNNER_PATH: join(dir, 'runner.sh') }),
+    env: (dir) => ({
+      ADLC_RUNNER_PATH: join(dir, 'runner.sh'),
+      RUNNER_ENVIRONMENT: 'self-hosted',
+      ADLC_SIGNED_RUNNER_POOL: '1',
+    }),
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256/);
@@ -266,6 +285,40 @@ test('existing signer roles cannot change in a PR', () => {
   assert.match(result.stderr, /signers\.alice\.role cannot change trusted value/);
 });
 
+test('existing signer role arrays cannot gain approver roles in a PR', () => {
+  const baseConfig = {
+    ...BASE_UNSIGNED,
+    signers: {
+      alice: { roles: ['builder'] },
+    },
+  };
+  const result = runBootstrapScenario({
+    baseConfig,
+    headConfig: {
+      ...baseConfig,
+      signers: {
+        alice: { roles: ['builder', 'approver'] },
+      },
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /existing signer alice roles cannot change/);
+});
+
+test('unchanged existing signer role arrays pass validation', () => {
+  const baseConfig = {
+    ...BASE_UNSIGNED,
+    signers: {
+      alice: { roles: ['builder'] },
+    },
+  };
+  const result = runBootstrapScenario({
+    baseConfig,
+    headConfig: baseConfig,
+  });
+  assert.equal(result.status, 0);
+});
+
 test('HEAD config must acknowledge the new-rail limitation', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,
@@ -286,4 +339,22 @@ test('first bootstrap mode rejects pre-populated manifest evidence', () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
+});
+
+test('signed mode requires the dedicated self-hosted runner pool sentinel', () => {
+  const signedBase = {
+    ...BASE_UNSIGNED,
+    securityMode: 'signed',
+    runnerBinarySha256: '0'.repeat(64),
+  };
+  const result = runBootstrapScenario({
+    baseConfig: signedBase,
+    headConfig: signedBase,
+    env: {
+      ADLC_RUNNER_PATH: join(tmpdir(), 'adlc-runner-does-not-exist'),
+      RUNNER_ENVIRONMENT: 'github-hosted',
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /dedicated adlc-signed self-hosted runner pool/);
 });
