@@ -10,7 +10,9 @@
 #
 # It reads every rail glob declared in the trusted base .adlc/tickets.json and
 # runs the diff-based `adlc rails-guard` gate against the PR base. It no-ops when
-# no base rails are declared. Make this a required check in branch protection.
+# no base rails are declared. Configure it as a required check only for
+# base-branch-declared rail protection after acknowledging the SECURITY LIMITATION
+# below.
 #
 # SECURITY LIMITATION: this template does not protect rails introduced for the
 # first time in the same PR. New rails are enforced only after they land on the
