@@ -96,6 +96,15 @@ test('trust root: PR edits .adlc/manifest.jsonl while base rails exist → exit 
   assert.equal(code, 2);
 });
 
+test('trust root: PR edits .adlc/config.json even when no ticket rails exist → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'config.json'), '{"skipRailEnforcement":true}\n'),
+  });
+  assert.equal(code, 2);
+});
+
 test('legit: a non-rail change with base rails → exit 0', () => {
   const code = runScenario({
     baseTickets: RAILED,

@@ -278,14 +278,19 @@ jobs:
               process.exit(0);
             }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
+            const trustRoots = [".adlc/tickets.json", ".adlc/config.json", ".adlc/manifest.jsonl"];
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
             // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.
             const ls = git(["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], "git ls-tree base tickets");
             if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
-            if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + base + " — no frozen ticket rails."); process.exit(0); }
-            const show = git(["show", base + ":.adlc/tickets.json"], "git show base tickets");
-            if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
+            let show = { stdout: "{\"tickets\":[]}", status: 0 };
+            if (!ls.stdout.trim()) {
+              console.log("no .adlc/tickets.json at " + base + " — protecting ADLC trust roots only.");
+            } else {
+              show = git(["show", base + ":.adlc/tickets.json"], "git show base tickets");
+              if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
+            }
             let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
             if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.tickets)) fail("base tickets not in { tickets: [...] } shape");
             const rails = [];
@@ -294,10 +299,9 @@ jobs:
               if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array base rails");
               for (const r of t.rails ?? []) { if (typeof r !== "string") fail("non-string base rail"); rails.push(r); }
             }
-            // Trust roots are frozen once rails exist: ticket rails, security
-            // config, and manifest evidence all require explicit rail review.
-            if (rails.length) rails.push(".adlc/tickets.json", ".adlc/config.json", ".adlc/manifest.jsonl");
-            const u = [...new Set(rails)];
+            // Trust roots are frozen once the base is bootstrapped: ticket rails,
+            // security config, and manifest evidence all require explicit rail review.
+            const u = [...new Set([...rails, ...trustRoots])];
             if (!u.length) { console.log("no rails declared at base — nothing frozen."); process.exit(0); }
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
             const res = spawnSync("adlc", argv, { stdio: "inherit", timeout: 120000 });

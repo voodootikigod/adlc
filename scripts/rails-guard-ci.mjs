@@ -28,36 +28,52 @@ function fail(msg) {
   process.exit(1);
 }
 
+function git(args, label) {
+  const result = spawnSync('git', args, { encoding: 'utf8', timeout: 60000 });
+  if (result.error) fail(`${label} failed: ${result.error.message}`);
+  if (result.signal) fail(`${label} timed out or was killed by ${result.signal}`);
+  return result;
+}
+
 // First confirm the base REF resolves. `git show <ref>:<path>` returns non-zero
 // for BOTH "ref does not resolve" and "path absent at ref" — conflating them
 // would fail OPEN (an unfetched/typo'd base would look like "no rails"). An
 // unresolvable base means rails cannot be verified → fail closed.
-const ref = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], {
-  encoding: 'utf8',
-});
+const ref = git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], 'git rev-parse base');
 if (ref.status !== 0) {
   fail(`base ref '${base}' does not resolve — rails cannot be verified. Fetch it (or pass the correct base).`);
 }
+
+const configLs = git(['ls-tree', '--name-only', base, '--', '.adlc/config.json'], 'git ls-tree base config');
+if (configLs.status !== 0) {
+  fail(`git ls-tree failed for '${base}' config (operational error) — failing closed.`);
+}
+const baseHasConfig = Boolean(configLs.stdout.trim());
 
 // Distinguish "the file is genuinely absent at base" from an operational git
 // error. `git ls-tree` lists the path in the base tree: a non-zero status is an
 // operational failure (lock, IO) → fail closed; empty output means the file is
 // truly absent → nothing was frozen. Only `git show` an existing file, so a
 // failure THERE is also operational → fail closed (never read as "no rails").
-const ls = spawnSync('git', ['ls-tree', '--name-only', base, '--', '.adlc/tickets.json'], {
-  encoding: 'utf8',
-});
+const ls = git(['ls-tree', '--name-only', base, '--', '.adlc/tickets.json'], 'git ls-tree base tickets');
 if (ls.status !== 0) {
   fail(`git ls-tree failed for '${base}' (operational error) — failing closed.`);
 }
 if (!ls.stdout.trim()) {
-  console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
-  process.exit(0);
+  if (baseHasConfig) {
+    console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — protecting ADLC trust roots only.`);
+  } else {
+    console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
+    process.exit(0);
+  }
 }
 
-const show = spawnSync('git', ['show', `${base}:.adlc/tickets.json`], { encoding: 'utf8' });
-if (show.status !== 0) {
-  fail(`git show failed for an existing base ticket file (operational error) — failing closed.`);
+let show = { stdout: '{"tickets":[]}', status: 0 };
+if (ls.stdout.trim()) {
+  show = git(['show', `${base}:.adlc/tickets.json`], 'git show base tickets');
+  if (show.status !== 0) {
+    fail(`git show failed for an existing base ticket file (operational error) — failing closed.`);
+  }
 }
 
 let data;
@@ -80,13 +96,12 @@ for (const t of data.tickets) {
   }
 }
 
-const unique = [...new Set(rails)];
+const trustRoots = rails.length || baseHasConfig ? ['.adlc/tickets.json', '.adlc/config.json', '.adlc/manifest.jsonl'] : [];
+const unique = [...new Set([...rails, ...trustRoots])];
 if (unique.length === 0) {
   console.log(`rails-guard-ci: no rails declared at ${base} — nothing frozen.`);
   process.exit(0);
 }
-// Once base rails exist, the ADLC trust roots are protected too.
-unique.push('.adlc/tickets.json', '.adlc/config.json', '.adlc/manifest.jsonl');
 
 const argv = ['--base', base, ...unique.flatMap((r) => ['--rails', r])];
 
@@ -100,8 +115,9 @@ const localBin = join(
   'rails-guard.mjs'
 );
 const result = existsSync(localBin)
-  ? spawnSync(process.execPath, [localBin, ...argv], { stdio: 'inherit' })
-  : spawnSync('adlc', ['rails-guard', ...argv], { stdio: 'inherit' });
+  ? spawnSync(process.execPath, [localBin, ...argv], { stdio: 'inherit', timeout: 120000 })
+  : spawnSync('adlc', ['rails-guard', ...argv], { stdio: 'inherit', timeout: 120000 });
 
 if (result.error) fail(`could not run rails-guard: ${result.error.message}`);
+if (result.signal) fail(`rails-guard timed out or was killed by ${result.signal}`);
 process.exit(typeof result.status === 'number' ? result.status : 1);

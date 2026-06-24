@@ -49,7 +49,8 @@ function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
   assert.match(script, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
-  assert.match(script, /rails\.push\("\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl"\)/);
+  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl"\]/);
+  assert.match(script, /new Set\(\[...rails, ...trustRoots\]\)/);
   return script;
 }
 
@@ -553,14 +554,48 @@ test('rail-freeze gate fails closed when base .adlc exists without config acknow
   assert.match(result.stderr, /base \.adlc\/config\.json is absent/);
 });
 
-test('rail-freeze gate exits 0 when base tickets declare no rails', () => {
-  const result = runRailFreezeScenario({
-    baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
-    headConfig: BASE_UNSIGNED,
-  });
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /no rails declared at base/);
+test('rail-freeze gate protects trust roots when base tickets declare no rails', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'rg-adlc-bin-'));
+  try {
+    const binDir = join(tmp, 'bin');
+    const capturePath = join(tmp, 'argv.json');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, 'adlc'),
+      [
+        '#!/usr/bin/env node',
+        "const { writeFileSync } = require('fs');",
+        'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));',
+        'process.exit(0);',
+        '',
+      ].join('\n'),
+      { mode: 0o700 }
+    );
+    const result = runRailFreezeScenario({
+      baseConfig: BASE_UNSIGNED,
+      baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+      headConfig: BASE_UNSIGNED,
+      env: {
+        PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
+        CAPTURE_PATH: capturePath,
+      },
+    });
+    assert.equal(result.status, 0);
+    const argv = JSON.parse(readFileSync(capturePath, 'utf8'));
+    assert.deepEqual(argv, [
+      'rails-guard',
+      '--base',
+      'origin/main',
+      '--rails',
+      '.adlc/tickets.json',
+      '--rails',
+      '.adlc/config.json',
+      '--rails',
+      '.adlc/manifest.jsonl',
+    ]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
