@@ -20,13 +20,17 @@ function extractNodeScript(marker) {
   const startToken = "node -e '\n";
   const start = workflow.indexOf(startToken, markerAt);
   assert.notEqual(start, -1, `${marker} node -e block exists`);
+  const nodeLineStart = workflow.lastIndexOf('\n', start) + 1;
+  const nodeIndent = workflow.slice(nodeLineStart, start);
+  assert.match(nodeIndent, /^\s+$/, `${marker} node -e line has YAML indentation`);
   const codeStart = start + startToken.length;
-  const end = workflow.indexOf("\n          '", codeStart);
-  assert.notEqual(end, -1, `${marker} node -e block terminates`);
-  const script = workflow
-    .slice(codeStart, end)
-    .split('\n')
-    .map((line) => (line.startsWith('            ') ? line.slice(12) : line))
+  const lines = workflow.slice(codeStart).split('\n');
+  const closeAt = lines.findIndex((line) => line === `${nodeIndent}'`);
+  assert.notEqual(closeAt, -1, `${marker} node -e block terminates at matching indentation`);
+  const scriptIndent = `${nodeIndent}  `;
+  const script = lines
+    .slice(0, closeAt)
+    .map((line) => (line.startsWith(scriptIndent) ? line.slice(scriptIndent.length) : line))
     .join('\n');
   assert.ok(script.length > 500, `${marker} extraction produced a non-trivial script`);
   assert.doesNotThrow(() => new vm.Script(script), `${marker} extraction produced valid JavaScript`);
@@ -379,6 +383,28 @@ test('existing signer roles cannot change in a PR', () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /signers\.alice\.role cannot change trusted value/);
+});
+
+test('existing signer keys cannot be deleted in a PR', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      signers: {},
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /signers\.alice must remain an object/);
+});
+
+test('existing signers field cannot be removed in a PR', () => {
+  const { signers: _signers, ...headConfig } = BASE_UNSIGNED;
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /signers must remain an object/);
 });
 
 test('existing signer role arrays cannot gain approver roles in a PR', () => {

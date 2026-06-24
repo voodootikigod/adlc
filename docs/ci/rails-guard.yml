@@ -179,6 +179,7 @@ jobs:
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — bootstrap cannot be verified");
             const baseAdlc = git(["ls-tree", "--name-only", base, "--", ".adlc"], "git ls-tree base .adlc");
             const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
+            if (baseAdlc.status !== 0) fail("git ls-tree failed for " + base + " .adlc (operational) — failing closed");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
               if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
@@ -268,6 +269,7 @@ jobs:
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
             const baseAdlc = git(["ls-tree", "--name-only", base, "--", ".adlc"], "git ls-tree base .adlc");
             const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
+            if (baseAdlc.status !== 0) fail("git ls-tree failed for " + base + " .adlc (operational) — failing closed");
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
               const fs = require("fs");
