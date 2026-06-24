@@ -49,7 +49,7 @@ function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
   assert.match(script, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
-  assert.match(script, /rails\.push\("\.adlc\/tickets\.json"\)/);
+  assert.match(script, /rails\.push\("\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl"\)/);
   return script;
 }
 
@@ -599,6 +599,10 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
       'src/critical/**',
       '--rails',
       '.adlc/tickets.json',
+      '--rails',
+      '.adlc/config.json',
+      '--rails',
+      '.adlc/manifest.jsonl',
     ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

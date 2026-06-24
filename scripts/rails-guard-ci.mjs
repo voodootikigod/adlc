@@ -7,9 +7,9 @@
 // The rail set is read from the TRUSTED BASE version of .adlc/tickets.json (via
 // `git show <base>:…`), never the PR's working tree — otherwise a PR could edit
 // the ticket file to remove rails and self-disable the gate in the same change.
-// Once base rails exist, .adlc/tickets.json itself is also a protected rail, so a
-// PR that edits the rail set is flagged for review. Malformed base tickets fail
-// closed.
+// Once base rails exist, the ADLC trust roots are also protected rails, so a PR
+// that edits the rail set, security config, or manifest evidence is flagged for
+// review. Malformed base tickets fail closed.
 //
 //   node scripts/rails-guard-ci.mjs [base-ref]      (default base: origin/main)
 //
@@ -85,8 +85,8 @@ if (unique.length === 0) {
   console.log(`rails-guard-ci: no rails declared at ${base} — nothing frozen.`);
   process.exit(0);
 }
-// Once base rails exist, the ticket file itself is a protected trust root.
-unique.push('.adlc/tickets.json');
+// Once base rails exist, the ADLC trust roots are protected too.
+unique.push('.adlc/tickets.json', '.adlc/config.json', '.adlc/manifest.jsonl');
 
 const argv = ['--base', base, ...unique.flatMap((r) => ['--rails', r])];
 

@@ -78,6 +78,24 @@ test('trust root: PR edits .adlc/tickets.json while base rails exist → exit 2'
   assert.equal(code, 2);
 });
 
+test('trust root: PR edits .adlc/config.json while base rails exist → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'config.json'), '{"securityMode":"unsigned-fallback"}\n'),
+  });
+  assert.equal(code, 2);
+});
+
+test('trust root: PR edits .adlc/manifest.jsonl while base rails exist → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), '{"evidence":"changed"}\n'),
+  });
+  assert.equal(code, 2);
+});
+
 test('legit: a non-rail change with base rails → exit 0', () => {
   const code = runScenario({
     baseTickets: RAILED,
