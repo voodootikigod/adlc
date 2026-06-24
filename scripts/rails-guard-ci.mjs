@@ -35,6 +35,11 @@ function fail(msg) {
   process.exit(1);
 }
 
+function deny(msg) {
+  console.error(`rails-guard-ci: ${msg}`);
+  process.exit(2);
+}
+
 function git(args, label) {
   const result = spawnSync('git', args, { encoding: 'utf8', timeout: 60000 });
   if (result.error) fail(`${label} failed: ${result.error.message}`);
@@ -63,6 +68,35 @@ function stable(value) {
     return JSON.stringify(Object.fromEntries(Object.keys(value).sort().map((key) => [key, JSON.parse(stable(value[key]))])));
   }
   return JSON.stringify(value);
+}
+
+function validateTicketsEnvelope(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.tickets)) {
+    fail(`${label} .adlc/tickets.json is not in the { "tickets": [...] } shape — failing closed.`);
+  }
+  const seen = new Set();
+  for (const t of value.tickets) {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) fail(`a ${label} ticket entry is not an object — failing closed.`);
+    if (typeof t.id !== 'string' || !t.id) fail(`a ${label} ticket is missing a string id — failing closed.`);
+    if (seen.has(t.id)) fail(`${label} .adlc/tickets.json has duplicate ticket id ${t.id} — failing closed.`);
+    seen.add(t.id);
+    if (t.rails !== undefined && !Array.isArray(t.rails)) fail(`a ${label} ticket has a non-array "rails" field — failing closed.`);
+    for (const r of t.rails ?? []) {
+      if (typeof r !== 'string') fail(`a ${label} ticket has a non-string rail entry — failing closed.`);
+    }
+  }
+  return value.tickets;
+}
+
+function assertBaseTicketContractsPreserved(baseTickets, headTickets) {
+  const headById = new Map(headTickets.map((ticket) => [ticket.id, ticket]));
+  for (const baseTicket of baseTickets) {
+    const headTicket = headById.get(baseTicket.id);
+    if (!headTicket) deny(`base ticket ${baseTicket.id} cannot be removed from .adlc/tickets.json in a PR`);
+    if (stable(headTicket) !== stable(baseTicket)) {
+      deny(`base ticket ${baseTicket.id} contract cannot change in .adlc/tickets.json in a PR`);
+    }
+  }
 }
 
 function assertArraySuperset(name, trustedValue, headValue) {
@@ -95,6 +129,17 @@ function validateNewSigners(trustedSigners, headSigners) {
   }
 }
 
+function rejectNewSigners(trustedSigners, headSigners) {
+  if (!headSigners || typeof headSigners !== 'object' || Array.isArray(headSigners)) {
+    fail('signers must remain an object');
+  }
+  for (const key of Object.keys(headSigners)) {
+    if (!trustedSigners || !Object.prototype.hasOwnProperty.call(trustedSigners, key)) {
+      fail(`new signer ${key} requires the protected-base admin ceremony`);
+    }
+  }
+}
+
 function validateConfigIntegrity() {
   if (!baseHasConfig) return;
   const baseConfig = git(['show', `${base}:.adlc/config.json`], 'git show base config');
@@ -111,6 +156,9 @@ function validateConfigIntegrity() {
   }
   if (head.acknowledgedNewRailBypass !== true) {
     fail('missing acknowledgedNewRailBypass: true');
+  }
+  if (trusted.trustedCodeownersAttested === true && head.trustedCodeownersAttested !== true) {
+    fail('trustedCodeownersAttested cannot be removed in a PR');
   }
   if (!['signed', 'unsigned-fallback'].includes(trusted.securityMode)) {
     fail('base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety');
@@ -156,7 +204,7 @@ function validateConfigIntegrity() {
       }
     }
   }
-  if (head.signers !== undefined) validateNewSigners(trusted.signers ?? {}, head.signers);
+  if (head.signers !== undefined) rejectNewSigners(trusted.signers ?? {}, head.signers);
   assertArraySuperset('revokedKeys', trusted.revokedKeys, head.revokedKeys);
   assertArraySuperset('securitySensitivePatterns', trusted.securitySensitivePatterns, head.securitySensitivePatterns);
   if (typeof trusted.maxBundleAgeDays === 'number' && (typeof head.maxBundleAgeDays !== 'number' || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) {
@@ -215,25 +263,44 @@ try {
 } catch (e) {
   fail(`cannot parse ${base}:.adlc/tickets.json (${e.message}) — failing closed.`);
 }
-if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.tickets)) {
-  fail(`${base}:.adlc/tickets.json is not in the { "tickets": [...] } shape — failing closed.`);
-}
+const baseTickets = validateTicketsEnvelope(data, 'base');
 
 const rails = [];
-for (const t of data.tickets) {
-  if (!t || typeof t !== 'object' || Array.isArray(t)) fail('a base ticket entry is not an object — failing closed.');
-  if (t.rails !== undefined && !Array.isArray(t.rails)) fail('a base ticket has a non-array "rails" field — failing closed.');
+for (const t of baseTickets) {
   for (const r of t.rails ?? []) {
-    if (typeof r !== 'string') fail('a base ticket has a non-string rail entry — failing closed.');
     rails.push(r);
   }
 }
 
-const trustRoots = rails.length || baseHasConfig
+if (ls.stdout.trim()) {
+  if (!existsSync('.adlc/tickets.json')) {
+    deny('.adlc/tickets.json exists at base but is absent at HEAD');
+  }
+  const headTickets = parseJson(readFileSync('.adlc/tickets.json', 'utf8'), 'head .adlc/tickets.json');
+  assertBaseTicketContractsPreserved(baseTickets, validateTicketsEnvelope(headTickets, 'head'));
+}
+
+const manifestLs = git(['ls-tree', '--name-only', base, '--', '.adlc/manifest.jsonl'], 'git ls-tree base manifest');
+if (manifestLs.status !== 0) {
+  fail(`git ls-tree failed for '${base}' manifest (operational error) — failing closed.`);
+}
+if (manifestLs.stdout.trim()) {
+  if (!existsSync('.adlc/manifest.jsonl')) {
+    deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
+  }
+  const baseManifest = git(['show', `${base}:.adlc/manifest.jsonl`], 'git show base manifest');
+  if (baseManifest.status !== 0) fail('git show failed for an existing base manifest (operational error) — failing closed.');
+  const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
+  if (!headManifest.startsWith(baseManifest.stdout)) {
+    deny('.adlc/manifest.jsonl must be append-only in PRs');
+  }
+} else if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
+  deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
+}
+
+const immutableTrustRoots = rails.length || baseHasConfig
   ? [
-      '.adlc/tickets.json',
       '.adlc/config.json',
-      '.adlc/manifest.jsonl',
       '.github/workflows/adlc-rails-guard.yml',
       'CODEOWNERS',
       '.github/CODEOWNERS',
@@ -243,10 +310,20 @@ const trustRoots = rails.length || baseHasConfig
       'scripts/test/rails-guard-workflow-hashes.json',
     ]
   : [];
-const unique = [...new Set([...rails, ...trustRoots])];
+const unique = [...new Set([...rails, ...immutableTrustRoots])];
 if (unique.length === 0) {
   console.log(`rails-guard-ci: no rails declared at ${base} — nothing frozen.`);
   process.exit(0);
+}
+
+if (immutableTrustRoots.length) {
+  const trustRootDiff = git(['diff', '--name-status', '-M', `${base}...HEAD`, '--', ...immutableTrustRoots], 'git diff trust roots');
+  if (trustRootDiff.status !== 0) {
+    fail('git diff trust roots failed (operational error) — failing closed.');
+  }
+  if (trustRootDiff.stdout.trim()) {
+    deny(`ADLC trust root changed, deleted, or renamed:\n${trustRootDiff.stdout.trim()}`);
+  }
 }
 
 const argv = ['--base', base, ...unique.flatMap((r) => ['--rails', r])];

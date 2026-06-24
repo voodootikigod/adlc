@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,8 +59,8 @@ function extractRailFreezeScript() {
   const script = extractNodeScript('- name: Rail-freeze gate');
   assert.match(script, /adlc rails-guard/);
   assert.match(script, /bootstrap validation was handled by the previous step/);
-  assert.match(script, /const trustRoots = \["\.adlc\/tickets\.json", "\.adlc\/config\.json", "\.adlc\/manifest\.jsonl", "\.github\/workflows\/adlc-rails-guard\.yml", "CODEOWNERS", "\.github\/CODEOWNERS", "docs\/CODEOWNERS", "docs\/ci\/rails-guard\.yml", "scripts\/rails-guard-ci\.mjs", "scripts\/test\/rails-guard-workflow-hashes\.json"\]/);
-  assert.match(script, /new Set\(\[...rails, ...trustRoots\]\)/);
+  assert.match(script, /const immutableTrustRoots = \["\.adlc\/config\.json", "\.github\/workflows\/adlc-rails-guard\.yml", "CODEOWNERS", "\.github\/CODEOWNERS", "docs\/CODEOWNERS", "docs\/ci\/rails-guard\.yml", "scripts\/rails-guard-ci\.mjs", "scripts\/test\/rails-guard-workflow-hashes\.json"\]/);
+  assert.match(script, /new Set\(\[...rails, ...immutableTrustRoots\]\)/);
   return script;
 }
 
@@ -188,6 +188,7 @@ function runRailFreezeScenario({ baseConfig = BASE_UNSIGNED, baseTickets, headCo
 
 const BASE_UNSIGNED = {
   acknowledgedNewRailBypass: true,
+  trustedCodeownersAttested: true,
   securityMode: 'unsigned-fallback',
   signers: {
     alice: { role: 'builder' },
@@ -203,6 +204,24 @@ test('clean unsigned-fallback PR with unchanged config exits 0', () => {
     headConfig: BASE_UNSIGNED,
   });
   assert.equal(result.status, 0);
+});
+
+test('bootstrap step requires trusted CODEOWNERS attestation on base config', () => {
+  const result = runBootstrapScenario({
+    baseConfig: { ...BASE_UNSIGNED, trustedCodeownersAttested: false },
+    headConfig: BASE_UNSIGNED,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /trustedCodeownersAttested: true/);
+});
+
+test('bootstrap step rejects trusted CODEOWNERS attestation removal in PR', () => {
+  const result = runBootstrapScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: { ...BASE_UNSIGNED, trustedCodeownersAttested: false },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /trustedCodeownersAttested cannot be removed/);
 });
 
 test('bootstrap step requires CODEOWNERS protection for the deployed workflow', () => {
@@ -343,11 +362,11 @@ test('bootstrap step rejects wildcard no-owner override after catch-all owners',
 
 test('new signer entries reject undeclared properties', () => {
   const result = runBootstrapScenario({
-    baseConfig: BASE_UNSIGNED,
+    baseConfig: null,
+    withCodeowners: false,
     headConfig: {
       ...BASE_UNSIGNED,
       signers: {
-        ...BASE_UNSIGNED.signers,
         bob: { role: 'critic', canApproveIf: true },
       },
     },
@@ -358,11 +377,11 @@ test('new signer entries reject undeclared properties', () => {
 
 test('new signer entries must declare role information', () => {
   const result = runBootstrapScenario({
-    baseConfig: BASE_UNSIGNED,
+    baseConfig: null,
+    withCodeowners: false,
     headConfig: {
       ...BASE_UNSIGNED,
       signers: {
-        ...BASE_UNSIGNED.signers,
         bob: {},
       },
     },
@@ -373,11 +392,11 @@ test('new signer entries must declare role information', () => {
 
 test('new signer entries may add only builder or critic roles', () => {
   const result = runBootstrapScenario({
-    baseConfig: BASE_UNSIGNED,
+    baseConfig: null,
+    withCodeowners: false,
     headConfig: {
       ...BASE_UNSIGNED,
       signers: {
-        ...BASE_UNSIGNED.signers,
         bob: { roles: ['builder', 'critic'] },
       },
     },
@@ -385,13 +404,28 @@ test('new signer entries may add only builder or critic roles', () => {
   assert.equal(result.status, 0);
 });
 
-test('new approver signer roles require the protected-base admin ceremony', () => {
+test('post-bootstrap signer additions require the protected-base admin ceremony', () => {
   const result = runBootstrapScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: {
       ...BASE_UNSIGNED,
       signers: {
         ...BASE_UNSIGNED.signers,
+        bob: { role: 'critic' },
+      },
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /new signer bob requires the protected-base admin ceremony/);
+});
+
+test('new approver signer roles require the protected-base admin ceremony', () => {
+  const result = runBootstrapScenario({
+    baseConfig: null,
+    withCodeowners: false,
+    headConfig: {
+      ...BASE_UNSIGNED,
+      signers: {
         bob: { role: 'approver' },
       },
     },
@@ -795,11 +829,7 @@ test('rail-freeze gate protects trust roots when base tickets declare no rails',
       '--base',
       'origin/main',
       '--rails',
-      '.adlc/tickets.json',
-      '--rails',
       '.adlc/config.json',
-      '--rails',
-      '.adlc/manifest.jsonl',
       '--rails',
       '.github/workflows/adlc-rails-guard.yml',
       '--rails',
@@ -819,6 +849,122 @@ test('rail-freeze gate protects trust roots when base tickets declare no rails',
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('rail-freeze gate allows adding a new ticket while preserving existing tickets', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) =>
+      writeJson(join(dir, '.adlc', 'tickets.json'), {
+        tickets: [
+          { id: 'T1', rails: ['src/critical/**'] },
+          { id: 'T2', rails: [] },
+        ],
+      }),
+  });
+  assert.equal(result.status, 0);
+});
+
+test('rail-freeze gate rejects ticket updates that remove base rails', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) => writeJson(join(dir, '.adlc', 'tickets.json'), { tickets: [{ id: 'T1', rails: [] }] }),
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /contract cannot change in \.adlc\/tickets\.json/);
+});
+
+test('rail-freeze gate rejects existing ticket contract changes that preserve rails', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', triageClass: 'Substantial', triageCommit: 'abc123', rails: ['src/critical/**'] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) =>
+      writeJson(join(dir, '.adlc', 'tickets.json'), {
+        tickets: [{ id: 'T1', triageClass: 'Trivial', triageCommit: 'abc123', rails: ['src/critical/**'] }],
+      }),
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /contract cannot change in \.adlc\/tickets\.json/);
+});
+
+test('rail-freeze gate rejects initial non-empty manifest evidence creation', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n'),
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /manifest\.jsonl cannot be created with evidence/);
+});
+
+test('rail-freeze gate allows append-only manifest evidence', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n'),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n{"seq":2}\n'),
+  });
+  assert.equal(result.status, 0);
+});
+
+test('rail-freeze gate rejects manifest rewrites', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n'),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":0}\n{"seq":2}\n'),
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /manifest\.jsonl must be append-only/);
+});
+
+for (const [path, renamedPath] of [
+  ['.adlc/tickets.json', 'tickets-renamed.json'],
+  ['.adlc/manifest.jsonl', 'manifest-renamed.jsonl'],
+  ['CODEOWNERS', 'CODEOWNERS.renamed'],
+  ['.github/workflows/adlc-rails-guard.yml', '.github/workflows/renamed.yml'],
+]) {
+  test(`rail-freeze gate rejects trust-root rename of ${path}`, () => {
+    const result = runRailFreezeScenario({
+      baseConfig: BASE_UNSIGNED,
+      baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+      headConfig: BASE_UNSIGNED,
+      mutateBase: (dir) => {
+        if (path !== '.adlc/tickets.json') {
+          mkdirSync(join(dir, dirname(path)), { recursive: true });
+          writeFileSync(join(dir, path), 'base\n');
+        }
+      },
+      mutateHead: (dir) => renameSync(join(dir, path), join(dir, renamedPath)),
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /ADLC trust root changed, deleted, or renamed|exists at base but is absent at HEAD/);
+  });
+
+  test(`rail-freeze gate rejects trust-root deletion of ${path}`, () => {
+    const result = runRailFreezeScenario({
+      baseConfig: BASE_UNSIGNED,
+      baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+      headConfig: BASE_UNSIGNED,
+      mutateBase: (dir) => {
+        if (path !== '.adlc/tickets.json') {
+          mkdirSync(join(dir, dirname(path)), { recursive: true });
+          writeFileSync(join(dir, path), 'base\n');
+        }
+      },
+      mutateHead: (dir) => unlinkSync(join(dir, path)),
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /ADLC trust root changed, deleted, or renamed|exists at base but is absent at HEAD/);
+  });
+}
 
 test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'rg-adlc-bin-'));
@@ -855,11 +1001,7 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
       '--rails',
       'src/critical/**',
       '--rails',
-      '.adlc/tickets.json',
-      '--rails',
       '.adlc/config.json',
-      '--rails',
-      '.adlc/manifest.jsonl',
       '--rails',
       '.github/workflows/adlc-rails-guard.yml',
       '--rails',

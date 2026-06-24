@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,7 @@ function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) 
 const RAILED = JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] });
 const VALID_CONFIG = JSON.stringify({
   acknowledgedNewRailBypass: true,
+  trustedCodeownersAttested: true,
   securityMode: 'unsigned-fallback',
   signers: { alice: { role: 'builder' } },
   revokedKeys: ['old-key'],
@@ -65,6 +66,7 @@ const VALID_CONFIG = JSON.stringify({
 });
 const SIGNED_CONFIG = JSON.stringify({
   acknowledgedNewRailBypass: true,
+  trustedCodeownersAttested: true,
   securityMode: 'signed',
   signedEvidenceRequired: true,
   runnerBinarySha256: '0'.repeat(64),
@@ -83,12 +85,34 @@ test('ATTACK: PR empties rails AND edits a formerly-frozen file → exit 2 (base
   assert.equal(code, 2);
 });
 
-test('trust root: PR edits .adlc/tickets.json while base rails exist → exit 2', () => {
+test('mutable state: PR adds a new ticket while preserving existing tickets → exit 0', () => {
   const code = runScenario({
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) =>
       writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }, { id: 'T2' }] })),
+  });
+  assert.equal(code, 0);
+});
+
+test('mutable state: PR removes a base rail from tickets → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] })),
+  });
+  assert.equal(code, 2);
+});
+
+test('mutable state: PR changes an existing ticket contract while preserving rails → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', triageClass: 'Substantial', triageCommit: 'abc123', rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'tickets.json'),
+        JSON.stringify({ tickets: [{ id: 'T1', triageClass: 'Trivial', triageCommit: 'abc123', rails: ['src/critical/**'] }] })
+      ),
   });
   assert.equal(code, 2);
 });
@@ -102,11 +126,31 @@ test('trust root: PR edits .adlc/config.json while base rails exist → exit 2',
   assert.equal(code, 2);
 });
 
-test('trust root: PR edits .adlc/manifest.jsonl while base rails exist → exit 2', () => {
+test('mutable state: PR creates manifest evidence when base has no manifest → exit 2', () => {
   const code = runScenario({
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), '{"evidence":"changed"}\n'),
+  });
+  assert.equal(code, 2);
+});
+
+test('mutable state: PR appends manifest evidence → exit 0', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
+    seedFileContents: { '.adlc/manifest.jsonl': '{"seq":1}\n' },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), '{"seq":1}\n{"seq":2}\n'),
+  });
+  assert.equal(code, 0);
+});
+
+test('mutable state: PR rewrites existing manifest evidence → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
+    seedFileContents: { '.adlc/manifest.jsonl': '{"seq":1}\n' },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), '{"seq":0}\n{"seq":2}\n'),
   });
   assert.equal(code, 2);
 });
@@ -119,6 +163,35 @@ test('trust root: PR edits deployed rails guard workflow while base rails exist 
   });
   assert.equal(code, 2);
 });
+
+for (const [path, renamedPath] of [
+  ['.adlc/tickets.json', 'tickets-renamed.json'],
+  ['.adlc/manifest.jsonl', 'manifest-renamed.jsonl'],
+  ['CODEOWNERS', 'CODEOWNERS.renamed'],
+  ['.github/workflows/adlc-rails-guard.yml', '.github/workflows/renamed.yml'],
+]) {
+  test(`trust root: PR renames ${path} → exit 2`, () => {
+    const seedFiles = ['src/critical/auth.mjs'];
+    if (path !== '.adlc/tickets.json') seedFiles.push(path);
+    const code = runScenario({
+      baseTickets: RAILED,
+      seedFiles,
+      mutate: (d) => renameSync(join(d, path), join(d, renamedPath)),
+    });
+    assert.equal(code, 2);
+  });
+
+  test(`trust root: PR deletes ${path} → exit 2`, () => {
+    const seedFiles = ['src/critical/auth.mjs'];
+    if (path !== '.adlc/tickets.json') seedFiles.push(path);
+    const code = runScenario({
+      baseTickets: RAILED,
+      seedFiles,
+      mutate: (d) => unlinkSync(join(d, path)),
+    });
+    assert.equal(code, 2);
+  });
+}
 
 test('trust root: PR edits .adlc/config.json even when no ticket rails exist → exit 2', () => {
   const code = runScenario({
@@ -157,6 +230,20 @@ test('standalone semantic gate blocks signed securityMode upgrade without ceremo
       writeFileSync(
         join(d, '.adlc', 'config.json'),
         `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), securityMode: 'signed', signedEvidenceRequired: true, runnerBinarySha256: '0'.repeat(64) })}\n`
+      ),
+  });
+  assert.equal(code, 1);
+});
+
+test('standalone semantic gate blocks trusted CODEOWNERS attestation removal → exit 1', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', 'src/app.mjs'],
+    seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
+    mutate: (d) =>
+      writeFileSync(
+        join(d, '.adlc', 'config.json'),
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), trustedCodeownersAttested: false })}\n`
       ),
   });
   assert.equal(code, 1);
@@ -246,7 +333,7 @@ test('standalone semantic gate blocks maxBundleAgeDays increase → exit 1', () 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks new approver signer grants → exit 1', () => {
+test('standalone semantic gate blocks post-bootstrap signer additions → exit 1', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
@@ -254,7 +341,7 @@ test('standalone semantic gate blocks new approver signer grants → exit 1', ()
     mutate: (d) =>
       writeFileSync(
         join(d, '.adlc', 'config.json'),
-        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: { ...JSON.parse(VALID_CONFIG).signers, bob: { role: 'approver' } } })}\n`
+        `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), signers: { ...JSON.parse(VALID_CONFIG).signers, bob: { role: 'critic' } } })}\n`
       ),
   });
   assert.equal(code, 1);
