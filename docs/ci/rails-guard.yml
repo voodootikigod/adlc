@@ -82,6 +82,8 @@ jobs:
             const path = require("path");
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
+            let runnerTmpDir = "";
+            process.on("exit", () => { if (runnerTmpDir) { try { fs.rmSync(runnerTmpDir, { recursive: true, force: true }); } catch (_) {} } });
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
             const git = (args, label) => {
               const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
@@ -160,6 +162,7 @@ jobs:
             if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
             if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
               if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
+              if (head.signers !== undefined) validateNewSigners({}, head.signers);
               console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required.");
               process.exit(0);
             }
@@ -181,8 +184,8 @@ jobs:
               const runnerBytes = fs.readFileSync(runnerPath);
               const digest = crypto.createHash("sha256").update(runnerBytes).digest("hex");
               if (digest.toLowerCase() !== trusted.runnerBinarySha256.toLowerCase()) fail("ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256");
-              const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "adlc-runner-"));
-              const runnerCopy = path.join(tmpDir, "adlc-runner");
+              runnerTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "adlc-runner-"));
+              const runnerCopy = path.join(runnerTmpDir, "adlc-runner");
               fs.writeFileSync(runnerCopy, runnerBytes, { mode: 0o500 });
               fs.chmodSync(runnerCopy, 0o500);
               const runner = spawnSync(runnerCopy, ["--version"], { encoding: "utf8", timeout: 30000 });
