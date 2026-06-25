@@ -7,9 +7,11 @@
 // The rail set is read from the TRUSTED BASE version of .adlc/tickets.json (via
 // `git show <base>:…`), never the PR's working tree — otherwise a PR could edit
 // the ticket file to remove rails and self-disable the gate in the same change.
-// Once base rails exist, the ADLC trust roots are also protected rails, so a PR
-// that edits the rail set, security config, or manifest evidence is flagged for
-// review. Malformed base tickets fail closed.
+// Once the base is bootstrapped, immutable ADLC trust roots are protected even
+// when no ticket rails exist yet. Existing base tickets must remain semantically
+// identical by id, while ordinary PRs may add new ticket entries. Manifest
+// evidence is append-only after it exists; a non-empty initial manifest cannot
+// be seeded by an ordinary PR. Malformed base tickets fail closed.
 //
 //   node scripts/rails-guard-ci.mjs [base-ref]      (default base: origin/main)
 //

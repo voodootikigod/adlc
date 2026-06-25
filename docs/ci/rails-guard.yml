@@ -9,17 +9,17 @@
 # was already frozen on the base branch.
 #
 # It reads every rail glob declared in the trusted base .adlc/tickets.json and
-# runs the diff-based `adlc rails-guard` gate against the PR base. It no-ops when
-# no base rails are declared. Configure it as a required check only for
-# base-branch-declared rail protection after acknowledging the SECURITY LIMITATION
-# below.
+# runs the diff-based `adlc rails-guard` gate against the PR base. Once
+# .adlc/config.json exists on the base branch, it also protects immutable ADLC
+# trust roots even if no ticket rails exist yet. Configure it as a required check
+# only after acknowledging the SECURITY LIMITATION below.
 #
 # SECURITY LIMITATION: this template does not protect rails introduced for the
 # first time in the same PR. New rails are enforced only after they land on the
 # base branch. Do not treat this workflow as complete rail-freeze enforcement for
 # newly frozen paths. /adlc-init must require --acknowledge-new-rail-bypass
 # (headless) or an interactive TUI confirmation before scaffolding this template
-# as a required check until Phase F new-rail-aware structural CI hardening ships.
+# as a required check until a future new-rail-aware union gate ships.
 #
 # SELF-PROTECTION REQUIREMENT: before configuring this as a required check,
 # protect the deployed .github/workflows/adlc-rails-guard.yml with CODEOWNERS or
@@ -49,6 +49,12 @@
 # Post-bootstrap signer changes are intentionally blocked in PRs because
 # .adlc/config.json is a rail trust root. Grant them through a protected-base
 # admin ceremony countersigned by an existing approver.
+#
+# Existing base ticket entries in `.adlc/tickets.json` are protected by id and
+# stable semantic content. Ordinary PRs may add new ticket entries, but they
+# cannot edit or remove existing ticket contracts. Existing `.adlc/manifest.jsonl`
+# evidence must remain append-only; when no base manifest exists, ordinary PRs
+# may create only an absent or empty manifest.
 #
 # First-time bootstrap PRs must not introduce pre-populated manifest evidence;
 # `.adlc/manifest.jsonl` must be absent or empty until reviewed post-bootstrap.
