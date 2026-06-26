@@ -7,4 +7,5 @@ node_modules/
 !.omo/evidence/p5-prompt.txt
 !.omo/evidence/p5-inputs.txt
 .adlc/*
+!.adlc/tickets.json
 !.adlc/tickets.example.json
