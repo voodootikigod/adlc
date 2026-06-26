@@ -64,7 +64,9 @@ native Claude Code extension point that fits it, fronted by a single umbrella CL
 > - `hooks/hooks.json` → `plugins/adlc-claude-code/hooks/hooks.json`
 >
 > The root `marketplace.json` `plugins[].source` field (`"./plugins/adlc-claude-code"`)
-> tells the CC marketplace protocol where to resolve `plugin.json`.
+> tells the CC marketplace protocol where to resolve `plugin.json`. The marketplace.json
+> structure is modelled on the `openai-codex` marketplace — the only confirmed working
+> non-official custom marketplace — to avoid any schema validation divergence.
 >
 > **Unverified assumption (blocks GA):** The CC marketplace resolver supports a
 > non-root subdirectory as the `source` value. The smoke test validates all file
@@ -334,23 +336,25 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   2. `/plugin install adlc@adlc` — actually installs the plugin files
   **Confirmed 2026-06-22:** plugin installed without error. CC marketplace resolver
   supports non-root `source` paths. The subdirectory-source assumption is verified.
-  **Re-test 2026-06-26 — regression and fix:** Step 1 succeeded but step 2 failed
-  with `Marketplace 'adlc' not found`. Root cause: a stale `adlc@adlc` entry in
-  `installed_plugins.json` (from a pre-restructuring local-scope worktree install at
-  version `0.1.0`) caused CC to attempt an update path rather than a fresh install;
-  this path failed to resolve the marketplace when the cached version matched the
-  current `plugin.json` version. Two fixes applied:
-  1. Removed trailing slash from `source` in `marketplace.json`
-     (`"./plugins/adlc-claude-code/"` → `"./plugins/adlc-claude-code"`) — aligns with
-     every working marketplace (openai-codex, claude-plugins-official); trailing slash
-     may cause path-resolution issues in some CC versions.
-  2. Bumped `plugin.json` version `0.1.0` → `0.2.0` — forces a cache miss past any
-     stale `0.1.0` install entries so CC performs a fresh clone and install.
-  **Troubleshooting:** If a user sees `Marketplace 'adlc' not found` after
-  `/plugin marketplace add` succeeds, the stale-cache fix is: remove the `adlc@adlc`
-  entry from `~/.claude/plugins/installed_plugins.json` and re-run `/plugin install
-  adlc@adlc`. The version bump in `plugin.json` prevents this from recurring for
-  anyone who installs fresh from the fixed commit.
+  **Re-test 2026-06-26 pass 1 — trailing-slash fix (not the root cause):** Step 1
+  succeeded but step 2 failed with `Marketplace 'adlc' not found`. Removed trailing
+  slash from `source` and bumped `plugin.json` to `0.2.0`. Still failed after merge.
+  **Re-test 2026-06-26 pass 2 — root cause found, marketplace.json structure fix:**
+  Structural comparison against the only confirmed working non-official marketplace
+  (`openai-codex`) revealed two schema divergences that likely cause silent validation
+  failure → "not found":
+  1. `owner.url` — not present in any working marketplace (`openai-codex` has only
+     `owner.name`; official marketplace has `owner.name` + `owner.email`). If the CC
+     owner schema uses `additionalProperties:false`, this extra field silently rejects
+     the whole marketplace.json.
+  2. Plugin entry missing `author` + `version` — both present in `openai-codex`; the
+     plugin entry in adlc had neither. The CC plugin-entry schema may require `author`.
+  Also removed `$schema` (openai-codex does not have it) and moved `description` into
+  `metadata: { description, version }` to match the openai-codex structure exactly.
+  Removed `category` from the plugin entry (not present in openai-codex; may be
+  invalid in custom marketplace plugin entries even if the official catalog allows it).
+  **Net change to `marketplace.json`:** matches the `openai-codex` format as closely
+  as possible. Re-test required after merge to confirm the install now succeeds.
 
 - [x] **`plugin.json` hooks field** — `plugins/adlc-claude-code/.claude-plugin/plugin.json`
   now includes `"hooks": "./hooks/hooks.json"`. Whether CC discovers `hooks/hooks.json`
