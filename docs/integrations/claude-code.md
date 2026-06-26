@@ -102,6 +102,30 @@ gate so obfuscated shell writes are still caught. Copy these into
 Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
 deliberately after reviewing a release.
 
+## Troubleshooting
+
+### `Marketplace 'adlc' not found` after a successful `/plugin marketplace add`
+
+This happens when a stale `adlc@adlc` entry exists in
+`~/.claude/plugins/installed_plugins.json` from a previous install (typically a
+local-scope install from an old commit). CC attempts an update path instead of a
+fresh install and fails to resolve the marketplace.
+
+**Fix:** Remove the stale entry and reinstall.
+
+```sh
+# 1. Open the file and delete the "adlc@adlc" key and its array value.
+$EDITOR ~/.claude/plugins/installed_plugins.json
+
+# 2. Re-run the install (marketplace add is already registered; skip if already done).
+/plugin install adlc@adlc
+```
+
+If editing JSON by hand is error-prone, you can also delete the whole file — Claude
+Code rebuilds it from scratch on the next install.
+
+---
+
 ## Lifecycle coverage
 
 | Phase | Coverage | Wired via |

@@ -63,7 +63,7 @@ native Claude Code extension point that fits it, fronted by a single umbrella CL
 > - `hooks/adlc-hook.mjs` → `plugins/adlc-claude-code/hooks/adlc-hook.mjs`
 > - `hooks/hooks.json` → `plugins/adlc-claude-code/hooks/hooks.json`
 >
-> The root `marketplace.json` `plugins[].source` field (`"./plugins/adlc-claude-code/"`)
+> The root `marketplace.json` `plugins[].source` field (`"./plugins/adlc-claude-code"`)
 > tells the CC marketplace protocol where to resolve `plugin.json`.
 >
 > **Unverified assumption (blocks GA):** The CC marketplace resolver supports a
@@ -98,7 +98,7 @@ A standard Claude Code plugin: `plugins/adlc-claude-code/.claude-plugin/plugin.j
 > (2026-06-22), there is only **one** `marketplace.json` in this repo:
 > **root `.claude-plugin/marketplace.json`** — the sole authoritative file used by
 > `/plugin marketplace add voodootikigod/adlc`; its `plugins[].source` field is
-> `"./plugins/adlc-claude-code/"`. The previously present local-dev convenience copy at
+> `"./plugins/adlc-claude-code"`. The previously present local-dev convenience copy at
 > `plugins/adlc-claude-code/.claude-plugin/marketplace.json` was removed because it
 > introduced a dual-resolution risk: a CC resolver reading the nested directory after
 > resolving `source` could re-process it, causing recursive resolution, silent
@@ -334,9 +334,23 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   2. `/plugin install adlc@adlc` — actually installs the plugin files
   **Confirmed 2026-06-22:** plugin installed without error. CC marketplace resolver
   supports non-root `source` paths. The subdirectory-source assumption is verified.
-  **Additional findings (ongoing):** hook command path resolution is still being
-  confirmed — `${PLUGIN_ROOT}` does not expand (CC likely uses execFile, not shell).
-  Diagnostic in progress to identify the correct path mechanism.
+  **Re-test 2026-06-26 — regression and fix:** Step 1 succeeded but step 2 failed
+  with `Marketplace 'adlc' not found`. Root cause: a stale `adlc@adlc` entry in
+  `installed_plugins.json` (from a pre-restructuring local-scope worktree install at
+  version `0.1.0`) caused CC to attempt an update path rather than a fresh install;
+  this path failed to resolve the marketplace when the cached version matched the
+  current `plugin.json` version. Two fixes applied:
+  1. Removed trailing slash from `source` in `marketplace.json`
+     (`"./plugins/adlc-claude-code/"` → `"./plugins/adlc-claude-code"`) — aligns with
+     every working marketplace (openai-codex, claude-plugins-official); trailing slash
+     may cause path-resolution issues in some CC versions.
+  2. Bumped `plugin.json` version `0.1.0` → `0.2.0` — forces a cache miss past any
+     stale `0.1.0` install entries so CC performs a fresh clone and install.
+  **Troubleshooting:** If a user sees `Marketplace 'adlc' not found` after
+  `/plugin marketplace add` succeeds, the stale-cache fix is: remove the `adlc@adlc`
+  entry from `~/.claude/plugins/installed_plugins.json` and re-run `/plugin install
+  adlc@adlc`. The version bump in `plugin.json` prevents this from recurring for
+  anyone who installs fresh from the fixed commit.
 
 - [x] **`plugin.json` hooks field** — `plugins/adlc-claude-code/.claude-plugin/plugin.json`
   now includes `"hooks": "./hooks/hooks.json"`. Whether CC discovers `hooks/hooks.json`
