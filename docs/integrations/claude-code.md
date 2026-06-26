@@ -10,6 +10,25 @@ the right gate without you memorizing 20 tools.
 
 ## Install
 
+**Recommended.** Install with [`plugins`](https://www.npmjs.com/package/plugins) — the
+vendor-neutral installer that reads this repo's `marketplace.json`, translates the plugin
+into the target's native format, and installs it. It auto-detects your agent tools (Claude
+Code, Cursor) and installs into each, so the same one-liner works everywhere:
+
+```sh
+npx plugins add voodootikigod/adlc           # install the plugin into your agent tool(s)
+npm install -g @adlc/cli                     # the gate toolkit the plugin shells out to
+/adlc-init                                    # bootstrap .adlc/ in your repo (once)
+```
+
+The plugin's gates shell out to the `adlc` binary, so the `@adlc/cli` toolkit is a
+prerequisite either way — the `plugins` installer handles the plugin, not the toolkit.
+Pin a specific release with `npx plugins@<version> add …`; scope the install with
+`--scope user|project|local` (default `user`) and skip the prompt with `--yes`.
+
+**Alternative — native Claude Code marketplace.** If you'd rather use Claude Code's
+built-in plugin marketplace commands, they resolve the same `marketplace.json`:
+
 ```sh
 npm install -g @adlc/cli                     # the toolkit, behind one `adlc <tool>` command
 /plugin marketplace add voodootikigod/adlc   # register this repo as a marketplace

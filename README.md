@@ -61,7 +61,19 @@ the ADLC flow.
 This repo is also a Claude Code plugin — it makes the whole lifecycle usable from
 inside the editor (phase-routing skill, ticket/distill/maintain commands, a
 prosecutor subagent, and hooks that fire the gates automatically), with no API
-keys (Claude is the model via `--prompt-only`):
+keys (Claude is the model via `--prompt-only`).
+
+**Recommended:** install with [`plugins`](https://www.npmjs.com/package/plugins), the
+vendor-neutral installer that auto-detects your agent tools (Claude Code, Cursor) and
+installs the plugin into each:
+
+```sh
+npx plugins add voodootikigod/adlc   # install the plugin into your agent tool(s)
+npm install -g @adlc/cli             # the gate toolkit the plugin shells out to
+/adlc-init                           # bootstrap .adlc/ in your repo (once)
+```
+
+Already using Claude Code's native plugin marketplace? That path still works:
 
 ```sh
 npm install -g @adlc/cli
@@ -84,7 +96,7 @@ See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** f
 | `.claude/commands/` | Maintainer commands for this repo (release workflow) |
 | `scripts/` | Release, smoke test, and CI helper scripts (not published; run by `npm test` and CI) |
 | `.adlc/` | Runtime data directory (tickets, gate evidence — gitignored except example) |
-| `.claude-plugin/` | Repo-root marketplace manifest (`marketplace.json`) used by `/plugin marketplace add voodootikigod/adlc`. See [ADR 0003](./docs/adr/0003-adlc-claude-code-plugin.md) for the subdirectory-source assumption and Pre-GA checklist. |
+| `.claude-plugin/` | Repo-root marketplace manifest (`marketplace.json`) — the index `npx plugins add voodootikigod/adlc` (and the native `/plugin marketplace add voodootikigod/adlc`) read to resolve the plugin. See [ADR 0003](./docs/adr/0003-adlc-claude-code-plugin.md) for the subdirectory-source assumption and Pre-GA checklist. |
 
 ## Design principles
 
