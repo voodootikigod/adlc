@@ -60,8 +60,8 @@ if (unexpectedFiles.length > 0) {
 if (!rootMarketplace.name) fail('root .claude-plugin/marketplace.json missing "name" field');
 const rootEntry = rootMarketplace.plugins?.find((p) => p.name === 'adlc');
 if (!rootEntry) fail('root .claude-plugin/marketplace.json missing plugin entry with name "adlc"');
-if (rootEntry.source !== './plugins/adlc-claude-code/') {
-  fail(`root .claude-plugin/marketplace.json plugin entry "source" must be "./plugins/adlc-claude-code/" (got ${JSON.stringify(rootEntry.source)})`);
+if (rootEntry.source !== './plugins/adlc-claude-code') {
+  fail(`root .claude-plugin/marketplace.json plugin entry "source" must be "./plugins/adlc-claude-code" (got ${JSON.stringify(rootEntry.source)})`);
 }
 
 // Guard: nested plugins/adlc-claude-code/.claude-plugin/ must contain EXACTLY plugin.json
@@ -401,9 +401,9 @@ if (!skillSource.includes('ADLC_CC_SENTINEL_PHASE_ROUTER_V1')) {
 // live marketplace install behavior. Two unverified assumptions remain (see Pre-GA
 // checklist in docs/adr/0003-adlc-claude-code-plugin.md):
 //
-//   Pre-GA "Live marketplace install test": CC marketplace resolver is assumed to support
-//      "source": "./plugins/adlc-claude-code/" — this is unverified. A live
-//      `/plugin marketplace add voodootikigod/adlc` test is required before GA.
+//   Pre-GA "Live marketplace install test": RESOLVED. Source path uses no trailing slash
+//      ("./plugins/adlc-claude-code"); plugin version bumped to 0.2.0 to prevent stale-cache
+//      re-install failures. See docs/adr/0003-adlc-claude-code-plugin.md for full account.
 //
 //   Pre-GA resolved concern (pass 14). Dual marketplace.json: The nested
 //      plugins/adlc-claude-code/.claude-plugin/marketplace.json was removed in pass 14.
@@ -431,7 +431,7 @@ console.log(JSON.stringify({
   skills: ['adlc/SKILL.md'],
   docs: requiredDocs,
   warnings: [
-    'RESOLVED (live install 2026-06-22 — marketplace resolver): CC marketplace resolver supports non-root source "./plugins/adlc-claude-code/". Plugin installed without error. See docs/adr/0003-adlc-claude-code-plugin.md.',
+    'RESOLVED (live install 2026-06-22 / fix 2026-06-26): CC marketplace resolver supports non-root source. Trailing slash removed from source path ("./plugins/adlc-claude-code/" → "./plugins/adlc-claude-code") and plugin.json bumped to 0.2.0 to fix stale-cache regression on re-install. See docs/adr/0003-adlc-claude-code-plugin.md.',
     'RESOLVED (pass 14 — dual marketplace.json): Nested plugins/adlc-claude-code/.claude-plugin/marketplace.json removed. Only the root .claude-plugin/marketplace.json now exists. Dual-resolution risk eliminated.',
     'RESOLVED (live install 2026-06-22 — hook CWD): CC runs hooks with CWD = user project dir (not plugin install dir). Hook commands use node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs <mode> — CC injects CLAUDE_PLUGIN_ROOT as the absolute plugin install path. Confirmed correct by research across 20+ production CC plugins. See docs/integrations/claude-code-plugin-hooks-investigation.md.',
     'RESOLVED (live install 2026-06-22 — plugin.json extra fields): CC schema uses additionalProperties:false; hooks/commands/agents/skills fields removed from plugin.json. CC discovers these assets by filesystem convention. See docs/adr/0003-adlc-claude-code-plugin.md.',
