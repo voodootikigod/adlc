@@ -391,6 +391,35 @@ test('(multi-root symlink) a NEW file under a symlinked root, in a frozen glob, 
   } finally { cleanup(repoA); cleanup(repoB); }
 });
 
+test('(multi-root relative) a RELATIVE ../ traversal into a sibling root rail is denied', () => {
+  // Gemini caught this: resolveRoot skipped ownership for relative paths, so a
+  // relative ../sibling/rail edit was checked against roots[0] (wrong root) -> allow.
+  const tmp = mkdtempSync(join(tmpdir(), 'adlc-ws-'));
+  const fe = join(tmp, 'frontend'); // roots[0], uninitialized
+  const be = join(tmp, 'backend');  // has the active rail
+  mkdirSync(fe, { recursive: true });
+  mkdirSync(join(be, '.adlc'), { recursive: true });
+  writeFileSync(join(be, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'x', rails: ['src/auth.js'] }] }));
+  try {
+    const w = (fp) => ({ tool_name: 'Write', tool_input: { file_path: fp }, workspace_roots: [fe, be] });
+    assert.equal(decide(w('../backend/src/auth.js'), { env: env() }).permission, 'deny', 'relative traversal into a sibling rail must deny');
+    assert.equal(decide(w('../backend/src/ok.js'), { env: env() }).permission, 'allow', 'relative non-rail must allow');
+    assert.equal(decide(w('src/app.js'), { env: env() }).permission, 'allow', 'frontend-local edit (inactive root) must allow');
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('(malformed payload) the hook script fails CLOSED on unparseable JSON under enforcement, OPEN otherwise', () => {
+  const root = fixture({ tickets: RAILED });
+  const run = (env) => {
+    const out = execFileSync(process.execPath, [GUARD_SCRIPT], { input: '{ this is : not json', cwd: root, env: { ...process.env, ...env } }).toString();
+    return JSON.parse(out).permission;
+  };
+  try {
+    assert.equal(run({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }), 'deny', 'malformed payload must fail closed under enforcement');
+    assert.equal(run({ ADLC_P4_ENFORCEMENT: '0' }), 'allow', 'malformed payload no-ops (allow) when enforcement is off');
+  } finally { cleanup(root); }
+});
+
 test('(multi-root ..) a non-normalized path is attributed to the repo it RESOLVES into', () => {
   // repoB (uninitialized, listed first) and repoA (has the rail). The payload path
   // lexically prefixes repoB but ../-resolves into repoA — raw prefix matching would

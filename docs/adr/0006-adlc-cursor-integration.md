@@ -117,9 +117,15 @@ control:
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail is
   resolved (target + existing parent segments) before rail comparison and denied.
 - Multi-root workspaces: in a Cursor workspace with several `workspace_roots`, the
-  guard resolves the root that **owns** the edited absolute path (longest match)
-  rather than the first listed root, so a rail edit in a later root is checked
-  against the right repo.
+  guard resolves the root that **owns** the edited path (longest normalized,
+  symlink-resolved containment match) rather than the first listed root — for
+  **relative** paths too, which are resolved against the primary root first, so a
+  `../sibling-root/rail` traversal is attributed to the repo it resolves into and
+  checked against the right rails (not waved through against `roots[0]`).
+- Unparseable payloads: a tool payload that fails `JSON.parse` cannot be verified;
+  the hook fails **closed** (deny) under active enforcement and open otherwise —
+  the same enforcement-aware fail-safe as the decision path, so a malformed payload
+  can't slip an edit through.
 
 Mitigation: the unbypassable commit-time CI gate (`docs/ci/rails-guard.yml`) reads
 the frozen rail set from the trusted base ref and rejects PRs that edit a

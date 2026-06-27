@@ -169,8 +169,15 @@ export function candidateRoots(payload) {
  */
 export function resolveRoot(payload, filePath, fallback = process.cwd()) {
   const roots = candidateRoots(payload);
-  if (filePath && isAbsolute(filePath)) {
-    const absFile = realpathDeepest(resolve(filePath));
+  if (filePath) {
+    // Resolve RELATIVE paths too (not just absolute): a relative path with `..`
+    // traversal — e.g. `../backend/src/auth.js` — must be attributed to the root it
+    // actually resolves into, not blindly to roots[0]. Resolve it against the
+    // primary root (roots[0]) / fallback the way the agent's cwd would, then do the
+    // normalized, symlink-resolved containment check. Skipping relative paths let a
+    // traversal edit a frozen rail in a SIBLING workspace root.
+    const base = roots[0] ?? fallback;
+    const absFile = realpathDeepest(isAbsolute(filePath) ? resolve(filePath) : resolve(base, filePath));
     const owning = roots
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .filter(({ real }) => {
@@ -291,8 +298,18 @@ async function main() {
     try {
       payload = JSON.parse(raw);
     } catch (err) {
-      process.stderr.write(`adlc-rails-guard: malformed payload JSON (failing OPEN) — ${err.message}\n`);
-      process.stdout.write(JSON.stringify({ permission: 'allow' }));
+      // Enforcement-aware (consistent with decide()'s categorical fail-safe): an
+      // unparseable payload while enforcement is active cannot be verified, so fail
+      // CLOSED; otherwise the guard is a no-op, so fail open to avoid bricking the editor.
+      const enforcing = process.env.ADLC_P4_ENFORCEMENT === '1';
+      process.stderr.write(`adlc-rails-guard: malformed payload JSON (failing ${enforcing ? 'CLOSED' : 'OPEN'}) — ${err.message}\n`);
+      process.stdout.write(JSON.stringify(enforcing
+        ? {
+            permission: 'deny',
+            user_message: 'ADLC rails-guard: unparseable tool payload while enforcement is active — failing closed',
+            agent_message: 'The rail guard received a tool payload it could not parse during an active build, so the edit cannot be verified against the frozen rails and is denied. Retry with a well-formed structured edit.',
+          }
+        : { permission: 'allow' }));
       return;
     }
   }
