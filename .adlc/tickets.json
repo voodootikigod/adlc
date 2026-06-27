@@ -161,7 +161,18 @@
         "packages/ticket-sync/test/rails-guard-sync.test.mjs",
         "packages/cli/lib/registry.mjs"
       ],
-      "rails": [],
+      "rails": [
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/lib/block.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**",
+        "packages/ticket-sync/test/schema.test.mjs",
+        "packages/ticket-sync/test/validate.test.mjs",
+        "packages/ticket-sync/test/canonical.test.mjs",
+        "packages/ticket-sync/test/block.test.mjs"
+      ],
       "edges": [
         {
           "to": "T9"
