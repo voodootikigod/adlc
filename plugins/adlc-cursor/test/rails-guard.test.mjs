@@ -286,11 +286,16 @@ test('(shell-masquerade) a structured mutator named like a shell tool still fail
   // contains "shell"/"terminal"/"powershell" bypass the fail-closed branch.
   const root = fixture({ tickets: RAILED });
   try {
-    for (const t of ['terminal_edit', 'shell_edit', 'powershell_write', 'shell_replace']) {
-      assert.equal(decide({ tool_name: t, tool_input: {} }, { root, env: env() }).permission, 'deny', `${t} (a mutator) must not masquerade as shell`);
+    // (a) names with a mutating hint (edit/write/replace) — denied by precedence
+    // (b) names with NO mutating hint but a shell token (modify/set) — denied because
+    //     the shell exemption matches EXACT known shell names only, not tokens
+    for (const t of ['terminal_edit', 'shell_edit', 'powershell_write', 'shell_replace', 'terminal_modify', 'shell_modify', 'terminal_set', 'powershell_morph']) {
+      assert.equal(decide({ tool_name: t, tool_input: {} }, { root, env: env() }).permission, 'deny', `${t} must not masquerade as shell`);
     }
     // real shell tools still allowed (regression guard for over-correction)
-    assert.equal(decide({ tool_name: 'run_terminal_cmd', tool_input: { command: 'npm test' } }, { root, env: env() }).permission, 'allow');
+    for (const t of ['Bash', 'run_terminal_cmd', 'terminal', 'shell', 'pwsh', 'run_command']) {
+      assert.equal(decide({ tool_name: t, tool_input: { command: 'npm test' } }, { root, env: env() }).permission, 'allow', `${t} must run during P4`);
+    }
   } finally { cleanup(root); }
 });
 

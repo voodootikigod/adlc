@@ -57,28 +57,30 @@ export function normalizeToolName(name) {
 // (their writes fall to the CI gate). They must be recognized so the no-path
 // fail-closed branch — meant for opaque *structured* mutators — doesn't deny a
 // normal `npm test`/build command and break the P4 workflow.
-// Whole normalized names that are shell-execution tools.
+// EXACT whole normalized names of shell-execution tools. The shell exemption used
+// by the no-path fail-closed branch matches ONLY these — never a substring or even
+// a token. A token/substring predicate is unsafe here: a novel structured mutator
+// named `terminal_modify` or `shell_set` (whose verb isn't in MUTATING_TOOL_HINTS,
+// so it classifies as 'other') would carry a shell token and be waved through. An
+// unrecognized shell tool name not in this set fails CLOSED under enforcement — the
+// safe direction (a blocked command is visible and reportable; a silent mutator
+// bypass is not). Real Cursor/agent shell tools are a small known set; extend here.
 const SHELL_TOOL_NAMES = new Set([
-  'bash', 'sh', 'zsh', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'exec',
-  'run', 'runcommand', 'runterminalcmd', 'runinterminal', 'executecommand',
-  'execcommand', 'terminalcmd', 'shellexec', 'execcommandline', 'runterminalcommand',
+  'bash', 'sh', 'zsh', 'fish', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'console',
+  'exec', 'run', 'runcommand', 'runcmd', 'runterminalcmd', 'runterminalcommand',
+  'runinterminal', 'runinterminalcommand', 'runshell', 'shellexec', 'shellcommand',
+  'executecommand', 'execcommand', 'executecommandline', 'execcommandline',
+  'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
 ]);
-// Individual word-TOKENS (split on non-alphanumerics) that mark shell execution.
-const SHELL_WORDS = new Set(['bash', 'sh', 'zsh', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'console']);
 
 /**
- * True only for genuine shell/terminal execution tools. Matching is whole-name or
- * whole-TOKEN (never loose substring), so `flush`/`publish` don't match `sh`. NOTE:
- * this is necessary-but-not-sufficient for the shell exemption — the caller must
- * still let a MUTATING classification win first, so a structured mutator named
- * `terminal_edit` (which contains the token `terminal` but also `edit`) is treated
- * as a mutator, not waved through as a shell.
+ * True ONLY for a recognized shell/terminal execution tool (exact whole-name match
+ * after normalization). Used by the no-path exemption, which must NOT be fooled by a
+ * structured mutator whose name merely contains a shell word. Mutating classification
+ * also wins first in the caller, so `terminal_edit` is denied regardless.
  */
 export function isShellTool(name) {
-  const raw = String(name ?? '').toLowerCase();
-  if (!raw) return false;
-  if (SHELL_TOOL_NAMES.has(normalizeToolName(raw))) return true;
-  return raw.split(/[^a-z0-9]+/).filter(Boolean).some((tok) => SHELL_WORDS.has(tok));
+  return SHELL_TOOL_NAMES.has(normalizeToolName(name));
 }
 
 /**
