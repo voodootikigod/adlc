@@ -26,14 +26,15 @@ export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.jso
 // they fall to the CI diff gate.
 export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create', 'delete', 'remove', 'rename', 'move', 'apply', 'insert', 'append'];
 
-// The Cursor preToolUse `matcher` regex, DERIVED from MUTATING_TOOL_HINTS so the
-// hook-routing pre-filter can never drift from the classifier. If a mutation tool
-// name shares no hint with this set it would bypass the in-session hook entirely
-// (the matcher decides what reaches the guard) — but it would also classify as
-// 'other' and, on the paths that do reach the guard, fail closed. Anything the
-// matcher misses still falls to the unbypassable CI rail-freeze gate. Used by both
-// the committed hooks.json template and the scaffolder (single source of truth).
-export const MUTATING_MATCHER = `(?i)(${MUTATING_TOOL_HINTS.join('|')})`;
+// The Cursor preToolUse hook is wired with a catch-all matcher (".*") so EVERY
+// tool call reaches the guard and the classifier is the single decision point —
+// read-only tools return allow immediately, known mutators are checked, and an
+// unrecognized tool ('other') carrying a rail path FAILS CLOSED. A narrow,
+// hint-derived matcher was rejected: it is an allowlist, so a novel mutator name
+// (modify_file, save_file, …) would bypass the in-session guard before the
+// fail-closed classifier could run. Routing everything is the only design under
+// which the documented in-session fail-closed behavior is actually true.
+export const PRETOOL_MATCHER = '.*';
 
 // Known pure-read tools (WHOLE normalized token — never substring). Only these
 // short-circuit to "allow"; everything unrecognized falls through to "other",
@@ -157,17 +158,30 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
     return { decision: 'allow', reason: 'no active ticket resolved' };
   }
 
-  const { tickets, errors } = loadTickets(ticketsPath);
-  // A corrupt/invalid tickets.json makes @adlc/core return an empty ticket list
-  // plus errors (it does NOT throw). Honoring that is load-bearing: ignoring it
-  // would silently drop the active ticket's declared rails to just the trust
-  // roots — i.e. fail OPEN for declared rails exactly when the rail trust root is
-  // corrupt. Under active enforcement with an active ticket, fail CLOSED instead.
+  // A corrupt/invalid tickets.json must FAIL CLOSED under active enforcement —
+  // never silently drop the active ticket's declared rails to just the trust
+  // roots. @adlc/core surfaces corruption three different ways, so we cover all:
+  //  (1) it THROWS on some malformed schemas (e.g. {"tickets":{}});
+  //  (2) it returns an `errors` array on others (e.g. a non-object ticket);
+  //  (3) it returns an empty list with no errors when `tickets` is absent —
+  //      in which case the resolved active ticket simply won't be found.
+  let tickets, errors;
+  try {
+    ({ tickets, errors } = loadTickets(ticketsPath));
+  } catch (err) {
+    return { decision: 'deny', reason: `tickets.json failed to load (${err.message}) — failing closed` };
+  }
   if (errors && errors.length) {
-    return { decision: 'deny', reason: `tickets.json failed to load/validate (${errors.length} error(s)) — failing closed` };
+    return { decision: 'deny', reason: `tickets.json failed to validate (${errors.length} error(s)) — failing closed` };
   }
   const ticket = tickets.find((t) => t.id === active.id);
-  const declaredRails = ticket?.rails ?? [];
+  if (!ticket) {
+    // An active-ticket signal that resolves to no ticket is a misconfig/tamper
+    // signal while enforcement is on — fail closed rather than enforce trust
+    // roots only.
+    return { decision: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
+  }
+  const declaredRails = ticket.rails ?? [];
   const rails = [...declaredRails, ...TRUST_ROOT_RAILS];
 
   // Match BOTH the lexical path and the symlink-resolved real path (so a symlink

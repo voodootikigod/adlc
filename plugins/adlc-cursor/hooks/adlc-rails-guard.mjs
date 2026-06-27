@@ -19,6 +19,7 @@
 // path is a conflicting active-ticket signal, which checkRail reports as a denial.
 
 import { fileURLToPath } from 'node:url';
+import { isAbsolute } from 'node:path';
 import { checkRail } from '../rails-checker.mjs';
 
 // Field names Cursor (and sibling agents) have used for the tool name, the tool
@@ -54,8 +55,36 @@ export function extractFilePath(payload) {
   return firstString(payload, PATH_KEYS);
 }
 
-export function resolveRoot(payload, fallback = process.cwd()) {
-  return firstString(payload, ROOT_KEYS) ?? fallback;
+/** Collect every candidate workspace root (handles single-root keys and arrays). */
+export function candidateRoots(payload) {
+  const roots = [];
+  if (payload && typeof payload === 'object') {
+    for (const k of ROOT_KEYS) {
+      const v = payload[k];
+      if (typeof v === 'string' && v.trim()) roots.push(v.trim());
+      else if (Array.isArray(v)) for (const e of v) if (typeof e === 'string' && e.trim()) roots.push(e.trim());
+    }
+  }
+  return roots;
+}
+
+/**
+ * Resolve the repo root to check against. In a Cursor MULTI-ROOT workspace,
+ * `workspace_roots` lists several roots and the edited file may belong to any of
+ * them — picking the first one blindly can check an absolute rail path against the
+ * wrong repo and miss a frozen-rail edit. So when the edited path is absolute, pick
+ * the workspace root that actually CONTAINS it (longest match wins); otherwise fall
+ * back to the first declared root, then the process cwd.
+ */
+export function resolveRoot(payload, filePath, fallback = process.cwd()) {
+  const roots = candidateRoots(payload);
+  if (filePath && isAbsolute(filePath)) {
+    const owning = roots
+      .filter((r) => { const rr = r.endsWith('/') ? r : `${r}/`; return filePath === r || filePath.startsWith(rr); })
+      .sort((a, b) => b.length - a.length)[0];
+    if (owning) return owning;
+  }
+  return roots[0] ?? fallback;
 }
 
 /**
@@ -70,7 +99,7 @@ export function decide(payload, { root, env = process.env } = {}) {
     // allow. Bash/shell writes are intentionally not gated here.
     if (!filePath) return { permission: 'allow' };
 
-    const verdict = checkRail({ filePath, tool, root: root ?? resolveRoot(payload), env });
+    const verdict = checkRail({ filePath, tool, root: root ?? resolveRoot(payload, filePath), env });
     if (verdict.decision === 'deny') {
       return {
         permission: 'deny',
@@ -110,7 +139,8 @@ async function main() {
       return;
     }
   }
-  const verdict = decide(payload, { root: resolveRoot(payload), env: process.env });
+  // decide() resolves the owning workspace root from the payload + edited path.
+  const verdict = decide(payload, { env: process.env });
   process.stdout.write(JSON.stringify(verdict));
 }
 

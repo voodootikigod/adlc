@@ -22,7 +22,7 @@ export function audit(payload, { root, env = process.env } = {}) {
     const filePath = extractFilePath(payload) ?? firstAfterEditPath(payload);
     if (!filePath) return { rail: false };
     // Treat the edit as a structured mutation for classification purposes.
-    const verdict = checkRail({ filePath, tool: 'edit', root: root ?? resolveRoot(payload), env });
+    const verdict = checkRail({ filePath, tool: 'edit', root: root ?? resolveRoot(payload, filePath), env });
     if (verdict.decision === 'deny') {
       process.stderr.write(
         `adlc-audit: POST-EDIT rail touch — ${verdict.reason}. ` +
@@ -58,7 +58,8 @@ async function main() {
   if (raw.trim()) {
     try { payload = JSON.parse(raw); } catch { /* observational: ignore */ }
   }
-  audit(payload, { root: resolveRoot(payload), env: process.env });
+  // audit() resolves the owning workspace root from the payload + edited path.
+  audit(payload, { env: process.env });
   // afterFileEdit has no deny channel; emit an empty no-op object.
   process.stdout.write('{}');
 }

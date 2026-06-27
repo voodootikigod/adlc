@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decide, extractToolName, extractFilePath } from '../hooks/adlc-rails-guard.mjs';
 import { audit } from '../hooks/adlc-audit.mjs';
-import { MUTATING_MATCHER } from '../rails-checker.mjs';
+import { PRETOOL_MATCHER } from '../rails-checker.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GUARD_SCRIPT = join(HERE, '..', 'hooks', 'adlc-rails-guard.mjs');
@@ -167,29 +167,53 @@ test('(d4) a symlink whose real target is a frozen rail is denied', () => {
 // --- Cross-model review regressions (ADR 0006): the HOOK-ROUTING boundary, not
 //     just the decision function, must cover the mutators; corrupt tickets fail closed. ---
 
-test('(matcher) the shipped preToolUse matcher routes every mutation tool to the guard', () => {
-  // Build the regex the way Cursor would interpret the matcher string (strip the
-  // inline (?i) flag, apply case-insensitively) and confirm it MATCHES the tools
-  // the classifier treats as mutating — otherwise the guard is never invoked and
-  // decide()'s deny is dead code in production (the F1 finding).
-  const re = new RegExp(MUTATING_MATCHER.replace('(?i)', ''), 'i');
-  for (const tool of ['Write', 'Edit', 'MultiEdit', 'search_replace', 'str_replace', 'reapply', 'delete_file', 'create_file', 'rename_file', 'apply_patch']) {
+test('(matcher) the shipped preToolUse matcher is catch-all so EVERY tool reaches the guard', () => {
+  // A narrow allowlist matcher would let a novel mutator name (modify_file,
+  // save_file) bypass the guard before the fail-closed classifier runs. Route all.
+  assert.equal(PRETOOL_MATCHER, '.*');
+  const re = new RegExp(PRETOOL_MATCHER, 'i');
+  for (const tool of ['Write', 'str_replace', 'modify_file', 'save_file', 'frobnicate', 'Read']) {
     assert.ok(re.test(tool), `matcher must route "${tool}" to the guard`);
   }
-  // Drift guard: the committed hooks.json matcher must equal the derived one.
+  // Drift guard: the committed hooks.json matcher must equal PRETOOL_MATCHER.
   const hooksJson = JSON.parse(readFileSync(join(HERE, '..', 'hooks.json'), 'utf8'));
-  assert.equal(hooksJson.hooks.preToolUse[0].matcher, MUTATING_MATCHER, 'hooks.json matcher drifted from MUTATING_MATCHER');
+  assert.equal(hooksJson.hooks.preToolUse[0].matcher, PRETOOL_MATCHER, 'hooks.json matcher drifted from PRETOOL_MATCHER');
 });
 
-test('(F2) a corrupt/invalid tickets.json fails CLOSED under active enforcement', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-'));
+test('(matcher-e2e) a novel mutator name routed to the guard fails CLOSED on a rail', () => {
+  const root = fixture({ tickets: RAILED });
   try {
-    mkdirSync(join(root, '.adlc'), { recursive: true });
-    writeFileSync(join(root, '.adlc', 'tickets.json'), '{ this is not valid json');
-    const v = decide(payload('Write', 'src/anything.js'), { root, env: env() });
-    assert.equal(v.permission, 'deny', 'corrupt tickets.json must not silently drop declared rails');
-    assert.match(v.user_message, /failing closed/);
+    for (const tool of ['modify_file', 'save_file', 'update_file']) {
+      const v = decide(payload(tool, 'src/frozen.js'), { root, env: env() });
+      assert.equal(v.permission, 'deny', `unknown mutator "${tool}" on a rail must fail closed`);
+    }
   } finally { cleanup(root); }
+});
+
+test('(F2) corrupt tickets.json fails CLOSED — invalid JSON, throwing schema, and missing tickets', () => {
+  for (const content of ['{ this is not valid json', '{"tickets":{}}', '{"tickets":"x"}', '{"nope":1}']) {
+    const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-'));
+    try {
+      mkdirSync(join(root, '.adlc'), { recursive: true });
+      writeFileSync(join(root, '.adlc', 'tickets.json'), content);
+      const v = decide(payload('Write', 'src/anything.js'), { root, env: env() });
+      assert.equal(v.permission, 'deny', `tickets.json=${content} must fail closed, not drop declared rails`);
+      assert.match(v.user_message, /failing closed|not found/);
+    } finally { cleanup(root); }
+  }
+});
+
+test('(multi-root) the guard checks the workspace root that OWNS the edited path', () => {
+  // repo-a (first root, no ADLC) + repo-b (ADLC-initialized, has the rail).
+  const repoA = mkdtempSync(join(tmpdir(), 'adlc-a-'));
+  const repoB = fixture({ tickets: RAILED });
+  try {
+    const abs = join(repoB, 'src', 'frozen.js'); // absolute path under repo-b (the rail)
+    const p = { tool_name: 'Edit', tool_input: { file_path: abs }, workspace_roots: [repoA, repoB] };
+    // No explicit root: the adapter must pick repo-b (owns the path), not repo-a.
+    const v = decide(p, { env: env() });
+    assert.equal(v.permission, 'deny', 'edit to repo-b rail must be denied even when repo-a is listed first');
+  } finally { cleanup(repoA); cleanup(repoB); }
 });
 
 test('wire format: the real script reads stdin JSON and writes a {permission} verdict', () => {

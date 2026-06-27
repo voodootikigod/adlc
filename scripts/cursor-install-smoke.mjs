@@ -45,13 +45,14 @@ else {
   // advisory: failClosed must be false so a hook bug cannot brick the editor
   if (pre[0]?.failClosed !== false) fail('preToolUse failClosed is not false (advisory layer must not brick the editor)');
   else ok('preToolUse is advisory (failClosed:false)');
-  // F1: the matcher must actually ROUTE the mutation tools to the guard, else the
-  // deny decision is dead code in production. Check str_replace / search_replace.
+  // F1: the matcher must ROUTE every tool to the guard (catch-all) so a novel
+  // mutator name can't bypass the fail-closed classifier. Anything narrower is an
+  // allowlist with a hole.
   const matcher = pre.find((e) => /adlc-rails-guard/.test(e.command ?? ''))?.matcher ?? '';
-  const re = new RegExp(matcher.replace('(?i)', ''), 'i');
-  const routed = ['Write', 'Edit', 'str_replace', 'search_replace'].every((t) => re.test(t));
-  if (!routed) fail(`preToolUse matcher does not route all mutation tools to the guard (matcher="${matcher}")`);
-  else ok('preToolUse matcher routes str_replace/search_replace/Write/Edit to the guard');
+  const re = new RegExp(matcher, 'i');
+  const routed = ['Write', 'str_replace', 'modify_file', 'frobnicate', 'Read'].every((t) => re.test(t));
+  if (!routed) fail(`preToolUse matcher is an allowlist, not catch-all (matcher="${matcher}") — novel mutators bypass the guard`);
+  else ok('preToolUse matcher is catch-all (every tool reaches the guard; classifier decides)');
 }
 
 // ---- AC1: hook scripts present + contract ----

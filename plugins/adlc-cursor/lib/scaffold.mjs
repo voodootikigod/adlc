@@ -6,16 +6,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MUTATING_MATCHER } from '../rails-checker.mjs';
+import { PRETOOL_MATCHER } from '../rails-checker.mjs';
 
 // The installed @adlc/cursor-package root (this file lives at <root>/lib/scaffold.mjs).
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const RAILS_GUARD_REL = 'hooks/adlc-rails-guard.mjs';
 const AUDIT_REL = 'hooks/adlc-audit.mjs';
-// Single source of truth: the matcher is derived from MUTATING_TOOL_HINTS in the
-// checker, so the scaffolded .cursor/hooks.json and the classifier can't drift.
-const PRETOOL_MATCHER = MUTATING_MATCHER;
+// Catch-all (".*"): every tool reaches the guard so the classifier — not an
+// allowlist matcher — is the single decision point (see PRETOOL_MATCHER in the
+// checker). Imported, not duplicated, so the scaffold and template can't drift.
 
 /** A hook entry is "ours" if its command points at one of our hook scripts. */
 function isAdlcHook(entry) {

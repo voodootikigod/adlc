@@ -4,7 +4,7 @@
     "preToolUse": [
       {
         "command": "node ./node_modules/@adlc/cursor-package/hooks/adlc-rails-guard.mjs",
-        "matcher": "(?i)(write|edit|replace|patch|create|delete|remove|rename|move|apply|insert|append)",
+        "matcher": ".*",
         "timeout": 10,
         "failClosed": false
       }
