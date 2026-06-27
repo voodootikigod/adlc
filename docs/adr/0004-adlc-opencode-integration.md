@@ -63,6 +63,11 @@ control:
   unset, point `ADLC_TICKET` / `.adlc/current-ticket.json` at a rail-free ticket,
   or (if the SDK lacks `onFailure: deny`) ignore an advisory denial.
 - Bash-driven writes are not gated in-session (Turing-complete shell).
+- Unrecognized mutation tools: the gate fails **closed** on tool names — only
+  known read-only tools (`read`/`grep`/`glob`/…) are skipped; known mutators
+  (`edit`/`write`/`patch`/`multiedit`/`apply_patch`) and any unrecognized
+  structured tool carrying a file path are checked, so a new tool name can't slip
+  an edit past the guard.
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail. The
   checker resolves symlinks (target + existing parent segments) before rail
   comparison (`resolveRailPath`), so an aliased write to a rail is denied — a

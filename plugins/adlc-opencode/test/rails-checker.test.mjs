@@ -49,8 +49,10 @@ test('c: no active ticket → allow', () => {
 });
 
 // ---- (d) DENY edit AND write to the active ticket's declared rail ----
-for (const tool of ['edit', 'write']) {
-  test(`d: ${tool} to a declared rail → deny`, () => {
+// All known mutators (incl. patch/multiedit/apply_patch) AND unknown structured
+// tools must be gated; only known read-only tools are skipped (fail closed).
+for (const tool of ['edit', 'write', 'patch', 'multiedit', 'apply_patch', 'some_new_tool']) {
+  test(`d: ${tool} to a declared rail → deny (gated)`, () => {
     const dir = repo({ tickets: T1_RAILED });
     try {
       const r = checkRail({ filePath: 'test/x.mjs', tool, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -58,6 +60,14 @@ for (const tool of ['edit', 'write']) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+test('d: a known read-only tool on a rail path → allow (not a mutation)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    const r = checkRail({ filePath: 'test/x.mjs', tool: 'read', root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 // ---- (e) DENY edit to .adlc/tickets.json (trust root) even when not declared ----
 test('e: edit .adlc/tickets.json (trust root) → deny even when rails do not list it', () => {

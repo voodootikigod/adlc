@@ -16,9 +16,16 @@ import { loadTickets, globMatch } from '@adlc/core';
 // rail set cannot be quietly edited away. Mirrors adlc-codex/hooks/adlc-rails-guard.mjs.
 export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
 
-// OpenCode's structured file-mutation tools. Bash-style writes are intentionally
-// NOT gated in-session (Turing-complete shell); they fall to the CI diff gate.
-export const MUTATING_TOOLS = ['edit', 'write'];
+// OpenCode's known structured file-mutation tools. Bash-style writes are
+// intentionally NOT gated in-session (Turing-complete shell); they fall to the CI
+// diff gate.
+export const MUTATING_TOOLS = ['edit', 'write', 'patch', 'multiedit', 'apply_patch'];
+
+// Known read-only tools that may carry a file path but never mutate it. The gate
+// fails CLOSED: only these are skipped; any other structured tool that reaches the
+// checker (i.e. carries a filePath) — including unrecognized mutation tools — is
+// checked against the rail set rather than silently allowed.
+export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch'];
 
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {
@@ -88,9 +95,12 @@ export function resolveActiveTicketId(root, env) {
  *  - rails in force = active ticket's declared rails PLUS the trust-root rails.
  */
 export function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) {
-  if (!MUTATING_TOOLS.includes(tool)) {
-    return { decision: 'allow', reason: `tool "${tool}" is not a structured mutating tool` };
+  if (READONLY_TOOLS.includes(tool)) {
+    return { decision: 'allow', reason: `tool "${tool}" is read-only` };
   }
+  // Everything else that reached here carries a file path: known mutators AND any
+  // unrecognized structured tool are checked (fail closed), so a new mutation tool
+  // name can't slip an edit past the guard.
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }

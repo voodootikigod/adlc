@@ -60,9 +60,11 @@ test('survivesVerification: strict majority of real votes survives', () => {
   assert.equal(survivesVerification([{ real: false }, { real: false }]), false);
 });
 
-test('survivesVerification: no votes → does not block (fail open on absent evidence)', () => {
-  assert.equal(survivesVerification([]), false);
-  assert.equal(survivesVerification(null), false);
+test('survivesVerification: no valid votes → SURVIVES as unverified blocker (fail closed)', () => {
+  // A verifier crash/timeout must NOT silently drop a finding in a pre-merge gate.
+  assert.equal(survivesVerification([]), true);
+  assert.equal(survivesVerification(null), true);
+  assert.equal(survivesVerification([null, undefined]), true); // no valid votes
 });
 
 // ---- shouldContinue (loop until dry) ----

@@ -41,13 +41,17 @@ export function dedupeFindings(findings) {
 
 /**
  * Decide whether a finding survives verification. Votes are the verifier's
- * independent verdicts ({ real: boolean }). A finding survives only if a strict
- * majority confirm it real (default), so a single noisy lens can't sink a ship and
- * a single weak confirmation can't pass a false one.
+ * independent verdicts ({ real: boolean }). With votes present, a finding survives
+ * if a strict majority confirm it real (default), so a single noisy lens can't
+ * sink a ship and a single weak confirmation can't pass a false one.
+ *
+ * FAIL CLOSED on absent verification: a pre-merge gate must not let a verifier
+ * crash, timeout, or parse failure silently DROP a finding. With zero valid votes
+ * the finding SURVIVES as an unverified blocker — surface it, don't bury it.
  */
 export function survivesVerification(votes, { threshold = 0.5 } = {}) {
   const list = (votes ?? []).filter(Boolean);
-  if (!list.length) return false; // unverified → do not block (fail open on absence of evidence)
+  if (!list.length) return true; // unverified → keep as a blocker (fail closed)
   const real = list.filter((v) => v.real === true).length;
   return real / list.length > threshold;
 }
