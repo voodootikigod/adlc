@@ -90,7 +90,12 @@ for (const c of PHASE_A_CMDS) {
   if (!/^---\n[\s\S]*?description:\s*\S+[\s\S]*?\n---/.test(read(p))) fail(`command/${c} lacks description frontmatter`);
   else ok(`command/${c} valid`);
 }
-if (!existsSync(join(PLUGIN, 'lib', 'scaffold.mjs'))) fail('lib/scaffold.mjs missing'); else ok('scaffold helper present');
+if (!existsSync(join(PLUGIN, 'lib', 'scaffold.mjs'))) fail('lib/scaffold.mjs missing');
+else {
+  const sc = read(join(PLUGIN, 'lib', 'scaffold.mjs'));
+  if (!/export function ensurePluginRegistered\b/.test(sc)) fail('scaffold does not register the plugin (rails-guard hook would not load)');
+  else ok('scaffold registers the plugin (rails-guard hook loads)');
+}
 
 // ---- Phase B (T3): keyless LLM-gate bridge ----
 const bridgePath = join(PLUGIN, 'lib', 'keyless-bridge.mjs');
@@ -98,7 +103,7 @@ if (!existsSync(bridgePath)) fail('lib/keyless-bridge.mjs missing');
 else {
   const br = read(bridgePath);
   for (const fn of ['extractPrompts', 'runGateKeyless', 'makeAsk']) {
-    if (!new RegExp(`export function ${fn}\\b`).test(br)) fail(`keyless-bridge missing export ${fn}`);
+    if (!new RegExp(`export (async )?function ${fn}\\b`).test(br)) fail(`keyless-bridge missing export ${fn}`);
   }
   if (!/--prompt-only/.test(br)) fail('keyless-bridge does not run gates in --prompt-only mode');
   ok('keyless bridge present (extractPrompts/runGateKeyless/makeAsk, prompt-only)');

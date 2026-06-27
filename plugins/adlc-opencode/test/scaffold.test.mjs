@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureConfig, deployDir, scaffold } from '../lib/scaffold.mjs';
+import { ensureConfig, deployDir, scaffold, ensurePluginRegistered } from '../lib/scaffold.mjs';
 import { ALL_BINS, GATE_BINS, DISPATCHERS } from '../gate-bins.mjs';
 
 const PKG = dirname(dirname(fileURLToPath(import.meta.url))); // plugins/adlc-opencode
@@ -34,6 +34,42 @@ test('ensureConfig never clobbers an existing config (idempotent)', () => {
     const cfg = JSON.parse(readFileSync(r.path, 'utf8'));
     assert.equal(cfg.mine, true); // untouched
     assert.equal(cfg.securityMode, 'signed');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- ensurePluginRegistered (so the rails-guard hook actually loads) ----
+test('ensurePluginRegistered: adds the plugin to .opencode/opencode.json', () => {
+  const root = mkroot();
+  try {
+    const r = ensurePluginRegistered(root);
+    assert.equal(r.registered, true);
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.ok(cfg.plugin.includes('@adlc/opencode-package'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ensurePluginRegistered: idempotent + preserves existing settings/plugins', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'opencode.json'), JSON.stringify({ theme: 'x', plugin: ['other-plugin'] }));
+    const r1 = ensurePluginRegistered(root);
+    assert.equal(r1.registered, true);
+    const r2 = ensurePluginRegistered(root);
+    assert.equal(r2.alreadyPresent, true); // idempotent
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.equal(cfg.theme, 'x'); // preserved
+    assert.deepEqual(cfg.plugin, ['other-plugin', '@adlc/opencode-package']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('scaffold registers the plugin (rails-guard hook will load)', () => {
+  const root = mkroot();
+  try {
+    const out = scaffold(root, PKG);
+    assert.equal(out.plugin.registered, true);
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.ok(cfg.plugin.includes('@adlc/opencode-package'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

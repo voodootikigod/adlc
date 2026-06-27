@@ -41,9 +41,11 @@ all six plan phases (A–F) now ship.
 ## Commands
 
 OpenCode loads project commands from `.opencode/commands/` (Markdown + YAML
-frontmatter). `/adlc-init` deploys this plugin's `command/*.md` and `skill/*.md`
-into `.opencode/` and creates `.adlc/config.json` (idempotently, via
-`lib/scaffold.mjs`). Phase A commands:
+frontmatter). `/adlc-init` deploys this plugin's `command/*.md`, `agent/*.md`, and
+`skill/*.md` into `.opencode/`, creates `.adlc/config.json`, **and registers the
+plugin in `.opencode/opencode.json` so the rails-guard hook actually loads** — all
+idempotently, via `lib/scaffold.mjs`. (Commands/agents/skills are inert markdown;
+the enforcing hook only runs once the plugin package is registered.) Phase A commands:
 
 | Command | Phase | Does |
 | --- | --- | --- |

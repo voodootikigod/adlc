@@ -38,7 +38,7 @@ export function extractPrompts(stdout) {
  * Multi-prompt cascades are asked in order with prior answers threaded as context.
  * Returns { prompts, answers } or throws on a gate operational failure.
  */
-export function runGateKeyless({ bin, args = [], ask, spawnImpl = spawnSync, cwd = process.cwd() }) {
+export async function runGateKeyless({ bin, args = [], ask, spawnImpl = spawnSync, cwd = process.cwd() }) {
   if (typeof ask !== 'function') throw new Error('runGateKeyless: an ask(prompt) function is required');
   const res = spawnImpl(bin, [...args, '--prompt-only'], { cwd, encoding: 'utf8' });
   if (res.status !== 0) {
@@ -47,7 +47,9 @@ export function runGateKeyless({ bin, args = [], ask, spawnImpl = spawnSync, cwd
   const prompts = extractPrompts(res.stdout);
   const answers = [];
   for (const p of prompts) {
-    answers.push(ask(p.text, { index: p.index, total: prompts.length, prior: answers.slice() }));
+    // Await each answer: the host SDK prompt API is async, and later prompts in a
+    // cascade must receive RESOLVED prior answers, not pending Promises.
+    answers.push(await ask(p.text, { index: p.index, total: prompts.length, prior: answers.slice() }));
   }
   return { prompts, answers };
 }

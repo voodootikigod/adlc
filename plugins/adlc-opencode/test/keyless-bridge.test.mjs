@@ -40,23 +40,35 @@ function stubSpawn(stdout, status = 0, stderr = '') {
   };
 }
 
-test('runGateKeyless: asks each prompt in order, threads prior answers', () => {
+test('runGateKeyless: asks each prompt in order, threads prior answers', async () => {
   const spawnImpl = stubSpawn('--- prompt 1 of 2 ---\nA\n--- prompt 2 of 2 ---\nB');
   const seen = [];
   const ask = (text, ctx) => { seen.push({ text, prior: ctx.prior.length }); return `ans:${text}`; };
-  const { prompts, answers } = runGateKeyless({ bin: 'adlc', args: ['parallax'], ask, spawnImpl });
+  const { prompts, answers } = await runGateKeyless({ bin: 'adlc', args: ['parallax'], ask, spawnImpl });
   assert.equal(prompts.length, 2);
   assert.deepEqual(answers, ['ans:A', 'ans:B']);
   assert.deepEqual(seen.map((s) => s.prior), [0, 1]); // 2nd ask sees 1 prior answer
 });
 
-test('runGateKeyless: gate operational failure (status!=0) throws', () => {
-  const spawnImpl = stubSpawn('', 1, 'no provider');
-  assert.throws(() => runGateKeyless({ bin: 'adlc', args: ['spec-lint'], ask: () => 'x', spawnImpl }), /exited 1/);
+test('runGateKeyless: ASYNC ask — answers are resolved values, prior holds resolved (not Promises)', async () => {
+  const spawnImpl = stubSpawn('--- prompt 1 of 2 ---\nA\n--- prompt 2 of 2 ---\nB');
+  const priorSeen = [];
+  // Realistic host SDK: async prompt call.
+  const ask = async (text, ctx) => { priorSeen.push(ctx.prior.slice()); return `ans:${text}`; };
+  const { answers } = await runGateKeyless({ bin: 'adlc', args: ['parallax'], ask, spawnImpl });
+  assert.deepEqual(answers, ['ans:A', 'ans:B']); // resolved strings, not Promises
+  // the 2nd prompt's prior must contain the RESOLVED first answer, not a pending Promise
+  assert.deepEqual(priorSeen[1], ['ans:A']);
+  for (const a of answers) assert.equal(typeof a, 'string');
 });
 
-test('runGateKeyless: requires an ask function', () => {
-  assert.throws(() => runGateKeyless({ bin: 'adlc', spawnImpl: stubSpawn('p') }), /ask\(prompt\) function is required/);
+test('runGateKeyless: gate operational failure (status!=0) throws', async () => {
+  const spawnImpl = stubSpawn('', 1, 'no provider');
+  await assert.rejects(() => runGateKeyless({ bin: 'adlc', args: ['spec-lint'], ask: () => 'x', spawnImpl }), /exited 1/);
+});
+
+test('runGateKeyless: requires an ask function', async () => {
+  await assert.rejects(() => runGateKeyless({ bin: 'adlc', spawnImpl: stubSpawn('p') }), /ask\(prompt\) function is required/);
 });
 
 // ---- makeAsk capability resolution (plan §6.4) ----
