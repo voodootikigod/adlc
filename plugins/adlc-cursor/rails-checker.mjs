@@ -26,6 +26,15 @@ export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.jso
 // they fall to the CI diff gate.
 export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create', 'delete', 'remove', 'rename', 'move', 'apply', 'insert', 'append'];
 
+// The Cursor preToolUse `matcher` regex, DERIVED from MUTATING_TOOL_HINTS so the
+// hook-routing pre-filter can never drift from the classifier. If a mutation tool
+// name shares no hint with this set it would bypass the in-session hook entirely
+// (the matcher decides what reaches the guard) — but it would also classify as
+// 'other' and, on the paths that do reach the guard, fail closed. Anything the
+// matcher misses still falls to the unbypassable CI rail-freeze gate. Used by both
+// the committed hooks.json template and the scaffolder (single source of truth).
+export const MUTATING_MATCHER = `(?i)(${MUTATING_TOOL_HINTS.join('|')})`;
+
 // Known pure-read tools (WHOLE normalized token — never substring). Only these
 // short-circuit to "allow"; everything unrecognized falls through to "other",
 // which checkRail treats as a checked mutation (FAIL CLOSED) so a novel or
@@ -148,7 +157,15 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
     return { decision: 'allow', reason: 'no active ticket resolved' };
   }
 
-  const { tickets } = loadTickets(ticketsPath);
+  const { tickets, errors } = loadTickets(ticketsPath);
+  // A corrupt/invalid tickets.json makes @adlc/core return an empty ticket list
+  // plus errors (it does NOT throw). Honoring that is load-bearing: ignoring it
+  // would silently drop the active ticket's declared rails to just the trust
+  // roots — i.e. fail OPEN for declared rails exactly when the rail trust root is
+  // corrupt. Under active enforcement with an active ticket, fail CLOSED instead.
+  if (errors && errors.length) {
+    return { decision: 'deny', reason: `tickets.json failed to load/validate (${errors.length} error(s)) — failing closed` };
+  }
   const ticket = tickets.find((t) => t.id === active.id);
   const declaredRails = ticket?.rails ?? [];
   const rails = [...declaredRails, ...TRUST_ROOT_RAILS];

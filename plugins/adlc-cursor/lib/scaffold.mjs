@@ -6,13 +6,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MUTATING_MATCHER } from '../rails-checker.mjs';
 
 // The installed @adlc/cursor-package root (this file lives at <root>/lib/scaffold.mjs).
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const RAILS_GUARD_REL = 'hooks/adlc-rails-guard.mjs';
 const AUDIT_REL = 'hooks/adlc-audit.mjs';
-const PRETOOL_MATCHER = '(?i)(write|edit|patch|create|delete|rename|move|apply|search_replace)';
+// Single source of truth: the matcher is derived from MUTATING_TOOL_HINTS in the
+// checker, so the scaffolded .cursor/hooks.json and the classifier can't drift.
+const PRETOOL_MATCHER = MUTATING_MATCHER;
 
 /** A hook entry is "ours" if its command points at one of our hook scripts. */
 function isAdlcHook(entry) {

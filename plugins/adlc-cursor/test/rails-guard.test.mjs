@@ -6,13 +6,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { decide, extractToolName, extractFilePath } from '../hooks/adlc-rails-guard.mjs';
 import { audit } from '../hooks/adlc-audit.mjs';
+import { MUTATING_MATCHER } from '../rails-checker.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GUARD_SCRIPT = join(HERE, '..', 'hooks', 'adlc-rails-guard.mjs');
@@ -160,6 +161,34 @@ test('(d4) a symlink whose real target is a frozen rail is denied', () => {
     if (!linked) return; // skip on platforms that can't symlink
     const v = decide(payload('Edit', 'alias.js'), { root, env: env() });
     assert.equal(v.permission, 'deny', 'editing a symlink aliasing a rail must be denied');
+  } finally { cleanup(root); }
+});
+
+// --- Cross-model review regressions (ADR 0006): the HOOK-ROUTING boundary, not
+//     just the decision function, must cover the mutators; corrupt tickets fail closed. ---
+
+test('(matcher) the shipped preToolUse matcher routes every mutation tool to the guard', () => {
+  // Build the regex the way Cursor would interpret the matcher string (strip the
+  // inline (?i) flag, apply case-insensitively) and confirm it MATCHES the tools
+  // the classifier treats as mutating — otherwise the guard is never invoked and
+  // decide()'s deny is dead code in production (the F1 finding).
+  const re = new RegExp(MUTATING_MATCHER.replace('(?i)', ''), 'i');
+  for (const tool of ['Write', 'Edit', 'MultiEdit', 'search_replace', 'str_replace', 'reapply', 'delete_file', 'create_file', 'rename_file', 'apply_patch']) {
+    assert.ok(re.test(tool), `matcher must route "${tool}" to the guard`);
+  }
+  // Drift guard: the committed hooks.json matcher must equal the derived one.
+  const hooksJson = JSON.parse(readFileSync(join(HERE, '..', 'hooks.json'), 'utf8'));
+  assert.equal(hooksJson.hooks.preToolUse[0].matcher, MUTATING_MATCHER, 'hooks.json matcher drifted from MUTATING_MATCHER');
+});
+
+test('(F2) a corrupt/invalid tickets.json fails CLOSED under active enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), '{ this is not valid json');
+    const v = decide(payload('Write', 'src/anything.js'), { root, env: env() });
+    assert.equal(v.permission, 'deny', 'corrupt tickets.json must not silently drop declared rails');
+    assert.match(v.user_message, /failing closed/);
   } finally { cleanup(root); }
 });
 
