@@ -1,7 +1,7 @@
 # External Ticketing Sync — Design
 
 **Date:** 2026-06-27
-**Status:** Approved design (rev 3, post adversarial review round 2), pending implementation plan
+**Status:** Approved design (rev 4, post adversarial review round 3 — cleared to proceed), pending implementation plan
 **Author:** Chris Williams (with Claude)
 
 ## Problem
@@ -358,8 +358,9 @@ works *with* that reality rather than pretending to bypass it:
    content changed) and an atomic sidecar write (sync state). `syncedHash` is part
    of that single sidecar write — never a second pass.
 
-**Union/deletion semantics:** pull **unions**. Local-only tickets (not in the
-sidecar) and synced tickets outside the current selection are preserved untouched.
+**Union/deletion semantics:** pull **unions**. Local-only tickets (a `T<n>` id with
+no sidecar entry) and synced tickets outside the current selection are preserved
+untouched.
 A previously-synced issue absent from a *full* selection is **not auto-deleted**;
 it is reported (and, in the deferred online doctor, flagged as orphaned). Closed
 issues are synced (status reflects closed) unless the selector excludes them.
@@ -390,8 +391,8 @@ MVP but ids are already repo-qualified, so multi-repo needs no id change later.)
 1. **Update** each ticket already in the sidecar: re-serialize its block (canonical
    JSON) between the sentinels, preserving `{prefix, suffix}` prose verbatim — only
    if the canonical block changed.
-2. **Create** each local-only ticket (not in the sidecar) that matches the create
-   policy, **idempotently**:
+2. **Create** each local-only ticket (a `T<n>` id with no sidecar entry) that
+   matches the create policy, **idempotently**:
    a. Generate/reuse a stable `key` (uuid) and record a `pendingCreates[key]` entry
       in the sidecar **before** the remote call (crash recovery).
    b. **Pre-create adoption scan:** scan the **already-paginated pull list** of
