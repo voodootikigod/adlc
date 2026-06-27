@@ -1,6 +1,7 @@
 # ADR: Risk-tiered multi-model adversarial review
 
-**Status:** **Proposed.** Adopt reviewer **diversity** as a risk-gated P5 practice: for
+**Status:** **Accepted — recommended practice (mechanical enforcement deferred).**
+(Superseded `Proposed` on 2026-06-27.) Adopt reviewer **diversity** as a risk-gated P5 practice: for
 high-blast-radius changes, require an independent verdict from **≥2 distinct providers**
 and treat a single provider's clean `approve` as **advisory, not a gate-pass**. Ship the
 `--providers` multi-provider mode in the `adversarial-review` skill as the mechanism. Do
@@ -132,10 +133,9 @@ surfaced **only** when an independent provider with different priors was added.
 
 ## Adoption / next steps
 
-1. Accept this ADR (P6 human gate) → status `Accepted`.
+1. ~~Accept this ADR (P6 human gate)~~ — **Accepted 2026-06-27.**
 2. Build the `--providers` mode in the `voodootikigod/adversarial-review` repo per the
    spec's AC4–AC7 (follow-on ticket).
-3. Document the risk-tier policy in `docs/toolkit.md` alongside the existing review
-   guidance.
+3. ~~Document the risk-tier policy in `docs/toolkit.md`~~ — **done** (Typical flow, step 6).
 4. Revisit mechanical enforcement once trust-boundary features are built often enough
    that operator invocation proves insufficient — the same trigger ADR-0005 set.

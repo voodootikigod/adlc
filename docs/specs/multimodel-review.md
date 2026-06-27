@@ -66,8 +66,8 @@ auto-provisioning of provider keys.
 
 ## Acceptance criteria (each has a concrete verification method)
 
-- **AC1** — ADR-0007 exists, is `Status: Proposed`, references the Cursor case study and
-  `review-calibration`, and includes a cost / diminishing-returns caveat. *Verify:* run `grep -nE 'Proposed|review-calibration|Cursor|diminishing' docs/adr/0007-multimodel-adversarial-review.md` and confirm all four appear.
+- **AC1** — ADR-0007 exists with a `Status` line (Accepted), references the Cursor case
+  study and `review-calibration`, and includes a cost / diminishing-returns caveat. *Verify:* run `grep -nE 'Status|review-calibration|Cursor|diminishing' docs/adr/0007-multimodel-adversarial-review.md` and confirm all four appear.
 
 - **AC2** — ADR-0007 defines the risk tiers (`trust boundary`, `deny path`, auth, data-loss, CI/CD) requiring ≥2 distinct providers and states a single approve is advisory for those tiers. *Verify:* `grep -nE 'trust boundary|deny path|advisory' docs/adr/0007-multimodel-adversarial-review.md` and confirm the tiers + "advisory" appear.
 
