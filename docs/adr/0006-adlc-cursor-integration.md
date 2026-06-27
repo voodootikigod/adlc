@@ -105,6 +105,12 @@ control:
   collects **every** target path (scalars + nested batch items, mirroring the
   Claude sibling) and the guard denies if **any** one is a frozen rail — a
   single-scalar extractor would wave a MultiEdit through.
+- Patch-envelope payloads: an `apply_patch`-style tool names its targets inside a
+  `command`/`patch` string (`*** Update File: …`). The extractor parses those
+  headers so the named paths are rail-checked. As a categorical backstop, a tool
+  that **classifies as mutating** but exposes **no inspectable path** under active
+  enforcement (an opaque/unparsed format) fails **closed** — only read-only/no-path
+  tools are allowed through.
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail is
   resolved (target + existing parent segments) before rail comparison and denied.
 - Multi-root workspaces: in a Cursor workspace with several `workspace_roots`, the

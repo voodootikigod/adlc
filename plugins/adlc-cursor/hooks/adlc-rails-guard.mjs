@@ -21,7 +21,7 @@
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
-import { checkRail } from '../rails-checker.mjs';
+import { checkRail, classifyTool } from '../rails-checker.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -75,6 +75,23 @@ export function extractToolName(payload) {
 // structured mutator can carry its paths ONLY here, with no top-level scalar.
 const BATCH_KEYS = ['edits', 'files', 'changes', 'operations', 'fileEdits', 'file_edits'];
 
+// Keys whose VALUE is a free-form patch / command string that names its target
+// files inline (the apply_patch envelope), e.g. "*** Update File: test/a.mjs".
+const PATCH_TEXT_KEYS = ['command', 'cmd', 'patch', 'input', 'content', 'text', 'diff'];
+const PATCH_PREFIXES = ['*** Add File: ', '*** Update File: ', '*** Delete File: ', '*** Move to: '];
+
+/** Pull every `*** <verb> File: <path>` target out of an apply_patch-style string. */
+function collectPatchPaths(text, out) {
+  for (const line of String(text).split(/\r?\n/)) {
+    for (const pre of PATCH_PREFIXES) {
+      if (line.startsWith(pre)) {
+        const p = line.slice(pre.length).trim();
+        if (p) out.add(p);
+      }
+    }
+  }
+}
+
 /**
  * EVERY file path a structured edit would touch — the scalar path keys at the top
  * level and in each input bag, PLUS any per-item paths nested in `edits[]`/`files[]`
@@ -94,6 +111,11 @@ export function extractFilePaths(payload) {
         if (typeof el === 'string' && el.trim()) out.add(el);
         else if (el && typeof el === 'object') { const es = firstString(el, PATH_KEYS); if (es) out.add(es); }
       }
+    }
+    // apply_patch-style payloads name their targets inside a patch/command string.
+    for (const tk of PATCH_TEXT_KEYS) {
+      const v = obj[tk];
+      if (typeof v === 'string' && v.includes('*** ')) collectPatchPaths(v, out);
     }
   };
   if (payload && typeof payload === 'object') {
@@ -159,9 +181,25 @@ export function decide(payload, { root, env = process.env } = {}) {
   try {
     const tool = extractToolName(payload);
     const filePaths = extractFilePaths(payload);
-    // Nothing path-shaped to gate (e.g. a non-file tool slipped past the matcher):
-    // allow. Bash/shell writes are intentionally not gated here.
-    if (!filePaths.length) return { permission: 'allow' };
+    if (!filePaths.length) {
+      // No path we could see. For a read-only / non-file tool that's fine — allow.
+      // But a MUTATING (or unrecognized) tool that reached the guard with an
+      // unparseable target under active enforcement is opaque: fail CLOSED rather
+      // than wave it through (e.g. a patch format we don't parse). Bash/shell writes
+      // are intentionally not gated here and fall to the CI gate.
+      const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+      if (enforcing && classifyTool(tool) !== 'readonly') {
+        return {
+          permission: 'deny',
+          user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — a mutating tool with no verifiable target path while enforcement is active`,
+          agent_message:
+            `A mutating tool reached the rail guard during an active build but exposed no inspectable ` +
+            `file path, so it cannot be verified against the frozen rails and is denied. Use a structured ` +
+            `edit/write with an explicit path rather than an opaque patch/command payload.`,
+        };
+      }
+      return { permission: 'allow' };
+    }
 
     // Check EVERY target path (a MultiEdit/batch payload touches several) and deny
     // if ANY is a frozen rail. Resolve the owning root per path (multi-root safe).

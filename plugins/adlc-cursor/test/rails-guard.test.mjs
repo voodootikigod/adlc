@@ -236,6 +236,28 @@ test('(batch) MultiEdit/batch payloads with nested edits[]/files[] are rail-chec
   } finally { cleanup(root); }
 });
 
+test('(patch) apply_patch command string naming a rail is denied; a non-rail patch allows', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    const railPatch = '*** Begin Patch\n*** Update File: src/frozen.js\n@@\n-a\n+b\n*** End Patch';
+    assert.equal(decide({ tool_name: 'apply_patch', tool_input: { command: railPatch } }, { root, env: env() }).permission, 'deny');
+    const freePatch = '*** Begin Patch\n*** Add File: src/new.js\n+x\n*** End Patch';
+    assert.equal(decide({ tool_name: 'apply_patch', tool_input: { command: freePatch } }, { root, env: env() }).permission, 'allow');
+  } finally { cleanup(root); }
+});
+
+test('(no-path) a MUTATING tool with no extractable path fails CLOSED under enforcement, OPEN otherwise; reads allow', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    // mutating tool, nothing to inspect, enforcement on -> deny (opaque, can't verify)
+    assert.equal(decide({ tool_name: 'edit_file', tool_input: {} }, { root, env: env() }).permission, 'deny');
+    // same, enforcement off -> allow (guard is a no-op)
+    assert.equal(decide({ tool_name: 'edit_file', tool_input: {} }, { root, env: { ADLC_P4_ENFORCEMENT: '0' } }).permission, 'allow');
+    // read-only tool with no path -> always allow
+    assert.equal(decide({ tool_name: 'codebase_search', tool_input: { query: 'x' } }, { root, env: env() }).permission, 'allow');
+  } finally { cleanup(root); }
+});
+
 test('(fail-safe) an unexpected throw in the deny path fails CLOSED under active enforcement, OPEN when off', () => {
   // Force checkRail to throw (a non-string root makes path.join throw) to exercise
   // the categorical catch: under active enforcement an error must NOT become a
