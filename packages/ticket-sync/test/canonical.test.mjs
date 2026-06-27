@@ -2,6 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalize, canonicalEqual, canonicalHash, normalizeNewlines } from '../lib/canonical.mjs';
 
+test('null property values are preserved, not crashed on (JSON null reaches canonicalize via free-form containers)', () => {
+  assert.equal(canonicalize(null), 'null');
+  assert.equal(canonicalize({ scope: null }), '{"scope":null}');
+  assert.equal(canonicalize({ tickets: { T1: null } }), '{"tickets":{"T1":null}}');
+  assert.ok(canonicalEqual({ a: null }, { a: null }));
+});
+
 test('sorts object keys recursively', () => {
   assert.equal(canonicalize({ b: 1, a: 2 }), '{"a":2,"b":1}');
   assert.equal(canonicalize({ z: { y: 1, x: 2 } }), '{"z":{"x":2,"y":1}}');
