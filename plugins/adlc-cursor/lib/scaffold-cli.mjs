@@ -16,5 +16,8 @@ const tag = (r) => (r.created ? 'created' : 'present');
 console.log(`adlc-cursor scaffold (${projectRoot}):`);
 console.log(`  .adlc/config.json     — ${tag(config)}`);
 console.log(`  .cursor/hooks.json    — ${hooks.created ? 'created' : 'merged'} (rails-guard + audit wired)`);
+if (hooks.backedUp) {
+  console.log(`  ⚠ existing .cursor/hooks.json was unparseable — preserved verbatim at ${hooks.backedUp} before writing a fresh file`);
+}
 console.log(`  .cursor/rules/adlc.mdc — ${tag(rule)}`);
 console.log('Next: author a ticket in .adlc/tickets.json, then `adlc rails-guard` to freeze rails.');

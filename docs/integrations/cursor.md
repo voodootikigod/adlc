@@ -28,22 +28,28 @@ binary are follow-on (see [Gaps](#gaps)).
 
 ## Install
 
-1. Install the toolkit and this package:
+The plugin ships in this repo at `plugins/adlc-cursor/`. The `@adlc/cursor-package`
+package is **not yet published to npm**, so install from source for now.
+
+1. Install the gate toolkit (the hooks/commands shell out to the `adlc` binary):
 
    ```sh
    npm install -g @adlc/cli
-   npm install --save-dev @adlc/cursor-package    # or reference the repo path
    ```
 
-2. Bootstrap (idempotent — merges into any existing `.cursor/hooks.json`):
+2. Bootstrap from the plugin source (idempotent — **merges** into any existing
+   `.cursor/hooks.json`; if that file is present but unparseable it is preserved
+   verbatim in a `.bak` sibling before a fresh one is written, never silently
+   dropped):
 
    ```sh
-   node ./node_modules/@adlc/cursor-package/lib/scaffold-cli.mjs .
+   node /path/to/adlc/plugins/adlc-cursor/lib/scaffold-cli.mjs .
    ```
 
    This writes `.adlc/config.json`, `.cursor/hooks.json` (wiring the rails-guard +
    audit hooks), and `.cursor/rules/adlc.mdc`. Inside Cursor you can also run the
-   `/adlc-init` command.
+   `/adlc-init` command. (Once the package is published, the same scaffolder will be
+   runnable from `node_modules/@adlc/cursor-package/`.)
 
 3. Verify locally (no Cursor binary required):
 

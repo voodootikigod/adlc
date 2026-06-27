@@ -56,13 +56,26 @@ export function ensureCursorHooks(projectRoot, { pluginRoot = PLUGIN_ROOT } = {}
   const hooksPath = join(cursorDir, 'hooks.json');
 
   let existing;
+  let backedUp;
   if (existsSync(hooksPath)) {
-    try { existing = JSON.parse(readFileSync(hooksPath, 'utf8')); }
-    catch { existing = undefined; } // unparseable: replace with a fresh, valid file
+    const raw = readFileSync(hooksPath, 'utf8');
+    try {
+      existing = JSON.parse(raw);
+    } catch {
+      // Unparseable existing config: do NOT silently drop the user's other hooks.
+      // Preserve the original VERBATIM in a sibling .bak (never overwriting an
+      // existing backup), then write a fresh valid file. The merge promise can't be
+      // honored on corrupt JSON, but data loss is unacceptable.
+      backedUp = `${hooksPath}.bak`;
+      let n = 0;
+      while (existsSync(backedUp)) backedUp = `${hooksPath}.bak.${++n}`;
+      writeFileSync(backedUp, raw);
+      existing = undefined;
+    }
   }
   const merged = mergeHooks(existing, pluginRoot);
   writeFileSync(hooksPath, `${JSON.stringify(merged, null, 2)}\n`);
-  return { path: hooksPath, created: !existing };
+  return { path: hooksPath, created: !existing, backedUp };
 }
 
 /** Copy the gate-router rule into `.cursor/rules/adlc.mdc`. Never clobbers a user edit. */

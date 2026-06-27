@@ -46,11 +46,16 @@ test('mergeHooks preserves a user existing hook and does not duplicate ADLC entr
   assert.equal(adlcCount, 1);
 });
 
-test('ensureCursorHooks recovers from an unparseable existing hooks.json', () => {
+test('ensureCursorHooks BACKS UP an unparseable existing hooks.json instead of dropping it', () => {
   const root = mkRepo();
   mkdirSync(join(root, '.cursor'), { recursive: true });
-  writeFileSync(join(root, '.cursor', 'hooks.json'), '{ not json');
-  ensureCursorHooks(root);
+  const original = '{ not json — a company hook lived here';
+  writeFileSync(join(root, '.cursor', 'hooks.json'), original);
+  const res = ensureCursorHooks(root);
+  // ADLC hook is installed...
   const hooks = readJson(join(root, '.cursor', 'hooks.json'));
   assert.match(hooks.hooks.preToolUse[0].command, /adlc-rails-guard/);
+  // ...but the original content is preserved verbatim in a backup, not lost.
+  assert.ok(res.backedUp, 'a backup path must be reported');
+  assert.equal(readFileSync(res.backedUp, 'utf8'), original, 'backup must hold the original bytes');
 });
