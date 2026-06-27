@@ -1,14 +1,13 @@
 # opencode Integration
 
-> **Status: planned — no integration exists yet.**
-> This document tracks design intent only. There are no installation
-> instructions because there is nothing to install.
+> **Status: proposal / implementation target.**
+> The OpenCode integration is specified in this branch, but no installable
+> `@adlc/opencode-plugin` package or `plugins/adlc-opencode` source tree ships yet.
 
-## Overview
+The current design is documented in:
 
-Opencode integration is planned for a future release.
+- [OpenCode adoption guide](../opencode.md)
+- [OpenCode integration plan](../opencode-integration-plan.md)
 
-When it ships, this document will cover installation, configuration, and
-usage of the ADLC toolkit inside the opencode harness — mirroring the
-structure of the [Claude Code integration](./claude-code.md) and
-[Codex integration](./codex.md) docs.
+Until the implementation artifacts land, treat those documents as the integration
+contract for future work rather than runnable installation instructions.

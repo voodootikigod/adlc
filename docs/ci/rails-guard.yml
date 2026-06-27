@@ -1,14 +1,63 @@
 # ADLC rail-freeze CI backstop — copy into your repo as
 # .github/workflows/adlc-rails-guard.yml
+# OpenCode /adlc-init template source: docs/ci/rails-guard.yml
 #
-# This is the unbypassable commit-time gate the in-session PreToolUse rail hook
-# relies on. The hook blocks Edit/Write/MultiEdit and common Bash writes to
-# frozen rails, but a shell write form it does not recognize (node -e, python,
-# cp, perl -i, …) still lands in the PR diff — this job rejects that PR.
+# This is the base-branch commit-time gate backing the in-session PreToolUse rail
+# hook. The hook blocks Edit/Write/MultiEdit and common Bash writes to frozen
+# rails, but a shell write form it does not recognize (node -e, python, cp,
+# perl -i, …) still lands in the PR diff — this job rejects that PR when the rail
+# was already frozen on the base branch.
 #
-# It reads every rail glob declared in .adlc/tickets.json and runs the
-# diff-based `adlc rails-guard` gate against the PR base. It no-ops when no rails
-# are declared. Make this a required check in branch protection.
+# It reads every rail glob declared in the trusted base .adlc/tickets.json and
+# runs the diff-based `adlc rails-guard` gate against the PR base. Once
+# .adlc/config.json exists on the base branch, it also protects immutable ADLC
+# trust roots even if no ticket rails exist yet. Configure it as a required check
+# only after acknowledging the SECURITY LIMITATION below.
+#
+# SECURITY LIMITATION: this template does not protect rails introduced for the
+# first time in the same PR. New rails are enforced only after they land on the
+# base branch. Do not treat this workflow as complete rail-freeze enforcement for
+# newly frozen paths. /adlc-init must require --acknowledge-new-rail-bypass
+# (headless) or an interactive TUI confirmation before scaffolding this template
+# as a required check until a future new-rail-aware union gate ships.
+#
+# SELF-PROTECTION REQUIREMENT: before configuring this as a required check,
+# protect the deployed .github/workflows/adlc-rails-guard.yml with CODEOWNERS or
+# a branch ruleset requiring trusted-owner approval. GitHub pull_request events
+# from same-repository branches run the PR branch's workflow file, so this script
+# cannot defend itself if a PR removes the gate. The effective CODEOWNERS file
+# must not leave the deployed workflow path ownerless through a later no-owner or
+# negation entry, even when a broader earlier pattern names trusted owners. This
+# job mechanically verifies that CODEOWNERS covers the workflow path; it cannot
+# prove the owners are trusted. After configuring branch protection/rulesets,
+# set `trustedCodeownersAttested: true` in base .adlc/config.json through a
+# trusted-owner reviewed commit before enabling this workflow as required.
+#
+# Signed evidence mode requires a repository-managed ADLC_RUNNER_PATH secret
+# pointing to an audited adlc-runner binary by absolute path. This template
+# intentionally does not install the unpublished @adlc/runner package from npm.
+# Signed mode also requires `runnerBinarySha256` in .adlc/config.json.
+# Run signed mode only on the dedicated `adlc-signed` self-hosted runner pool,
+# with ADLC_SIGNED_RUNNER_POOL=1 set as an Actions variable for that protected
+# runner environment. Shared self-hosted runners must not be able to write to
+# ADLC_RUNNER_PATH or its temporary execution copy.
+#
+# Signed-mode PR checks execute the audited runner probe during pull_request.
+# Runner-host filesystem integrity is a prerequisite; if that execution surface
+# is unacceptable, split the signed runner probe into a protected-base push job.
+#
+# Post-bootstrap signer changes are intentionally blocked in PRs because
+# .adlc/config.json is a rail trust root. Grant them through a protected-base
+# admin ceremony countersigned by an existing approver.
+#
+# Existing base ticket entries in `.adlc/tickets.json` are protected by id and
+# stable semantic content. Ordinary PRs may add new ticket entries, but they
+# cannot edit or remove existing ticket contracts. Existing `.adlc/manifest.jsonl`
+# evidence must remain append-only; when no base manifest exists, ordinary PRs
+# may create only an absent or empty manifest.
+#
+# First-time bootstrap PRs must not introduce pre-populated manifest evidence;
+# `.adlc/manifest.jsonl` must be absent or empty until reviewed post-bootstrap.
 
 name: ADLC Rails Guard
 
@@ -20,6 +69,9 @@ permissions:
 
 jobs:
   rails-guard:
+    # Unsigned-fallback bootstrap can run on GitHub-hosted runners. Signed mode
+    # fast-fails below unless this job is moved to [self-hosted, adlc-signed]
+    # with ADLC_SIGNED_RUNNER_POOL=1 exposed through the step env below.
     runs-on: ubuntu-latest
     steps:
       # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
@@ -46,38 +98,333 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
+      - name: Verify ADLC bootstrap acknowledgement
+        # Bootstrap ordering: enable this workflow as a required check only after the
+        # initial .adlc/config.json acknowledgement has landed on the base branch.
+        # The only allowed first-PR escape is a base branch with no .adlc tree at all.
+        run: |
+          node -e '
+            const fs = require("fs");
+            const crypto = require("crypto");
+            const os = require("os");
+            const path = require("path");
+            const { spawnSync } = require("child_process");
+            const base = "origin/" + (process.env.BASE_REF || "main");
+            let runnerTmpDir = "";
+            const cleanupRunner = () => { if (runnerTmpDir) { try { fs.rmSync(runnerTmpDir, { recursive: true, force: true }); } catch (_) {} } };
+            process.on("exit", cleanupRunner);
+            process.on("SIGINT", () => process.exit(1));
+            process.on("SIGTERM", () => process.exit(1));
+            const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
+            const workflowHasCodeowners = () => {
+              const workflowPath = ".github/workflows/adlc-rails-guard.yml";
+              const escapeRegex = (s) => s.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+              const globToRegex = (pattern) => {
+                let out = "";
+                for (let i = 0; i < pattern.length; i += 1) {
+                  const c = pattern[i];
+                  if (c === "*") {
+                    if (pattern[i + 1] === "*") {
+                      out += ".*";
+                      i += 1;
+                    } else {
+                      out += "[^/]*";
+                    }
+                  } else {
+                    out += escapeRegex(c);
+                  }
+                }
+                return new RegExp("^" + out + "$");
+              };
+              const codeownersPatternMatches = (rawPattern) => {
+                let pattern = rawPattern.replace(/^\/+/, "");
+                if (!pattern) return false;
+                if (pattern === "*") return true;
+                if (pattern.endsWith("/")) pattern += "**";
+                const candidates = pattern.includes("/") ? [workflowPath] : [path.basename(workflowPath)];
+                const matcher = globToRegex(pattern);
+                return candidates.some(candidate => matcher.test(candidate));
+              };
+              for (const file of [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]) {
+                const show = spawnSync("git", ["show", base + ":" + file], { encoding: "utf8", timeout: 60000 });
+                if (show.error) fail("git show base CODEOWNERS failed: " + show.error.message);
+                if (show.signal) fail("git show base CODEOWNERS timed out or was killed by " + show.signal);
+                if (show.status !== 0) continue;
+                let protectedByCodeowners = false;
+                const lines = show.stdout.split(/\r?\n/).map(line => line.replace(/\s+#.*$/, "").trim()).filter(line => line && !line.startsWith("#"));
+                for (const line of lines) {
+                  const parts = line.split(/\s+/);
+                  const pattern = parts[0];
+                  const negated = pattern.startsWith("!");
+                  const normalized = negated ? pattern.slice(1) : pattern;
+                  if (codeownersPatternMatches(normalized)) {
+                    protectedByCodeowners = !negated && parts.length >= 2;
+                  }
+                }
+                return protectedByCodeowners;
+              }
+              return false;
+            };
+            const git = (args, label) => {
+              const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
+              if (res.error) fail(label + " failed: " + res.error.message);
+              if (res.signal) fail(label + " timed out or was killed by " + res.signal);
+              return res;
+            };
+            const parse = (s, label) => { try { return JSON.parse(s); } catch (e) { fail("cannot parse " + label + ": " + e.message); } };
+            const stable = (v) => JSON.stringify(sortKeys(v));
+            const sortKeys = (v) => {
+              if (Array.isArray(v)) return v.map(sortKeys);
+              if (v && typeof v === "object") return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
+              return v;
+            };
+            const assertSuperset = (trustedValue, headValue, path) => {
+              if (Array.isArray(trustedValue)) {
+                if (!Array.isArray(headValue)) fail(path + " must remain an array");
+                const headSet = new Set(headValue.map(stable));
+                for (const item of trustedValue) if (!headSet.has(stable(item))) fail(path + " cannot remove trusted entry " + stable(item));
+                return;
+              }
+              if (trustedValue && typeof trustedValue === "object") {
+                if (!headValue || typeof headValue !== "object" || Array.isArray(headValue)) fail(path + " must remain an object");
+                for (const key of Object.keys(trustedValue)) assertSuperset(trustedValue[key], headValue[key], path + "." + key);
+                return;
+              }
+              if (stable(trustedValue) !== stable(headValue)) fail(path + " cannot change trusted value " + stable(trustedValue));
+            };
+            const assertNoExtraExistingSignerFields = (trustedValue, headValue, path) => {
+              if (!trustedValue || typeof trustedValue !== "object" || Array.isArray(trustedValue)) return;
+              if (!headValue || typeof headValue !== "object" || Array.isArray(headValue)) fail(path + " must remain an object");
+              for (const key of Object.keys(trustedValue)) {
+                const trustedEntry = trustedValue[key];
+                const headEntry = headValue[key];
+                if (trustedEntry && typeof trustedEntry === "object" && !Array.isArray(trustedEntry)) {
+                  if (!headEntry || typeof headEntry !== "object" || Array.isArray(headEntry)) fail(path + "." + key + " must remain an object");
+                  for (const headKey of Object.keys(headEntry)) if (!Object.prototype.hasOwnProperty.call(trustedEntry, headKey)) fail(path + "." + key + "." + headKey + " is an undeclared signer property");
+                  assertNoExtraExistingSignerFields(trustedEntry, headEntry, path + "." + key);
+                }
+              }
+            };
+            const validateNewSigners = (trustedSigners, headSigners) => {
+              if (!headSigners || typeof headSigners !== "object" || Array.isArray(headSigners)) fail("signers must remain an object");
+              const allowedNewRoles = new Set(["builder", "critic"]);
+              const allowedNewFields = new Set(["role", "roles"]);
+              for (const key of Object.keys(headSigners)) {
+                if (trustedSigners && Object.prototype.hasOwnProperty.call(trustedSigners, key)) continue;
+                const entry = headSigners[key];
+                if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("new signer " + key + " must be an object");
+                for (const field of Object.keys(entry)) if (!allowedNewFields.has(field)) fail("new signer " + key + " has undeclared property " + field);
+                if (entry.role === undefined && entry.roles === undefined) fail("new signer " + key + " must declare a role or roles field");
+                if (entry.role !== undefined && entry.roles !== undefined) fail("new signer " + key + " must use either role or roles, not both");
+                if (entry.role !== undefined && (typeof entry.role !== "string" || !allowedNewRoles.has(entry.role))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
+                const roles = Array.isArray(entry.roles) ? entry.roles : [entry.role];
+                if (!roles.length || roles.some(r => typeof r !== "string" || !allowedNewRoles.has(r))) fail("new signer " + key + " can only use builder or critic roles in this CI path; grant approver roles through the protected-base admin ceremony");
+              }
+            };
+            const rejectNewSigners = (trustedSigners, headSigners) => {
+              if (!headSigners || typeof headSigners !== "object" || Array.isArray(headSigners)) fail("signers must remain an object");
+              for (const key of Object.keys(headSigners)) {
+                if (!trustedSigners || !Object.prototype.hasOwnProperty.call(trustedSigners, key)) fail("new signer " + key + " requires the protected-base admin ceremony");
+              }
+            };
+            const assertExistingSignerRolesExact = (trustedSigners, headSigners) => {
+              const roleSet = (entry) => {
+                if (!entry || typeof entry !== "object" || Array.isArray(entry)) fail("signer entry must remain an object");
+                return new Set((Array.isArray(entry.roles) ? entry.roles : [entry.role]).filter(r => r !== undefined));
+              };
+              for (const key of Object.keys(trustedSigners)) {
+                const trustedRoles = roleSet(trustedSigners[key]);
+                const headRoles = roleSet(headSigners[key]);
+                if (trustedRoles.size !== headRoles.size) fail("existing signer " + key + " roles cannot change");
+                for (const role of trustedRoles) if (!headRoles.has(role)) fail("existing signer " + key + " roles cannot change");
+              }
+            };
+            if (!fs.existsSync(".adlc/config.json")) fail("missing .adlc/config.json; run /adlc-init before enabling this required check");
+            const head = parse(fs.readFileSync(".adlc/config.json", "utf8"), "head .adlc/config.json");
+            if (head.acknowledgedNewRailBypass !== true) fail("missing acknowledgedNewRailBypass: true; acknowledge the new-rail limitation before using this as a required check");
+            if (!["signed", "unsigned-fallback"].includes(head.securityMode)) fail("securityMode must be signed or unsigned-fallback");
+            if (head.securityMode === "unsigned-fallback" && head.signedEvidenceRequired === true) fail("signedEvidenceRequired cannot be true in unsigned-fallback mode");
+            const ref = git(["rev-parse", "--verify", "--quiet", base + "^{commit}"], "git rev-parse base");
+            if (ref.status !== 0) fail("base ref " + base + " does not resolve — bootstrap cannot be verified");
+            const baseAdlc = git(["ls-tree", "--name-only", base, "--", ".adlc"], "git ls-tree base .adlc");
+            const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
+            if (baseAdlc.status !== 0) fail("git ls-tree failed for " + base + " .adlc (operational) — failing closed");
+            if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
+            if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
+              if (fs.existsSync(".adlc/manifest.jsonl") && fs.readFileSync(".adlc/manifest.jsonl", "utf8").trim()) fail("first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence");
+              if (head.securityMode === "signed") fail("bootstrap with securityMode signed requires the adlc-signed runner pool and ADLC_SIGNED_RUNNER_POOL=1 before enabling this as a required check; bootstrap in unsigned-fallback first, then upgrade through the protected-base runner ceremony");
+              if (head.signers !== undefined) validateNewSigners({}, head.signers);
+              console.log("bootstrap mode: base has no .adlc tree; merge this bootstrap commit before enabling the workflow as required, then configure CODEOWNERS protection before marking the check required.");
+              process.exit(0);
+            }
+            if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; merge bootstrap config before enabling this required check");
+            const showConfig = git(["show", base + ":.adlc/config.json"], "git show base config");
+            if (showConfig.status !== 0) fail("git show failed for existing base config (operational) — failing closed");
+            const trusted = parse(showConfig.stdout, "base .adlc/config.json");
+            if (trusted.trustedCodeownersAttested !== true) fail("base .adlc/config.json must set trustedCodeownersAttested: true after trusted-owner CODEOWNERS/ruleset review; this PR cannot self-attest workflow protection");
+            if (head.trustedCodeownersAttested !== true) fail("trustedCodeownersAttested cannot be removed in a PR");
+            if (!workflowHasCodeowners()) fail("missing CODEOWNERS entry protecting .github/workflows/adlc-rails-guard.yml; configure trusted-owner review before enabling this required check");
+            if (trusted.acknowledgedNewRailBypass !== true) fail("acknowledgedNewRailBypass must already be set on the base branch; a PR cannot self-acknowledge this limitation");
+            if (!["signed", "unsigned-fallback"].includes(trusted.securityMode)) fail("base .adlc/config.json has an unrecognized securityMode; cannot verify downgrade safety");
+            if (trusted.securityMode === "signed" && head.securityMode !== "signed") fail("cannot downgrade securityMode from signed to unsigned-fallback in a PR");
+            if (trusted.signedEvidenceRequired === true && head.signedEvidenceRequired !== true) fail("cannot remove signedEvidenceRequired from a base config that requires it");
+            if (typeof trusted.runnerBinarySha256 === "string" && head.runnerBinarySha256 !== trusted.runnerBinarySha256) fail("runnerBinarySha256 cannot change in a PR; rotate it through the protected-base runner ceremony");
+            if ((head.securityMode === "signed" || head.signedEvidenceRequired === true) && trusted.securityMode !== "signed" && trusted.signedEvidenceRequired !== true) fail("signed mode upgrade requires a protected-base runner ceremony");
+            if (trusted.securityMode === "signed" || trusted.signedEvidenceRequired === true) {
+              // Defense-in-depth signal only: the authoritative boundary is the
+              // adlc-signed runner-pool label plus branch/workflow protection.
+              if (process.env.RUNNER_ENVIRONMENT !== "self-hosted" || process.env.ADLC_SIGNED_RUNNER_POOL !== "1") fail("signed mode requires the dedicated adlc-signed self-hosted runner pool with ADLC_SIGNED_RUNNER_POOL=1");
+              const runnerPath = process.env.ADLC_RUNNER_PATH;
+              if (!runnerPath) fail("signed mode requires ADLC_RUNNER_PATH to point to an audited adlc-runner binary");
+              if (!path.isAbsolute(runnerPath)) fail("ADLC_RUNNER_PATH must be an absolute path");
+              if (typeof trusted.runnerBinarySha256 !== "string" || !/^[a-f0-9]{64}$/i.test(trusted.runnerBinarySha256)) fail("signed mode requires runnerBinarySha256 in base .adlc/config.json");
+              let runnerBytes;
+              try {
+                runnerBytes = fs.readFileSync(runnerPath);
+              } catch (e) {
+                if (e && e.code === "ENOENT") fail("ADLC_RUNNER_PATH " + runnerPath + " does not exist; is this job running on the dedicated signed-mode runner pool?");
+                fail("cannot read ADLC_RUNNER_PATH " + runnerPath + ": " + e.message);
+              }
+              const digest = crypto.createHash("sha256").update(runnerBytes).digest("hex");
+              if (digest.toLowerCase() !== trusted.runnerBinarySha256.toLowerCase()) fail("ADLC_RUNNER_PATH sha256 does not match runnerBinarySha256");
+              runnerTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "adlc-runner-"));
+              const runnerCopy = path.join(runnerTmpDir, "adlc-runner");
+              fs.writeFileSync(runnerCopy, runnerBytes, { mode: 0o500 });
+              fs.chmodSync(runnerCopy, 0o500);
+              // Keep the probe environment and cwd narrow, while preserving the
+              // basic OS variables legitimate binaries commonly need for homedir
+              // and temp resolution. Secrets and repo-controlled files stay
+              // excluded from the probe context.
+              const runnerEnv = {
+                PATH: process.env.PATH || "",
+                HOME: process.env.HOME || "",
+                TMPDIR: process.env.TMPDIR || os.tmpdir(),
+                USER: process.env.USER || "",
+              };
+              const runner = spawnSync(runnerCopy, ["--version"], { encoding: "utf8", timeout: 30000, env: runnerEnv, cwd: runnerTmpDir });
+              if (runner.error) fail("signed mode requires ADLC_RUNNER_PATH to execute: " + runner.error.message);
+              if (runner.signal) fail("ADLC_RUNNER_PATH --version timed out or was killed by " + runner.signal);
+              if (runner.status !== 0) fail("signed mode requires ADLC_RUNNER_PATH --version to exit 0");
+              for (const subcommand of ["record", "run", "accept", "upgrade"]) {
+                const probe = spawnSync(runnerCopy, [subcommand, "--help"], { encoding: "utf8", timeout: 30000, env: runnerEnv, cwd: runnerTmpDir });
+                if (probe.error) fail("adlc-runner " + subcommand + " probe failed: " + probe.error.message);
+                if (probe.signal) fail("adlc-runner " + subcommand + " probe timed out or was killed by " + probe.signal);
+                if (probe.status !== 0) fail("signed mode requires adlc-runner " + subcommand + " --help to exit 0");
+              }
+            }
+            // .adlc/config.json is a rail trust root, so post-bootstrap signer
+            // changes require the protected-base admin ceremony.
+            if (trusted.signers !== undefined) { assertSuperset(trusted.signers, head.signers, "signers"); assertNoExtraExistingSignerFields(trusted.signers, head.signers, "signers"); assertExistingSignerRolesExact(trusted.signers, head.signers); }
+            if (head.signers !== undefined) rejectNewSigners(trusted.signers ?? {}, head.signers);
+            if (Array.isArray(trusted.revokedKeys)) assertSuperset(trusted.revokedKeys, head.revokedKeys, "revokedKeys");
+            if (Array.isArray(trusted.securitySensitivePatterns)) assertSuperset(trusted.securitySensitivePatterns, head.securitySensitivePatterns, "securitySensitivePatterns");
+            if (typeof trusted.maxBundleAgeDays === "number" && (typeof head.maxBundleAgeDays !== "number" || head.maxBundleAgeDays > trusted.maxBundleAgeDays)) fail("maxBundleAgeDays can only decrease or stay the same");
+          '
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          ADLC_RUNNER_PATH: ${{ secrets.ADLC_RUNNER_PATH }}
+          ADLC_SIGNED_RUNNER_POOL: ${{ vars.ADLC_SIGNED_RUNNER_POOL }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+
       - name: Rail-freeze gate
         run: |
           node -e '
             const { spawnSync } = require("child_process");
             const base = "origin/" + (process.env.BASE_REF || "main");
             const fail = (m) => { console.error("rails-guard-ci: " + m); process.exit(1); };
+            const deny = (m) => { console.error("rails-guard-ci: " + m); process.exit(2); };
+            const git = (args, label) => {
+              const res = spawnSync("git", args, { encoding: "utf8", timeout: 60000 });
+              if (res.error) fail(label + " failed: " + res.error.message);
+              if (res.signal) fail(label + " timed out or was killed by " + res.signal);
+              return res;
+            };
+            const stable = (v) => {
+              if (Array.isArray(v)) return JSON.stringify(v.map(i => JSON.parse(stable(i))));
+              if (v && typeof v === "object") return JSON.stringify(Object.fromEntries(Object.keys(v).sort().map(k => [k, JSON.parse(stable(v[k]))])));
+              return JSON.stringify(v);
+            };
+            const validateTickets = (value, label) => {
+              if (!value || typeof value !== "object" || Array.isArray(value) || !Array.isArray(value.tickets)) fail(label + " tickets not in { tickets: [...] } shape");
+              const seen = new Set();
+              for (const t of value.tickets) {
+                if (!t || typeof t !== "object" || Array.isArray(t)) fail("malformed " + label + " ticket entry");
+                if (typeof t.id !== "string" || !t.id) fail(label + " ticket missing string id");
+                if (seen.has(t.id)) fail(label + " tickets duplicate id " + t.id);
+                seen.add(t.id);
+                if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array " + label + " rails");
+                for (const r of t.rails ?? []) if (typeof r !== "string") fail("non-string " + label + " rail");
+              }
+              return value.tickets;
+            };
+            const assertBaseTicketsPreserved = (baseTickets, headTickets) => {
+              const headById = new Map(headTickets.map(t => [t.id, t]));
+              for (const baseTicket of baseTickets) {
+                const headTicket = headById.get(baseTicket.id);
+                if (!headTicket) deny("base ticket " + baseTicket.id + " cannot be removed from .adlc/tickets.json in a PR");
+                if (stable(headTicket) !== stable(baseTicket)) deny("base ticket " + baseTicket.id + " contract cannot change in .adlc/tickets.json in a PR");
+              }
+            };
             // Confirm the base REF resolves first — git show returns non-zero for
             // both "bad ref" and "file absent", and conflating them would fail open.
-            const ref = spawnSync("git", ["rev-parse", "--verify", "--quiet", base + "^{commit}"], { encoding: "utf8" });
+            const ref = git(["rev-parse", "--verify", "--quiet", base + "^{commit}"], "git rev-parse base");
             if (ref.status !== 0) fail("base ref " + base + " does not resolve — rails cannot be verified");
+            const baseAdlc = git(["ls-tree", "--name-only", base, "--", ".adlc"], "git ls-tree base .adlc");
+            const baseConfig = git(["ls-tree", "--name-only", base, "--", ".adlc/config.json"], "git ls-tree base config");
+            if (baseAdlc.status !== 0) fail("git ls-tree failed for " + base + " .adlc (operational) — failing closed");
+            if (baseConfig.status !== 0) fail("git ls-tree failed for " + base + " config (operational) — failing closed");
+            if (!baseConfig.stdout.trim() && !baseAdlc.stdout.trim()) {
+              // The bootstrap acknowledgement step above is authoritative for
+              // first-bootstrap manifest/config validation. This step only owns
+              // base-branch rail diff enforcement.
+              console.log("bootstrap mode: base has no .adlc tree — no frozen rails exist yet; bootstrap validation was handled by the previous step.");
+              process.exit(0);
+            }
+            if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
+            const immutableTrustRoots = [".adlc/config.json", ".adlc/admin.pub", ".github/workflows/adlc-rails-guard.yml", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
-            // (nothing frozen). Read the TRUSTED base file, not the PR working tree.
-            const ls = spawnSync("git", ["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], { encoding: "utf8" });
+            // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.
+            const ls = git(["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], "git ls-tree base tickets");
             if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
-            if (!ls.stdout.trim()) { console.log("no .adlc/tickets.json at " + base + " — nothing frozen."); process.exit(0); }
-            const show = spawnSync("git", ["show", base + ":.adlc/tickets.json"], { encoding: "utf8" });
-            if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
-            let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
-            if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.tickets)) fail("base tickets not in { tickets: [...] } shape");
-            const rails = [];
-            for (const t of d.tickets) {
-              if (!t || typeof t !== "object" || Array.isArray(t)) fail("malformed base ticket entry");
-              if (t.rails !== undefined && !Array.isArray(t.rails)) fail("non-array base rails");
-              for (const r of t.rails ?? []) { if (typeof r !== "string") fail("non-string base rail"); rails.push(r); }
+            let show = { stdout: "{\"tickets\":[]}", status: 0 };
+            if (!ls.stdout.trim()) {
+              console.log("no .adlc/tickets.json at " + base + " — protecting ADLC trust roots only.");
+            } else {
+              show = git(["show", base + ":.adlc/tickets.json"], "git show base tickets");
+              if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
             }
-            const u = [...new Set(rails)];
+            let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
+            const baseTickets = validateTickets(d, "base");
+            const rails = [];
+            for (const t of baseTickets) for (const r of t.rails ?? []) rails.push(r);
+            if (ls.stdout.trim()) {
+              if (!require("fs").existsSync(".adlc/tickets.json")) deny(".adlc/tickets.json exists at base but is absent at HEAD");
+              const headTickets = JSON.parse(require("fs").readFileSync(".adlc/tickets.json", "utf8"));
+              assertBaseTicketsPreserved(baseTickets, validateTickets(headTickets, "head"));
+            }
+            const manifestLs = git(["ls-tree", "--name-only", base, "--", ".adlc/manifest.jsonl"], "git ls-tree base manifest");
+            if (manifestLs.status !== 0) fail("git ls-tree failed for " + base + " manifest (operational) — failing closed");
+            if (manifestLs.stdout.trim()) {
+              if (!require("fs").existsSync(".adlc/manifest.jsonl")) deny(".adlc/manifest.jsonl exists at base but is absent at HEAD");
+              const baseManifest = git(["show", base + ":.adlc/manifest.jsonl"], "git show base manifest");
+              if (baseManifest.status !== 0) fail("git show failed for existing base manifest (operational) — failing closed");
+              if (!require("fs").readFileSync(".adlc/manifest.jsonl", "utf8").startsWith(baseManifest.stdout)) deny(".adlc/manifest.jsonl must be append-only in PRs");
+            } else if (require("fs").existsSync(".adlc/manifest.jsonl") && require("fs").readFileSync(".adlc/manifest.jsonl", "utf8").trim()) {
+              deny(".adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony");
+            }
+            // Immutable trust roots are frozen once the base is bootstrapped.
+            // Mutable ADLC state has semantic checks above: base tickets cannot
+            // change, and manifest updates must be append-only after bootstrap.
+            const u = [...new Set([...rails, ...immutableTrustRoots])];
             if (!u.length) { console.log("no rails declared at base — nothing frozen."); process.exit(0); }
-            u.push(".adlc/tickets.json"); // trust root is frozen once rails exist
+            const trustRootDiff = git(["diff", "--name-status", "-M", base + "...HEAD", "--", ...immutableTrustRoots], "git diff trust roots");
+            if (trustRootDiff.status !== 0) fail("git diff trust roots failed (operational) — failing closed");
+            if (trustRootDiff.stdout.trim()) deny("ADLC trust root changed, deleted, or renamed:\n" + trustRootDiff.stdout.trim());
             const argv = ["rails-guard", "--base", base, ...u.flatMap(r => ["--rails", r])];
-            const res = spawnSync("adlc", argv, { stdio: "inherit" });
+            const res = spawnSync("adlc", argv, { stdio: "inherit", timeout: 120000 });
             if (res.error) fail("could not run adlc rails-guard: " + res.error.message + " (is @adlc/cli installed?)");
+            if (res.signal) fail("adlc rails-guard timed out or was killed by " + res.signal);
             process.exit(typeof res.status === "number" ? res.status : 1);
           '
         env:
