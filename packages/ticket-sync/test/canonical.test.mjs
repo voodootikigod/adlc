@@ -32,3 +32,8 @@ test('canonicalHash is stable across key order', () => {
 test('normalizeNewlines collapses CRLF and CR to LF', () => {
   assert.equal(normalizeNewlines('a\r\nb\rc\nd'), 'a\nb\nc\nd');
 });
+
+test('normalizeNewlines coerces non-string input via String()', () => {
+  assert.equal(normalizeNewlines(123), '123');
+  assert.equal(normalizeNewlines(null), 'null');
+});

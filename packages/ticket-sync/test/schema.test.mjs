@@ -30,3 +30,9 @@ test('each schema is valid JSON with $id and the draft 2020-12 $schema', () => {
     assert.equal(obj.type, 'object');
   }
 });
+
+test('dependency hygiene (AC5): no third-party runtime deps — only @adlc/* allowed', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const thirdParty = Object.keys(pkg.dependencies ?? {}).filter((d) => !d.startsWith('@adlc/'));
+  assert.deepEqual(thirdParty, [], `non-@adlc runtime dependency present: ${thirdParty.join(', ')}`);
+});
