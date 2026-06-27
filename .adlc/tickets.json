@@ -193,7 +193,21 @@
         "packages/ticket-sync/test/outcomes.test.mjs",
         "packages/ticket-sync/test/github.test.mjs"
       ],
-      "rails": [],
+      "rails": [
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/lib/block.mjs",
+        "packages/ticket-sync/lib/gh.mjs",
+        "packages/ticket-sync/lib/provider.mjs",
+        "packages/ticket-sync/lib/reconcile.mjs",
+        "packages/ticket-sync/lib/rails-guard-sync.mjs",
+        "packages/ticket-sync/lib/config.mjs",
+        "packages/ticket-sync/lib/store.mjs",
+        "packages/ticket-sync/lib/pull.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**"
+      ],
       "edges": [
         {
           "to": "T10"
