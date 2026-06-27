@@ -34,7 +34,12 @@ through the stable `adlc <tool>` dispatcher.
    and select a gated consensus winner.
 6. Before review, use [`adlc hollow-test`](./tools/hollow-test.md), [`adlc prosecute`](./tools/prosecute.md), [`adlc behavior-diff`](./tools/behavior-diff.md), and [`adlc gate-manifest`](./tools/gate-manifest.md)
    to prove that tests are load-bearing, prosecution reached two dry passes, behavior
-   changes are visible, and gate evidence is recorded.
+   changes are visible, and gate evidence is recorded. For **high-blast-radius** changes
+   (trust boundary, deny path, auth, secrets, data-loss, schema/migration, CI/CD), run the
+   adversarial review against **≥2 distinct-family providers** and treat a single
+   provider's clean approve as advisory, not a gate-pass — different models have different
+   blind spots (see [ADR-0007](./adr/0007-multimodel-adversarial-review.md)). Use
+   [`adlc review-calibration`](./tools/review-calibration.md) to decide, on evidence, when one model's recall is too low to trust alone.
 7. After review, use [`adlc lesson-foundry`](./tools/lesson-foundry.md) and [`adlc rejection-mining`](./tools/rejection-mining.md) to convert repeated review
    findings into deterministic lint checks, skills, or spec-gap templates.
 8. On a schedule or after model changes, use [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md),
