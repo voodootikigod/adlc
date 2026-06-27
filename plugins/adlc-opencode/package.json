@@ -7,6 +7,7 @@
   "main": "index.mjs",
   "opencode": {
     "plugin": "./index.mjs",
+    "command": "./command/",
     "skill": "./skill/"
   },
   "peerDependencies": {

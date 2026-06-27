@@ -11,11 +11,27 @@ discovery skill.
 
 ## Status
 
-This is the **MVP increment**: the rails-guard plugin (`plugins/adlc-opencode/`)
-and the discovery skill ship and are tested. The broader lifecycle surface — the
-full slash-command suite, the keyless LLM bridge, advisory session hooks, and the
-prosecutor lenses — is designed in the integration plan and tracked as follow-on
-work (plan Phases A/B/C/E).
+Shipping so far: the rails-guard plugin (`plugins/adlc-opencode/`, plan Phase D),
+the discovery skill, and the **Phase A command surface** — `/adlc-init`,
+`/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`, `/adlc-decompose` plus the
+gate-bin dependency mapping and deterministic `/adlc-init` scaffolding. Still
+follow-on (plan Phases B/C/E): the keyless LLM bridge, advisory session hooks, and
+the prosecutor lenses.
+
+## Commands
+
+OpenCode loads project commands from `.opencode/commands/` (Markdown + YAML
+frontmatter). `/adlc-init` deploys this plugin's `command/*.md` and `skill/*.md`
+into `.opencode/` and creates `.adlc/config.json` (idempotently, via
+`lib/scaffold.mjs`). Phase A commands:
+
+| Command | Phase | Does |
+| --- | --- | --- |
+| `/adlc-init` | — | Bootstrap `.adlc/`, scaffold `.opencode/`, preflight |
+| `/adlc-ticket` | P0 | Author + triage a ticket (lock-safe write, coldstart check) |
+| `/adlc-spec` | P1 | Interrogate the spec (`parallax`, `spec-lint`, `premortem`, prompt-only) |
+| `/adlc-approve-spec` | P1 G1 | Record the human spec approval |
+| `/adlc-decompose` | P2 | Slice into tickets, `coldstart` + `merge-forecast` |
 
 ## Install
 
@@ -75,9 +91,9 @@ glob/ticket logic to `@adlc/core`:
 
 | Phase | Status | Wired via |
 | --- | --- | --- |
-| P0 Triage | Planned | plan Phase A (`/adlc-ticket`) — follow-on ticket T2 |
-| P1 Interrogate | Planned | plan Phase A (`/adlc-spec`) + the `adlc` skill |
-| P2 Decompose | Planned | plan Phase A — follow-on T2 |
+| P0 Triage | **Yes** | `/adlc-ticket` (Phase A) |
+| P1 Interrogate | **Yes** | `/adlc-spec` + `/adlc-approve-spec` (Phase A) + the `adlc` skill |
+| P2 Decompose | **Yes** | `/adlc-decompose` (Phase A) |
 | P3 Rail | **MVP** | the in-session rails-guard hook (this plugin) + CI gate |
 | P4 Build | Partial | rails-guard hook; flail-detection is follow-on |
 | P5 Prosecute | Planned | plan Phase E prosecutor lenses — follow-on T5 |
