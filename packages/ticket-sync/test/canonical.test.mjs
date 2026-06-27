@@ -15,6 +15,26 @@ test('array order IS significant', () => {
   assert.ok(!canonicalEqual({ a: [1, 2] }, { a: [2, 1] }));
 });
 
+test('array elements are canonicalized: key order inside array-of-objects is insignificant', () => {
+  // `edges` is real array-of-objects ticket data; the array branch must recurse.
+  assert.equal(
+    canonicalize({ edges: [{ to: 'T2', contract: 'c' }] }),
+    '{"edges":[{"contract":"c","to":"T2"}]}'
+  );
+  assert.ok(canonicalEqual(
+    { edges: [{ to: 'T2', contract: 'c' }] },
+    { edges: [{ contract: 'c', to: 'T2' }] }
+  ));
+});
+
+test('omit applies inside array elements, not just top level', () => {
+  assert.ok(canonicalEqual(
+    { list: [{ $schema: 'a', k: 1 }] },
+    { list: [{ $schema: 'b', k: 1 }] },
+    { omit: ['$schema'] }
+  ));
+});
+
 test('number forms normalize (2e5 === 200000)', () => {
   assert.ok(canonicalEqual({ budget: 2e5 }, { budget: 200000 }));
 });
