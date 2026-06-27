@@ -1,18 +1,22 @@
 {
   "name": "@adlc/pi-package",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
   "description": "ADLC integration for Pi terminal coding agent",
   "type": "module",
   "pi": {
-    "extensions": ["./index.ts"],
-    "skills": ["./skills/"]
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills/"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.79.0"
   },
   "dependencies": {
-    "@adlc/core": "^1.0.2",
-    "@adlc/rails-guard": "^1.0.2"
+    "@adlc/core": "^1.1.0",
+    "@adlc/rails-guard": "^1.1.0"
   }
 }

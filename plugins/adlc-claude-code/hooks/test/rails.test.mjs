@@ -516,7 +516,6 @@ for (const [name, json] of [
 const NODE_DIR = dirname(process.execPath);
 const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
 const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // recorder reachable
-const WITHOUT_ADLC = '/nonexistent-adlc-recorder-path'; // hook uses absolute node; `adlc` not resolvable
 
 test('bypass on a rail WITH a working recorder → allow + audited entry', () => {
   const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
@@ -531,9 +530,21 @@ test('bypass on schema-invalid tickets WITH recorder → allow (audited)', () =>
 });
 
 test('bypass with the recorder UNAVAILABLE → deny (an unaudited override is refused)', () => {
-  const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
-  const r = runRails(t, 'test/x.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: WITHOUT_ADLC } });
-  assert.equal(r.verdict, 'deny');
+  // Simulate an unreachable recorder with an EMPTY PATH dir. Pointing PATH at
+  // node's own directory is NOT sufficient: a globally-installed `adlc` lands
+  // alongside the node binary (npm global bins under fnm/nvm share node's dir),
+  // so it would still resolve there and the bypass would be (wrongly) audited.
+  // An empty dir guarantees `adlc` is off PATH regardless of where it is
+  // installed. The hook is launched via an absolute node path, so it needs
+  // nothing on PATH to run — only the recorder lookup is affected.
+  const noAdlcDir = mkdtempSync(join(tmpdir(), 'adlc-no-recorder-'));
+  try {
+    const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
+    const r = runRails(t, 'test/x.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: noAdlcDir } });
+    assert.equal(r.verdict, 'deny');
+  } finally {
+    rmSync(noAdlcDir, { recursive: true, force: true });
+  }
 });
 
 test('bypass on a multi-file edit hitting two rails → allow + BOTH audited', () => {
