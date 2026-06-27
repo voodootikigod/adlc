@@ -37,9 +37,12 @@ export function resolveRepo(ticketSync, { gitRemoteUrl } = {}) {
  * never delete). Default selector: open issues (the body-contains-sentinel filter
  * is applied client-side after fetch, since `gh` can't grep the body server-side).
  */
-export function selectorArgs(ticketSync, { limit = 500 } = {}) {
+export function selectorArgs(ticketSync, { limit = 500, repo } = {}) {
   const sel = ticketSync?.select ?? {};
-  const args = ['issue', 'list', '--json', 'number,title,body,labels,state,url', '--limit', String(limit)];
+  const args = ['issue', 'list'];
+  if (repo) args.push('--repo', repo);
+  // `id` is the GraphQL node id (stable across transfer/renumber).
+  args.push('--json', 'id,number,title,body,labels,state,url', '--limit', String(limit));
   args.push('--state', sel.state || 'open');
   for (const label of sel.labels ?? []) args.push('--label', label);
   if (sel.query) args.push('--search', sel.query);

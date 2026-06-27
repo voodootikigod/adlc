@@ -21,6 +21,9 @@
     "ticket-sync",
     "github"
   ],
+  "bin": {
+    "adlc-ticket-sync": "./bin/ticket-sync.mjs"
+  },
   "files": [
     "bin/",
     "lib/",
