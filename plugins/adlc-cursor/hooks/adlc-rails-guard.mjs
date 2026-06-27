@@ -50,15 +50,42 @@ export function extractToolName(payload) {
   return firstString(payload, TOOL_NAME_KEYS) ?? '';
 }
 
-/** Pull the edited path from the input bag (or the top-level payload as fallback). */
-export function extractFilePath(payload) {
-  if (!payload || typeof payload !== 'object') return undefined;
-  for (const bagKey of INPUT_BAG_KEYS) {
-    const bag = payload[bagKey];
-    const hit = firstString(bag, PATH_KEYS);
-    if (hit) return hit;
+// Keys whose VALUE is an array of per-item edits (MultiEdit) or a string/object
+// list of files (batch edit). Mirrors the Claude sibling's targetFilePaths — a
+// structured mutator can carry its paths ONLY here, with no top-level scalar.
+const BATCH_KEYS = ['edits', 'files', 'changes', 'operations', 'fileEdits', 'file_edits'];
+
+/**
+ * EVERY file path a structured edit would touch — the scalar path keys at the top
+ * level and in each input bag, PLUS any per-item paths nested in `edits[]`/`files[]`
+ * (MultiEdit / batch shapes). Returns a de-duplicated array; the gate checks every
+ * one. Missing this is a bypass: a MultiEdit payload carries no top-level path.
+ */
+export function extractFilePaths(payload) {
+  const out = new Set();
+  const addScalars = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    const s = firstString(obj, PATH_KEYS);
+    if (s) out.add(s);
+    for (const bk of BATCH_KEYS) {
+      const arr = obj[bk];
+      if (!Array.isArray(arr)) continue;
+      for (const el of arr) {
+        if (typeof el === 'string' && el.trim()) out.add(el);
+        else if (el && typeof el === 'object') { const es = firstString(el, PATH_KEYS); if (es) out.add(es); }
+      }
+    }
+  };
+  if (payload && typeof payload === 'object') {
+    addScalars(payload);
+    for (const bagKey of INPUT_BAG_KEYS) addScalars(payload[bagKey]);
   }
-  return firstString(payload, PATH_KEYS);
+  return [...out];
+}
+
+/** The first target path (used by the observational audit hook). */
+export function extractFilePath(payload) {
+  return extractFilePaths(payload)[0];
 }
 
 /** Collect every candidate workspace root (handles single-root keys and arrays). */
@@ -111,21 +138,25 @@ export function resolveRoot(payload, filePath, fallback = process.cwd()) {
 export function decide(payload, { root, env = process.env } = {}) {
   try {
     const tool = extractToolName(payload);
-    const filePath = extractFilePath(payload);
+    const filePaths = extractFilePaths(payload);
     // Nothing path-shaped to gate (e.g. a non-file tool slipped past the matcher):
     // allow. Bash/shell writes are intentionally not gated here.
-    if (!filePath) return { permission: 'allow' };
+    if (!filePaths.length) return { permission: 'allow' };
 
-    const verdict = checkRail({ filePath, tool, root: root ?? resolveRoot(payload, filePath), env });
-    if (verdict.decision === 'deny') {
-      return {
-        permission: 'deny',
-        user_message: `ADLC rails-guard: blocked edit to ${verdict.reason}`,
-        agent_message:
-          `This path is a FROZEN ADLC rail: ${verdict.reason}. ` +
-          `Do not edit it during the active build. If the rail must change, update the ticket spec ` +
-          `and re-freeze — do not work around the guard.`,
-      };
+    // Check EVERY target path (a MultiEdit/batch payload touches several) and deny
+    // if ANY is a frozen rail. Resolve the owning root per path (multi-root safe).
+    for (const filePath of filePaths) {
+      const verdict = checkRail({ filePath, tool, root: root ?? resolveRoot(payload, filePath), env });
+      if (verdict.decision === 'deny') {
+        return {
+          permission: 'deny',
+          user_message: `ADLC rails-guard: blocked edit to ${verdict.reason}`,
+          agent_message:
+            `This path is a FROZEN ADLC rail: ${verdict.reason}. ` +
+            `Do not edit it during the active build. If the rail must change, update the ticket spec ` +
+            `and re-freeze — do not work around the guard.`,
+        };
+      }
     }
     return { permission: 'allow' };
   } catch (err) {

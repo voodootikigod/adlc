@@ -10,7 +10,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { checkRail } from '../rails-checker.mjs';
-import { extractFilePath, resolveRoot } from './adlc-rails-guard.mjs';
+import { extractFilePaths, resolveRoot } from './adlc-rails-guard.mjs';
 
 /**
  * Observe an afterFileEdit payload. Returns { rail: boolean, reason } and, when a
@@ -18,17 +18,23 @@ import { extractFilePath, resolveRoot } from './adlc-rails-guard.mjs';
  */
 export function audit(payload, { root, env = process.env } = {}) {
   try {
-    // afterFileEdit names the file directly; reuse the same defensive extractor.
-    const filePath = extractFilePath(payload) ?? firstAfterEditPath(payload);
-    if (!filePath) return { rail: false };
-    // Treat the edit as a structured mutation for classification purposes.
-    const verdict = checkRail({ filePath, tool: 'edit', root: root ?? resolveRoot(payload, filePath), env });
-    if (verdict.decision === 'deny') {
-      process.stderr.write(
-        `adlc-audit: POST-EDIT rail touch — ${verdict.reason}. ` +
-        `afterFileEdit cannot block; the CI rail-freeze gate will reject this change.\n`,
-      );
-      return { rail: true, reason: verdict.reason };
+    // afterFileEdit names the file(s) directly; reuse the same extractor so batch
+    // shapes (edits[]/files[]) are observed too.
+    const paths = extractFilePaths(payload);
+    if (!paths.length) {
+      const fallback = firstAfterEditPath(payload);
+      if (fallback) paths.push(fallback);
+    }
+    if (!paths.length) return { rail: false };
+    for (const filePath of paths) {
+      const verdict = checkRail({ filePath, tool: 'edit', root: root ?? resolveRoot(payload, filePath), env });
+      if (verdict.decision === 'deny') {
+        process.stderr.write(
+          `adlc-audit: POST-EDIT rail touch — ${verdict.reason}. ` +
+          `afterFileEdit cannot block; the CI rail-freeze gate will reject this change.\n`,
+        );
+        return { rail: true, reason: verdict.reason };
+      }
     }
     return { rail: false };
   } catch {

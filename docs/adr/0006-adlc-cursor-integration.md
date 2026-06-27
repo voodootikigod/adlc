@@ -100,6 +100,11 @@ control:
   enforcement is off the guard is a no-op, so it fails open to avoid bricking the
   editor. This closes the whole "exception → silent allow" class, not just the
   triggers found so far.
+- Batch / MultiEdit payloads: a structured mutator can carry its paths only in
+  nested `edits[]`/`files[]` arrays with no top-level scalar path. The extractor
+  collects **every** target path (scalars + nested batch items, mirroring the
+  Claude sibling) and the guard denies if **any** one is a frozen rail — a
+  single-scalar extractor would wave a MultiEdit through.
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail is
   resolved (target + existing parent segments) before rail comparison and denied.
 - Multi-root workspaces: in a Cursor workspace with several `workspace_roots`, the

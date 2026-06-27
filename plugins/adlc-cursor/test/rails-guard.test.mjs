@@ -216,6 +216,26 @@ test('(multi-root) the guard checks the workspace root that OWNS the edited path
   } finally { cleanup(repoA); cleanup(repoB); }
 });
 
+test('(batch) MultiEdit/batch payloads with nested edits[]/files[] are rail-checked, not waved through', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    // edits[] (MultiEdit): a rail among the items must deny.
+    const multi = { tool_name: 'MultiEdit', tool_input: { edits: [
+      { file_path: 'src/free.js', old_string: 'a', new_string: 'b' },
+      { file_path: 'src/frozen.js', old_string: 'a', new_string: 'b' },
+    ] } };
+    assert.equal(decide(multi, { root, env: env() }).permission, 'deny', 'edits[] rail must deny');
+
+    // files[] string array.
+    const files = { tool_name: 'apply_patch', tool_input: { files: ['src/free.js', 'src/frozen.js'] } };
+    assert.equal(decide(files, { root, env: env() }).permission, 'deny', 'files[] rail must deny');
+
+    // All-non-rail batch must allow.
+    const clean = { tool_name: 'MultiEdit', tool_input: { edits: [{ file_path: 'src/free.js' }, { file_path: 'lib/ok.js' }] } };
+    assert.equal(decide(clean, { root, env: env() }).permission, 'allow', 'non-rail batch must allow');
+  } finally { cleanup(root); }
+});
+
 test('(fail-safe) an unexpected throw in the deny path fails CLOSED under active enforcement, OPEN when off', () => {
   // Force checkRail to throw (a non-string root makes path.join throw) to exercise
   // the categorical catch: under active enforcement an error must NOT become a
