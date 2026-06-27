@@ -1,17 +1,21 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "adlc",
-  "description": "The Agentic Development Lifecycle toolkit, packaged for Claude Code.",
   "owner": {
-    "name": "Chris Williams",
-    "url": "https://github.com/voodootikigod"
+    "name": "Chris Williams"
+  },
+  "metadata": {
+    "description": "The Agentic Development Lifecycle toolkit, packaged for Claude Code.",
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "adlc",
       "description": "Embrace the ADLC from inside Claude Code: a phase-routing discovery skill and commands to bootstrap (.adlc/) and author tickets (P0). Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli).",
-      "source": "./plugins/adlc-claude-code",
-      "category": "development"
+      "version": "0.2.0",
+      "author": {
+        "name": "Chris Williams"
+      },
+      "source": "./plugins/adlc-claude-code"
     }
   ]
 }

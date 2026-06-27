@@ -125,23 +125,33 @@ deliberately after reviewing a release.
 
 ### `Marketplace 'adlc' not found` after a successful `/plugin marketplace add`
 
-This happens when a stale `adlc@adlc` entry exists in
-`~/.claude/plugins/installed_plugins.json` from a previous install (typically a
-local-scope install from an old commit). CC attempts an update path instead of a
-fresh install and fails to resolve the marketplace.
+**Most likely cause:** You are running `/plugin install adlc@adlc` from inside
+the `voodootikigod/adlc` repository itself. Claude Code detects the local
+`.claude-plugin/marketplace.json` at the project root and uses that as the
+"adlc" marketplace source rather than the registered global cache entry. The
+local source is not a proper install target, so the lookup fails.
 
-**Fix:** Remove the stale entry and reinstall.
+**Fix:** Use the CLI command instead of the slash command, which bypasses the
+CWD-local marketplace detection:
 
 ```sh
-# 1. Open the file and delete the "adlc@adlc" key and its array value.
-$EDITOR ~/.claude/plugins/installed_plugins.json
-
-# 2. Re-run the install (marketplace add is already registered; skip if already done).
-/plugin install adlc@adlc
+claude plugin install adlc@adlc
 ```
 
-If editing JSON by hand is error-prone, you can also delete the whole file — Claude
-Code rebuilds it from scratch on the next install.
+This works from any directory including the adlc repo itself.
+
+If you are installing into your own project (not the adlc repo), the
+`/plugin install adlc@adlc` slash command works normally — this issue only
+affects the adlc repo developer workflow.
+
+**Secondary cause:** A stale `adlc@adlc` entry in
+`~/.claude/plugins/installed_plugins.json` from a previous local-scope install.
+If the CLI command also fails, remove the stale entry:
+
+```sh
+$EDITOR ~/.claude/plugins/installed_plugins.json   # delete the "adlc@adlc" key
+claude plugin install adlc@adlc
+```
 
 ---
 
