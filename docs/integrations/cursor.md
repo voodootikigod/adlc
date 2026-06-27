@@ -64,8 +64,16 @@ Cursor's hooks are a **best-effort, in-session** layer, not the control:
 
 2. **Commit-time (unbypassable).** The real control is the CI rail-freeze gate
    ([`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)). It reads the frozen rail
-   set from the trusted base ref and rejects any PR that touched a rail, regardless
-   of how the edit was made. **Make it a required check.**
+   set **from the trusted base ref** and rejects any PR that edits a path frozen
+   there, regardless of how the edit was made. **Make it a required check.**
+
+   **Scope limit (read the template's own SECURITY LIMITATION):** because the rail
+   set is read from the base ref, the gate protects rails **already frozen on the
+   base branch**. A PR that *introduces* a new rail **and** edits that path in the
+   same PR is **not** caught — first-time rails are enforced only once they land on
+   the base branch, and the template requires an explicit `acknowledgedNewRailBypass`
+   acknowledgement before it can be a required check. Freeze rails in a separate,
+   merged commit before the build PR if you need same-PR protection.
 
 ## Rail contract
 
@@ -109,6 +117,8 @@ right gate for whatever it's doing.
 ## Boundary
 
 The in-session hook is a convenience that fails safe; it is **not** a security
-boundary. The frozen-rail guarantee is the CI gate. Treat the two as designed: the
+boundary. The frozen-rail guarantee is the CI gate — **for rails already frozen on
+the base branch** (see the scope limit above; a rail first introduced in the same
+PR is not protected until it lands on the base). Treat the two as designed: the
 hook keeps an honest agent on the rails during a build, and CI stops a dishonest or
-buggy one at the door.
+buggy one at the door — provided the rail was frozen in a merged commit first.

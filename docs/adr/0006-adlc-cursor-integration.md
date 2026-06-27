@@ -120,9 +120,18 @@ control:
   against the right repo.
 
 Mitigation: the unbypassable commit-time CI gate (`docs/ci/rails-guard.yml`) reads
-the frozen rail set from the trusted base ref and rejects offending PRs regardless
-of how the edit was made. It is the same gate the OpenCode and Codex integrations
-rely on; this ADR adds **no competing CI workflow**.
+the frozen rail set from the trusted base ref and rejects PRs that edit a
+base-frozen rail regardless of how the edit was made. It is the same gate the
+OpenCode and Codex integrations rely on; this ADR adds **no competing CI workflow**.
+
+**Known scope limit (do not overstate this gate):** because the rail set is read
+from the base ref, the gate protects rails **already frozen on the base branch**.
+A PR that introduces a new rail *and* edits that path in the same PR is **not**
+caught — the template documents this as a SECURITY LIMITATION and requires an
+explicit `acknowledgedNewRailBypass` before it can serve as a required check, until
+a new-rail-aware union gate ships. Same-PR protection requires freezing the rail in
+a separate, already-merged commit first. The integration docs must not claim the
+gate catches *every* rail edit.
 
 ## Unverified / follow-on
 
