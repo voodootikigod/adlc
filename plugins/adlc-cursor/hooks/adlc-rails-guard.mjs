@@ -21,7 +21,7 @@
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
-import { checkRail, classifyTool, isShellTool } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -199,13 +199,28 @@ export function decide(payload, { root, env = process.env } = {}) {
       // unrecognized) tool that reached the guard with an unparseable target under
       // active enforcement is opaque: fail CLOSED rather than wave it through (e.g. a
       // patch format we don't parse).
-      const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+      // Respect the SAME rail-state preconditions as a path-bearing edit (via the
+      // shared railPreconditions), so a pathless opaque tool no-ops when enforcement
+      // is off / the repo is uninitialized / no active ticket is resolved, and fails
+      // closed on a conflict or corrupt ticket state — never denying on the bare
+      // ADLC_P4_ENFORCEMENT flag alone.
+      const pre = railPreconditions({ root: root ?? resolveRoot(payload), env });
+      if (pre.state === 'deny') {
+        return {
+          permission: 'deny',
+          user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — ${pre.reason}`,
+          agent_message: `The rail trust state failed closed: ${pre.reason}. Fix the ticket/rail state rather than working around the guard.`,
+        };
+      }
+      if (pre.state === 'inactive') return { permission: 'allow' };
+
+      // Enforcing with a valid active ticket: a structured mutator (mutating
+      // classification ALWAYS wins, so `terminal_edit` can't masquerade as shell) or
+      // an unrecognized non-shell tool that exposes no inspectable path is opaque and
+      // cannot be verified — fail CLOSED. Read-only and genuine shell tools are exempt.
       const cls = classifyTool(tool);
-      // Opaque = a structured mutator (mutating classification ALWAYS wins, so a
-      // name like `terminal_edit` can't masquerade as shell), OR an unrecognized
-      // non-shell tool. Read-only and genuine shell/terminal tools are exempt.
       const opaque = cls === 'mutating' || (cls === 'other' && !isShellTool(tool));
-      if (enforcing && opaque) {
+      if (opaque) {
         return {
           permission: 'deny',
           user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — a structured mutating tool with no verifiable target path while enforcement is active`,

@@ -270,6 +270,24 @@ test('(no-path) a MUTATING tool with no extractable path fails CLOSED under enfo
   } finally { cleanup(root); }
 });
 
+test('(no-path preconditions) a pathless opaque tool NO-OPs when uninitialized / no active ticket', () => {
+  const op = { tool_name: 'edit_file', tool_input: {} };
+  // uninitialized repo (enforcement on, no tickets.json) -> allow (no-op)
+  const bare = mkdtempSync(join(tmpdir(), 'adlc-cursor-'));
+  try {
+    assert.equal(decide(op, { root: bare, env: env() }).permission, 'allow', 'uninitialized must no-op, not deny');
+  } finally { cleanup(bare); }
+  // initialized but NO active ticket -> allow (no-op), matching a path-bearing edit
+  const r = fixture({ tickets: RAILED });
+  try {
+    assert.equal(decide(op, { root: r, env: { ADLC_P4_ENFORCEMENT: '1' } }).permission, 'allow', 'no active ticket must no-op');
+    // but a conflict still fails closed even with no path
+    mkdirSync(join(r, '.adlc'), { recursive: true });
+    writeFileSync(join(r, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T2' }));
+    assert.equal(decide(op, { root: r, env: env() }).permission, 'deny', 'conflict must fail closed');
+  } finally { cleanup(r); }
+});
+
 test('(shell) shell/terminal commands with no file path are NOT denied under enforcement (npm test must run)', () => {
   const root = fixture({ tickets: RAILED });
   try {

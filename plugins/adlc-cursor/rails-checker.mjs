@@ -167,80 +167,77 @@ export function resolveActiveTicketId(root, env) {
 }
 
 /**
- * Decide whether a structured edit/write should be allowed or denied.
- * Pure and fail-safe: returns { decision: 'allow' | 'deny', reason }.
+ * Evaluate the rail-state PRECONDITIONS (independent of any specific path) so that
+ * both the path-bearing `checkRail` and the adapter's no-path branch make the SAME
+ * no-op / fail-closed / enforcing decision and cannot drift.
  *
- * Enforcement contract (identical to the sibling hooks):
- *  - only structured mutating tools are gated; read-only tools always allow;
- *  - enforcement is phase-scoped to ADLC_P4_ENFORCEMENT === '1';
- *  - no-op when the repo is not ADLC-initialized;
- *  - the active ticket is the SINGLE source of declared rails; a conflicting
- *    active-ticket signal fails closed;
- *  - rails in force = active ticket's declared rails PLUS the trust-root rails.
+ * Returns one of:
+ *  - { state: 'inactive', reason } — enforcement off, repo not initialized, or no
+ *    active ticket → the gate is a no-op (allow);
+ *  - { state: 'deny', reason } — a conflict, corrupt/unloadable tickets.json, an
+ *    active ticket that isn't found, or a malformed rail entry → fail closed;
+ *  - { state: 'active', rails, activeId } — enforcing with a valid ticket + rails.
+ */
+export function railPreconditions({ root = process.cwd(), env = process.env } = {}) {
+  if (env.ADLC_P4_ENFORCEMENT !== '1') {
+    return { state: 'inactive', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+  }
+  const ticketsPath = join(root, '.adlc', 'tickets.json');
+  if (!existsSync(ticketsPath)) {
+    return { state: 'inactive', reason: 'repo not ADLC-initialized (no .adlc/tickets.json)' };
+  }
+  const active = resolveActiveTicketId(root, env);
+  if (active.conflict) {
+    return { state: 'deny', reason: 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
+  }
+  if (!active.id) {
+    return { state: 'inactive', reason: 'no active ticket resolved' };
+  }
+  // A corrupt/invalid tickets.json must FAIL CLOSED under active enforcement. core
+  // surfaces corruption three ways: it throws on some malformed schemas, returns an
+  // `errors` array on others, and returns an empty list when `tickets` is absent.
+  let tickets, errors;
+  try {
+    ({ tickets, errors } = loadTickets(ticketsPath));
+  } catch (err) {
+    return { state: 'deny', reason: `tickets.json failed to load (${err.message}) — failing closed` };
+  }
+  if (errors && errors.length) {
+    return { state: 'deny', reason: `tickets.json failed to validate (${errors.length} error(s)) — failing closed` };
+  }
+  const ticket = tickets.find((t) => t.id === active.id);
+  if (!ticket) {
+    return { state: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
+  }
+  const declaredRails = ticket.rails ?? [];
+  // core validates rails is an array but NOT its element types; a non-string entry
+  // would make globMatch throw mid-match. Reject it here so it fails CLOSED.
+  if (declaredRails.some((rail) => typeof rail !== 'string' || rail.length === 0)) {
+    return { state: 'deny', reason: `active ticket ${active.id} has a malformed rail entry — failing closed` };
+  }
+  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS], activeId: active.id };
+}
+
+/**
+ * Decide whether a structured edit/write to a specific path should be allowed or
+ * denied. Pure and fail-safe: returns { decision: 'allow' | 'deny', reason }.
+ * Preconditions are delegated to railPreconditions (single source of truth).
  */
 export function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) {
   if (classifyTool(tool) === 'readonly') {
     return { decision: 'allow', reason: `tool "${tool}" is read-only` };
   }
-  // Mutating and unrecognized structured tools that carry a path are checked
-  // (fail closed): a new mutation tool name can't slip an edit past the guard.
-  if (env.ADLC_P4_ENFORCEMENT !== '1') {
-    return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
-  }
-  const ticketsPath = join(root, '.adlc', 'tickets.json');
-  if (!existsSync(ticketsPath)) {
-    return { decision: 'allow', reason: 'repo not ADLC-initialized (no .adlc/tickets.json)' };
-  }
+  const pre = railPreconditions({ root, env });
+  if (pre.state === 'inactive') return { decision: 'allow', reason: pre.reason };
+  if (pre.state === 'deny') return { decision: 'deny', reason: pre.reason };
 
-  const active = resolveActiveTicketId(root, env);
-  if (active.conflict) {
-    return { decision: 'deny', reason: 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
-  }
-  if (!active.id) {
-    return { decision: 'allow', reason: 'no active ticket resolved' };
-  }
-
-  // A corrupt/invalid tickets.json must FAIL CLOSED under active enforcement —
-  // never silently drop the active ticket's declared rails to just the trust
-  // roots. @adlc/core surfaces corruption three different ways, so we cover all:
-  //  (1) it THROWS on some malformed schemas (e.g. {"tickets":{}});
-  //  (2) it returns an `errors` array on others (e.g. a non-object ticket);
-  //  (3) it returns an empty list with no errors when `tickets` is absent —
-  //      in which case the resolved active ticket simply won't be found.
-  let tickets, errors;
-  try {
-    ({ tickets, errors } = loadTickets(ticketsPath));
-  } catch (err) {
-    return { decision: 'deny', reason: `tickets.json failed to load (${err.message}) — failing closed` };
-  }
-  if (errors && errors.length) {
-    return { decision: 'deny', reason: `tickets.json failed to validate (${errors.length} error(s)) — failing closed` };
-  }
-  const ticket = tickets.find((t) => t.id === active.id);
-  if (!ticket) {
-    // An active-ticket signal that resolves to no ticket is a misconfig/tamper
-    // signal while enforcement is on — fail closed rather than enforce trust
-    // roots only.
-    return { decision: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
-  }
-  const declaredRails = ticket.rails ?? [];
-  // @adlc/core validates that `rails` is an array but NOT that its entries are
-  // strings, so a malformed entry (e.g. rails: [123]) would make globMatch throw
-  // mid-match — and that exception would escape to the adapter's catch, which
-  // fails OPEN. A corrupt rail set under active enforcement must fail CLOSED, so
-  // reject any non-string/empty rail here rather than letting it bypass the guard.
-  if (declaredRails.some((rail) => typeof rail !== 'string' || rail.length === 0)) {
-    return { decision: 'deny', reason: `active ticket ${active.id} has a malformed rail entry — failing closed` };
-  }
-  const rails = [...declaredRails, ...TRUST_ROOT_RAILS];
-
-  // Match BOTH the lexical path and the symlink-resolved real path (so a symlink
-  // alias whose target is a frozen rail can't slip past a name check).
+  // Enforcing: match BOTH the lexical path and the symlink-resolved real path (so a
+  // symlink alias whose target is a frozen rail can't slip past a name check).
   const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
   for (const path of candidates) {
-    const hit = rails.find((rail) => rail === path || globMatch(rail, path));
+    const hit = pre.rails.find((rail) => rail === path || globMatch(rail, path));
     if (hit) {
-      return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${active.id})` };
+      return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${pre.activeId})` };
     }
   }
   return { decision: 'allow', reason: 'path is not a frozen rail' };
