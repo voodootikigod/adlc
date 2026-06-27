@@ -172,6 +172,9 @@ test('pull end-to-end through the REAL github provider: the block in the issue b
     assert.deepEqual(t.scope, ['src/**'], 'block scope must survive mapper → parse → ticket');
     assert.deepEqual(t.rails, ['test/**']);
     assert.equal(t.title, 'real issue');
+    // The human prose is persisted to body with the machine block STRIPPED OUT
+    // (writing the raw sentinels into body would corrupt it and break push round-trips).
+    assert.equal(t.body, 'human');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
