@@ -59,7 +59,7 @@ else {
 // ---- AC3: run the real enforcement unit test (always-on proof) ----
 try {
   execFileSync(process.execPath, ['--test', ...globTests(join(PLUGIN, 'test'))], { cwd: ROOT, stdio: 'pipe' });
-  ok('enforcement unit test (rails-checker.test.mjs) passes');
+  ok('plugin unit tests pass (rails-checker + scaffold)');
 } catch (e) {
   fail(`enforcement unit test failed:\n${e.stdout?.toString() ?? e.message}`);
 }
@@ -73,6 +73,27 @@ else {
   else ok('stub banner removed');
   if (!/ci\/rails-guard\.yml/.test(doc)) fail('opencode.md does not point at the mandatory CI gate (docs/ci/rails-guard.yml)'); else ok('links the unbypassable CI gate');
   if (!/advisor/i.test(doc)) fail('opencode.md does not frame the in-session hook as advisory'); else ok('frames in-session hook as advisory');
+}
+
+// ---- Phase A (T2): command suite + gate-bin dependency mapping ----
+const pkg2 = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
+if (!pkg2.opencode?.command) fail('package.json opencode.command entry missing'); else ok('opencode.command manifest entry');
+const cmdDir = join(PLUGIN, 'command');
+const PHASE_A_CMDS = ['adlc-init.md', 'adlc-ticket.md', 'adlc-spec.md', 'adlc-approve-spec.md', 'adlc-decompose.md'];
+for (const c of PHASE_A_CMDS) {
+  const p = join(cmdDir, c);
+  if (!existsSync(p)) { fail(`command/${c} missing`); continue; }
+  if (!/^---\n[\s\S]*?description:\s*\S+[\s\S]*?\n---/.test(read(p))) fail(`command/${c} lacks description frontmatter`);
+  else ok(`command/${c} valid`);
+}
+if (!existsSync(join(PLUGIN, 'lib', 'scaffold.mjs'))) fail('lib/scaffold.mjs missing'); else ok('scaffold helper present');
+if (!existsSync(join(PLUGIN, 'gate-bins.mjs'))) fail('gate-bins.mjs missing');
+else {
+  const gb = read(join(PLUGIN, 'gate-bins.mjs'));
+  for (const b of ['rails-guard', 'spec-lint', 'coldstart', 'merge-forecast', 'preflight']) {
+    if (!gb.includes(`'${b}'`)) fail(`gate-bins missing ${b}`);
+  }
+  ok('gate-bins declares the core gate tools');
 }
 
 // AC7 (live deny proof against the real opencode binary) is the remaining GA gate;
