@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkRail, resolveActiveTicketId, probeEnforcementCapability } from '../rails-checker.mjs';
@@ -74,6 +74,27 @@ test('f: another ticket\'s rail does not block (single-active-ticket scope)', ()
   try {
     const r = checkRail({ filePath: 'b/x.mjs', tool: 'edit', root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
     assert.equal(r.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- (e2) symlink alias to a frozen rail is resolved and denied ----
+test('e2: edit via a symlink whose real target is a frozen rail → deny', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**'] }] } });
+  try {
+    // alias.json (in an otherwise-allowed path) → .adlc/tickets.json (trust root)
+    symlinkSync(join(dir, '.adlc', 'tickets.json'), join(dir, 'alias.json'));
+    const r = checkRail({ filePath: 'alias.json', tool: 'edit', root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('e2: write through a symlinked parent dir into a frozen rail → deny', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['locked/**'] }] } });
+  try {
+    mkdirSync(join(dir, 'locked'), { recursive: true });
+    symlinkSync(join(dir, 'locked'), join(dir, 'aliasdir')); // aliasdir → locked/
+    const r = checkRail({ filePath: 'aliasdir/new.mjs', tool: 'write', root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
