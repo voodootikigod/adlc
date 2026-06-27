@@ -10,7 +10,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { checkRail } from '../rails-checker.mjs';
-import { extractFilePaths, resolveRoot } from './adlc-rails-guard.mjs';
+import { extractFilePaths, resolveOwning } from './adlc-rails-guard.mjs';
 
 /**
  * Observe an afterFileEdit payload. Returns { rail: boolean, reason } and, when a
@@ -27,7 +27,8 @@ export function audit(payload, { root, env = process.env } = {}) {
     }
     if (!paths.length) return { rail: false };
     for (const filePath of paths) {
-      const verdict = checkRail({ filePath, tool: 'edit', root: root ?? resolveRoot(payload, filePath), env });
+      const owned = root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath);
+      const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool: 'edit', root: owned.root, env });
       if (verdict.decision === 'deny') {
         process.stderr.write(
           `adlc-audit: POST-EDIT rail touch — ${verdict.reason}. ` +

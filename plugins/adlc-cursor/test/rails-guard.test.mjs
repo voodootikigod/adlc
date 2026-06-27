@@ -391,20 +391,22 @@ test('(multi-root symlink) a NEW file under a symlinked root, in a frozen glob, 
   } finally { cleanup(repoA); cleanup(repoB); }
 });
 
-test('(multi-root relative) a RELATIVE ../ traversal into a sibling root rail is denied', () => {
-  // Gemini caught this: resolveRoot skipped ownership for relative paths, so a
-  // relative ../sibling/rail edit was checked against roots[0] (wrong root) -> allow.
+test('(multi-root relative) a RELATIVE ../ traversal into a DIFFERENT-DEPTH sibling root rail is denied', () => {
+  // Gemini round-18: resolveRoot skipped ownership for relative paths (bypass).
+  // Gemini round-19: the fix was incomplete — checkRail re-joined the primary-root-
+  // relative path against the owning root, mangling it when roots differ in depth.
+  // Use DIFFERENT-depth roots (app vs shared/libs) so a join-mismatch can't pass.
   const tmp = mkdtempSync(join(tmpdir(), 'adlc-ws-'));
-  const fe = join(tmp, 'frontend'); // roots[0], uninitialized
-  const be = join(tmp, 'backend');  // has the active rail
-  mkdirSync(fe, { recursive: true });
-  mkdirSync(join(be, '.adlc'), { recursive: true });
-  writeFileSync(join(be, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'x', rails: ['src/auth.js'] }] }));
+  const app = join(tmp, 'app');             // roots[0], uninitialized, depth 1
+  const libs = join(tmp, 'shared', 'libs'); // active rail, depth 2, different name
+  mkdirSync(app, { recursive: true });
+  mkdirSync(join(libs, '.adlc'), { recursive: true });
+  writeFileSync(join(libs, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'x', rails: ['src/frozen.js'] }] }));
   try {
-    const w = (fp) => ({ tool_name: 'Write', tool_input: { file_path: fp }, workspace_roots: [fe, be] });
-    assert.equal(decide(w('../backend/src/auth.js'), { env: env() }).permission, 'deny', 'relative traversal into a sibling rail must deny');
-    assert.equal(decide(w('../backend/src/ok.js'), { env: env() }).permission, 'allow', 'relative non-rail must allow');
-    assert.equal(decide(w('src/app.js'), { env: env() }).permission, 'allow', 'frontend-local edit (inactive root) must allow');
+    const w = (fp) => ({ tool_name: 'Write', tool_input: { file_path: fp }, workspace_roots: [app, libs] });
+    assert.equal(decide(w('../shared/libs/src/frozen.js'), { env: env() }).permission, 'deny', 'relative traversal into a different-depth sibling rail must deny');
+    assert.equal(decide(w('../shared/libs/src/ok.js'), { env: env() }).permission, 'allow', 'relative non-rail must allow');
+    assert.equal(decide(w('src/app.js'), { env: env() }).permission, 'allow', 'app-local edit (inactive root) must allow');
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 });
 

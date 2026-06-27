@@ -167,27 +167,35 @@ export function candidateRoots(payload) {
  * (or a symlinked root alias) must be attributed to the repo it actually resolves
  * into, not the one whose name lexically prefixes it.
  */
-export function resolveRoot(payload, filePath, fallback = process.cwd()) {
+export function resolveOwning(payload, filePath, fallback = process.cwd()) {
   const roots = candidateRoots(payload);
-  if (filePath) {
-    // Resolve RELATIVE paths too (not just absolute): a relative path with `..`
-    // traversal — e.g. `../backend/src/auth.js` — must be attributed to the root it
-    // actually resolves into, not blindly to roots[0]. Resolve it against the
-    // primary root (roots[0]) / fallback the way the agent's cwd would, then do the
-    // normalized, symlink-resolved containment check. Skipping relative paths let a
-    // traversal edit a frozen rail in a SIBLING workspace root.
-    const base = roots[0] ?? fallback;
-    const absFile = realpathDeepest(isAbsolute(filePath) ? resolve(filePath) : resolve(base, filePath));
+  const base = roots[0] ?? fallback;
+  // Resolve the edited path to an ABSOLUTE path. A relative path with `..`
+  // traversal (e.g. `../backend/src/auth.js`) is resolved against the primary root
+  // the way the agent's cwd would, so it's attributed to the root it actually
+  // resolves into — not blindly to roots[0]. The absolute path is returned and used
+  // for the rail check: passing the ORIGINAL relative path plus the owning root to
+  // checkRail would make it `join(owningRoot, relativeToPrimary)` and mangle the
+  // path whenever the roots differ in depth/name (caught by Gemini round-19).
+  const absFile = filePath
+    ? (isAbsolute(filePath) ? resolve(filePath) : resolve(base, filePath))
+    : undefined;
+  if (absFile) {
     const owning = roots
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .filter(({ real }) => {
-        const rel = relative(real, absFile);
+        const rel = relative(real, realpathDeepest(absFile));
         return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
       })
       .sort((a, b) => b.real.length - a.real.length)[0];
-    if (owning) return owning.raw;
+    if (owning) return { root: owning.raw, absFile };
   }
-  return roots[0] ?? fallback;
+  return { root: roots[0] ?? fallback, absFile };
+}
+
+/** The owning workspace root for an edited path (back-compat wrapper). */
+export function resolveRoot(payload, filePath, fallback = process.cwd()) {
+  return resolveOwning(payload, filePath, fallback).root;
 }
 
 /**
@@ -246,9 +254,12 @@ export function decide(payload, { root, env = process.env } = {}) {
     }
 
     // Check EVERY target path (a MultiEdit/batch payload touches several) and deny
-    // if ANY is a frozen rail. Resolve the owning root per path (multi-root safe).
+    // if ANY is a frozen rail. Resolve the owning root AND the absolute path per
+    // path (multi-root safe) — pass the ABSOLUTE path to checkRail so it never
+    // re-joins a primary-root-relative path against a different owning root.
     for (const filePath of filePaths) {
-      const verdict = checkRail({ filePath, tool, root: root ?? resolveRoot(payload, filePath), env });
+      const owned = root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath);
+      const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool, root: owned.root, env });
       if (verdict.decision === 'deny') {
         return {
           permission: 'deny',
