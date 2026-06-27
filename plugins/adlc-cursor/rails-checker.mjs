@@ -52,6 +52,23 @@ export function normalizeToolName(name) {
   return String(name ?? '').toLowerCase().replace(/[^a-z]/g, '');
 }
 
+// Shell / terminal execution tools. These run a Turing-complete command string, not
+// a structured file edit, so they are INTENTIONALLY not rail-gated in-session
+// (their writes fall to the CI gate). They must be recognized so the no-path
+// fail-closed branch — meant for opaque *structured* mutators — doesn't deny a
+// normal `npm test`/build command and break the P4 workflow.
+const SHELL_TOOL_TOKENS = new Set([
+  'bash', 'sh', 'zsh', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'exec',
+  'run', 'runcommand', 'runterminalcmd', 'runinterminal', 'executecommand',
+  'execcommand', 'terminalcmd', 'shellexec', 'execcommandline',
+]);
+export function isShellTool(name) {
+  const n = normalizeToolName(name);
+  if (!n) return false;
+  if (SHELL_TOOL_TOKENS.has(n)) return true;
+  return ['bash', 'shell', 'terminal', 'powershell'].some((h) => n.includes(h));
+}
+
 /**
  * Classify a Cursor tool name: 'mutating' | 'readonly' | 'other'.
  *

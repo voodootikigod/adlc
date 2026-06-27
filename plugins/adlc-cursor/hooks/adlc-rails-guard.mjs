@@ -21,7 +21,7 @@
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
-import { checkRail, classifyTool } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool } from '../rails-checker.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -192,20 +192,23 @@ export function decide(payload, { root, env = process.env } = {}) {
     const tool = extractToolName(payload);
     const filePaths = extractFilePaths(payload);
     if (!filePaths.length) {
-      // No path we could see. For a read-only / non-file tool that's fine — allow.
-      // But a MUTATING (or unrecognized) tool that reached the guard with an
-      // unparseable target under active enforcement is opaque: fail CLOSED rather
-      // than wave it through (e.g. a patch format we don't parse). Bash/shell writes
-      // are intentionally not gated here and fall to the CI gate.
+      // No path we could see. Allow read-only tools AND shell/terminal tools — the
+      // latter run a Turing-complete command (e.g. `npm test`) and are intentionally
+      // not rail-gated in-session; their writes fall to the CI gate. Denying them
+      // would break the normal P4 build/test workflow. But a structured MUTATING (or
+      // unrecognized) tool that reached the guard with an unparseable target under
+      // active enforcement is opaque: fail CLOSED rather than wave it through (e.g. a
+      // patch format we don't parse).
       const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
-      if (enforcing && classifyTool(tool) !== 'readonly') {
+      if (enforcing && classifyTool(tool) !== 'readonly' && !isShellTool(tool)) {
         return {
           permission: 'deny',
-          user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — a mutating tool with no verifiable target path while enforcement is active`,
+          user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — a structured mutating tool with no verifiable target path while enforcement is active`,
           agent_message:
-            `A mutating tool reached the rail guard during an active build but exposed no inspectable ` +
-            `file path, so it cannot be verified against the frozen rails and is denied. Use a structured ` +
-            `edit/write with an explicit path rather than an opaque patch/command payload.`,
+            `A structured mutating tool reached the rail guard during an active build but exposed no ` +
+            `inspectable file path, so it cannot be verified against the frozen rails and is denied. Use a ` +
+            `structured edit/write with an explicit path rather than an opaque patch payload. ` +
+            `(Shell commands are allowed in-session and gated by the CI rail-freeze check instead.)`,
         };
       }
       return { permission: 'allow' };

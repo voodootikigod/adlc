@@ -108,10 +108,12 @@ control:
   a MultiEdit or a rename-onto-a-rail through.
 - Patch-envelope payloads: an `apply_patch`-style tool names its targets inside a
   `command`/`patch` string (`*** Update File: …`). The extractor parses those
-  headers so the named paths are rail-checked. As a categorical backstop, a tool
-  that **classifies as mutating** but exposes **no inspectable path** under active
-  enforcement (an opaque/unparsed format) fails **closed** — only read-only/no-path
-  tools are allowed through.
+  headers so the named paths are rail-checked. As a categorical backstop, a
+  **structured mutating** tool that exposes **no inspectable path** under active
+  enforcement (an opaque/unparsed format) fails **closed**. Read-only tools **and
+  shell/terminal tools** are exempt from this branch: shell runs a Turing-complete
+  command (e.g. `npm test`) that is intentionally not rail-gated in-session, so
+  denying it would break the P4 build/test loop — its writes fall to the CI gate.
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail is
   resolved (target + existing parent segments) before rail comparison and denied.
 - Multi-root workspaces: in a Cursor workspace with several `workspace_roots`, the

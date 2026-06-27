@@ -270,6 +270,17 @@ test('(no-path) a MUTATING tool with no extractable path fails CLOSED under enfo
   } finally { cleanup(root); }
 });
 
+test('(shell) shell/terminal commands with no file path are NOT denied under enforcement (npm test must run)', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    for (const t of ['Bash', 'run_terminal_cmd', 'terminal', 'shell', 'powershell']) {
+      assert.equal(decide({ tool_name: t, tool_input: { command: 'npm test && npm run build' } }, { root, env: env() }).permission, 'allow', `${t} must run during P4`);
+    }
+    // but a shell payload that DOES expose a rail target (patch envelope) is still checked
+    assert.equal(decide({ tool_name: 'Bash', tool_input: { command: '*** Update File: src/frozen.js' } }, { root, env: env() }).permission, 'deny');
+  } finally { cleanup(root); }
+});
+
 test('(fail-safe) an unexpected throw in the deny path fails CLOSED under active enforcement, OPEN when off', () => {
   // Force checkRail to throw (a non-string root makes path.join throw) to exercise
   // the categorical catch: under active enforcement an error must NOT become a
