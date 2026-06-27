@@ -200,7 +200,12 @@ export function decide(payload, { root, env = process.env } = {}) {
       // active enforcement is opaque: fail CLOSED rather than wave it through (e.g. a
       // patch format we don't parse).
       const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
-      if (enforcing && classifyTool(tool) !== 'readonly' && !isShellTool(tool)) {
+      const cls = classifyTool(tool);
+      // Opaque = a structured mutator (mutating classification ALWAYS wins, so a
+      // name like `terminal_edit` can't masquerade as shell), OR an unrecognized
+      // non-shell tool. Read-only and genuine shell/terminal tools are exempt.
+      const opaque = cls === 'mutating' || (cls === 'other' && !isShellTool(tool));
+      if (enforcing && opaque) {
         return {
           permission: 'deny',
           user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — a structured mutating tool with no verifiable target path while enforcement is active`,

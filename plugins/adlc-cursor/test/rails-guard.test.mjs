@@ -281,6 +281,19 @@ test('(shell) shell/terminal commands with no file path are NOT denied under enf
   } finally { cleanup(root); }
 });
 
+test('(shell-masquerade) a structured mutator named like a shell tool still fails CLOSED', () => {
+  // The shell exemption must not let a pathless structured mutator whose name merely
+  // contains "shell"/"terminal"/"powershell" bypass the fail-closed branch.
+  const root = fixture({ tickets: RAILED });
+  try {
+    for (const t of ['terminal_edit', 'shell_edit', 'powershell_write', 'shell_replace']) {
+      assert.equal(decide({ tool_name: t, tool_input: {} }, { root, env: env() }).permission, 'deny', `${t} (a mutator) must not masquerade as shell`);
+    }
+    // real shell tools still allowed (regression guard for over-correction)
+    assert.equal(decide({ tool_name: 'run_terminal_cmd', tool_input: { command: 'npm test' } }, { root, env: env() }).permission, 'allow');
+  } finally { cleanup(root); }
+});
+
 test('(fail-safe) an unexpected throw in the deny path fails CLOSED under active enforcement, OPEN when off', () => {
   // Force checkRail to throw (a non-string root makes path.join throw) to exercise
   // the categorical catch: under active enforcement an error must NOT become a
