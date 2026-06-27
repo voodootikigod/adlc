@@ -74,6 +74,11 @@ test('sync-state: version required + numeric; containers object-typed', () => {
   assert.ok(validateSyncState({}).some((x) => x.startsWith('version')));
   assert.ok(validateSyncState({ version: 'one' }).some((x) => x === 'version: expected number'));
   assert.ok(validateSyncState({ version: 1, tickets: [] }).some((x) => x.startsWith('tickets')));
+  // JSON `null` must NOT pass as a free-form container object (it bypasses the
+  // Array.isArray guard and relies on typeName's null branch). null comes from
+  // JSON.parse and a null container would null-deref downstream.
+  assert.ok(validateSyncState({ version: 1, tickets: null }).some((x) => x === 'tickets: expected object'), 'null container must be rejected');
+  assert.ok(validateConfig({ ticketSync: { provider: 'github', statusLabels: null } }).some((x) => x === 'ticketSync.statusLabels: expected object'), 'null nested object must be rejected');
 });
 
 test('errorField extracts the leading field name', () => {
