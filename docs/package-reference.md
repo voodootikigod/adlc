@@ -7,29 +7,29 @@ Follow each README for full options, output schemas, examples, and implementatio
 
 | Package | Binary | Role | Source |
 | --- | --- | --- | --- |
-| `@adlc/behavior-diff` | `behavior-diff` | Captures and compares HTTP/API behavior snapshots for the P6 human gate. | [`packages/behavior-diff/README.md`](../packages/behavior-diff/README.md) |
-| `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`packages/cli/README.md`](../packages/cli/README.md) |
-| `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`packages/coldstart/README.md`](../packages/coldstart/README.md) |
-| `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`packages/consensus-fix/README.md`](../packages/consensus-fix/README.md) |
-| `@adlc/core` | none | Shared LLM, git, CLI, ledger, ticket, and mutation primitives. | [`packages/core/README.md`](../packages/core/README.md) |
-| `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, and oversized session logs. | [`packages/flail-detector/README.md`](../packages/flail-detector/README.md) |
-| `@adlc/gate-fuzzing` | `gate-fuzzing` | Runs hostile candidates against gate suites to find defeats and calibration gaps. | [`packages/gate-fuzzing/README.md`](../packages/gate-fuzzing/README.md) |
-| `@adlc/gate-manifest` | `gate-manifest` | Records, verifies, shows, and attests append-only gate evidence. | [`packages/gate-manifest/README.md`](../packages/gate-manifest/README.md) |
-| `@adlc/hollow-test` | `hollow-test` | Mutates changed code to find tests that pass without testing the intended behavior. | [`packages/hollow-test/README.md`](../packages/hollow-test/README.md) |
-| `@adlc/lesson-foundry` | `lesson-foundry` | Mines repeated findings into deterministic defenses such as lint checks or skills. | [`packages/lesson-foundry/README.md`](../packages/lesson-foundry/README.md) |
-| `@adlc/merge-forecast` | `merge-forecast` | Estimates fan-out width, dependency pressure, and merge backpressure. | [`packages/merge-forecast/README.md`](../packages/merge-forecast/README.md) |
-| `@adlc/model-ratchet` | `model-ratchet` | Identifies hot files for re-prosecution after model or repository drift. | [`packages/model-ratchet/README.md`](../packages/model-ratchet/README.md) |
-| `@adlc/model-router` | `model-router` | Assigns tickets to frontier, direct, or ladder model strategies. | [`packages/model-router/README.md`](../packages/model-router/README.md) |
-| `@adlc/parallax` | `parallax` | Fans out readers to expose spec ambiguity, edge conflicts, or route conflicts. | [`packages/parallax/README.md`](../packages/parallax/README.md) |
-| `@adlc/preflight` | `preflight` | Checks baseline environment readiness before fan-out. | [`packages/preflight/README.md`](../packages/preflight/README.md) |
-| `@adlc/premortem` | `premortem` | Stress-tests an approved spec before implementation. | [`packages/premortem/README.md`](../packages/premortem/README.md) |
-| `@adlc/prosecute` | `adlc-prosecute` | Records ticket- and revision-scoped P5 review evidence and asserts distinct reviewer-produced dry lenses. Invoke as `adlc prosecute` in normal workflows. | [`packages/prosecute/README.md`](../packages/prosecute/README.md) |
-| `@adlc/rails-guard` | `rails-guard` | Enforces frozen rails, declared suppressions, and manifest recording. | [`packages/rails-guard/README.md`](../packages/rails-guard/README.md) |
-| `@adlc/rejection-mining` | `rejection-mining` | Mines review rejections into reusable review lenses. | [`packages/rejection-mining/README.md`](../packages/rejection-mining/README.md) |
-| `@adlc/review-calibration` | `review-calibration` | Measures reviewer recall by applying mutants and scoring whether review catches them. | [`packages/review-calibration/README.md`](../packages/review-calibration/README.md) |
-| `@adlc/runner` | `adlc-runner` | Asserts phase completion from manifest artifacts rather than command success alone. Normal workflows reach it through `adlc run` and `adlc accept`. | [`packages/runner/README.md`](../packages/runner/README.md) |
-| `@adlc/skill-rot` | `skill-rot` | Checks skill files for stale validation metadata and optional freshness stamping. | [`packages/skill-rot/README.md`](../packages/skill-rot/README.md) |
-| `@adlc/spec-lint` | `spec-lint` | Gates specs for wishes, unverifiable acceptance criteria, and LLM-only verification. | [`packages/spec-lint/README.md`](../packages/spec-lint/README.md) |
+| `@adlc/behavior-diff` | `behavior-diff` | Captures and compares HTTP/API behavior snapshots for the P6 human gate. | [`docs/tools/behavior-diff.md`](./tools/behavior-diff.md) |
+| `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`docs/tools/cli.md`](./tools/cli.md) |
+| `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`docs/tools/coldstart.md`](./tools/coldstart.md) |
+| `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`docs/tools/consensus-fix.md`](./tools/consensus-fix.md) |
+| `@adlc/core` | none | Shared LLM, git, CLI, ledger, ticket, and mutation primitives. | [`docs/tools/core.md`](./tools/core.md) |
+| `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, and oversized session logs. | [`docs/tools/flail-detector.md`](./tools/flail-detector.md) |
+| `@adlc/gate-fuzzing` | `gate-fuzzing` | Runs hostile candidates against gate suites to find defeats and calibration gaps. | [`docs/tools/gate-fuzzing.md`](./tools/gate-fuzzing.md) |
+| `@adlc/gate-manifest` | `gate-manifest` | Records, verifies, shows, and attests append-only gate evidence. | [`docs/tools/gate-manifest.md`](./tools/gate-manifest.md) |
+| `@adlc/hollow-test` | `hollow-test` | Mutates changed code to find tests that pass without testing the intended behavior. | [`docs/tools/hollow-test.md`](./tools/hollow-test.md) |
+| `@adlc/lesson-foundry` | `lesson-foundry` | Mines repeated findings into deterministic defenses such as lint checks or skills. | [`docs/tools/lesson-foundry.md`](./tools/lesson-foundry.md) |
+| `@adlc/merge-forecast` | `merge-forecast` | Estimates fan-out width, dependency pressure, and merge backpressure. | [`docs/tools/merge-forecast.md`](./tools/merge-forecast.md) |
+| `@adlc/model-ratchet` | `model-ratchet` | Identifies hot files for re-prosecution after model or repository drift. | [`docs/tools/model-ratchet.md`](./tools/model-ratchet.md) |
+| `@adlc/model-router` | `model-router` | Assigns tickets to frontier, direct, or ladder model strategies. | [`docs/tools/model-router.md`](./tools/model-router.md) |
+| `@adlc/parallax` | `parallax` | Fans out readers to expose spec ambiguity, edge conflicts, or route conflicts. | [`docs/tools/parallax.md`](./tools/parallax.md) |
+| `@adlc/preflight` | `preflight` | Checks baseline environment readiness before fan-out. | [`docs/tools/preflight.md`](./tools/preflight.md) |
+| `@adlc/premortem` | `premortem` | Stress-tests an approved spec before implementation. | [`docs/tools/premortem.md`](./tools/premortem.md) |
+| `@adlc/prosecute` | `adlc-prosecute` | Records ticket- and revision-scoped P5 review evidence and asserts distinct reviewer-produced dry lenses. Invoke as `adlc prosecute` in normal workflows. | [`docs/tools/prosecute.md`](./tools/prosecute.md) |
+| `@adlc/rails-guard` | `rails-guard` | Enforces frozen rails, declared suppressions, and manifest recording. | [`docs/tools/rails-guard.md`](./tools/rails-guard.md) |
+| `@adlc/rejection-mining` | `rejection-mining` | Mines review rejections into reusable review lenses. | [`docs/tools/rejection-mining.md`](./tools/rejection-mining.md) |
+| `@adlc/review-calibration` | `review-calibration` | Measures reviewer recall by applying mutants and scoring whether review catches them. | [`docs/tools/review-calibration.md`](./tools/review-calibration.md) |
+| `@adlc/runner` | `adlc-runner` | Asserts phase completion from manifest artifacts rather than command success alone. Normal workflows reach it through `adlc run` and `adlc accept`. | [`docs/tools/runner.md`](./tools/runner.md) |
+| `@adlc/skill-rot` | `skill-rot` | Checks skill files for stale validation metadata and optional freshness stamping. | [`docs/tools/skill-rot.md`](./tools/skill-rot.md) |
+| `@adlc/spec-lint` | `spec-lint` | Gates specs for wishes, unverifiable acceptance criteria, and LLM-only verification. | [`docs/tools/spec-lint.md`](./tools/spec-lint.md) |
 
 ## Command forms
 
