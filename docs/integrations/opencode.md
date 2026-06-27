@@ -57,23 +57,55 @@ the enforcing hook only runs once the plugin package is registered.) Phase A com
 
 ## Install
 
+The plugin ships in this repo at `plugins/adlc-opencode/`. The
+`@adlc/opencode-package` package is **not yet published to npm**, so install from
+source for now (peer dependency: `@opencode-ai/plugin` >= 1.17.11).
+
+**1. Install the gate toolkit** — the plugin shells out to the `adlc` binary:
+
 ```sh
-npm install -g @adlc/cli                       # the toolkit, behind one `adlc <tool>` command
-npm install -g @opencode-ai/plugin             # peer dependency (>=1.17.11)
-# deploy the plugin into your project's OpenCode plugin directory:
-#   .opencode/plugin/adlc-opencode/   (or register it in opencode.json "plugin")
+npm install -g @adlc/cli
 ```
 
-Local verification:
+**2. Make the plugin available to OpenCode** — symlink the source into your
+project's plugin directory, or register its path in `opencode.json`:
+
+```sh
+ln -s /path/to/adlc/plugins/adlc-opencode .opencode/plugin/adlc-opencode
+# …or add "/path/to/adlc/plugins/adlc-opencode" to the "plugin" array in
+#    .opencode/opencode.json (project) or ~/.config/opencode/opencode.json (global)
+```
+
+**3. Bootstrap the workspace** — in the OpenCode TUI:
+
+```
+/adlc-init
+```
+
+`/adlc-init` creates `.adlc/` (the committable ticket contract + `config.json`),
+deploys the command/agent/skill surface into `.opencode/`, **registers the plugin
+in `opencode.json` so the rails-guard hook loads**, and runs preflight. First-time,
+before the `/adlc-init` command is available, run the scaffolder directly:
+
+```sh
+node /path/to/adlc/plugins/adlc-opencode/lib/scaffold-cli.mjs .
+```
+
+**4. Restart OpenCode** so it loads the plugin — the `tool.execute.before`
+rails-guard hook and the `session.created` / `session.idle` advisory hooks become
+active. `/adlc-ticket`, `/adlc-spec`, `/adlc-prosecute`, etc. are then available.
+
+Local verification (no `opencode` binary needed, does not mutate your environment):
 
 ```sh
 node scripts/opencode-install-smoke.mjs .
 ```
 
 That smoke test validates the plugin manifest, the `tool.execute.before` hook
-wiring, skill registration, the `@adlc/core` delegation (the rail engine is not
-re-implemented), and runs the real enforcement unit test. It does not require the
-`opencode` binary and does not mutate your environment.
+wiring, command/agent/skill registration, the scaffolder, the `@adlc/core`
+delegation (the rail engine is not re-implemented), and runs the plugin unit tests.
+An end-to-end deny proof against a live `opencode` binary is the remaining GA
+verification — see [ADR 0004](../adr/0004-adlc-opencode-integration.md).
 
 ## Rail enforcement — two layers
 
