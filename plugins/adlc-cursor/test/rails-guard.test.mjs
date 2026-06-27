@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { decide, extractToolName, extractFilePath } from '../hooks/adlc-rails-guard.mjs';
@@ -213,6 +213,20 @@ test('(multi-root) the guard checks the workspace root that OWNS the edited path
     // No explicit root: the adapter must pick repo-b (owns the path), not repo-a.
     const v = decide(p, { env: env() });
     assert.equal(v.permission, 'deny', 'edit to repo-b rail must be denied even when repo-a is listed first');
+  } finally { cleanup(repoA); cleanup(repoB); }
+});
+
+test('(multi-root ..) a non-normalized path is attributed to the repo it RESOLVES into', () => {
+  // repoB (uninitialized, listed first) and repoA (has the rail). The payload path
+  // lexically prefixes repoB but ../-resolves into repoA — raw prefix matching would
+  // pick repoB (uninitialized -> allow); normalized ownership must pick repoA -> deny.
+  const repoA = fixture({ tickets: RAILED });
+  const repoB = mkdtempSync(join(tmpdir(), 'adlc-b-'));
+  try {
+    const sneaky = join(repoB, '..', basename(repoA), 'src', 'frozen.js'); // resolves to repoA/src/frozen.js
+    const p = { tool_name: 'Write', tool_input: { file_path: sneaky }, workspace_roots: [repoB, repoA] };
+    const v = decide(p, { env: env() });
+    assert.equal(v.permission, 'deny', 'non-normalized path resolving into repoA rail must be denied');
   } finally { cleanup(repoA); cleanup(repoB); }
 });
 

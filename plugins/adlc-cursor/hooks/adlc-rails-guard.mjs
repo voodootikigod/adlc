@@ -19,8 +19,14 @@
 // path is a conflicting active-ticket signal, which checkRail reports as a denial.
 
 import { fileURLToPath } from 'node:url';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, resolve, relative } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { checkRail } from '../rails-checker.mjs';
+
+/** Best-effort realpath; falls back to the lexical path (a write may create it). */
+function realOr(p) {
+  try { return realpathSync(p); } catch { return p; }
+}
 
 // Field names Cursor (and sibling agents) have used for the tool name, the tool
 // input bag, and the edited path. Read defensively — the exact preToolUse shape
@@ -75,14 +81,25 @@ export function candidateRoots(payload) {
  * wrong repo and miss a frozen-rail edit. So when the edited path is absolute, pick
  * the workspace root that actually CONTAINS it (longest match wins); otherwise fall
  * back to the first declared root, then the process cwd.
+ *
+ * Ownership is decided on NORMALIZED, symlink-resolved paths with a boundary-aware
+ * containment check (`relative()` not starting with `..`) — never raw string
+ * prefixes. A non-normalized payload path like `/repo-b/../repo-a/src/frozen.js`
+ * (or a symlinked root alias) must be attributed to the repo it actually resolves
+ * into, not the one whose name lexically prefixes it.
  */
 export function resolveRoot(payload, filePath, fallback = process.cwd()) {
   const roots = candidateRoots(payload);
   if (filePath && isAbsolute(filePath)) {
+    const absFile = realOr(resolve(filePath));
     const owning = roots
-      .filter((r) => { const rr = r.endsWith('/') ? r : `${r}/`; return filePath === r || filePath.startsWith(rr); })
-      .sort((a, b) => b.length - a.length)[0];
-    if (owning) return owning;
+      .map((raw) => ({ raw, real: realOr(resolve(raw)) }))
+      .filter(({ real }) => {
+        const rel = relative(real, absFile);
+        return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+      })
+      .sort((a, b) => b.real.length - a.real.length)[0];
+    if (owning) return owning.raw;
   }
   return roots[0] ?? fallback;
 }
