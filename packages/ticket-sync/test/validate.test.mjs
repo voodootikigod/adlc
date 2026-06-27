@@ -63,6 +63,10 @@ test('non-object where an object is expected is rejected (object guard is load-b
   assert.ok(validateConfig({ ticketSync: 5 }).some((x) => x === 'ticketSync: expected object'));
   // top-level non-object too
   assert.ok(validateTicket('not-a-ticket').some((x) => x.includes('expected object')));
+  // an ARRAY must NOT pass as an object — external input (e.g. a YAML sequence)
+  // parses to an array, and the guard's Array.isArray clause must reject it.
+  assert.ok(validateBlock([]).some((x) => x.includes('expected object')), 'array must not validate as a block');
+  assert.ok(validateConfig({ ticketSync: [] }).some((x) => x === 'ticketSync: expected object'), 'nested array must be rejected');
 });
 
 test('sync-state: version required + numeric; containers object-typed', () => {
