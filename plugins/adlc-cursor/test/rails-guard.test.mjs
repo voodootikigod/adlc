@@ -259,6 +259,25 @@ test('(F2-rails) a malformed rail entry (non-string) fails CLOSED, not open', ()
   } finally { cleanup(root); }
 });
 
+test('(multi-root symlink) a NEW file under a symlinked root, in a frozen glob, is denied', () => {
+  // repoB/link -> repoA; repoA freezes src/contracts/**. A not-yet-existing file
+  // addressed as repoB/link/src/contracts/new.json must resolve into repoA and deny.
+  const repoA = mkdtempSync(join(tmpdir(), 'adlc-a-'));
+  mkdirSync(join(repoA, '.adlc'), { recursive: true });
+  mkdirSync(join(repoA, 'src'), { recursive: true });
+  writeFileSync(join(repoA, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T1', title: 'x', rails: ['src/contracts/**'] }] }));
+  const repoB = mkdtempSync(join(tmpdir(), 'adlc-b-'));
+  let linked = false;
+  try { symlinkSync(repoA, join(repoB, 'link')); linked = true; } catch { /* FS w/o symlink */ }
+  try {
+    if (!linked) return;
+    const abs = join(repoB, 'link', 'src', 'contracts', 'new.schema.json'); // new file, deep non-existent tail
+    const p = { tool_name: 'Write', tool_input: { file_path: abs }, workspace_roots: [repoB, repoA] };
+    assert.equal(decide(p, { env: env() }).permission, 'deny', 'new file under a symlinked frozen glob must deny');
+  } finally { cleanup(repoA); cleanup(repoB); }
+});
+
 test('(multi-root ..) a non-normalized path is attributed to the repo it RESOLVES into', () => {
   // repoB (uninitialized, listed first) and repoA (has the rail). The payload path
   // lexically prefixes repoB but ../-resolves into repoA — raw prefix matching would

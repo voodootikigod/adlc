@@ -19,13 +19,33 @@
 // path is a conflicting active-ticket signal, which checkRail reports as a denial.
 
 import { fileURLToPath } from 'node:url';
-import { isAbsolute, resolve, relative } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
+import { realpathSync, existsSync } from 'node:fs';
 import { checkRail } from '../rails-checker.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
   try { return realpathSync(p); } catch { return p; }
+}
+
+/**
+ * Realpath the DEEPEST EXISTING ancestor of an absolute path, then re-append the
+ * not-yet-existing tail. A plain realpath of the full path fails for a file being
+ * CREATED, which would leave a symlinked parent (e.g. repoB/link -> repoA)
+ * unresolved and mis-attribute the file to the wrong workspace root. Mirrors the
+ * checker's resolveRailPath strategy.
+ */
+function realpathDeepest(absPath) {
+  if (existsSync(absPath)) return realOr(absPath);
+  const tail = [];
+  let cur = absPath;
+  while (!existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) break; // reached filesystem root
+    tail.unshift(basename(cur));
+    cur = parent;
+  }
+  return tail.length ? resolve(realOr(cur), ...tail) : realOr(cur);
 }
 
 // Field names Cursor (and sibling agents) have used for the tool name, the tool
@@ -118,9 +138,9 @@ export function candidateRoots(payload) {
 export function resolveRoot(payload, filePath, fallback = process.cwd()) {
   const roots = candidateRoots(payload);
   if (filePath && isAbsolute(filePath)) {
-    const absFile = realOr(resolve(filePath));
+    const absFile = realpathDeepest(resolve(filePath));
     const owning = roots
-      .map((raw) => ({ raw, real: realOr(resolve(raw)) }))
+      .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .filter(({ real }) => {
         const rel = relative(real, absFile);
         return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));

@@ -94,7 +94,20 @@ export function resolveRailPath(filePath, root) {
   if (existsSync(abs)) {
     resolved = realpathOr(abs);
   } else {
-    resolved = join(realpathOr(dirname(abs)), basename(abs));
+    // The file may not exist yet (a `write` creating it) and several parent
+    // segments may also be missing. Walk up to the DEEPEST EXISTING ancestor,
+    // realpath THAT (catching a symlinked ancestor like repoB/link -> repoA), then
+    // re-append the not-yet-existing tail. A single-level dirname would miss a
+    // symlink two or more levels above a new file.
+    const tail = [];
+    let cur = abs;
+    while (!existsSync(cur)) {
+      const parent = dirname(cur);
+      if (parent === cur) break; // filesystem root
+      tail.unshift(basename(cur));
+      cur = parent;
+    }
+    resolved = tail.length ? join(realpathOr(cur), ...tail) : realpathOr(cur);
   }
   return relative(realpathOr(root), resolved).split('\\').join('/');
 }
