@@ -53,14 +53,15 @@ export function deployDir(pkgRoot, destRoot, sub, destSub = sub) {
 }
 
 /**
- * Full scaffold: ensure config + deploy command/ and skill/ into .opencode/.
- * OpenCode discovers project commands under .opencode/commands/ and skills under
- * .opencode/skill/; the plugin ships them under command/ and skill/ respectively.
- * Returns a summary of what changed.
+ * Full scaffold: ensure config + deploy command/, agent/, and skill/ into
+ * .opencode/. OpenCode discovers project commands under .opencode/commands/,
+ * subagents under .opencode/agents/, and skills under .opencode/skill/; the plugin
+ * ships them under command/, agent/, and skill/ respectively. Returns a summary.
  */
 export function scaffold(root, pkgRoot) {
   const config = ensureConfig(root);
   const commands = deployDir(pkgRoot, root, 'command', 'commands');
+  const agents = deployDir(pkgRoot, root, 'agent', 'agents');
   const skills = deployDir(pkgRoot, root, 'skill', 'skill');
-  return { config, commands, skills };
+  return { config, commands, agents, skills };
 }

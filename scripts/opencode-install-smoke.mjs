@@ -113,6 +113,21 @@ else {
   ok('gate-bins declares the core gate tools');
 }
 
+// ---- Phase E (T5): prosecutor lenses + verifier, G4/prosecute/distill commands ----
+if (!pkg2.opencode?.agent) fail('package.json opencode.agent entry missing'); else ok('opencode.agent manifest entry');
+const agentDir = join(PLUGIN, 'agent');
+const AGENTS = ['prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff', 'prosecutor-tests', 'prosecutor-verifier'];
+for (const a of AGENTS) {
+  const p = join(agentDir, `${a}.md`);
+  if (!existsSync(p)) { fail(`agent/${a}.md missing`); continue; }
+  if (!/^---\n[\s\S]*?mode:\s*subagent[\s\S]*?\n---/.test(read(p))) fail(`agent/${a}.md lacks subagent frontmatter`);
+  else ok(`agent/${a}.md valid`);
+}
+for (const c of ['adlc-verify-build.md', 'adlc-prosecute.md', 'adlc-distill.md']) {
+  if (!existsSync(join(cmdDir, c))) fail(`command/${c} missing`); else ok(`command/${c} present`);
+}
+if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs missing'); else ok('prosecutor registry/helpers present');
+
 // AC7 (live deny proof against the real opencode binary) is the remaining GA gate;
 // it requires a disposable OpenCode install and is tracked in ADR 0004.
 console.log('  note — AC7 live-binary deny proof is a maintainer/CI follow-up (no opencode binary here).');
