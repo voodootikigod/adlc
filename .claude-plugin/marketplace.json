@@ -10,7 +10,7 @@
     {
       "name": "adlc",
       "description": "Embrace the ADLC from inside Claude Code: a phase-routing discovery skill and commands to bootstrap (.adlc/) and author tickets (P0). Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli).",
-      "source": "./",
+      "source": "./plugins/adlc-claude-code",
       "category": "development"
     }
   ]

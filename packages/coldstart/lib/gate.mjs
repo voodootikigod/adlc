@@ -44,7 +44,12 @@ export function buildCheckTicket(completeFn, extractJsonFn) {
 export async function checkTicket(ticket) {
   const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
   if (mockEnv !== undefined && process.env.NODE_ENV === 'test') {
-    const parsed = JSON.parse(mockEnv);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(mockEnv);
+    } catch (e) {
+      // Ignored: fallback to {}
+    }
     const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
     return { id: ticket.id, gaps };
   }

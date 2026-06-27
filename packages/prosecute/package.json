@@ -1,0 +1,46 @@
+{
+  "name": "@adlc/prosecute",
+  "version": "1.1.0",
+  "description": "P5 review-evidence recorder for ticket- and revision-bound findings and dry-pass completion.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/prosecute"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/prosecute#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "prosecute",
+    "gate"
+  ],
+  "bin": {
+    "adlc-prosecute": "./bin/adlc-prosecute.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.1.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "adlc-codex",
+  "version": "1.0.2",
+  "description": "Codex workflows for operating the Agentic Development Lifecycle with the ADLC toolkit.",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

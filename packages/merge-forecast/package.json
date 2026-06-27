@@ -1,6 +1,6 @@
 {
   "name": "@adlc/merge-forecast",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Conflict forecast and dispatch schedule for parallel ticket execution (D2).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.2"
+    "@adlc/core": "1.1.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

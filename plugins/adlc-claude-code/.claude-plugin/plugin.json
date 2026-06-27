@@ -1,0 +1,21 @@
+{
+  "name": "adlc",
+  "version": "0.2.0",
+  "description": "Embrace the Agentic Development Lifecycle from inside Claude Code — phase-routing discovery skill plus commands to bootstrap and author ADLC tickets. Wraps the @adlc/cli gate toolkit.",
+  "author": {
+    "name": "Chris Williams",
+    "url": "https://github.com/voodootikigod"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/blob/main/docs/integrations/claude-code.md",
+  "repository": "https://github.com/voodootikigod/adlc",
+  "license": "MIT",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "lifecycle",
+    "gates",
+    "spec",
+    "review",
+    "ai"
+  ]
+}

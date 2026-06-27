@@ -1,18 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { execFileSync } from 'node:child_process';
+import * as corePublic from '../index.mjs';
 import { extractJson } from '../lib/llm.mjs';
-import { appendEntry, readEntries, sha256, hashFiles } from '../lib/ledger.mjs';
+import { appendEntry, canonicalJson, readEntries, sha256, hashFiles } from '../lib/ledger.mjs';
 import { resolveBase, refExists } from '../lib/git.mjs';
 import {
   validateTicket, loadTickets, topoSort, computeFloat,
   globMatch, inScope, scopesOverlap,
 } from '../lib/tickets.mjs';
 import { generateMutants, applyMutant, changedLinesFromDiff } from '../lib/mutate.mjs';
+import { resolveRevision as resolveWorktreeRevision } from '../lib/revision.mjs';
+
+const repoRoot = new URL('../../../', import.meta.url).pathname;
 
 test('extractJson: plain object', () => {
   assert.deepEqual(extractJson('{"a": 1}'), { a: 1 });
@@ -50,6 +54,34 @@ test('sha256 + hashFiles: deterministic, missing file hashes null', () => {
   assert.equal(sha256('abc'), sha256('abc'));
   const hashes = hashFiles(['/definitely/not/a/file']);
   assert.equal(hashes['/definitely/not/a/file'], null);
+});
+
+test('canonicalJson: sorts object keys recursively while preserving array order', () => {
+  const left = { b: 2, a: { d: 4, c: 3 }, list: [{ y: 2, x: 1 }] };
+  const right = { list: [{ x: 1, y: 2 }], a: { c: 3, d: 4 }, b: 2 };
+  assert.equal(canonicalJson(left), canonicalJson(right));
+  assert.notEqual(canonicalJson({ list: [1, 2] }), canonicalJson({ list: [2, 1] }));
+});
+
+test('index.d.ts: public declarations match runtime signatures used by consumers', () => {
+  const types = readFileSync(join(repoRoot, 'packages/core/index.d.ts'), 'utf8');
+  const rootDeclarations = new Set(
+    [...types.matchAll(/^export (?:async )?function (\w+)|^export const (\w+)|^export namespace (\w+)/gm)]
+      .map((match) => match[1] ?? match[2] ?? match[3])
+  );
+  for (const exportName of Object.keys(corePublic).sort()) {
+    assert.ok(rootDeclarations.has(exportName), `missing declaration for root export ${exportName}`);
+  }
+
+  const mutateBlock = types.split('export namespace mutate {')[1]?.split('\n}')[0] ?? '';
+  for (const exportName of Object.keys(corePublic.mutate).sort()) {
+    assert.match(mutateBlock, new RegExp(`\\b${exportName}\\b`), `missing declaration for mutate.${exportName}`);
+  }
+
+  assert.match(types, /export function appendEntry<T = unknown>\(name: string, entry: T, dir\?: string\): T;/);
+  assert.match(types, /export function gateFail\(message\?: string, details\?: unknown\): never;/);
+  assert.match(types, /export function gitDiff\(base\?: string, cwd\?: string\): string;/);
+  assert.match(types, /export function promptOnly\(prompts: string \| readonly string\[\]\): never;/);
 });
 
 test('validateTicket: catches missing fields', () => {
@@ -206,6 +238,141 @@ test('resolveBase: returns null when no trunk candidate exists (callers must fai
     g('branch', '-m', 'main', 'work'); // rename away from main/master
     assert.equal(refExists('main', dir), false);
     assert.equal(resolveBase(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: handles large tracked diffs without exec buffer failure', () => {
+  const { dir, g } = gitRepo();
+  try {
+    const file = join(dir, 'large.txt');
+    writeFileSync(file, 'a'.repeat(2 * 1024 * 1024));
+    g('add', '-A'); g('commit', '-qm', 'large');
+    writeFileSync(file, 'b'.repeat(2 * 1024 * 1024));
+    const revision = resolveWorktreeRevision({ cwd: dir });
+    assert.match(revision, /^git-worktree:/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: touching an untracked file without content change is stable', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const untracked = join(dir, 'review.txt');
+    writeFileSync(untracked, 'same content\n'.repeat(10));
+    const before = resolveWorktreeRevision({ cwd: dir });
+    const now = new Date();
+    utimesSync(untracked, now, new Date(now.getTime() + 10_000));
+    const after = resolveWorktreeRevision({ cwd: dir });
+    assert.equal(after, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: untracked source content changes the fingerprint', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    writeFileSync(join(dir, 'feature.mjs'), 'export const value = 1;\n');
+    const after = resolveWorktreeRevision({ cwd: dir });
+    assert.notEqual(after, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: handles dirty files whose paths contain newlines', () => {
+  const { dir, g } = gitRepo();
+  try {
+    const file = join(dir, 'multi\nline.txt');
+    writeFileSync(file, 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    writeFileSync(file, 'changed\n');
+    const after = resolveWorktreeRevision({ cwd: dir });
+    assert.match(after, /^git-worktree:/);
+    assert.notEqual(after, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: explicitly ignored review artifacts do not change the fingerprint', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    writeFileSync(join(dir, 'acceptance.json'), '{"accepted":true}\n');
+    const after = resolveWorktreeRevision({ cwd: dir, ignorePaths: ['acceptance.json'] });
+    assert.equal(after, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: root files with artifact basenames are fingerprinted unless explicitly ignored', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    writeFileSync(join(dir, 'after.json'), '{"unreviewed":true}\n');
+    assert.notEqual(resolveWorktreeRevision({ cwd: dir }), before);
+    assert.equal(resolveWorktreeRevision({ cwd: dir, ignorePaths: ['after.json'] }), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: nested files with artifact basenames still change the fingerprint', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    mkdirSync(join(dir, 'test/fixtures'), { recursive: true });
+    writeFileSync(join(dir, 'test/fixtures/after.json'), '{"unreviewed":true}\n');
+    const after = resolveWorktreeRevision({ cwd: dir });
+    assert.notEqual(after, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: .adlc runtime and ticket files are ignored by the generic worktree hash', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc/manifest.jsonl'), '{"type":"runtime"}\n');
+    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
+    writeFileSync(join(dir, '.adlc/tickets.json'), '{"tickets":[]}\n');
+    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveRevision: ignored .adlc tickets stay out of the generic worktree hash', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.example.json\n');
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc/tickets.json'), '{"tickets":[]}\n');
+    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

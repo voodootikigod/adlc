@@ -28,30 +28,29 @@ product.
 
 ## Install
 
-Each package publishes independently under the `@adlc` npm scope. Install only what you
-need, or run on demand with `npx`:
+Each package publishes independently under the `@adlc` npm scope. For normal use,
+install the dispatcher and run tools through the stable `adlc <tool>` surface:
 
 ```sh
-# one tool, global
-npm install -g @adlc/spec-lint
-
-# or run without installing
-npx @adlc/spec-lint <spec.md>
-
-# or install the whole suite behind one `adlc <tool>` command
 npm install -g @adlc/cli
 adlc spec-lint <spec.md>
+
+# or run without installing
+npx @adlc/cli spec-lint <spec.md>
 ```
+
+Individual packages can still be installed for package development, but Codex skills,
+hooks, CI, and lifecycle docs should use the dispatcher.
 
 ## The toolkit
 
 | Phase | Packages |
 | --- | --- |
 | **Spec & ticket shaping** | [`parallax`](./packages/parallax) · [`spec-lint`](./packages/spec-lint) · [`premortem`](./packages/premortem) · [`coldstart`](./packages/coldstart) |
-| **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) |
-| **Review evidence & calibration** | [`behavior-diff`](./packages/behavior-diff) · [`gate-manifest`](./packages/gate-manifest) · [`hollow-test`](./packages/hollow-test) · [`review-calibration`](./packages/review-calibration) · [`model-ratchet`](./packages/model-ratchet) · [`gate-fuzzing`](./packages/gate-fuzzing) |
+| **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) · [`runner`](./packages/runner) |
+| **Review evidence & calibration** | [`behavior-diff`](./packages/behavior-diff) · [`gate-manifest`](./packages/gate-manifest) · [`hollow-test`](./packages/hollow-test) · [`prosecute`](./packages/prosecute) · [`review-calibration`](./packages/review-calibration) · [`model-ratchet`](./packages/model-ratchet) · [`gate-fuzzing`](./packages/gate-fuzzing) |
 | **Compounding defenses** | [`lesson-foundry`](./packages/lesson-foundry) · [`rejection-mining`](./packages/rejection-mining) · [`skill-rot`](./packages/skill-rot) |
-| **Shared foundation** | [`@adlc/core`](./packages/core) · [`@adlc/cli`](./packages/cli) |
+| **Shared foundation** | [`@adlc/cli`](./packages/cli) · [`@adlc/core`](./packages/core) |
 
 See [docs/package-reference.md](./docs/package-reference.md) for binaries, command forms,
 and per-package detail, and [docs/toolkit.md](./docs/toolkit.md) for how the packages fit
@@ -62,7 +61,19 @@ the ADLC flow.
 This repo is also a Claude Code plugin — it makes the whole lifecycle usable from
 inside the editor (phase-routing skill, ticket/distill/maintain commands, a
 prosecutor subagent, and hooks that fire the gates automatically), with no API
-keys (Claude is the model via `--prompt-only`):
+keys (Claude is the model via `--prompt-only`).
+
+**Recommended:** install with [`plugins`](https://www.npmjs.com/package/plugins), the
+vendor-neutral installer that auto-detects your agent tools (Claude Code, Cursor) and
+installs the plugin into each:
+
+```sh
+npx plugins add voodootikigod/adlc   # install the plugin into your agent tool(s)
+npm install -g @adlc/cli             # the gate toolkit the plugin shells out to
+/adlc-init                           # bootstrap .adlc/ in your repo (once)
+```
+
+Already using Claude Code's native plugin marketplace? That path still works:
 
 ```sh
 npm install -g @adlc/cli
@@ -71,7 +82,21 @@ npm install -g @adlc/cli
 /adlc-init
 ```
 
-See **[docs/claude-code.md](./docs/claude-code.md)** for the full adoption guide.
+See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** for the full adoption guide.
+
+## Project layout
+
+| Directory | Contents |
+|---|---|
+| `packages/` | The toolkit: 21 zero-dependency, gate-shaped CLIs |
+| `plugins/adlc-claude-code/` | Claude Code integration (skill, commands, hooks, subagent) |
+| `plugins/adlc-codex/` | Codex integration (hooks and skills; no TypeScript package) |
+| `plugins/adlc-pi/` | Pi harness integration package (TypeScript, skills, tests) |
+| `docs/` | Lifecycle thesis, integration guides, ADRs, CI templates |
+| `.claude/commands/` | Maintainer commands for this repo (release workflow) |
+| `scripts/` | Release, smoke test, and CI helper scripts (not published; run by `npm test` and CI) |
+| `.adlc/` | Runtime data directory (tickets, gate evidence — gitignored except example) |
+| `.claude-plugin/` | Repo-root marketplace manifest (`marketplace.json`) — the index `npx plugins add voodootikigod/adlc` (and the native `/plugin marketplace add voodootikigod/adlc`) read to resolve the plugin. See [ADR 0003](./docs/adr/0003-adlc-claude-code-plugin.md) for the subdirectory-source assumption and Pre-GA checklist. |
 
 ## Design principles
 
@@ -99,8 +124,10 @@ Requires **Node.js 18 or newer**.
 ## Documentation
 
 - [ADLC.md](./ADLC.md) — the full lifecycle thesis and flaw inventory.
-- [docs/claude-code.md](./docs/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
-- [docs/](./docs/README.md) — toolkit guide, package reference, and the narrative essays.
+- [docs/integrations/claude-code.md](./docs/integrations/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
+- [docs/integrations/codex.md](./docs/integrations/codex.md) — native Codex integration guide.
+- [docs/integrations/pi.md](./docs/integrations/pi.md) — Raspberry Pi harness integration guide.
+- [docs/](./docs/README.md) — toolkit guide, package reference, ADRs, and narrative essays.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the contract every package follows.
 
 ## Contributing

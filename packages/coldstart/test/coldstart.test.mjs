@@ -394,6 +394,31 @@ describe('gate checkTicket / checkAll (unit, no network)', () => {
     await assert.rejects(() => checkTicketWith(ticket), /network failure/);
   });
 
+  test('checkTicket handles invalid JSON in ADLC_GATE_MOCK_RESPONSE gracefully', async () => {
+    // Save original env
+    const origEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
+    const origNodeEnv = process.env.NODE_ENV;
+
+    process.env.NODE_ENV = 'test';
+    process.env.ADLC_GATE_MOCK_RESPONSE = 'invalid json';
+
+    // Import the real checkTicket function for this test to trigger the mock branch
+    const { checkTicket } = await import('../lib/gate.mjs');
+
+    const ticket = { id: 'T_INVALID', title: 'Test invalid JSON' };
+    let result;
+    try {
+      result = await checkTicket(ticket);
+    } finally {
+      // Restore env
+      process.env.ADLC_GATE_MOCK_RESPONSE = origEnv;
+      process.env.NODE_ENV = origNodeEnv;
+    }
+
+    assert.equal(result.id, 'T_INVALID');
+    assert.deepEqual(result.gaps, []);
+  });
+
   test('checkAll runs checkTicket for every ticket in order', async () => {
     const responses = [
       { gaps: [] },

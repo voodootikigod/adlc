@@ -43,7 +43,7 @@ jobs:
         # scheduled runner with repo access. Bump deliberately after reviewing the
         # release. (`--ignore-scripts` blocks install-time scripts; the CLIs are
         # zero-dependency, so nothing legitimate needs them.)
-        run: npm install -g --ignore-scripts @adlc/cli@1.0.2
+        run: npm install -g --ignore-scripts @adlc/cli@1.1.0
 
       # The two checks below are ADVISORY, but a check that *crashes* must not be
       # mistaken for a clean run. Each captures the tool's real exit code, records

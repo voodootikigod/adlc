@@ -1,3 +1,10 @@
 node_modules/
 .worktrees/
-.adlc/
+.omo/*
+!.omo/evidence/
+.omo/evidence/*
+!.omo/evidence/p5-review.txt
+!.omo/evidence/p5-prompt.txt
+!.omo/evidence/p5-inputs.txt
+.adlc/*
+!.adlc/tickets.example.json

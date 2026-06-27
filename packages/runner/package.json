@@ -1,0 +1,46 @@
+{
+  "name": "@adlc/runner",
+  "version": "1.1.0",
+  "description": "Artifact-asserting ADLC phase runner for deterministic gate completion checks.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/runner"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/runner#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "runner",
+    "gate"
+  ],
+  "bin": {
+    "adlc-runner": "./bin/adlc.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.1.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

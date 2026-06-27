@@ -1,6 +1,6 @@
 {
   "name": "@adlc/lesson-foundry",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Converts prosecution findings into permanent defenses — the compounding closer (P7).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.0.2"
+    "@adlc/core": "1.1.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

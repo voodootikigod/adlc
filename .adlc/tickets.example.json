@@ -1,0 +1,42 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "Add authenticated export endpoint",
+      "body": "Implement the export endpoint. Verification: `npm test -- auth-export.test.mjs`. allow-suppression: none",
+      "scope": [
+        "src/export/**",
+        "test/auth-export.test.mjs"
+      ],
+      "rails": [
+        "test/auth-export.test.mjs",
+        "src/contracts/export.schema.json"
+      ],
+      "edges": [
+        {
+          "to": "T2",
+          "contract": "T1 publishes src/contracts/export.schema.json before T2 consumes it."
+        }
+      ],
+      "duration": 2,
+      "category": "feature",
+      "budget": "mid"
+    },
+    {
+      "id": "T2",
+      "title": "Wire export UI",
+      "body": "Use the export contract from T1. Verification: `npm test -- export-ui.test.mjs`.",
+      "scope": [
+        "src/ui/export/**",
+        "test/export-ui.test.mjs"
+      ],
+      "rails": [
+        "test/export-ui.test.mjs"
+      ],
+      "edges": [],
+      "duration": 1,
+      "category": "feature",
+      "budget": "cheap"
+    }
+  ]
+}
