@@ -1,0 +1,109 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "Schema bedrock: definition-driven validator + generated JSON Schemas",
+      "body": "Build the foundation of @adlc/ticket-sync per docs/superpowers/specs/2026-06-27-external-ticketing-sync-design.md (sections 'Schema bedrock', 'Hard constraints', field-definition table). Create packages/ticket-sync as a zero-runtime-dependency package (CONVENTIONS rule 1; Node 18+ built-ins only) WITHOUT editing packages/core (CONVENTIONS rule 2 — core is frozen). Deliver: lib/schema.mjs (single declarative field definition = source of truth), lib/validate.mjs (definition-driven validator over the rich schema), lib/canonical.mjs (canonical JSON: sorted keys, LF, stable number formatting, CRLF-insensitive equality), scripts/gen-schema.mjs (emits schemas/adlc-ticket.schema.json, adlc-block.schema.json, adlc-config.schema.json, adlc-sync-state.schema.json from the definition), and the committed schema files.\n\nAcceptance criteria (each verifiable):\n1. `npm test` green for packages/ticket-sync/test/{schema,validate,canonical}.test.mjs.\n2. Drift gate: test regenerates schemas in-memory and asserts byte-equality with the committed schemas/*.json; editing the definition without regenerating fails the test (verify by mutating the definition in a scratch run).\n3. Cross-validator agreement: a corpus of tickets core's validateTicket accepts is also accepted by the rich validator on shared fields (asymmetric subset direction).\n4. No file under packages/core is modified (verify: `git diff --name-only main...HEAD -- packages/core` is empty).\n5. Package declares zero runtime dependencies (verify: no 'dependencies' beyond @adlc/* in package.json).",
+      "scope": [
+        "packages/ticket-sync/package.json",
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**",
+        "packages/ticket-sync/test/schema.test.mjs",
+        "packages/ticket-sync/test/validate.test.mjs",
+        "packages/ticket-sync/test/canonical.test.mjs"
+      ],
+      "rails": [],
+      "edges": [{ "to": "T2" }],
+      "duration": 2,
+      "category": "contract"
+    },
+    {
+      "id": "T2",
+      "title": "Fenced JSON block codec (parse/serialize, fail-closed)",
+      "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
+      "scope": [
+        "packages/ticket-sync/lib/block.mjs",
+        "packages/ticket-sync/test/block.test.mjs"
+      ],
+      "rails": [],
+      "edges": [{ "to": "T3" }],
+      "duration": 1,
+      "category": "feature"
+    },
+    {
+      "id": "T3",
+      "title": "Pull: GitHub read adapter, 3-way reconcile, Validity Gate, sidecar, store",
+      "body": "Implement `adlc ticket pull` (dry-run by default; --write applies) per the spec data-flow 'Pull', 'Sidecar', 'Validity Gate', 'Sync vs the rails trust root', and 'Lock + atomic write'. Deliver: lib/gh.mjs (execFile wrapper — argv only, no shell, C4), lib/providers/github.mjs (read/map), lib/provider.mjs (interface, no registry), lib/reconcile.mjs (pure 3-way base/local/remote; base from sidecar syncedHash; missing/corrupt base fails safe to CONFLICT), lib/config.mjs (+ adlc-config validation, repo auto-detect, issue selector), lib/store.mjs (writeTicketsAtomic + mkdir lock sharing .adlc/tickets.lock; sidecar .adlc/ticket-sync.state.json gitignored rebuildable cache), lib/rails-guard-sync.mjs (rails superset / scope subset guard + forensic record), and register the `ticket` tool in packages/cli/lib/registry.mjs. Single repo-qualified id space gh:owner/repo#n, owner/repo lowercased to match loadTickets equality; unresolved edges FAIL CLOSED (no silent drop); pagination explicit (truncation -> exit 1, never deletion). Depends on T2.\n\nAcceptance criteria:\n1. test/{reconcile,github,config,store,validity,rails-guard-sync}.test.mjs green; all offline via an injected gh runner with canned --json fixtures.\n2. reconcile: remote-only/local-only/both-changed(conflict)/both-equal(converged); local-only ticket survives pull; out-of-selection survives.\n3. Validity Gate: id normalization unifies T<n>/gh: spellings; an unresolved edges[].to fails closed (exit 2), not dropped; resolution-checked set == bytes written.\n4. rails-guard-sync: rails non-superset and scope-widen refused without --allow-rail-narrowing; forensic record written.\n5. pull is dry-run without --write (verify no file mutation); exit codes 0/1/2 per matrix.",
+      "scope": [
+        "packages/ticket-sync/lib/gh.mjs",
+        "packages/ticket-sync/lib/provider.mjs",
+        "packages/ticket-sync/lib/providers/github.mjs",
+        "packages/ticket-sync/lib/reconcile.mjs",
+        "packages/ticket-sync/lib/config.mjs",
+        "packages/ticket-sync/lib/store.mjs",
+        "packages/ticket-sync/lib/rails-guard-sync.mjs",
+        "packages/ticket-sync/bin/ticket-sync.mjs",
+        "packages/ticket-sync/test/reconcile.test.mjs",
+        "packages/ticket-sync/test/github.test.mjs",
+        "packages/ticket-sync/test/config.test.mjs",
+        "packages/ticket-sync/test/store.test.mjs",
+        "packages/ticket-sync/test/validity.test.mjs",
+        "packages/ticket-sync/test/rails-guard-sync.test.mjs",
+        "packages/cli/lib/registry.mjs"
+      ],
+      "rails": [],
+      "edges": [{ "to": "T4" }],
+      "duration": 3,
+      "category": "feature"
+    },
+    {
+      "id": "T4",
+      "title": "Push + create: write-back, idempotent create, status outcomes",
+      "body": "Implement `adlc ticket push` and `adlc ticket sync` (dry-run by default; --write applies) per the spec data-flow 'Push'. Deliver: lib/outcomes.mjs (reduce .adlc/manifest.jsonl -> per-ticket status: latest-per-gate, verdict=latest P5 entry, no P5 -> no pass label), lib/status-render.mjs (labels mutually-exclusive within statusLabels + a canonical timestamp-free status comment; both display-only, never authoritative), and github write ops (updateIssueBody, ensureLabels, upsertStatusComment, createIssue). Create is idempotent: stable sentinel key, adopt off the already-paginated pull list (not the eventually-consistent search index), persist {nodeId,number} into pendingCreates before id-reassignment, >1 key match fails closed; on create reassign id T<n>->gh:owner/repo#n, rewrite every edges[].to store-wide, migrate manifest evidence to the new id. Transfer/renumber reuses the same reassign+edge-rewrite path. Depends on T3.\n\nAcceptance criteria:\n1. test/outcomes.test.mjs green: multiple verdicts (latest wins), none (no fabricated pass), per-gate latest.\n2. test/github.test.mjs idempotency: push twice against a recording fake -> second run makes no mutating calls; create adoption finds an existing keyed issue; a simulated lost local write does NOT duplicate; id reassignment rewrites edge references.\n3. push is dry-run without --write; partial failure -> per-issue result list, exit 1.",
+      "scope": [
+        "packages/ticket-sync/lib/outcomes.mjs",
+        "packages/ticket-sync/lib/status-render.mjs",
+        "packages/ticket-sync/lib/providers/github.mjs",
+        "packages/ticket-sync/bin/ticket-sync.mjs",
+        "packages/ticket-sync/test/outcomes.test.mjs",
+        "packages/ticket-sync/test/github.test.mjs"
+      ],
+      "rails": [],
+      "edges": [{ "to": "T5" }],
+      "duration": 3,
+      "category": "feature"
+    },
+    {
+      "id": "T5",
+      "title": "Doctor: read-only, offline health checks",
+      "body": "Implement `adlc ticket doctor` (read-only always; --json) per the spec 'doctor — read-only, offline (MVP)'. A flat list of offline checks; exit 2 if any error else 0. No --fix, no network, no registry (deferred to a follow-up spec). Checks: .adlc/config.json valid against adlc-config.schema.json; tickets.json loads via @adlc/core loadTickets with no errors (dup id / dangling edge / cycle / schema); committed JSON Schemas == regenerated (bedrock drift); sidecar valid, no two ids map to one nodeId, every synced ticket has a syncedHash, no stale pendingCreates; stale .adlc/tickets.lock (age-guarded, reported not removed). Depends on T3 (config/store/validity/sidecar).\n\nAcceptance criteria:\n1. test/doctor.test.mjs green: each check has a failing AND a passing fixture; exit codes correct (0 healthy, 2 problems).\n2. doctor performs zero network calls and zero writes (verify with an injected gh runner that throws on use, and a read-only assertion).",
+      "scope": [
+        "packages/ticket-sync/lib/doctor.mjs",
+        "packages/ticket-sync/bin/ticket-sync.mjs",
+        "packages/ticket-sync/test/doctor.test.mjs"
+      ],
+      "rails": [],
+      "edges": [{ "to": "T6" }],
+      "duration": 1,
+      "category": "feature"
+    },
+    {
+      "id": "T6",
+      "title": "Docs + opt-in live gh smoke test",
+      "body": "Document the feature and add an env-gated real-gh smoke test per the spec 'Testing' and staging step 6. Deliver: packages/ticket-sync/README.md, docs/ticket-sync.md (pull/push/sync/doctor guide, flag matrix, config, token scopes, sidecar policy), a synced-ids + sidecar note in docs/ticket-authoring.md, and a scripts smoke (env-gated like codex-install-smoke, not part of the default offline suite). Depends on T4 and T5 (documents the whole surface).\n\nAcceptance criteria:\n1. docs/ticket-sync.md documents every subcommand and flag exactly as implemented (verify against bin/ticket-sync.mjs --help output).\n2. The live smoke is opt-in (skipped without the documented env var) and does not run in the default `npm test`.\n3. README links resolve and match the shipped commands.",
+      "scope": [
+        "packages/ticket-sync/README.md",
+        "docs/ticket-sync.md",
+        "docs/ticket-authoring.md",
+        "scripts/ticket-sync-smoke.mjs"
+      ],
+      "rails": [],
+      "edges": [],
+      "duration": 1,
+      "category": "docs"
+    }
+  ]
+}

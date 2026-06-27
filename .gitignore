@@ -8,3 +8,4 @@ node_modules/
 !.omo/evidence/p5-inputs.txt
 .adlc/*
 !.adlc/tickets.example.json
+!.adlc/tickets.json
