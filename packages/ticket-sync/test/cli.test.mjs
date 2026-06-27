@@ -16,6 +16,8 @@ test('parseFlags: dry-run is the default (write/force/allow-rail-narrowing all f
   assert.equal(f['allow-rail-narrowing'], false);
   assert.equal(f.json, false);
   assert.equal(parseFlags(['--write']).write, true);
+  assert.equal(parseFlags(['--force']).force, true);
+  assert.equal(parseFlags(['--allow-rail-narrowing'])['allow-rail-narrowing'], true);
 });
 
 /** Run the bin; return { code, stdout, stderr }. */
