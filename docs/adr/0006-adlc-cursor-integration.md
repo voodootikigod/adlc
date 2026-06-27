@@ -102,9 +102,10 @@ control:
   triggers found so far.
 - Batch / MultiEdit payloads: a structured mutator can carry its paths only in
   nested `edits[]`/`files[]` arrays with no top-level scalar path. The extractor
-  collects **every** target path (scalars + nested batch items, mirroring the
-  Claude sibling) and the guard denies if **any** one is a frozen rail — a
-  single-scalar extractor would wave a MultiEdit through.
+  collects **every** target path (every path-key including a rename/move source
+  *and* destination, plus nested batch items, mirroring the Claude sibling) and the
+  guard denies if **any** one is a frozen rail — a single-path extractor would wave
+  a MultiEdit or a rename-onto-a-rail through.
 - Patch-envelope payloads: an `apply_patch`-style tool names its targets inside a
   `command`/`patch` string (`*** Update File: …`). The extractor parses those
   headers so the named paths are rail-checked. As a categorical backstop, a tool

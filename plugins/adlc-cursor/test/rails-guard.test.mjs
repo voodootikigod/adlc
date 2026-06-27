@@ -236,6 +236,18 @@ test('(batch) MultiEdit/batch payloads with nested edits[]/files[] are rail-chec
   } finally { cleanup(root); }
 });
 
+test('(rename) a rename/move with a frozen rail in EITHER slot (path or target_path) is denied', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    // frozen destination behind a non-rail source
+    assert.equal(decide({ tool_name: 'rename_file', tool_input: { path: 'src/free.js', target_path: 'src/frozen.js' } }, { root, env: env() }).permission, 'deny');
+    // frozen source moved to a non-rail destination
+    assert.equal(decide({ tool_name: 'move_file', tool_input: { path: 'src/frozen.js', target_path: 'src/free.js' } }, { root, env: env() }).permission, 'deny');
+    // neither slot is a rail -> allow
+    assert.equal(decide({ tool_name: 'rename_file', tool_input: { path: 'src/a.js', target_path: 'src/b.js' } }, { root, env: env() }).permission, 'allow');
+  } finally { cleanup(root); }
+});
+
 test('(patch) apply_patch command string naming a rail is denied; a non-rail patch allows', () => {
   const root = fixture({ tickets: RAILED });
   try {

@@ -100,16 +100,26 @@ function collectPatchPaths(text, out) {
  */
 export function extractFilePaths(payload) {
   const out = new Set();
+  // Collect EVERY path-key value on an object — not just the first. A rename/move
+  // payload carries a source AND a destination (path + target_path); checking only
+  // the first would miss a frozen rail hidden in the second slot.
+  const addEveryPathKey = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const k of PATH_KEYS) {
+      const v = obj[k];
+      if (typeof v === 'string' && v.trim()) out.add(v);
+      else if (Array.isArray(v)) for (const e of v) if (typeof e === 'string' && e.trim()) out.add(e);
+    }
+  };
   const addScalars = (obj) => {
     if (!obj || typeof obj !== 'object') return;
-    const s = firstString(obj, PATH_KEYS);
-    if (s) out.add(s);
+    addEveryPathKey(obj);
     for (const bk of BATCH_KEYS) {
       const arr = obj[bk];
       if (!Array.isArray(arr)) continue;
       for (const el of arr) {
         if (typeof el === 'string' && el.trim()) out.add(el);
-        else if (el && typeof el === 'object') { const es = firstString(el, PATH_KEYS); if (es) out.add(es); }
+        else if (el && typeof el === 'object') addEveryPathKey(el);
       }
     }
     // apply_patch-style payloads name their targets inside a patch/command string.
