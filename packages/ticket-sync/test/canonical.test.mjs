@@ -24,6 +24,11 @@ test('omit drops a key at any depth (e.g. $schema)', () => {
   assert.ok(canonicalEqual({ $schema: 'a', scope: ['s'] }, { $schema: 'b', scope: ['s'] }, { omit: ['$schema'] }));
 });
 
+test('omit drops a key at DEPTH, not just top level (the "at any depth" contract)', () => {
+  assert.equal(canonicalize({ outer: { $schema: 'x', a: 1 } }, { omit: ['$schema'] }), '{"outer":{"a":1}}');
+  assert.ok(canonicalEqual({ o: { $schema: 'a', k: 1 } }, { o: { $schema: 'b', k: 1 } }, { omit: ['$schema'] }));
+});
+
 test('canonicalHash is stable across key order', () => {
   assert.equal(canonicalHash({ a: 1, b: 2 }), canonicalHash({ b: 2, a: 1 }));
   assert.notEqual(canonicalHash({ a: 1 }), canonicalHash({ a: 2 }));
