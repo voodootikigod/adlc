@@ -182,6 +182,14 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
     return { decision: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
   }
   const declaredRails = ticket.rails ?? [];
+  // @adlc/core validates that `rails` is an array but NOT that its entries are
+  // strings, so a malformed entry (e.g. rails: [123]) would make globMatch throw
+  // mid-match — and that exception would escape to the adapter's catch, which
+  // fails OPEN. A corrupt rail set under active enforcement must fail CLOSED, so
+  // reject any non-string/empty rail here rather than letting it bypass the guard.
+  if (declaredRails.some((rail) => typeof rail !== 'string' || rail.length === 0)) {
+    return { decision: 'deny', reason: `active ticket ${active.id} has a malformed rail entry — failing closed` };
+  }
   const rails = [...declaredRails, ...TRUST_ROOT_RAILS];
 
   // Match BOTH the lexical path and the symlink-resolved real path (so a symlink

@@ -129,11 +129,25 @@ export function decide(payload, { root, env = process.env } = {}) {
     }
     return { permission: 'allow' };
   } catch (err) {
-    // Advisory layer: a hook crash must not brick the editor. Fail open and let
-    // the unbypassable CI rail-freeze gate catch the edit.
+    // Categorical fail-safe (closes the whole "exception → bypass" class):
+    //  - when enforcement is ACTIVE, an unexpected error is more likely corruption
+    //    or tamper than a benign bug, so fail CLOSED (deny) — never let a throw in
+    //    the deny path become a silent allow on a frozen rail;
+    //  - when enforcement is OFF the guard is a no-op anyway, so fail OPEN to avoid
+    //    bricking the editor on a hook bug. The CI gate remains the real control.
+    const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     process.stderr.write(
-      `adlc-rails-guard: internal error (failing OPEN, advisory) — ${err?.message ?? err}\n`,
+      `adlc-rails-guard: internal error (failing ${enforcing ? 'CLOSED' : 'OPEN'}) — ${err?.message ?? err}\n`,
     );
+    if (enforcing) {
+      return {
+        permission: 'deny',
+        user_message: `ADLC rails-guard: internal error while enforcing — failing closed (${err?.message ?? err})`,
+        agent_message:
+          'The rail guard hit an unexpected error while enforcement is active and failed closed. ' +
+          'Fix the rail/ticket state (e.g. a malformed .adlc/tickets.json) rather than working around the guard.',
+      };
+    }
     return { permission: 'allow' };
   }
 }

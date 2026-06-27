@@ -216,6 +216,29 @@ test('(multi-root) the guard checks the workspace root that OWNS the edited path
   } finally { cleanup(repoA); cleanup(repoB); }
 });
 
+test('(fail-safe) an unexpected throw in the deny path fails CLOSED under active enforcement, OPEN when off', () => {
+  // Force checkRail to throw (a non-string root makes path.join throw) to exercise
+  // the categorical catch: under active enforcement an error must NOT become a
+  // silent allow; with enforcement off the guard is a no-op so it fails open.
+  const p = payload('Write', 'src/x.js');
+  assert.equal(decide(p, { root: 42, env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' } }).permission, 'deny');
+  assert.equal(decide(p, { root: 42, env: { ADLC_P4_ENFORCEMENT: '0' } }).permission, 'allow');
+});
+
+test('(F2-rails) a malformed rail entry (non-string) fails CLOSED, not open', () => {
+  // @adlc/core only checks rails is an array, not its element types. A non-string
+  // rail makes globMatch throw; without a guard the adapter catch fails open.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', title: 'x', rails: [123, 'src/frozen.js'] }] }));
+    const v = decide(payload('Write', 'src/frozen.js'), { root, env: env() });
+    assert.equal(v.permission, 'deny', 'a malformed rail entry must fail closed');
+    assert.match(v.user_message, /malformed rail|failing closed/);
+  } finally { cleanup(root); }
+});
+
 test('(multi-root ..) a non-normalized path is attributed to the repo it RESOLVES into', () => {
   // repoB (uninitialized, listed first) and repoA (has the rail). The payload path
   // lexically prefixes repoB but ../-resolves into repoA — raw prefix matching would

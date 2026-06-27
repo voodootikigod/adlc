@@ -90,8 +90,16 @@ control:
 - Corrupt `tickets.json`: `@adlc/core`'s `loadTickets` signals corruption three
   ways — it throws on some malformed schemas, returns an `errors` array on others,
   and returns an empty list when `tickets` is absent. The checker fails **closed**
-  on all three (and on a resolved active ticket that isn't found), so a corrupt or
+  on all three (and on a resolved active ticket that isn't found, and on a
+  malformed rail entry such as a non-string in the `rails` array), so a corrupt or
   truncated rail trust root cannot silently drop the declared rail set.
+- Categorical fail-safe: rather than enumerate every way the deny path could throw,
+  the adapter's catch is **enforcement-aware** — when `ADLC_P4_ENFORCEMENT=1`, any
+  unexpected error in the decision fails **closed** (deny), because under active
+  enforcement an error is likelier corruption/tamper than a benign bug; when
+  enforcement is off the guard is a no-op, so it fails open to avoid bricking the
+  editor. This closes the whole "exception → silent allow" class, not just the
+  triggers found so far.
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail is
   resolved (target + existing parent segments) before rail comparison and denied.
 - Multi-root workspaces: in a Cursor workspace with several `workspace_roots`, the
