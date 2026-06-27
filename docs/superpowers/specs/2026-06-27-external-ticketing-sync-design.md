@@ -563,6 +563,43 @@ the default offline suite.
    sidecar note in `docs/ticket-authoring.md`, env-gated real-`gh` smoke.
    *Accept:* docs match flags; smoke documented as opt-in.
 
+## P1 interrogation — build-time guardrails (spec-lint ✓, premortem, parallax)
+
+`spec-lint`: 6/6 staging acceptance criteria carry concrete verification methods.
+The premortem/parallax gates surfaced no *design* blockers (the design was already
+hardened over 4 adversarial-review rounds) but flagged failure modes and residual
+ambiguities to **enforce during build**, mapped to their tickets:
+
+**Premortem — likely implementation/rollout failure modes:**
+1. **Canonical-JSON divergence → conflict storms** (T1). Zero-dep hand-rolled
+   canonicalization (number formatting, unicode escaping, key collation) is the
+   most likely "works but unusable" failure: any nondeterminism makes every sync a
+   false conflict. Lock the exact algorithm and add property tests.
+2. **Create idempotency depends on a *fresh* list** (T4). Standalone `push` must do
+   its own fully-paginated fetch before create-adoption — never the
+   eventually-consistent search index, and never a stale prior pull.
+3. **Frozen-core → drift** (T3). Relational checks (dup id / edge resolution /
+   cycle) must run via `@adlc/core` `loadTickets` at the Validity Gate, not be
+   re-implemented in the package (the cross-validator test only covers per-field).
+4. **rails-guard-ci override friction** (T3). Keep all sync bookkeeping in the
+   sidecar (done) so only genuine rail/content changes hit the human gate;
+   document the override path so frequent sync doesn't push teams to disable rails.
+5. **Lock interop** (T3). `store.mjs`'s mkdir lock is only honored by code that
+   opts in; the `/adlc-ticket` prose writer may not — document the shared contract.
+6. **`gh` environment variance** (T3). `GH_HOST`/Enterprise, unauthenticated CI,
+   and `gh` JSON-field drift break outside the dev box — pre-flight probe + pin to
+   documented fields.
+7. **Id-reassignment orphans external refs** (T4). Reassigning `T7`→`gh:` can
+   orphan references in PR text/branch names/other docs — document; keep the `gh:`
+   id stable thereafter.
+
+**Parallax — residual ambiguities to pin in the owning ticket:**
+- **A (T4):** standalone `push` self-fetches its issue list (resolves premortem #2).
+- **B (T4):** the canonical `statusLabels` vocabulary + mutually-exclusive state
+  machine (the config example is illustrative, not the canonical default).
+- **C (T1):** the exact canonical-JSON algorithm (resolves premortem #1).
+- **D (T3):** selector AND/OR semantics + closed-issue inclusion default.
+
 ## Open / deferred items
 
 - **doctor repair** (registry, `--fix`, `--fix --write`, online checks) — own spec.
