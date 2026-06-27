@@ -12,11 +12,19 @@ discovery skill.
 ## Status
 
 Shipping so far: the rails-guard plugin (`plugins/adlc-opencode/`, plan Phase D),
-the discovery skill, and the **Phase A command surface** — `/adlc-init`,
+the discovery skill, the **Phase A command surface** — `/adlc-init`,
 `/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`, `/adlc-decompose` plus the
-gate-bin dependency mapping and deterministic `/adlc-init` scaffolding. Still
-follow-on (plan Phases B/C/E): the keyless LLM bridge, advisory session hooks, and
-the prosecutor lenses.
+gate-bin dependency mapping and deterministic `/adlc-init` scaffolding — and the
+**Phase B keyless gate bridge** (`lib/keyless-bridge.mjs`): run any LLM-backed gate
+in `--prompt-only` mode, route the prompt(s) to the host model, no API key. Still
+follow-on (plan Phases C/E): advisory session hooks and the prosecutor lenses.
+
+> **Keyless bridge — SDK dependency (plan §6.4).** The bridge's protocol (extract
+> a gate's prompts, ask, thread answers) is implemented and tested, but the
+> isolated-sub-context model call depends on a proposed OpenCode SDK extension. The
+> `ask` function is capability-gated: it uses the SDK isolated-prompt API when
+> present, optionally degrades to the active session model, and otherwise returns
+> `null` so callers fail closed rather than silently skip a gate.
 
 ## Commands
 
