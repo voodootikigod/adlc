@@ -1,7 +1,7 @@
 # External Ticketing Sync — Design
 
 **Date:** 2026-06-27
-**Status:** Approved design (rev 2, post adversarial review), pending implementation plan
+**Status:** Approved design (rev 3, post adversarial review round 2), pending implementation plan
 **Author:** Chris Williams (with Claude)
 
 ## Problem
@@ -58,9 +58,16 @@ the first design draft did wrong.
   package, **not** core. `origin` rides along on tickets because core's
   `validateTicket()` ignores unknown fields (verified).
 - **C3 — `.adlc/tickets.json` is the rail trust root.** The PreToolUse hook
-  freezes it once any rail exists, and the **CI rails-guard diff gate** rejects an
-  un-audited change to it. Any writer of that file (pull/push/create) must
-  reconcile with this (see Sync vs the rails trust root).
+  freezes it once any rail exists, and the **CI rails-guard diff gate**
+  (`scripts/rails-guard-ci.mjs`) treats the file itself as a protected rail and
+  flags **any** change to it — it does **not** consult the gate-manifest, so there
+  is **no machine "audited bypass"** for CI. The only path to land a trust-root
+  change is the existing one: a human reviews the diff and admin-overrides the
+  required check. Therefore: (a) routine sync bookkeeping must NOT live in
+  `tickets.json` (it would churn the trust root every run); it lives in a non-rail
+  **sidecar**. (b) Real ticket-content changes from sync (new tickets, changed
+  rails/scope/edges) intentionally go through that same human-reviewed gate — that
+  review IS the protection against a malicious or careless external edit.
 - **C4 — `gh` is invoked via `execFile` (argv array), never a shell.** Untrusted
   issue content (titles, bodies, labels) is passed as arguments/stdin, never
   interpolated into a shell string.
@@ -74,10 +81,10 @@ the first design draft did wrong.
 | D3 | Transport = **`gh` CLI** via `execFile` | Reuses `gh` auth (like `rejection-mining`); zero npm deps; no shell injection. |
 | D4 | Metadata home = **fenced JSON block** in the issue body, between HTML-comment sentinels | Portable, lossless via canonical JSON, zero-dep parse, editor-validatable via a `$schema` key. |
 | D5 | **Definition-driven validator + generated JSON Schema**, in the **new package** | One source of truth for the external contract; cannot drift (drift gate). Core stays frozen (C2). |
-| D6 | Conflict policy = **3-way detect (base/local/remote), warn-don't-merge** | A stored last-synced base is required to tell "remote changed" from "both changed". |
+| D6 | Conflict policy = **3-way detect (base/local/remote), warn-don't-merge**; base stored in the **sidecar** | A stored last-synced base is required to tell "remote changed" from "both changed"; it must not live in the trust root (C3). |
 | D7 | **Field ownership** split | Humans own prose/labels; ADLC owns the block, `adlc:` labels, the status comment. |
-| D8 | **Create issues for local-only tickets** (push), matched by `origin` | Full round-trip; ids do not churn (local id kept, `origin` attached). |
-| D9 | **Repo-qualified ids**, issues-only | `gh:<owner>/<repo>#<number>` is globally unique; PR number-space excluded. |
+| D8 | **Create issues for local-only tickets** (push), **idempotent via a stable key**, then **reassign the id to the gh-qualified id** with atomic edge rewrite | Full round-trip; a single id space (D9) avoids dangling-edge corruption; the key prevents duplicate issues on a lost local write. |
+| D9 | **Single, repo-qualified id space**, issues-only | `gh:<owner>/<repo>#<number>` is globally unique; PR number-space excluded; one id space so `edge.to` always resolves. |
 | D10 | **Labels are display-only**; authoritative state is the local manifest + an **author-verified** status comment | GitHub has no label-namespace ACL; labels/markers are spoofable. |
 | D11 | **doctor**: read-only + offline in MVP; repair deferred | Matches pull-first; avoids a cross-package registry and a third remote-write path now. |
 
@@ -147,9 +154,9 @@ The block carries ADLC execution metadata GitHub Issues lack. It is a fenced
 `json` block between reserved HTML-comment sentinels. Example issue body (the
 prose is human-owned; everything between the sentinels is ADLC-owned):
 
-    Human-authored description goes here.
+    Human-authored description goes here (the "prefix" prose).
 
-    <!-- adlc:begin v=1 -->
+    <!-- adlc:begin v=1 key=7f3a… -->
     ```json
     {
       "$schema": "https://adlc.dev/schema/v1/adlc-block.schema.json",
@@ -163,50 +170,70 @@ prose is human-owned; everything between the sentinels is ADLC-owned):
     ```
     <!-- adlc:end -->
 
+    More human prose may follow (the "suffix"), also preserved verbatim.
+
 - `id` and `title` are **not** in the block. `title` = issue title;
-  `id = "gh:<owner>/<repo>#<number>"` (D9). `origin` (below) carries the durable refs.
-- The schema version lives on the **sentinel** (`v=1`) so it is readable without
-  parsing the JSON; `$schema` inside is an optional editor-validation hint and is
-  **excluded from canonical equality** (so its presence/URL never causes push churn).
+  `id = "gh:<owner>/<repo>#<number>"` (D9). The sidecar carries the durable refs.
+- The schema version (`v=1`) and the create idempotency `key` live on the
+  **sentinel** so they are readable without parsing the JSON. `$schema` inside is an
+  optional editor-validation hint and is **excluded from canonical equality** (so
+  its presence/URL never causes push churn).
+- **Body model:** the issue body is `{prefix, block, suffix}`; both prose segments
+  are preserved verbatim across round-trips (only the JSON between the sentinels is
+  rewritten).
 - **Reserved strings:** `<!-- adlc:begin` and `<!-- adlc:end -->` are reserved.
   Exactly one well-formed pair is allowed; zero, multiple, or unbalanced sentinels
-  → fail closed (see Validity Gate). A `json` fence inside human prose is ignored
-  (only content inside the sentinels is parsed).
+  → fail closed with an error naming the offending line (see Validity Gate).
 
-### `origin` (rides on the ticket; ignored by core)
+### Sidecar: `.adlc/ticket-sync.state.json` (NOT a rail)
 
-```
-origin: {
-  provider: "github",
-  repo: "acme/app",
-  number: 42,
-  nodeId: "I_kwDO…",        // GraphQL node id — stable across transfer/renumber (C-transfer)
-  url: "https://github.com/acme/app/issues/42",
-  syncedHash: "<canonical-block-hash at last successful sync>",   // the 3-way BASE (D6)
-  syncedAt: "<iso8601>"
+All sync bookkeeping lives in a sidecar so routine syncs never touch the rail
+trust root (C3). It is keyed by **ticket id** and is not read by any gate:
+
+```json
+{
+  "version": 1,
+  "tickets": {
+    "gh:acme/app#42": {
+      "provider": "github", "repo": "acme/app", "number": 42,
+      "nodeId": "I_kwDO…",                 // GraphQL node id — stable across transfer/renumber
+      "url": "https://github.com/acme/app/issues/42",
+      "syncedHash": "<canonical-block-hash at last successful sync>",  // the 3-way BASE (D6)
+      "syncedAt": "<iso8601>",
+      "createKey": "<uuid>"                 // idempotency key for create (below)
+    }
+  },
+  "pendingCreates": { "<uuid>": { "localId": "T7", "title": "…" } }   // crash-recovery (below)
 }
 ```
 
-`url` is derived/display-only; `nodeId` is the durable identity used for matching
-and re-resolution. Reconcile matches local↔remote by `origin.nodeId` (falling back
-to `provider+repo+number`), **never by id string** — so a locally-authored `T7`
-that gets an issue created keeps id `T7` and simply gains `origin`.
+- `nodeId` is the durable identity used for matching and re-resolution; reconcile
+  matches local↔remote by `nodeId`, falling back to `provider+repo+number`.
+- `syncedHash` is the canonical-block hash; it is computed and written **in the same
+  atomic sidecar write** as the rest of that sync's state (no second write, no
+  desync window). A no-op pull that changes nothing writes nothing.
+- The sidecar is mutable, frequently rewritten, and **not** a rail — so ordinary
+  sync activity never trips the CI trust-root gate. Only genuine ticket-content
+  changes land in `tickets.json`, which is exactly what should be human-reviewed.
 
 ## Schema bedrock (D5) — one definition → three artifacts
 
 ```
 packages/ticket-sync/lib/schema.mjs   <- THE source of truth (plain data, zero deps)
         |--> validate.mjs             <- definition-driven validator (rich)
-        |--> gen -> adlc-ticket.schema.json   (full ticket incl. origin)
-        |--> gen -> adlc-block.schema.json    (block subset: no id/title/origin)
-        +--> gen -> adlc-config.schema.json   (.adlc/config.json)
+        |--> gen -> adlc-ticket.schema.json   (full ticket; no sync state)
+        |--> gen -> adlc-block.schema.json    (block subset: no id/title)
+        |--> gen -> adlc-config.schema.json   (.adlc/config.json)
+        +--> gen -> adlc-sync-state.schema.json (.adlc/ticket-sync.state.json sidecar)
 ```
 
 - `scripts/gen-schema.mjs` emits all three JSON Schemas from the definition.
 - **Drift gate** (`schema.test.mjs`): regenerate in-memory and assert the
   committed `.json` files match — same pattern as the release lockfile gate.
-- **Cross-validator agreement** (`validate.test.mjs`): a corpus runs through both
-  core's `validateTicket` and the rich validator; they must agree on core's fields.
+- **Cross-validator agreement** (`validate.test.mjs`): asymmetric and scoped —
+  every input core's `validateTicket` accepts must also be accepted by the rich
+  validator on core's shared fields (the rich validator may additionally enforce id
+  format / `category` enum that core ignores; that is not "disagreement").
 - **Relational invariants are NOT schema-expressible** and stay in code: duplicate
   ids, edge resolution, cycles. The "one definition" claim is scoped to *per-field*
   validation; relational checks are explicitly code-only (and run at the Validity
@@ -216,19 +243,19 @@ packages/ticket-sync/lib/schema.mjs   <- THE source of truth (plain data, zero d
 
 | Field | Type | Required | Constraints | Owner |
 |---|---|---|---|---|
-| `id` | string | yes | `gh:<owner>/<repo>#<n>` for synced; `T<n>` for local | derived/local |
+| `id` | string | yes | single space: `gh:<owner>/<repo>#<n>` once synced; `T<n>` only while purely local (reassigned to the gh id on create, D8) | derived |
 | `title` | string | yes | from issue title | human |
-| `body` | string | no | prose above the sentinel | human |
+| `body` | string | no | `{prefix, suffix}` prose around the block, verbatim | human |
 | `scope` | string[] | no | globs | ADLC (block) |
 | `rails` | string[] | no | path globs (security-relevant) | ADLC (block) |
-| `edges` | object[] | no | `{ to: <ticket-id>, contract?: string }`; `to` must resolve | ADLC (block) |
+| `edges` | object[] | no | `{ to: <ticket-id>, contract?: string }`; `to` MUST resolve (else fail closed) | ADLC (block) |
 | `duration` | number | no | `> 0`; relative effort | ADLC (block) |
 | `category` | string | no | enum: `feature|bug|refactor|docs|chore|spec|contract|architecture` | ADLC (block) |
 | `budget` | number | no | `> 0`; token hint | ADLC (block) |
-| `origin` | object | no (required once synced) | shape above | ADLC |
 
-(The block subset = `scope, rails, edges, duration, category, budget` + optional
-`$schema`. `v` lives on the sentinel.)
+Sync metadata (`origin`/`syncedHash`/etc.) is **not** a ticket field — it lives in
+the sidecar (above). The block subset = `scope, rails, edges, duration, category,
+budget` + optional `$schema`; `v` and `key` live on the sentinel.
 
 ## Validity Gate (applied before any local write)
 
@@ -236,11 +263,17 @@ Pull/create build the full proposed ticket set **in memory**, then it must pass,
 atomically, before the file is written (C3-safe — a failed pull never mutates the
 file):
 
-1. Each ticket passes the rich per-field validator.
-2. **Relational checks (loadTickets-level):** no duplicate ids; every `edges[].to`
-   resolves **within the materialized set**; no cycles. A block referencing a
-   not-pulled ticket → that edge is **dropped with a warning** (never written as a
-   dangling edge, which would crash `computeFloat`); the drop is surfaced by doctor.
+1. **Id normalization (single space):** all ticket ids and all `edges[].to` values
+   are normalized to the canonical id space (D9) before checking — a block written
+   as `gh:acme/app#42` and a local ticket whose sidecar maps to that issue are the
+   same key. There is exactly one id space; no `T<n>`↔`gh:` ambiguity survives this
+   step (created tickets are already reassigned to their gh id, D8).
+2. **Relational checks (loadTickets-level):** no duplicate ids; **every `edges[].to`
+   must resolve within the materialized set**; no cycles. An edge whose target was
+   not pulled → **fail closed (exit 2)** with a message to widen the selector (or
+   the tool auto-expands the selection to fetch the referenced issue). It is
+   **never** silently dropped — dropping a real dependency/contract is corruption,
+   and writing it dangling would crash `computeFloat` (verified).
 3. **Block cases:** no block → import title/body only (empty execution fields, not
    an error); valid block → materialize; **present-but-invalid or
    unbalanced-sentinel block → fail closed** (report against that ticket, do not
@@ -252,22 +285,32 @@ Only after all of the above does `store.writeTicketsAtomic()` run.
 
 ## Sync vs the rails trust root (C3)
 
-`.adlc/tickets.json` is the rail trust root. Sync writes it from outside the
-PreToolUse hook, so the in-session hook does not block it — but the **CI
-rails-guard diff gate** will reject the committed change unless it is audited.
-Therefore:
+`.adlc/tickets.json` is the rail trust root. The **CI gate
+(`scripts/rails-guard-ci.mjs`) does not consult the gate-manifest** — it flags ANY
+change to the trust root and there is **no machine bypass** (verified). The design
+works *with* that reality rather than pretending to bypass it:
 
-- Every sync write that changes rails records a `rails-bypass` entry to the
-  gate-manifest (mirroring `/adlc-ticket`), so the committed diff is auditable.
-  If the manifest can't be written, the write is refused (fail closed), exactly
-  like the hook's audited bypass.
-- **Rail-narrowing guard:** pull compares incoming `rails` per ticket against the
-  current local `rails`. If any rail is **removed or narrowed**, pull refuses
-  unless `--allow-rail-narrowing` is given, and that override is **always audited**
-  (independent of `--force`). Rationale: a malicious or careless issue edit that
-  strips `rails` must not silently weaken local enforcement.
-- `--force` (block-conflict override) writes a gate-manifest audit entry with the
-  prior/incoming block diff; refused if the manifest is unwritable.
+- **Routine syncs do not touch the trust root.** All sync bookkeeping is in the
+  sidecar (not a rail). A pull/push that changes no ticket *content* leaves
+  `tickets.json` byte-identical, so the CI gate is never involved — this is what
+  makes the workflow viable in rails-enabled repos.
+- **Ticket-content changes from sync go through the existing human gate, by
+  design.** When sync genuinely changes `tickets.json` (a new ticket with rails,
+  or changed rails/scope/edges pulled from the tracker), the CI gate flags it and a
+  human reviews the diff and admin-overrides the required check — the *same* path as
+  any `/adlc-ticket` rail change. There is no new bypass. **That human review is the
+  authoritative protection** against a malicious/careless external edit (rail strip,
+  scope widening) and against blindly trusting rails on first import.
+- **Local defense-in-depth (UX, not the backstop):** before writing, pull computes
+  a per-ticket rail/scope diff vs the local set and **refuses** a change that
+  *removes or replaces* (not pure-superset-addition) any `rails` or widens `scope`,
+  unless `--allow-rail-narrowing` is given. "Narrowing" is defined conservatively
+  and decidably: **the incoming rail string-set must be a superset of the local
+  rail string-set; any non-pure-addition requires the flag.** No glob-containment
+  reasoning. This catches the common accident early; the CI+human gate remains the
+  real enforcement. The local override is logged to the gate-manifest as forensics
+  (it does not make CI pass — nothing does except human review).
+- `--force` (block-conflict override) is likewise logged as forensics.
 
 ## Data flow
 
@@ -277,20 +320,24 @@ Therefore:
    pagination (`gh issue list --limit … --search …`). A capped/truncated fetch
    **fails (exit 1)** rather than risk truncation-driven deletion.
 2. For each issue: split body into prose + the sentinel block; parse the JSON.
-3. Map issue → ticket: `id = gh:<owner>/<repo>#<n>`, attach `origin` (incl.
-   `nodeId`).
-4. Load current local tickets; **3-way reconcile** per ticket using
-   `origin.syncedHash` as the base (D6): remote-only change → take remote; local-
+3. Map issue → ticket: `id = gh:<owner>/<repo>#<n>`; record sync state
+   (`nodeId`, refs) in the sidecar.
+4. Load current local tickets + sidecar; **3-way reconcile** per ticket using the
+   sidecar `syncedHash` as the base (D6): remote-only change → take remote; local-
    only change → keep local; both changed → **conflict → warn + exit 2**
-   (`--force` to take remote, audited).
-5. Run the **Validity Gate**, apply the **rail-narrowing guard**, then
-   `writeTicketsAtomic()`. Update each synced ticket's `origin.syncedHash`/`syncedAt`.
+   (`--force` to take remote). If local and remote canonical blocks are *equal*,
+   it is converged, not a conflict.
+5. Run the **Validity Gate** and the local rail/scope guard. Compute each synced
+   ticket's new `syncedHash` and fold it into the materialized set, then **one
+   atomic write each**: `writeTicketsAtomic()` for `tickets.json` (only if ticket
+   content changed) and an atomic sidecar write (sync state). `syncedHash` is part
+   of that single sidecar write — never a second pass.
 
-**Union/deletion semantics:** pull **unions**. Local-only tickets (no `origin`)
-and `origin` tickets outside the current selection are preserved untouched.
+**Union/deletion semantics:** pull **unions**. Local-only tickets (not in the
+sidecar) and synced tickets outside the current selection are preserved untouched.
 A previously-synced issue absent from a *full* selection is **not auto-deleted**;
-doctor flags it as orphaned. Closed issues are synced (status reflects closed)
-unless the selector excludes them.
+it is reported (and, in the deferred online doctor, flagged as orphaned). Closed
+issues are synced (status reflects closed) unless the selector excludes them.
 
 ### Issue selector (config)
 
@@ -315,30 +362,44 @@ MVP but ids are already repo-qualified, so multi-repo needs no id change later.)
 
 ### Push (local → external) — update + create (D8), idempotent
 
-1. **Update** each ticket that has `origin`: re-serialize its block (canonical
-   JSON) into the issue body between sentinels (prose preserved verbatim via span
-   extraction), only if the canonical block changed.
-2. **Create** each local-only ticket (no `origin`) that matches the create policy:
-   `gh issue create` with `title`/prose/serialized block; on success attach
-   `origin` (incl. `nodeId`) and `writeTicketsAtomic()` (the id stays `T<n>`).
+1. **Update** each ticket already in the sidecar: re-serialize its block (canonical
+   JSON) between the sentinels, preserving `{prefix, suffix}` prose verbatim — only
+   if the canonical block changed.
+2. **Create** each local-only ticket (not in the sidecar) that matches the create
+   policy, **idempotently**:
+   a. Generate/reuse a stable `key` (uuid) and record a `pendingCreates[key]` entry
+      in the sidecar **before** the remote call (crash recovery).
+   b. **Pre-create search** the remote for an existing issue whose block sentinel
+      carries that `key` (`gh issue list --search`). If found → adopt it (no new
+      issue). This makes a re-run after a lost local write *adopt* rather than
+      duplicate.
+   c. Else `gh issue create` with the block sentinel embedding `key=<uuid>`.
+   d. On success: **reassign the ticket id** from `T<n>` to `gh:<owner>/<repo>#<n>`,
+      **rewrite every `edges[].to` across the store** that referenced the old id,
+      record sync state in the sidecar, clear `pendingCreates[key]`, and do the two
+      atomic writes (single id space, D8/D9).
 3. **Status** (D10): from `outcomes.mjs` (reduction of `.adlc/manifest.jsonl`:
    latest entry per gate; "verdict" = latest P5 entry; **no P5 entry → no pass
-   label**, never fabricated). Render to (a) `adlc:` **labels** (mutually exclusive
-   within the `statusLabels` set; created-if-missing; **display-only**) and (b) a
-   single **status comment** with a canonical, timestamp-free body, anchored by
-   `<!-- adlc:status -->` **and** authored by the authenticated `gh` user. Locating
-   the comment requires marker AND author match — a spoofed marker comment by
-   another user is ignored.
-4. Issues resolved by `origin.nodeId`; transferred/renumbered issues are
-   re-resolved via the node id. **Locked/closed** issue → push records a doctor
-   finding and skips (bounded; no infinite retry).
+   label**, never fabricated). Rendered to (a) `adlc:` **labels** (mutually
+   exclusive within `statusLabels`; created-if-missing) and (b) a single **status
+   comment** (canonical, timestamp-free body, anchored by `<!-- adlc:status -->`).
+   Both are **display-only, never authoritative** — no gate or doctor reads them for
+   a decision (the manifest is the source of truth). The author check (comment
+   author == authenticated user) only excludes *other identities*; it does not
+   defend against co-holders of the same token (e.g. a shared CI bot). Integrity
+   comes from **convergence** (the next push overwrites drift), not from trusting
+   the comment.
+4. Issues resolved by the sidecar `nodeId`; transferred/renumbered issues are
+   re-resolved via the node id. **Locked/closed** issue → push reports it and skips
+   (bounded; no infinite retry).
 5. Dry-run by default; `--write` performs all mutations. Partial failure → per-
    issue result list, exit `1`; re-run is idempotent (canonical block + stable
    labels + author-anchored comment converge).
 
 ### Field ownership (D7)
 
-- Human-owned: issue title, prose above the sentinel, non-`adlc:` labels.
+- Human-owned: issue title, `{prefix, suffix}` prose around the sentinel,
+  non-`adlc:` labels.
 - ADLC-owned: the sentinel block, `adlc:` labels, the status comment.
 - Conflicts are detected 3-way (D6); never auto-merged.
 
@@ -359,7 +420,7 @@ The `/adlc-ticket` "protocol" is **LLM prose, not code**, and core has no writer
 
 | Command | Default | `--write` | `--force` | other |
 |---|---|---|---|---|
-| `ticket pull` | dry-run (print plan/diff) | apply local write | resolve block conflict by taking **remote** (audited) | `--allow-rail-narrowing` (audited) |
+| `ticket pull` | dry-run (print plan/diff) | apply local write | resolve block conflict by taking **remote** (logged forensically) | `--allow-rail-narrowing` (logged) |
 | `ticket push` | dry-run (print remote ops) | perform remote edits/creates/labels/comment | — | — |
 | `ticket sync` | dry-run | pull then push | as pull | composes pull flags |
 | `ticket doctor` | read-only (always) | — | — | `--json` |
@@ -370,16 +431,20 @@ truncation) · `2` blocked (validity fail, conflict, rail-narrowing without flag
 ## Security
 
 - **C4** `execFile` argv only; no shell; untrusted content never interpolated.
-- **Rails:** narrowing guard + audited bypass (above) close the malicious-edit path.
-- **Labels are display-only (D10):** no doctor/consumer trusts a label for a gate
-  decision; authoritative state is the local manifest + the author-verified comment.
-- **Status comment** trusted only when authored by the authenticated `gh` user.
+- **Rails/scope:** the real protection against a malicious external edit (rail
+  strip, scope widen) is that it lands in `tickets.json` and goes through the CI +
+  human-review gate (see "Sync vs the rails trust root"). The local narrowing guard
+  is early UX, not the backstop. First-import rails are likewise human-reviewed (a
+  new trust-root entry trips the gate) — there is no "trust on first use".
+- **Labels + status comment are display-only (D10):** nothing trusts them for a
+  decision; the local manifest is authoritative. The comment author check excludes
+  other identities but not co-holders of the token; integrity is by convergence.
 - **Token scope:** document the minimum — pull needs issues:read, push needs
   issues:write; prefer a fine-grained PAT over full `repo`. Support `GH_HOST`
   (Enterprise). `push` does a pre-flight permission probe and fails early (exit 1)
   if write scope is missing.
 - **Audit/observability:** every remote mutation (create/edit/label/comment) and
-  every audited local override is logged (gate-manifest and `--json` output) with
+  every local override is logged (`--json` output + gate-manifest forensics) with
   what changed.
 
 ## `doctor` — read-only, offline (MVP) (D11)
@@ -390,11 +455,12 @@ patterns are observed):
 
 - `.adlc/config.json` present + valid against `adlc-config.schema.json`.
 - `tickets.json` loads (via `loadTickets`) with no errors (dup id / dangling edge /
-  cycle / schema).
+  cycle / schema). (Unresolved edges are impossible post-pull since pull fails
+  closed on them; this catches hand-edits.)
 - Committed JSON Schemas == regenerated (bedrock drift).
-- Local block integrity: balanced sentinels, parseable JSON, supported `v`.
-- `origin` consistency: no two tickets share one `origin.nodeId`; synced tickets
-  have a `syncedHash`; dropped-edge warnings from the last pull surfaced.
+- Sidecar (`.adlc/ticket-sync.state.json`) valid; no two ticket ids map to one
+  `nodeId`; every synced ticket has a `syncedHash`; no stale `pendingCreates`
+  (a leftover entry means a create may have orphaned a remote issue — flag it).
 - Stale `.adlc/tickets.lock` (age-guarded; reported, not removed).
 
 Deferred to the follow-up doctor spec: the check **registry**, `--fix` (local
@@ -415,16 +481,22 @@ via the **injected `gh` runner**; tests feed canned `--json` fixtures.
 - `canonical.test.mjs` — sorted-key/LF/number normalization; CRLF-insensitive
   equality; idempotent re-serialize.
 - `reconcile.test.mjs` — 3-way base/local/remote (remote-only, local-only, both-
-  changed → conflict); local-only ticket survives pull; out-of-selection survives.
+  changed → conflict; both-changed-to-equal → converged, NOT a conflict);
+  local-only ticket survives pull; out-of-selection survives.
 - `github.test.mjs` — `mapIssueToTicket` from fixtures; create/edit/label/comment
   op construction; **idempotency**: push twice against a recording fake → second
-  run makes no mutating calls; transferred issue re-resolved by nodeId.
+  run makes no mutating calls; **create idempotency**: pre-create search adopts an
+  existing keyed issue; a re-run after a simulated lost local write does NOT
+  duplicate; id reassignment rewrites edge references; transferred issue re-resolved
+  by nodeId.
 - `outcomes.test.mjs` — manifest reduction: multiple verdicts (latest wins), none
   (no fabricated pass), per-gate latest.
-- `rails-guard-sync.test.mjs` — narrowing detection; refuse without flag; audited
-  bypass record; refuse if manifest unwritable.
+- `validity.test.mjs` — id normalization unifies `T<n>`/`gh:` spellings; an
+  unresolved `edges[].to` **fails closed** (not dropped).
+- `rails-guard-sync.test.mjs` — narrowing/scope-widen detection (superset rule);
+  refuse without flag; forensic log written; behavior when manifest unwritable.
 - `store.test.mjs` — atomic write; lock acquire/retry/abort; interop with a held
-  lock.
+  lock; sidecar `pendingCreates` crash-recovery path.
 - `config.test.mjs`, `doctor.test.mjs`, `cli.test.mjs` — schema validity, the
   offline checks, flag matrix + exit codes.
 
