@@ -81,9 +81,23 @@ control:
 - Unrecognized mutation tools: the gate fails **closed** on tool names — only known
   read-only tools (`read`/`grep`/`codebase_search`/…) are skipped; known mutators
   and any unrecognized structured tool carrying a file path are checked, so a new
-  tool name can't slip an edit past the guard.
+  tool name can't slip an edit past the guard. To make this true at the *routing*
+  layer (not just the decision layer), the `preToolUse` hook uses a **catch-all
+  matcher (`.*`)** — every tool reaches the guard and the classifier decides; a
+  narrow allowlist matcher would let a novel mutator name (`modify_file`,
+  `save_file`) bypass the guard before the fail-closed classifier ran. The cost is
+  one hook invocation per tool call; read-only tools return `allow` immediately.
+- Corrupt `tickets.json`: `@adlc/core`'s `loadTickets` signals corruption three
+  ways — it throws on some malformed schemas, returns an `errors` array on others,
+  and returns an empty list when `tickets` is absent. The checker fails **closed**
+  on all three (and on a resolved active ticket that isn't found), so a corrupt or
+  truncated rail trust root cannot silently drop the declared rail set.
 - Symlink aliasing: an edit to a symlink whose real target is a frozen rail is
   resolved (target + existing parent segments) before rail comparison and denied.
+- Multi-root workspaces: in a Cursor workspace with several `workspace_roots`, the
+  guard resolves the root that **owns** the edited absolute path (longest match)
+  rather than the first listed root, so a rail edit in a later root is checked
+  against the right repo.
 
 Mitigation: the unbypassable commit-time CI gate (`docs/ci/rails-guard.yml`) reads
 the frozen rail set from the trusted base ref and rejects offending PRs regardless
