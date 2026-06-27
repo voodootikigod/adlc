@@ -303,6 +303,7 @@ if (manifestLs.stdout.trim()) {
 const immutableTrustRoots = rails.length || baseHasConfig
   ? [
       '.adlc/config.json',
+      '.adlc/admin.pub',
       '.github/workflows/adlc-rails-guard.yml',
       'CODEOWNERS',
       '.github/CODEOWNERS',

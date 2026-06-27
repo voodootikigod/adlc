@@ -126,6 +126,29 @@ test('trust root: PR edits .adlc/config.json while base rails exist → exit 2',
   assert.equal(code, 2);
 });
 
+test('trust root: PR edits .adlc/admin.pub (admin recovery key) while base rails exist → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.adlc/admin.pub'],
+    seedFileContents: { '.adlc/admin.pub': 'ssh-ed25519 AAAAbase-fingerprint\n' },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'admin.pub'), 'ssh-ed25519 AAAAforged-fingerprint\n'),
+  });
+  assert.equal(code, 2);
+});
+
+test('trust root: PR edits .adlc/admin.pub even when no ticket rails exist → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['.adlc/config.json', '.adlc/admin.pub', 'src/app.mjs'],
+    seedFileContents: {
+      '.adlc/config.json': `${VALID_CONFIG}\n`,
+      '.adlc/admin.pub': 'ssh-ed25519 AAAAbase-fingerprint\n',
+    },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'admin.pub'), 'ssh-ed25519 AAAAforged-fingerprint\n'),
+  });
+  assert.equal(code, 2);
+});
+
 test('mutable state: PR creates manifest evidence when base has no manifest → exit 2', () => {
   const code = runScenario({
     baseTickets: RAILED,
@@ -167,6 +190,7 @@ test('trust root: PR edits deployed rails guard workflow while base rails exist 
 for (const [path, renamedPath] of [
   ['.adlc/tickets.json', 'tickets-renamed.json'],
   ['.adlc/manifest.jsonl', 'manifest-renamed.jsonl'],
+  ['.adlc/admin.pub', '.adlc/admin-renamed.pub'],
   ['CODEOWNERS', 'CODEOWNERS.renamed'],
   ['.github/workflows/adlc-rails-guard.yml', '.github/workflows/renamed.yml'],
 ]) {

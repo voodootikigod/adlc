@@ -381,7 +381,7 @@ jobs:
               process.exit(0);
             }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
-            const immutableTrustRoots = [".adlc/config.json", ".github/workflows/adlc-rails-guard.yml", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
+            const immutableTrustRoots = [".adlc/config.json", ".adlc/admin.pub", ".github/workflows/adlc-rails-guard.yml", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
             // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.
