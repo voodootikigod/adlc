@@ -18,8 +18,12 @@ gate-bin dependency mapping and deterministic `/adlc-init` scaffolding — and t
 **Phase B keyless gate bridge** (`lib/keyless-bridge.mjs`): run any LLM-backed gate
 in `--prompt-only` mode, route the prompt(s) to the host model, no API key — and
 the **Phase C advisory session hooks** (`session.created` preflight,
-`session.idle` gate-manifest audit). Still follow-on (plan Phase E): the
-prosecutor lenses.
+`session.idle` gate-manifest audit), and the **Phase E prosecution surface** — the
+G4 build gate (`/adlc-verify-build`), the five P5 prosecution subagents
+(`@prosecutor-correctness|security|contract|diff|tests`) plus the
+`@prosecutor-verifier`, the `/adlc-prosecute` fan-out/verify/loop-until-dry
+command, and `/adlc-distill` (P7). With Phase F's CI backstop (merged earlier),
+all six plan phases (A–F) now ship.
 
 > **Session hooks — event-name note.** The plan specified `session.created` +
 > `session.ended`, but OpenCode has no `session.ended`; the end-of-work signal is
@@ -37,9 +41,11 @@ prosecutor lenses.
 ## Commands
 
 OpenCode loads project commands from `.opencode/commands/` (Markdown + YAML
-frontmatter). `/adlc-init` deploys this plugin's `command/*.md` and `skill/*.md`
-into `.opencode/` and creates `.adlc/config.json` (idempotently, via
-`lib/scaffold.mjs`). Phase A commands:
+frontmatter). `/adlc-init` deploys this plugin's `command/*.md`, `agent/*.md`, and
+`skill/*.md` into `.opencode/`, creates `.adlc/config.json`, **and registers the
+plugin in `.opencode/opencode.json` so the rails-guard hook actually loads** — all
+idempotently, via `lib/scaffold.mjs`. (Commands/agents/skills are inert markdown;
+the enforcing hook only runs once the plugin package is registered.) Phase A commands:
 
 | Command | Phase | Does |
 | --- | --- | --- |
@@ -112,9 +118,9 @@ glob/ticket logic to `@adlc/core`:
 | P2 Decompose | **Yes** | `/adlc-decompose` (Phase A) |
 | P3 Rail | **MVP** | the in-session rails-guard hook (this plugin) + CI gate |
 | P4 Build | Partial | rails-guard hook + `session.created` advisory preflight; flail-detection is follow-on |
-| P5 Prosecute | Planned | plan Phase E prosecutor lenses — follow-on T5 |
+| P5 Prosecute | **Yes** | `/adlc-verify-build` (G4) + 5 prosecutor lenses + verifier + `/adlc-prosecute` |
 | P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
-| P7 Distill | Planned | plan Phase E (`/adlc-distill`) — follow-on T5 |
+| P7 Distill | **Yes** | `/adlc-distill` (Phase E) |
 
 ## Gaps
 
@@ -123,9 +129,11 @@ glob/ticket logic to `@adlc/core`:
    is advisory; the CI gate is the real control.
 2. **Bash-driven writes are not gated in-session** (Turing-complete shell) — caught
    by the CI diff gate, mirroring the Claude Code posture.
-3. **Lifecycle breadth.** Only P3 ships in this MVP; the command suite, keyless
-   bridge, advisory session hooks, and prosecutor lenses are follow-on tickets
-   (T2–T5).
+3. **Phase-E orchestration is model-driven.** `/adlc-prosecute` describes the
+   fan-out → dedupe → verify → loop-until-dry protocol (the decision helpers in
+   `lib/prosecutor.mjs` are unit-tested), but the loop itself is executed by the
+   model invoking the subagents, not a deterministic first-party runner — the same
+   gap the Codex path documents for P5.
 4. **Live deny proof pending.** A maintainer-only end-to-end check against a real
    OpenCode binary (driving an actual edit-to-rail and asserting the block) is the
    remaining GA gate — see ADR 0004.

@@ -8,6 +8,7 @@
   "opencode": {
     "plugin": "./index.mjs",
     "command": "./command/",
+    "agent": "./agent/",
     "skill": "./skill/"
   },
   "peerDependencies": {

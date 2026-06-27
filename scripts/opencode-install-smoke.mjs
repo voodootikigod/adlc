@@ -90,7 +90,12 @@ for (const c of PHASE_A_CMDS) {
   if (!/^---\n[\s\S]*?description:\s*\S+[\s\S]*?\n---/.test(read(p))) fail(`command/${c} lacks description frontmatter`);
   else ok(`command/${c} valid`);
 }
-if (!existsSync(join(PLUGIN, 'lib', 'scaffold.mjs'))) fail('lib/scaffold.mjs missing'); else ok('scaffold helper present');
+if (!existsSync(join(PLUGIN, 'lib', 'scaffold.mjs'))) fail('lib/scaffold.mjs missing');
+else {
+  const sc = read(join(PLUGIN, 'lib', 'scaffold.mjs'));
+  if (!/export function ensurePluginRegistered\b/.test(sc)) fail('scaffold does not register the plugin (rails-guard hook would not load)');
+  else ok('scaffold registers the plugin (rails-guard hook loads)');
+}
 
 // ---- Phase B (T3): keyless LLM-gate bridge ----
 const bridgePath = join(PLUGIN, 'lib', 'keyless-bridge.mjs');
@@ -98,7 +103,7 @@ if (!existsSync(bridgePath)) fail('lib/keyless-bridge.mjs missing');
 else {
   const br = read(bridgePath);
   for (const fn of ['extractPrompts', 'runGateKeyless', 'makeAsk']) {
-    if (!new RegExp(`export function ${fn}\\b`).test(br)) fail(`keyless-bridge missing export ${fn}`);
+    if (!new RegExp(`export (async )?function ${fn}\\b`).test(br)) fail(`keyless-bridge missing export ${fn}`);
   }
   if (!/--prompt-only/.test(br)) fail('keyless-bridge does not run gates in --prompt-only mode');
   ok('keyless bridge present (extractPrompts/runGateKeyless/makeAsk, prompt-only)');
@@ -112,6 +117,21 @@ else {
   }
   ok('gate-bins declares the core gate tools');
 }
+
+// ---- Phase E (T5): prosecutor lenses + verifier, G4/prosecute/distill commands ----
+if (!pkg2.opencode?.agent) fail('package.json opencode.agent entry missing'); else ok('opencode.agent manifest entry');
+const agentDir = join(PLUGIN, 'agent');
+const AGENTS = ['prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff', 'prosecutor-tests', 'prosecutor-verifier'];
+for (const a of AGENTS) {
+  const p = join(agentDir, `${a}.md`);
+  if (!existsSync(p)) { fail(`agent/${a}.md missing`); continue; }
+  if (!/^---\n[\s\S]*?mode:\s*subagent[\s\S]*?\n---/.test(read(p))) fail(`agent/${a}.md lacks subagent frontmatter`);
+  else ok(`agent/${a}.md valid`);
+}
+for (const c of ['adlc-verify-build.md', 'adlc-prosecute.md', 'adlc-distill.md']) {
+  if (!existsSync(join(cmdDir, c))) fail(`command/${c} missing`); else ok(`command/${c} present`);
+}
+if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs missing'); else ok('prosecutor registry/helpers present');
 
 // AC7 (live deny proof against the real opencode binary) is the remaining GA gate;
 // it requires a disposable OpenCode install and is tracked in ADR 0004.

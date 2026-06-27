@@ -7,8 +7,8 @@
 // enforcement contract (active-ticket resolution, phase gating, trust-root
 // freeze) that adlc-codex and adlc-pi already implement.
 
-import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch } from '@adlc/core';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
@@ -16,14 +16,45 @@ import { loadTickets, globMatch } from '@adlc/core';
 // rail set cannot be quietly edited away. Mirrors adlc-codex/hooks/adlc-rails-guard.mjs.
 export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
 
-// OpenCode's structured file-mutation tools. Bash-style writes are intentionally
-// NOT gated in-session (Turing-complete shell); they fall to the CI diff gate.
-export const MUTATING_TOOLS = ['edit', 'write'];
+// OpenCode's known structured file-mutation tools. Bash-style writes are
+// intentionally NOT gated in-session (Turing-complete shell); they fall to the CI
+// diff gate.
+export const MUTATING_TOOLS = ['edit', 'write', 'patch', 'multiedit', 'apply_patch'];
 
-/** Canonicalize a path to a forward-slash path relative to the repo root. */
+// Known read-only tools that may carry a file path but never mutate it. The gate
+// fails CLOSED: only these are skipped; any other structured tool that reaches the
+// checker (i.e. carries a filePath) — including unrecognized mutation tools — is
+// checked against the rail set rather than silently allowed.
+export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch'];
+
+/** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {
   const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
   return relative(root, abs).split('\\').join('/');
+}
+
+function realpathOr(p) {
+  try { return realpathSync(p); } catch { return p; }
+}
+
+/**
+ * Symlink-aware canonicalization (security-relevant): resolve symlinks on the
+ * target and on its existing parent segments before comparing to the frozen rail
+ * set, so a symlink whose real target is a frozen rail (e.g. an alias pointing at
+ * .adlc/tickets.json) cannot slip a write past a lexical name check. Falls back to
+ * the lexical path for anything that can't be resolved.
+ */
+export function resolveRailPath(filePath, root) {
+  const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
+  // The file may not exist yet (a `write` creating it): resolve the deepest
+  // existing ancestor (catches a symlinked parent dir), then re-append the tail.
+  let resolved;
+  if (existsSync(abs)) {
+    resolved = realpathOr(abs);
+  } else {
+    resolved = join(realpathOr(dirname(abs)), basename(abs));
+  }
+  return relative(realpathOr(root), resolved).split('\\').join('/');
 }
 
 /**
@@ -64,9 +95,12 @@ export function resolveActiveTicketId(root, env) {
  *  - rails in force = active ticket's declared rails PLUS the trust-root rails.
  */
 export function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) {
-  if (!MUTATING_TOOLS.includes(tool)) {
-    return { decision: 'allow', reason: `tool "${tool}" is not a structured mutating tool` };
+  if (READONLY_TOOLS.includes(tool)) {
+    return { decision: 'allow', reason: `tool "${tool}" is read-only` };
   }
+  // Everything else that reached here carries a file path: known mutators AND any
+  // unrecognized structured tool are checked (fail closed), so a new mutation tool
+  // name can't slip an edit past the guard.
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
@@ -88,10 +122,14 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
   const declaredRails = ticket?.rails ?? [];
   const rails = [...declaredRails, ...TRUST_ROOT_RAILS];
 
-  const canonical = canonicalizePath(filePath, root);
-  const hit = rails.find((rail) => rail === canonical || globMatch(rail, canonical));
-  if (hit) {
-    return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${active.id})` };
+  // Match BOTH the lexical path (normal case) and the symlink-resolved real path
+  // (so a symlink alias whose target is a frozen rail can't slip past a name check).
+  const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
+  for (const path of candidates) {
+    const hit = rails.find((rail) => rail === path || globMatch(rail, path));
+    if (hit) {
+      return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${active.id})` };
+    }
   }
   return { decision: 'allow', reason: 'path is not a frozen rail' };
 }
