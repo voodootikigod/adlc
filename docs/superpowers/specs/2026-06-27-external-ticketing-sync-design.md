@@ -55,8 +55,9 @@ the first design draft did wrong.
   security liability).
 - **C2 — Core is frozen** (CONVENTIONS rule 2): "Never edit anything under
   `packages/core/`." → The schema bedrock and the rich validator live in the new
-  package, **not** core. `origin` rides along on tickets because core's
-  `validateTicket()` ignores unknown fields (verified).
+  package, **not** core. There is **no new ticket field** at all: sync metadata
+  lives in the sidecar (below), so core's `loadTickets()`/`validateTicket()` are
+  untouched and never see sync state.
 - **C3 — `.adlc/tickets.json` is the rail trust root.** The PreToolUse hook
   freezes it once any rail exists, and the **CI rails-guard diff gate**
   (`scripts/rails-guard-ci.mjs`) treats the file itself as a protected rail and
@@ -112,7 +113,7 @@ packages/ticket-sync/
     status-render.mjs     # status -> {labels, commentBody} (canonical, timestamp-free)
     config.mjs            # read/validate .adlc/config.json; gh/git repo auto-detect
     store.mjs             # writeTicketsAtomic() + shared lock (re-implemented; see Lock)
-    rails-guard-sync.mjs  # rail-narrowing detection + audited gate-manifest bypass record
+    rails-guard-sync.mjs  # rail/scope narrowing detection + forensic override record (NOT a CI bypass)
     doctor.mjs            # read-only offline checks (flat list; MVP)
     gh.mjs                # execFile wrapper for gh (INJECTED into providers/tests)
     providers/
@@ -127,11 +128,11 @@ packages/ticket-sync/
     store.test.mjs  rails-guard-sync.test.mjs  doctor.test.mjs  cli.test.mjs
 ```
 
-**Core is NOT touched.** `loadTickets()`/`validateTicket()` stay as-is; `origin`
-is an unknown field they ignore. To prevent the rich validator from drifting from
-core's gate validator, `validate.test.mjs` runs a shared corpus through **both**
-`@adlc/core`'s `validateTicket` and the bedrock validator and asserts they agree
-on the fields core knows about.
+**Core is NOT touched.** `loadTickets()`/`validateTicket()` stay as-is; no sync
+field is added to tickets (it all lives in the sidecar). To prevent the rich
+validator from drifting from core's gate validator, `validate.test.mjs` runs a
+shared corpus through **both** `@adlc/core`'s `validateTicket` and the bedrock
+validator and asserts agreement on the fields core knows about.
 
 ### Provider interface (D2)
 
@@ -215,6 +216,17 @@ trust root (C3). It is keyed by **ticket id** and is not read by any gate:
 - The sidecar is mutable, frequently rewritten, and **not** a rail — so ordinary
   sync activity never trips the CI trust-root gate. Only genuine ticket-content
   changes land in `tickets.json`, which is exactly what should be human-reviewed.
+- **Persistence: the sidecar is a gitignored, rebuildable cache** (it would churn
+  git history and merge badly if committed, and a committed base could be
+  pre-seeded). On a fresh clone it is absent. A synced ticket (`gh:` id) with **no
+  sidecar entry** is not treated as local-only: its refs are re-derived from the
+  `gh:` id and re-fetched to rebuild `nodeId`/`syncedHash` on the next pull.
+- **Base integrity is non-authoritative but must fail safe.** The 3-way base
+  (`syncedHash`) only powers warn-don't-merge UX; no rail/validity defense depends
+  on it. A **missing or unparseable base** must reconcile to **conflict** (require
+  `--force`) when local≠remote — never to a silent take-remote. (So tampering with
+  or deleting the sidecar can at worst force a conflict prompt, never a silent
+  overwrite of local edits.)
 
 ## Schema bedrock (D5) — one definition → three artifacts
 
@@ -266,8 +278,14 @@ file):
 1. **Id normalization (single space):** all ticket ids and all `edges[].to` values
    are normalized to the canonical id space (D9) before checking — a block written
    as `gh:acme/app#42` and a local ticket whose sidecar maps to that issue are the
-   same key. There is exactly one id space; no `T<n>`↔`gh:` ambiguity survives this
-   step (created tickets are already reassigned to their gh id, D8).
+   same key. Normalization is **deterministic and matches `loadTickets` string
+   equality**: owner/repo are lowercased (GitHub is case-insensitive but
+   case-preserving, so `gh:Acme/App#42` and `gh:acme/app#42` must collapse), and
+   whitespace/`#` spelling is canonicalized. There is exactly one id space; no
+   `T<n>`↔`gh:` ambiguity survives (created/transferred tickets are reassigned to
+   their gh id, D8). **The resolution-checked materialized set is byte-for-byte what
+   `writeTicketsAtomic` persists** — so passing the gate guarantees the written file
+   cannot crash `computeFloat`.
 2. **Relational checks (loadTickets-level):** no duplicate ids; **every `edges[].to`
    must resolve within the materialized set**; no cycles. An edge whose target was
    not pulled → **fail closed (exit 2)** with a message to widen the selector (or
@@ -300,16 +318,23 @@ works *with* that reality rather than pretending to bypass it:
   human reviews the diff and admin-overrides the required check — the *same* path as
   any `/adlc-ticket` rail change. There is no new bypass. **That human review is the
   authoritative protection** against a malicious/careless external edit (rail strip,
-  scope widening) and against blindly trusting rails on first import.
+  scope widening). Caveat (grounded in `rails-guard-ci.mjs`): once rails exist at
+  base, `tickets.json` is frozen and every change trips the gate; the **very first**
+  rail introduced into a previously rail-less repo is caught by ordinary PR diff
+  review, not by the rails-guard check itself. Adding rails only ever *tightens*
+  enforcement, so this is not an escalation path.
 - **Local defense-in-depth (UX, not the backstop):** before writing, pull computes
   a per-ticket rail/scope diff vs the local set and **refuses** a change that
   *removes or replaces* (not pure-superset-addition) any `rails` or widens `scope`,
-  unless `--allow-rail-narrowing` is given. "Narrowing" is defined conservatively
-  and decidably: **the incoming rail string-set must be a superset of the local
-  rail string-set; any non-pure-addition requires the flag.** No glob-containment
-  reasoning. This catches the common accident early; the CI+human gate remains the
-  real enforcement. The local override is logged to the gate-manifest as forensics
-  (it does not make CI pass — nothing does except human review).
+  unless `--allow-rail-narrowing` is given. Both directions are defined
+  conservatively and decidably as pure string-set tests (no glob-containment):
+  **incoming `rails` must be a superset of local `rails`** (removal/replacement →
+  flag), and **incoming `scope` must be a subset of local `scope`** (widening →
+  flag). This catches the common accident early; the CI+human gate remains the real
+  enforcement. The local override is logged to the gate-manifest as forensics (it
+  does not make CI pass — nothing does except human review). Note: in a repo with
+  **no base rails**, `rails-guard-ci` does not protect `tickets.json`, so for scope
+  changes there the local guard + ordinary PR review are the only checks.
 - `--force` (block-conflict override) is likewise logged as forensics.
 
 ## Data flow
@@ -369,15 +394,22 @@ MVP but ids are already repo-qualified, so multi-repo needs no id change later.)
    policy, **idempotently**:
    a. Generate/reuse a stable `key` (uuid) and record a `pendingCreates[key]` entry
       in the sidecar **before** the remote call (crash recovery).
-   b. **Pre-create search** the remote for an existing issue whose block sentinel
-      carries that `key` (`gh issue list --search`). If found → adopt it (no new
-      issue). This makes a re-run after a lost local write *adopt* rather than
-      duplicate.
-   c. Else `gh issue create` with the block sentinel embedding `key=<uuid>`.
-   d. On success: **reassign the ticket id** from `T<n>` to `gh:<owner>/<repo>#<n>`,
-      **rewrite every `edges[].to` across the store** that referenced the old id,
-      record sync state in the sidecar, clear `pendingCreates[key]`, and do the two
-      atomic writes (single id space, D8/D9).
+   b. **Pre-create adoption scan:** scan the **already-paginated pull list** of
+      issue bodies (authoritative, not the eventually-consistent search index) for
+      the sentinel `key`. If exactly one matches → adopt it. **>1 match → fail
+      closed (exit 2)**, human reconciles (never adopt-arbitrary or create-a-third).
+   c. Else `gh issue create` with the block sentinel embedding `key=<uuid>`; then,
+      **immediately and before id-reassignment**, persist the returned
+      `{nodeId, number}` into `pendingCreates[key]` (one tiny atomic sidecar write)
+      so a crash here leaves a non-spoofable recovery handle (`nodeId`), not just
+      the body `key`.
+   d. **Reassign the ticket id** from `T<n>` to `gh:<owner>/<repo>#<n>`, **rewrite
+      every `edges[].to` across the store** that referenced the old id, **migrate
+      `.adlc/manifest.jsonl` evidence** recorded under the old id to the new id (so
+      a ticket that passed locally as `T7` keeps its status), record sync state,
+      clear `pendingCreates[key]`, and do the atomic writes (single id space,
+      D8/D9). *MVP assumes a single writer; concurrent create from two machines is
+      out of scope and noted.*
 3. **Status** (D10): from `outcomes.mjs` (reduction of `.adlc/manifest.jsonl`:
    latest entry per gate; "verdict" = latest P5 entry; **no P5 entry → no pass
    label**, never fabricated). Rendered to (a) `adlc:` **labels** (mutually
@@ -389,9 +421,11 @@ MVP but ids are already repo-qualified, so multi-repo needs no id change later.)
    defend against co-holders of the same token (e.g. a shared CI bot). Integrity
    comes from **convergence** (the next push overwrites drift), not from trusting
    the comment.
-4. Issues resolved by the sidecar `nodeId`; transferred/renumbered issues are
-   re-resolved via the node id. **Locked/closed** issue → push reports it and skips
-   (bounded; no infinite retry).
+4. Issues resolved by the sidecar `nodeId`; a transferred/renumbered issue keeps
+   its `nodeId` but its `gh:` id string changes → it runs the **same
+   reassign + edge-rewrite + manifest-migrate + Validity** path as create (step 2d),
+   so edges never dangle after a transfer. **Locked/closed** issue → push reports it
+   and skips (bounded; no infinite retry).
 5. Dry-run by default; `--write` performs all mutations. Partial failure → per-
    issue result list, exit `1`; re-run is idempotent (canonical block + stable
    labels + author-anchored comment converge).
@@ -434,8 +468,9 @@ truncation) · `2` blocked (validity fail, conflict, rail-narrowing without flag
 - **Rails/scope:** the real protection against a malicious external edit (rail
   strip, scope widen) is that it lands in `tickets.json` and goes through the CI +
   human-review gate (see "Sync vs the rails trust root"). The local narrowing guard
-  is early UX, not the backstop. First-import rails are likewise human-reviewed (a
-  new trust-root entry trips the gate) — there is no "trust on first use".
+  is early UX, not the backstop. (First rail into a rail-less repo is caught by
+  ordinary PR review, not rails-guard-ci; once rails exist, every trust-root change
+  trips the gate.)
 - **Labels + status comment are display-only (D10):** nothing trusts them for a
   decision; the local manifest is authoritative. The comment author check excludes
   other identities but not co-holders of the token; integrity is by convergence.
@@ -518,12 +553,14 @@ the default offline suite.
    default.
 4. **Push + create** — `outcomes`, `status-render`, create/update/label/comment,
    `adlc ticket push`/`sync`. *Accept:* idempotent push (no-op second run); create
-   attaches origin without id churn; status reduction correct.
+   reassigns the id + rewrites edges + records sidecar state, with no duplicate on a
+   simulated lost write; manifest evidence migrates with the id; status reduction
+   correct.
 5. **Doctor (read-only)** — offline checks + `adlc ticket doctor`. *Accept:* each
    check has a failing+passing fixture; exit codes correct.
-6. **Docs + opt-in live smoke** — README, `docs/ticket-sync.md`, `origin` note in
-   `docs/ticket-authoring.md`, env-gated real-`gh` smoke. *Accept:* docs match
-   flags; smoke documented as opt-in.
+6. **Docs + opt-in live smoke** — README, `docs/ticket-sync.md`, a synced-ids +
+   sidecar note in `docs/ticket-authoring.md`, env-gated real-`gh` smoke.
+   *Accept:* docs match flags; smoke documented as opt-in.
 
 ## Open / deferred items
 
