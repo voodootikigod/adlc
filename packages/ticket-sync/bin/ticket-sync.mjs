@@ -4,6 +4,7 @@
 // provider; the pull logic itself is in lib/pull.mjs (offline-tested).
 
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { pull } from '../lib/pull.mjs';
 import { makeGhRunner } from '../lib/gh.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
@@ -17,7 +18,7 @@ const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [-
 
 Dry-run by default; pass --write to apply. Exit: 0 ok · 1 operational · 2 blocked.`;
 
-function parseFlags(args) {
+export function parseFlags(args) {
   const flags = { write: false, force: false, 'allow-rail-narrowing': false, json: false };
   for (const a of args) {
     if (a === '--write') flags.write = true;
@@ -78,7 +79,9 @@ async function main() {
   process.exit(1);
 }
 
-main().catch((err) => {
-  process.stderr.write(`adlc ticket: ${err?.message ?? err}\n`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    process.stderr.write(`adlc ticket: ${err?.message ?? err}\n`);
+    process.exit(1);
+  });
+}

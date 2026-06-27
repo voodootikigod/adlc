@@ -5,8 +5,18 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseFlags } from '../bin/ticket-sync.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'ticket-sync.mjs');
+
+test('parseFlags: dry-run is the default (write/force/allow-rail-narrowing all false)', () => {
+  const f = parseFlags([]);
+  assert.equal(f.write, false);
+  assert.equal(f.force, false);
+  assert.equal(f['allow-rail-narrowing'], false);
+  assert.equal(f.json, false);
+  assert.equal(parseFlags(['--write']).write, true);
+});
 
 /** Run the bin; return { code, stdout, stderr }. */
 function run(args, cwd) {

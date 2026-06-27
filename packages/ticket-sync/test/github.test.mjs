@@ -16,6 +16,13 @@ test('mapIssue maps gh fields incl. the node id and label names', () => {
   assert.deepEqual(m.labels, ['adlc', 'p1']);
 });
 
+test('mapIssue preserves title, body, and url (body carries the block — must not be dropped)', () => {
+  const m = mapIssue(raw);
+  assert.equal(m.title, 'Do the thing');
+  assert.equal(m.body, 'desc');
+  assert.equal(m.url, 'https://github.com/acme/app/issues/42');
+});
+
 const fakeRunner = (stdout) => async () => ({ ok: true, code: 0, stdout, stderr: '', error: null });
 
 test('listIssues returns mapped issues from gh json', async () => {

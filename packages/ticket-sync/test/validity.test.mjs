@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { validityGate, pull } from '../lib/pull.mjs';
 import { serializeBlock } from '../lib/block.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
+import { githubProvider } from '../lib/providers/github.mjs';
 
 // ---- validityGate (pure) ----
 
@@ -128,6 +129,49 @@ test('pull: --force overrides a CONFLICT but a scope-widen still needs --allow-r
     const r = await pull({ dir, provider: fakeProvider([issue(1, { scope: ['remote/**'] })]), write: true, force: true });
     assert.equal(r.exitCode, 2, '--force does not override the rail/scope guard');
     assert.ok(r.errors.some((e) => e.includes('allow-rail-narrowing')));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('pull: keep-local preserves local edits when remote is unchanged (no silent clobber)', async () => {
+  // base == remote (remote unchanged since last sync); local edited → keep-local.
+  const dir = repo({
+    tickets: [{ id: 'gh:acme/app#1', title: 'x', duration: 2 }],
+    sidecar: { version: 1, tickets: { 'gh:acme/app#1': { nodeId: 'N1', syncedHash: canonicalHash({ duration: 1 }, { omit: ['$schema'] }) } }, pendingCreates: {} },
+  });
+  try {
+    const r = await pull({ dir, provider: fakeProvider([issue(1, { duration: 1 })]), write: true, now: 'T' });
+    assert.equal(r.exitCode, 0);
+    assert.ok(r.plan.some((p) => p.id === 'gh:acme/app#1' && p.action === 'keep-local'));
+    assert.equal(readTickets(dir).find((x) => x.id === 'gh:acme/app#1').duration, 2, 'local edit must NOT be clobbered');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('pull: take-remote writes the remote value when local is unchanged since base', async () => {
+  const dir = repo({
+    tickets: [{ id: 'gh:acme/app#1', title: 'x', duration: 1 }],
+    sidecar: { version: 1, tickets: { 'gh:acme/app#1': { nodeId: 'N1', syncedHash: canonicalHash({ duration: 1 }, { omit: ['$schema'] }) } }, pendingCreates: {} },
+  });
+  try {
+    const r = await pull({ dir, provider: fakeProvider([issue(1, { duration: 5 })]), write: true, now: 'T' });
+    assert.equal(r.exitCode, 0);
+    assert.equal(readTickets(dir).find((x) => x.id === 'gh:acme/app#1').duration, 5, 'remote update must be written');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('pull end-to-end through the REAL github provider: the block in the issue body lands on the ticket', async () => {
+  const dir = repo();
+  try {
+    const rawIssue = {
+      id: 'N1', number: 1, url: 'https://github.com/acme/app/issues/1', state: 'open', labels: [],
+      title: 'real issue', body: serializeBlock({ prefix: 'human\n', suffix: '' }, { scope: ['src/**'], rails: ['test/**'], duration: 1 }),
+    };
+    const ghRunner = async () => ({ ok: true, code: 0, stdout: JSON.stringify([rawIssue]), stderr: '', error: null });
+    const r = await pull({ dir, provider: githubProvider(), runner: ghRunner, write: true, now: 'T' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    const t = readTickets(dir).find((x) => x.id === 'gh:acme/app#1');
+    assert.deepEqual(t.scope, ['src/**'], 'block scope must survive mapper → parse → ticket');
+    assert.deepEqual(t.rails, ['test/**']);
+    assert.equal(t.title, 'real issue');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
