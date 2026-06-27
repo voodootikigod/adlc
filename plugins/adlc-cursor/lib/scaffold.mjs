@@ -6,7 +6,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PRETOOL_MATCHER } from '../rails-checker.mjs';
+// Import the matcher from the dependency-free constants module — NOT rails-checker
+// (which imports @adlc/core). The scaffolder must run in a fresh source checkout
+// before `npm install` has linked the workspace packages.
+import { PRETOOL_MATCHER } from '../constants.mjs';
 
 // The installed @adlc/cursor-package root (this file lives at <root>/lib/scaffold.mjs).
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');

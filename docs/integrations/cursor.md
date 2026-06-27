@@ -37,7 +37,15 @@ package is **not yet published to npm**, so install from source for now.
    npm install -g @adlc/cli
    ```
 
-2. Bootstrap from the plugin source (idempotent — **merges** into any existing
+2. Install the repo's workspace dependencies so the rails-guard hook can resolve
+   `@adlc/core` at runtime (the bootstrap scaffolder itself has no third-party
+   dependency, but the hook it wires imports `@adlc/core`):
+
+   ```sh
+   cd /path/to/adlc && npm install
+   ```
+
+3. Bootstrap from the plugin source (idempotent — **merges** into any existing
    `.cursor/hooks.json`; if that file is present but unparseable it is preserved
    verbatim in a `.bak` sibling before a fresh one is written, never silently
    dropped):
@@ -51,7 +59,7 @@ package is **not yet published to npm**, so install from source for now.
    `/adlc-init` command. (Once the package is published, the same scaffolder will be
    runnable from `node_modules/@adlc/cursor-package/`.)
 
-3. Verify locally (no Cursor binary required):
+4. Verify locally (no Cursor binary required):
 
    ```sh
    node scripts/cursor-install-smoke.mjs .

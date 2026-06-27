@@ -29,12 +29,10 @@ export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create
 // The Cursor preToolUse hook is wired with a catch-all matcher (".*") so EVERY
 // tool call reaches the guard and the classifier is the single decision point —
 // read-only tools return allow immediately, known mutators are checked, and an
-// unrecognized tool ('other') carrying a rail path FAILS CLOSED. A narrow,
-// hint-derived matcher was rejected: it is an allowlist, so a novel mutator name
-// (modify_file, save_file, …) would bypass the in-session guard before the
-// fail-closed classifier could run. Routing everything is the only design under
-// which the documented in-session fail-closed behavior is actually true.
-export const PRETOOL_MATCHER = '.*';
+// unrecognized tool ('other') carrying a rail path FAILS CLOSED. Defined in the
+// dependency-free constants module (so the scaffolder can read it without pulling
+// @adlc/core) and re-exported here for the hook/test importers.
+export { PRETOOL_MATCHER } from './constants.mjs';
 
 // Known pure-read tools (WHOLE normalized token — never substring). Only these
 // short-circuit to "allow"; everything unrecognized falls through to "other",
