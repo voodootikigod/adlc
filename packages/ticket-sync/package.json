@@ -1,0 +1,45 @@
+{
+  "name": "@adlc/ticket-sync",
+  "version": "1.1.0",
+  "description": "Two-way sync between ADLC tickets and external trackers (GitHub Issues first).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/ticket-sync"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/ticket-sync#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "ticket-sync",
+    "github"
+  ],
+  "files": [
+    "bin/",
+    "lib/",
+    "schemas/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.1.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "gen:schema": "node scripts/gen-schema.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

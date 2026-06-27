@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adlc.dev/schema/v1/adlc-ticket.schema.json",
+  "title": "ADLC ticket",
+  "description": "A single ADLC ticket as stored in .adlc/tickets.json.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique id: T<n> while local; gh:<owner>/<repo>#<n> once synced."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-line imperative summary (from the issue title once synced)."
+    },
+    "body": {
+      "type": "string",
+      "description": "Self-contained ticket text including acceptance criteria."
+    },
+    "scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "File globs this ticket may edit."
+    },
+    "rails": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Frozen path globs that must not change during the build."
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Id of the dependent ticket."
+          },
+          "contract": {
+            "type": "string",
+            "description": "Optional path to the contract this edge guarantees."
+          }
+        },
+        "required": [
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Prerequisite->dependent ordering edges."
+    },
+    "duration": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Relative build-time estimate (> 0)."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "feature",
+        "bug",
+        "bugfix",
+        "refactor",
+        "docs",
+        "chore",
+        "test",
+        "spec",
+        "contract",
+        "architecture"
+      ],
+      "description": "Routing category."
+    },
+    "budget": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Optional token budget hint (> 0)."
+    }
+  },
+  "required": [
+    "id",
+    "title"
+  ],
+  "additionalProperties": true
+}
