@@ -28,7 +28,16 @@
         "packages/ticket-sync/lib/block.mjs",
         "packages/ticket-sync/test/block.test.mjs"
       ],
-      "rails": [],
+      "rails": [
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**",
+        "packages/ticket-sync/test/schema.test.mjs",
+        "packages/ticket-sync/test/validate.test.mjs",
+        "packages/ticket-sync/test/canonical.test.mjs"
+      ],
       "edges": [{ "to": "T3" }],
       "duration": 1,
       "category": "feature"
