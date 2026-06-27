@@ -1,6 +1,6 @@
 # ADR: Bringing the ADLC to Claude Code as a plugin
 
-**Status:** **Accepted — shipped (pre-GA: live marketplace install test pending).** Phases A–F merged to `main` via PR #6
+**Status:** **Accepted — shipped (GA: all checklist items resolved).** Phases A–F merged to `main` via PR #6
 (2026-06-18). The P7 skill-mining wiring is accepted and in review (PR #7). The
 `adlc` command-name reconciliation with the Codex effort is a separate, related
 decision — see [`0002-adlc-command-reconciliation.md`](./0002-adlc-command-reconciliation.md)
@@ -64,13 +64,15 @@ native Claude Code extension point that fits it, fronted by a single umbrella CL
 > - `hooks/hooks.json` → `plugins/adlc-claude-code/hooks/hooks.json`
 >
 > The root `marketplace.json` `plugins[].source` field (`"./plugins/adlc-claude-code"`)
-> tells the CC marketplace protocol where to resolve `plugin.json`.
+> tells the CC marketplace protocol where to resolve `plugin.json`. The marketplace.json
+> structure is modelled on the `openai-codex` marketplace — the only confirmed working
+> non-official custom marketplace.
 >
-> **Unverified assumption (blocks GA):** The CC marketplace resolver supports a
-> non-root subdirectory as the `source` value. The smoke test validates all file
-> paths but does **not** exercise the live CC marketplace API. A live
-> `/plugin marketplace add voodootikigod/adlc` test is required before GA —
-> see the Pre-GA checklist in the **Verification** section below.
+> **Verified (2026-06-26):** The CC marketplace resolver supports non-root subdirectory
+> `source` values. The live install succeeds via `claude plugin install adlc@adlc`. Note:
+> the `/plugin install` slash command fails when run from inside the adlc repo itself
+> (CC detects the local `.claude-plugin/marketplace.json` and treats the project directory
+> as the marketplace source); use the CLI command instead.
 >
 > See [../integrations/claude-code.md](../integrations/claude-code.md) for the current adoption guide.
 
@@ -334,23 +336,26 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
   2. `/plugin install adlc@adlc` — actually installs the plugin files
   **Confirmed 2026-06-22:** plugin installed without error. CC marketplace resolver
   supports non-root `source` paths. The subdirectory-source assumption is verified.
-  **Re-test 2026-06-26 — regression and fix:** Step 1 succeeded but step 2 failed
-  with `Marketplace 'adlc' not found`. Root cause: a stale `adlc@adlc` entry in
-  `installed_plugins.json` (from a pre-restructuring local-scope worktree install at
-  version `0.1.0`) caused CC to attempt an update path rather than a fresh install;
-  this path failed to resolve the marketplace when the cached version matched the
-  current `plugin.json` version. Two fixes applied:
-  1. Removed trailing slash from `source` in `marketplace.json`
-     (`"./plugins/adlc-claude-code/"` → `"./plugins/adlc-claude-code"`) — aligns with
-     every working marketplace (openai-codex, claude-plugins-official); trailing slash
-     may cause path-resolution issues in some CC versions.
-  2. Bumped `plugin.json` version `0.1.0` → `0.2.0` — forces a cache miss past any
-     stale `0.1.0` install entries so CC performs a fresh clone and install.
-  **Troubleshooting:** If a user sees `Marketplace 'adlc' not found` after
-  `/plugin marketplace add` succeeds, the stale-cache fix is: remove the `adlc@adlc`
-  entry from `~/.claude/plugins/installed_plugins.json` and re-run `/plugin install
-  adlc@adlc`. The version bump in `plugin.json` prevents this from recurring for
-  anyone who installs fresh from the fixed commit.
+  **Re-test 2026-06-26 pass 1 — trailing-slash fix (not the root cause):** Step 1
+  succeeded but step 2 failed with `Marketplace 'adlc' not found`. Removed trailing
+  slash from `source` and bumped `plugin.json` to `0.2.0`. Still failed after merge.
+  **Re-test 2026-06-26 pass 2 — marketplace.json structure fix (not the root cause):**
+  Structural comparison against the only confirmed working non-official marketplace
+  (`openai-codex`) prompted a full marketplace.json rewrite to match its format:
+  removed `$schema`, `owner.url`, `category`; added `metadata`, `author`, `version`
+  to plugin entry. Still failed after merge — format was not the root cause.
+  **Re-test 2026-06-26 pass 3 — actual root cause identified:**
+  The `/plugin install adlc@adlc` **slash command** fails when run from inside the
+  `voodootikigod/adlc` repository itself. CC detects the local
+  `.claude-plugin/marketplace.json` at the project root and uses it as the "adlc"
+  marketplace source instead of the registered global cache entry. The local source is
+  not a proper install target, so the lookup reports "not found".
+  **Confirmed fix:** `claude plugin install adlc@adlc` (CLI, not slash command) works
+  from any directory including the adlc repo itself. The install succeeds and the plugin
+  is registered at scope=user. The slash command works normally from any project that
+  does NOT have a `.claude-plugin/marketplace.json` — this issue only affects the adlc
+  developer workflow. See the Troubleshooting section in
+  `docs/integrations/claude-code.md` for the user-facing note.
 
 - [x] **`plugin.json` hooks field** — `plugins/adlc-claude-code/.claude-plugin/plugin.json`
   now includes `"hooks": "./hooks/hooks.json"`. Whether CC discovers `hooks/hooks.json`

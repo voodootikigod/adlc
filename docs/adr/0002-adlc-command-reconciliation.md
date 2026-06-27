@@ -14,9 +14,11 @@ Two parallel efforts each added an `adlc` command, in separate branches:
   CLIs (`adlc spec-lint …`, `adlc rails-guard …`). The whole Claude Code
   integration — hooks, slash commands, the discovery skill, the CI scripts —
   calls `adlc <tool>`.
-- **`feat/codex-integration-codex`** ships `@adlc/runner` with bin `adlc`, an
-  **artifact-asserting phase runner**: `adlc run <phase>` and `adlc accept
-  --ticket …` assert that required `.adlc/` phase evidence exists.
+- **`feat/codex-integration-codex`** originally shipped `@adlc/runner` with bin
+  `adlc`, an **artifact-asserting phase runner**: `adlc run <phase>` and
+  `adlc accept --ticket …` asserted that required `.adlc/` phase evidence exists.
+  Under the accepted Option D revision below, that runner bin is renamed to
+  `adlc-runner`.
 
 Both packages declare bin `adlc`. npm cannot install two packages that claim the
 same global bin (and in the monorepo, `node_modules/.bin/adlc` links to whichever
@@ -29,7 +31,15 @@ Code vs Codex), `@adlc/prosecute` uses a distinct bin (`adlc-prosecute`), the
 Codex plugin and the Claude Code plugin coexist, and this branch's `release.mjs`
 already auto-discovers and lockstep-publishes the new packages.
 
-## Decision
+## Original Decision (SUPERSEDED — see Option D Revision)
+
+> This Option C decision is retained as historical context only. The accepted
+> OpenCode integration decision is Option D below: separate concern-focused bins,
+> with `adlc` remaining the dispatcher and `adlc-runner` owning runner verbs.
+> Editorial note: older Option C drafts used `adlc-run` for the standalone runner
+> bin. This preserved section uses the normalized `adlc-runner` label so the
+> historical comparison and accepted Option D terminology can be read side by
+> side without introducing a third runner-bin spelling.
 
 > **⚠ This section records Option C (hardened), which was the initial decision.
 > It was superseded by Option D in the Revision section below. Jump to
@@ -44,24 +54,24 @@ delegating to `@adlc/runner` by *spawning its bin*.**
   — handled *before* tool lookup, preserving the exact `adlc run <phase>` /
   `adlc accept …` grammar (so codex's existing usage is unchanged).
 - A reserved verb is served by **spawning `@adlc/runner`'s own standalone bin
-  (`adlc-run`) as a child process** — NOT by importing runner as a library. This
+  (`adlc-runner`) as a child process** — NOT by importing runner as a library. This
   is identical to how the dispatcher already runs tools: full process isolation
   and verbatim exit-code propagation (0/1/2). The runner is never loaded into the
   dispatcher's process.
-- `@adlc/runner` **keeps a non-colliding `adlc-run` bin** (it drops only the
+- `@adlc/runner` **keeps a non-colliding `adlc-runner` bin** (it drops only the
   colliding `adlc` bin), so it stays independently installable/usable, and the
   dispatcher has a stable bin to resolve and spawn.
 - Everything else (`adlc <anything-not-a-reserved-verb>`) dispatches to
   `@adlc/<tool>` exactly as today.
 - `@adlc/cli` adds a dependency on `@adlc/runner` (lockstep, like the other 19),
-  so `adlc-run` is always present alongside `adlc`.
+  so `adlc-runner` is always present alongside `adlc`.
 
 ### Dispatch precedence (the contract)
 
 ```
 adlc <first> [args...]
   if <first> in {--help,-h,help,--version,-v}     → dispatcher built-in
-  else if <first> in RESERVED_VERBS {run,accept}  → spawn `adlc-run` <first> args...
+  else if <first> in RESERVED_VERBS {run,accept}  → spawn `adlc-runner` <first> args...
   else if <first> is a known tool                 → spawn @adlc/<first> args...
   else                                            → unknown-tool error (exit 1)
 ```
@@ -79,24 +89,32 @@ regress silently):
 3. **Reserved verbs are a closed set** — adding a verb is a deliberate registry +
    test change, not an implicit fallthrough.
 
-## Alternatives considered
+## Alternatives Considered Under Original Option C Decision
+
+> This section records the Option C-era analysis. Option D is now the accepted
+> decision; see the revision section below for the current rationale.
 
 - **B — `@adlc/runner` keeps `adlc`, rename `@adlc/cli`'s bin.** Rejected: every
   Phase A–F artifact (hooks, slash commands, discovery skill, CI scripts) calls
   `adlc <tool>`; renaming breaks all of them.
 - **D — keep both bins under different names** (`adlc` for the dispatcher,
-  `adlc-run` for the runner). Lower effort and zero shadowing risk, but ships two
+  `adlc-runner` for the runner). Lower effort and zero shadowing risk, but ships two
   top-level commands and loses the single-entry-point property the dispatcher was
-  created for. Acceptable fallback if unification proves costly.
+  created for. Acceptable fallback if unification proves costly. **Historical note:**
+  Option D is now the accepted decision, not a fallback; this bullet preserves the
+  superseded Option C-era evaluation.
 
-## Consequences
+## Original Consequences (SUPERSEDED — Option C)
+
+> These consequences apply only to the superseded Option C single-bin dispatcher
+> design. The accepted Option D consequences are listed in the revision section.
 
 - **Backward compatible both ways**: `adlc spec-lint …` and `adlc run p5` /
   `adlc accept …` all keep working; no caller changes.
 - **Single entry point** preserved — one command for the whole lifecycle.
 - **New coupling**: `@adlc/cli` now depends on `@adlc/runner`. Both are already
   lockstep-versioned, so this adds no release complexity beyond the existing
-  repin-all behavior. Because the dispatcher *spawns* `adlc-run` rather than
+  repin-all behavior. Because the dispatcher *spawns* `adlc-runner` rather than
   importing it, the coupling is a runtime resolve, not a hard module link — the
   dispatcher does not break if the runner's internals change.
 - **Reserved-verb surface is guarded**: the disjointness test makes a shadowing
@@ -105,12 +123,17 @@ regress silently):
   to a stable ref before the unification is implemented against it. This ADR does
   not modify any codex file.
 
-## Resolved questions (from the Gemini-3.5-Flash adversarial review)
+## Resolved Questions Under Original Option C Decision
+
+> This section records how the original Option C proposal answered the first
+> review pass. The accepted Option D revision supersedes the coupling and
+> reserved-verb conclusions below.
 
 The review of the original (un-hardened) proposal raised coupling, process-
-isolation loss, and shadowing. Resolutions, now folded into the Decision above:
+isolation loss, and shadowing. Resolutions were folded into the superseded
+Option C decision above:
 
-1. **Library import vs spawn → spawn.** The dispatcher spawns `adlc-run` as a
+1. **Library import vs spawn → spawn.** The dispatcher spawns `adlc-runner` as a
    child (process isolation + verbatim exit codes), consistent with how it runs
    every tool. The runner is never imported into the dispatcher process.
 2. **Reserving `run`/`accept` vs an `adlc phase …` prefix → keep bare verbs.** A
@@ -121,28 +144,25 @@ isolation loss, and shadowing. Resolutions, now folded into the Decision above:
 3. **Closed set.** `RESERVED_VERBS = {run, accept}` is closed; expanding it is a
    deliberate registry + test change.
 
-If the coupling or reserved surface ever proves costly, **Option D** (separate
-`adlc` + `adlc-run` bins) remains the documented fallback — it trades the single
-entry point for zero coupling and zero shadowing.
+This fallback framing is superseded: **Option D** is now the accepted decision.
 
-## Implementation notes (cautions from the second review pass)
+## Original Implementation Notes (SUPERSEDED — Option C cautions from the second review pass)
 
-These are binding on the implementation; each maps to how the dispatcher already
-runs tools, so they add no new mechanism:
+These notes were binding on the superseded Option C implementation. Under
+accepted Option D, `adlc` and `adlc-runner` are invoked directly as independent
+bins by harness adapters; `adlc` does not spawn `adlc-runner`.
 
-1. **Resolve `adlc-run` BY PATH, never via `$PATH`.** On a global install only
-   `@adlc/cli`'s own `adlc` bin lands on the global PATH; its dependency's
-   `adlc-run` does not. The dispatcher must resolve `@adlc/runner`'s declared bin
-   the same way it resolves a tool — `createRequire(...).resolve('@adlc/runner/
-   package.json')` → read `bin` → `spawn(process.execPath, [binPath, ...argv])`.
-   A `spawnSync('adlc-run', …)` PATH lookup would fail under global install.
-2. **Inherit stdio** on the spawned child (`stdio: 'inherit'`), so `adlc run` /
-   `adlc accept` output and any interactivity reach the user unchanged. A test
-   asserts this.
-3. **Forward argv verbatim, verb included.** `adlc run p5` spawns the runner with
-   `["run","p5"]` — the runner's existing first-positional grammar is unchanged
-   (its bin is the old `adlc` bin, only renamed). A test asserts exit-code
-   fidelity (0/1/2) and that the verb reaches the runner.
+1. **Superseded Option C physical-path resolution.** Under accepted Option D,
+   `adlc-runner` is a separate globally installed bin registered by
+   `@adlc/runner`; harness adapters resolve it through the user's `$PATH`.
+   `createRequire`-based physical-path lookup through `@adlc/cli` is not used.
+2. **Superseded Option C stdio inheritance.** There is no dispatcher-spawned
+   child under accepted Option D, so the `stdio: 'inherit'` contract is vacuous.
+   Harness adapters invoke `adlc-runner` directly and inherit or capture stdio
+   according to that harness's native command execution contract.
+3. **Superseded Option C argv forwarding.** `adlc` no longer forwards
+   `["run","p5"]` to the runner. Callers invoke `adlc-runner run p5` directly,
+   preserving the runner's first-positional grammar without a dispatcher wrapper.
 
 ---
 
@@ -160,7 +180,7 @@ Three genuinely distinct concerns, all harness-agnostic:
 
 - **Tools** — the 19 atomic gate bins (`spec-lint`, `rails-guard`, …).
 - **Dispatcher** (`adlc <tool>`) — sugar: one stable prefix over the 19 tools.
-- **Runner** (`adlc run <phase>` / `accept`) — higher-level lifecycle-evidence
+- **Runner** (`adlc-runner run <phase>` / `accept`) — higher-level lifecycle-evidence
   assertion. A different job than gate dispatch.
 
 Each harness plugin is a thin adapter wiring that harness's native primitives
@@ -170,13 +190,27 @@ Each harness plugin is a thin adapter wiring that harness's native primitives
 
 **Option D — separate, concern-focused bins.** Do NOT overload one command.
 
-- `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged.
+- `adlc <tool>` — dispatcher (`@adlc/cli`). Unchanged. Note that under Option D, the dispatcher tool `adlc` contains no top-level `record` subcommand. The existing `gate-manifest record` tool remains an unsigned/HMAC legacy append surface for gate tools and local hooks, and must not be represented as runner-authorized signed evidence. Signed-mode lifecycle assertions and role-enforced manifest entries are the runner responsibility, performed via `adlc-runner record --entry <payload>` or higher-level runner verbs. When the runner is absent, fallback scripts may append unsigned entries, but those entries are explicitly non-authoritative under signed evidence mode.
 - `adlc-runner <verb> …` — runner (`@adlc/runner`), a **single** bin with
-  `run` / `accept` subcommands (`adlc-runner run <phase>`,
-  `adlc-runner accept --ticket …`). This is the minimal change to the runner
-  package: its bin already parses `run`/`accept` as the first positional, so it is
+  `run` / `accept` / `record` / `upgrade` / `init-developer-keys` / `init-admin-keys` / `rotate-developer-keys` subcommands (`adlc-runner run <phase>`,
+  `adlc-runner accept --ticket …`, `adlc-runner record --entry …`, `adlc-runner upgrade --ticket …`, `adlc-runner init-developer-keys`, `adlc-runner init-admin-keys`, `adlc-runner rotate-developer-keys`). This is the minimal change to the runner
+  package: its bin already parses `run`/`accept`/`record`/`upgrade`/`init-developer-keys`/`init-admin-keys`/`rotate-developer-keys` as the first positional, so it is
   only renamed `adlc` → `adlc-runner`; the grammar is otherwise unchanged.
 - No reserved verbs on `adlc`, no `cli → runner` dependency, no disjointness test.
+
+### Consequences (ACCEPTED — Option D)
+
+- **Dispatcher callers are unchanged**: `adlc <tool> …` remains the stable entry
+  point for gate tools such as `adlc spec-lint …` and `adlc rails-guard …`.
+- **Runner callers use the runner bin directly**: phase assertions and manifest
+  operations use `adlc-runner <verb> …`, for example `adlc-runner run p5` and
+  `adlc-runner accept --ticket …`; `adlc run …` and `adlc accept …` are not
+  compatibility targets under Option D.
+- **Two top-level commands are intentional**: the design trades away the original
+  single-entry-point property to keep gate dispatch and phase assertion
+  separate.
+- **No dispatcher-runner coupling**: `@adlc/cli` has no runtime dependency on
+  `@adlc/runner`, does not reserve `run`/`accept`, and does not spawn the runner.
 
 ### Why the roadmap flips the decision
 
@@ -199,7 +233,7 @@ one caller; a tax on **every** caller when callers multiply:
 
 Cost: two top-level commands instead of one. Acceptable: the primary callers are
 plugins, for which two unambiguous commands beat one overloaded command; and the
-docs are one sentence per harness ("gates: `adlc <x>`; phases: `adlc-run <x>`").
+docs are one sentence per harness ("gates: `adlc <x>`; phases: `adlc-runner <x>`").
 This costs the Claude Code side nothing — Phase A–F never calls `run`/`accept`.
 
 ### Companion direction: share the harness-agnostic logic, not just the bins
@@ -209,7 +243,7 @@ Today the Claude hook (`plugins/adlc-claude-code/hooks/adlc-hook.mjs`) and the C
 of the same rails logic**. With N harnesses that is N drifting copies of
 security-critical code. Factor the harness-agnostic decision logic (rails
 parsing, the bash-write lexer, the fail-closed contract) into a **shared library**
-(`@adlc/core` or a new `@adlc/hook-core`). Each harness plugin then keeps only the
+(`@adlc/core`). Each harness plugin then keeps only the
 thin native binding: *read this harness's hook payload → call the shared logic →
 emit this harness's response format.* One source of truth for the dangerous
 logic, N thin bindings.
@@ -220,8 +254,9 @@ The Gemini-3.5-Flash review confirmed separate bins over unify and sharpened the
 design. All three are folded into the accepted decision:
 
 1. **Runner is ONE bin with subcommands, not two top-level commands.** Use
-   `adlc-runner run …` / `adlc-runner accept …`, never separate `adlc-run` +
-   `adlc-accept` bins. Fewer top-level commands, and it matches the runner's
+   `adlc-runner run …` / `adlc-runner accept …` as subcommands of one
+   `adlc-runner` executable; never split them into separate top-level executables
+   such as `adlc-runner-run` and `adlc-runner-accept`. Fewer top-level commands, and it matches the runner's
    existing first-positional grammar (rename only).
 
 2. **Plugins must declare exactly the bins they use** — separate bins move
@@ -245,9 +280,11 @@ design. All three are folded into the accepted decision:
    or `rm <rail>` disabled enforcement); **fixed** by treating `rm`/`mv` operands
    (and `cp`/`install` destinations) as mutation targets. For *other* harnesses,
    the principle still holds: configure each so a hook *crash* (non-zero/uncaught
-   exit) is treated as deny for the enforcing hook. The shared hook library
-   (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
-   guarantee is a harness-binding responsibility, documented per harness.
+    exit) is treated as deny for the enforcing hook. The shared hook library
+    (companion direction) holds the *decision* logic; the *fail-closed-on-crash*
+    guarantee is a harness-binding responsibility, documented per harness.
+
+4. **Key management is a runner responsibility.** Because `adlc-runner` is the security-critical asserter containing the cryptographic signature verification and generation logic (relying on `developer.key`, `admin.override`, and `admin.pub`), any subcommands that generate, rotate, or recover these keys (such as `adlc-runner init-developer-keys`, `adlc-runner init-admin-keys`, and `adlc-runner rotate-developer-keys`) fall strictly under its domain. The `@adlc/cli` dispatcher remains fully modular, thin, and keyless.
 
 ---
 

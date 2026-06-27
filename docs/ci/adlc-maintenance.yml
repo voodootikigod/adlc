@@ -1,5 +1,6 @@
 # ADLC scheduled maintenance — copy into your repo as
 # .github/workflows/adlc-maintenance.yml
+# OpenCode /adlc-init template source: docs/ci/adlc-maintenance.yml
 #
 # Idle-time metabolism (ADLC C10/C12): the DETERMINISTIC, keyless maintenance
 # checks on a weekly cron. It reports stale skill metadata and the highest-churn

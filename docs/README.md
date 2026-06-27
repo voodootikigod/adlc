@@ -16,7 +16,9 @@ package READMEs.
 - [Claude Code integration](./integrations/claude-code.md) explains how to install and
   use the Claude Code plugin, including lifecycle coverage and known gaps.
 - [Pi integration](./integrations/pi.md) explains the Raspberry Pi harness integration.
-- [opencode integration](./integrations/opencode.md) [planned]
+- [opencode integration](./integrations/opencode.md) explains how to install and use the
+  OpenCode plugin (rails-guard hook, command suite, keyless gate bridge, session hooks,
+  prosecutor lenses) — all six plan phases shipped.
 - [Package reference](./package-reference.md) lists every package, binary, phase, and
   primary README source.
 - [Ticket authoring](./ticket-authoring.md) defines the canonical ticket schema that

@@ -265,12 +265,12 @@ test('renderReport: handles missing optional fields gracefully', () => {
 
 const LOADER_SOURCE = `
 // Intercept the real core module and return a minimal stub.
-const CORE = new URL(
-  '../../core/index.mjs',
-  new URL('../../packages/premortem/lib/run.mjs', import.meta.url),
-).href;
+const CORE = 'mock:adlc-core';
 
 export async function resolve(specifier, context, nextResolve) {
+  if (specifier === '@adlc/core') {
+    return { url: CORE, shortCircuit: true };
+  }
   return nextResolve(specifier, context);
 }
 
@@ -311,19 +311,9 @@ test('--json: run() emits JSON causes array to stdout (mocked LLM)', () => {
     const loaderPath = join(tmpDir, 'loader.mjs');
     const runnerPath = join(tmpDir, 'runner.mjs');
 
-    // Patch the CORE URL in the loader to use the real absolute path
-    const coreUrl = new URL(
-      '../../core/index.mjs',
-      new URL('../lib/run.mjs', import.meta.url),
-    ).href;
-    const loaderWithUrl = LOADER_SOURCE.replace(
-      "new URL(\n  '../../core/index.mjs',\n  new URL('../../packages/premortem/lib/run.mjs', import.meta.url),\n).href",
-      JSON.stringify(coreUrl),
-    );
-
     // Derive run.mjs's real URL (never hardcode the absolute project path).
     const runUrl = new URL('../lib/run.mjs', import.meta.url).href;
-    writeFileSync(loaderPath, loaderWithUrl, 'utf8');
+    writeFileSync(loaderPath, LOADER_SOURCE, 'utf8');
     writeFileSync(runnerPath, RUNNER_SOURCE.replace('__RUN_URL__', runUrl), 'utf8');
 
     const result = spawnSync(
