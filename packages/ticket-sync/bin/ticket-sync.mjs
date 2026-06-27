@@ -6,14 +6,15 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { pull } from '../lib/pull.mjs';
+import { push } from '../lib/push.mjs';
 import { makeGhRunner } from '../lib/gh.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
 
 const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [--allow-rail-narrowing] [--json]
 
   pull    import issues from the external tracker into .adlc/tickets.json
-  push    write ADLC tickets/outcomes back to the tracker        (T9 — not yet)
-  sync    pull then push                                          (T9 — not yet)
+  push    write ADLC tickets/outcomes back to the tracker (update + idempotent create)
+  sync    pull then push
   doctor  read-only health checks                                 (T10 — not yet)
 
 Dry-run by default; pass --write to apply. Exit: 0 ok · 1 operational · 2 blocked.`;
@@ -28,6 +29,18 @@ export function parseFlags(args) {
     else { process.stderr.write(`unknown flag: ${a}\n`); process.exit(1); }
   }
   return flags;
+}
+
+/**
+ * sync = pull then push, composed. A non-clean pull (conflict/operational) ABORTS
+ * before push — never push on top of an unreconciled pull. Pure orchestration over
+ * injected pull/push thunks so the abort branch is unit-testable offline.
+ */
+export async function syncFlow(pullFn, pushFn) {
+  const pulled = await pullFn();
+  if (pulled.exitCode !== 0) return { exitCode: pulled.exitCode, pulled, pushed: null };
+  const pushed = await pushFn();
+  return { exitCode: pushed.exitCode, pulled, pushed };
 }
 
 function gitRemoteUrl() {
@@ -46,7 +59,10 @@ function report(result, json) {
   if (result.errors?.length) process.stderr.write(`${result.errors.map((e) => `  - ${e}`).join('\n')}\n`);
   if (result.plan?.length) {
     process.stdout.write(`${result.dryRun ? '[dry-run] would ' : ''}${result.applied ? 'applied' : 'plan'}:\n`);
-    for (const p of result.plan) process.stdout.write(`  ${p.action}\t${p.id}${p.decision ? ` (${p.decision})` : ''}\n`);
+    for (const p of result.plan) {
+      const detail = p.decision ? ` (${p.decision})` : p.newId ? ` -> ${p.newId}` : p.reason ? ` (${p.reason})` : '';
+      process.stdout.write(`  ${p.action ?? p.kind}\t${p.id}${detail}\n`);
+    }
   }
   if (result.dryRun) process.stdout.write('\nDry run — re-run with --write to apply.\n');
 }
@@ -70,8 +86,35 @@ async function main() {
     process.exit(result.exitCode);
   }
 
-  if (sub === 'push' || sub === 'sync' || sub === 'doctor') {
-    process.stderr.write(`adlc ticket ${sub}: not implemented yet (${sub === 'doctor' ? 'T10' : 'T9'}).\n`);
+  if (sub === 'push') {
+    const result = await push({
+      dir: process.cwd(),
+      provider: githubProvider(),
+      runner: makeGhRunner(),
+      gitRemoteUrl: gitRemoteUrl(),
+      write: flags.write,
+    });
+    report(result, flags.json);
+    process.exit(result.exitCode);
+  }
+
+  if (sub === 'sync') {
+    const common = { dir: process.cwd(), provider: githubProvider(), runner: makeGhRunner(), gitRemoteUrl: gitRemoteUrl() };
+    const { exitCode, pulled, pushed } = await syncFlow(
+      () => pull({ ...common, write: flags.write, force: flags.force, allowRailNarrowing: flags['allow-rail-narrowing'] }),
+      () => push({ ...common, write: flags.write }),
+    );
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify({ pull: pulled, push: pushed })}\n`);
+    } else {
+      process.stdout.write('— pull —\n'); report(pulled, false);
+      if (pushed) { process.stdout.write('— push —\n'); report(pushed, false); }
+    }
+    process.exit(exitCode);
+  }
+
+  if (sub === 'doctor') {
+    process.stderr.write('adlc ticket doctor: not implemented yet (T10).\n');
     process.exit(1);
   }
 

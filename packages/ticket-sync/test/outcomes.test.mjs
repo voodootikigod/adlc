@@ -49,3 +49,14 @@ test('falls back to ts when seq is absent', () => {
   ];
   assert.equal(statusForTicket(entries, 'T1'), 'p5-pass');
 });
+
+test('ts tiebreak is driven by the timestamp, NOT array order (later ts wins even when listed first)', () => {
+  // Pin the ts fallback itself: with the later entry FIRST in the array, only a real
+  // Date.parse(ts) comparison yields the right answer — a degenerate seqOf (always 0)
+  // would let the array-last (older) entry win.
+  const entries = [
+    { ticket: 'T1', gate: 'prosecution', ts: '2026-02-01T00:00:00Z', data: { verdict: 'clear' } },
+    { ticket: 'T1', gate: 'prosecution', ts: '2026-01-01T00:00:00Z', data: { verdict: 'blocked' } },
+  ];
+  assert.equal(statusForTicket(entries, 'T1'), 'p5-pass', 'the Feb "clear" verdict must win regardless of order');
+});

@@ -1,9 +1,13 @@
 // providers/github.mjs — the GitHub implementation of the provider interface.
 // The ONLY GitHub-specific code; it talks to `gh` through the injected runner, so
-// it is fully offline-testable with canned --json fixtures.
+// it is fully offline-testable with canned --json fixtures. Every mutation is an
+// execFile argv (never a shell string) — untrusted issue content is passed as a
+// flag VALUE, never interpolated into a command (design C4).
 
 import { ghJson } from '../gh.mjs';
 import { selectorArgs } from '../config.mjs';
+import { normalizeNewlines } from '../canonical.mjs';
+import { STATUS_COMMENT_MARKER } from '../status-render.mjs';
 
 /** Map one raw `gh issue list --json` entry to the provider's neutral shape. */
 export function mapIssue(raw) {
@@ -18,6 +22,20 @@ export function mapIssue(raw) {
   };
 }
 
+/** Pull the numeric issue number out of a `gh issue create` URL (…/issues/<n>). */
+export function parseIssueNumberFromUrl(url) {
+  const m = String(url ?? '').match(/\/issues\/(\d+)\s*$/);
+  return m ? Number(m[1]) : null;
+}
+
+/** Pull the numeric comment id out of a comment url (…#issuecomment-<id>). */
+export function parseCommentId(url) {
+  const m = String(url ?? '').match(/#issuecomment-(\d+)\s*$/);
+  return m ? m[1] : null;
+}
+
+const refNum = (ref) => String(typeof ref === 'object' ? ref.number : ref);
+
 export function githubProvider() {
   return {
     /** @returns {Promise<{ok, issues?, error?, truncated?}>} */
@@ -31,6 +49,82 @@ export function githubProvider() {
         return { ok: false, truncated: true, error: `fetched ${r.data.length} issues (hit the limit of ${limit}); narrow the selector or raise --limit` };
       }
       return { ok: true, issues: r.data.map(mapIssue) };
+    },
+
+    /** Resolve the authenticated login (for the status-comment author check). */
+    async whoami({ runner }) {
+      const r = await ghJson(runner, ['api', 'user']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, login: r.data?.login ?? null };
+    },
+
+    /**
+     * Create an issue for a local-only ticket. Two calls: `issue create` (returns a
+     * URL) then `issue view --json` to recover the durable nodeId + number.
+     * @returns {Promise<{ok, number?, nodeId?, url?, error?}>}
+     */
+    async createIssue({ runner, repo, dryRun }, { title, body }) {
+      if (dryRun) return { ok: true, dryRun: true };
+      const created = await runner(['issue', 'create', '--repo', repo, '--title', title, '--body', body]);
+      if (!created.ok) return { ok: false, error: created.error || created.stderr || 'gh issue create failed' };
+      const url = (created.stdout || '').trim().split('\n').filter(Boolean).pop();
+      const number = parseIssueNumberFromUrl(url);
+      if (!number) return { ok: false, error: `could not parse the new issue number from: ${url}` };
+      const view = await ghJson(runner, ['issue', 'view', String(number), '--repo', repo, '--json', 'id,number,url']);
+      if (!view.ok) return { ok: false, error: view.error };
+      return { ok: true, number, nodeId: view.data?.id ?? null, url: view.data?.url ?? url };
+    },
+
+    /** Replace the issue body (prose + re-serialized block). */
+    async updateIssueBody({ runner, repo, dryRun }, ref, body) {
+      if (dryRun) return { ok: true, dryRun: true };
+      const r = await runner(['issue', 'edit', refNum(ref), '--repo', repo, '--body', body]);
+      return r.ok ? { ok: true } : { ok: false, error: r.error || r.stderr || 'gh issue edit failed' };
+    },
+
+    /**
+     * Ensure the given labels (create-if-missing), then add/remove them on the issue.
+     * The caller passes only labels that actually need to change, so a converged
+     * issue triggers NO call (push idempotency).
+     */
+    async ensureLabels({ runner, repo, dryRun }, ref, { add = [], remove = [] } = {}) {
+      if (add.length === 0 && remove.length === 0) return { ok: true, noop: true };
+      if (dryRun) return { ok: true, dryRun: true };
+      for (const label of add) {
+        // --force makes create idempotent (update-if-exists), so re-runs never error.
+        const c = await runner(['label', 'create', label, '--repo', repo, '--force']);
+        if (!c.ok) return { ok: false, error: c.error || c.stderr || `gh label create ${label} failed` };
+      }
+      const args = ['issue', 'edit', refNum(ref), '--repo', repo];
+      for (const l of add) args.push('--add-label', l);
+      for (const l of remove) args.push('--remove-label', l);
+      const r = await runner(args);
+      return r.ok ? { ok: true } : { ok: false, error: r.error || r.stderr || 'gh issue edit (labels) failed' };
+    },
+
+    /**
+     * Upsert the marker-anchored status comment. Reads the issue's comments, finds
+     * the one authored by `login` carrying the marker; edits it only if the body
+     * differs, else creates it. A converged comment makes NO mutating call.
+     */
+    async upsertStatusComment({ runner, repo, dryRun, login }, ref, body) {
+      const view = await ghJson(runner, ['issue', 'view', refNum(ref), '--repo', repo, '--json', 'comments']);
+      if (!view.ok) return { ok: false, error: view.error };
+      const comments = Array.isArray(view.data?.comments) ? view.data.comments : [];
+      const mine = comments.find((c) => c?.author?.login === login && typeof c.body === 'string' && c.body.includes(STATUS_COMMENT_MARKER));
+      const same = (a, b) => normalizeNewlines(a ?? '').trim() === normalizeNewlines(b ?? '').trim();
+
+      if (mine && same(mine.body, body)) return { ok: true, changed: false };
+      if (dryRun) return { ok: true, dryRun: true, changed: true };
+
+      if (mine) {
+        const id = parseCommentId(mine.url);
+        if (!id) return { ok: false, error: `could not parse comment id from: ${mine.url}` };
+        const r = await runner(['api', '--method', 'PATCH', `/repos/${repo}/issues/comments/${id}`, '-f', `body=${body}`]);
+        return r.ok ? { ok: true, changed: true } : { ok: false, error: r.error || r.stderr || 'gh api PATCH comment failed' };
+      }
+      const r = await runner(['issue', 'comment', refNum(ref), '--repo', repo, '--body', body]);
+      return r.ok ? { ok: true, changed: true } : { ok: false, error: r.error || r.stderr || 'gh issue comment failed' };
     },
   };
 }
