@@ -16,8 +16,16 @@ the discovery skill, the **Phase A command surface** — `/adlc-init`,
 `/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`, `/adlc-decompose` plus the
 gate-bin dependency mapping and deterministic `/adlc-init` scaffolding — and the
 **Phase B keyless gate bridge** (`lib/keyless-bridge.mjs`): run any LLM-backed gate
-in `--prompt-only` mode, route the prompt(s) to the host model, no API key. Still
-follow-on (plan Phases C/E): advisory session hooks and the prosecutor lenses.
+in `--prompt-only` mode, route the prompt(s) to the host model, no API key — and
+the **Phase C advisory session hooks** (`session.created` preflight,
+`session.idle` gate-manifest audit). Still follow-on (plan Phase E): the
+prosecutor lenses.
+
+> **Session hooks — event-name note.** The plan specified `session.created` +
+> `session.ended`, but OpenCode has no `session.ended`; the end-of-work signal is
+> `session.idle`, which the gate-manifest audit uses. Both hooks are advisory:
+> they only surface warnings, never throw, and no-op when the repo is not
+> ADLC-initialized.
 
 > **Keyless bridge — SDK dependency (plan §6.4).** The bridge's protocol (extract
 > a gate's prompts, ask, thread answers) is implemented and tested, but the
@@ -103,9 +111,9 @@ glob/ticket logic to `@adlc/core`:
 | P1 Interrogate | **Yes** | `/adlc-spec` + `/adlc-approve-spec` (Phase A) + the `adlc` skill |
 | P2 Decompose | **Yes** | `/adlc-decompose` (Phase A) |
 | P3 Rail | **MVP** | the in-session rails-guard hook (this plugin) + CI gate |
-| P4 Build | Partial | rails-guard hook; flail-detection is follow-on |
+| P4 Build | Partial | rails-guard hook + `session.created` advisory preflight; flail-detection is follow-on |
 | P5 Prosecute | Planned | plan Phase E prosecutor lenses — follow-on T5 |
-| P6 Integrate | Planned | gate-manifest evidence (human gate) |
+| P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
 | P7 Distill | Planned | plan Phase E (`/adlc-distill`) — follow-on T5 |
 
 ## Gaps

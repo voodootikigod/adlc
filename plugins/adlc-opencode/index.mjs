@@ -12,6 +12,7 @@
 // advisory mode; otherwise it signals that preflight should fail closed.
 
 import { checkRail, probeEnforcementCapability } from './rails-checker.mjs';
+import { checkPreflight, auditGateManifest } from './lib/session-hooks.mjs';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
 
@@ -41,6 +42,24 @@ export const adlcRailsGuard = async ({ directory, worktree, project } = {}) => {
       }
       // Advisory mode: cannot abort, so surface loudly without claiming to block.
       console.error(`${message} [ADVISORY — host SDK does not honor deny; rely on the CI rail-freeze gate]`);
+    },
+
+    // session.created (Phase C): advisory environment preflight. Never throws.
+    'session.created': async () => {
+      try {
+        const { skipped, warnings } = checkPreflight(root, { env: process.env });
+        if (!skipped) for (const w of warnings) console.error(`ADLC preflight: ${w}`);
+      } catch { /* advisory: swallow */ }
+    },
+
+    // session.idle (Phase C): advisory gate-evidence audit (the plan's
+    // "session.ended" — OpenCode has no such event; session.idle is the
+    // end-of-work signal). Never throws.
+    'session.idle': async () => {
+      try {
+        const { warning } = auditGateManifest(root);
+        if (warning) console.error(`ADLC gate-manifest audit: ${warning}`);
+      } catch { /* advisory: swallow */ }
     },
   };
 };
