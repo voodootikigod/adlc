@@ -37,6 +37,10 @@ else {
   const idx = read(indexPath);
   if (!/tool\.execute\.before/.test(idx)) fail('index.mjs does not wire tool.execute.before'); else ok('wires tool.execute.before');
   if (!/export (const|default) /.test(idx)) fail('index.mjs has no plugin export'); else ok('exports a plugin');
+  // Phase C (T4): advisory session hooks
+  if (!/session\.created/.test(idx)) fail('index.mjs does not wire session.created'); else ok('wires session.created (advisory preflight)');
+  if (!/session\.idle/.test(idx)) fail('index.mjs does not wire session.idle'); else ok('wires session.idle (advisory gate-manifest audit)');
+  if (!existsSync(join(PLUGIN, 'lib', 'session-hooks.mjs'))) fail('lib/session-hooks.mjs missing'); else ok('session-hooks helper present');
 }
 
 // ---- AC1: skill registration ----
