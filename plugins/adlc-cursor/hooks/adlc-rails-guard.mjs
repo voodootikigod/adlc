@@ -199,17 +199,21 @@ export function decide(payload, { root, env = process.env } = {}) {
       // unrecognized) tool that reached the guard with an unparseable target under
       // active enforcement is opaque: fail CLOSED rather than wave it through (e.g. a
       // patch format we don't parse).
-      // Respect the SAME rail-state preconditions as a path-bearing edit (via the
-      // shared railPreconditions), so a pathless opaque tool no-ops when enforcement
-      // is off / the repo is uninitialized / no active ticket is resolved, and fails
-      // closed on a conflict or corrupt ticket state — never denying on the bare
-      // ADLC_P4_ENFORCEMENT flag alone.
-      //
-      // A pathless tool gives NO ownership signal, so in a multi-root workspace we
-      // can't tell which root it targets. Evaluate EVERY candidate root and take the
-      // strictest outcome: any 'deny' root → deny; else (for an opaque tool) any
-      // 'active' root → deny; else allow. Picking only roots[0] would let an opaque
-      // mutator slip when a *later* root is the actively-enforcing ADLC repo.
+      // Classify FIRST. Read-only tools and genuine shell/terminal tools are NEVER
+      // rail-gated in-session and must be exempt unconditionally — a no-path shell
+      // command (`npm test`) or a read-only search has to run even if some *other*
+      // workspace root has a broken/conflicting ticket state. Only a structured
+      // mutator (mutating classification ALWAYS wins, so `terminal_edit` can't
+      // masquerade as shell) or an unrecognized non-shell tool is "opaque".
+      const cls = classifyTool(tool);
+      const opaque = cls === 'mutating' || (cls === 'other' && !isShellTool(tool));
+      if (!opaque) return { permission: 'allow' };
+
+      // Opaque mutator with no inspectable path. It gives NO ownership signal, so in
+      // a multi-root workspace we can't tell which root it targets: evaluate EVERY
+      // candidate root via the shared railPreconditions and take the strictest
+      // outcome — any 'deny' (conflict/corrupt) → deny; else any 'active' root → deny
+      // (can't verify it against that root's frozen rails); else (all inactive) allow.
       const roots = root != null ? [root] : (candidateRoots(payload).length ? candidateRoots(payload) : [process.cwd()]);
       const states = roots.map((r) => railPreconditions({ root: r, env }));
       const denied = states.find((s) => s.state === 'deny');
@@ -220,17 +224,7 @@ export function decide(payload, { root, env = process.env } = {}) {
           agent_message: `The rail trust state failed closed: ${denied.reason}. Fix the ticket/rail state rather than working around the guard.`,
         };
       }
-      const anyActive = states.some((s) => s.state === 'active');
-      if (!anyActive) return { permission: 'allow' };
-
-      // Some root is enforcing with a valid active ticket: a structured mutator
-      // (mutating classification ALWAYS wins, so `terminal_edit` can't masquerade as
-      // shell) or an unrecognized non-shell tool that exposes no inspectable path is
-      // opaque and cannot be verified — fail CLOSED. Read-only and genuine shell
-      // tools are exempt.
-      const cls = classifyTool(tool);
-      const opaque = cls === 'mutating' || (cls === 'other' && !isShellTool(tool));
-      if (opaque) {
+      if (states.some((s) => s.state === 'active')) {
         return {
           permission: 'deny',
           user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — a structured mutating tool with no verifiable target path while enforcement is active`,

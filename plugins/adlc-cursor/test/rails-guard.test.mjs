@@ -288,6 +288,20 @@ test('(no-path multi-root) a pathless opaque tool fails CLOSED if ANY workspace 
   } finally { cleanup(bare); cleanup(active); }
 });
 
+test('(no-path multi-root) shell/read-only tools stay exempt even when a candidate root is conflicted/corrupt', () => {
+  // A bad ticket state in ONE root must not block a pathless shell command or a
+  // read-only search — classification is checked before strict precondition denial.
+  const bare = mkdtempSync(join(tmpdir(), 'adlc-bare-'));
+  const conflicted = fixture({ tickets: RAILED, currentTicket: 'T2' }); // ADLC_TICKET=T1 vs file T2 -> conflict
+  try {
+    const roots = [bare, conflicted];
+    assert.equal(decide({ tool_name: 'Bash', tool_input: { command: 'npm test' }, workspace_roots: roots }, { env: env() }).permission, 'allow', 'shell must run despite a conflicted root');
+    assert.equal(decide({ tool_name: 'codebase_search', tool_input: { query: 'x' }, workspace_roots: roots }, { env: env() }).permission, 'allow', 'read-only must run despite a conflicted root');
+    // but an opaque mutator with a conflicted root still fails closed
+    assert.equal(decide({ tool_name: 'edit_file', tool_input: {}, workspace_roots: roots }, { env: env() }).permission, 'deny', 'opaque mutator must fail closed on a conflicted root');
+  } finally { cleanup(bare); cleanup(conflicted); }
+});
+
 test('(no-path preconditions) a pathless opaque tool NO-OPs when uninitialized / no active ticket', () => {
   const op = { tool_name: 'edit_file', tool_input: {} };
   // uninitialized repo (enforcement on, no tickets.json) -> allow (no-op)
