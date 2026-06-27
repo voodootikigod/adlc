@@ -270,6 +270,24 @@ test('(no-path) a MUTATING tool with no extractable path fails CLOSED under enfo
   } finally { cleanup(root); }
 });
 
+test('(no-path multi-root) a pathless opaque tool fails CLOSED if ANY workspace root is actively enforcing', () => {
+  // A pathless tool gives no ownership signal; if any root (even a later one) is
+  // active, an opaque mutator must deny rather than slip via roots[0].
+  const bare = mkdtempSync(join(tmpdir(), 'adlc-bare-'));
+  const active = fixture({ tickets: RAILED }); // initialized + has a rail
+  try {
+    const op = { tool_name: 'edit_file', tool_input: {}, workspace_roots: [bare, active] };
+    assert.equal(decide(op, { env: env() }).permission, 'deny', 'opaque mutator must deny when a later root is active');
+    // shell tools stay exempt even with an active root
+    const sh = { tool_name: 'Bash', tool_input: { command: 'npm test' }, workspace_roots: [bare, active] };
+    assert.equal(decide(sh, { env: env() }).permission, 'allow', 'shell stays allowed in multi-root');
+    // all-inactive roots -> allow
+    const bare2 = mkdtempSync(join(tmpdir(), 'adlc-bare2-'));
+    assert.equal(decide({ ...op, workspace_roots: [bare, bare2] }, { env: env() }).permission, 'allow', 'all-inactive must allow');
+    cleanup(bare2);
+  } finally { cleanup(bare); cleanup(active); }
+});
+
 test('(no-path preconditions) a pathless opaque tool NO-OPs when uninitialized / no active ticket', () => {
   const op = { tool_name: 'edit_file', tool_input: {} };
   // uninitialized repo (enforcement on, no tickets.json) -> allow (no-op)
