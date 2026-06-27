@@ -42,11 +42,27 @@ test('missing end sentinel → fail closed, error names the line', () => {
   assert.equal(parsed.block, null);
 });
 
-test('duplicate begin sentinels → fail closed with a line number', () => {
+test('duplicate begin sentinels (two full pairs) → fail closed with a line number', () => {
   const text = '<!-- adlc:begin v=1 -->\n```json\n{}\n```\n<!-- adlc:end -->\n<!-- adlc:begin v=1 -->\n```json\n{}\n```\n<!-- adlc:end -->';
   const parsed = parseBlock(text);
   assert.ok(!parsed.ok);
   assert.ok(parsed.errors.some((e) => e.includes('adlc:begin') && /line \d+/.test(e)));
+});
+
+test('two begins + ONE end → fail closed (begin-count guard is independent of end-count)', () => {
+  const text = '<!-- adlc:begin v=1 -->\n```json\n{}\n```\n<!-- adlc:begin v=1 -->\n```json\n{}\n```\n<!-- adlc:end -->';
+  const parsed = parseBlock(text);
+  assert.ok(!parsed.ok, 'two begins + one end must not be accepted (ambiguous)');
+  assert.equal(parsed.block, null);
+  assert.ok(parsed.errors.some((e) => e.includes('adlc:begin') && e.includes('found 2')));
+});
+
+test('raw JSON between the sentinels (no ```json fence) is tolerated for hand authoring', () => {
+  // Pins the FENCE_RE `: inner` fallback so it stays load-bearing (and cannot
+  // regress into an uncaught crash on a fenceless body).
+  const parsed = parseBlock('<!-- adlc:begin v=1 -->\n{"duration":2}\n<!-- adlc:end -->');
+  assert.ok(parsed.ok);
+  assert.deepEqual(parsed.fields, { duration: 2 });
 });
 
 test('end before begin → fail closed', () => {
@@ -100,11 +116,13 @@ test('$schema is preserved but excluded from block equality', () => {
   assert.equal(parsed.fields.$schema, a.$schema, '$schema is preserved on round-trip');
 });
 
-test('CRLF body parses identically to LF (GitHub web edits)', () => {
-  const lf = serializeBlock({ prefix: 'p\n', suffix: '\ns' }, FIELDS);
+test('CRLF body parses identically to LF, prefix/suffix included (normalizeNewlines is load-bearing)', () => {
+  const lf = serializeBlock({ prefix: 'p\n\n', suffix: '\n\ns' }, FIELDS);
   const crlf = lf.replace(/\n/g, '\r\n');
   const a = parseBlock(lf);
   const b = parseBlock(crlf);
   assert.ok(a.ok && b.ok);
+  assert.equal(b.prefix, a.prefix); // kills a normalizeNewlines-drop mutant
+  assert.equal(b.suffix, a.suffix);
   assert.deepEqual(b.fields, a.fields);
 });
