@@ -54,7 +54,14 @@ export function fetchPRList(limit, ghRunner = runGh) {
     '--limit', String(limit),
     '--json', 'number,title',
   ]);
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw Object.assign(
+      new Error(`Failed to parse PR list: ${err.message}`),
+      { code: 'GH_PARSE_ERROR' }
+    );
+  }
 }
 
 /**
@@ -68,5 +75,12 @@ export function fetchPRDetail(prNumber, ghRunner = runGh) {
     'pr', 'view', String(prNumber),
     '--json', 'reviews,comments',
   ]);
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw Object.assign(
+      new Error(`Failed to parse PR detail for PR #${prNumber}: ${err.message}`),
+      { code: 'GH_PARSE_ERROR' }
+    );
+  }
 }

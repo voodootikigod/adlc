@@ -104,6 +104,44 @@ test('fetchSignals: counts skipped PRs on fetch error', async () => {
   assert.strictEqual(signals.length, 0);
 });
 
+test('fetchSignals: counts skipped PRs on JSON parse error in detail', async () => {
+  const invalidJsonRunner = (args) => {
+    const key = args.join(',');
+    // PR list succeeds
+    if (key === 'pr,list,--state,all,--limit,10,--json,number,title') {
+      return JSON.stringify([{ number: 99, title: 'Bad JSON PR' }]);
+    }
+    // PR view returns invalid JSON
+    return 'Gateway Timeout 504';
+  };
+
+  const { signals, totalPRs, skippedPRs } = await fetchSignals({
+    limit: 10,
+    ghRunner: invalidJsonRunner,
+  });
+
+  assert.strictEqual(totalPRs, 1);
+  assert.strictEqual(skippedPRs, 1);
+  assert.strictEqual(signals.length, 0);
+});
+
+test('fetchPRList: throws GH_PARSE_ERROR on JSON parse error', async () => {
+  const invalidJsonRunner = (args) => {
+    // PR list returns invalid JSON
+    return 'Gateway Timeout 504';
+  };
+
+  try {
+    await fetchSignals({
+      limit: 10,
+      ghRunner: invalidJsonRunner,
+    });
+    assert.fail('Should have thrown an error');
+  } catch (err) {
+    assert.strictEqual(err.code, 'GH_PARSE_ERROR');
+  }
+});
+
 test('fetchSignals: empty PR list returns zero', async () => {
   const emptyRunner = (args) => {
     if (args.join(',').includes('pr,list')) return JSON.stringify([]);
