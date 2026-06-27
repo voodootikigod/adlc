@@ -73,7 +73,26 @@ test('pull --write materializes the ticket + sidecar (nodeId, syncedHash)', asyn
     assert.deepEqual(t.scope, ['a/**']);
     const sc = JSON.parse(readFileSync(join(dir, '.adlc', 'ticket-sync.state.json'), 'utf8'));
     assert.equal(sc.tickets['gh:acme/app#1'].nodeId, 'N1');
-    assert.ok(sc.tickets['gh:acme/app#1'].syncedHash);
+    // The written base must be the canonical hash of the ADOPTED block — a wrong
+    // value would corrupt the next pull's 3-way reconcile (spurious conflicts).
+    assert.equal(
+      sc.tickets['gh:acme/app#1'].syncedHash,
+      canonicalHash({ scope: ['a/**'], duration: 1 }, { omit: ['$schema'] }),
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('pull→pull round-trip: a second pull with no remote change is a no-op (converged, not conflict)', async () => {
+  // Proves the syncedHash written by the first pull is correct in situ: the second
+  // pull reads it as the base and must reconcile to converged/keep-local, never conflict.
+  const dir = repo();
+  try {
+    const prov = fakeProvider([issue(1, { scope: ['a/**'], duration: 1 })]);
+    const r1 = await pull({ dir, provider: prov, write: true, now: 'T' });
+    assert.equal(r1.exitCode, 0);
+    const r2 = await pull({ dir, provider: prov, write: true, now: 'T' });
+    assert.equal(r2.exitCode, 0, `second pull must not conflict: ${JSON.stringify(r2.errors)}`);
+    assert.ok(!r2.errors, 'no conflict errors on an unchanged re-pull');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
