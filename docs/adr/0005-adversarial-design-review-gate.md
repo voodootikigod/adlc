@@ -1,10 +1,14 @@
 # ADR: A risk-gated adversarial design-review gate at the P1→P2 boundary
 
-**Status:** **Proposed.** Motivated by the OpenCode integration ticket (T1) case
-study described below. Not yet wired into the toolkit; this ADR captures the
-decision and the proposed mechanism for review.
+**Status:** **Accepted — recommended practice (deterministic tooling deferred).**
+Adopt the gate as a recommended, risk-gated P1 practice (invoke the
+`adversarial-review` skill in planning mode on qualifying tickets); do **not** yet
+build mechanical P2-entry enforcement into the `coldstart`/router path. Revisit the
+tooling investment once trust-boundary features are built often enough that relying
+on the operator to invoke it proves insufficient. Validated by the OpenCode case
+study below.
 
-**Date:** 2026-06-26
+**Date:** 2026-06-26 (accepted 2026-06-27)
 **Deciders:** Chris Williams (with the in-session adversarial-review skill acting
 as the counter-model for the case study).
 
@@ -103,9 +107,18 @@ it (it is literally a deny-control).
 - Output is the skill's structured verdict. `needs-attention` blocks the P1→P2
   transition until each high-severity finding is folded into the ticket (re-running
   the ticket-write protocol) or recorded as an accepted risk in the ticket body /
-  the feature's ADR threat model.
-- Prefer a *different* model from the one that authored the spec, to avoid a
-  self-review monoculture (the skill already does this for code review).
+  the feature's ADR threat model. As a *recommended* practice the block is
+  advisory-but-expected (peer to `premortem`), not a mechanical exit code — the
+  accepted-risk escape hatch must be written down, not left implicit.
+- **Different model required when available.** Use a different provider from the
+  one that authored the spec, to avoid a self-review monoculture (the skill does
+  this for code review). When only one model is available the review still runs but
+  is weaker — note the degradation in the recorded verdict rather than skipping it.
+- **Stopping rule (loop-until-dry).** When iterating review→revise→re-review, stop
+  after a round whose findings are all refuted by the verify pass, or after two
+  consecutive rounds surface no new *surviving* findings. This bounds the known
+  thrash where a reviewer re-raises already-fixed findings; the `--verify` refute
+  pass is what distinguishes a genuine new finding from a stale re-raise.
 
 ### Placement in the phase model
 
@@ -152,11 +165,38 @@ adversarial design review has cleared.
 3. **Always-on design review for every ticket.** Rejected on cost; the risk gate
    captures the high-value cases without taxing routine work.
 
-## Adoption / next steps (if accepted)
+## Validation (the OpenCode build, 2026-06-27)
 
-- Add the trigger heuristic to the P2 entry criteria (the `coldstart`/router
-  path) so a risk-gated ticket cannot be certified ready until the design review
-  clears.
-- Document the gate in the integration adoption docs alongside the other P1 gates.
-- Capture the cleared verdict (or accepted-risk justification) in the ticket body
-  or the feature ADR's threat model, for provenance.
+The gate was exercised end-to-end while building the OpenCode integration, and it
+earned its keep at both ends of the lifecycle:
+
+- **Design phase (this gate).** The planning-phase adversarial review of ticket T1
+  surfaced the bypassable-control and missing-proof findings (F1/F2 above) and the
+  `.adlc/admin.pub` trust-root gap — before a line of plugin code existed. Those
+  fed ticket revisions, not a rebuild.
+- **Build phase (the symmetric P5-style loop).** A four-round adversarial loop on
+  the *built* plugin then found five implementation defects (fail-open rail paths,
+  an async-cascade bug, a hollow test) and converged cleanly under the stopping
+  rule above.
+
+Both passes used a different model (codex/GPT-5) from the author (Claude),
+confirming the monoculture clause matters in practice.
+
+## Adoption / next steps
+
+Adopted as a **recommended practice now; deterministic tooling deferred:**
+
+- **Now:** on a qualifying (trust-boundary / safety-critical) ticket, run the
+  `adversarial-review` skill in planning mode at the P1→P2 boundary, apply the
+  stopping rule, and record the cleared verdict (or accepted-risk justification) in
+  the ticket body / the feature ADR's threat model for provenance.
+- **Now:** reference this gate in the integration adoption docs alongside the other
+  P1 gates so operators know to reach for it.
+- **Deferred (revisit on ROI):** wiring the trigger heuristic into the P2 entry
+  criteria (the `coldstart`/router path) so a risk-gated ticket cannot be certified
+  ready until the review clears. Build this only if trust-boundary features become
+  frequent enough that relying on the operator to invoke the practice proves
+  insufficient.
+
+P5 prosecution of the built code remains mandatory regardless — a cleared design
+review is not a cleared build.

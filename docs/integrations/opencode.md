@@ -55,6 +55,14 @@ the enforcing hook only runs once the plugin package is registered.) Phase A com
 | `/adlc-approve-spec` | P1 G1 | Record the human spec approval |
 | `/adlc-decompose` | P2 | Slice into tickets, `coldstart` + `merge-forecast` |
 
+> **Trust-boundary tickets (enforcement, auth, secrets, data-loss, CI/CD): also run
+> an adversarial *design* review at the P1→P2 boundary** — a recommended practice
+> ([ADR 0005](../adr/0005-adversarial-design-review-gate.md)). The other P1 gates
+> check that a ticket is clear and executable; the design review asks the question
+> they don't — *can this control be bypassed, and who controls it?* Run
+> `adversarial-review` in planning mode, apply the stopping rule, and record the
+> verdict in the ticket / feature ADR threat model.
+
 ## Install
 
 The plugin ships in this repo at `plugins/adlc-opencode/`. The
