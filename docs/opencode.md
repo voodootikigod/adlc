@@ -45,24 +45,19 @@ This package automatically installs the `adlc` dispatcher, `adlc-runner`, and al
 The plugin initialization check will verify that both `adlc` and `adlc-runner` bins are available on PATH and output a clear installation error if missing.
 
 ### 2. Install the OpenCode Plugin
-> [!NOTE]
-> The plugin manager command (`opencode plugin add`) and configuration file format (`opencode.json` plugin registry mapping) described below are target specifications that must be verified against the official OpenCode SDK specification during implementation. Do not treat them as runnable install instructions until the implementation adds the package or source tree.
 
-Once implemented and published, the expected package install path is:
-
-```sh
-opencode plugin add @adlc/opencode-plugin
-```
-
-For local development after the implementation lands, copy or symlink the expected plugin source directory (`plugins/adlc-opencode`) to your project-local `.opencode/` directory:
+The plugin ships at `plugins/adlc-opencode/` (`@adlc/opencode-package`). It is
+**not yet published to npm**, so install from source. See the
+[integration guide](./integrations/opencode.md#install) for the canonical steps;
+in short, symlink the source into your project's plugin directory, or register its
+path in `opencode.json`:
 
 ```sh
-mkdir -p .opencode/plugin/
-# Copy or symlink the integration code:
-ln -s /path/to/adlc/plugins/adlc-opencode/ .opencode/plugin/adlc-opencode
+ln -s /path/to/adlc/plugins/adlc-opencode .opencode/plugin/adlc-opencode
 ```
 
-Alternatively, register the implemented plugin globally in your `~/.config/opencode/opencode.json`:
+Alternatively, register the plugin in your project or global
+`opencode.json` (`/adlc-init` does this for you — see step 3):
 
 ```json
 {
@@ -71,6 +66,11 @@ Alternatively, register the implemented plugin globally in your `~/.config/openc
   ]
 }
 ```
+
+> [!NOTE]
+> Peer dependency: `@opencode-ai/plugin` >= 1.17.11. A published-package install
+> (`opencode plugin add @adlc/opencode-package`) will be the path once the package
+> is published; until then, use the source/symlink install above.
 
 ### 3. Initialize your Repository
 Bootstrap the ADLC workspace context in your repository by typing the following slash command directly into the OpenCode TUI chat interface:
