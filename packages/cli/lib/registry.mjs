@@ -45,6 +45,12 @@ export const GROUPS = [
       { name: 'skill-rot', packageName: '@adlc/skill-rot', summary: 'Check skill files for stale validation metadata and stamp freshness.' },
     ],
   },
+  {
+    title: 'External integration',
+    tools: [
+      { name: 'ticket', packageName: '@adlc/ticket-sync', binName: 'adlc-ticket-sync', summary: 'Two-way sync ADLC tickets with external trackers (GitHub Issues).' },
+    ],
+  },
 ];
 
 /** @type {Tool[]} */

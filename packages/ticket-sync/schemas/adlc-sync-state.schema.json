@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adlc.dev/schema/v1/adlc-sync-state.schema.json",
+  "title": "ADLC ticket-sync sidecar state",
+  "description": ".adlc/ticket-sync.state.json — gitignored rebuildable sync cache (NOT a rail).",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "description": "Sidecar format version."
+    },
+    "tickets": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": true,
+      "description": "ticket id -> sync record."
+    },
+    "pendingCreates": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": true,
+      "description": "create key -> in-flight create record."
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "additionalProperties": true
+}

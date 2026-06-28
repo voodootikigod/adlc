@@ -40,9 +40,10 @@ function withTempSpec(contents, fn) {
 }
 
 test('registry exposes the suite tools and omits internal packages', () => {
-  assert.equal(TOOLS.length, 20);
+  assert.equal(TOOLS.length, 21);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
+  assert.equal(isTool('ticket'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });
@@ -56,6 +57,7 @@ test('suggest returns near misses only', () => {
 test('resolves package-local tool bins without PATH lookup', () => {
   assert.match(resolveBin('spec-lint') ?? '', /packages\/spec-lint\/bin\/spec-lint\.mjs$/);
   assert.match(resolveBin('prosecute') ?? '', /packages\/prosecute\/bin\/adlc-prosecute\.mjs$/);
+  assert.match(resolveBin('ticket') ?? '', /packages\/ticket-sync\/bin\/ticket-sync\.mjs$/);
   assert.equal(resolveBin('definitely-not-real'), null);
 });
 
@@ -72,7 +74,7 @@ test('help lists every routed tool and exits 0', () => {
 test('renderHelp embeds version and tool count', () => {
   const output = renderHelp('9.9.9');
   assert.match(output, /adlc 9\.9\.9/);
-  assert.match(output, /Tools \(20\)/);
+  assert.match(output, /Tools \(21\)/);
 });
 
 test('version prints a semver-shaped string', () => {

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adlc.dev/schema/v1/adlc-config.schema.json",
+  "title": "ADLC ticket-sync config",
+  "description": ".adlc/config.json — ticket-sync provider configuration.",
+  "type": "object",
+  "properties": {
+    "ticketSync": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "github"
+          ],
+          "description": "External provider."
+        },
+        "repo": {
+          "type": "string",
+          "description": "owner/name; auto-detected from the git remote when omitted."
+        },
+        "select": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "all"
+              ],
+              "description": "Issue state filter."
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Sync issues carrying any of these labels."
+            },
+            "query": {
+              "type": "string",
+              "description": "Optional raw search query."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Which issues to sync."
+        },
+        "createLabel": {
+          "type": "string",
+          "description": "Label applied to issues ADLC creates."
+        },
+        "statusLabels": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": true,
+          "description": "Map of status -> adlc: label."
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "additionalProperties": false,
+      "description": "External ticket-sync settings."
+    }
+  },
+  "additionalProperties": true
+}
