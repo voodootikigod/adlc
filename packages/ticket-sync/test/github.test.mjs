@@ -4,9 +4,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mapIssue, githubProvider, parseIssueNumberFromUrl, parseCommentId } from '../lib/providers/github.mjs';
-import { serializeBlock } from '../lib/block.mjs';
+import { serializeBlock, parseBlock } from '../lib/block.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
-import { push, extractSentinelKey } from '../lib/push.mjs';
+import { push, extractSentinelKey, orderLocalByDependency } from '../lib/push.mjs';
 
 // ---------------------------------------------------------------------------
 // mapIssue / listIssues (read path)
@@ -86,6 +86,55 @@ test('createIssue parses the new number then recovers nodeId via issue view', as
   };
   const r = await githubProvider().createIssue({ runner, repo: 'acme/app', dryRun: false }, { title: 't', body: 'b' });
   assert.deepEqual(r, { ok: true, number: 7, nodeId: 'I_7', url: 'u7' });
+});
+
+test('createIssue attaches labels atomically: ensures the label exists, then create --label (Finding 1 defense)', async () => {
+  const calls = [];
+  const runner = async (args) => {
+    calls.push(args);
+    if (args[0] === 'label' && args[1] === 'create') return { ok: true, stdout: '', stderr: '', error: null };
+    if (args[1] === 'create') return { ok: true, stdout: 'https://github.com/acme/app/issues/7\n', stderr: '', error: null };
+    if (args[1] === 'view') return { ok: true, stdout: JSON.stringify({ id: 'I_7', number: 7, url: 'u7' }), stderr: '', error: null };
+    return { ok: false, error: 'unexpected' };
+  };
+  const r = await githubProvider().createIssue({ runner, repo: 'acme/app', dryRun: false }, { title: 't', body: 'b', labels: ['adlc'] });
+  assert.ok(r.ok, r.error);
+  assert.ok(calls.some((a) => a[0] === 'label' && a[1] === 'create' && a.includes('adlc') && a.includes('--force')), 'label is ensured (create --force) before use');
+  const create = calls.find((a) => a[0] === 'issue' && a[1] === 'create');
+  assert.ok(create.includes('--label') && create[create.indexOf('--label') + 1] === 'adlc', 'create carries --label adlc');
+});
+
+test('createIssue with no labels emits no --label (createLabel unset path)', async () => {
+  const calls = [];
+  const runner = async (args) => {
+    calls.push(args);
+    if (args[1] === 'create') return { ok: true, stdout: 'https://github.com/acme/app/issues/7\n', stderr: '', error: null };
+    if (args[1] === 'view') return { ok: true, stdout: JSON.stringify({ id: 'I_7', number: 7, url: 'u7' }), stderr: '', error: null };
+    return { ok: false, error: 'unexpected' };
+  };
+  await githubProvider().createIssue({ runner, repo: 'acme/app', dryRun: false }, { title: 't', body: 'b' });
+  assert.ok(!calls.some((a) => a.includes('--label')), 'no --label when none requested');
+  assert.ok(!calls.some((a) => a[0] === 'label' && a[1] === 'create'), 'no label create when none requested');
+});
+
+test('getIssue distinguishes a CONFIRMED-deleted issue (notFound) from a transient failure (Finding C)', async () => {
+  const deleted = await githubProvider().getIssue({ runner: async () => ({ ok: false, error: 'GraphQL: Could not resolve to an Issue with the number of 9.' }) }, 9);
+  assert.equal(deleted.ok, false);
+  assert.equal(deleted.notFound, true, 'a "could not resolve" error is a confirmed deletion');
+  const transient = await githubProvider().getIssue({ runner: async () => ({ ok: false, error: 'HTTP 503: upstream connect error' }) }, 9);
+  assert.equal(transient.ok, false);
+  assert.equal(transient.notFound, false, 'a 5xx/network error is NOT a confirmed deletion');
+});
+
+test('getIssue reports the issue labels (drives label-diff suppression on adoption)', async () => {
+  const runner = async (args) => {
+    if (args[1] === 'view') return { ok: true, stdout: JSON.stringify({ id: 'I_5', number: 5, url: 'u5', labels: [{ name: 'adlc' }, { name: 'adlc:passed' }], state: 'OPEN' }), stderr: '', error: null };
+    return { ok: false };
+  };
+  const r = await githubProvider().getIssue({ runner, repo: 'acme/app' }, 5);
+  assert.ok(r.ok);
+  assert.deepEqual(r.labels, ['adlc', 'adlc:passed'], 'labels are reported, not dropped');
+  assert.equal(r.nodeId, 'I_5');
 });
 
 test('createIssue is a no-op under dryRun (no runner call)', async () => {
@@ -174,7 +223,13 @@ function fakeGitHub({ issues = [], login = 'bot' } = {}) {
     calls.push(args);
     const [a0, a1] = args;
     if (a0 === 'issue' && a1 === 'list') {
-      return ok(JSON.stringify(state.issues.map((i) => ({
+      // Model the real selector: `gh issue list --label X` returns only issues that
+      // carry EVERY requested label. An issue outside the selection is invisible here
+      // (this is the realism that exposes the unlabeled-orphan duplicate bug).
+      const want = [];
+      for (let k = 0; k < args.length; k++) if (args[k] === '--label') want.push(args[k + 1]);
+      const selected = state.issues.filter((i) => want.every((l) => i.labels.includes(l)));
+      return ok(JSON.stringify(selected.map((i) => ({
         id: i.id, number: i.number, title: i.title, body: i.body,
         labels: i.labels.map((name) => ({ name })), state: i.state.toUpperCase(), url: i.url,
       }))));
@@ -185,17 +240,25 @@ function fakeGitHub({ issues = [], login = 'bot' } = {}) {
       const fields = args[args.indexOf('--json') + 1];
       if (!i) return { ok: false, code: 1, stdout: '', stderr: 'not found', error: 'not found' };
       if (fields.includes('comments')) return ok(JSON.stringify({ comments: i.comments }));
-      return ok(JSON.stringify({ id: i.id, number: i.number, url: i.url }));
+      // issue view by number works regardless of labels — this is how crash recovery
+      // adopts an orphan the selector can't see.
+      const out = { id: i.id, number: i.number, url: i.url };
+      if (fields.includes('labels')) out.labels = i.labels.map((name) => ({ name }));
+      if (fields.includes('state')) out.state = i.state.toUpperCase();
+      if (fields.includes('body')) out.body = i.body;
+      return ok(JSON.stringify(out));
     }
     // --- mutations ---
     if (a0 === 'issue' && a1 === 'create') {
       mutating.push(args);
       seq += 1;
       const number = seq;
+      const labels = [];
+      for (let k = 0; k < args.length; k++) if (args[k] === '--label') labels.push(args[k + 1]);
       state.issues.push({
         number, id: `I_${number}`, url: `https://github.com/acme/app/issues/${number}`,
         title: args[args.indexOf('--title') + 1], body: args[args.indexOf('--body') + 1],
-        labels: [], state: 'open', comments: [],
+        labels, state: 'open', comments: [],
       });
       return ok(`https://github.com/acme/app/issues/${number}\n`);
     }
@@ -238,10 +301,10 @@ const CONFIG = {
   },
 };
 
-function repo({ tickets = [], sidecar, manifest = [] } = {}) {
+function repo({ tickets = [], sidecar, manifest = [], config = CONFIG } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-push-'));
   mkdirSync(join(dir, '.adlc'));
-  writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(CONFIG));
+  writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(config));
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2));
   if (sidecar) writeFileSync(join(dir, '.adlc', 'ticket-sync.state.json'), JSON.stringify(sidecar));
   if (manifest.length) writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), manifest.map((e) => JSON.stringify(e)).join('\n') + '\n');
@@ -277,10 +340,14 @@ test('push twice → the second run makes ZERO mutating calls (create then conve
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('create adoption: an existing keyed issue is adopted, NOT duplicated (lost local write recovery)', async () => {
+test('create adoption: an UNLABELED orphan is adopted via the pendingCreates handle, NOT duplicated (Finding 1)', async () => {
   const KEY = 'stable-key-123';
-  // Simulate: a prior create succeeded remotely (issue #5 carries the key) but the
-  // local reassignment was lost — tickets.json still has T7, pendingCreates survives.
+  // Simulate the real crash window: a prior create succeeded remotely (issue #5
+  // carries the key) but the local reassignment was lost — tickets.json still has
+  // T7, pendingCreates survives WITH the {nodeId,number} handle. Crucially #5 is
+  // UNLABELED, and the selector is label-scoped (select.labels:['adlc']), so the
+  // adoption SCAN cannot see #5. Recovery MUST adopt via the stored number handle
+  // (selector-independent), or it duplicates the issue.
   const body = serializeBlock({ prefix: 'Build it\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });
   const dir = repo({
     tickets: [{ id: 'T7', title: 'Build it', scope: ['a/**'], duration: 1 }],
@@ -288,12 +355,211 @@ test('create adoption: an existing keyed issue is adopted, NOT duplicated (lost 
     manifest: [p5clear('T7', 1)],
   });
   try {
-    const gh = fakeGitHub({ issues: [{ number: 5, id: 'I_5', url: 'https://github.com/acme/app/issues/5', title: 'Build it', body }] });
+    const gh = fakeGitHub({ issues: [{ number: 5, id: 'I_5', url: 'https://github.com/acme/app/issues/5', title: 'Build it', body, labels: [] }] });
+    const before = gh.state.issues.length;
     const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'WOULD-DUP' });
     assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
     assert.ok(!gh.mutating.some((a) => a[0] === 'issue' && a[1] === 'create'), 'must NOT create a second issue');
-    assert.equal(readTickets(dir).find((t) => t.id.startsWith('gh:')).id, 'gh:acme/app#5', 'adopted #5');
+    assert.equal(gh.state.issues.length, before, 'remote issue count unchanged — no duplicate');
+    assert.equal(readTickets(dir).find((t) => t.id.startsWith('gh:')).id, 'gh:acme/app#5', 'adopted #5 via the handle');
     assert.deepEqual(readSidecar(dir).pendingCreates, {}, 'pendingCreates cleared after adoption');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('handle adoption: a TRANSIENT getIssue failure FAILS CLOSED — never recreates a duplicate (Finding C)', async () => {
+  const KEY = 'k-transient';
+  const body = serializeBlock({ prefix: 'x\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });
+  const dir = repo({
+    tickets: [{ id: 'T7', title: 'x', scope: ['a/**'], duration: 1 }],
+    sidecar: { version: 1, tickets: {}, pendingCreates: { [KEY]: { localId: 'T7', nodeId: 'I_5', number: 5 } } },
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub({ issues: [{ number: 5, id: 'I_5', url: 'https://github.com/acme/app/issues/5', title: 'x', body, labels: [] }] });
+    // The handle read (`issue view 5` for the getIssue fields) fails TRANSIENTLY (not a 404).
+    const runner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'view' && String(args[2]) === '5' && !args.includes('comments')) {
+        return { ok: false, code: 1, stdout: '', stderr: 'HTTP 503: server error', error: 'HTTP 503: server error' };
+      }
+      return gh.runner(args);
+    };
+    const before = gh.state.issues.length;
+    const r = await push({ dir, provider: githubProvider(), runner, write: true, now: 'T', uuid: () => 'WOULD-DUP' });
+    assert.equal(r.exitCode, 1, 'a transient verify failure is operational, not a silent recreate');
+    assert.ok(!gh.mutating.some((a) => a[0] === 'issue' && a[1] === 'create'), 'must NOT create a duplicate on a transient failure');
+    assert.equal(gh.state.issues.length, before, 'remote issue count unchanged');
+    assert.ok(r.errors.some((e) => /could not verify pending issue/.test(e)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('handle adoption: a CONFIRMED-deleted pending issue (notFound) is safely RECREATED, not failed (Finding C)', async () => {
+  const KEY = 'k-deleted';
+  const dir = repo({
+    tickets: [{ id: 'T7', title: 'x', scope: ['a/**'], duration: 1 }],
+    // pending number points to #9 which does NOT exist remotely (deleted).
+    sidecar: { version: 1, tickets: {}, pendingCreates: { [KEY]: { localId: 'T7', nodeId: 'I_9', number: 9 } } },
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub(); // no issue #9 → the fake's view returns a not-found error
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => KEY });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    assert.ok(gh.mutating.some((a) => a[0] === 'issue' && a[1] === 'create'), 'a confirmed-deleted issue is recreated');
+    assert.ok(readTickets(dir).find((t) => t.id.startsWith('gh:')), 'ticket reassigned to the recreated issue');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('push creates the issue WITH the createLabel atomically (closes the pre-number-write orphan window) (Finding 1 defense)', async () => {
+  const dir = repo({ tickets: [{ id: 'T7', title: 'x', scope: ['a/**'], duration: 1 }], manifest: [p5clear('T7', 1)] });
+  try {
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    const create = gh.calls.find((a) => a[0] === 'issue' && a[1] === 'create');
+    assert.ok(create, 'an issue was created');
+    // The orphan must belong to the label-scoped selection AT BIRTH, not only after
+    // the later labeling step — else a crash before the number-write reopens Finding 1.
+    assert.ok(create.includes('--label') && create[create.indexOf('--label') + 1] === 'adlc', 'create carries the configured createLabel');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('no-number handle: a LABELED orphan is adopted via the scan; the createLabel is what makes it visible (Finding 1)', async () => {
+  const KEY = 'k-nonum';
+  const body = serializeBlock({ prefix: 'x\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });
+  // pendingCreates has NO number (crash between create and the number-write), so the
+  // primary handle-adoption is skipped and recovery falls to the label-scoped scan.
+  const dir = repo({
+    tickets: [{ id: 'T7', title: 'x', scope: ['a/**'], duration: 1 }],
+    sidecar: { version: 1, tickets: {}, pendingCreates: { [KEY]: { localId: 'T7' } } },
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    // The orphan carries the createLabel, so the label-scoped listIssues returns it.
+    const gh = fakeGitHub({ issues: [{ number: 5, id: 'I_5', url: 'https://github.com/acme/app/issues/5', title: 'x', body, labels: ['adlc'] }] });
+    const before = gh.state.issues.length;
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => KEY });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    assert.ok(!gh.mutating.some((a) => a[0] === 'issue' && a[1] === 'create'), 'labeled orphan adopted via scan, not duplicated');
+    assert.equal(gh.state.issues.length, before, 'no duplicate created');
+    assert.equal(readTickets(dir).find((t) => t.id.startsWith('gh:')).id, 'gh:acme/app#5');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('handle adoption suppresses a redundant label re-add when the orphan is already correctly labeled (getIssue labels are used)', async () => {
+  const KEY = 'k-labeled';
+  const body = serializeBlock({ prefix: 'x\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });
+  const dir = repo({
+    tickets: [{ id: 'T7', title: 'x', scope: ['a/**'], duration: 1 }],
+    sidecar: { version: 1, tickets: {}, pendingCreates: { [KEY]: { localId: 'T7', nodeId: 'I_5', number: 5 } } },
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    // The orphan is already at the desired label set (status p5-pass → adlc:passed, plus createLabel).
+    const gh = fakeGitHub({ issues: [{ number: 5, id: 'I_5', url: 'https://github.com/acme/app/issues/5', title: 'x', body, labels: ['adlc', 'adlc:passed'] }] });
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'NOPE' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    // getIssue reported the existing labels, so the diff is empty — no --add-label call.
+    assert.ok(!gh.mutating.some((a) => a.includes('--add-label')), 'no redundant label re-add (getIssue labels suppress it)');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('push attaches EVERY selector label at create, not just createLabel (multi-label selector) (Finding A)', async () => {
+  const MULTI = {
+    ticketSync: {
+      provider: 'github', repo: 'acme/app',
+      select: { state: 'open', labels: ['adlc', 'team-a'] }, createLabel: 'adlc',
+      statusLabels: { 'p5-pass': 'adlc:passed', 'p5-fail': 'adlc:failed', wip: 'adlc:in-progress' },
+    },
+  };
+  const dir = repo({ config: MULTI, tickets: [{ id: 'T7', title: 'x', scope: ['a/**'], duration: 1 }], manifest: [p5clear('T7', 1)] });
+  try {
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    const create = gh.calls.find((a) => a[0] === 'issue' && a[1] === 'create');
+    const created = gh.state.issues.find((i) => i.title === 'x');
+    // Both required selector labels must be present at birth, or a multi-label
+    // selector can't see the orphan in the crash-before-number-write window.
+    assert.ok(created.labels.includes('adlc') && created.labels.includes('team-a'), `orphan must carry both selector labels, has: ${created.labels}`);
+    assert.ok(create.filter((x) => x === '--label').length >= 2, 'create attaches every selector label');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('multi-create FORWARD edge: the referrer\'s remote body carries the rewritten edge to a LATER-created ticket (Finding B)', async () => {
+  // T7 references T8 (forward edge); T8 appears later in tickets.json. Dependency-first
+  // create order makes T8 get its gh: id BEFORE T7's body is serialized, so T7's remote
+  // body must carry the rewritten gh: edge, not a stale 'T8'.
+  const dir = repo({
+    tickets: [
+      { id: 'T7', title: 'Refers forward', duration: 1, edges: [{ to: 'T8', contract: 'c.json' }] },
+      { id: 'T8', title: 'Referenced later', scope: ['a/**'], duration: 1 },
+    ],
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    const t8Issue = gh.state.issues.find((i) => i.title === 'Referenced later');
+    const t7Issue = gh.state.issues.find((i) => i.title === 'Refers forward');
+    const parsed = parseBlock(t7Issue.body);
+    assert.ok(parsed.ok, `T7 remote body must parse: ${parsed.errors?.join('; ')}`);
+    assert.equal(parsed.block.edges[0].to, `gh:acme/app#${t8Issue.number}`, 'forward edge rewritten in the remote body, NOT stale T8');
+    // sidecar base must hash the published (rewritten) block — no remote/base drift.
+    const t7Id = readTickets(dir).find((t) => t.title === 'Refers forward').id;
+    assert.equal(readSidecar(dir).tickets[t7Id].syncedHash, canonicalHash(parsed.block, { omit: ['$schema'] }));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('multi-create TRANSITIVE chain (T7→T8→T9): every remote body carries a rewritten gh: edge (Finding B, multi-hop)', async () => {
+  // Dependency-first order is a topological sort, so a chain serializes leaf-first
+  // (T9, then T8, then T7); each referrer's body must hold the final gh: id of its
+  // (transitive) target — no stale T<n> anywhere in the chain.
+  const dir = repo({
+    tickets: [
+      { id: 'T7', title: 'top', duration: 1, edges: [{ to: 'T8' }] },
+      { id: 'T8', title: 'mid', duration: 1, edges: [{ to: 'T9' }] },
+      { id: 'T9', title: 'leaf', scope: ['a/**'], duration: 1 },
+    ],
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    const num = (title) => gh.state.issues.find((i) => i.title === title).number;
+    const edgeOf = (title) => parseBlock(gh.state.issues.find((i) => i.title === title).body).block.edges[0].to;
+    assert.equal(edgeOf('top'), `gh:acme/app#${num('mid')}`, 'T7 body → mid gh id');
+    assert.equal(edgeOf('mid'), `gh:acme/app#${num('leaf')}`, 'T8 body → leaf gh id');
+    // No remote body may still contain a bare T<n> edge.
+    for (const i of gh.state.issues) {
+      const b = parseBlock(i.body).block;
+      for (const e of b.edges ?? []) assert.match(e.to, /^gh:/, `remote edge must be a gh: id, got ${e.to}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('multi-create DIAMOND DAG (T7→{T8,T9}, T8→T10, T9→T10): all edges rewritten, no stale T<n> (Finding B)', async () => {
+  const dir = repo({
+    tickets: [
+      { id: 'T7', title: 'apex', duration: 1, edges: [{ to: 'T8' }, { to: 'T9' }] },
+      { id: 'T8', title: 'left', duration: 1, edges: [{ to: 'T10' }] },
+      { id: 'T9', title: 'right', duration: 1, edges: [{ to: 'T10' }] },
+      { id: 'T10', title: 'base', scope: ['a/**'], duration: 1 },
+    ],
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    for (const i of gh.state.issues) {
+      for (const e of parseBlock(i.body).block.edges ?? []) assert.match(e.to, /^gh:/, `every remote edge rewritten; got ${e.to} on "${i.title}"`);
+    }
+    // tickets.json is internally consistent: no dangling edge after the full DAG create.
+    const tickets = readTickets(dir);
+    const ids = new Set(tickets.map((t) => t.id));
+    for (const t of tickets) for (const e of t.edges ?? []) assert.ok(ids.has(e.to), `edge ${t.id}→${e.to} resolves`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -317,6 +583,36 @@ test('id reassignment rewrites every edge reference store-wide', async () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('multi-create: the dependent ticket\'s REMOTE body carries the rewritten edge, not the stale T<n> (Finding 2)', async () => {
+  // T7 + T8(edges→T7), both local-only. T7 is created first (→#1) and its edge is
+  // rewritten store-wide; when T8 is created, its REMOTE issue body + sidecar
+  // syncedHash must reflect the rewritten edge gh:acme/app#1 — not the stale 'T7' —
+  // or a fresh clone pulling before the next push sees a dangling edge.
+  const dir = repo({
+    tickets: [
+      { id: 'T7', title: 'Build it', scope: ['a/**'], duration: 1 },
+      { id: 'T8', title: 'Depends on it', duration: 1, edges: [{ to: 'T7', contract: 'c.json' }] },
+    ],
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+    const t8Issue = gh.state.issues.find((i) => i.title === 'Depends on it');
+    const parsed = parseBlock(t8Issue.body);
+    assert.ok(parsed.ok, `T8 remote body must parse: ${parsed.errors?.join('; ')}`);
+    assert.equal(parsed.block.edges[0].to, 'gh:acme/app#1', 'remote body edge must be the rewritten gh id, NOT stale T7');
+    // The sidecar base must hash the SAME (rewritten) block that was published.
+    const sc = readSidecar(dir);
+    assert.equal(
+      sc.tickets['gh:acme/app#2'].syncedHash,
+      canonicalHash(parsed.block, { omit: ['$schema'] }),
+      'syncedHash must match the published rewritten block (no remote/base drift)',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('push fails closed (exit 2) when >1 issue already carries the create key', async () => {
   const KEY = 'dup-key';
   const body = serializeBlock({ prefix: 'x\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });
@@ -325,9 +621,12 @@ test('push fails closed (exit 2) when >1 issue already carries the create key', 
     sidecar: { version: 1, tickets: {}, pendingCreates: { [KEY]: { localId: 'T7' } } },
   });
   try {
+    // Both dups carry the createLabel so they ARE in the label-scoped selection —
+    // the >1-match guard operates on the selector list, and pendingCreates here has
+    // no number handle, so adoption falls through to the scan.
     const gh = fakeGitHub({ issues: [
-      { number: 1, id: 'I_1', url: 'https://github.com/acme/app/issues/1', title: 'x', body },
-      { number: 2, id: 'I_2', url: 'https://github.com/acme/app/issues/2', title: 'x', body },
+      { number: 1, id: 'I_1', url: 'https://github.com/acme/app/issues/1', title: 'x', body, labels: ['adlc'] },
+      { number: 2, id: 'I_2', url: 'https://github.com/acme/app/issues/2', title: 'x', body, labels: ['adlc'] },
     ] });
     const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => KEY });
     assert.equal(r.exitCode, 2);
@@ -350,6 +649,24 @@ test('push is dry-run by default: it plans a create but makes no mutating calls'
     assert.equal(existsSync(join(dir, '.adlc', 'ticket-sync.state.json')), false, 'dry-run must not write the sidecar');
     assert.ok(!r.plan.some((p) => String(p.newId ?? '').includes('undefined')), 'no #undefined planned id');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('orderLocalByDependency: a referenced ticket is ordered BEFORE its referrer (dependency-first)', () => {
+  const order = orderLocalByDependency([
+    { id: 'T7', title: 'a', edges: [{ to: 'T8' }] }, // references T8 → T8 must come first
+    { id: 'T8', title: 'b' },
+    { id: 'gh:acme/app#1', title: 'synced — ignored' },
+  ]).map((t) => t.id);
+  assert.deepEqual(order, ['T8', 'T7'], 'T8 (referenced) precedes T7 (referrer); synced ticket excluded');
+});
+
+test('orderLocalByDependency: tolerates a cycle without looping (cycles are gate-rejected anyway)', () => {
+  const order = orderLocalByDependency([
+    { id: 'T7', title: 'a', edges: [{ to: 'T8' }] },
+    { id: 'T8', title: 'b', edges: [{ to: 'T7' }] },
+  ]).map((t) => t.id);
+  assert.equal(order.length, 2, 'every ticket appears exactly once despite the cycle');
+  assert.deepEqual([...order].sort(), ['T7', 'T8']);
 });
 
 test('extractSentinelKey returns the bare key for both spaced and hand-edited (no-space) bodies', () => {

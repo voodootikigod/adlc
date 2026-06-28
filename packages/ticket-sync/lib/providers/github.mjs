@@ -59,13 +59,40 @@ export function githubProvider() {
     },
 
     /**
-     * Create an issue for a local-only ticket. Two calls: `issue create` (returns a
-     * URL) then `issue view --json` to recover the durable nodeId + number.
+     * Fetch one issue by number (labels included) — the selector-independent read
+     * used by crash recovery to adopt an orphan the label-scoped list can't see.
+     * @returns {Promise<{ok, number?, nodeId?, url?, labels?, state?, error?}>}
+     */
+    async getIssue({ runner, repo }, number) {
+      const r = await ghJson(runner, ['issue', 'view', String(number), '--repo', repo, '--json', 'id,number,url,labels,state']);
+      if (!r.ok) {
+        // Distinguish a CONFIRMED-missing issue (safe for the caller to recreate)
+        // from a TRANSIENT failure (network/5xx/rate-limit) — the caller must not
+        // recreate on a transient failure or it duplicates the existing issue.
+        const notFound = /could not resolve|not found|no longer exists|404/i.test(r.error || '');
+        return { ok: false, notFound, error: r.error };
+      }
+      const m = mapIssue(r.data);
+      return { ok: true, number: m.number, nodeId: m.nodeId, url: m.url, labels: m.labels, state: m.state };
+    },
+
+    /**
+     * Create an issue for a local-only ticket. Optionally attach labels ATOMICALLY
+     * (create-if-missing first, then `issue create --label`) so the new issue is in
+     * the configured selection immediately — no unlabeled-orphan window. Then
+     * `issue view --json` recovers the durable nodeId + number.
      * @returns {Promise<{ok, number?, nodeId?, url?, error?}>}
      */
-    async createIssue({ runner, repo, dryRun }, { title, body }) {
+    async createIssue({ runner, repo, dryRun }, { title, body, labels = [] }) {
       if (dryRun) return { ok: true, dryRun: true };
-      const created = await runner(['issue', 'create', '--repo', repo, '--title', title, '--body', body]);
+      for (const label of labels) {
+        // --force = create-if-missing (idempotent); `issue create --label X` errors if X doesn't exist.
+        const c = await runner(['label', 'create', label, '--repo', repo, '--force']);
+        if (!c.ok) return { ok: false, error: c.error || c.stderr || `gh label create ${label} failed` };
+      }
+      const args = ['issue', 'create', '--repo', repo, '--title', title, '--body', body];
+      for (const label of labels) args.push('--label', label);
+      const created = await runner(args);
       if (!created.ok) return { ok: false, error: created.error || created.stderr || 'gh issue create failed' };
       const url = (created.stdout || '').trim().split('\n').filter(Boolean).pop();
       const number = parseIssueNumberFromUrl(url);
