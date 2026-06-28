@@ -68,10 +68,25 @@ test('unknown subcommand → exit 1', () => {
   assert.match(r.stderr, /unknown subcommand/);
 });
 
-test('doctor → exit 1 (not implemented yet, T10)', () => {
-  const r = run(['doctor'], process.cwd());
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /not implemented yet/);
+test('doctor runs read-only checks: exit 2 with a FAIL row when config is missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-cli-'));
+  mkdirSync(join(dir, '.adlc'));
+  try {
+    const r = run(['doctor'], dir);
+    assert.equal(r.code, 2, 'problems → exit 2');
+    assert.match(r.stdout, /FAIL\tconfig-valid/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('doctor --json emits a machine-readable result', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-cli-'));
+  mkdirSync(join(dir, '.adlc'));
+  try {
+    const r = run(['doctor', '--json'], dir);
+    const parsed = JSON.parse(r.stdout);
+    assert.equal(typeof parsed.exitCode, 'number');
+    assert.ok(Array.isArray(parsed.checks));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('push / sync with no .adlc/config.json → exit 1 (operational, before any network)', () => {

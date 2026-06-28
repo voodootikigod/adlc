@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { pull } from '../lib/pull.mjs';
 import { push } from '../lib/push.mjs';
+import { doctor } from '../lib/doctor.mjs';
 import { makeGhRunner } from '../lib/gh.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
 
@@ -15,7 +16,7 @@ const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [-
   pull    import issues from the external tracker into .adlc/tickets.json
   push    write ADLC tickets/outcomes back to the tracker (update + idempotent create)
   sync    pull then push
-  doctor  read-only health checks                                 (T10 — not yet)
+  doctor  read-only offline health checks (config/tickets/schema/sidecar/lock)
 
 Dry-run by default; pass --write to apply. Exit: 0 ok · 1 operational · 2 blocked.`;
 
@@ -114,8 +115,16 @@ async function main() {
   }
 
   if (sub === 'doctor') {
-    process.stderr.write('adlc ticket doctor: not implemented yet (T10).\n');
-    process.exit(1);
+    const result = doctor({ dir: process.cwd() });
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } else {
+      for (const c of result.checks) {
+        process.stdout.write(`  ${c.ok ? 'ok  ' : 'FAIL'}\t${c.name}${c.detail ? `\t— ${c.detail}` : ''}\n`);
+      }
+      process.stdout.write(`\n${result.ok ? 'All checks passed.' : 'Problems found — see FAIL rows above.'}\n`);
+    }
+    process.exit(result.exitCode);
   }
 
   process.stderr.write(`unknown subcommand: ${sub}\n\n${USAGE}\n`);
