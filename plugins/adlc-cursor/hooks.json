@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "node ./node_modules/@adlc/cursor-package/hooks/adlc-rails-guard.mjs",
+        "matcher": ".*",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "node ./node_modules/@adlc/cursor-package/hooks/adlc-audit.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ]
+  }
+}
