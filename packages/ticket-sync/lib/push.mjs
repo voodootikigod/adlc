@@ -49,6 +49,32 @@ function loadLocalTickets(dir) {
 
 const blockHash = (block) => (block ? canonicalHash(block, { omit: ['$schema'] }) : null);
 
+/**
+ * Order the local-only (`T<n>`) tickets so each ticket comes AFTER every local
+ * ticket it references via `edges[].to` (dependency-first). This guarantees a
+ * referenced ticket already holds its `gh:` id when the referrer's body is
+ * serialized, so a forward edge never publishes a stale `T<n>` id (Finding B).
+ * Pure; the `seen` guard tolerates the (gate-rejected) cyclic input without
+ * looping. Non-local edge targets (already `gh:` or external) are simply ignored.
+ */
+export function orderLocalByDependency(tickets) {
+  const locals = tickets.filter((t) => LOCAL_RE.test(t.id));
+  const byId = new Map(locals.map((t) => [t.id, t]));
+  const order = [];
+  const seen = new Set();
+  const visit = (t) => {
+    if (seen.has(t.id)) return;
+    seen.add(t.id);
+    for (const e of t.edges ?? []) {
+      const dep = byId.get(e?.to);
+      if (dep) visit(dep);
+    }
+    order.push(t);
+  };
+  for (const t of locals) visit(t);
+  return order;
+}
+
 /** Serialize a ticket's body: prose + canonical block (or prose-only when no block). */
 function ticketBody(prose, block, key) {
   return block ? serializeBlock(prose, block, { key }) : `${prose.prefix ?? ''}${prose.suffix ?? ''}`;
@@ -79,6 +105,10 @@ export async function push({
   const repo = rr.repo.toLowerCase();
   const statusLabels = ts.statusLabels ?? {};
   const createLabel = ts.createLabel ?? null;
+  const selectLabels = Array.isArray(ts.select?.labels) ? ts.select.labels : [];
+  // Labels to attach AT create so the new issue matches the configured selector
+  // immediately (every required selector label, not just createLabel) — Finding A.
+  const createTimeLabels = [...new Set([createLabel, ...selectLabels].filter(Boolean))];
 
   // Pre-flight permission probe (doubles as the authenticated-login resolver for
   // the status-comment author check). Fail early (operational) if auth is broken.
@@ -155,22 +185,25 @@ export async function push({
     }
 
     // ---- Pass 2: CREATE local-only tickets (idempotent) ----
-    for (const t of localTickets) {
-      if (!LOCAL_RE.test(t.id)) continue;
-      const desired = pickBlock(t);
+    // Finding B: create in DEPENDENCY-FIRST order — a ticket is created only after
+    // every local ticket it references (edges[].to) already has its gh: id. Then when
+    // its body is serialized the working set is fully rewritten, so a FORWARD edge
+    // (T7→T8 created later) never publishes a stale `T<n>` edge. Cycles are impossible
+    // (the Validity Gate rejects them); the `seen` guard makes visit terminate anyway.
+    const createOrder = orderLocalByDependency(localTickets);
+    for (const t of createOrder) {
+      // Finding 2: derive the block from the CURRENT working ticket (its edges may
+      // already have been rewritten by an earlier create in this same loop), NOT the
+      // stale localTickets snapshot — else the remote body + syncedHash publish a
+      // dangling `T<n>` edge while tickets.json holds the rewritten `gh:` edge.
+      const current = tickets.find((x) => x.id === t.id) ?? t;
+      const desired = pickBlock(current);
 
       // Reuse a stable key across runs: a surviving pendingCreates entry for this
       // local id (crash recovery) wins; else mint one.
       const pendingKey = Object.entries(state.pendingCreates).find(([, v]) => v?.localId === t.id)?.[0];
       const createKey = pendingKey ?? uuid();
-
-      // Adoption scan over the authoritative paginated list (not the search index).
-      const matches = list.issues.filter((i) => extractSentinelKey(i.body) === createKey);
-      if (matches.length > 1) {
-        errors.push(`${t.id}: ${matches.length} issues already carry create key ${createKey} (#${matches.map((i) => i.number).join(', #')}) — reconcile by hand`);
-        blocked = true;
-        continue;
-      }
+      const pending = state.pendingCreates[createKey];
 
       let number;
       let nodeId;
@@ -178,24 +211,61 @@ export async function push({
       let created = false;
       let currentLabels = [];
 
-      if (matches.length === 1) {
-        ({ number, nodeId, url } = matches[0]);
-        currentLabels = matches[0].labels ?? [];
-      } else if (!write) {
-        plan.push({ kind: 'create', id: t.id, createKey });
-        continue; // no remote id available in dry-run
-      } else {
-        const body = ticketBody({ prefix: t.body ? `${t.body}\n\n` : '', suffix: '' }, desired, createKey);
-        // Persist the recovery handle BEFORE the remote call so a crash leaves a
-        // body-key we can re-adopt; update it with nodeId the instant we have one.
-        state.pendingCreates[createKey] = { localId: t.id, title: t.title };
-        writeSidecar(dir, state);
-        const res = await provider.createIssue(ctx, { title: t.title, body });
-        if (!res.ok) { errors.push(`${t.id}: create — ${res.error}`); failed = true; continue; }
-        ({ number, nodeId, url } = res);
-        state.pendingCreates[createKey] = { localId: t.id, title: t.title, nodeId, number };
-        writeSidecar(dir, state);
-        created = true;
+      // Finding 1 (primary): selector-INDEPENDENT crash recovery. If a prior create
+      // for this ticket persisted a {number} handle, adopt that issue DIRECTLY via
+      // `issue view` — the selector-scoped scan below can't see an orphan that was
+      // never labeled, so relying on it duplicates the issue.
+      if (pending && Number.isInteger(pending.number)) {
+        const got = await provider.getIssue(ctx, pending.number);
+        if (got.ok) {
+          ({ number, url } = got);
+          nodeId = got.nodeId ?? pending.nodeId ?? null;
+          currentLabels = got.labels ?? [];
+        } else if (!got.notFound) {
+          // Finding C: a transient/unknown read failure is NOT proof the issue is
+          // gone. We hold a create handle proving one exists, so recreating would
+          // DUPLICATE it (the selector-scoped scan below may not see an unlabeled
+          // orphan). Fail closed (operational) — retry; a genuinely deleted issue
+          // returns notFound and is safely recreated, and a stale handle is flagged
+          // by `doctor` (stale pendingCreates).
+          errors.push(`${t.id}: could not verify pending issue #${pending.number} (${got.error}) — retry; if it was truly deleted, clear pendingCreates in .adlc/ticket-sync.state.json`);
+          failed = true;
+          continue;
+        }
+        // got.notFound → the issue is genuinely gone; fall through to scan/create.
+      }
+
+      if (number === undefined) {
+        // Adoption scan over the authoritative paginated list (not the search index).
+        const matches = list.issues.filter((i) => extractSentinelKey(i.body) === createKey);
+        if (matches.length > 1) {
+          errors.push(`${t.id}: ${matches.length} issues already carry create key ${createKey} (#${matches.map((i) => i.number).join(', #')}) — reconcile by hand`);
+          blocked = true;
+          continue;
+        }
+        if (matches.length === 1) {
+          ({ number, nodeId, url } = matches[0]);
+          currentLabels = matches[0].labels ?? [];
+        } else if (!write) {
+          plan.push({ kind: 'create', id: t.id, createKey });
+          continue; // no remote id available in dry-run
+        } else {
+          const body = ticketBody({ prefix: t.body ? `${t.body}\n\n` : '', suffix: '' }, desired, createKey);
+          // Persist the recovery handle BEFORE the remote call so a crash leaves a
+          // body-key we can re-adopt; update it with nodeId the instant we have one.
+          state.pendingCreates[createKey] = { localId: t.id, title: t.title };
+          writeSidecar(dir, state);
+          // Finding 1/A (defense): attach EVERY selector label ATOMICALLY at create so
+          // even an orphan from a crash before the post-create sidecar write is inside
+          // the (possibly multi-label) selection and findable by the scan.
+          const res = await provider.createIssue(ctx, { title: t.title, body, labels: createTimeLabels });
+          if (!res.ok) { errors.push(`${t.id}: create — ${res.error}`); failed = true; continue; }
+          ({ number, nodeId, url } = res);
+          currentLabels = createTimeLabels;
+          state.pendingCreates[createKey] = { localId: t.id, title: t.title, nodeId, number };
+          writeSidecar(dir, state);
+          created = true;
+        }
       }
 
       // Defense in depth: never reassign onto a non-numeric id. A misbehaving
