@@ -1,8 +1,61 @@
 ---
-title: claude-code
-description: claude-code documentation (coming soon).
+title: Claude Code
+description: Adopt the ADLC inside Claude Code — phase-routing skill, gate commands, prosecutor subagent, and hooks that fire the gates automatically.
 ---
 
-# claude-code
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/toolkit) and the [ADLC theory](/docs/theory).
+# ADLC in Claude Code
+
+Claude Code runs the whole lifecycle from inside the editor: a phase-routing
+skill, ticket/distill/maintain commands, a prosecutor subagent, and hooks that
+fire the gates automatically. No API keys — Claude is the model via `--prompt-only`.
+
+## Install
+
+<Tabs items={['plugins (recommended)', 'Native marketplace']}>
+  <Tab value="plugins (recommended)">
+
+```sh
+npx plugins add voodootikigod/adlc   # install the plugin into your agent tool(s)
+npm install -g @adlc/cli             # the gate toolkit the plugin shells out to
+/adlc-init                           # bootstrap .adlc/ in your repo (once)
+```
+
+  </Tab>
+  <Tab value="Native marketplace">
+
+```sh
+npm install -g @adlc/cli
+/plugin marketplace add voodootikigod/adlc
+/plugin install adlc@adlc
+/adlc-init
+```
+
+  </Tab>
+</Tabs>
+
+## How each phase maps into Claude Code
+
+| ADLC phase | Mechanism | Claude Code vector |
+| --- | --- | --- |
+| **P0 Triage** | `/adlc-ticket` | Slash command authors & triages a ticket into `.adlc/tickets.json`. |
+| **P1 Interrogate** | `adlc spec-lint`, `parallax` | Phase-routing skill runs the spec gates. |
+| **P2 Decompose** | `adlc coldstart`, `model-router` | Skill resolves ticket scope and routes work by tier. |
+| **P3–P4 Rail & Build** | `adlc rails-guard` | Hook blocks edits to frozen rails on every structured edit. |
+| **P5 Prosecute** | `prosecute` + prosecutor subagent | Fresh-context, refute-chartered review before merge. |
+| **P7 Distill** | `/adlc-distill` | Turns repeated findings into deterministic defenses. |
+
+## What gets installed
+
+- **Skill:** phase router (`/adlc`) that picks the right gate.
+- **Commands:** `/adlc-init`, `/adlc-ticket`, `/adlc-distill`, `/adlc-maintain`.
+- **Subagent:** `adlc:prosecutor` — the P5 pre-merge gate.
+- **Hooks:** structured-edit rails-guard + CI backstop.
+
+Source: [`plugins/adlc-claude-code/`](https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-claude-code).
+
+## Go deeper
+
+The prosecution gate this integration automates:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).
