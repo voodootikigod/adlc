@@ -84,6 +84,16 @@ npm install -g @adlc/cli
 
 See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** for the full adoption guide.
 
+## Use it in other editors
+
+Each agent tool has its own native integration. See the guides:
+
+- **[Codex](./docs/integrations/codex.md)** — hooks-based integration.
+- **[Cursor](./docs/integrations/cursor.md)** — preToolUse hook + rules.
+- **[Google Antigravity](./docs/integrations/antigravity.md)** — native plugin system.
+- **[OpenCode](./docs/integrations/opencode.md)** — full phase-router coverage.
+- **[Pi](./docs/integrations/pi.md)** — TypeScript Extension integration.
+
 ## Project layout
 
 | Directory | Contents |
@@ -91,6 +101,7 @@ See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** f
 | `packages/` | The toolkit: 21 zero-dependency, gate-shaped CLIs |
 | `plugins/adlc-claude-code/` | Claude Code integration (skill, commands, hooks, subagent) |
 | `plugins/adlc-codex/` | Codex integration (hooks and skills; no TypeScript package) |
+| `plugins/adlc-antigravity/` | Google Antigravity integration (native plugin system, skills, hooks) |
 | `plugins/adlc-pi/` | Pi harness integration package (TypeScript, skills, tests) |
 | `docs/` | Lifecycle thesis, integration guides, ADRs, CI templates |
 | `.claude/commands/` | Maintainer commands for this repo (release workflow) |
