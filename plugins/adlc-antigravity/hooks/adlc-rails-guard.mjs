@@ -48,3 +48,27 @@ export function extractFilePaths(payload) {
   }
   return [...out];
 }
+
+const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', 'workspace_roots'];
+
+/** Nearest ancestor dir of absPath containing .adlc/tickets.json, or null. */
+export function findAdlcRoot(absPath) {
+  let cur = dirname(absPath);
+  const { root: fsRoot } = parse(cur);
+  // Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir).
+  while (true) {
+    if (existsSync(join(cur, '.adlc', 'tickets.json'))) return cur;
+    if (cur === fsRoot) return null;
+    cur = dirname(cur);
+  }
+}
+
+/** Make a raw target path absolute using workspacePaths[0]; report if we could. */
+export function anchorPath(rawPath, payload) {
+  if (!rawPath) return { abs: null, anchored: false };
+  if (isAbsolute(rawPath)) return { abs: rawPath, anchored: true };
+  const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+    .find((s) => typeof s === 'string' && s.trim());
+  if (ws) return { abs: join(ws, rawPath), anchored: true };
+  return { abs: null, anchored: false };
+}
