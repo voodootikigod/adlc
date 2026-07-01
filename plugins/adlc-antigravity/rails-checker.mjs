@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch } from '@adlc/core';
+import { loadTickets, globMatch } from './core-inline.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the

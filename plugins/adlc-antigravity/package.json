@@ -4,6 +4,6 @@
   "type": "module",
   "version": "0.2.0",
   "description": "ADLC native integration for Google Antigravity (agy)",
-  "dependencies": { "@adlc/core": "*" },
+  "dependencies": {},
   "agy": { "hooks": "./hooks.json", "skills": "./skills/", "command": "./commands/adlc-init.md" }
 }

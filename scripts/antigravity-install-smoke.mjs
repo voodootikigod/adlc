@@ -34,6 +34,37 @@ const guard = read(join(PLUGIN, 'hooks', 'adlc-rails-guard.mjs'));
 const imports = [...chk.matchAll(/from '([^']+)'/g), ...guard.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
 if (imports.some((s) => !s.startsWith('node:') && !s.startsWith('.') && s !== '@adlc/core')) fail('deny path imports third-party deps'); else ok('deny path: node: + @adlc/core only');
 
+// self-contained portability check (Task-10 live-gate finding): `agy plugin install`
+// COPIES this plugin into ~/.gemini/config/plugins/<name>/ WITHOUT node_modules, so
+// ANY runtime import of a workspace package (e.g. '@adlc/core') fails to resolve and
+// the hook fails closed on every tool. The plugin must be fully self-contained —
+// core-inline.mjs — and every import across the deny-path files must be either a
+// node: builtin or a relative (sibling) path.
+const inlineCore = read(join(PLUGIN, 'core-inline.mjs'));
+const SELF_CONTAINED_FILES = [
+  ['rails-checker.mjs', chk],
+  ['hooks/adlc-rails-guard.mjs', guard],
+  ['core-inline.mjs', inlineCore],
+];
+let selfContained = true;
+for (const [label, src] of SELF_CONTAINED_FILES) {
+  // Match an actual import/require of the package, not prose in a comment (the
+  // header comments legitimately reference '@adlc/core' by name when explaining
+  // the history of this port).
+  if (/from\s+['"]@adlc\/core['"]|require\(\s*['"]@adlc\/core['"]\s*\)/.test(src)) {
+    fail(`${label} imports '@adlc/core' — plugin must be self-contained — \`agy plugin install\` copies without node_modules`);
+    selfContained = false;
+  }
+  for (const m of src.matchAll(/from '([^']+)'/g)) {
+    const spec = m[1];
+    if (!spec.startsWith('node:') && !spec.startsWith('.')) {
+      fail(`${label} imports non-node/non-relative module "${spec}" — plugin must be self-contained — \`agy plugin install\` copies without node_modules`);
+      selfContained = false;
+    }
+  }
+}
+if (selfContained) ok('plugin is self-contained (node: + relative imports only, no @adlc/core)');
+
 // always exit 0 + allow_tool contract: drive the shim with a rail-hit fixture
 const repo = mkdtempSync(join(tmpdir(), 'agy-smoke-'));
 mkdirSync(join(repo, '.adlc'), { recursive: true });
