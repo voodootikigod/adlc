@@ -27,16 +27,13 @@ API key is required.
 | Prosecute before merge | P5 | `adlc hollow-test`, `adlc behavior-diff`, `adlc review-calibration`, `adversarial-review` |
 | Decide to integrate | P6 | `adlc gate-manifest` (human gate) |
 | Distill findings into defenses | P7 | `adlc lesson-foundry`, `adlc rejection-mining` |
+| Cross-model ship/no-ship loop | P1 · P3 · P5 | `adversarial-review` — fresh-context review, loop review→fix→re-review until `exit 0 = SHIP` |
 
-## The adversarial-review loop
-
-A cross-model, fresh-context ship/no-ship review that loops review→fix→re-review until
-clean (`exit 0 = SHIP`). Recommended at **P1** (design review of the ticket/spec), **P3**
-(attack the declared rail *set* for adequacy — is every invariant covered and
-unbypassable), and **P5** (built code; ≥2 distinct providers on the risk gate). Flags:
-`--verify` (refute stale findings), `--loop` (autonomous fix loop, working-tree only),
-`--providers` (multi-provider quorum). See ADR-0008 (adversarial-review coverage map) in
-the ADLC repo.
+`adversarial-review` at **P1** reviews the design itself; at **P3** it attacks the
+declared rail *set* for adequacy (is every invariant covered and unbypassable); at **P5**
+it runs ≥2 distinct providers on the risk gate. Flags: `--verify` (refute stale findings),
+`--loop` (autonomous fix loop, working-tree only), `--providers` (multi-provider quorum).
+See ADR-0008 (adversarial-review coverage map) in the ADLC repo.
 
 ## Rail enforcement in this harness
 
