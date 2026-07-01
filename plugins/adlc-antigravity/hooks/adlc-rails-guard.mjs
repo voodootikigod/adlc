@@ -72,3 +72,52 @@ export function anchorPath(rawPath, payload) {
   if (ws) return { abs: join(ws, rawPath), anchored: true };
   return { abs: null, anchored: false };
 }
+
+const allow = () => ({ allow_tool: true });
+const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: ${reason}` });
+
+/**
+ * Pure decision over a parsed agy PreToolUse payload → agy verdict.
+ * Never throws (the caller also wraps it). Implements the §5 decision tree.
+ */
+export function decide(payload, { env = process.env } = {}) {
+  const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+  try {
+    const tool = extractToolName(payload);
+    const cls = classifyTool(tool);
+
+    // Step 2 — classify first. Reads and shell tools are never rail-gated in-session.
+    if (cls === 'readonly') return allow();
+    if (isShellTool(tool)) return allow(); // run_command → CI diff gate
+
+    const paths = extractFilePaths(payload);
+
+    // Step 2 (cont.) — an 'other' tool with NO path and no mutating hint is not a file
+    // op (e.g. search_web) → allow. A 'mutating' name with no path is opaque (H2).
+    if (!paths.length) {
+      if (cls === 'other') return allow();
+      return enforcing
+        ? deny(`mutating tool "${tool}" exposed no inspectable target path — failing closed`)
+        : allow();
+    }
+
+    // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
+    // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
+    for (const raw of paths) {
+      const { abs, anchored } = anchorPath(raw, payload);
+      if (!anchored) {
+        if (enforcing) return deny(`unanchorable path "${raw}" (relative, no workspace root) — failing closed`);
+        continue;
+      }
+      const root = findAdlcRoot(abs);
+      if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
+      const verdict = checkRail({ filePath: abs, tool, root, env });
+      if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
+    }
+    return allow();
+  } catch (err) {
+    // Categorical fail-safe: under enforcement an unexpected error is more likely
+    // tamper/corruption than a benign bug → fail CLOSED; off → no-op allow.
+    return enforcing ? deny(`internal error while enforcing — ${err?.message ?? err}`) : allow();
+  }
+}
