@@ -1,0 +1,16 @@
+{
+  "adlc-rails": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node $HOME/.gemini/config/plugins/adlc-antigravity/hooks/adlc-rails-guard.cjs",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
