@@ -95,56 +95,107 @@ classify correctly through it because `normalizeToolName()` strips non-alpha:
 `write_to_file`→`writetofile` (contains "write" → mutating), `view_file`→`viewfile`
 (∈ `PURE_READS`), `run_command`→`runcommand` (∈ `SHELL_TOOL_NAMES` → not gated in-session).
 
-### Adapter responsibilities
+### Adapter decision tree (order is load-bearing; see §6 for the rationale)
 
-1. **Parse stdin** JSON; read `toolCall.name` and extract a path from `toolCall.args`
-   defensively across keys: `TargetFile`, `AbsolutePath`, `CommandLine`, `path`,
-   `file_path`, `FilePath`.
-2. **Root derivation (agy-specific, §6 F2):** cwd is the plugin dir and `workspacePaths` may
-   be `[]`. Derive the repo root by walking **up from the absolute target path** to the
-   nearest ancestor containing `.adlc/`; use `workspacePaths[0]` when present. If the target
-   path is **relative** or a root cannot be resolved, treat as **fail-closed** under
-   enforcement (see §6 F2).
-3. **Decide** via `checkRail({filePath, tool, root, env})`.
-4. **Emit** `{"allow_tool": false, "deny_reason": "<reason>"}` on deny, else
+1. **Parse stdin** JSON; read `toolCall.name`. Wrap everything from here in the fail-safe
+   shell of §6 F1.
+2. **Classify the tool FIRST (before any path/root work).** This gate exists so the `.*`
+   matcher — which fires the hook on *every* tool — cannot turn root-resolution failure into
+   a block of unrelated tools (§6 G1):
+   - **read-only** tool (`classifyTool → 'readonly'`, e.g. `view_file`, `grep_search`) → **allow**.
+   - **shell** tool (`run_command`) → **allow** in-session (Turing-complete; deferred to the
+     CI diff gate, parity with Cursor/Claude Code).
+   - **no file path** present in `toolCall.args` (e.g. `search_web`, `ask_question`,
+     `list_permissions`) → **allow** (it is not a file mutation, so it can never touch a rail).
+   - otherwise (a **mutating file tool**, or `'other'` carrying a path) → continue.
+3. **Extract the path** from `toolCall.args` defensively across keys: `TargetFile`,
+   `AbsolutePath`, `path`, `file_path`, `FilePath`.
+4. **Root derivation (agy-specific, §6 F2/G2):** cwd is the plugin dir and `workspacePaths`
+   may be `[]`. Walk **up from the absolute target path** to the nearest ancestor containing
+   `.adlc/tickets.json`; use `workspacePaths[0]` when present.
+   - **No `.adlc/` found up-tree** → the repo is **not ADLC-initialized** → **no-op allow**
+     (NOT fail-closed — this preserves the shared "no-op when not initialized" contract and
+     keeps non-ADLC projects usable under a global `ADLC_P4_ENFORCEMENT=1`).
+   - **`.adlc/` found**, path anchors to it → `checkRail({filePath, tool, root, env})`
+     (enforcement/ticket/conflict/corruption handling lives inside the checker).
+   - **`.adlc/` found but the path cannot be anchored to it** (relative and unresolvable)
+     **and** `ADLC_P4_ENFORCEMENT=1` → **fail closed** (deny). Safe direction; rare, since
+     observed writes are absolute (V7).
+5. **Emit** `{"allow_tool": false, "deny_reason": "<reason>"}` on deny, else
    `{"allow_tool": true}`. **Always `exit 0`** (V5).
-5. **Shell exemption:** `run_command` is a Turing-complete shell tool, **not** rail-gated
-   in-session — its writes fall to the CI diff gate, same as Cursor/Claude Code.
 
-## 6. Security hardening (from cross-model adversarial review)
+## 6. Security hardening (from two cross-model adversarial-review passes)
 
-The design was prosecuted by `agy` routed to **Gemini 3.1 Pro** (cross-model vs. the Claude
-builder) via the `adversarial-review` skill. Verdict: **needs-attention**. Resolutions:
+The design was prosecuted **twice** by `agy` routed to **Gemini 3.1 Pro** (cross-model vs.
+the Claude builder) via the `adversarial-review` skill — once on the raw design (F1–F4) and
+once on the written spec (G1–G7). Both returned **needs-attention**; both sets are resolved
+below.
 
-### F1 (critical) — startup/async exceptions must not fail open
-An ESM `import` of `@adlc/core` throws at **module load**, before any `try/catch`; a non-zero
-exit then **fails open** (V5). **Resolution:**
-- The hook entry file registers `process.on('uncaughtException', …)` and
-  `process.on('unhandledRejection', …)` **first**, before any risky work.
-- No risky **top-level** imports: the entry does handler-registration, then **dynamic
-  `import()`** of the checker inside `try/catch`.
-- Every handler / catch path emits a decision and calls `process.exit(0)`. Under
-  `ADLC_P4_ENFORCEMENT=1`, error paths emit `{"allow_tool": false, …}` — **fail closed**;
-  when enforcement is off, emit allow (no-op). The process must never terminate non-zero.
+### 6.0 Enforcement philosophy (the honest framing pass 2 forced)
 
-### F2 (critical) — relative / unanchorable path must fail closed
-With no workspace-root signal (V8) and possibly a relative `TargetFile`, naive root
-derivation could return "inactive → allow" while agy writes the rail against the real repo.
-**Resolution:** derive root from the **absolute** target path (walk up to `.adlc/`);
-accept `workspacePaths[0]` when present. If the path is **relative** or **no `.adlc/` root
-resolves**, then under `ADLC_P4_ENFORCEMENT=1` **fail closed** (`allow_tool:false`) rather
-than allow. (Observed writes used absolute paths (V7), so the common path is unaffected.)
+agy's **fail-open-on-nonzero-exit** contract (V5) means the in-session hook **cannot be made
+unconditionally fail-closed**: a startup syntax error, an incompatible Node runtime, a hook
+**timeout**, or a Windows path failure all exit non-zero and **fail open**. Therefore, as in
+all five existing integrations, **the in-session hook is advisory / best-effort, and the
+commit-time CI diff gate (`scripts/rails-guard-ci.mjs`) is the real, unbypassable
+guarantee.** The hardening below **shrinks the fail-open window** on the paths we control; it
+does not — and cannot — eliminate it. The integration doc must state this plainly so the hook
+is never mistaken for the guarantee.
 
-### F3 (high) — portable command path
-Resolved by V9: the `command` uses `$HOME` (`node $HOME/.gemini/config/plugins/adlc-antigravity/hooks/adlc-rails-guard.mjs`).
-No install-time rewrite. A smoke test asserts the installed dir name equals the manifest `name`.
+### F1 / G4 (critical) — minimize the fail-open window on process startup & errors
+An ESM `import` of `@adlc/core`, a syntax error, or a Node-version incompatibility throws at
+**module load — before any `try/catch` or handler runs** — and a non-zero exit then fails
+open (V5). **Resolution (best-effort, not absolute):**
+- The hook entry is a **minimal, dependency-free `.cjs` shim** (smallest possible syntax
+  surface) that (a) registers `process.on('uncaughtException')` + `unhandledRejection`
+  **first**, then (b) **dynamic-`import()`s** the ESM checker inside `try/catch`. No risky
+  top-level imports.
+- Every handler / catch path emits a decision and `process.exit(0)`; under
+  `ADLC_P4_ENFORCEMENT=1` error paths emit `{"allow_tool": false, …}` (fail closed), else
+  allow. The process never *intentionally* exits non-zero.
+- A CI test loads the shim on the **minimum supported Node version** and asserts a thrown
+  checker error still yields `allow_tool:false` + exit 0 under enforcement.
+- **Residual (documented, covered by CI gate):** a shim syntax error, a Node too old to run
+  it, or a hook timeout (G7) still fails open in-session. Keep the hook fast (§F8) and rely
+  on the CI gate.
 
-### F4 (high) — tool-classifier underscore names → REFUTED, with a follow-up
-Refuted: `normalizeToolName()` strips underscores, so `view_file`/`run_command` already
-classify correctly. **Follow-up task retained:** audit agy's full tool-name list (e.g.
-`codebase_search`, `list_dir`, `grep_search`, any edit/replace tools) against `PURE_READS`
-and `SHELL_TOOL_NAMES`, extending them where an agy-specific tool would otherwise fall to
-`'other'` (fail-closed) and wrongly block a read.
+### F2 / G1 / G2 (critical) — correct the fail-closed logic so it doesn't over-block
+The pass-1 F2 wording ("no root resolves → fail closed") **regressed** two everyday cases.
+Corrected per the §5 decision tree:
+- **G1 — non-file / read-only tools** (`search_web`, `ask_question`, `view_file`, …) are
+  **classified and allowed before** any root work, so root-resolution failure can never block
+  them.
+- **G2 — non-ADLC repositories**: "no `.adlc/` found up-tree" means **not initialized → no-op
+  allow**, *not* fail-closed — so a global `ADLC_P4_ENFORCEMENT=1` doesn't lock down normal
+  projects.
+- **Fail-closed is narrow**: only a **mutating file tool** whose path anchors inside a repo
+  that **does** have `.adlc/`, but that we cannot resolve (relative/unanchorable), denies
+  under enforcement. Observed writes are absolute (V7), so this is the rare edge, and denying
+  is the safe direction.
+
+### F3 / G6 (high) — portable command path, POSIX-scoped
+V9: the `command` uses `$HOME`
+(`node $HOME/.gemini/config/plugins/adlc-antigravity/hooks/adlc-rails-guard.mjs`) — portable
+across **POSIX** users with no install rewrite; a smoke test asserts the installed dir name
+equals the manifest `name`. **G6:** `$HOME`/forward-slashes are **not** reliable on Windows
+shells, where a failed command fails open (V5). **v1 scopes the in-session hook to
+macOS/Linux** (matching antigravity-booster, whose sandbox is macOS-only and Linux is
+preview); the doc states Windows in-session is unsupported, and **the cross-platform CI gate
+protects Windows users** regardless.
+
+### F4 / G3 (high→blocking) — tool-classifier audit is a build task, not a follow-up
+Refuted as stated (`normalizeToolName()` strips underscores, and `MUTATING_TOOL_HINTS`
+includes `replace`/`edit`/`patch`/`create`, so `replace_file_content`→`replacefilecontent` is
+already caught as mutating). **But** correctness depends on it, so the audit is **promoted to
+a blocking implementation task**: enumerate agy's real tool names (`agy` probing) and assert,
+in tests, that **every** mutating file tool classifies `mutating` (denies a rail) and **every**
+read/non-file tool is allowed — extending `PURE_READS` / `SHELL_TOOL_NAMES` /
+`MUTATING_TOOL_HINTS` for any agy-specific tool that would otherwise fall to `'other'`.
+
+### F8 / G7 (medium) — keep the hook fast to shrink the timeout fail-open
+The hook does only small file reads + glob matching; target **< a few hundred ms**. Set a
+comfortable `timeout` in `hooks.json`. A timeout still fails open (V5) — documented residual,
+covered by the CI gate.
 
 ## 7. Scope boundaries (YAGNI)
 
@@ -156,21 +207,37 @@ and `SHELL_TOOL_NAMES`, extending them where an agy-specific tool would otherwis
 
 ## 8. Testing & verification
 
-- **Unit** (`test/rails-guard.test.mjs`): stdin-payload parsing across per-tool arg keys;
-  root derivation (absolute target → `.adlc/`; relative/unanchorable → fail closed under
-  enforcement); deny/allow emission shape (`allow_tool`/`deny_reason`); **exit code is always
-  0**; enforcement-off no-op; conflict/corrupt-ticket fail-closed (inherited from checker);
-  the F1 handlers (simulate a thrown error → asserts `allow_tool:false` + exit 0 under
-  enforcement).
-- **Smoke** (`scripts/antigravity-install-smoke.mjs`): `agy plugin validate` passes **and**
-  the manifest/dir-name invariant holds; a fixture stdin denies a rail write and allows a
-  non-rail write.
+- **Unit** (`test/rails-guard.test.mjs`) — must include an explicit case per finding:
+  - stdin-payload parsing across per-tool arg keys (`TargetFile`/`AbsolutePath`/…);
+  - deny/allow emission shape (`allow_tool`/`deny_reason`) and **exit code is always 0** (V5);
+  - **G1** — a non-file tool (`search_web`) and a read-only tool (`view_file`) are **allowed
+    under `ADLC_P4_ENFORCEMENT=1`** (not blocked by root failure);
+  - **G2** — a `write_to_file` in a repo with **no `.adlc/`** is **allowed** under global
+    enforcement (no-op, not fail-closed);
+  - rail hit — a mutating write to a frozen rail inside an ADLC repo is **denied**;
+  - **G3** — a table of agy's real mutating tool names each **denies** a rail write, and each
+    real read/non-file tool is **allowed**;
+  - narrow fail-closed — mutating tool + `.adlc/` present + unanchorable path + enforcement →
+    **deny**;
+  - enforcement-off no-op; conflict / corrupt-ticket fail-closed (inherited from checker);
+  - **F1/G4** — the `.cjs` shim, on a simulated checker throw, still emits `allow_tool:false`
+    + exit 0 under enforcement; a CI step loads the shim on the **min supported Node version**.
+- **Smoke** (`scripts/antigravity-install-smoke.mjs`): `agy plugin validate` passes, the
+  installed **dir-name == manifest `name`** invariant holds (F3), and a fixture stdin denies a
+  rail write and allows a non-rail write.
 - Wire both into the root `package.json` `test` script.
-- The unbypassable guarantee remains the CI `rails-guard-ci.mjs` diff gate, unchanged.
+- **The unbypassable guarantee remains the CI `rails-guard-ci.mjs` diff gate** — the
+  in-session hook is advisory (§6.0).
 
 ## 9. Open follow-ups (tracked, not blocking this design)
 
-1. Audit agy's complete tool-name set against the classifier sets (F4 follow-up).
-2. Confirm the hook-contract behavior on a future agy release (V2: validate ≠ runtime).
+1. Confirm the hook-contract behavior on a future agy release (V2: validate ≠ runtime).
+2. Windows in-session support (G6) — revisit if agy exposes a cross-platform plugin-root
+   placeholder or reliable env expansion.
 3. Optional later: interactive-mode `workspacePaths` population may allow a simpler root
    derivation; revisit if agy fills it.
+4. Petition the agy team to **fail closed on hook non-zero exit / timeout** (V5) — the single
+   change that would let the in-session hook become a real guarantee rather than advisory.
+
+(The agy tool-name classifier audit, formerly a follow-up, is now the **blocking build task
+F4/G3** in §6.)
