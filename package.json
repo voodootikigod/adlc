@@ -5,10 +5,11 @@
   "version": "1.1.0",
   "description": "Agentic Development Lifecycle toolkit — gate-shaped, zero-dependency CLIs",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
-    "test": "for d in packages/*/test; do node --test \"$d\"/*.test.mjs || exit 1; done && node --test plugins/adlc-claude-code/hooks/test/*.test.mjs && node --test scripts/test/*.test.mjs && (npx tsc --target es2022 --module nodenext --moduleResolution nodenext --noEmitOnError false --skipLibCheck true --noImplicitAny false --declaration false plugins/adlc-pi/index.ts || true) && node --test plugins/adlc-pi/test/*.test.mjs && node --test plugins/adlc-opencode/test/*.test.mjs && node --test plugins/adlc-cursor/test/*.test.mjs && node scripts/cursor-install-smoke.mjs .",
+    "test": "for d in packages/*/test; do node --test \"$d\"/*.test.mjs || exit 1; done && node --test plugins/adlc-claude-code/hooks/test/*.test.mjs && node --test scripts/test/*.test.mjs && (npx tsc --target es2022 --module nodenext --moduleResolution nodenext --noEmitOnError false --skipLibCheck true --noImplicitAny false --declaration false plugins/adlc-pi/index.ts || true) && node --test plugins/adlc-pi/test/*.test.mjs && node --test plugins/adlc-opencode/test/*.test.mjs && node --test plugins/adlc-cursor/test/*.test.mjs && node scripts/cursor-install-smoke.mjs . && node --test apps/docs/test/*.test.mjs",
     "release": "node scripts/release.mjs"
   },
   "engines": {

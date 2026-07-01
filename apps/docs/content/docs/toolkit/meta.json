@@ -1,0 +1,16 @@
+{
+  "title": "Toolkit",
+  "pages": [
+    "index",
+    "---Spec & ticket shaping---",
+    "parallax", "spec-lint", "premortem", "coldstart",
+    "---Execution supervision & rails---",
+    "preflight", "model-router", "merge-forecast", "rails-guard", "flail-detector", "consensus-fix", "runner",
+    "---Review evidence & calibration---",
+    "behavior-diff", "gate-manifest", "hollow-test", "prosecute", "review-calibration", "model-ratchet", "gate-fuzzing",
+    "---Compounding defenses---",
+    "lesson-foundry", "rejection-mining", "skill-rot",
+    "---Shared foundation---",
+    "cli", "core"
+  ]
+}
