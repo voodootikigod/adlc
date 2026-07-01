@@ -135,7 +135,7 @@ surfaced **only** when an independent provider with different priors was added.
 
 1. ~~Accept this ADR (P6 human gate)~~ — **Accepted 2026-06-27.**
 2. ~~Build the `--providers` mode in the `voodootikigod/adversarial-review` repo per the
-   spec's AC4–AC7 (follow-on ticket).~~ — **Done.** `--providers` (multi-provider
+   spec's AC4–AC7 (follow-on ticket).~~ — **done.** `--providers` (multi-provider
    selection, quorum-aware verdict, dedup, under-satisfaction accounting AC4–AC7) is
    implemented in `src/llm.js` / `src/review.js`. Remaining follow-ons tracked in
    [ADR-0008](./0008-adversarial-review-coverage-map.md): `--input` artifact mode and a
