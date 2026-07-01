@@ -91,8 +91,11 @@ supply-chain; **anything that constrains the agent itself**.
 
 ### 2. Router discoverability (NEW)
 
-- Edit `skills/adlc/SKILL.md` (the phase router): reference `adversarial-review` at P1
-  (design), P3 (rail selection), and P5 (built code, multi-model), and add a short
+- Edit the **adlc phase router `SKILL.md`** — which is replicated **per harness** at
+  `plugins/adlc-claude-code/skills/adlc/SKILL.md`, `plugins/adlc-pi/skills/adlc/SKILL.md`,
+  and `plugins/adlc-codex/skills/adlc/SKILL.md`. **All harness copies must be edited** or
+  discoverability is inconsistent across harnesses. In each: reference `adversarial-review`
+  at P1 (design), P3 (rail selection), and P5 (built code, multi-model), and add a short
   **"adversarial-review loop"** subsection: cross-model + fresh-context + loop-until-SHIP;
   `--verify`, `--loop`, `--providers`; **exit 0 = SHIP**.
 - Mirror into the toolkit "typical flow" doc where ADR-0007's adoption note already planted
@@ -125,7 +128,8 @@ supply-chain; **anything that constrains the agent itself**.
 1. **ADR-0008 — "Adversarial-review coverage map across the ADLC."** Home for the coverage
    map table + the four insertion points as recommended practice. Extends (does not
    supersede) ADR-0005/0007; keeps the "defer mechanical enforcement" posture.
-2. **Edits to `skills/adlc/SKILL.md`** — insertion point 2.
+2. **Edits to the adlc phase router `SKILL.md` in every harness plugin**
+   (`plugins/adlc-claude-code`, `plugins/adlc-pi`, `plugins/adlc-codex`) — insertion point 2.
 3. **Edits to the toolkit / typical-flow doc** — insertion point 2 + the P6 recording
    convention (insertion point 3).
 4. **This design spec** — provenance.
@@ -182,7 +186,7 @@ Each has a concrete verification method (this spec must pass `spec-lint`).
 
 - **AC1** — *Verify:* `grep -nE 'Status|P0|P3|P5|P6|Maintenance' docs/adr/0008-adversarial-review-coverage-map.md` confirms ADR-0008 has a status line and a coverage-map table covering P0–P7 + Maintenance (all listed phases appear).
 - **AC2** — *Verify:* `grep -nE 'adequacy|integrity|rails-guard' docs/adr/0008-adversarial-review-coverage-map.md` confirms ADR-0008 names the P3 review as *adequacy* (right/unbypassable rails) explicitly distinct from `rails-guard` *integrity* (frozen rails unedited).
-- **AC3** — *Verify:* `grep -nE 'adversarial-review|exit 0|SHIP' skills/adlc/SKILL.md` confirms the router names `adversarial-review` under P1/P3/P5 and states `exit 0 = SHIP`.
+- **AC3** — *Verify:* `grep -rlE 'adversarial-review' plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md` returns all three harness router copies, and `grep -nE 'adversarial-review|exit 0|SHIP'` on each confirms it names `adversarial-review` under P1/P3/P5 and states `exit 0 = SHIP`.
 - **AC4** — *Verify:* `grep -nE 'gate-manifest record adversarial-review|exitReason|iterations' docs/toolkit.md` confirms the P6 evidence-recording convention block is present in the edited typical-flow doc.
 - **AC5** — *Verify:* `grep -nE 'input|summary|providers|findings-ledger' docs/adr/0008-adversarial-review-coverage-map.md` confirms the four `adversarial-review` follow-on items (A input mode, B loop-summary, C providers-done, D findings-ledger precedent) are recorded as cross-repo follow-ons under an implications heading.
 - **AC6** — *Verify:* `adlc spec-lint docs/superpowers/specs/2026-07-01-adversarial-review-coverage-map-design.md` asserts exit 0 (this spec has zero wishes).
