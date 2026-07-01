@@ -20,6 +20,12 @@ const call = (name, args, env = ENF, extra = {}) => decide({ toolCall: { name, a
 test('G1: non-file tool (search_web) allowed under enforcement', () => {
   assert.equal(call('search_web', { query: 'x' }).allow_tool, true);
 });
+test("'other'-classified tool with no path allowed under enforcement (covers the 'other' no-path branch)", () => {
+  // generate_image classifies 'other' (a mutator with no inspectable path); with no
+  // extractable path it takes the 'other' no-path allow branch. (Its fail-closed
+  // treatment when it DID expose a path is out of scope here.)
+  assert.equal(call('generate_image', { prompt: 'a cat' }).allow_tool, true);
+});
 test('read-only tool (view_file) allowed under enforcement', () => {
   assert.equal(call('view_file', { AbsolutePath: '/anything/a.js' }).allow_tool, true);
 });

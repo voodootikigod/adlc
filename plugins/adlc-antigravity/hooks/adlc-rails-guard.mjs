@@ -81,8 +81,9 @@ const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: $
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
  */
 export function decide(payload, { env = process.env } = {}) {
-  const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+  let enforcing = false;
   try {
+    enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     const tool = extractToolName(payload);
     const cls = classifyTool(tool);
 
@@ -93,7 +94,8 @@ export function decide(payload, { env = process.env } = {}) {
     const paths = extractFilePaths(payload);
 
     // Step 2 (cont.) — an 'other' tool with NO path and no mutating hint is not a file
-    // op (e.g. search_web) → allow. A 'mutating' name with no path is opaque (H2).
+    // op (e.g. generate_image, a mutator with no inspectable path) → allow. A
+    // 'mutating' name with no path is opaque (H2).
     if (!paths.length) {
       if (cls === 'other') return allow();
       return enforcing
