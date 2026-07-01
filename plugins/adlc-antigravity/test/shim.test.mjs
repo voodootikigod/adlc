@@ -23,14 +23,23 @@ test('shim: exits 0 and prints an allow verdict for a read tool', () => {
   });
   assert.deepEqual(JSON.parse(out), { allow_tool: true });
 });
-test('shim: exit code is 0 even when the ESM module path is broken (fail-open is agy default; we still must not crash noisily)', () => {
-  // Point the shim at a non-existent module via env override to simulate a load failure.
-  let code = 0;
-  try {
-    execFileSync(process.execPath, [SHIM], {
-      input: '{}', encoding: 'utf8',
-      env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },
-    });
-  } catch (e) { code = e.status ?? 1; }
-  assert.equal(code, 0);
+test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed payload', () => {
+  // execFileSync only throws on non-zero exit; since the shim always exits 0,
+  // it returns stdout normally here — exit 0 is implicitly covered because a
+  // future regression that exits non-zero would make execFileSync throw and
+  // fail this test. The point of this test is the payload assertion below.
+  const out = execFileSync(process.execPath, [SHIM], {
+    input: '{}', encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },
+  });
+  const v = JSON.parse(out);
+  assert.equal(v.allow_tool, false);           // fail CLOSED under enforcement
+  assert.ok(/ADLC rails-guard/.test(v.deny_reason ?? ''));
+});
+test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', () => {
+  const out = execFileSync(process.execPath, [SHIM], {
+    input: '{}', encoding: 'utf8',
+    env: { ...process.env, ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },  // no ADLC_P4_ENFORCEMENT
+  });
+  assert.deepEqual(JSON.parse(out), { allow_tool: true });
 });
