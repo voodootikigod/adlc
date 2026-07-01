@@ -24,16 +24,16 @@ spec-lint <spec.md> [--llm] [--json] [--prompt-only]
 
 | Flag | Description |
 | --- | --- |
-| `--llm` | Cheap-tier LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly"). Demoted criteria become WISH. |
-| `--json` | Machine-readable output for orchestrators. |
-| `--prompt-only` | Print the exact LLM prompt and exit 0 — works with zero API keys. |
+| `--llm` | Cheap-tier LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly", "run tests"). Demoted criteria become WISH. Requires a provider env var (see core). |
+| `--json` | Machine-readable output for orchestrators. All other output is suppressed. |
+| `--prompt-only` | Print the exact LLM prompt and exit 0 — works with zero API keys; paste into any harness. |
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: '#78bd65' }}>**0** — gate passes: every criterion names a verification method.</span>
-  <span style={{ color: '#e5cd52' }}>**1** — operational error (bad input, unreadable file).</span>
-  <span style={{ color: '#eb3d54' }}>**2** — gate fails: one or more criteria are wishes.</span>
+  <span style={{ color: '#78bd65' }}>**0** — gate passes: every criterion names a verification method (or no criteria found; warns loudly).</span>
+  <span style={{ color: '#e5cd52' }}>**1** — operational error (bad input, unreadable file, or LLM call failed).</span>
+  <span style={{ color: '#eb3d54' }}>**2** — gate fails: one or more criteria are wishes (line numbers printed).</span>
 </div>
 
 ## Example
