@@ -1,0 +1,24 @@
+---
+title: The Lifecycle
+description: The ADLC phase and gate map, and which toolkit CLI enforces each gate.
+---
+
+# The Lifecycle
+
+<PhaseDiagram phase="P5" />
+
+Each phase has a machine-checkable gate. The toolkit makes those gates concrete.
+
+| Phase | Question the gate answers | Primary tools |
+| --- | --- | --- |
+| **P0 Triage** | Is the workspace ready for fan-out? | [preflight](/docs/toolkit/preflight) |
+| **P1 Interrogate** | Is the spec testable and stress-tested? | [spec-lint](/docs/toolkit/spec-lint), [premortem](/docs/toolkit/premortem), [parallax](/docs/toolkit/parallax) |
+| **P2 Decompose** | Can an agent execute this ticket without guessing? | [coldstart](/docs/toolkit/coldstart), [model-router](/docs/toolkit/model-router), [merge-forecast](/docs/toolkit/merge-forecast) |
+| **P3–P4 Rail & Build** | Are frozen rails protected; is an agent flailing? | [rails-guard](/docs/toolkit/rails-guard), [flail-detector](/docs/toolkit/flail-detector), [consensus-fix](/docs/toolkit/consensus-fix) |
+| **P5 Prosecute** | Did prosecution dry out; did behavior change? | [prosecute](/docs/toolkit/prosecute), [behavior-diff](/docs/toolkit/behavior-diff), [hollow-test](/docs/toolkit/hollow-test), [gate-manifest](/docs/toolkit/gate-manifest) |
+| **Calibration** | What must be re-prosecuted after drift? | [model-ratchet](/docs/toolkit/model-ratchet), [review-calibration](/docs/toolkit/review-calibration), [skill-rot](/docs/toolkit/skill-rot), [gate-fuzzing](/docs/toolkit/gate-fuzzing) |
+| **P7 Distill** | Which findings become permanent defenses? | [lesson-foundry](/docs/toolkit/lesson-foundry), [rejection-mining](/docs/toolkit/rejection-mining) |
+
+The two human gates sit at **P1** (spec approval) and **P6** (review). Everything
+between is deterministic — read
+[the full argument](https://voodootikigod.com/adlc-2-two-human-gates).
