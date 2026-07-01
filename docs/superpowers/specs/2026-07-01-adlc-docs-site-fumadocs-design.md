@@ -20,17 +20,19 @@ as MDX for a polished narrative experience.
 
 ## Success criteria
 
-1. `apps/docs` builds cleanly with `next build` (verified locally; CI-checkable).
-2. Navigation IA renders the full section tree (all sections present; unbuilt
-   pages may be stubs) so structure is reviewable early.
-3. The **first deliverable** ships: home, theory overview, lifecycle map, one tool
-   exemplar (`spec-lint`), one integration exemplar (`Claude Code`) — each a
-   complete, non-stub page.
-4. Every tool/phase page that references a theory concept deep-links to the
-   correct `voodootikigod.com/series/adlc` post via a single shared link map.
-5. Built-in search (Orama) is enabled and returns results for tool names.
+1. `apps/docs` builds cleanly — verify: `npm run build --workspace @adlc/docs`
+   exits `0`.
+2. Verify: `ls apps/docs/content/docs/toolkit/meta.json apps/docs/content/docs/integrations/meta.json apps/docs/content/docs/reference/meta.json` exits `0` and `npm run build --workspace @adlc/docs` exits `0` — the navigation IA renders the full section tree (all sections present; unbuilt pages may be stubs).
+3. Verify: `test -f apps/docs/content/docs/theory/index.mdx apps/docs/content/docs/lifecycle.mdx apps/docs/content/docs/toolkit/spec-lint.mdx apps/docs/content/docs/integrations/claude-code.mdx` exits `0` and `npm run build --workspace @adlc/docs` exits `0` — the first deliverable ships home, theory overview, lifecycle map, the `spec-lint` tool exemplar, and the `Claude Code` integration exemplar as complete pages.
+4. Every theory deep-link resolves to a real `voodootikigod.com/series/adlc` post
+   with no fabricated URLs — verify: `node --test apps/docs/test/theory-links.test.mjs`
+   asserts every resolved link is an absolute `https://voodootikigod.com/` URL and
+   unknown ids fall back to the series landing (exit `0`).
+5. Built-in search (Orama) is enabled — verify: `apps/docs/app/api/search/route.ts`
+   exists (`test -f`) and `npm run build --workspace @adlc/docs` compiles the
+   `/api/search` route without error (exit `0`).
 6. The published `@adlc/*` packages and their zero-dependency contract are
-   unaffected; root `npm test` still passes unchanged.
+   unaffected — verify: `npm test` at repo root exits `0`, unchanged from `main`.
 
 ## Non-goals (YAGNI)
 
