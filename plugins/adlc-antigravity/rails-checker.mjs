@@ -45,6 +45,23 @@ export const PURE_READS = new Set([
   'read', 'readfile', 'readlints', 'grep', 'grepsearch', 'glob', 'globsearch',
   'codebasesearch', 'semanticsearch', 'filesearch', 'list', 'listdir', 'ls',
   'cat', 'view', 'viewfile', 'webfetch', 'websearch', 'fetch', 'fetchrules', 'search',
+  // agy: find_by_name — file-search tool (Pattern/SearchDirectory/Extensions
+  // args), no file-content access. A read, like glob/filesearch above.
+  'findbyname',
+  // agy: search_web — note this is 'searchweb', a DIFFERENT normalized token
+  // than the existing 'websearch' above; PURE_READS is whole-token match, so
+  // agy's actual name did not match the pre-existing entry.
+  'searchweb',
+  // agy: non-file tools with NO file-path argument in any observed transcript
+  // call (manage_task, schedule, list_permissions, send_message, ask_question,
+  // invoke_subagent, ask_permission, manage_subagents, define_subagent,
+  // read_url_content). Classified readonly so checkRail allows them
+  // unconditionally; left as 'other' they would be treated as opaque
+  // no-path mutators and denied while enforcement is active, breaking core
+  // agy workflows (e.g. asking the user a question).
+  'managetask', 'schedule', 'listpermissions', 'sendmessage', 'askquestion',
+  'invokesubagent', 'askpermission', 'managesubagents', 'definesubagent',
+  'readurlcontent',
 ]);
 
 /** Normalize a raw Cursor tool name to a lowercase alpha token for classification. */
