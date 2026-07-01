@@ -25,6 +25,11 @@ The `vercel.json` in this directory specifies the build command and framework de
 
 ## Local Development
 
+> **Requires Node ≥ 20.9** (Next.js 16). This is higher than the rest of the
+> `@adlc` repo, whose zero-dependency CLIs support Node ≥ 18 — the floor is
+> declared in this app's `package.json` `engines` so the CLIs' Node-18 contract
+> is unchanged.
+
 Install dependencies from the repo root (npm workspaces):
 ```bash
 cd /path/to/adlc
