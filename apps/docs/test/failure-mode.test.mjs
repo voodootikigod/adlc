@@ -14,3 +14,14 @@ test('F2 is Sycophancy and links to the thesis post', () => {
   assert.equal(FAILURE_MODES.F2.name, 'Sycophancy');
   assert.equal(theoryLink('F2'), 'https://voodootikigod.com/adlc-1-models-arent-human');
 });
+
+test('all failure mode names match the canonical map', () => {
+  assert.equal(FAILURE_MODES.F1.name, 'Premature satisfaction');
+  assert.equal(FAILURE_MODES.F2.name, 'Sycophancy');
+  assert.equal(FAILURE_MODES.F3.name, 'Context rot');
+  assert.equal(FAILURE_MODES.F4.name, 'Confident hallucination');
+  assert.equal(FAILURE_MODES.F5.name, 'Reward hacking');
+  assert.equal(FAILURE_MODES.F6.name, 'Finding-count prior');
+  assert.equal(FAILURE_MODES.F7.name, 'Generative bloat');
+  assert.equal(FAILURE_MODES.F8.name, 'Coherence loss');
+});

@@ -19,7 +19,7 @@ turns unverifiable criteria into blocking failures.
 ## Usage
 
 ```sh
-spec-lint <spec.md> [--llm] [--json] [--prompt-only]
+adlc spec-lint <spec.md> [--llm] [--json] [--prompt-only]
 ```
 
 | Flag | Description |
@@ -31,9 +31,9 @@ spec-lint <spec.md> [--llm] [--json] [--prompt-only]
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: '#78bd65' }}>**0** — gate passes: every criterion names a verification method (or no criteria found; warns loudly).</span>
-  <span style={{ color: '#e5cd52' }}>**1** — operational error (bad input, unreadable file, or LLM call failed).</span>
-  <span style={{ color: '#eb3d54' }}>**2** — gate fails: one or more criteria are wishes (line numbers printed).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: every criterion names a verification method (or no criteria found; warns loudly).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad input, unreadable file, or LLM call failed).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more criteria are wishes (line numbers printed).</span>
 </div>
 
 ## Example

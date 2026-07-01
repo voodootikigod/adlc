@@ -7,7 +7,7 @@ export function FailureMode({ id }: { id: keyof typeof FAILURE_MODES }) {
   return (
     <div
       className="my-4 rounded-md border-l-4 p-3"
-      style={{ borderColor: '#ef7c2a', background: '#2f3137' }}
+      style={{ borderColor: 'var(--adlc-highlight)', background: '#2f3137' }}
     >
       <strong>
         {id} — {fm.name}
