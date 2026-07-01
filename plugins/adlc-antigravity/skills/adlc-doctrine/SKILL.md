@@ -24,8 +24,8 @@ them exactly.
 - Rails (test files, contracts, CI config named as read-only) are frozen.
   Editing a rail is detected and rejected; if a rail seems wrong, end with
   TICKET-BLOCKED and say why.
-- Never delete, skip, or weaken a test to make a gate pass. New
-  skip/xfail/suppression markers fail review.
+- Never delete, skip, or weaken a test to make a gate pass. Newly added
+  test-suppression markers (skipped or expected-to-fail tests) fail review.
 
 ## Quota discipline (Antigravity-specific)
 
