@@ -27,3 +27,9 @@ export default function proxy(request: NextRequest) {
 
   return NextResponse.next();
 }
+
+// Register this proxy as Next.js middleware covering all /docs paths
+// (both .md suffix rewrites and Accept-header-based LLM content negotiation).
+export const config = {
+  matcher: ['/docs/:path*'],
+};
