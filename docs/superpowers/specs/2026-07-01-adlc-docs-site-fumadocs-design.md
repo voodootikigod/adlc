@@ -42,6 +42,7 @@ as MDX for a polished narrative experience.
 - We do not wire or trigger the Vercel deployment; we prepare config only. The
   maintainer creates/links the Vercel project.
 - No i18n, no versioned docs in the first cut.
+- No light theme and no theme toggle — the site is dark-only.
 
 ## Architecture & tooling
 
@@ -86,8 +87,9 @@ a Shiki theme built from the An Old Hope token colors (the upstream repo
 generates a compatible theme JSON; we import/adapt it as a custom Shiki theme, or
 map its token scopes to the palette above).
 
-Light mode: provide a sensible light variant (Fumadocs default light with blue
-accent). Dark is the default.
+**Dark-only.** The site ships a single dark theme (An Old Hope). No light
+variant and no theme toggle — the theme switcher is disabled/removed so the
+palette is always applied.
 
 ## Information architecture (navigation tree)
 
