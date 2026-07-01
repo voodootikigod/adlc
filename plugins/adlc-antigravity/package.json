@@ -1,0 +1,9 @@
+{
+  "name": "@adlc/antigravity-package",
+  "private": true,
+  "type": "module",
+  "version": "0.2.0",
+  "description": "ADLC native integration for Google Antigravity (agy)",
+  "dependencies": { "@adlc/core": "*" },
+  "agy": { "hooks": "./hooks.json", "skills": "./skills/", "command": "./commands/adlc-init.md" }
+}
