@@ -37,12 +37,15 @@ Idle-time / post-drift maintenance? ─────────→ —   /adlc-m
 ```
 
 **The adversarial-review loop.** A cross-model, fresh-context ship/no-ship review that
-loops review→fix→re-review until clean (`exit 0 = SHIP`). Recommended at **P1** (design
-review of the ticket/spec), **P3** (attack the declared rail *set* for adequacy — is every
-invariant covered and unbypassable), and **P5** (built code; ≥2 distinct providers on the
-risk gate). Flags: `--verify` (refute stale findings), `--loop` (autonomous fix loop,
-working-tree only), `--providers` (multi-provider quorum). See ADR-0008
-(adversarial-review coverage map) in the ADLC repo.
+loops review→fix→re-review until clean (`exit 0 = SHIP`). It only reviews a git diff/branch
+today (positional args are focus text, not a file path) — it is recommended practice at
+**P1** (design review of the ticket/spec) and **P3** (attack the declared rail *set* for
+adequacy — is every invariant covered and unbypassable) via `--prompt-only` or diff review,
+pending the deferred `--input` mode, and at **P5** (built code; ≥2 distinct providers on the
+risk gate) it runs directly. Flags: `--verify` (refute stale findings), `--loop` (autonomous
+fix loop over working-tree code changes only, needs a write sandbox), `--providers`
+(multi-provider quorum). Installed separately — invoke via `npx adversarial-review` if not
+on PATH. See ADR-0008 (adversarial-review coverage map) in the ADLC repo.
 
 ## The phases
 
@@ -58,8 +61,10 @@ downstream reads this file; nothing else creates it. Author here first.
   failure modes before implementation.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
-- `adversarial-review <spec.md> [--prompt-only]` — cross-model, fresh-context ship/no-ship
-  review of the design itself; loop review→fix→re-review until `exit 0 = SHIP`.
+- Design review is recommended practice today via `adversarial-review --prompt-only`
+  (feed the ticket/spec to a model yourself) or `adversarial-review --base <ref>`
+  (review the diff that introduces it); `exit 0 = SHIP`. First-class artifact input
+  (`--input`) is a deferred follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P2 — Decompose (an agent can execute without guessing)
 - `adlc coldstart <ticket-id> --prompt-only` (or `--all`) — gate ticket
@@ -81,8 +86,12 @@ downstream reads this file; nothing else creates it. Author here first.
   Wire that gate with the template at `docs/ci/rails-guard.yml` and make it a
   required check. Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to
   the manifest).
-- `adversarial-review --loop` — attack the declared rail *set* for adequacy before
-  freezing: is every invariant covered and unbypassable? Loop until `exit 0 = SHIP`.
+- Rail-set adequacy review — is every invariant covered and unbypassable — is
+  recommended practice today via `adversarial-review --prompt-only` (feed the declared
+  rail set + ticket + invariants to a model); `exit 0 = SHIP`. `--loop` reviews
+  working-tree code changes, not a not-yet-built rail set, so there is no runnable
+  `--loop` command at P3 yet. First-class artifact input (`--input`) is a deferred
+  follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P4 — Build (supervised execution)
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
