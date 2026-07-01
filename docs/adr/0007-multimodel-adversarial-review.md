@@ -134,8 +134,12 @@ surfaced **only** when an independent provider with different priors was added.
 ## Adoption / next steps
 
 1. ~~Accept this ADR (P6 human gate)~~ — **Accepted 2026-06-27.**
-2. Build the `--providers` mode in the `voodootikigod/adversarial-review` repo per the
-   spec's AC4–AC7 (follow-on ticket).
+2. ~~Build the `--providers` mode in the `voodootikigod/adversarial-review` repo per the
+   spec's AC4–AC7 (follow-on ticket).~~ — **Done.** `--providers` (multi-provider
+   selection, quorum-aware verdict, dedup, under-satisfaction accounting AC4–AC7) is
+   implemented in `src/llm.js` / `src/review.js`. Remaining follow-ons tracked in
+   [ADR-0008](./0008-adversarial-review-coverage-map.md): `--input` artifact mode and a
+   loop-convergence summary.
 3. ~~Document the risk-tier policy in `docs/toolkit.md`~~ — **done** (Typical flow, step 6).
 4. Revisit mechanical enforcement once trust-boundary features are built often enough
    that operator invocation proves insufficient — the same trigger ADR-0005 set.
