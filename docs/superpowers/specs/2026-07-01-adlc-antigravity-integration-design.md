@@ -105,11 +105,15 @@ classify correctly through it because `normalizeToolName()` strips non-alpha:
    - **read-only** tool (`classifyTool → 'readonly'`, e.g. `view_file`, `grep_search`) → **allow**.
    - **shell** tool (`run_command`) → **allow** in-session (Turing-complete; deferred to the
      CI diff gate, parity with Cursor/Claude Code).
-   - **no file path** present in `toolCall.args` (e.g. `search_web`, `ask_question`,
-     `list_permissions`) → **allow** (it is not a file mutation, so it can never touch a rail).
-   - otherwise (a **mutating file tool**, or `'other'` carrying a path) → continue.
-   The tools that reach step 3 are exactly the **mutating** file tools and the ambiguous
-   `'other'` bucket (an unrecognized tool that *might* mutate).
+   - **`'other'` tool with no extractable file path** (e.g. `search_web`, `ask_question`,
+     `list_permissions`) → **allow** (no path *and* no mutating-hint ⇒ not a file mutation,
+     so it can never touch a rail). This no-path allow is scoped to **`'other'`** — a
+     **`'mutating'`** classification is by tool *name*, so it must NOT be short-circuited here
+     even when no path is visible (that case is H2 at step 4).
+   - otherwise (a **`'mutating'`** file tool — regardless of whether a path is visible — or an
+     **`'other'`** tool that *does* carry a path) → continue.
+   The tools that reach step 3 are exactly the **mutating** file tools (always) and the
+   ambiguous **`'other'`** bucket **when it carries a path**.
 3. **Extract the path** from `toolCall.args` defensively across keys: `TargetFile`,
    `AbsolutePath`, `path`, `file_path`, `FilePath`.
 4. **Resolve-or-fail-closed (agy-specific; §6 F2/G2/H1/H2/H3).** The guiding principle: a tool
