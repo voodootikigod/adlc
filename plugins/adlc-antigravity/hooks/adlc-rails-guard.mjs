@@ -7,7 +7,7 @@
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
-import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool } from '../rails-checker.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -122,4 +122,30 @@ export function decide(payload, { env = process.env } = {}) {
     // tamper/corruption than a benign bug → fail CLOSED; off → no-op allow.
     return enforcing ? deny(`internal error while enforcing — ${err?.message ?? err}`) : allow();
   }
+}
+
+/** Parse a raw stdin string and return the agy verdict. Enforcement-aware on bad JSON. */
+export function runFromStdin(raw, env = process.env) {
+  const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+  let payload = {};
+  if (raw && raw.trim()) {
+    try { payload = JSON.parse(raw); }
+    catch { return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow(); }
+  }
+  return decide(payload, { env });
+}
+
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+export async function main() {
+  const raw = await readStdin();
+  process.stdout.write(JSON.stringify(runFromStdin(raw, process.env)));
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main();
 }
