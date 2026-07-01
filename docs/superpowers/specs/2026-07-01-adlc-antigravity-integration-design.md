@@ -108,19 +108,28 @@ classify correctly through it because `normalizeToolName()` strips non-alpha:
    - **no file path** present in `toolCall.args` (e.g. `search_web`, `ask_question`,
      `list_permissions`) → **allow** (it is not a file mutation, so it can never touch a rail).
    - otherwise (a **mutating file tool**, or `'other'` carrying a path) → continue.
+   The tools that reach step 3 are exactly the **mutating** file tools and the ambiguous
+   `'other'` bucket (an unrecognized tool that *might* mutate).
 3. **Extract the path** from `toolCall.args` defensively across keys: `TargetFile`,
    `AbsolutePath`, `path`, `file_path`, `FilePath`.
-4. **Root derivation (agy-specific, §6 F2/G2):** cwd is the plugin dir and `workspacePaths`
-   may be `[]`. Walk **up from the absolute target path** to the nearest ancestor containing
-   `.adlc/tickets.json`; use `workspacePaths[0]` when present.
-   - **No `.adlc/` found up-tree** → the repo is **not ADLC-initialized** → **no-op allow**
-     (NOT fail-closed — this preserves the shared "no-op when not initialized" contract and
-     keeps non-ADLC projects usable under a global `ADLC_P4_ENFORCEMENT=1`).
-   - **`.adlc/` found**, path anchors to it → `checkRail({filePath, tool, root, env})`
-     (enforcement/ticket/conflict/corruption handling lives inside the checker).
-   - **`.adlc/` found but the path cannot be anchored to it** (relative and unresolvable)
-     **and** `ADLC_P4_ENFORCEMENT=1` → **fail closed** (deny). Safe direction; rare, since
-     observed writes are absolute (V7).
+4. **Resolve-or-fail-closed (agy-specific; §6 F2/G2/H1/H2/H3).** The guiding principle: a tool
+   that *might mutate a file* but that the hook **cannot fully resolve** must **fail closed**
+   under enforcement — only a path that resolves to a *genuinely non-ADLC location* is a
+   no-op allow. cwd is the plugin dir and `workspacePaths` may be `[]` (V8), so:
+   - **No path extracted** (unknown arg key on a tool that classified `mutating`/`'other'`)
+     → under `ADLC_P4_ENFORCEMENT=1` **deny** (H2); else allow. (A `'other'` tool with **no
+     path and no mutating-hint** — e.g. `search_web` — was already allowed at step 2, so this
+     branch only bites a name-mutating or path-shaped tool we failed to parse.)
+   - **Relative path**: anchor via `workspacePaths[0]` if present → treat as absolute below.
+     If **unanchorable** (relative *and* `workspacePaths` empty) → under enforcement **deny**
+     (H1/H3); else allow. This is the headless-mode hole the G2 fix must not reopen.
+   - **Absolute path**: walk **up** to the nearest ancestor containing `.adlc/tickets.json`.
+     - **found** → `checkRail({filePath, tool, root, env})` (enforcement/ticket/conflict/
+       corruption handling lives inside the checker).
+     - **not found** → the path resolved to a **genuinely non-ADLC** location → **no-op
+       allow** (preserves the "no-op when not initialized" contract; keeps non-ADLC projects
+       usable under a global `ADLC_P4_ENFORCEMENT=1` — G2). Safe *because the path was
+       absolute*, so we searched the real location, not the plugin dir.
 5. **Emit** `{"allow_tool": false, "deny_reason": "<reason>"}` on deny, else
    `{"allow_tool": true}`. **Always `exit 0`** (V5).
 
@@ -168,10 +177,18 @@ Corrected per the §5 decision tree:
 - **G2 — non-ADLC repositories**: "no `.adlc/` found up-tree" means **not initialized → no-op
   allow**, *not* fail-closed — so a global `ADLC_P4_ENFORCEMENT=1` doesn't lock down normal
   projects.
-- **Fail-closed is narrow**: only a **mutating file tool** whose path anchors inside a repo
-  that **does** have `.adlc/`, but that we cannot resolve (relative/unanchorable), denies
-  under enforcement. Observed writes are absolute (V7), so this is the rare edge, and denying
-  is the safe direction.
+- **Fail-closed is narrow but complete** (pass-3 correction, H1/H2/H3): the no-op-allow
+  fallback applies **only to an absolute path that resolves to a non-ADLC location**. A
+  mutating/`'other'` tool that the hook cannot fully resolve fails closed under enforcement:
+  - **H1/H3** — a **relative** path with empty `workspacePaths` (headless mode) is
+    unanchorable → **deny** (previously it fell through to the non-ADLC no-op-allow and
+    bypassed the rail). §5 and §6 now agree: relative+unanchorable ⇒ deny, never allow.
+  - **H2** — a tool that classifies **mutating by name** but exposes its path under an
+    **unrecognized arg key** (path extraction returns nothing) → **deny**. (`'other'` tools
+    with neither a path nor a mutating-hint — `search_web` — remain allowed at step 2, so G1
+    is preserved.)
+  - Only an **absolute** path (V7 — the observed common case) that walks up and finds **no**
+    `.adlc/` is a genuine non-ADLC no-op allow (G2).
 
 ### F3 / G6 (high) — portable command path, POSIX-scoped
 V9: the `command` uses `$HOME`
@@ -212,8 +229,12 @@ covered by the CI gate.
   - deny/allow emission shape (`allow_tool`/`deny_reason`) and **exit code is always 0** (V5);
   - **G1** — a non-file tool (`search_web`) and a read-only tool (`view_file`) are **allowed
     under `ADLC_P4_ENFORCEMENT=1`** (not blocked by root failure);
-  - **G2** — a `write_to_file` in a repo with **no `.adlc/`** is **allowed** under global
-    enforcement (no-op, not fail-closed);
+  - **G2** — a `write_to_file` with an **absolute** path in a repo with **no `.adlc/`** is
+    **allowed** under global enforcement (no-op, not fail-closed);
+  - **H1/H3** — a mutating write with a **relative** path and empty `workspacePaths`
+    (headless) is **denied** under enforcement (must NOT fall through to G2 no-op-allow);
+  - **H2** — a name-mutating tool whose path is under an **unrecognized arg key** (no path
+    extracted) is **denied** under enforcement;
   - rail hit — a mutating write to a frozen rail inside an ADLC repo is **denied**;
   - **G3** — a table of agy's real mutating tool names each **denies** a rail write, and each
     real read/non-file tool is **allowed**;
