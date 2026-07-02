@@ -42,15 +42,19 @@ initially omitted), flagged there by two independent reviewers as a drift hazard
 - **Content baseline:** the current committed form of the five router files (post-PR-#55) is the
   source of truth for extracting `shared` vs `harness_specific` content — diff the five files to
   separate common from harness-unique.
-- **Baseline ref (`$BASE`) for AC5/AC8.** Before the first (reformat) commit, the build records the
-  pre-consolidation commit sha to `.adlc/router-baseline.sha` (`git rev-parse HEAD > .adlc/router-baseline.sha`).
-  AC5/AC8 compare generated output against **that** ref, never `HEAD` — on a branch that has already
-  committed the refactor, `HEAD` holds the refactored files, so a `HEAD` baseline compares
-  refactored-vs-refactored and cannot detect a regression (it would be a hollow check).
+- **Baseline ref (`$BASE`) for AC5/AC8.** `$BASE` is **computed at check time** as
+  `git merge-base main HEAD` — the branch point, i.e. the pre-consolidation router state. No
+  committed baseline file (a `.adlc/*`-stored sha would be gitignored; `.gitignore` only negates
+  `tickets.json`). AC5/AC8 compare generated output against `$BASE`, never `HEAD` — on a branch that
+  has already committed the refactor, `HEAD` holds the refactored files, so a `HEAD` baseline
+  compares refactored-vs-refactored and cannot detect a regression (a hollow check). Because T13 is
+  rebased onto post-PR-#55 `main` (see Dependency), `merge-base main HEAD` is the post-PR-#55,
+  pre-consolidation state AC4/AC5/AC8 expect. If AC5/AC8 are wired into a CI job, that job must
+  `checkout` with `fetch-depth: 0` so the merge-base commit is present.
 - **Dependency on PR #55.** T13 consolidates the very routers PR #55 edited, and **AC4** requires the
   PR #55 discoverability content (`adversarial-review` at P1/P3/P5, `exit 0 = SHIP`) to be present in
-  all five. So T13 must be **built on top of PR #55** (rebased onto post-PR-#55 `main`); the recorded
-  `$BASE` is that post-PR-#55, pre-consolidation router state. Building T13 before PR #55 merges would
+  all five. So T13 must be **built on top of PR #55** (rebased onto post-PR-#55 `main`); the computed
+  `$BASE` (`git merge-base main HEAD`) is that post-PR-#55, pre-consolidation router state. Building T13 before PR #55 merges would
   make AC4 fail and `$BASE` wrong.
 
 ## Non-goals
@@ -67,10 +71,10 @@ Each has a concrete verification method (this spec must pass `spec-lint`).
 - **AC2** — *Verify:* `node scripts/router/gen-routers.mjs && git diff --exit-code plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc` exits 0 — generated output equals the committed five routers on a clean checkout.
 - **AC3** — *Verify:* `printf '\\n<!-- drift -->\\n' >> plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check; test $? -ne 0; git checkout plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check` — the check exits non-zero on a hand-edited router and exits 0 after regeneration.
 - **AC4** — *Verify:* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do grep -q 'adversarial-review' "$f" && grep -q 'exit 0 = SHIP' "$f" || echo "FAIL $f"; done` prints nothing — the PR #55 discoverability content survives in all five generated routers.
-- **AC5** — *Verify (format-agnostic, works for prose AND table; preserves the phase→gate association so a P1↔P3 gate SWAP is detected — not a global token set; baseline is `$BASE`, NOT `HEAD`):* `BASE=$(cat .adlc/router-baseline.sha); pairs(){ awk '{ if (match($0,/P[0-7]/)) cur=substr($0,RSTART,RLENGTH); s=$0; while (match(s,/adlc [a-z-]+/)) { print cur"|"substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH) } }' | sort -u; }; for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | pairs) <(pairs < "$f") || echo "ROUTING DRIFT $f"; done` prints no `ROUTING DRIFT` line — each `phase|adlc-gate` pair (gate associated with its nearest preceding phase label) is identical between the pre-consolidation baseline and the generated output, so no routing was added, dropped, or swapped between phases.
+- **AC5** — *Verify (format-agnostic, works for prose AND table; preserves the phase→gate association so a P1↔P3 gate SWAP is detected — not a global token set; baseline is `$BASE`, NOT `HEAD`):* `BASE=$(git merge-base main HEAD); pairs(){ awk '{ if (match($0,/P[0-7]/)) cur=substr($0,RSTART,RLENGTH); s=$0; while (match(s,/adlc [a-z-]+/)) { print cur"|"substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH) } }' | sort -u; }; for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | pairs) <(pairs < "$f") || echo "ROUTING DRIFT $f"; done` prints no `ROUTING DRIFT` line — each `phase|adlc-gate` pair (gate associated with its nearest preceding phase label) is identical between the pre-consolidation baseline and the generated output, so no routing was added, dropped, or swapped between phases.
 - **AC6** — *Verify:* `adlc spec-lint docs/specs/router-consolidation.md` exits 0 (this spec has zero wishes).
 - **AC7** — *Verify:* `test -f .github/workflows/router-drift.yml && grep -nE 'gen-routers.mjs --check' .github/workflows/router-drift.yml` confirms the drift check is wired as a CI workflow.
-- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep/diff stay green; baseline is `$BASE`, NOT `HEAD`; all five routers carry `---` frontmatter, opencode included):* `BASE=$(cat .adlc/router-baseline.sha); for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' "$f") || echo "FRONTMATTER DRIFT $f"; done` prints no `FRONTMATTER DRIFT` — each router's leading `---` frontmatter block is byte-identical to its pre-consolidation form.
+- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep/diff stay green; baseline is `$BASE`, NOT `HEAD`; all five routers carry `---` frontmatter, opencode included):* `BASE=$(git merge-base main HEAD); for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' "$f") || echo "FRONTMATTER DRIFT $f"; done` prints no `FRONTMATTER DRIFT` — each router's leading `---` frontmatter block is byte-identical to its pre-consolidation form.
 
 Suppressions are denied.
 
