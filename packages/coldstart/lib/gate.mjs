@@ -11,11 +11,11 @@ import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
  * @param {Function} completeFn - async (opts) => string
  * @param {Function} extractJsonFn - (text) => object
  */
-export function buildCheckTicket(completeFn, extractJsonFn) {
+export function buildCheckTicket(completeFn, extractJsonFn, tier = 'cheap') {
   return async function checkTicketWith(ticket) {
     const prompt = buildPrompt(ticket);
     const raw = await completeFn({
-      tier: 'cheap',
+      tier,
       system: SYSTEM_PROMPT,
       prompt,
       maxTokens: 1024,
@@ -41,7 +41,7 @@ export function buildCheckTicket(completeFn, extractJsonFn) {
  * force a green executability verdict with no LLM call. The real path fails
  * closed when no API key is configured — which is the correct behavior.
  */
-export async function checkTicket(ticket) {
+export async function checkTicket(ticket, tier = 'cheap') {
   const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
   if (mockEnv !== undefined && process.env.NODE_ENV === 'test') {
     let parsed = {};
@@ -53,7 +53,7 @@ export async function checkTicket(ticket) {
     const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
     return { id: ticket.id, gaps };
   }
-  return buildCheckTicket(coreComplete, coreExtractJson)(ticket);
+  return buildCheckTicket(coreComplete, coreExtractJson, tier)(ticket);
 }
 
 /**
@@ -61,10 +61,10 @@ export async function checkTicket(ticket) {
  * Returns an array of { id, gaps } in the same order.
  * Throws on the first LLM error (fail-fast for operational errors).
  */
-export async function checkAll(tickets) {
+export async function checkAll(tickets, tier = 'cheap') {
   const results = [];
   for (const ticket of tickets) {
-    results.push(await checkTicket(ticket));
+    results.push(await checkTicket(ticket, tier));
   }
   return results;
 }

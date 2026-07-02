@@ -33,24 +33,24 @@ Output ONLY valid JSON matching this schema (no extra text):
  * Refine a single cluster via LLM.
  * Returns { name, description, rule } or null on failure.
  */
-export async function refineCluster(clusterName, findings) {
+export async function refineCluster(clusterName, findings, tier = 'mid') {
   const prompt = buildRefinementPrompt(clusterName, findings);
-  const raw = await complete({ tier: 'mid', prompt, maxTokens: 512 });
+  const raw = await complete({ tier, prompt, maxTokens: 512 });
   return extractJson(raw);
 }
 
 /**
- * Refine multiple clusters, one mid call each.
+ * Refine multiple clusters, one call each.
  * Returns Map<clusterIndex, {name, description, rule}>.
  * Failures are logged but do not throw.
  */
-export async function refineClusters(clusters, allFindings) {
+export async function refineClusters(clusters, allFindings, tier = 'mid') {
   const results = new Map();
 
   for (const [idx, cluster] of clusters.entries()) {
     const findings = cluster.indices.map((i) => allFindings[i]);
     try {
-      const refined = await refineCluster(cluster.name, findings);
+      const refined = await refineCluster(cluster.name, findings, tier);
       if (refined && refined.name && refined.description && refined.rule) {
         results.set(idx, refined);
       }

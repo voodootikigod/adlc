@@ -25,6 +25,7 @@ const { values: flags } = parseArgs({
     write:       { type: 'boolean', default: false },
     gate:        { type: 'boolean', default: false },
     llm:         { type: 'boolean', default: false },
+    tier:        { type: 'string',  default: 'mid' },
     'prompt-only': { type: 'boolean', default: false },
     json:        { type: 'boolean', default: false },
   },
@@ -33,9 +34,15 @@ const { values: flags } = parseArgs({
 const ledgerName = flags.ledger;
 const minSize    = parseInt(flags.min, 10);
 const outDir     = flags['out-dir'];
+const tier       = flags.tier;
 
 if (isNaN(minSize) || minSize < 1) {
   opError(`--min must be a positive integer (got: ${flags.min})`);
+}
+
+const VALID_TIERS = ['cheap', 'mid', 'frontier'];
+if (!VALID_TIERS.includes(tier)) {
+  opError(`--tier must be cheap|mid|frontier, got: ${tier}`);
 }
 
 // Resolve ledger directory: look in cwd's .adlc or use the default
@@ -68,7 +75,7 @@ if (flags['prompt-only']) {
 let llmRefinements = new Map();
 if (flags.llm && clusters.length > 0) {
   try {
-    llmRefinements = await refineClusters(clusters, findings);
+    llmRefinements = await refineClusters(clusters, findings, tier);
   } catch (err) {
     opError(`LLM refinement failed: ${err.message}. Use --prompt-only to get prompts.`);
   }

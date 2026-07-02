@@ -23,6 +23,7 @@ const { values: flags } = parseArgs({
     'out-dir':    { type: 'string',  default: '.adlc/lenses' },
     write:        { type: 'boolean', default: false },
     llm:          { type: 'boolean', default: false },
+    tier:         { type: 'string',  default: 'mid' },
     'prompt-only': { type: 'boolean', default: false },
     json:         { type: 'boolean', default: false },
   },
@@ -31,12 +32,29 @@ const { values: flags } = parseArgs({
 const limit  = parseInt(flags.limit, 10);
 const minSize = parseInt(flags.min, 10);
 const outDir  = flags['out-dir'];
+const tier    = flags.tier;
 
 if (isNaN(limit) || limit < 1) {
   opError(`--limit must be a positive integer (got: ${flags.limit})`);
 }
 if (isNaN(minSize) || minSize < 1) {
   opError(`--min must be a positive integer (got: ${flags.min})`);
+}
+
+const VALID_TIERS = ['cheap', 'mid', 'frontier'];
+if (!VALID_TIERS.includes(tier)) {
+  opError(`--tier must be cheap|mid|frontier, got: ${tier}`);
+}
+
+// --prompt-only: print a representative prompt and exit 0. Checked BEFORE any
+// gh call — the tool must be usable with zero network access, not just zero
+// LLM API keys.
+if (flags['prompt-only']) {
+  const placeholderCluster = { slug: 'example-cluster', indices: [0] };
+  const placeholderSignals = [{ body: '<sample PR rejection comment>', prNumber: 0 }];
+  const prompt = buildAllPrompts([placeholderCluster], placeholderSignals)[0];
+  promptOnly(prompt);
+  // promptOnly exits; unreachable
 }
 
 // Verify gh is available
@@ -61,21 +79,11 @@ if (totalPRs === 0) {
 // Cluster signals
 const clusters = buildClusters(signals, minSize);
 
-// --prompt-only: print prompts and exit 0
-if (flags['prompt-only']) {
-  if (clusters.length === 0) {
-    promptOnly('(no clusters to refine)');
-  }
-  const prompts = buildAllPrompts(clusters, signals);
-  promptOnly(prompts);
-  // promptOnly exits; unreachable
-}
-
 // --llm: refine clusters
 let llmRefinements = new Map();
 if (flags.llm && clusters.length > 0) {
   try {
-    llmRefinements = await refineClusters(clusters, signals);
+    llmRefinements = await refineClusters(clusters, signals, tier);
   } catch (err) {
     opError(`LLM refinement failed: ${err.message}. Use --prompt-only to get prompts.`);
   }

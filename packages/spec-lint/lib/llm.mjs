@@ -35,14 +35,14 @@ ${items}`;
  * @param {Array<{line:number, text:string}>} verifiedCriteria
  * @returns {Promise<{ vacuous: number[], reason: Record<string,string> }>}
  */
-export async function detectVacuous(verifiedCriteria) {
+export async function detectVacuous(verifiedCriteria, tier = 'cheap') {
   if (verifiedCriteria.length === 0) {
     return { vacuous: [], reason: {} };
   }
 
   const prompt = buildVacuousPrompt(verifiedCriteria);
   const response = await complete({
-    tier: 'cheap',
+    tier,
     system: 'You are a spec quality auditor. Respond with JSON only.',
     prompt,
     maxTokens: 1024,

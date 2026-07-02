@@ -9,14 +9,14 @@
  * identifies the plant's defect.
  */
 
-const JUDGE_SYSTEM =
+export const JUDGE_SYSTEM =
   'You are calibrating a code reviewer. Given a known planted defect and one ' +
   'review finding, decide whether the finding actually IDENTIFIES that defect ' +
   '(names the wrong behavior / root cause), not merely that it mentions the ' +
   'same line. Echoing or quoting a changed line without describing what is ' +
   'wrong is NOT identifying it. Answer only JSON: {"match": true|false}.';
 
-function buildJudgePrompt(plant, finding) {
+export function buildJudgePrompt(plant, finding) {
   return [
     'PLANTED DEFECT',
     `  file: ${plant.file}:${plant.line}`,
@@ -43,12 +43,13 @@ function oneLine(s) {
  *
  * @param {Function} completeFn   async ({tier, system, prompt, maxTokens}) => string
  * @param {Function} extractJsonFn (text) => object
+ * @param {string} [tier]
  * @returns {(plant, finding) => Promise<boolean>}
  */
-export function makeLlmJudge(completeFn, extractJsonFn) {
+export function makeLlmJudge(completeFn, extractJsonFn, tier = 'cheap') {
   return async function judge(plant, finding) {
     const raw = await completeFn({
-      tier: 'cheap',
+      tier,
       system: JUDGE_SYSTEM,
       prompt: buildJudgePrompt(plant, finding),
       maxTokens: 64,

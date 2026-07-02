@@ -51,6 +51,11 @@ if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
   opError('--threshold must be a number between 0 and 1');
 }
 
+const VALID_TIERS = ['cheap', 'mid', 'frontier'];
+if (values.tier !== undefined && !VALID_TIERS.includes(values.tier)) {
+  opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
+}
+
 const tierOverride = values.tier ?? undefined;
 
 // --------------------------------------------------------------------------

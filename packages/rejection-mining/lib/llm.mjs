@@ -39,30 +39,31 @@ Output ONLY valid JSON matching this schema (no extra text, no markdown):
  * @param {Array<{body: string}>} signals
  * @returns {Promise<{title: string, charter: string}|null>}
  */
-export async function refineCluster(slug, signals) {
+export async function refineCluster(slug, signals, tier = 'mid') {
   const prompt = buildRefinementPrompt(slug, signals);
-  const raw = await complete({ tier: 'mid', prompt, maxTokens: 512 });
+  const raw = await complete({ tier, prompt, maxTokens: 512 });
   const parsed = extractJson(raw);
   if (parsed && parsed.title && parsed.charter) return parsed;
   return null;
 }
 
 /**
- * Refine multiple clusters (one mid call each).
+ * Refine multiple clusters (one call each).
  * Returns Map<clusterIndex, {title, charter}>.
  * Failures are logged but do not throw.
  *
  * @param {Array<{slug: string, indices: number[]}>} clusters
  * @param {Array<{body: string}>} signals
+ * @param {string} [tier]
  * @returns {Promise<Map<number, {title: string, charter: string}>>}
  */
-export async function refineClusters(clusters, signals) {
+export async function refineClusters(clusters, signals, tier = 'mid') {
   const results = new Map();
 
   for (const [idx, cluster] of clusters.entries()) {
     const clusterSignals = cluster.indices.map((i) => signals[i]);
     try {
-      const refined = await refineCluster(cluster.slug, clusterSignals);
+      const refined = await refineCluster(cluster.slug, clusterSignals, tier);
       if (refined) results.set(idx, refined);
     } catch (err) {
       console.error(

@@ -11,7 +11,7 @@
 
 import { writeFileSync, readFileSync } from 'node:fs';
 import {
-  parseArgs, pass, gateFail, opError, printJson,
+  parseArgs, pass, gateFail, opError, printJson, promptOnly,
   git, isDirty, isGitRepo, mutate,
   complete as coreComplete, extractJson as coreExtractJson, detectProvider,
 } from '@adlc/core';
@@ -19,7 +19,7 @@ import { filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mj
 import { runWithPlants } from '../lib/runner.mjs';
 import { parseFindings } from '../lib/findings.mjs';
 import { scorePlants } from '../lib/scorer.mjs';
-import { makeLlmJudge, referenceJudge } from '../lib/judge.mjs';
+import { makeLlmJudge, referenceJudge, JUDGE_SYSTEM, buildJudgePrompt } from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
 import { echoReviewer, oracleReviewer } from '../lib/controls.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
@@ -36,13 +36,14 @@ const { values } = parseArgs({
     scorer:         { type: 'string', default: 'judge' }, // judge | string
     files:          { type: 'string' },
     'plants-file':  { type: 'string' },
+    tier:           { type: 'string', default: 'cheap' },
     json:           { type: 'boolean', default: false },
+    'prompt-only':  { type: 'boolean', default: false },
     help:           { type: 'boolean', default: false },
   },
 });
 
-if (values.help || !values['review-cmd']) {
-  console.log(`
+const HELP_TEXT = `
 review-calibration — reviewer recall measurement via planted bugs (ADLC C8)
 
 Usage:
@@ -66,7 +67,10 @@ Options:
   --files <list>        Fallback comma-separated file list
   --plants-file <path>  JSON array of authored plants:
                         [{file,line,original,mutated,category?,defect?,witness?}]
+  --tier cheap|mid|frontier  Model tier for the LLM judge (default: cheap)
   --json                Machine-readable JSON output
+  --prompt-only         Print a representative judge prompt and exit 0 (no
+                        API key or git repo needed)
   --help                Show this help
 
 Exit codes:
@@ -76,8 +80,43 @@ Exit codes:
   2  Recall/precision below thresholds (gate fails)
 
 ADLC phase: P5 meta-gate — "who reviews the reviewer"
-`);
-  process.exit(values.help ? 0 : 1);
+`;
+
+if (values.help) {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
+
+const VALID_TIERS = ['cheap', 'mid', 'frontier'];
+if (!VALID_TIERS.includes(values.tier)) {
+  opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
+}
+
+// --prompt-only: print a representative judge prompt and exit 0. Checked
+// BEFORE the --review-cmd requirement and any git/dirty-tree checks — the
+// tool must be usable with zero setup, not just zero API keys.
+if (values['prompt-only']) {
+  const placeholderPlant = {
+    file: 'src/example.mjs',
+    line: 42,
+    category: 'off-by-one',
+    original: 'i <= arr.length',
+    mutated: 'i < arr.length',
+    defect: 'off-by-one bound change causes an out-of-bounds read',
+  };
+  const placeholderFinding = {
+    file: 'src/example.mjs',
+    line: 42,
+    description: '<reviewer finding text will appear here>',
+    evidence: null,
+  };
+  promptOnly(`${JUDGE_SYSTEM}\n\n${buildJudgePrompt(placeholderPlant, placeholderFinding)}`);
+  // promptOnly exits; unreachable
+}
+
+if (!values['review-cmd']) {
+  console.log(HELP_TEXT);
+  process.exit(1);
 }
 
 const reviewCmd  = values['review-cmd'];
@@ -87,6 +126,7 @@ const minRecall  = parseFloat(values['min-recall']);
 const minPrecision = values['min-precision'] != null ? parseFloat(values['min-precision']) : null;
 const scorerMode = values.scorer;
 const filesFlag  = values.files ?? '';
+const tier       = values.tier;
 const useJson    = values.json;
 const cwd        = process.cwd();
 
@@ -121,7 +161,7 @@ if (scorerMode === 'string') {
       'or pass --scorer string (gameable, warned). Refusing to emit a string-matched recall number.'
     );
   }
-  judge = makeLlmJudge(coreComplete, coreExtractJson);
+  judge = makeLlmJudge(coreComplete, coreExtractJson, tier);
 }
 
 // ── select plants ────────────────────────────────────────────────────────────

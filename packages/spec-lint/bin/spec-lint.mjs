@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // spec-lint — ADLC C1 acceptance-criteria gate.
-// Usage: spec-lint <spec.md> [--llm] [--json] [--prompt-only]
+// Usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]
 
 import { readFileSync } from 'node:fs';
 import { parseArgs, pass, gateFail, opError, printJson, promptOnly } from '@adlc/core';
@@ -12,6 +12,7 @@ import { buildVacuousPrompt, detectVacuous } from '../lib/llm.mjs';
 const { values: flags, positionals } = parseArgs({
   options: {
     llm: { type: 'boolean', default: false },
+    tier: { type: 'string', default: 'cheap' },
     json: { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },
   },
@@ -20,7 +21,12 @@ const { values: flags, positionals } = parseArgs({
 const specPath = positionals[0];
 
 if (!specPath) {
-  opError('usage: spec-lint <spec.md> [--llm] [--json] [--prompt-only]');
+  opError('usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]');
+}
+
+const VALID_TIERS = ['cheap', 'mid', 'frontier'];
+if (!VALID_TIERS.includes(flags.tier)) {
+  opError(`--tier must be cheap|mid|frontier, got: ${flags.tier}`);
 }
 
 // Read spec file.
@@ -52,7 +58,7 @@ if (flags['prompt-only']) {
 if (flags.llm && verifiedCriteria.length > 0) {
   let llmResult;
   try {
-    llmResult = await detectVacuous(verifiedCriteria);
+    llmResult = await detectVacuous(verifiedCriteria, flags.tier);
   } catch (err) {
     opError(`LLM call failed: ${err.message}. Use --prompt-only to get the prompt.`);
   }

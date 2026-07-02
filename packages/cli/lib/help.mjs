@@ -24,5 +24,9 @@ export function renderHelp(version) {
     }
   }
 
+  lines.push('');
+  lines.push('Note: "ticket" is the dispatcher shorthand for the @adlc/ticket-sync package');
+  lines.push('      (adlc ticket ... routes to ticket-sync\'s bin).');
+
   return lines.join('\n');
 }

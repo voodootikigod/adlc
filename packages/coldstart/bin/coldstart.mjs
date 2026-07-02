@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // coldstart — P2 ticket executability gate.
-// Usage: coldstart <ticket-id> [--tickets path] [--all] [--prompt-only] [--json]
+// Usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--json]
 
 import {
   parseArgs,
@@ -19,15 +19,22 @@ const { values, positionals } = parseArgs({
   options: {
     tickets: { type: 'string', default: '.adlc/tickets.json' },
     all: { type: 'boolean', default: false },
+    tier: { type: 'string', default: 'cheap' },
     'prompt-only': { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
   },
 });
 
+const VALID_TIERS = ['cheap', 'mid', 'frontier'];
+if (!VALID_TIERS.includes(values.tier)) {
+  opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
+}
+
 const promptOnlyMode = values['prompt-only'];
 const jsonMode = values['json'];
 const ticketsPath = values['tickets'];
 const runAll = values['all'];
+const tier = values['tier'];
 
 // ── Load tickets ─────────────────────────────────────────────────────────────
 
@@ -50,7 +57,7 @@ if (runAll) {
   const ticketId = positionals[0];
   if (!ticketId) {
     opError(
-      'usage: coldstart <ticket-id> [--tickets path] [--all] [--prompt-only] [--json]'
+      'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--json]'
     );
   }
   const ticket = tickets.find((t) => t.id === ticketId);
@@ -84,7 +91,7 @@ if (!provider) {
 
 let results;
 try {
-  results = await checkAll(targets);
+  results = await checkAll(targets, tier);
 } catch (err) {
   opError(`LLM call failed: ${err.message}`);
 }
