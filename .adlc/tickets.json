@@ -276,12 +276,29 @@
         "docs/router/**",
         "scripts/router/**",
         "packages/router-source/**",
-        ".github/workflows/**"
+        ".github/workflows/**",
+        "plugins/adlc-antigravity/skills/adlc/SKILL.md"
       ],
       "rails": [],
       "edges": [],
       "duration": 3,
       "category": "refactor"
+    },
+    {
+      "id": "T14",
+      "title": "Add adversarial-review discoverability to the adlc-antigravity phase router",
+      "body": "PROBLEM. PR #55 added an adversarial-review loop discoverability block (references at P1/P3/P5 and the phrase `exit 0 = SHIP`) to the ADLC phase routers of five harnesses. The sixth harness, adlc-antigravity (merged separately in PR #53), was not covered: its phase router `plugins/adlc-antigravity/skills/adlc/SKILL.md` is a full-map prose router (~20 phase->gate pairs, `---` frontmatter) but contains ZERO `adversarial-review` mentions. Operators on Antigravity therefore see no guidance to reach for the cross-model ship/no-ship loop at P1/P3/P5.\n\nGOAL. Bring the antigravity router in line with the other five (specifically claude-code, the closest full-map prose analogue): add the adversarial-review references at the P1 (design review), P3 (rail-selection adequacy), and P5 (built code, >=2 providers) entries, plus a short 'adversarial-review loop' note (cross-model + fresh-context + loop-until-SHIP; flags `--verify`, `--loop`, `--providers`; the exact phrase `exit 0 = SHIP`; an `npx adversarial-review` invoke hint; and reference ADR-0008 by NAME, no repo-relative link since routers ship as installed plugins). Match the file's existing prose voice; do not use the unsupported `adversarial-review <spec.md>` positional or a `--loop` command for P1/P3 artifact review (see PR #55's corrected guidance: P1/P3 reviews are `--prompt-only`/diff-based today because `--input` is deferred).\n\nACCEPTANCE CRITERIA:\nAC1 - `grep -c 'adversarial-review' plugins/adlc-antigravity/skills/adlc/SKILL.md` returns a value >= 1 and `grep -c 'exit 0 = SHIP' plugins/adlc-antigravity/skills/adlc/SKILL.md` returns >= 1. Verify by running both greps.\nAC2 - The references appear at P1, P3 and P5. Verify: `grep -nE 'P1|P3|P5' plugins/adlc-antigravity/skills/adlc/SKILL.md` shows the adversarial-review mentions co-located with those phases.\nAC3 - No unsupported command syntax. Verify: `grep -nE 'adversarial-review +<?spec|adversarial-review --loop' plugins/adlc-antigravity/skills/adlc/SKILL.md` returns nothing.\nAC4 - The router still loads (frontmatter intact). Verify: the leading `---` frontmatter block is unchanged (`diff <(git show HEAD:plugins/adlc-antigravity/skills/adlc/SKILL.md | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' plugins/adlc-antigravity/skills/adlc/SKILL.md)` is empty).\n\nCONTEXT. Mirrors the claude-code treatment from PR #55 (ADR-0008). This is a standalone content fix that closes the gap now; it is a prerequisite of T13 (router consolidation), so that T13's single-source consolidation starts from a consistent six-router baseline. Suppressions are denied.",
+      "scope": [
+        "plugins/adlc-antigravity/skills/adlc/SKILL.md"
+      ],
+      "rails": [],
+      "edges": [
+        {
+          "to": "T13"
+        }
+      ],
+      "duration": 1,
+      "category": "bugfix"
     }
   ]
 }

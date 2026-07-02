@@ -1,18 +1,19 @@
 # Spec — Consolidate the replicated ADLC phase routers (T13, P1)
 
 **Phase:** P1 working spec for ticket **T13**. Deliverable of the eventual build is a single
-canonical router source + a generator + a drift check that keeps all five harness routers in
+canonical router source + a generator + a drift check that keeps all six harness routers in
 sync. This spec makes the design decisions the ticket left open and states testable acceptance
 criteria.
 
 ## Problem
 
-ADLC phase-router content is spread across five harness plugins in three file conventions, and
+ADLC phase-router content is spread across six harness plugins in three file conventions, and
 the harnesses fall into **two content classes** (verified by counting `phase|adlc-gate` pairs in
-each file — do not assume all five are identical):
+each file — do not assume all six are identical):
 
 - **Full-map routers** — enumerate the P0–P7 → gate map:
   - `plugins/adlc-claude-code/skills/adlc/SKILL.md` — prose, YAML frontmatter (~20 pairs)
+  - `plugins/adlc-antigravity/skills/adlc/SKILL.md` — prose, `---` frontmatter (~20 pairs)
   - `plugins/adlc-opencode/skill/adlc.md` — table + prose, `---` frontmatter (~16 pairs)
   - `plugins/adlc-cursor/rules/adlc.mdc` — Cursor `.mdc` table, frontmatter (~16 pairs)
 - **Minimal / delegating routers** — a short skill that delegates to `adlc preflight` / `adlc run`,
@@ -20,9 +21,13 @@ each file — do not assume all five are identical):
   - `plugins/adlc-codex/skills/adlc/SKILL.md` — prose, YAML frontmatter
   - `plugins/adlc-pi/skills/adlc/SKILL.md` — prose, YAML frontmatter
 
+There are **six** harness routers (antigravity, `adlc-antigravity`, merged in PR #53, is the sixth).
+Note antigravity currently **lacks** the adversarial-review discoverability block — closed by **T14**
+(a prerequisite of this ticket), so consolidation starts from a consistent six-router baseline.
+
 Two kinds of content are shared and therefore drift-prone: (a) the **P0–P7 phase→gate map**, shared
-across the three full-map routers; (b) the **adversarial-review discoverability block** (from PR
-#55), shared across **all five**. An edit to either can update some harnesses and miss others —
+across the four full-map routers; (b) the **adversarial-review discoverability block** (from PR
+#55), shared across **all six**. An edit to either can update some harnesses and miss others —
 which happened in PR #55, where the adversarial-review block was initially omitted from opencode and
 cursor and flagged by two independent reviewers as a drift hazard.
 
@@ -38,31 +43,31 @@ cursor and flagged by two independent reviewers as a drift hazard.
   (`prose` | `table`), `frontmatter` (verbatim string emitted at file top), an **`includes`** list
   naming which shared sections that harness renders, and optional `harness_specific` sections (prose
   unique to that harness). This models the two content classes: full-map harnesses
-  (claude-code, opencode, cursor) `include: [phase_map, adversarial_note]`; minimal harnesses
+  (claude-code, antigravity, opencode, cursor) `include: [phase_map, adversarial_note]`; minimal harnesses
   (codex, pi) `include: [adversarial_note]` only, keeping their short delegating body as
   `harness_specific` — the generator must **not** push `phase_map` onto codex/pi (AC5 guards this:
   their baseline has ~3 pairs, so an injected full map trips ROUTING DRIFT).
 - **Generator:** `scripts/router/gen-routers.mjs` **imports the canonical ES module
-  `router-model.mjs` directly** (no YAML/JSON parsing) and renders each of the five target files
-  via a per-`format` template (prose renderer for the three SKILL.md; table renderer for opencode
+  `router-model.mjs` directly** (no YAML/JSON parsing) and renders each of the six target files
+  via a per-`format` template (prose renderer for the prose SKILL.md files; table renderer for opencode
   `adlc.md` and cursor `.mdc`), writing frontmatter + shared content + that harness's specific
   sections.
 - **Drift check:** `scripts/router/gen-routers.mjs --check` regenerates each target in memory and
   compares to the committed file; it exits non-zero listing any drifted paths, and exits 0 when all
-  five match. A CI workflow runs it as a required check.
+  six match. A CI workflow runs it as a required check.
 - **Consolidation equivalence check (deliverable, not an inline shell one-liner):**
   `scripts/router/check-consolidation.mjs <BASE>` verifies the consolidation preserved each harness's
   routing and frontmatter versus the pre-consolidation baseline. It (1) **asserts `<BASE>` is a
   non-empty, resolvable commit and exits non-zero with an error if not** — never a silent pass on an
-  empty/unresolved ref; (2) for each of the five routers, parses the phase→gate structure
+  empty/unresolved ref; (2) for each of the six routers, parses the phase→gate structure
   **structurally per format** (markdown table columns for `.mdc`/opencode; heading-scoped blocks for
   prose) rather than a whole-line regex, so multi-reference lines and same-line swaps cannot produce
   false negatives; (3) compares that structure and the frontmatter block between `git show BASE:<f>`
   and the working file; exits non-zero listing any `ROUTING DRIFT`/`FRONTMATTER DRIFT`. Being a real
   module, it is itself unit-testable and prosecutable (a golden test that a synthetic swap and a
   frontmatter mutation are both caught).
-- **Content baseline:** the current committed form of the five router files (post-PR-#55) is the
-  source of truth for extracting `shared` vs `harness_specific` content — diff the five files to
+- **Content baseline:** the current committed form of the six router files (post-PR-#55) is the
+  source of truth for extracting `shared` vs `harness_specific` content — diff the six files to
   separate common from harness-unique.
 - **Baseline ref (`$BASE`) for AC5/AC8.** `$BASE` is **computed at check time** as
   `git merge-base origin/main HEAD` (falling back to local `main` when no remote is present) — the
@@ -77,7 +82,7 @@ cursor and flagged by two independent reviewers as a drift hazard.
   commit is present.
 - **Dependency on PR #55.** T13 consolidates the very routers PR #55 edited, and **AC4** requires the
   PR #55 discoverability content (`adversarial-review` at P1/P3/P5, `exit 0 = SHIP`) to be present in
-  all five. So T13 must be **built on top of PR #55** (rebased onto post-PR-#55 `main`); the computed
+  all six. So T13 must be **built on top of PR #55** (rebased onto post-PR-#55 `main`); the computed
   `$BASE` (`git merge-base origin/main HEAD`) is that post-PR-#55, pre-consolidation router state. Building T13 before PR #55 merges would
   make AC4 fail and `$BASE` wrong.
 
@@ -85,20 +90,20 @@ cursor and flagged by two independent reviewers as a drift hazard.
 
 - No change to the phase→gate routing itself (pure refactor of how the routers are produced).
 - No new harness. No change to `.adlc/` gates or the CLI dispatcher.
-- Not adding a sixth harness router; if a harness is added later it becomes a new `harnesses` entry.
+- Not inventing new harnesses; a future (seventh) harness simply becomes a new `harnesses` entry.
 
 ## Acceptance criteria
 
 Each has a concrete verification method (this spec must pass `spec-lint`).
 
 - **AC1** — *Verify:* `node -e "import('./scripts/router/router-model.mjs').then(m=>{const o=m.default||m.routerModel;if(!o.shared||!o.harnesses)process.exit(1)})"` exits 0 — the canonical ES module exports a model with `shared` and `harnesses`.
-- **AC2** — *Verify:* `node scripts/router/gen-routers.mjs && git diff --exit-code plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc` exits 0 — generated output equals the committed five routers on a clean checkout.
+- **AC2** — *Verify:* `node scripts/router/gen-routers.mjs && git diff --exit-code plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-antigravity/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc` exits 0 — generated output equals the committed six routers on a clean checkout.
 - **AC3** — *Verify:* `printf '\\n<!-- drift -->\\n' >> plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check; test $? -ne 0; git checkout plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check` — the check exits non-zero on a hand-edited router and exits 0 after regeneration.
-- **AC4** — *Verify:* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do grep -q 'adversarial-review' "$f" && grep -q 'exit 0 = SHIP' "$f" || echo "FAIL $f"; done` prints nothing — the PR #55 discoverability content survives in all five generated routers.
+- **AC4** — *Verify:* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-antigravity/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do grep -q 'adversarial-review' "$f" && grep -q 'exit 0 = SHIP' "$f" || echo "FAIL $f"; done` prints nothing — the PR #55 discoverability content survives in all six generated routers.
 - **AC5** — *Verify (routing preserved per harness; structured parse, not whole-line regex; baseline `$BASE`, NOT `HEAD`):* `node scripts/router/check-consolidation.mjs "$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)"` exits 0 with no `ROUTING DRIFT` — each harness's phase→gate structure is identical between the pre-consolidation baseline and the generated output, so no routing was added, dropped, or swapped (the check parses table columns / heading-scoped prose blocks structurally, so a same-line swap cannot false-negative).
 - **AC6** — *Verify:* `adlc spec-lint docs/specs/router-consolidation.md` exits 0 (this spec has zero wishes).
 - **AC7** — *Verify:* `test -f .github/workflows/router-drift.yml && grep -nE 'gen-routers.mjs --check' .github/workflows/router-drift.yml` confirms the drift check is wired as a CI workflow.
-- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep stays green; all five routers carry `---` frontmatter, opencode included):* `node scripts/router/check-consolidation.mjs "$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)" --frontmatter` exits 0 with no `FRONTMATTER DRIFT` — each router's leading `---` frontmatter block is byte-identical to its pre-consolidation baseline.
+- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep stays green; all six routers carry `---` frontmatter, opencode included):* `node scripts/router/check-consolidation.mjs "$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)" --frontmatter` exits 0 with no `FRONTMATTER DRIFT` — each router's leading `---` frontmatter block is byte-identical to its pre-consolidation baseline.
 - **AC9** — *Verify (no silent pass on an unresolved baseline — an empty `<BASE>` must NOT degrade to `git show :<f>` comparing a file to the index):* `node scripts/router/check-consolidation.mjs "" ; test $? -ne 0` — the check exits non-zero (with a clear "baseline unresolved" error) when handed an empty/invalid `<BASE>`, rather than silently passing.
 
 Suppressions are denied.
@@ -107,7 +112,7 @@ Suppressions are denied.
 
 To keep the consolidation reviewable and avoid hiding a routing regression inside reformat churn
 (premortem finding #1), the build lands in **two commits**: (1) a **content-preserving reformat**
-of the five committed routers to exactly match generator output — reviewed as whitespace/format
+of the six committed routers to exactly match generator output — reviewed as whitespace/format
 only, with AC5 + AC8 green; then (2) introduce `router-model.mjs` + the generator + the drift CI.
 The drift check must be a **required** status check, not advisory (premortem finding #3).
 
@@ -130,5 +135,5 @@ The drift check must be a **required** status check, not advisory (premortem fin
   equality vs. HEAD) and AC8 (frontmatter equality vs. HEAD) are the correctness anchors; the build
   must also prosecute the generator with a golden test, not a hollow "it ran" assertion.
 - **Single source → single point of failure (premortem #3).** One bad edit to `router-model.mjs`
-  now breaks all five harnesses at once. Mitigated by the required drift check + AC5/AC8 running in
+  now breaks all six harnesses at once. Mitigated by the required drift check + AC5/AC8 running in
   CI on every change to the model or generator.
