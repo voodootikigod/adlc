@@ -9,3 +9,4 @@ node_modules/
 .adlc/*
 !.adlc/tickets.json
 !.adlc/tickets.example.json
+.adlc/tickets.lock

@@ -262,6 +262,43 @@
       "edges": [],
       "duration": 1,
       "category": "bug"
+    },
+    {
+      "id": "T13",
+      "title": "Consolidate the five replicated ADLC phase routers into a single source of truth",
+      "body": "PROBLEM. The ADLC phase-router content (the \"where am I / which gate\" map plus per-phase gate descriptions) is duplicated across five harness plugins in three file conventions:\n  - plugins/adlc-claude-code/skills/adlc/SKILL.md   (prose phase list)\n  - plugins/adlc-codex/skills/adlc/SKILL.md          (prose phase list)\n  - plugins/adlc-pi/skills/adlc/SKILL.md             (prose phase list)\n  - plugins/adlc-opencode/skill/adlc.md              (table + prose)\n  - plugins/adlc-cursor/rules/adlc.mdc               (Cursor .mdc table)\nThis replication is a drift hazard: an edit can update some harnesses and miss others. It happened during PR #55 (opencode and cursor were initially omitted from a router edit), and PR #55's whole-branch review (independent agy and opus reviewers) flagged the replication as a LOW maintenance hazard with the recommendation to consolidate to a single source of truth.\n\nGOAL. Define ONE canonical source for the phase-router content and generate each harness's router file from it, so a single edit propagates to all five and a CI check fails if any harness drifts. Preserve each file's required format and front-matter (prose for the three SKILL.md files; a table for the cursor .mdc and opencode adlc.md).\n\nACCEPTANCE CRITERIA (each with a concrete verification method):\nAC1 - A single canonical source file exists (e.g. docs/router/phase-router.yaml or a module under packages/) holding the phase map + per-phase gate text + the adversarial-review discoverability content. Verify: the file exists and is the input the generator reads (grep the generator for its path).\nAC2 - A generator/build step emits all five harness router files from the canonical source, preserving each file's format and any YAML/frontmatter. Verify: run the generator on a clean checkout, then `git diff --exit-code` on the five router paths returns 0 (generated output equals committed).\nAC3 - A CI-runnable drift check fails when any harness router diverges from the canonical source. Verify: hand-edit one generated router, run the check, assert non-zero exit; regenerate, assert exit 0.\nAC4 - The PR #55 discoverability content survives consolidation: every generated router names `adversarial-review` at P1/P3/P5 and contains the exact phrase `exit 0 = SHIP`. Verify: after generation, grep each of the five files for `adversarial-review` and `exit 0 = SHIP`; all five match.\nAC5 - No routing regression: each generated router carries the same phase->gate mapping it had pre-consolidation. Verify: compare the semantic phase->gate content of each generated router against its pre-consolidation version (git show HEAD:<path>); differences are limited to formatting/source-derivation, not routing changes.\n\nCONTEXT. Related to PR #55 (ADR-0008 adversarial-review coverage map). The router files were last edited there; use their current committed form as the content baseline to extract into the canonical source. Suppressions are denied.",
+      "scope": [
+        "plugins/adlc-claude-code/skills/adlc/SKILL.md",
+        "plugins/adlc-codex/skills/adlc/SKILL.md",
+        "plugins/adlc-pi/skills/adlc/SKILL.md",
+        "plugins/adlc-opencode/skill/adlc.md",
+        "plugins/adlc-cursor/rules/adlc.mdc",
+        "docs/router/**",
+        "scripts/router/**",
+        "packages/router-source/**",
+        ".github/workflows/**",
+        "plugins/adlc-antigravity/skills/adlc/SKILL.md"
+      ],
+      "rails": [],
+      "edges": [],
+      "duration": 3,
+      "category": "refactor"
+    },
+    {
+      "id": "T14",
+      "title": "Add adversarial-review discoverability to the adlc-antigravity phase router",
+      "body": "PROBLEM. PR #55 added an adversarial-review loop discoverability block (references at P1/P3/P5 and the phrase `exit 0 = SHIP`) to the ADLC phase routers of five harnesses. The sixth harness, adlc-antigravity (merged separately in PR #53), was not covered: its phase router `plugins/adlc-antigravity/skills/adlc/SKILL.md` is a full-map prose router (~20 phase->gate pairs, `---` frontmatter) but contains ZERO `adversarial-review` mentions. Operators on Antigravity therefore see no guidance to reach for the cross-model ship/no-ship loop at P1/P3/P5.\n\nGOAL. Bring the antigravity router in line with the other five (specifically claude-code, the closest full-map prose analogue): add the adversarial-review references at the P1 (design review), P3 (rail-selection adequacy), and P5 (built code, >=2 providers) entries, plus a short 'adversarial-review loop' note (cross-model + fresh-context + loop-until-SHIP; flags `--verify`, `--loop`, `--providers`; the exact phrase `exit 0 = SHIP`; an `npx adversarial-review` invoke hint; and reference ADR-0008 by NAME, no repo-relative link since routers ship as installed plugins). Match the file's existing prose voice; do not use the unsupported `adversarial-review <spec.md>` positional or a `--loop` command for P1/P3 artifact review (see PR #55's corrected guidance: P1/P3 reviews are `--prompt-only`/diff-based today because `--input` is deferred).\n\nACCEPTANCE CRITERIA:\nAC1 - `grep -c 'adversarial-review' plugins/adlc-antigravity/skills/adlc/SKILL.md` returns a value >= 1 and `grep -c 'exit 0 = SHIP' plugins/adlc-antigravity/skills/adlc/SKILL.md` returns >= 1. Verify by running both greps.\nAC2 - The references appear at P1, P3 and P5. Verify: `grep -nE 'P1|P3|P5' plugins/adlc-antigravity/skills/adlc/SKILL.md` shows the adversarial-review mentions co-located with those phases.\nAC3 - No unsupported command syntax. Verify: `grep -nE 'adversarial-review +<?spec|adversarial-review --loop' plugins/adlc-antigravity/skills/adlc/SKILL.md` returns nothing.\nAC4 - The router still loads (frontmatter intact). Verify: the leading `---` frontmatter block is unchanged (`diff <(git show HEAD:plugins/adlc-antigravity/skills/adlc/SKILL.md | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' plugins/adlc-antigravity/skills/adlc/SKILL.md)` is empty).\n\nCONTEXT. Mirrors the claude-code treatment from PR #55 (ADR-0008). This is a standalone content fix that closes the gap now; it is a prerequisite of T13 (router consolidation), so that T13's single-source consolidation starts from a consistent six-router baseline. Suppressions are denied.",
+      "scope": [
+        "plugins/adlc-antigravity/skills/adlc/SKILL.md"
+      ],
+      "rails": [],
+      "edges": [
+        {
+          "to": "T13"
+        }
+      ],
+      "duration": 1,
+      "category": "bugfix"
     }
   ]
 }
