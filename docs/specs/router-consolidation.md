@@ -50,6 +50,17 @@ cursor and flagged by two independent reviewers as a drift hazard.
 - **Drift check:** `scripts/router/gen-routers.mjs --check` regenerates each target in memory and
   compares to the committed file; it exits non-zero listing any drifted paths, and exits 0 when all
   five match. A CI workflow runs it as a required check.
+- **Consolidation equivalence check (deliverable, not an inline shell one-liner):**
+  `scripts/router/check-consolidation.mjs <BASE>` verifies the consolidation preserved each harness's
+  routing and frontmatter versus the pre-consolidation baseline. It (1) **asserts `<BASE>` is a
+  non-empty, resolvable commit and exits non-zero with an error if not** — never a silent pass on an
+  empty/unresolved ref; (2) for each of the five routers, parses the phase→gate structure
+  **structurally per format** (markdown table columns for `.mdc`/opencode; heading-scoped blocks for
+  prose) rather than a whole-line regex, so multi-reference lines and same-line swaps cannot produce
+  false negatives; (3) compares that structure and the frontmatter block between `git show BASE:<f>`
+  and the working file; exits non-zero listing any `ROUTING DRIFT`/`FRONTMATTER DRIFT`. Being a real
+  module, it is itself unit-testable and prosecutable (a golden test that a synthetic swap and a
+  frontmatter mutation are both caught).
 - **Content baseline:** the current committed form of the five router files (post-PR-#55) is the
   source of truth for extracting `shared` vs `harness_specific` content — diff the five files to
   separate common from harness-unique.
@@ -84,10 +95,11 @@ Each has a concrete verification method (this spec must pass `spec-lint`).
 - **AC2** — *Verify:* `node scripts/router/gen-routers.mjs && git diff --exit-code plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc` exits 0 — generated output equals the committed five routers on a clean checkout.
 - **AC3** — *Verify:* `printf '\\n<!-- drift -->\\n' >> plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check; test $? -ne 0; git checkout plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check` — the check exits non-zero on a hand-edited router and exits 0 after regeneration.
 - **AC4** — *Verify:* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do grep -q 'adversarial-review' "$f" && grep -q 'exit 0 = SHIP' "$f" || echo "FAIL $f"; done` prints nothing — the PR #55 discoverability content survives in all five generated routers.
-- **AC5** — *Verify (format-agnostic, works for prose AND table; preserves the phase→gate association so a P1↔P3 gate SWAP is detected — not a global token set; baseline is `$BASE`, NOT `HEAD`):* `BASE=$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD); pairs(){ awk '{ if (match($0,/P[0-7]/)) cur=substr($0,RSTART,RLENGTH); s=$0; while (match(s,/adlc [a-z-]+/)) { print cur"|"substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH) } }' | sort -u; }; for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | pairs) <(pairs < "$f") || echo "ROUTING DRIFT $f"; done` prints no `ROUTING DRIFT` line — each `phase|adlc-gate` pair (gate associated with its nearest preceding phase label) is identical between the pre-consolidation baseline and the generated output, so no routing was added, dropped, or swapped between phases.
+- **AC5** — *Verify (routing preserved per harness; structured parse, not whole-line regex; baseline `$BASE`, NOT `HEAD`):* `node scripts/router/check-consolidation.mjs "$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)"` exits 0 with no `ROUTING DRIFT` — each harness's phase→gate structure is identical between the pre-consolidation baseline and the generated output, so no routing was added, dropped, or swapped (the check parses table columns / heading-scoped prose blocks structurally, so a same-line swap cannot false-negative).
 - **AC6** — *Verify:* `adlc spec-lint docs/specs/router-consolidation.md` exits 0 (this spec has zero wishes).
 - **AC7** — *Verify:* `test -f .github/workflows/router-drift.yml && grep -nE 'gen-routers.mjs --check' .github/workflows/router-drift.yml` confirms the drift check is wired as a CI workflow.
-- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep/diff stay green; baseline is `$BASE`, NOT `HEAD`; all five routers carry `---` frontmatter, opencode included):* `BASE=$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD); for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' "$f") || echo "FRONTMATTER DRIFT $f"; done` prints no `FRONTMATTER DRIFT` — each router's leading `---` frontmatter block is byte-identical to its pre-consolidation form.
+- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep stays green; all five routers carry `---` frontmatter, opencode included):* `node scripts/router/check-consolidation.mjs "$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)" --frontmatter` exits 0 with no `FRONTMATTER DRIFT` — each router's leading `---` frontmatter block is byte-identical to its pre-consolidation baseline.
+- **AC9** — *Verify (no silent pass on an unresolved baseline — an empty `<BASE>` must NOT degrade to `git show :<f>` comparing a file to the index):* `node scripts/router/check-consolidation.mjs "" ; test $? -ne 0` — the check exits non-zero (with a clear "baseline unresolved" error) when handed an empty/invalid `<BASE>`, rather than silently passing.
 
 Suppressions are denied.
 
