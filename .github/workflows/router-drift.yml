@@ -1,0 +1,49 @@
+name: Router drift
+
+# The single source of truth for the six ADLC phase routers is
+# scripts/router/router-model.mjs; the committed router files are rendered from it by
+# scripts/router/gen-routers.mjs. This workflow is the permanent, required gate that
+# fails a PR whose committed router file drifted from the canonical source (someone
+# hand-edited a generated file instead of the model, or forgot to regenerate).
+#
+# The consolidation-equivalence module (scripts/router/check-consolidation.mjs, AC5/AC8)
+# is prosecuted every run by its golden unit tests in scripts/test/, which the repo's
+# `npm test` job (see ci.yml) executes — it is a refactor-verification tool keyed to the
+# pre-consolidation merge-base, not a permanent routing-freeze, so it is intentionally
+# not wired here as a blocking merge-base comparison (that would false-positive on any
+# future intentional, harness-consistent routing change).
+#
+# ============================================================
+# ACTION REQUIRED — GITHUB REPOSITORY SETTINGS
+# ============================================================
+# Add "router-drift" as a required status check in
+# Settings > Branches > Branch protection rules for main. A failing-but-not-required
+# check does not block a merge (premortem finding #3: the drift check must be required,
+# not advisory).
+# ============================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  router-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history so any merge-base tooling can resolve the branch point
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Router drift gate
+        run: node scripts/router/gen-routers.mjs --check
