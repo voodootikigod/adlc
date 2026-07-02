@@ -66,12 +66,42 @@ export function parseAddedLines(diffText) {
 }
 
 /**
+ * Documentation file extensions (lowercase, leading dot). Suppression markers are
+ * code constructs; prose documentation legitimately names them (an integration
+ * guide, this package's own README). A marker in a prose doc is never an executed
+ * suppression, so scanning docs only yields false positives with no coverage gain.
+ *
+ * Only NON-EXECUTABLE prose markdown is exempt. `.mdx` is deliberately EXCLUDED: it
+ * compiles to JSX/TS and can carry real, operative type- and lint-ignore
+ * suppressions, so it is scanned like any other code file. Kept intentionally minimal
+ * — every exempt extension is bypass surface for a security gate (both this list's
+ * scope and the `.mdx` exclusion were tightened by cross-model adversarial review).
+ */
+export const DOC_EXTENSIONS = ['.md', '.markdown'];
+
+/**
+ * True when `file`'s FINAL extension is a documentation format (case-insensitive).
+ * Only the true trailing suffix counts, so a code file like `render.md.mjs` (ext
+ * `.mjs`) is still scanned — the check must not be fooled by `.md` appearing
+ * mid-name. Returns false for a non-string, empty path, dotfile, or no-extension file.
+ */
+export function isDocFile(file) {
+  if (typeof file !== 'string' || file === '') return false;
+  const base = file.slice(file.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return false; // no extension, or a leading-dot name like ".md"
+  return DOC_EXTENSIONS.includes(base.slice(dot).toLowerCase());
+}
+
+/**
  * Find suppression markers in added lines.
  * Returns [ { file, lineNo, marker, content } ].
+ * Documentation files (see isDocFile) are skipped — prose is not executed code.
  */
 export function findSuppressions(addedLines) {
   const found = [];
   for (const { file, lineNo, content } of addedLines) {
+    if (isDocFile(file)) continue;
     for (const marker of SUPPRESSION_MARKERS) {
       if (content.includes(marker)) {
         found.push({ file, lineNo, marker, content });
