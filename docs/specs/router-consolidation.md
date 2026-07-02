@@ -31,16 +31,27 @@ initially omitted), flagged there by two independent reviewers as a drift hazard
   emitted at file top), and optional `harness_specific` sections (prose unique to that harness,
   e.g. claude-code's `--prompt-only` note, opencode/cursor integration links) that are NOT shared
   router content.
-- **Generator:** `scripts/router/gen-routers.mjs` reads the YAML and renders each of the five
-  target files via a per-`format` template (prose renderer for the three SKILL.md; table renderer
-  for opencode `adlc.md` and cursor `.mdc`), writing frontmatter + shared content + that harness's
-  specific sections.
+- **Generator:** `scripts/router/gen-routers.mjs` **imports the canonical ES module
+  `router-model.mjs` directly** (no YAML/JSON parsing) and renders each of the five target files
+  via a per-`format` template (prose renderer for the three SKILL.md; table renderer for opencode
+  `adlc.md` and cursor `.mdc`), writing frontmatter + shared content + that harness's specific
+  sections.
 - **Drift check:** `scripts/router/gen-routers.mjs --check` regenerates each target in memory and
   compares to the committed file; it exits non-zero listing any drifted paths, and exits 0 when all
   five match. A CI workflow runs it as a required check.
 - **Content baseline:** the current committed form of the five router files (post-PR-#55) is the
   source of truth for extracting `shared` vs `harness_specific` content — diff the five files to
   separate common from harness-unique.
+- **Baseline ref (`$BASE`) for AC5/AC8.** Before the first (reformat) commit, the build records the
+  pre-consolidation commit sha to `.adlc/router-baseline.sha` (`git rev-parse HEAD > .adlc/router-baseline.sha`).
+  AC5/AC8 compare generated output against **that** ref, never `HEAD` — on a branch that has already
+  committed the refactor, `HEAD` holds the refactored files, so a `HEAD` baseline compares
+  refactored-vs-refactored and cannot detect a regression (it would be a hollow check).
+- **Dependency on PR #55.** T13 consolidates the very routers PR #55 edited, and **AC4** requires the
+  PR #55 discoverability content (`adversarial-review` at P1/P3/P5, `exit 0 = SHIP`) to be present in
+  all five. So T13 must be **built on top of PR #55** (rebased onto post-PR-#55 `main`); the recorded
+  `$BASE` is that post-PR-#55, pre-consolidation router state. Building T13 before PR #55 merges would
+  make AC4 fail and `$BASE` wrong.
 
 ## Non-goals
 
@@ -56,10 +67,10 @@ Each has a concrete verification method (this spec must pass `spec-lint`).
 - **AC2** — *Verify:* `node scripts/router/gen-routers.mjs && git diff --exit-code plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc` exits 0 — generated output equals the committed five routers on a clean checkout.
 - **AC3** — *Verify:* `printf '\\n<!-- drift -->\\n' >> plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check; test $? -ne 0; git checkout plugins/adlc-cursor/rules/adlc.mdc; node scripts/router/gen-routers.mjs --check` — the check exits non-zero on a hand-edited router and exits 0 after regeneration.
 - **AC4** — *Verify:* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do grep -q 'adversarial-review' "$f" && grep -q 'exit 0 = SHIP' "$f" || echo "FAIL $f"; done` prints nothing — the PR #55 discoverability content survives in all five generated routers.
-- **AC5** — *Verify (format-agnostic, works for prose AND table):* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show HEAD:"$f" | grep -oE 'adlc [a-z-]+|P[0-7]' | sort -u) <(grep -oE 'adlc [a-z-]+|P[0-7]' "$f" | sort -u) || echo "ROUTING DRIFT $f"; done` prints no `ROUTING DRIFT` line — the set of phase labels and referenced `adlc <gate>` tools per harness is identical before/after, so no routing was added or dropped (this replaces the earlier table-only check that was vacuous for the three prose routers).
+- **AC5** — *Verify (format-agnostic, works for prose AND table; baseline is `$BASE`, the pre-consolidation ref — see Baseline note, NOT `HEAD`, which on this branch already holds the refactored files and would make the check vacuous):* `BASE=$(cat .adlc/router-baseline.sha); for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-opencode/skill/adlc.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | grep -oE 'adlc [a-z-]+|P[0-7]' | sort -u) <(grep -oE 'adlc [a-z-]+|P[0-7]' "$f" | sort -u) || echo "ROUTING DRIFT $f"; done` prints no `ROUTING DRIFT` line — the set of phase labels and referenced `adlc <gate>` tools per harness is identical between the pre-consolidation baseline and the generated output.
 - **AC6** — *Verify:* `adlc spec-lint docs/specs/router-consolidation.md` exits 0 (this spec has zero wishes).
 - **AC7** — *Verify:* `test -f .github/workflows/router-drift.yml && grep -nE 'gen-routers.mjs --check' .github/workflows/router-drift.yml` confirms the drift check is wired as a CI workflow.
-- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep/diff stay green):* `for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show HEAD:"$f" | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' "$f") || echo "FRONTMATTER DRIFT $f"; done` prints no `FRONTMATTER DRIFT` — each router's leading frontmatter block is byte-identical to its pre-consolidation form (opencode's non-`---` header is checked by AC5's routing set).
+- **AC8** — *Verify (frontmatter fidelity — a mishandled frontmatter silently breaks plugin loading while grep/diff stay green; baseline is `$BASE`, NOT `HEAD`):* `BASE=$(cat .adlc/router-baseline.sha); for f in plugins/adlc-claude-code/skills/adlc/SKILL.md plugins/adlc-pi/skills/adlc/SKILL.md plugins/adlc-codex/skills/adlc/SKILL.md plugins/adlc-cursor/rules/adlc.mdc; do diff <(git show "$BASE":"$f" | sed -n '1,/^---$/p') <(sed -n '1,/^---$/p' "$f") || echo "FRONTMATTER DRIFT $f"; done` prints no `FRONTMATTER DRIFT` — each router's leading frontmatter block is byte-identical to its pre-consolidation form (opencode's non-`---` header is checked by AC5's routing set).
 
 Suppressions are denied.
 
