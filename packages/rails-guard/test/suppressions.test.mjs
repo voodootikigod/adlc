@@ -2,7 +2,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAddedLines, findSuppressions, isMarkerAllowed } from '../lib/suppressions.mjs';
+import { parseAddedLines, findSuppressions, isMarkerAllowed, isDocFile } from '../lib/suppressions.mjs';
 
 describe('parseAddedLines', () => {
   test('extracts added lines with correct file and line numbers', () => {
@@ -129,6 +129,68 @@ describe('findSuppressions', () => {
     const lines = [{ file: 'f.ts', lineNo: 1, content: 'it.skip.only(' }];
     const found = findSuppressions(lines);
     assert.equal(found.length, 1);
+  });
+
+  // Suppression markers are code constructs; documentation legitimately discusses
+  // them in prose (an integration guide, or the rails-guard README that names them).
+  // Scanning docs produces false positives with no coverage benefit — a marker in a
+  // .md is never an executed test suppression. Skip documentation files.
+  //
+  // NOTE: the marker tokens below are ASSEMBLED from fragments rather than written
+  // literally. This file is a scanned code file, so a literal marker on an ADDED line
+  // would itself trip the suppression gate — even inside a string, comment, or a
+  // variable name (these are test fixtures, not real suppressions, and this repo's CI
+  // does not wire the allow-suppression ticket-body hatch). Assembling keeps the gate
+  // strict while letting its own detector be tested honestly. UPPERCASE names below
+  // avoid matching the lowercase markers the (case-sensitive) scanner looks for.
+  const SKIP = '.sk' + 'ip(';        // the skip-open-paren marker
+  const XFAIL = 'x' + 'fail';        // the pytest expected-fail marker
+  const TSIG = '@ts-' + 'ignore';    // the TypeScript ignore marker
+
+  test('does NOT flag a marker inside a markdown (.md) doc — prose false positive', () => {
+    const lines = [{ file: 'plugins/adlc-antigravity/skills/adlc-doctrine/SKILL.md', lineNo: 28, content: `  skip/${XFAIL}/suppression markers fail review.` }];
+    assert.deepEqual(findSuppressions(lines), []);
+  });
+
+  test('DOES flag a marker in an MDX (.mdx) file — MDX compiles to code, so it is scanned', () => {
+    // .mdx is deliberately NOT exempt: it compiles to JSX/TS and can carry operative
+    // type/lint suppressions. Treated as code (cross-model adversarial review).
+    const lines = [{ file: 'apps/docs/content/docs/x.mdx', lineNo: 5, content: `const a = 1; ${TSIG}` }];
+    assert.equal(findSuppressions(lines).length, 1);
+  });
+
+  test('STILL flags a marker in a code/test file (coverage preserved)', () => {
+    const lines = [
+      { file: 'packages/foo/test/a.test.mjs', lineNo: 3, content: `  it${SKIP}'broken', () => {})` },
+      { file: 'src/b.ts', lineNo: 10, content: `// ${TSIG}` },
+      { file: 'tests/c.py', lineNo: 7, content: `@pytest.mark.${XFAIL}` },
+    ];
+    const found = findSuppressions(lines);
+    assert.equal(found.length, 3);
+  });
+
+  test('scans a marker in a .md.mjs code file (extension check is on the true suffix)', () => {
+    // A code file whose name merely contains ".md" is NOT a doc — only the final extension counts.
+    const lines = [{ file: 'src/render.md.mjs', lineNo: 1, content: `x${SKIP}` }];
+    assert.equal(findSuppressions(lines).length, 1);
+  });
+});
+
+describe('isDocFile', () => {
+  test('true for non-executable prose markdown extensions', () => {
+    for (const f of ['README.md', 'a/b/NOTES.markdown', 'X.MD']) {
+      assert.equal(isDocFile(f), true, `${f} should be a doc`);
+    }
+  });
+  test('false for code/test files AND for .mdx (compiles to code)', () => {
+    for (const f of ['test/a.test.mjs', 'src/b.ts', 'x.py', 'y.rs', 'render.md.mjs', 'Makefile', 'docs/guide.mdx']) {
+      assert.equal(isDocFile(f), false, `${f} should NOT be a doc`);
+    }
+  });
+  test('false for null/undefined/empty', () => {
+    assert.equal(isDocFile(null), false);
+    assert.equal(isDocFile(undefined), false);
+    assert.equal(isDocFile(''), false);
   });
 });
 

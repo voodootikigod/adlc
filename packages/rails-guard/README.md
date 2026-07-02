@@ -16,7 +16,11 @@ planning) and P4 (builder execution). Guards two invariants simultaneously:
 2. **Suppression-marker gate**: newly added `.skip(`, `.only(`, `xfail`,
    `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `# noqa`, `#[ignore]`
    lines are blocked unless the active ticket's `body` contains an explicit
-   `allow-suppression: <marker>` declaration.
+   `allow-suppression: <marker>` declaration. **Prose documentation files**
+   (`.md`, `.markdown`) are exempt from this scan — a marker in prose is never an
+   executed suppression, and docs (including this README) legitimately name the
+   markers when describing the rule. `.mdx` is **not** exempt: it compiles to
+   JSX/TS and can carry operative suppressions, so it is scanned like code.
 
 ## Usage
 

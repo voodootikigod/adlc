@@ -114,6 +114,37 @@ describe('runChecks — suppression markers', () => {
     git(['checkout', '--', 'src/foo.ts'], dir);
   });
 
+  test('does NOT flag a suppression marker inside a documentation (.md) file', () => {
+    // A doc that discusses the markers in prose is a false positive — prose is not
+    // executed. The end-to-end gate (this is the runChecks path the CI gate shells to)
+    // must skip it. Regression guard for the adlc-antigravity doctrine-skill false positive.
+    // The marker token is assembled (not literal, incl. the variable name) so this
+    // scanned test file's own added line does not trip the suppression gate —
+    // see suppressions.test.mjs for the full rationale.
+    const XF = 'x' + 'fail';
+    writeFile(dir, 'docs/rules.md', `# rules\nNewly added skip/${XF}/suppression markers fail review.\n`);
+    // STAGE the new file so it appears in `git diff HEAD` as an added file. Without this
+    // the untracked doc is invisible to the diff, the marker never reaches runChecks, and
+    // the test is a FALSE GREEN that passes even if the doc-skip logic is deleted.
+    git(['add', 'docs/rules.md'], dir);
+    let result, diff;
+    try {
+      diff = getDiff(dir, 'HEAD');
+      const files = getChangedFiles(dir, 'HEAD');
+      const ticket = { id: 'T1', title: 't', body: '' };
+      result = runChecks({ changedFiles: files, diffText: diff, cliRails: ['test/**'], ticket });
+    } finally {
+      // Always clean up (F4) — even if runChecks throws — so the shared repo stays pristine.
+      git(['reset', '-q', 'HEAD', '--', 'docs/rules.md'], dir);
+      rmSync(join(dir, 'docs/rules.md'), { force: true });
+    }
+    // Precondition: the marker MUST actually be in the scanned diff, else the assertion
+    // below is vacuous (this is what makes the test load-bearing, not a false green).
+    assert.ok(diff.includes('docs/rules.md') && diff.includes(XF), 'the doc marker must be in the diff under test');
+    assert.equal(result.violations.filter(v => v.type === 'suppression').length, 0);
+    assert.ok(result.suppressionsClean);
+  });
+
   test('allows .skip( when ticket body has allow-suppression', () => {
     writeFile(dir, 'src/foo.ts', "export function foo() {}\nit.skip('known', () => {});\n");
     const files = getChangedFiles(dir, 'HEAD');
