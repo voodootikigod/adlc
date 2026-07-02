@@ -7,17 +7,24 @@ criteria.
 
 ## Problem
 
-The ADLC phase-router content (the "where am I / which gate" map + per-phase gate text) is
-duplicated across five harness plugins in three file conventions:
+ADLC phase-router content is spread across five harness plugins in three file conventions, and
+the harnesses fall into **two content classes** (verified by counting `phase|adlc-gate` pairs in
+each file — do not assume all five are identical):
 
-- `plugins/adlc-claude-code/skills/adlc/SKILL.md` — prose, YAML frontmatter
-- `plugins/adlc-codex/skills/adlc/SKILL.md` — prose, YAML frontmatter
-- `plugins/adlc-pi/skills/adlc/SKILL.md` — prose, YAML frontmatter
-- `plugins/adlc-opencode/skill/adlc.md` — table + prose
-- `plugins/adlc-cursor/rules/adlc.mdc` — Cursor `.mdc` table, frontmatter
+- **Full-map routers** — enumerate the P0–P7 → gate map:
+  - `plugins/adlc-claude-code/skills/adlc/SKILL.md` — prose, YAML frontmatter (~20 pairs)
+  - `plugins/adlc-opencode/skill/adlc.md` — table + prose, `---` frontmatter (~16 pairs)
+  - `plugins/adlc-cursor/rules/adlc.mdc` — Cursor `.mdc` table, frontmatter (~16 pairs)
+- **Minimal / delegating routers** — a short skill that delegates to `adlc preflight` / `adlc run`,
+  with **no** per-phase P0–P7 map (~3 pairs):
+  - `plugins/adlc-codex/skills/adlc/SKILL.md` — prose, YAML frontmatter
+  - `plugins/adlc-pi/skills/adlc/SKILL.md` — prose, YAML frontmatter
 
-An edit can update some and miss others — which happened in PR #55 (opencode and cursor were
-initially omitted), flagged there by two independent reviewers as a drift hazard.
+Two kinds of content are shared and therefore drift-prone: (a) the **P0–P7 phase→gate map**, shared
+across the three full-map routers; (b) the **adversarial-review discoverability block** (from PR
+#55), shared across **all five**. An edit to either can update some harnesses and miss others —
+which happened in PR #55, where the adversarial-review block was initially omitted from opencode and
+cursor and flagged by two independent reviewers as a drift hazard.
 
 ## Design decisions (made concrete here)
 
@@ -25,12 +32,16 @@ initially omitted), flagged there by two independent reviewers as a drift hazard
   router model object — **no YAML/JSON parser, zero new dependency** (the generator `import`s it
   directly). Chosen over a YAML file specifically to remove supply-chain surface and the
   block-scalar truncation risk that a parser introduces on gate text containing `:`/backticks/`|`.
-  It holds a `shared` block (the ordered phase→gate map + per-phase gate text + the
-  adversarial-review discoverability content) and a `harnesses` map keyed by harness id. Each
-  harness entry carries `path`, `format` (`prose` | `table`), `frontmatter` (verbatim string
-  emitted at file top), and optional `harness_specific` sections (prose unique to that harness,
-  e.g. claude-code's `--prompt-only` note, opencode/cursor integration links) that are NOT shared
-  router content.
+  It holds a `shared` block with **independently-addressable sections** — `phase_map` (the ordered
+  P0–P7 → gate map + per-phase gate text) and `adversarial_note` (the PR #55 discoverability block) —
+  and a `harnesses` map keyed by harness id. Each harness entry carries `path`, `format`
+  (`prose` | `table`), `frontmatter` (verbatim string emitted at file top), an **`includes`** list
+  naming which shared sections that harness renders, and optional `harness_specific` sections (prose
+  unique to that harness). This models the two content classes: full-map harnesses
+  (claude-code, opencode, cursor) `include: [phase_map, adversarial_note]`; minimal harnesses
+  (codex, pi) `include: [adversarial_note]` only, keeping their short delegating body as
+  `harness_specific` — the generator must **not** push `phase_map` onto codex/pi (AC5 guards this:
+  their baseline has ~3 pairs, so an injected full map trips ROUTING DRIFT).
 - **Generator:** `scripts/router/gen-routers.mjs` **imports the canonical ES module
   `router-model.mjs` directly** (no YAML/JSON parsing) and renders each of the five target files
   via a per-`format` template (prose renderer for the three SKILL.md; table renderer for opencode
