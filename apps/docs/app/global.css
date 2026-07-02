@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* An Old Hope — dark-only palette mapped to Fumadocs CSS tokens */
+:root,
+.dark {
+  --color-fd-background: #1c1d21;
+  --color-fd-foreground: #cbcdd2;
+  --color-fd-muted: #2f3137;
+  --color-fd-muted-foreground: #686b78;
+  --color-fd-popover: #1c1d21;
+  --color-fd-popover-foreground: #cbcdd2;
+  --color-fd-card: #26272c;
+  --color-fd-card-foreground: #cbcdd2;
+  --color-fd-border: #3f4044;
+  --color-fd-primary: #4fb4d8;
+  --color-fd-primary-foreground: #1c1d21;
+  --color-fd-secondary: #3f4044;
+  --color-fd-secondary-foreground: #cbcdd2;
+  --color-fd-accent: #2f3137;
+  --color-fd-accent-foreground: #4fb4d8;
+  --color-fd-ring: #4fb4d8;
+}
+
+/* Gate-semantic tokens (used by shared components) */
+:root {
+  --adlc-pass: #78bd65;
+  --adlc-fail: #eb3d54;
+  --adlc-wish: #e5cd52;
+  --adlc-highlight: #ef7c2a;
+}

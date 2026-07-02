@@ -1,0 +1,50 @@
+---
+title: spec-lint
+description: Audits a spec for acceptance criteria that lack a concrete verification method.
+---
+
+# spec-lint
+
+**ADLC phase: P1 Interrogate** · **Gate:** every acceptance criterion names how it will be checked.
+
+<PhaseDiagram phase="P1" />
+
+## What it defends against
+
+<FailureMode id="F1" />
+
+A spec whose criteria can't be checked lets a model declare victory early. `spec-lint`
+turns unverifiable criteria into blocking failures.
+
+## Usage
+
+```sh
+adlc spec-lint <spec.md> [--llm] [--json] [--prompt-only]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--llm` | Cheap-tier LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly", "run tests"). Demoted criteria become WISH. Requires a provider env var (see core). |
+| `--json` | Machine-readable output for orchestrators. All other output is suppressed. |
+| `--prompt-only` | Print the exact LLM prompt and exit 0 — works with zero API keys; paste into any harness. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: every criterion names a verification method (or no criteria found; warns loudly).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad input, unreadable file, or LLM call failed).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more criteria are wishes (line numbers printed).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc spec-lint spec.md
+✗ 2 criteria have no verification method (lines 14, 22)
+exit 2
+```
+
+## Go deeper
+
+Specs-as-tests and why unverifiable criteria are dangerous:
+[Tests Are the Spec](https://voodootikigod.com/adlc-3-tests-are-the-spec).

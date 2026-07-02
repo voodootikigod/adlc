@@ -19,6 +19,9 @@ package READMEs.
 - [opencode integration](./integrations/opencode.md) explains how to install and use the
   OpenCode plugin (rails-guard hook, command suite, keyless gate bridge, session hooks,
   prosecutor lenses) — all six plan phases shipped.
+- [Google Antigravity integration](./integrations/antigravity.md) explains how to install
+  and use the Antigravity plugin, including the advisory in-session hook and unbypassable
+  CI gate.
 - [Package reference](./package-reference.md) lists every package, binary, phase, and
   primary README source.
 - [Ticket authoring](./ticket-authoring.md) defines the canonical ticket schema that
