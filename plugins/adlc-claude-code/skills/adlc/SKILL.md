@@ -24,17 +24,28 @@ the user runs `npm i -g @adlc/cli`. Run `/adlc-init` once per repo to create the
 
 ```
 Vague request, no ticket yet? ───────────────→ P0  /adlc-ticket
-Have a spec / acceptance criteria? ──────────→ P1  adlc spec-lint · premortem · parallax
+Have a spec / acceptance criteria? ──────────→ P1  adlc spec-lint · premortem · parallax · adversarial-review
 Have tickets, planning fan-out? ─────────────→ P2  adlc coldstart · model-router · merge-forecast
-About to build, want to freeze tests? ───────→ P3  adlc rails-guard
+About to build, want to freeze tests? ───────→ P3  adlc rails-guard · adversarial-review
 Mid-build, agent looping or drifting? ───────→ P4  adlc flail-detector
 Hard failing test, need a repair? ───────────→ P4  adlc consensus-fix
-Change done, pre-merge prosecution? ─────────→ P5  adlc hollow-test · behavior-diff · review-calibration
+Change done, pre-merge prosecution? ─────────→ P5  adlc hollow-test · behavior-diff · review-calibration · adversarial-review
 Recording / showing gate evidence? ──────────→ —   adlc gate-manifest
 Repeated review findings to bank? ───────────→ P7  /adlc-distill (lesson-foundry · rejection-mining)
 Mine the repo for reusable skills? ──────────→ P7  skill-mining (npx skills add voodootikigod/skill-mining)
 Idle-time / post-drift maintenance? ─────────→ —   /adlc-maintain (skill-rot · model-ratchet · gate-fuzzing)
 ```
+
+**The adversarial-review loop.** A cross-model, fresh-context ship/no-ship review that
+loops review→fix→re-review until clean (`exit 0 = SHIP`). It only reviews a git diff/branch
+today (positional args are focus text, not a file path) — it is recommended practice at
+**P1** (design review of the ticket/spec) and **P3** (attack the declared rail *set* for
+adequacy — is every invariant covered and unbypassable) via `--prompt-only` or diff review,
+pending the deferred `--input` mode, and at **P5** (built code; ≥2 distinct providers on the
+risk gate) it runs directly. Flags: `--verify` (refute stale findings), `--loop` (autonomous
+fix loop over working-tree code changes only, needs a write sandbox), `--providers`
+(multi-provider quorum). Installed separately — invoke via `npx adversarial-review` if not
+on PATH. See ADR-0008 (adversarial-review coverage map) in the ADLC repo.
 
 ## The phases
 
@@ -50,6 +61,10 @@ downstream reads this file; nothing else creates it. Author here first.
   failure modes before implementation.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
+- Design review is recommended practice today via `adversarial-review --prompt-only`
+  (feed the ticket/spec to a model yourself) or `adversarial-review --base <ref>`
+  (review the diff that introduces it); `exit 0 = SHIP`. First-class artifact input
+  (`--input`) is a deferred follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P2 — Decompose (an agent can execute without guessing)
 - `adlc coldstart <ticket-id> --prompt-only` (or `--all`) — gate ticket
@@ -71,6 +86,12 @@ downstream reads this file; nothing else creates it. Author here first.
   Wire that gate with the template at `docs/ci/rails-guard.yml` and make it a
   required check. Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to
   the manifest).
+- Rail-set adequacy review — is every invariant covered and unbypassable — is
+  recommended practice today via `adversarial-review --prompt-only` (feed the declared
+  rail set + ticket + invariants to a model); `exit 0 = SHIP`. `--loop` reviews
+  working-tree code changes, not a not-yet-built rail set, so there is no runnable
+  `--loop` command at P3 yet. First-class artifact input (`--input`) is a deferred
+  follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P4 — Build (supervised execution)
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
@@ -86,6 +107,8 @@ downstream reads this file; nothing else creates it. Author here first.
   behavior change visible for the P6 human gate.
 - `adlc review-calibration --review-cmd "… {base} …"` — measure reviewer recall
   by scoring whether review catches injected mutants ("who reviews the reviewer").
+- `adversarial-review --providers <a,b> [--verify]` — ≥2 distinct providers, cross-model
+  and fresh-context, on the risk gate; loop review→fix→re-review until `exit 0 = SHIP`.
 
 ### P6 — Integrate (the human gate)
 This gate is a human decision, not something an agent passes. Surface the

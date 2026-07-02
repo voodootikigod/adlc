@@ -54,6 +54,21 @@ Several tools use `.adlc/` as the shared workspace for machine-readable state:
 - `.adlc/manifest.jsonl` stores append-only gate evidence through `gate-manifest`.
 - `.adlc/lessons/` is the default output location for [`adlc lesson-foundry`](./tools/lesson-foundry.md).
 
+### Recording an adversarial-review verdict (P6)
+
+The adversarial-review loop emits NDJSON events (`loop_start` / `review` / `fix` /
+`loop_end`); `loop_end.exitReason === "clean"` is the SHIP signal. Record the verdict as
+first-class human-gate evidence:
+
+    adlc gate-manifest record adversarial-review \
+      --evidence 'providers=<a,b>; iterations=<n>; verdict=<approve|needs-attention>; exitReason=<clean|no-progress|ceiling>; surviving=<n>; accepted=<n>'
+
+Capture: providers used, iterations, final verdict, exit reason, surviving findings, and
+accepted-with-justification findings. See
+[ADR-0008](./adr/0008-adversarial-review-coverage-map.md). (A helper to emit this record
+directly from the loop is a deferred `adversarial-review` follow-on — the loop-convergence
+summary.)
+
 The package READMEs define each tool's exact schema. Treat these docs as a routing map,
 then follow the linked README for command-specific details.
 
