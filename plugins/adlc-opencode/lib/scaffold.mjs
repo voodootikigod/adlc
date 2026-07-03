@@ -74,12 +74,148 @@ export function ensurePluginRegistered(root, pkgName = '@adlc/opencode-package')
   return { registered: true, alreadyPresent: false, path };
 }
 
+// ---------------------------------------------------------------------------
+// .gitignore: track the ticket contract AND the P1 spec contract, ignore the
+// rest of the runtime (T-issue #46). Never clobbers unrelated gitignore
+// content — only appends the stanza, or the specific negation lines missing
+// from an existing stanza.
+// ---------------------------------------------------------------------------
+
+const GITIGNORE_STANZA = ['.adlc/*', '!.adlc/tickets.json', '!.adlc/specs/'];
+
+/**
+ * Ensure `.gitignore` ignores all of `.adlc/` except the tracked contracts
+ * (`tickets.json` and the `specs/` directory). Idempotent: if the stanza is
+ * fully present, nothing is written. If `.adlc/*` is present but a negation
+ * line (e.g. `!.adlc/specs/`) is missing, only the missing line(s) are
+ * inserted right after the existing block — the rest of the file is
+ * untouched. Returns { path, added: string[], changed: boolean }.
+ */
+export function ensureGitignore(root) {
+  const path = join(root, '.gitignore');
+  const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  const hadTrailingNewline = existing.endsWith('\n');
+  const lines = existing.length ? existing.split('\n') : [];
+  if (hadTrailingNewline && lines[lines.length - 1] === '') lines.pop();
+
+  const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
+  if (missing.length === 0) return { path, added: [], changed: false };
+
+  const anchorIdx = lines.indexOf('.adlc/*');
+  if (anchorIdx === -1) {
+    if (lines.length > 0) lines.push('');
+    lines.push(...GITIGNORE_STANZA);
+  } else {
+    let insertAt = anchorIdx + 1;
+    while (insertAt < lines.length && lines[insertAt].startsWith('!')) insertAt++;
+    lines.splice(insertAt, 0, ...missing);
+  }
+  writeFileSync(path, lines.join('\n') + '\n');
+  return { path, added: missing, changed: true };
+}
+
+// ---------------------------------------------------------------------------
+// Formatter/linter ignores: `.adlc/tickets.json` is a machine-written,
+// frozen trust root once rails exist — a repo formatter reformatting it on a
+// ticket branch trips rails-guard. Add `.adlc/` to whichever formatter/linter
+// configs are ALREADY present in the repo (never invent a new tool). (#42)
+// ---------------------------------------------------------------------------
+
+/** Add a line to a plain-text ignore file (gitignore-style) if not already present. */
+function ensureTextIgnoreFile(root, filename, entry) {
+  const path = join(root, filename);
+  if (!existsSync(path)) return { path, detected: false, changed: false };
+  const existing = readFileSync(path, 'utf8');
+  const lines = existing.split('\n');
+  if (lines.includes(entry)) return { path, detected: true, changed: false };
+  const needsNewline = existing.length > 0 && !existing.endsWith('\n');
+  writeFileSync(path, existing + (needsNewline ? '\n' : '') + entry + '\n');
+  return { path, detected: true, changed: true };
+}
+
+/** Add a `.adlc/**` override entry to `biome.json` (Biome 1.x `overrides` shape) if present. */
+function ensureBiomeIgnore(root) {
+  const path = join(root, 'biome.json');
+  if (!existsSync(path)) return { path, detected: false, changed: false };
+  let config;
+  try {
+    config = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return { path, detected: true, changed: false, skipped: 'unparseable JSON — add manually' };
+  }
+  const overrides = Array.isArray(config.overrides) ? config.overrides : [];
+  const already = overrides.some(
+    (o) => Array.isArray(o?.include) && o.include.includes('.adlc/**')
+  );
+  if (already) return { path, detected: true, changed: false };
+  const next = {
+    ...config,
+    overrides: [
+      ...overrides,
+      { include: ['.adlc/**'], formatter: { enabled: false }, linter: { enabled: false } },
+    ],
+  };
+  writeFileSync(path, JSON.stringify(next, null, 2) + '\n');
+  return { path, detected: true, changed: true };
+}
+
+/** Add an `ignorePatterns` entry to a legacy JSON `.eslintrc*` config if present. */
+function ensureEslintRcIgnore(root) {
+  for (const filename of ['.eslintrc.json', '.eslintrc']) {
+    const path = join(root, filename);
+    if (!existsSync(path)) continue;
+    let config;
+    try {
+      config = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      return { path, detected: true, changed: false, skipped: 'unparseable JSON — add manually' };
+    }
+    const ignorePatterns = Array.isArray(config.ignorePatterns) ? config.ignorePatterns : [];
+    if (ignorePatterns.includes('.adlc/**')) return { path, detected: true, changed: false };
+    const next = { ...config, ignorePatterns: [...ignorePatterns, '.adlc/**'] };
+    writeFileSync(path, JSON.stringify(next, null, 2) + '\n');
+    return { path, detected: true, changed: true };
+  }
+  // Flat config (eslint.config.js/.mjs/.cjs) is executable JS — safe text
+  // mutation isn't reliable, so only report detection; document the manual
+  // fallback (an `{ ignores: ['.adlc/**'] }` object in the exported array).
+  for (const filename of ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs']) {
+    if (existsSync(join(root, filename))) {
+      return {
+        path: join(root, filename),
+        detected: true,
+        changed: false,
+        skipped: 'flat config — add { ignores: [".adlc/**"] } manually',
+      };
+    }
+  }
+  return { path: null, detected: false, changed: false };
+}
+
+/**
+ * Detect and update whichever formatter/linter configs already exist in the
+ * repo so none of them touch `.adlc/`: Biome (`biome.json` overrides),
+ * Prettier (`.prettierignore`), ESLint (`ignorePatterns` in a JSON
+ * `.eslintrc*`, `.eslintignore`, or detection-only for flat config). Never
+ * creates a config for a tool that isn't already in use. Returns a summary
+ * keyed by tool.
+ */
+export function ensureFormatterIgnores(root) {
+  const biome = ensureBiomeIgnore(root);
+  const prettier = ensureTextIgnoreFile(root, '.prettierignore', '.adlc/');
+  const eslintrc = ensureEslintRcIgnore(root);
+  const eslintignore = ensureTextIgnoreFile(root, '.eslintignore', '.adlc/');
+  return { biome, prettier, eslint: eslintrc.detected ? eslintrc : eslintignore };
+}
+
 /**
  * Full scaffold: ensure config, REGISTER the plugin (so the rails-guard hook
- * loads), and deploy command/, agent/, and skill/ into .opencode/. OpenCode
- * discovers project commands under .opencode/commands/, subagents under
- * .opencode/agents/, and skills under .opencode/skill/; the plugin ships them
- * under command/, agent/, and skill/ respectively. Returns a summary.
+ * loads), deploy command/, agent/, and skill/ into .opencode/, ensure the
+ * .gitignore contract stanza, and exclude .adlc/ from any detected repo
+ * formatter/linter. OpenCode discovers project commands under
+ * .opencode/commands/, subagents under .opencode/agents/, and skills under
+ * .opencode/skill/; the plugin ships them under command/, agent/, and skill/
+ * respectively. Returns a summary.
  */
 export function scaffold(root, pkgRoot) {
   const config = ensureConfig(root);
@@ -87,5 +223,7 @@ export function scaffold(root, pkgRoot) {
   const commands = deployDir(pkgRoot, root, 'command', 'commands');
   const agents = deployDir(pkgRoot, root, 'agent', 'agents');
   const skills = deployDir(pkgRoot, root, 'skill', 'skill');
-  return { config, plugin, commands, agents, skills };
+  const gitignore = ensureGitignore(root);
+  const formatterIgnores = ensureFormatterIgnores(root);
+  return { config, plugin, commands, agents, skills, gitignore, formatterIgnores };
 }
