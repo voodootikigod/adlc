@@ -776,6 +776,67 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   });
 });
 
+// ── E2E: agy provider's tier-dependent model family (issue #64 follow-up) ─────
+// detectProvider().name for 'agy' is the literal string 'agy', but agy proxies
+// to a tier-dependent underlying model (Gemini on --tier cheap, Claude on
+// --tier mid/frontier — see packages/core/lib/llm.mjs PROVIDERS[3].models).
+// These tests force ADLC_PROVIDER=agy (no real agy binary needed — the fake
+// reviewer reports nothing, so the judge function itself is never invoked)
+// and verify the guard compares against the RESOLVED family, not 'agy'.
+
+describe('E2E: agy provider resolves to its tier-dependent model family', () => {
+  let dir;
+  const agyEnv = {
+    ...process.env,
+    ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '',
+    ADLC_PROVIDER: 'agy',
+  };
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'rc-agy-guard-'));
+    createRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function run(args) {
+    return spawnSync('node', [BIN, ...args], {
+      cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: 60000, env: agyEnv,
+    });
+  }
+
+  it('agy + --tier mid + --review-provider anthropic --strict → gate-fails (both are Claude)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--tier', 'mid', '--review-provider', 'anthropic', '--strict', '--json',
+    ]);
+    assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
+    assert.ok(/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+
+  it('agy + --tier cheap + --review-provider gemini --strict → gate-fails (both are Gemini)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--tier', 'cheap', '--review-provider', 'gemini', '--strict', '--json',
+    ]);
+    assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
+  });
+
+  it('agy + --tier cheap + --review-provider anthropic → no warning (genuinely different families)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--tier', 'cheap', '--review-provider', 'anthropic', '--json',
+    ]);
+    assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
+    assert.ok(!/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+});
+
 describe('E2E: dirty tree rejection', () => {
   let dir;
 

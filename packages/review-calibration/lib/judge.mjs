@@ -155,3 +155,42 @@ export function checkProviderIndependence(reviewProvider, judgeProvider) {
     judgeProvider,
   };
 }
+
+/** Substring → family, checked against the actual model name agy dispatches to. */
+const MODEL_FAMILY_PATTERNS = [
+  [/claude/, 'anthropic'],
+  [/gemini/, 'gemini'],
+  [/gpt/, 'openai'],
+];
+
+/**
+ * Resolve the judge's EFFECTIVE provider family for `checkProviderIndependence`.
+ *
+ * `detectProvider().name` is a literal identifier ('anthropic' | 'openai' |
+ * 'gemini' | 'agy') — accurate for the three API-key providers, whose name
+ * already equals the model family they call. The 'agy' provider is different:
+ * it proxies to the Antigravity CLI, whose ACTUAL model family is tier-dependent
+ * (see packages/core/lib/llm.mjs PROVIDERS[3].models — models.cheap is
+ * Gemini-family while models.mid/frontier are Claude/anthropic-family). Passing
+ * the literal string 'agy' into checkProviderIndependence would never match a
+ * declared --review-provider, silently defeating the guard exactly when agy is
+ * transparently running the same model family as the reviewer-under-test.
+ *
+ * Resolves by inspecting the actual model name for the given tier and matching
+ * it against known family substrings. Falls back to the literal provider name
+ * (never silently claims independence) when the provider isn't 'agy' or its
+ * model name doesn't match a known family.
+ *
+ * @param {{name: string, models?: Record<string,string>}|null|undefined} provider  detectProvider() result
+ * @param {string} tier
+ * @returns {string|undefined}
+ */
+export function resolveEffectiveProvider(provider, tier) {
+  if (!provider) return undefined;
+  if (provider.name !== 'agy') return provider.name;
+  const model = String(provider.models?.[tier] ?? '').toLowerCase();
+  for (const [pattern, family] of MODEL_FAMILY_PATTERNS) {
+    if (pattern.test(model)) return family;
+  }
+  return provider.name; // unrecognized model name — fall back, don't guess a match
+}

@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   referenceJudge, defectTokens, calibrateJudge, makeLlmJudge,
-  checkProviderIndependence,
+  checkProviderIndependence, resolveEffectiveProvider,
 } from '../lib/judge.mjs';
 
 // ── referenceJudge / defectTokens ─────────────────────────────────────────────
@@ -124,5 +124,54 @@ describe('checkProviderIndependence', () => {
     assert.equal(checkProviderIndependence(undefined, 'anthropic').same, false);
     assert.equal(checkProviderIndependence('anthropic', undefined).same, false);
     assert.equal(checkProviderIndependence(undefined, undefined).same, false);
+  });
+});
+
+// ── resolveEffectiveProvider (agy tier-dependent model family, issue #64) ─────
+// detectProvider().name for the 'agy' provider is the literal string 'agy',
+// but agy proxies to a tier-dependent underlying model family (Gemini on
+// --tier cheap, Claude/anthropic on --tier mid/frontier per
+// packages/core/lib/llm.mjs PROVIDERS[3].models). Comparing the literal
+// 'agy' string against a declared --review-provider would never match even
+// when the judge and reviewer-under-test are genuinely the same family.
+
+describe('resolveEffectiveProvider', () => {
+  const agyProvider = {
+    name: 'agy',
+    models: {
+      cheap: 'Gemini 3.5 Flash (Medium)',
+      mid: 'Claude Sonnet 4.6 (Thinking)',
+      frontier: 'Claude Opus 4.6 (Thinking)',
+    },
+  };
+
+  it('resolves agy + mid/frontier tier to anthropic (Claude model)', () => {
+    assert.equal(resolveEffectiveProvider(agyProvider, 'mid'), 'anthropic');
+    assert.equal(resolveEffectiveProvider(agyProvider, 'frontier'), 'anthropic');
+  });
+
+  it('resolves agy + cheap tier to gemini (Gemini model)', () => {
+    assert.equal(resolveEffectiveProvider(agyProvider, 'cheap'), 'gemini');
+  });
+
+  it('leaves non-agy providers untouched (name already equals its family)', () => {
+    assert.equal(resolveEffectiveProvider({ name: 'anthropic', models: {} }, 'mid'), 'anthropic');
+    assert.equal(resolveEffectiveProvider({ name: 'openai', models: {} }, 'cheap'), 'openai');
+  });
+
+  it('falls back to the literal name for an unrecognized agy model mapping', () => {
+    const unknown = { name: 'agy', models: { mid: 'Some Future Model X' } };
+    assert.equal(resolveEffectiveProvider(unknown, 'mid'), 'agy');
+  });
+
+  it('returns undefined for a missing provider', () => {
+    assert.equal(resolveEffectiveProvider(null, 'mid'), undefined);
+    assert.equal(resolveEffectiveProvider(undefined, 'mid'), undefined);
+  });
+
+  it('end-to-end: agy at mid tier now correctly flags as same-family as anthropic', () => {
+    const effective = resolveEffectiveProvider(agyProvider, 'mid');
+    const result = checkProviderIndependence('anthropic', effective);
+    assert.equal(result.same, true);
   });
 });

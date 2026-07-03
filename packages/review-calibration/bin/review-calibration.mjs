@@ -21,6 +21,7 @@ import { parseFindings } from '../lib/findings.mjs';
 import { scorePlants } from '../lib/scorer.mjs';
 import {
   makeLlmJudge, referenceJudge, JUDGE_SYSTEM, buildJudgePrompt, checkProviderIndependence,
+  resolveEffectiveProvider,
 } from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
 import { echoReviewer, oracleReviewer } from '../lib/controls.mjs';
@@ -183,7 +184,11 @@ if (scorerMode === 'string') {
       'or pass --scorer string (gameable, warned). Refusing to emit a string-matched recall number.'
     );
   }
-  judgeProviderName = judgeProvider.name;
+  // agy's actual model family is tier-dependent (e.g. --tier cheap runs
+  // Gemini, --tier mid/frontier run Claude/anthropic) — resolve to the
+  // family it will really dispatch to, not the literal 'agy' provider name,
+  // so the independence guard below can't be silently defeated (issue #64).
+  judgeProviderName = resolveEffectiveProvider(judgeProvider, tier);
   judge = makeLlmJudge(coreComplete, coreExtractJson, tier);
 }
 
