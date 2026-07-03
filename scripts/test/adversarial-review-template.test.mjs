@@ -74,6 +74,44 @@ test('AC3: risk-tier path filter covers every ADR-0007 category', () => {
   assert.match(text, /\.github\/workflows/);
 });
 
+test('AC3b: risk-tier PATTERN actually matches realistic auth/validator file paths (not just substrings in prose)', () => {
+  // Regression for a review finding: the PATTERN string could contain the
+  // words "auth"/"validat" in comments/other alternatives while the *regex*
+  // still failed to match common real-world file names like
+  // `authentication/`, `authorization.ts`, or `validation.ts`. This test
+  // extracts the exact `PATTERN=`/`PATTERN="$PATTERN|...` construction lines
+  // from the classify step and runs the real `grep -qiE` the workflow runs,
+  // against realistic sample paths -- the same verification method used to
+  // find the bug.
+  const text = readTemplate();
+  const patternLines = text
+    .split('\n')
+    .filter((line) => /^\s*PATTERN=/.test(line))
+    .map((line) => line.trim());
+  assert.ok(patternLines.length > 1, 'expected the multi-line PATTERN construction in the classify step');
+
+  const mustMatch = [
+    'src/authentication/handler.js',
+    'lib/authorization.ts',
+    'src/validation.ts',
+    'src/input-validation.ts',
+    'src/auth/handler.js',
+  ];
+  const mustNotNecessarilyBlockUnrelated = ['src/components/Button.tsx', 'README.md'];
+
+  for (const file of mustMatch) {
+    const script = `${patternLines.join('\n')}\nprintf '%s\\n' ${JSON.stringify(file)} | grep -qiE "$PATTERN"`;
+    const rc = execFileSync('bash', ['-c', `${script}; echo $?`], { encoding: 'utf8' }).trim();
+    assert.equal(rc, '0', `expected PATTERN to classify "${file}" as risk=high (a real auth/validator path), but it did not match`);
+  }
+
+  for (const file of mustNotNecessarilyBlockUnrelated) {
+    const script = `${patternLines.join('\n')}\nprintf '%s\\n' ${JSON.stringify(file)} | grep -qiE "$PATTERN"`;
+    const rc = execFileSync('bash', ['-c', `${script}; echo $?`], { encoding: 'utf8' }).trim();
+    assert.equal(rc, '1', `expected PATTERN to NOT classify unrelated file "${file}" as risk=high`);
+  }
+});
+
 test('AC4: uses plain (non-loop) review mode and documents why, citing adversarial-review#9', () => {
   const text = readTemplate();
   const executable = stripComments(text);

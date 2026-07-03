@@ -32,13 +32,15 @@
 #
 # ACTION REQUIRED before enabling this workflow:
 #   1. `adversarial-review` lives in a separate repo
-#      (voodootikigod/adversarial-review) and is not vendored or
-#      version-pinned anywhere in *this* repo, so this template cannot ship a
-#      pre-audited version pin the way docs/ci/adlc-maintenance.yml pins
-#      `@adlc/cli`. Replace `ADVERSARIAL_REVIEW_VERSION: latest` below with an
-#      exact version you have audited before relying on this as a required
-#      check — do not leave a mutable `latest` resolving on every PR from a
-#      runner with repo/comment-posting access.
+#      (voodootikigod/adversarial-review) and is not vendored anywhere in
+#      *this* repo, so this template cannot ship a pre-audited version pin the
+#      way docs/ci/adlc-maintenance.yml pins `@adlc/cli` against an in-repo
+#      release process. `ADVERSARIAL_REVIEW_VERSION` below defaults to
+#      `2.6.0` (latest at the time this template was last reviewed) rather
+#      than a mutable `latest` tag, so a copy of this file does not silently
+#      start running a different, unaudited release on every PR. Re-audit and
+#      bump this pin deliberately when you adopt the template and periodically
+#      thereafter -- do not widen it back to `latest`.
 #   2. Provider credentials: `--providers auto` needs whichever provider
 #      API keys / local CLIs your `adversarial-review` install expects
 #      (e.g. Anthropic/OpenAI/Gemini API keys as repo secrets). Wire those
@@ -86,10 +88,10 @@ jobs:
           #   data-loss / destructive / irreversible ops
           #   schema / migration changes
           #   CI/CD / supply-chain config
-          PATTERN='(^|/|-|_)(auth|authn|authz)(/|-|_|\.|$)'
+          PATTERN='(^|/|-|_)auth[a-z]*(/|-|_|\.|$)'
           PATTERN="$PATTERN|trust-boundary"
           PATTERN="$PATTERN|(^|/|-|_)(rails?-)?guard"
-          PATTERN="$PATTERN|validat(e|or)"
+          PATTERN="$PATTERN|validat(e|or|ion)"
           PATTERN="$PATTERN|sandbox"
           PATTERN="$PATTERN|secret"
           PATTERN="$PATTERN|destructive|irreversible|data-loss"
@@ -137,8 +139,8 @@ jobs:
         id: review
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
-          # See ACTION REQUIRED item 1 above -- pin before relying on this.
-          ADVERSARIAL_REVIEW_VERSION: latest
+          # See ACTION REQUIRED item 1 above -- re-audit and bump deliberately.
+          ADVERSARIAL_REVIEW_VERSION: 2.6.0
         run: |
           set +e
           # Plain (non-loop) review mode -- NOT --loop. Per
@@ -249,7 +251,8 @@ jobs:
       - name: Run single-model adversarial review (plain, non-loop mode)
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
-          ADVERSARIAL_REVIEW_VERSION: latest
+          # See ACTION REQUIRED item 1 above -- re-audit and bump deliberately.
+          ADVERSARIAL_REVIEW_VERSION: 2.6.0
         run: |
           set +e
           # No --providers here on purpose: today's default single
