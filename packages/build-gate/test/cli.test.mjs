@@ -129,8 +129,11 @@ test('ADLC_BUILD_GATE_BYPASS=1 with a writable .adlc → allow + audited manifes
     const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
     assert.ok(existsSync(manifestPath));
     const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim().split('\n').pop());
-    assert.equal(entry.type, 'build-gate-bypass');
+    assert.equal(entry.gate, 'build-gate-bypass');
     assert.equal(entry.ticket, 'T1');
+    // Chain-linkage fields required by gate-manifest's verify() (issue #48 review finding).
+    assert.equal(entry.seq, 1);
+    assert.equal(entry.prev, null);
   });
 });
 

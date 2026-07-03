@@ -3,15 +3,28 @@
 // Mirrors the ADLC_RAILS_BYPASS pattern in
 // plugins/adlc-claude-code/hooks/adlc-hook.mjs's recordBypass(): a bypass is
 // only ever honored if it is durably recorded to the gate-manifest ledger
-// FIRST. Uses @adlc/core's appendEntry directly (the same primitive
-// packages/rails-guard/bin/rails-guard.mjs uses for its own --record path) —
-// not the @adlc/gate-manifest package, matching the existing sibling-package
-// convention of depending only on @adlc/core, never on another sibling tool.
+// FIRST.
+//
+// This calls @adlc/gate-manifest's own record() directly (the exact function
+// backing `adlc gate-manifest record build-gate-bypass`, per
+// docs/specs/build-gate-fitness.md) rather than @adlc/core's raw appendEntry.
+// The gate-manifest ledger format is hash-chained: every entry needs a
+// monotonically increasing `seq` and a `prev` = sha256(previous raw JSONL
+// line) (see packages/gate-manifest/lib/record.mjs / verify.mjs). Building a
+// raw entry by hand here — without those fields, and without the `gate` key
+// verify() expects — corrupts that chain for every entry appended
+// afterward, so this package deliberately depends on @adlc/gate-manifest
+// (unlike sibling tools with no ledger-writing responsibilities) instead of
+// re-deriving its chain/signing logic.
 
-import { appendEntry, ADLC_DIR } from '@adlc/core';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { ADLC_DIR } from '@adlc/core';
 
 /**
- * Durably record a build-gate override to .adlc/manifest.jsonl.
+ * Durably record a build-gate override to .adlc/manifest.jsonl as a
+ * 'build-gate-bypass' gate-manifest entry (chain-linked and, when
+ * ADLC_MANIFEST_KEY is set, HMAC-signed — exactly like every other entry in
+ * the ledger).
  *
  * @param {object} opts
  * @param {string} opts.ticketId
@@ -24,19 +37,17 @@ import { appendEntry, ADLC_DIR } from '@adlc/core';
  */
 export function recordOverride({ ticketId, signals, depth, sessionBytes, reason, dir = ADLC_DIR }) {
   try {
-    appendEntry(
-      'manifest',
-      {
-        ts: new Date().toISOString(),
-        type: 'build-gate-bypass',
-        ticket: ticketId ?? null,
+    record({
+      gate: 'build-gate-bypass',
+      ticket: ticketId ?? undefined,
+      rawData: JSON.stringify({
         signals: signals ?? [],
         depth: depth ?? null,
         sessionBytes: sessionBytes ?? null,
         reason: reason ?? null,
-      },
-      dir
-    );
+      }),
+      dir,
+    });
     return true;
   } catch {
     // An override that cannot be durably recorded is not a valid override —
