@@ -37,7 +37,7 @@ if (!VALID_TIERS.includes(values.tier)) {
   opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
 }
 
-if (values['record-verdict'] && !values['prompt-only']) {
+if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
 
@@ -83,7 +83,7 @@ if (promptOnlyMode) {
     (t) => `=== system ===\n${SYSTEM_PROMPT}\n\n=== user (${t.id}) ===\n${buildPrompt(t)}`
   );
 
-  if (values['record-verdict']) {
+  if (values['record-verdict'] !== undefined) {
     // Print the prompt(s) — same evidence surface as plain --prompt-only —
     // then capture the operator's answer into the gate-manifest ledger so
     // the audit trail shows the gate was answered *and* what it concluded.

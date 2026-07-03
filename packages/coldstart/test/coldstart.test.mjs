@@ -747,4 +747,23 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('--record-verdict "" (empty string) does NOT silently degrade to plain --prompt-only — errors instead', () => {
+    const dir = makeTempDir();
+    try {
+      const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
+      const result = runCLI(['T1', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', ''], { cwd: dir });
+      assert.notEqual(result.status, 0, `empty --record-verdict must not silently succeed; got exit 0\nstdout: ${result.stdout}`);
+      assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest entry should be written for an empty verdict source');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--record-verdict "" without --prompt-only → exit 1 with the mutual-exclusion error (not silently ignored)', () => {
+    const ticketsPath = writeTickets(tmpDir, [{ id: 'T1', title: 'Foo' }]);
+    const result = runCLI(['T1', '--tickets', ticketsPath, '--record-verdict', '']);
+    assert.equal(result.status, 1, `expected exit 1, got ${result.status}`);
+    assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
+  });
 });

@@ -81,7 +81,7 @@ if (values.tier !== undefined && !VALID_TIERS.includes(values.tier)) {
   opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
 }
 
-if (values['record-verdict'] && !values['prompt-only']) {
+if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
 
@@ -135,7 +135,7 @@ if (values.edge) {
     }));
     const divergencePrompt = buildDivergencePrompt(placeholderEdgeReadings);
 
-    if (values['record-verdict']) {
+    if (values['record-verdict'] !== undefined) {
       await recordPromptOnlyVerdict([edgeFanPrompt, divergencePrompt], { mode: 'edge', tickets: [idA, idB] });
     }
 
@@ -188,7 +188,7 @@ if (values.route) {
     const placeholderAnswers = Array.from({ length: n }, (_, i) => `<answer ${i + 1}>`);
     const judgePrompt = buildRouteJudgePrompt(question, placeholderAnswers);
 
-    if (values['record-verdict']) {
+    if (values['record-verdict'] !== undefined) {
       await recordPromptOnlyVerdict([answerPrompt, judgePrompt], { mode: 'route', question });
     }
 
@@ -258,7 +258,7 @@ if (values['prompt-only']) {
   }));
   const divergencePrompt = buildDivergencePrompt(placeholderSpecReadings);
 
-  if (values['record-verdict']) {
+  if (values['record-verdict'] !== undefined) {
     await recordPromptOnlyVerdict([specFanPrompt, divergencePrompt], { mode: 'spec', request });
   }
 

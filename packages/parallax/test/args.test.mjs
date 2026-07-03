@@ -257,3 +257,20 @@ test('omitting --record-verdict preserves current --prompt-only behavior (no man
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('--record-verdict "" (empty string) does NOT silently degrade to plain --prompt-only — errors instead', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parallax-test-'));
+  try {
+    const r = run(['--request', 'Add a login page', '--prompt-only', '--record-verdict', ''], { cwd: dir });
+    assert.notEqual(r.status, 0, `empty --record-verdict must not silently succeed; got exit 0\nstdout: ${r.stdout}`);
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest entry should be written for an empty verdict source');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--record-verdict "" without --prompt-only → exit 1 with the mutual-exclusion error (not silently ignored)', () => {
+  const r = run(['--request', 'test', '--record-verdict', '']);
+  assert.equal(r.status, 1);
+  assert.ok(r.stderr.includes('--record-verdict requires --prompt-only'));
+});

@@ -47,7 +47,7 @@ if (!VALID_TIERS.includes(values.tier)) {
   opError(`invalid --tier '${values.tier}' — must be one of: ${VALID_TIERS.join(', ')}`);
 }
 
-if (values['record-verdict'] && !values['prompt-only']) {
+if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
 

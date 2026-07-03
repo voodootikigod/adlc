@@ -429,3 +429,33 @@ test('CLI: omitting --record-verdict preserves current --prompt-only behavior (n
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('CLI: --record-verdict "" (empty string) does NOT silently degrade to plain --prompt-only — errors instead', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--prompt-only', '--record-verdict', '',
+    ], { cwd: tmpDir, encoding: 'utf8' });
+    assert.notEqual(result.status, 0, `empty --record-verdict must not silently succeed; got exit 0\nstdout: ${result.stdout}`);
+    assert.equal(existsSync(join(tmpDir, '.adlc', 'manifest.jsonl')), false, 'no manifest entry should be written for an empty verdict source');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --record-verdict "" without --prompt-only → exit 1 with the mutual-exclusion error (not silently ignored)', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--record-verdict', '',
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 1, `expected exit 1, got ${result.status}`);
+    assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

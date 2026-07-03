@@ -39,7 +39,7 @@ export async function run(opts) {
     const display =
       `--- system ---\n${SYSTEM_PROMPT}\n\n--- user ---\n${prompt}`;
 
-    if (recordVerdictSource) {
+    if (recordVerdictSource !== undefined) {
       // Print the prompt — same evidence surface as plain --prompt-only —
       // then capture the operator's answer into the gate-manifest ledger so
       // the audit trail shows the gate was answered *and* what it concluded.
