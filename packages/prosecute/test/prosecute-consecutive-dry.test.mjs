@@ -21,7 +21,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runProsecution } from '../lib/run.mjs';
-import { FIXTURE_REVISION, finding, input, killedFinding, tmpAdlc } from './helpers.mjs';
+import { FIXTURE_REVISION, finding, input, killedFinding, readManifest, tmpAdlc } from './helpers.mjs';
 
 describe('consecutiveDry counter', () => {
   it('increments on each dry pass and resets to 0 when a non-dry pass appears in between', () => {
@@ -43,6 +43,15 @@ describe('consecutiveDry counter', () => {
     // Streak was reset, so only 1 consecutive dry pass remains at the end: gate-fail.
     assert.equal(result.exitCode, 2);
     assert.match(result.message, /convergence budget ended before two consecutive dry passes/);
+
+    // Each dry pass (security, correctness, behavior -- 3 of the 4 passes above) must write a
+    // p5-dry-pass evidence entry to the manifest: this is the audit-trail record that a dry pass
+    // occurred, and it is the trust boundary this whole package exists to protect (see
+    // docs/specs/prosecute-coverage-split.md). Count, not just presence, so a regression that
+    // drops the write for only some dry passes is also caught.
+    const manifest = readManifest(dir);
+    const dryPassEntries = manifest.split('\n').filter((line) => line.includes('"type":"p5-dry-pass"'));
+    assert.equal(dryPassEntries.length, 3);
   });
 
   it('re-accumulates two consecutive dry passes after a reset', () => {

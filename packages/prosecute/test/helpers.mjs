@@ -89,6 +89,10 @@ export function killedFinding(overrides = {}) {
   });
 }
 
+export function readManifest(dir) {
+  return readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
+}
+
 export function input(dir, overrides = {}) {
   return {
     provenance: {
