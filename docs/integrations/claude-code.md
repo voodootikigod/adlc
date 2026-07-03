@@ -153,6 +153,36 @@ $EDITOR ~/.claude/plugins/installed_plugins.json   # delete the "adlc@adlc" key
 claude plugin install adlc@adlc
 ```
 
+### `npm warn Unknown user config "min-release-age"` during install
+
+**This is not caused by @adlc.** Neither `npx plugins add voodootikigod/adlc`
+nor `npm install -g @adlc/cli` sets, reads, or ships an `.npmrc` — the toolkit
+has no `config` field and no install/postinstall script. Reproduce the
+documented install commands from a clean environment against the real registry
+and neither one emits this warning.
+
+**Actual cause:** `min-release-age` is a real npm config (the "install
+cooldown" supply-chain-safety feature that delays installing a package version
+until it has been public for N days). npm only added it to its list of known
+config keys in **npm 11.10.0**. If your `~/.npmrc` (npm's *user* config, not
+this repo's) already has `min-release-age` set — e.g. because you or your org
+adopted npm's cooldown feature — and your active npm is anywhere in the 11.x
+line *before* 11.10.0, npm treats the key as unrecognized and warns on **every**
+`npm install`/`npm install -g` you run, not just the `@adlc/cli` one. (npm's
+own bundled version in Node 20, 10.x, predates the unknown-config check
+entirely and never warns either way; npm >= 11.10.0 recognizes the key and
+never warns.) The `npm install -g @adlc/cli` step in these docs is simply the
+first npm command most readers run after cloning, so it takes the blame.
+
+**Fix:** upgrade npm past the version boundary where it learns the key:
+
+```sh
+npm install -g npm@latest
+```
+
+Then re-run the install command; the warning is gone because your npm now
+recognizes `min-release-age`, not because anything was suppressed.
+
 ---
 
 ## Lifecycle coverage
