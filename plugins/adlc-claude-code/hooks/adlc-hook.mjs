@@ -626,29 +626,39 @@ function gitChangedPaths() {
     }
   }
 
-  // First reachable trunk candidate — same candidate order as @adlc/core's
-  // resolveBase (packages/core/lib/git.mjs), so this hook's notion of "the
-  // branch" matches the rest of the toolkit's freeze/diff gates.
+  // First reachable trunk candidate whose merge-base with HEAD actually
+  // resolves — same candidate order AND same retry-on-merge-base-failure
+  // behavior as @adlc/core's resolveBase (packages/core/lib/git.mjs), so this
+  // hook's notion of "the branch" matches the rest of the toolkit's
+  // freeze/diff gates. A candidate can exist as a ref yet share no common
+  // history with HEAD (orphan branch, stale ref after a history rewrite,
+  // shallow clone) — resolveBase() doesn't stop at the first *existing* ref,
+  // it keeps trying candidates until one produces a real merge-base, so this
+  // must too or it silently drops the committed-diff contribution to `changed`.
   // Overridable via ADLC_ADVERSARIAL_REVIEW_BASE for repos with a different trunk.
-  const base = (process.env.ADLC_ADVERSARIAL_REVIEW_BASE ?? '').trim() ||
-    ['main', 'master', 'origin/main', 'origin/master'].find((c) => {
-      const r = runGit(['rev-parse', '--verify', '--quiet', `${c}^{commit}`]);
-      return !r.error && r.status === 0;
-    });
-  if (base) {
-    // Diff against the MERGE-BASE (fork point of `base` and HEAD), NOT
-    // `base`'s live tip — resolveBase() itself resolves to `git merge-base
-    // <candidate> HEAD`, and diffing straight against the tip would flag any
-    // file trunk changed *after* this branch diverged as "changed" on this
-    // branch too, producing false-positive risk-tier matches on stable code.
-    const mergeBase = runGit(['merge-base', base, 'HEAD']);
-    const diffBase = !mergeBase.error && mergeBase.status === 0 ? mergeBase.stdout.trim() : '';
-    if (diffBase) {
-      const diff = runGit(['diff', '--name-only', diffBase, '--']);
-      if (!diff.error && diff.status === 0 && diff.stdout) {
-        for (const p of diff.stdout.split('\n')) {
-          if (p.trim()) paths.add(p.trim());
-        }
+  const envBase = (process.env.ADLC_ADVERSARIAL_REVIEW_BASE ?? '').trim();
+  const candidates = envBase ? [envBase] : ['main', 'master', 'origin/main', 'origin/master'];
+  let diffBase = '';
+  for (const c of candidates) {
+    const exists = runGit(['rev-parse', '--verify', '--quiet', `${c}^{commit}`]);
+    if (exists.error || exists.status !== 0) continue;
+    // Diff against the MERGE-BASE (fork point of `c` and HEAD), NOT `c`'s live
+    // tip — resolveBase() itself resolves to `git merge-base <candidate>
+    // HEAD`, and diffing straight against the tip would flag any file trunk
+    // changed *after* this branch diverged as "changed" on this branch too,
+    // producing false-positive risk-tier matches on stable code.
+    const mergeBase = runGit(['merge-base', c, 'HEAD']);
+    if (!mergeBase.error && mergeBase.status === 0 && mergeBase.stdout.trim()) {
+      diffBase = mergeBase.stdout.trim();
+      break;
+    }
+    // candidate exists but shares no history with HEAD — try the next one
+  }
+  if (diffBase) {
+    const diff = runGit(['diff', '--name-only', diffBase, '--']);
+    if (!diff.error && diff.status === 0 && diff.stdout) {
+      for (const p of diff.stdout.split('\n')) {
+        if (p.trim()) paths.add(p.trim());
       }
     }
   }

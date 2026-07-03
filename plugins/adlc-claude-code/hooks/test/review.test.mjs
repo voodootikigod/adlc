@@ -127,6 +127,26 @@ test('risk-gated untracked file, no manifest at all → advisory notice (not blo
   }
 });
 
+// Regression for the fbf4a38 fix: the remediation text once told operators to
+// run `gate-manifest record adversarial-review --evidence '...'`, but
+// `gate-manifest record` only accepts --ticket/--data/--files and throws
+// ERR_PARSE_ARGS_UNKNOWN_OPTION on --evidence. Assert the printed command uses
+// only real flags so this specific regression can't silently creep back in.
+test('advisory notice remediation text uses --files/--data, never the non-existent --evidence flag', () => {
+  const dir = initRepo();
+  try {
+    mkdirSync(join(dir, 'src', 'auth'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'auth', 'login.mjs'), 'export function login() {}\n');
+    const r = runReview(dir, { env: { PATH: WITH_ADLC } });
+    assert.match(r.out, /gate-manifest record adversarial-review/);
+    assert.match(r.out, /--files/);
+    assert.match(r.out, /--data/);
+    assert.doesNotMatch(r.out, /--evidence/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test('risk-gated CI/CD file (.github/workflows) → advisory notice', () => {
   const dir = initRepo();
   try {

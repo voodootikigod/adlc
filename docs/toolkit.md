@@ -86,7 +86,7 @@ payload (there is no `--evidence 'k=v; k=v'` flag — node's strict-mode `parseA
 `ERR_PARSE_ARGS_UNKNOWN_OPTION` on it), so shape the same fields as JSON:
 
     adlc gate-manifest record adversarial-review \
-      --data '{"providers":"<a,b>","iterations":<n>,"verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>","surviving":<n>,"accepted":<n>}'
+      --data '{"providers":"<a,b>","iterations":"<n>","verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>","surviving":"<n>","accepted":"<n>"}'
 
 Capture: providers used, iterations, final verdict, exit reason, surviving findings, and
 accepted-with-justification findings. See

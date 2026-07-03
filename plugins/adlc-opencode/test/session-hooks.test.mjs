@@ -138,6 +138,23 @@ test('auditAdversarialReview: risk-tier path changed, no manifest at all → nee
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Regression for the fbf4a38 fix: the remediation text once told operators to
+// run `gate-manifest record adversarial-review --evidence '...'`, but
+// `gate-manifest record` only accepts --ticket/--data/--files and throws
+// ERR_PARSE_ARGS_UNKNOWN_OPTION on --evidence. Assert the printed command uses
+// only real flags so this specific regression can't silently creep back in.
+test('auditAdversarialReview: warning remediation text uses --files/--data, never the non-existent --evidence flag', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const spawnImpl = stub({ 'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' } });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.match(r.warning, /gate-manifest record adversarial-review/);
+    assert.match(r.warning, /--files/);
+    assert.match(r.warning, /--data/);
+    assert.doesNotMatch(r.warning, /--evidence/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('auditAdversarialReview: quoted git-status path (space in filename) is unquoted before risk-tier matching → needed', () => {
   const root = initAdlc(mkroot());
   try {

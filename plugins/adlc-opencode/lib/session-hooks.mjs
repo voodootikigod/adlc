@@ -143,28 +143,37 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
     }
   }
 
-  // Same trunk-candidate order as @adlc/core's resolveBase (lib/git.mjs), so
-  // this check's notion of "the branch" matches the rest of the toolkit's
-  // freeze/diff gates. Overridable via `base` for a repo with a different trunk.
-  const resolvedBase = base ??
-    ['main', 'master', 'origin/main', 'origin/master'].find((c) => {
-      const r = run(spawnImpl, 'git', ['rev-parse', '--verify', '--quiet', `${c}^{commit}`], root);
-      return !r.error && r.status === 0;
-    });
-  if (resolvedBase) {
-    // Diff against the MERGE-BASE (fork point of `resolvedBase` and HEAD), NOT
-    // `resolvedBase`'s live tip — resolveBase() itself resolves to
-    // `git merge-base <candidate> HEAD`. Diffing straight against the tip would
-    // flag any file trunk changed *after* this branch diverged as "changed" on
-    // this branch too, producing false-positive risk-tier matches.
-    const mergeBase = run(spawnImpl, 'git', ['merge-base', resolvedBase, 'HEAD'], root);
-    const diffBase = !mergeBase.error && mergeBase.status === 0 ? mergeBase.stdout.trim() : '';
-    if (diffBase) {
-      const diff = run(spawnImpl, 'git', ['diff', '--name-only', diffBase, '--'], root);
-      if (!diff.error && diff.status === 0 && diff.stdout) {
-        for (const p of diff.stdout.split('\n')) {
-          if (p.trim()) paths.add(p.trim());
-        }
+  // Same trunk-candidate order AND same retry-on-merge-base-failure behavior
+  // as @adlc/core's resolveBase (lib/git.mjs), so this check's notion of "the
+  // branch" matches the rest of the toolkit's freeze/diff gates. A candidate
+  // can exist as a ref yet share no common history with HEAD (orphan branch,
+  // stale ref after a history rewrite, shallow clone) — resolveBase() doesn't
+  // stop at the first *existing* ref, it keeps trying candidates until one
+  // produces a real merge-base, so this must too or it silently drops the
+  // committed-diff contribution to `changed`. Overridable via `base` for a
+  // repo with a different trunk.
+  const baseCandidates = base ? [base] : ['main', 'master', 'origin/main', 'origin/master'];
+  let diffBase = '';
+  for (const c of baseCandidates) {
+    const exists = run(spawnImpl, 'git', ['rev-parse', '--verify', '--quiet', `${c}^{commit}`], root);
+    if (exists.error || exists.status !== 0) continue;
+    // Diff against the MERGE-BASE (fork point of `c` and HEAD), NOT `c`'s live
+    // tip — resolveBase() itself resolves to `git merge-base <candidate>
+    // HEAD`. Diffing straight against the tip would flag any file trunk
+    // changed *after* this branch diverged as "changed" on this branch too,
+    // producing false-positive risk-tier matches.
+    const mergeBase = run(spawnImpl, 'git', ['merge-base', c, 'HEAD'], root);
+    if (!mergeBase.error && mergeBase.status === 0 && mergeBase.stdout.trim()) {
+      diffBase = mergeBase.stdout.trim();
+      break;
+    }
+    // candidate exists but shares no history with HEAD — try the next one
+  }
+  if (diffBase) {
+    const diff = run(spawnImpl, 'git', ['diff', '--name-only', diffBase, '--'], root);
+    if (!diff.error && diff.status === 0 && diff.stdout) {
+      for (const p of diff.stdout.split('\n')) {
+        if (p.trim()) paths.add(p.trim());
       }
     }
   }
