@@ -99,7 +99,17 @@ export function runTicketPrune(options = {}) {
     } catch (err) {
       return { ok: false, error: `could not read archive file: ${err.message}` };
     }
-    const archiveById = new Map((existingArchive.tickets ?? []).map((t) => [t.id, t]));
+    // readJson's fallback only applies to a genuinely absent file — a file
+    // that exists and contains a syntactically-valid-but-unusable JSON
+    // document (e.g. the literal `null`, a bare array, or `{}` without a
+    // `tickets` array) parses successfully and is returned as-is. Guard
+    // against that here (rather than trusting existingArchive.tickets to be
+    // an array) so a pre-existing archive file with unexpected-but-valid
+    // JSON content degrades to "treat as empty archive" instead of throwing
+    // when we dereference .tickets below.
+    const existingArchiveTickets =
+      existingArchive && Array.isArray(existingArchive.tickets) ? existingArchive.tickets : [];
+    const archiveById = new Map(existingArchiveTickets.map((t) => [t.id, t]));
 
     const archivedEntries = [];
     for (const ticket of removed) {

@@ -288,6 +288,28 @@ test('--write: invalid JSON in a pre-existing archive file is a clean {ok:false}
   });
 });
 
+test('--write: a pre-existing archive file containing the JSON literal `null` (syntactically valid, but not an object) archives cleanly instead of throwing', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+    // `null` is valid JSON — readJson's fallback is only used for a missing
+    // file, so this parses successfully to `null`, not { tickets: [] }.
+    writeFileSync(join(dir, '.adlc', 'tickets.archive.json'), 'null');
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.archived.length, 1);
+    assert.equal(result.archived[0].id, 'T1');
+
+    const archive = readArchive(dir);
+    assert.equal(archive.tickets.length, 1);
+    assert.equal(archive.tickets[0].id, 'T1');
+
+    const tickets = readTickets(dir);
+    assert.equal(tickets.tickets.length, 0);
+  });
+});
+
 test('bin: --write with a corrupt archive file exits 1 with a clean error message, not a raw stack trace', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
