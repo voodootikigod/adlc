@@ -118,6 +118,19 @@ gate so obfuscated shell writes are still caught. Copy these into
 - [`ci/adlc-maintenance.yml`](../ci/adlc-maintenance.yml) — a weekly advisory cron
   running the deterministic maintenance checks into the job summary.
 
+**Private-repo / free-plan caveat.** "Make it a required check" assumes your
+GitHub plan allows configuring one. On a **private repo on GitHub's free plan**,
+both required-status-check mechanisms (`PUT .../branches/main/protection`,
+`POST .../rulesets`) return 403 ("Upgrade to GitHub Pro or make this repository
+public") — the gate still runs on every PR, but nothing stops a merge past a red
+run. If that's your setup, don't ship `rails-guard` as a standalone job; fold the
+rail-freeze step into the job backing your existing required check (e.g. the main
+`test` job) instead. See the "Private-repo fallback" sketch at the bottom of
+[`ci/rails-guard.yml`](../ci/rails-guard.yml).
+
+Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
+deliberately after reviewing a release.
+
 Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
 deliberately after reviewing a release.
 
