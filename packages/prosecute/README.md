@@ -1,9 +1,16 @@
 # @adlc/prosecute
 
-P5 review-evidence recorder. It does not run a model review by itself. It consumes
-normalized reviewer-produced pass evidence, records ticket- and revision-scoped P5
-evidence to `.adlc/manifest.jsonl`, and passes only after two consecutive dry passes
-with at least three distinct dry lenses.
+> **Design decision: this is a recorder, not a reviewer.** `@adlc/prosecute` makes zero
+> model calls and runs no adversarial review of its own. It is a P5 evidence ledger: it
+> validates, hashes, and appends normalized reviewer-produced pass records to
+> `.adlc/manifest.jsonl`. The actual model-judged review is a separate tool -- run
+> `npx adversarial-review` (or `adlc review`, which passes args through to it) -- and feed
+> **its** output into `prosecute` as the `--input` evidence. If you run `adlc prosecute`
+> expecting it to find bugs, it will not; it only proves that a real review already did.
+
+P5 review-evidence recorder. It consumes normalized reviewer-produced pass evidence,
+records ticket- and revision-scoped P5 evidence to `.adlc/manifest.jsonl`, and passes
+only after two consecutive dry passes with at least three distinct dry lenses.
 
 ## Usage
 
