@@ -148,6 +148,21 @@ test('ensureGitignore is a no-op when the full stanza is already present (idempo
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('ensureGitignore does not duplicate a standalone negation line when the .adlc/* anchor is absent', () => {
+  const root = mkroot();
+  try {
+    writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n');
+    const r = ensureGitignore(root);
+    assert.equal(r.changed, true);
+    assert.deepEqual(r.added, ['.adlc/*', '!.adlc/specs/']);
+    const body = readFileSync(join(root, '.gitignore'), 'utf8');
+    const occurrences = body.split('\n').filter((l) => l === '!.adlc/tickets.json').length;
+    assert.equal(occurrences, 1, '!.adlc/tickets.json must not be duplicated');
+    assert.match(body, /^\.adlc\/\*$/m);
+    assert.match(body, /^!\.adlc\/specs\/$/m);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('scaffold() wires ensureGitignore in so /adlc-init tracks specs/ by default', () => {
   const root = mkroot();
   try {
@@ -206,6 +221,19 @@ test('ensureFormatterIgnores adds ignorePatterns to an existing .eslintrc.json',
     const cfg = JSON.parse(readFileSync(join(root, '.eslintrc.json'), 'utf8'));
     assert.ok(cfg.ignorePatterns.includes('.adlc/**'));
     assert.deepEqual(cfg.extends, ['eslint:recommended']); // untouched
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ensureFormatterIgnores appends .adlc/ to an existing .eslintignore', () => {
+  const root = mkroot();
+  try {
+    writeFileSync(join(root, '.eslintignore'), 'dist/\n');
+    const { eslint } = ensureFormatterIgnores(root);
+    assert.equal(eslint.detected, true);
+    assert.equal(eslint.changed, true);
+    const body = readFileSync(join(root, '.eslintignore'), 'utf8');
+    assert.match(body, /^dist\/$/m);
+    assert.match(body, /^\.adlc\/$/m);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

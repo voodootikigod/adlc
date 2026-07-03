@@ -140,8 +140,11 @@ export function ensureGitignore(projectRoot) {
 
   const anchorIdx = lines.indexOf('.adlc/*');
   if (anchorIdx === -1) {
+    // Push only the entries actually missing — some negation lines may
+    // already exist standalone in the file (without the anchor immediately
+    // preceding them); re-pushing the full stanza would duplicate those.
     if (lines.length > 0) lines.push('');
-    lines.push(...GITIGNORE_STANZA);
+    lines.push(...missing);
   } else {
     let insertAt = anchorIdx + 1;
     while (insertAt < lines.length && lines[insertAt].startsWith('!')) insertAt++;

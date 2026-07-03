@@ -96,6 +96,19 @@ test('ensureGitignore is a no-op when the full stanza is already present (idempo
   assert.deepEqual(r.added, []);
 });
 
+test('ensureGitignore does not duplicate a standalone negation line when the .adlc/* anchor is absent', () => {
+  const root = mkRepo();
+  writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n');
+  const r = ensureGitignore(root);
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.added, ['.adlc/*', '!.adlc/specs/']);
+  const body = readFileSync(join(root, '.gitignore'), 'utf8');
+  const occurrences = body.split('\n').filter((l) => l === '!.adlc/tickets.json').length;
+  assert.equal(occurrences, 1, '!.adlc/tickets.json must not be duplicated');
+  assert.match(body, /^\.adlc\/\*$/m);
+  assert.match(body, /^!\.adlc\/specs\/$/m);
+});
+
 test('scaffold() wires ensureGitignore in so /adlc-init tracks specs/ by default', () => {
   const root = mkRepo();
   const out = scaffold(root);
@@ -145,6 +158,28 @@ test('ensureFormatterIgnores adds ignorePatterns to an existing .eslintrc.json',
   const cfg = readJson(join(root, '.eslintrc.json'));
   assert.ok(cfg.ignorePatterns.includes('.adlc/**'));
   assert.deepEqual(cfg.extends, ['eslint:recommended']);
+});
+
+test('ensureFormatterIgnores appends .adlc/ to an existing .eslintignore', () => {
+  const root = mkRepo();
+  writeFileSync(join(root, '.eslintignore'), 'dist/\n');
+  const { eslint } = ensureFormatterIgnores(root);
+  assert.equal(eslint.detected, true);
+  assert.equal(eslint.changed, true);
+  const body = readFileSync(join(root, '.eslintignore'), 'utf8');
+  assert.match(body, /^dist\/$/m);
+  assert.match(body, /^\.adlc\/$/m);
+});
+
+test('ensureFormatterIgnores detects but does not silently mutate a flat eslint.config.js', () => {
+  const root = mkRepo();
+  writeFileSync(join(root, 'eslint.config.js'), 'export default [];\n');
+  const { eslint } = ensureFormatterIgnores(root);
+  assert.equal(eslint.detected, true);
+  assert.equal(eslint.changed, false);
+  assert.ok(eslint.skipped, 'must document the manual fallback');
+  const body = readFileSync(join(root, 'eslint.config.js'), 'utf8');
+  assert.equal(body, 'export default [];\n'); // untouched
 });
 
 test('ensureFormatterIgnores reports nothing detected when no formatter/linter configs exist', () => {
