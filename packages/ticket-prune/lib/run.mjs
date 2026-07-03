@@ -66,7 +66,17 @@ export function runTicketPrune(options = {}) {
   try {
     // Re-read under the lock: another writer (e.g. ticket-sync) may have
     // mutated tickets.json between the classification read above and here.
-    const rawUnderLock = readJson(absTicketsPath, null);
+    // Every fallible step below (JSON parse of either file, either atomic
+    // write) is wrapped so a failure surfaces as the documented
+    // {ok:false, error} shape instead of an uncaught exception, and so a
+    // failure never lands us in a state where a ticket vanishes from both
+    // files (see the write ordering note below).
+    let rawUnderLock;
+    try {
+      rawUnderLock = readJson(absTicketsPath, null);
+    } catch (err) {
+      return { ok: false, error: `could not re-read tickets file under lock: ${err.message}` };
+    }
     if (rawUnderLock === null) {
       return { ok: false, error: `ticket file disappeared during archive: ${absTicketsPath}` };
     }
@@ -83,7 +93,12 @@ export function runTicketPrune(options = {}) {
 
     const archivedAt = new Date().toISOString();
     const reasonById = new Map(stale.map((r) => [r.id, r.reason]));
-    const existingArchive = readJson(absArchivePath, { tickets: [] });
+    let existingArchive;
+    try {
+      existingArchive = readJson(absArchivePath, { tickets: [] });
+    } catch (err) {
+      return { ok: false, error: `could not read archive file: ${err.message}` };
+    }
     const archiveById = new Map((existingArchive.tickets ?? []).map((t) => [t.id, t]));
 
     const archivedEntries = [];
@@ -93,8 +108,30 @@ export function runTicketPrune(options = {}) {
       archivedEntries.push(entry);
     }
 
-    writeJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: kept });
-    writeJsonAtomic(absArchivePath, { tickets: [...archiveById.values()] });
+    // Write the archive BEFORE removing anything from tickets.json. If this
+    // write throws (bad --archive directory, permissions, disk full), we
+    // return an error with tickets.json completely untouched — the stale
+    // tickets are still there to retry, never lost. The alternative
+    // ordering (tickets.json first) can lose a ticket permanently if the
+    // archive write is what fails, since it would already be gone from
+    // tickets.json with nowhere else it was ever persisted.
+    try {
+      writeJsonAtomic(absArchivePath, { tickets: [...archiveById.values()] });
+    } catch (err) {
+      return { ok: false, error: `could not write archive file: ${err.message}` };
+    }
+
+    try {
+      writeJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: kept });
+    } catch (err) {
+      // Worst case here: the archive now holds entries that are also still
+      // present in tickets.json (a harmless duplicate, recoverable by
+      // re-running), never a ticket that exists in neither file.
+      return {
+        ok: false,
+        error: `archived ${archivedEntries.length} ticket(s) but failed to remove them from tickets.json: ${err.message}`,
+      };
+    }
 
     return { ok: true, baseRef, write, stale, active, archived: archivedEntries };
   } finally {

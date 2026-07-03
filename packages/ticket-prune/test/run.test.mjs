@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTicketPrune } from '../lib/run.mjs';
+import { acquireLock } from '../lib/store.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, '..', 'bin', 'ticket-prune.mjs');
@@ -32,20 +33,56 @@ function readArchive(dir) {
  * standing in for "mocked done signals": a ticket whose scope matches it is
  * inferrable-stale; a ticket whose scope points nowhere real is not.
  */
+function setupScratchRepo(dir) {
+  git(['init', '-q'], dir);
+  git(['config', 'user.email', 'test@example.com'], dir);
+  git(['config', 'user.name', 'Test'], dir);
+  mkdirSync(join(dir, 'plugins', 'adlc-widget'), { recursive: true });
+  writeFileSync(join(dir, 'plugins', 'adlc-widget', 'index.mjs'), '// shipped\n');
+  git(['add', '-A'], dir);
+  git(['commit', '-q', '-m', 'ship the widget'], dir);
+}
+
 function withScratchRepo(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'ticket-prune-run-'));
   try {
-    git(['init', '-q'], dir);
-    git(['config', 'user.email', 'test@example.com'], dir);
-    git(['config', 'user.name', 'Test'], dir);
-    mkdirSync(join(dir, 'plugins', 'adlc-widget'), { recursive: true });
-    writeFileSync(join(dir, 'plugins', 'adlc-widget', 'index.mjs'), '// shipped\n');
-    git(['add', '-A'], dir);
-    git(['commit', '-q', '-m', 'ship the widget'], dir);
+    setupScratchRepo(dir);
     return fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Async variant: awaits `fn(dir)` before cleanup, for tests that spawn a
+ * concurrent child process and need the temp dir to outlive its own return. */
+async function withScratchRepoAsync(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-prune-run-async-'));
+  try {
+    setupScratchRepo(dir);
+    return await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Spawns a real child process that sleeps `delayMs`, overwrites
+ * .adlc/tickets.json with `ticketsObj`, then releases the .adlc/tickets.lock
+ * — simulating another writer (e.g. ticket-sync) mutating tickets.json and
+ * releasing the lock while ticket-prune is blocked retrying for it. Runs
+ * out-of-process so it isn't blocked by acquireLock's synchronous retry
+ * loop in the test process. Returns a promise that resolves when the child
+ * exits (rejects on nonzero exit).
+ */
+function spawnMutateAfterDelay(dir, ticketsObj, delayMs) {
+  const script = join(HERE, 'fixtures', 'mutate-tickets-after-delay.mjs');
+  const child = spawn(process.execPath, [script, dir, JSON.stringify(ticketsObj), String(delayMs)], {
+    stdio: 'inherit',
+  });
+  return new Promise((resolvePromise, reject) => {
+    child.on('exit', (code) => (code === 0 ? resolvePromise() : reject(new Error(`writer helper exited ${code}`))));
+    child.on('error', reject);
+  });
 }
 
 // ── dry-run reports without mutating ────────────────────────────────────────
@@ -210,6 +247,126 @@ test('--write accumulates across repeated runs instead of clobbering the archive
     runTicketPrune({ cwd: dir, write: true });
     archive = readArchive(dir);
     assert.deepEqual(archive.tickets.map((t) => t.id).sort(), ['T1', 'T2']);
+  });
+});
+
+// ── --write failure safety (no data loss, no uncaught exceptions) ──────────
+
+test('--write: if the archive write fails, tickets.json is left untouched (no data loss) and the error is reported cleanly', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    // Point --archive at a path inside a directory that doesn't exist, so
+    // the archive's atomic write throws (ENOENT).
+    const badArchivePath = join(dir, 'nonexistent-dir', 'tickets.archive.json');
+
+    const result = runTicketPrune({ cwd: dir, archivePath: badArchivePath, write: true });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /archive/i);
+
+    // The stale ticket must still be in tickets.json, byte-identical to
+    // before the failed run — archive-write failures must never remove a
+    // ticket from tickets.json without it having been durably archived.
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+    assert.equal(existsSync(badArchivePath), false);
+  });
+});
+
+test('--write: invalid JSON in a pre-existing archive file is a clean {ok:false} error, not an uncaught exception, and does not touch tickets.json', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+    writeFileSync(join(dir, '.adlc', 'tickets.archive.json'), '{ not valid json');
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /invalid JSON/);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+  });
+});
+
+test('bin: --write with a corrupt archive file exits 1 with a clean error message, not a raw stack trace', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+    writeFileSync(join(dir, '.adlc', 'tickets.archive.json'), '{ not valid json');
+
+    const { code, stderr } = runBin(['--write', '--json'], dir);
+
+    assert.equal(code, 1);
+    assert.match(stderr, /^error: /);
+    assert.doesNotMatch(stderr, /at runTicketPrune/); // no raw Node stack trace
+  });
+});
+
+// ── concurrency: re-read under the lock ─────────────────────────────────────
+//
+// runTicketPrune re-reads tickets.json after acquiring the lock, specifically
+// to guard against another writer (e.g. ticket-sync) mutating tickets.json
+// between the initial classification read and the lock acquisition. These
+// two tests force a *real* concurrent mutation (via a child process that
+// holds/releases the shared lock out-of-process) to exercise that re-read,
+// rather than two sequential non-overlapping runs.
+
+test('--write: re-reads tickets.json under the lock, so a ticket added concurrently (after classification, before the lock) survives the write', async () => {
+  await withScratchRepoAsync(async (dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+
+    // Hold the lock ourselves first so runTicketPrune's own acquireLock()
+    // call is forced to block/retry — simulating another writer being
+    // mid-write at the exact moment ticket-prune tries to take the lock.
+    assert.equal(acquireLock(dir), true);
+
+    // While ticket-prune is blocked on the lock, this child process mutates
+    // tickets.json to add T2 (unknown to classification, which already ran
+    // against the pre-mutation file above) and then releases the lock.
+    const mutated = {
+      tickets: [
+        { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] },
+        { id: 'T2', title: 'Added concurrently', scope: ['packages/never-built/**'] },
+      ],
+    };
+    const writerDone = spawnMutateAfterDelay(dir, mutated, 150);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+    await writerDone;
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.archived.map((t) => t.id), ['T1']);
+
+    // T2 didn't exist when classification ran, so it's in neither `stale`
+    // nor `active` — but the re-read under the lock must still see it and
+    // preserve it in tickets.json. If runTicketPrune used the pre-lock
+    // `tickets` snapshot instead of re-reading fresh under the lock, T2
+    // would be silently dropped here.
+    assert.deepEqual(readTickets(dir).tickets.map((t) => t.id), ['T2']);
+  });
+});
+
+test('--write: if a stale ticket is already gone by the time the lock is acquired, the run archives nothing instead of crashing or re-archiving', () => {
+  return withScratchRepoAsync(async (dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+
+    assert.equal(acquireLock(dir), true);
+
+    // Simulates another writer having already archived/removed T1 by the
+    // time ticket-prune gets the lock.
+    const writerDone = spawnMutateAfterDelay(dir, { tickets: [] }, 150);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+    await writerDone;
+
+    assert.equal(result.ok, true);
+    // Classification (which ran before the lock was even attempted) still
+    // reports T1 as stale...
+    assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
+    // ...but the removed.length === 0 early-return branch means nothing is
+    // (re-)archived and no archive file is created.
+    assert.deepEqual(result.archived, []);
+    assert.equal(existsSync(join(dir, '.adlc', 'tickets.archive.json')), false);
+    assert.deepEqual(readTickets(dir).tickets, []);
   });
 });
 
