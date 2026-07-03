@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -452,6 +452,47 @@ test('agy provider: ADLC_AGY=false/0 do NOT enable the provider', () => {
   assert.equal(detectProvider({ ADLC_AGY: 'off' }), null);
   assert.equal(detectProvider({ ADLC_AGY: '1' })?.name, 'agy');
   assert.equal(detectProvider({ ADLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
+});
+
+// Review-round-2 (issue #63): complete()/fan()/fanProviders() accept an
+// injectable `env` but historically did not forward it to provider.send(),
+// so the agy provider always fell back to process.env for ADLC_AGY_TIMEOUT /
+// ADLC_AGY_SANDBOX regardless of what env was passed in. This stubs a fake
+// `agy` binary (a shell script that just echoes its argv) so we can assert
+// the timeout/sandbox flags actually came from the injected env, not from
+// real process.env, without needing the real Antigravity CLI installed.
+test('complete: injected env reaches the agy provider send() (timeout/sandbox honored, not process.env)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-agy-stub-'));
+  const stubPath = join(dir, 'fake-agy.sh');
+  // Drain stdin fully before exiting — otherwise the parent's stdin.end()
+  // can race the child's exit and surface as an unrelated EPIPE.
+  writeFileSync(stubPath, '#!/bin/sh\ncat >/dev/null\necho "ARGS: $@"\n');
+  chmodSync(stubPath, 0o755);
+
+  // Leave a DIFFERENT value in real process.env to prove it is NOT what
+  // gets used — if the bug regresses, this is what `agySend` would read.
+  const prevTimeout = process.env.ADLC_AGY_TIMEOUT;
+  const prevSandbox = process.env.ADLC_AGY_SANDBOX;
+  process.env.ADLC_AGY_TIMEOUT = '999s-WRONG-PROCESS-ENV';
+  delete process.env.ADLC_AGY_SANDBOX;
+
+  try {
+    const injectedEnv = {
+      ADLC_AGY: stubPath,
+      ADLC_AGY_TIMEOUT: '5s',
+      ADLC_AGY_SANDBOX: '1',
+    };
+    const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'agy' }, injectedEnv);
+    assert.match(out, /--print-timeout 5s/, 'should use the injected timeout, not process.env');
+    assert.match(out, /--sandbox/, 'should pass --sandbox from the injected env');
+    assert.ok(!out.includes('999s-WRONG-PROCESS-ENV'), 'must not fall back to process.env');
+  } finally {
+    if (prevTimeout === undefined) delete process.env.ADLC_AGY_TIMEOUT;
+    else process.env.ADLC_AGY_TIMEOUT = prevTimeout;
+    if (prevSandbox === undefined) delete process.env.ADLC_AGY_SANDBOX;
+    else process.env.ADLC_AGY_SANDBOX = prevSandbox;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // --- per-invocation provider selection (issue #63) ---

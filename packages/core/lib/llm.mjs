@@ -214,13 +214,16 @@ export async function complete(opts, env = process.env) {
     );
   }
   const model = resolveModel(provider, opts, env);
-  return provider.send({
-    apiKey: provider.apiKey,
-    model,
-    system: opts.system,
-    prompt: opts.prompt,
-    maxTokens: opts.maxTokens ?? 4096,
-  });
+  return provider.send(
+    {
+      apiKey: provider.apiKey,
+      model,
+      system: opts.system,
+      prompt: opts.prompt,
+      maxTokens: opts.maxTokens ?? 4096,
+    },
+    env
+  );
 }
 
 /**
