@@ -258,6 +258,33 @@ test('ternary-swap: swaps the recursive/leaf branches of an array-processing ter
   assert.equal(m.mutated, '    const result = Array.isArray(item) ? item : flatten(item);');
 });
 
+// ── ternary-swap fail-closed on trailing content (review round 2, c0e8800) ──
+// A naive `$`-anchored regex would absorb a trailing `//` comment, or the
+// remainder of an enclosing array/call-argument list, into whenFalse and
+// relocate it during the swap — corrupting the line. Each case below must
+// produce NO mutant (fail closed) rather than a corrupted one.
+
+test('ternary-swap: fails closed on a ternary line with a trailing // comment', () => {
+  const line = '    const result = Array.isArray(item) ? flatten(item) : item; // keep going';
+  const op = OPERATORS.find((o) => o.name === 'ternary-swap');
+  assert.equal(op.apply(line), null,
+    'a naive $-anchored regex would absorb "; // keep going" into whenFalse and relocate it on swap');
+});
+
+test('ternary-swap: fails closed on a ternary embedded as one element of an array literal', () => {
+  const line = '  const arr = [cond ? a : b, other];';
+  const op = OPERATORS.find((o) => o.name === 'ternary-swap');
+  assert.equal(op.apply(line), null,
+    'a naive $-anchored regex would absorb ", other];" into whenFalse and relocate it on swap');
+});
+
+test('ternary-swap: fails closed on a ternary embedded in a call-argument list', () => {
+  const line = '  foo(cond ? a : b)';
+  const op = OPERATORS.find((o) => o.name === 'ternary-swap');
+  assert.equal(op.apply(line), null,
+    'the unmatched closing ) belongs to the enclosing call, not to whenFalse');
+});
+
 test('applyMutant: applies and refuses stale content', () => {
   const src = 'const a = true;';
   const [m] = generateMutants(src);
