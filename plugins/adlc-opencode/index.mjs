@@ -12,7 +12,7 @@
 // advisory mode; otherwise it signals that preflight should fail closed.
 
 import { checkRail, probeEnforcementCapability } from './rails-checker.mjs';
-import { checkPreflight, auditGateManifest } from './lib/session-hooks.mjs';
+import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
 
@@ -59,6 +59,14 @@ export const adlcRailsGuard = async ({ directory, worktree, project } = {}) => {
       try {
         const { warning } = auditGateManifest(root);
         if (warning) console.error(`ADLC gate-manifest audit: ${warning}`);
+      } catch { /* advisory: swallow */ }
+
+      // Mechanical adversarial-review trigger (issue #59): deterministic,
+      // no-LLM check that a risk-gated change has a recorded review. Advisory
+      // only — session.idle has no blocking contract in OpenCode.
+      try {
+        const { warning } = auditAdversarialReview(root, { env: process.env });
+        if (warning) console.error(`ADLC adversarial-review audit: ${warning}`);
       } catch { /* advisory: swallow */ }
     },
   };

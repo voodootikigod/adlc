@@ -36,6 +36,7 @@ const TIMEOUTS_MS = {
   preflight: 55_000,  // hooks.json: 60 s
   flail: 25_000,      // hooks.json: 30 s
   manifest: 25_000,   // hooks.json: 30 s
+  review: 25_000,     // hooks.json: 30 s
   rails: 10_000,      // hooks.json: 15 s — enforcing hook: deny on timeout
   buildgate: 10_000,  // hooks.json: 15 s — enforcing hook: deny on timeout
 };

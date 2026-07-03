@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkPreflight, auditGateManifest } from '../lib/session-hooks.mjs';
+import { checkPreflight, auditGateManifest, auditAdversarialReview } from '../lib/session-hooks.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
 const mkroot = () => mkdtempSync(join(tmpdir(), 'oc-t4-'));
@@ -94,6 +94,115 @@ test('auditGateManifest: verify ok → no warning', () => {
     const r = auditGateManifest(root, { spawnImpl: stub({ 'adlc gate-manifest verify': { status: 0, stdout: '{}' } }) });
     assert.equal(r.ok, true);
     assert.equal(r.warning, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- auditAdversarialReview (issue #59: mechanical local trigger) ----
+
+test('auditAdversarialReview: not ADLC-initialized → skipped no-op', () => {
+  const root = mkroot();
+  try {
+    const r = auditAdversarialReview(root, { spawnImpl: stub({}) });
+    assert.equal(r.skipped, true);
+    assert.equal(r.needed, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: no changed paths → not needed', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const r = auditAdversarialReview(root, { spawnImpl: stub({}), env: {} });
+    assert.equal(r.needed, false);
+    assert.equal(r.warning, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: changed path is NOT risk-tier → not needed', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const spawnImpl = stub({ 'git status': { status: 0, stdout: ' M docs/readme.md\n' } });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: risk-tier path changed, no manifest at all → needed', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const spawnImpl = stub({ 'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' } });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, true);
+    assert.match(r.warning, /risk-gated/);
+    assert.equal(r.matches.length, 1);
+    assert.equal(r.matches[0].tier, 'auth-trust-boundary');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: risk-tier path changed but adlc unreachable → still needed (cannot prove satisfied)', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"rails-bypass"}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': { status: 1, error: new Error('ENOENT') },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: adversarial-review already recorded (untargeted) → not needed', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review"}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review' }] }) },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: recorded for the active ticket (ADLC_TICKET) → not needed', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review","ticket":"T1"}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review', ticket: 'T1' }] }) },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: { ADLC_TICKET: 'T1' } });
+    assert.equal(r.needed, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: recorded for a DIFFERENT ticket than active → still needed', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review","ticket":"T2"}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review', ticket: 'T2' }] }) },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: { ADLC_TICKET: 'T1' } });
+    assert.equal(r.needed, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: conflicting ADLC_TICKET vs current-ticket.json degrades to unscoped (advisory, does not fail closed)', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T9' }));
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review"}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review' }] }) },
+    });
+    // ADLC_TICKET ('T1') conflicts with current-ticket.json ('T9') — must not throw
+    // or fail closed; degrades to "no active ticket", so the untargeted record above still satisfies it.
+    const r = auditAdversarialReview(root, { spawnImpl, env: { ADLC_TICKET: 'T1' } });
+    assert.equal(r.needed, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -3,18 +3,24 @@
 //   preflight  (SessionStart)  → environment readiness before fan-out  [advisory]
 //   flail      (PostToolUse)    → flail-detection over the transcript    [advisory]
 //   manifest   (Stop)           → gate-evidence chain integrity audit    [advisory]
+//   review     (Stop)           → mechanical adversarial-review trigger  [advisory by
+//                                  default; opt-in BLOCKING via
+//                                  ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1 — see review()]
 //   rails      (PreToolUse)     → block edits to frozen rail paths        [ENFORCING]
 //   buildgate  (PreToolUse)     → fitness-to-build gate (issue #48)        [ENFORCING]
 //
-// CONTRACT: the three advisory modes must NEVER block and stay SILENT unless
-// there is something to flag. `rails` and `buildgate` are the two enforcement
-// hooks — either can DENY an Edit/Write (via a permissionDecision in its JSON
-// output, not via exit code, though exit 2 is also set as a fail-closed
-// belt-and-suspenders). All five modes still ALWAYS exit 0 on the allow path
-// and never surface their own errors; if the toolkit isn't installed or the
+// CONTRACT: preflight/flail/manifest must NEVER block and stay SILENT unless
+// there is something to flag. `rails` and `buildgate` are the two unconditional
+// enforcement hooks — either can DENY an Edit/Write (via a permissionDecision in
+// its JSON output, not via exit code, though exit 2 is also set as a fail-closed
+// belt-and-suspenders). `review` is advisory by default (systemMessage only) and
+// only blocks (Stop `decision: "block"`, forcing the session to continue rather
+// than end) when the operator has explicitly opted in — see review()'s own
+// comment for the rationale. All five modes still ALWAYS exit 0 on the allow
+// path and never surface their own errors; if the toolkit isn't installed or the
 // repo isn't ADLC-initialized, every mode no-ops. Both enforcing gates are
-// themselves a no-op until a ticket declares `rails` paths / an active ticket
-// is resolved, so installing the plugin can't brick a clean repo.
+// themselves a no-op until a ticket declares `rails` paths / an active ticket is
+// resolved, so installing the plugin can't brick a clean repo.
 //
 // `buildgate`'s core decision (risk-tier derivation, the depth/session-bytes
 // context-fitness signal, and the allow/deny decision) is computed ENTIRELY
@@ -28,7 +34,8 @@
 //
 // Output: when there is something to say, print ONE JSON object using fields
 // Claude Code recognizes (`systemMessage`; `hookSpecificOutput.additionalContext`
-// for SessionStart; `hookSpecificOutput.permissionDecision` for PreToolUse).
+// for SessionStart; `hookSpecificOutput.permissionDecision` for PreToolUse;
+// top-level `decision`/`reason` for Stop).
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -210,6 +217,7 @@ function main() {
   if (MODE === 'preflight') return preflight();
   if (MODE === 'flail') return flail(input);
   if (MODE === 'manifest') return manifest();
+  if (MODE === 'review') return review();
   if (MODE === 'rails') return rails(input);
   if (MODE === 'buildgate') return buildgate(input);
   // unknown mode → no-op
@@ -412,6 +420,208 @@ function manifest() {
   const msg =
     `ADLC gate-manifest: evidence chain INVALID — ${res.message}. ` +
     `The gate ledger may have been tampered with or truncated.`;
+  emit({ systemMessage: msg });
+}
+
+// ---------------------------------------------------------------------------
+// review (Stop) — mechanical adversarial-review trigger for issue #59.
+//
+// ADR-0005/0007 both explicitly deferred MECHANICAL enforcement of the
+// adversarial-review practice, contingent on operator-reliance "proving
+// insufficient" (their own words) — issue #59 is that signal. This mode is the
+// deterministic (no-LLM) trigger: it diffs the working tree/branch against the
+// ADR-0007 §1 risk-tier path patterns and, if the change is risk-gated and no
+// `adversarial-review` gate-manifest record exists for the active ticket,
+// surfaces a notice.
+//
+// KEEP IN SYNC with packages/core/lib/risk-tier.mjs — RISK_TIER_PATTERNS,
+// matchRiskTier, classifyRiskTier, and decideAdversarialReviewNotice below are
+// ported VERBATIM from there (this hook can't resolve @adlc/core at runtime,
+// same constraint documented on the ported `globMatch` just below).
+// ---------------------------------------------------------------------------
+
+const RISK_TIER_PATTERNS = Object.freeze({
+  'auth-trust-boundary': Object.freeze([
+    '**/auth/**', '**/authn/**', '**/authz/**', '**/oauth/**', '**/sso/**',
+    '**/session/**', '**/login/**', '**/permissions/**', '**/rbac/**', '**/acl/**',
+  ]),
+  'security-control-deny-path': Object.freeze([
+    '**/*guard*', '**/*validator*', '**/*validators*', '**/sandbox/**', '**/sandboxes/**',
+    '**/middleware/**', '**/*deny-path*', '**/*policy*', '**/policies/**',
+  ]),
+  secrets: Object.freeze([
+    '**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
+    '**/secrets/**', '**/secret/**', '**/*credentials*', '**/vault/**',
+  ]),
+  'data-loss-destructive': Object.freeze([
+    '**/*delete*', '**/*destroy*', '**/*purge*', '**/*truncate*', '**/*wipe*',
+    '**/*irreversible*',
+  ]),
+  'schema-migration': Object.freeze([
+    '**/migrations/**', '**/migrate/**', '**/*.sql', '**/schema.*', '**/*.prisma',
+  ]),
+  'ci-cd-supply-chain': Object.freeze([
+    '.github/workflows/**', '**/Dockerfile', '**/Dockerfile.*', '**/docker-compose*.yml',
+    '**/package.json', '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock',
+    '**/requirements*.txt', '**/Gemfile*', '**/go.sum', '**/go.mod', '**/Cargo.lock',
+    '.circleci/**', '.gitlab-ci.yml',
+  ]),
+});
+
+/** Classify ONE repo-relative path against every risk tier. Pure. */
+function matchRiskTier(path) {
+  const norm = String(path).split('\\').join('/');
+  for (const [tier, patterns] of Object.entries(RISK_TIER_PATTERNS)) {
+    for (const pattern of patterns) {
+      if (globMatch(pattern, norm)) return { tier, pattern };
+    }
+  }
+  return null;
+}
+
+/** Classify a SET of changed paths. Pure. */
+function classifyRiskTier(paths) {
+  const matches = [];
+  for (const path of paths ?? []) {
+    const hit = matchRiskTier(path);
+    if (hit) matches.push({ path, ...hit });
+  }
+  return { gated: matches.length > 0, matches };
+}
+
+/**
+ * The hook-mode decision, pure and unit-testable against a mocked manifest
+ * state: given changed paths and already-loaded gate-manifest entries, is a
+ * mechanical adversarial-review notice warranted?
+ */
+function decideAdversarialReviewNotice({ changedPaths = [], manifestEntries = [], ticketId = null } = {}) {
+  const { gated, matches } = classifyRiskTier(changedPaths);
+  if (!gated) return { needed: false, matches: [] };
+  const hasRecord = (manifestEntries ?? []).some(
+    (e) => e && e.gate === 'adversarial-review' && (!ticketId || !e.ticket || e.ticket === ticketId)
+  );
+  return { needed: !hasRecord, matches };
+}
+
+/**
+ * Resolve the active ticket id the SAME way the sibling integrations do
+ * (process.env.ADLC_TICKET OR .adlc/current-ticket.json — see
+ * plugins/adlc-opencode/rails-checker.mjs `resolveActiveTicketId`). Unlike that
+ * enforcing helper, an unresolvable/conflicting signal here does NOT fail
+ * closed — `review` is advisory, so it degrades to "no active ticket" (the
+ * notice then checks for ANY adversarial-review record, unscoped) rather than
+ * blocking on a bad pointer file.
+ */
+function resolveActiveTicketIdAdvisory() {
+  const envTicket = (process.env.ADLC_TICKET ?? '').trim() || null;
+  let fileTicket = null;
+  const currentPath = join('.adlc', 'current-ticket.json');
+  if (existsSync(currentPath)) {
+    try {
+      const data = JSON.parse(readFileSync(currentPath, 'utf8'));
+      const raw = typeof data === 'string' ? data : (data.id ?? data.ticket);
+      fileTicket = (raw ?? '').toString().trim() || null;
+    } catch {
+      return null; // unparseable pointer — degrade to "unknown", stay advisory
+    }
+  }
+  if (envTicket && fileTicket && envTicket !== fileTicket) return null; // conflict — degrade
+  return envTicket ?? fileTicket;
+}
+
+/**
+ * Repo-relative changed paths covering BOTH the working tree (uncommitted
+ * modifications + untracked files) and the committed branch diff against the
+ * first reachable trunk candidate — "diffs the working tree/branch" per the
+ * issue. Best-effort: any git failure (not a repo, no candidate base reachable,
+ * git missing) yields an empty set rather than throwing — `review` is advisory
+ * and must never crash or fail closed on a git problem.
+ */
+function gitChangedPaths() {
+  const paths = new Set();
+  const runGit = (args) => spawnSync('git', args, { encoding: 'utf8' });
+
+  const status = runGit(['status', '--porcelain', '--no-renames']);
+  if (!status.error && status.status === 0 && status.stdout) {
+    for (const line of status.stdout.split('\n')) {
+      const p = line.slice(3).trim();
+      if (p) paths.add(p);
+    }
+  }
+
+  const untracked = runGit(['ls-files', '--others', '--exclude-standard']);
+  if (!untracked.error && untracked.status === 0 && untracked.stdout) {
+    for (const p of untracked.stdout.split('\n')) {
+      if (p.trim()) paths.add(p.trim());
+    }
+  }
+
+  // First reachable trunk candidate is the diff base — same candidate order as
+  // @adlc/core's resolveBase (packages/core/lib/git.mjs), so this hook's notion
+  // of "the branch" matches the rest of the toolkit's freeze/diff gates.
+  // Overridable via ADLC_ADVERSARIAL_REVIEW_BASE for repos with a different trunk.
+  const base = (process.env.ADLC_ADVERSARIAL_REVIEW_BASE ?? '').trim() ||
+    ['main', 'master', 'origin/main', 'origin/master'].find((c) => {
+      const r = runGit(['rev-parse', '--verify', '--quiet', `${c}^{commit}`]);
+      return !r.error && r.status === 0;
+    });
+  if (base) {
+    const diff = runGit(['diff', '--name-only', base, '--']);
+    if (!diff.error && diff.status === 0 && diff.stdout) {
+      for (const p of diff.stdout.split('\n')) {
+        if (p.trim()) paths.add(p.trim());
+      }
+    }
+  }
+
+  return [...paths];
+}
+
+// Stop — mechanical adversarial-review trigger (issue #59). Advisory by
+// default: never blocks unless ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1 is set, in
+// which case a risk-gated, unreviewed change emits a Stop `decision: "block"`
+// (Claude Code forces the session to continue, surfacing `reason` as context)
+// rather than only a systemMessage. Defaulting to advisory matches this file's
+// existing opt-in-enforcement posture (ADLC_P4_ENFORCEMENT / ADLC_RAILS_BYPASS
+// elsewhere in the toolkit) — a NEW Stop-hook that silently started blocking
+// sessions by default would be a much bigger behavior change than this bug fix
+// warrants, and the manifest record it checks for can always be produced by
+// running `npx adversarial-review` + `adlc gate-manifest record` directly.
+function review() {
+  if (!existsSync('.adlc')) return; // not an ADLC repo
+
+  const changed = gitChangedPaths();
+  if (changed.length === 0) return; // nothing changed (or git unavailable) → silent
+
+  const { gated, matches } = classifyRiskTier(changed);
+  if (!gated) return; // not risk-gated → adversarial-review is not mechanically required
+
+  const ticketId = resolveActiveTicketIdAdvisory();
+
+  let manifestEntries = [];
+  if (existsSync(join('.adlc', 'manifest.jsonl'))) {
+    const r = runAdlc(['gate-manifest', 'show', '--json']);
+    if (r && r.stdout) {
+      const parsed = parseJson(r.stdout);
+      if (parsed && Array.isArray(parsed.entries)) manifestEntries = parsed.entries;
+    }
+  }
+
+  const decision = decideAdversarialReviewNotice({ changedPaths: changed, manifestEntries, ticketId });
+  if (!decision.needed) return; // already satisfied (or nothing to satisfy) → silent
+
+  const tiers = [...new Set(decision.matches.map((m) => m.tier))].join(', ');
+  const sample = decision.matches.slice(0, 3).map((m) => m.path).join(', ');
+  const msg =
+    `ADLC adversarial-review: this change touches a risk-gated path (${tiers}: ${sample}` +
+    `${decision.matches.length > 3 ? ', …' : ''}) with no adversarial-review gate-manifest ` +
+    `record${ticketId ? ` for ticket ${ticketId}` : ''}. Run \`npx adversarial-review\` and record ` +
+    `the verdict via \`adlc gate-manifest record adversarial-review --evidence '...'\` before merging.`;
+
+  if (process.env.ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT === '1') {
+    emit({ decision: 'block', reason: msg, systemMessage: msg });
+    return;
+  }
   emit({ systemMessage: msg });
 }
 
@@ -1053,7 +1263,7 @@ try {
   // The `rails`/`buildgate` modes are ENFORCING — a crash must FAIL CLOSED,
   // never fall through to exit 0 (which the harness reads as "allow"). Emit a
   // deny and exit 2 so the PreToolUse call is blocked even if the deny
-  // payload is missed. The advisory modes (preflight/flail/manifest)
+  // payload is missed. The advisory modes (preflight/flail/manifest/review)
   // legitimately swallow their own errors.
   if (MODE === 'rails') {
     try {

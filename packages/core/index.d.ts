@@ -117,6 +117,21 @@ export function resolveRevision(options?: {
   ignorePaths?: string[];
 }): string | null;
 
+export const RISK_TIER_PATTERNS: Readonly<Record<string, readonly string[]>>;
+export function matchRiskTier(path: string): { tier: string; pattern: string } | null;
+export function classifyRiskTier(paths?: readonly string[]): {
+  gated: boolean;
+  matches: Array<{ path: string; tier: string; pattern: string }>;
+};
+export function decideAdversarialReviewNotice(options?: {
+  changedPaths?: readonly string[];
+  manifestEntries?: readonly unknown[];
+  ticketId?: string | null;
+}): {
+  needed: boolean;
+  matches: Array<{ path: string; tier: string; pattern: string }>;
+};
+
 export namespace mutate {
   export const OPERATORS: ReadonlyArray<{
     readonly name: string;
