@@ -77,6 +77,7 @@ export function gitDiff(base?: string, cwd?: string): string;
 export function changedFiles(base?: string, cwd?: string): string[];
 export function isDirty(cwd?: string): boolean;
 export function isGitRepo(cwd?: string): boolean;
+export function repoRoot(cwd?: string): string;
 export function refExists(ref: string, cwd?: string): boolean;
 export function resolveBase(cwd?: string, candidates?: string[]): string | null;
 export function coChange(limit?: number, cwd?: string): {

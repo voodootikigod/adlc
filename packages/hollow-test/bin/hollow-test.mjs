@@ -4,9 +4,9 @@
 // restores them via finally blocks + SIGINT handler.
 
 import { writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
-import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git } from '@adlc/core';
+import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
   filterTargetFiles, buildFileTargets, readFileSafe,
   readRailsFromTicketFile, expandRailsToFiles,
@@ -45,7 +45,9 @@ Options:
   --target <file>       Mutate this file directly, independent of the diff
                         (repeatable; bypasses the test/spec path exclusion).
                         Use for characterization/rails-authoring tickets
-                        where the behavior file isn't in the diff.
+                        where the behavior file isn't in the diff. Must
+                        resolve inside the repository root; paths that
+                        escape it (e.g. via ../../) are refused.
   --rails <ticket-file> Path to a ticket JSON file; its declared "rails"
                         globs are expanded against tracked files and added
                         as mutation targets (repeatable).
@@ -77,6 +79,18 @@ if (!isGitRepo(cwd)) {
 
 if (isDirty(cwd)) {
   opError('commit or stash first — hollow-test mutates files in place and restores them');
+}
+
+// Repo root — NOT necessarily `cwd`. hollow-test may be invoked from any
+// subdirectory (e.g. a per-package script that `cd`s into packages/foo/
+// first), so anything that needs to reason about the repo as a whole
+// (rails-glob matching, --target containment) must resolve against this,
+// not `cwd`.
+let root;
+try {
+  root = repoRoot(cwd);
+} catch (err) {
+  opError(`could not resolve repository root: ${err.message}`);
 }
 
 // ── base ref resolution ──────────────────────────────────────────────────────
@@ -128,7 +142,28 @@ const diffEligibleFiles = filterTargetFiles(changedLines);
 // to mutate a specific file that may not even appear in the diff (the P3
 // rails-authoring / characterization-test ticket shapes — issues #70, #41).
 
-const explicitTargets = values.target ?? [];
+// --target is resolved relative to `cwd` (ordinary CLI-arg convention — the
+// caller types it relative to wherever they invoked hollow-test from), but
+// normalized to a repo-root-relative path before use so it: (a) matches the
+// path convention every other file in this tool uses (diff output, rails
+// globs), and (b) can be containment-checked against the repo root. A path
+// like `--target ../../../etc/passwd` (or an absolute path outside the repo)
+// must be rejected rather than silently read/mutated — unlike --rails, whose
+// globs can only ever match `git ls-files` output and therefore can never
+// escape the repo, --target has no such structural guarantee on its own.
+function escapesRoot(relPath) {
+  return relPath === '' || relPath.split(sep)[0] === '..' || isAbsolute(relPath);
+}
+
+const explicitTargets = (values.target ?? []).map((t) => {
+  const rel = relative(root, resolve(cwd, t));
+  if (escapesRoot(rel)) {
+    opError(
+      `--target ${t} resolves outside the repository root (${root}) — refusing to read or mutate it`
+    );
+  }
+  return rel;
+});
 
 let railsGlobs = [];
 for (const ticketFile of (values.rails ?? [])) {
@@ -148,7 +183,14 @@ let railsFiles = [];
 if (railsGlobs.length > 0) {
   let allFiles;
   try {
-    allFiles = git(['ls-files'], { cwd }).split('\n').filter(Boolean);
+    // --full-name: `git ls-files` normally returns paths relative to the
+    // CURRENT WORKING DIRECTORY it was invoked from (unlike `git diff`,
+    // which is always repo-root-relative). Rails globs are naturally
+    // authored repo-root-relative in ticket files, and every other path
+    // this tool works with (diff-derived changedLines/filterTargetFiles) is
+    // also repo-root-relative — so without --full-name, running hollow-test
+    // from any subdirectory makes rails globs silently fail to match.
+    allFiles = git(['ls-files', '--full-name'], { cwd }).split('\n').filter(Boolean);
   } catch (err) {
     opError(`git ls-files failed: ${err.message}`);
   }
@@ -169,7 +211,7 @@ const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
 // fallback exited 0 ("nothing mutable"), reporting a vacuous pass instead of
 // surfacing the real cause. Refuse to run instead.
 for (const f of explicitFiles) {
-  if (readFileSafe(resolve(cwd, f)) === null) {
+  if (readFileSafe(resolve(root, f)) === null) {
     opError(
       `--target/--rails file not found or unreadable: ${f} — ` +
       'a mistyped path, deleted/renamed file, or stale rails entry would ' +
@@ -202,7 +244,7 @@ const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
 // explicitFiles are passed as a priority list so the --max budget can't
 // starve them to quota 0 when diff-derived files alone would consume it —
 // see buildFileTargets() in lib/targets.mjs.
-const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, cwd, explicitFiles);
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, explicitFiles);
 
 // ── fail closed: --max too small to cover every explicit target ────────────
 // buildFileTargets() reserves 1 quota per explicit file when the budget

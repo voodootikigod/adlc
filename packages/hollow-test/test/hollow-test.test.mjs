@@ -857,6 +857,161 @@ describe('CLI: --rails reads declared rail globs from a ticket file', () => {
   });
 });
 
+// ── --rails glob matching must survive a non-root cwd (review round 5) ─────
+// `git ls-files` (unlike `git diff`) returns paths relative to the CURRENT
+// WORKING DIRECTORY it is invoked from, not the repo root. Rails globs are
+// authored repo-root-relative in ticket files, so running hollow-test from
+// a subdirectory (e.g. a per-package script that `cd`s into pkgs/sub first)
+// must still match — this pins the --full-name fix against regression.
+
+describe('CLI: --rails matches correctly when invoked from a non-root cwd', () => {
+  let dir;
+  let subDir;
+  let ticketPath;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-subdir-'));
+    initRepo(dir);
+    subDir = join(dir, 'pkgs', 'sub');
+    mkdirSync(join(subDir, 'src'), { recursive: true });
+    mkdirSync(join(subDir, 'test'), { recursive: true });
+
+    writeFileSync(join(subDir, 'src', 'guarded.mjs'), [
+      'export function isPositive(n) {',
+      '  return n > 0;',
+      '}',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'init: add nested guarded.mjs, no tests yet');
+
+    // Second commit adds ONLY a test file — src/guarded.mjs does not change,
+    // producing a test-only diff (the P3 rails-authoring shape).
+    writeFileSync(join(subDir, 'test', 'guarded.test.mjs'), [
+      "import { describe, it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { isPositive } from '../src/guarded.mjs';",
+      "describe('isPositive', () => {",
+      "  it('detects positive, zero, and negative', () => {",
+      '    assert.strictEqual(isPositive(1), true);',
+      '    assert.strictEqual(isPositive(0), false);',
+      '    assert.strictEqual(isPositive(-1), false);',
+      '  });',
+      '});',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'add rails for nested guarded.mjs (test-only diff)');
+
+    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-ticket-subdir-'));
+    ticketPath = join(ticketDir, 'ticket.json');
+    writeFileSync(ticketPath, JSON.stringify({
+      tickets: [{
+        id: 'T1',
+        title: 'characterize nested guarded.mjs',
+        rails: ['pkgs/sub/src/guarded.mjs'],
+      }],
+    }));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('expands a repo-root-relative rails glob even when cwd is a subdirectory of the repo', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--rails', ticketPath,
+        '--max', '10',
+        '--json',
+      ],
+      subDir, // cwd is a subdirectory, NOT the repo root
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0 when hollow-test is invoked from a subdirectory, got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}\n` +
+      'A "declared globs matched no tracked files" error here means `git ls-files` ' +
+      'regressed back to returning cwd-relative paths.');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.summary.total > 0,
+      `Expected --rails to expand to a mutable file from a subdirectory cwd (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'pkgs/sub/src/guarded.mjs'),
+      `Expected mutant file paths to stay repo-root-relative: ${JSON.stringify(parsed.mutants)}`);
+    assert.equal(parsed.summary.survived, 0, 'expected the real rails to kill every mutant');
+  });
+});
+
+// ── --target must not escape the repository root (review round 5) ─────────
+// Unlike --rails (whose globs can only ever match `git ls-files` output, so
+// they structurally can't escape the repo), --target is a literal caller-typed
+// path with no containment check of its own. A path like `--target
+// ../../../etc/passwd` must be rejected, not resolved-and-read.
+
+describe('CLI: --target rejects a path that escapes the repo root', () => {
+  let dir;
+  let outsideFile;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-escape-'));
+    createRailsAuthoringRepo(dir);
+    // A file that exists on disk OUTSIDE the repo, so a successful escape
+    // would be readable (proving the containment check, not a coincidental
+    // ENOENT) if it were not rejected first.
+    outsideFile = join(dir, '..', 'outside-secret.mjs');
+    writeFileSync(outsideFile, 'export const secret = 1;\n');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outsideFile, { force: true });
+  });
+
+  it('exits 1 (NOT 0) for a relative --target that resolves above the repo root', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', '../outside-secret.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A --target path escaping the repo root must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /resolves outside the repository root/i.test(result.stderr),
+      `Expected an explanatory containment error, got stderr: ${result.stderr}`
+    );
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed containment error, got stdout: ${result.stdout}`
+    );
+  });
+
+  it('exits 1 (NOT 0) for an absolute --target path outside the repo', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', outsideFile,
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `An absolute --target path outside the repo must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /resolves outside the repository root/i.test(result.stderr),
+      `Expected an explanatory containment error, got stderr: ${result.stderr}`
+    );
+  });
+});
+
 // ── --target overrides diff-line restriction on an overlapping file (AC2) ──
 // docs/specs/hollow-test-target-mode.md AC2 documents that --target mutates
 // the whole file "even if the file also happens to appear in the diff" —
