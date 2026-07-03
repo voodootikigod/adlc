@@ -86,10 +86,18 @@ const GITIGNORE_STANZA = ['.adlc/*', '!.adlc/tickets.json', '!.adlc/specs/'];
 /**
  * Ensure `.gitignore` ignores all of `.adlc/` except the tracked contracts
  * (`tickets.json` and the `specs/` directory). Idempotent: if the stanza is
- * fully present, nothing is written. If `.adlc/*` is present but a negation
- * line (e.g. `!.adlc/specs/`) is missing, only the missing line(s) are
- * inserted right after the existing block — the rest of the file is
- * untouched. Returns { path, added: string[], changed: boolean }.
+ * fully present AND correctly ordered, nothing is written. If `.adlc/*` is
+ * present but a negation line (e.g. `!.adlc/specs/`) is missing, only the
+ * missing line(s) are inserted right after the existing block — the rest of
+ * the file is untouched. Returns { path, added: string[], changed: boolean }.
+ *
+ * Git applies `.gitignore` patterns with last-match-wins semantics: a
+ * negation line (e.g. `!.adlc/tickets.json`) only has effect if it comes
+ * AFTER the `.adlc/*` anchor that would otherwise re-ignore it. A stanza
+ * negation line found BEFORE the anchor — from a hand edit, a merge, or a
+ * differently-ordered legacy stanza — is therefore relocated to after the
+ * anchor rather than left in place (checked unconditionally, even when
+ * every stanza line is nominally "present somewhere" in the file).
  */
 export function ensureGitignore(root) {
   const path = join(root, '.gitignore');
@@ -98,11 +106,10 @@ export function ensureGitignore(root) {
   let lines = existing.length ? existing.split('\n') : [];
   if (hadTrailingNewline && lines[lines.length - 1] === '') lines.pop();
 
-  const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
-  if (missing.length === 0) return { path, added: [], changed: false };
-
   const anchorIdx = lines.indexOf('.adlc/*');
+
   if (anchorIdx === -1) {
+    const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
     // The `.adlc/*` anchor is absent. A pre-existing negation line (e.g. a
     // lone `!.adlc/tickets.json` left over from a partial/legacy edit) may
     // already be present standalone, earlier in the file. Simply pushing
@@ -116,11 +123,27 @@ export function ensureGitignore(root) {
     lines = lines.filter((line) => !GITIGNORE_STANZA.includes(line));
     if (lines.length > 0) lines.push('');
     lines.push(...GITIGNORE_STANZA);
-  } else {
-    let insertAt = anchorIdx + 1;
-    while (insertAt < lines.length && lines[insertAt].startsWith('!')) insertAt++;
-    lines.splice(insertAt, 0, ...missing);
+    writeFileSync(path, lines.join('\n') + '\n');
+    return { path, added: missing, changed: true };
   }
+
+  // The anchor IS present. Relocate any stanza negation line that sits
+  // BEFORE it — leaving it there would be silently overridden by the
+  // anchor (last-match-wins), re-ignoring the file it was meant to protect.
+  const beforeCount = lines.length;
+  lines = lines.filter(
+    (line, idx) => !(idx < anchorIdx && line !== '.adlc/*' && GITIGNORE_STANZA.includes(line))
+  );
+  const relocated = lines.length !== beforeCount;
+
+  const newAnchorIdx = lines.indexOf('.adlc/*');
+  const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
+  if (missing.length === 0 && !relocated) return { path, added: [], changed: false };
+
+  let insertAt = newAnchorIdx + 1;
+  while (insertAt < lines.length && lines[insertAt].startsWith('!')) insertAt++;
+  lines.splice(insertAt, 0, ...missing);
+
   writeFileSync(path, lines.join('\n') + '\n');
   return { path, added: missing, changed: true };
 }

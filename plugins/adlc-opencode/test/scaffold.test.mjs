@@ -171,6 +171,65 @@ test('ensureGitignore does not duplicate a standalone negation line when the .ad
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('ensureGitignore relocates a negation line that precedes the .adlc/* anchor (last-match-wins hazard)', () => {
+  const root = mkroot();
+  try {
+    writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n.adlc/*\n');
+    const r = ensureGitignore(root);
+    assert.equal(r.changed, true);
+    const body = readFileSync(join(root, '.gitignore'), 'utf8');
+    const resultLines = body.split('\n').filter((l) => l.length > 0);
+    const occurrences = resultLines.filter((l) => l === '!.adlc/tickets.json').length;
+    assert.equal(occurrences, 1, '!.adlc/tickets.json must not be duplicated');
+    const anchorPos = resultLines.indexOf('.adlc/*');
+    const ticketsPos = resultLines.indexOf('!.adlc/tickets.json');
+    const specsPos = resultLines.indexOf('!.adlc/specs/');
+    assert.ok(anchorPos < ticketsPos, '.adlc/* must precede !.adlc/tickets.json after relocation');
+    assert.ok(anchorPos < specsPos, '.adlc/* must precede !.adlc/specs/');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ensureGitignore relocates a misordered stanza even when every line is nominally present (no "missing" entries)', () => {
+  const root = mkroot();
+  try {
+    // All three stanza lines exist somewhere in the file, but in the wrong
+    // order relative to the anchor — a naive "is everything present" check
+    // would wrongly treat this as already-correct and skip fixing it.
+    writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n!.adlc/specs/\n.adlc/*\n');
+    const r = ensureGitignore(root);
+    assert.equal(r.changed, true);
+    const body = readFileSync(join(root, '.gitignore'), 'utf8');
+    const resultLines = body.split('\n').filter((l) => l.length > 0);
+    const anchorPos = resultLines.indexOf('.adlc/*');
+    const ticketsPos = resultLines.indexOf('!.adlc/tickets.json');
+    const specsPos = resultLines.indexOf('!.adlc/specs/');
+    assert.ok(anchorPos < ticketsPos, '.adlc/* must precede !.adlc/tickets.json after relocation');
+    assert.ok(anchorPos < specsPos, '.adlc/* must precede !.adlc/specs/ after relocation');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ensureGitignore does not duplicate a negation line that already correctly follows the anchor elsewhere', () => {
+  const root = mkroot();
+  try {
+    // `!.adlc/tickets.json` appears twice: once misplaced before the anchor
+    // (stale) and once correctly after it. Only the stale copy should be
+    // removed; the correct copy must not be duplicated.
+    writeFileSync(
+      join(root, '.gitignore'),
+      '!.adlc/tickets.json\n.adlc/*\n!.adlc/tickets.json\n'
+    );
+    const r = ensureGitignore(root);
+    assert.equal(r.changed, true);
+    const body = readFileSync(join(root, '.gitignore'), 'utf8');
+    const resultLines = body.split('\n').filter((l) => l.length > 0);
+    const occurrences = resultLines.filter((l) => l === '!.adlc/tickets.json').length;
+    assert.equal(occurrences, 1, '!.adlc/tickets.json must not be duplicated');
+    const anchorPos = resultLines.indexOf('.adlc/*');
+    const ticketsPos = resultLines.indexOf('!.adlc/tickets.json');
+    assert.ok(anchorPos < ticketsPos, '.adlc/* must precede !.adlc/tickets.json');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('scaffold() wires ensureGitignore in so /adlc-init tracks specs/ by default', () => {
   const root = mkroot();
   try {
