@@ -4,7 +4,7 @@
 
 import { resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
-import { classifyTickets, listTrackedFiles } from './detect.mjs';
+import { classifyTicket, classifyTickets, listTrackedFiles } from './detect.mjs';
 import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs';
 
 /**
@@ -83,16 +83,37 @@ export function runTicketPrune(options = {}) {
     const freshTickets = Array.isArray(rawUnderLock.tickets) ? rawUnderLock.tickets : [];
 
     const staleIds = new Set(stale.map((r) => r.id));
-    const kept = freshTickets.filter((t) => !staleIds.has(t.id));
-    const removed = freshTickets.filter((t) => staleIds.has(t.id));
+    const staleCandidates = freshTickets.filter((t) => staleIds.has(t.id));
+
+    // Re-classify each candidate against the fresh content read under the
+    // lock rather than trusting the pre-lock `stale`/reason data: another
+    // writer (e.g. ticket-sync, or a human editor) may have mutated a
+    // ticket's content between the initial classification and now in a way
+    // that un-stales it (e.g. flipped `status` from "done" back to
+    // "in-progress", or edited `scope`). Archiving on the stale
+    // classification anyway would silently delete a currently-active ticket
+    // and write an archive entry whose reason no longer matches its content.
+    const freshReasonById = new Map();
+    const removed = [];
+    for (const ticket of staleCandidates) {
+      const reclassified = classifyTicket(ticket, trackedFiles);
+      if (reclassified.stale) {
+        freshReasonById.set(ticket.id, reclassified.reason);
+        removed.push(ticket);
+      }
+    }
+
+    const removedIds = new Set(removed.map((t) => t.id));
+    const kept = freshTickets.filter((t) => !removedIds.has(t.id));
 
     if (removed.length === 0) {
-      // Every stale id was already gone by the time we took the lock.
+      // Every stale id was either already gone, or no longer classifies as
+      // stale (a concurrent writer mutated it out from under us), by the
+      // time we took the lock.
       return { ok: true, baseRef, write, stale, active, archived: [] };
     }
 
     const archivedAt = new Date().toISOString();
-    const reasonById = new Map(stale.map((r) => [r.id, r.reason]));
     let existingArchive;
     try {
       existingArchive = readJson(absArchivePath, { tickets: [] });
@@ -113,7 +134,7 @@ export function runTicketPrune(options = {}) {
 
     const archivedEntries = [];
     for (const ticket of removed) {
-      const entry = { ...ticket, archivedAt, archiveReason: reasonById.get(ticket.id) };
+      const entry = { ...ticket, archivedAt, archiveReason: freshReasonById.get(ticket.id) };
       archiveById.set(ticket.id, entry);
       archivedEntries.push(entry);
     }

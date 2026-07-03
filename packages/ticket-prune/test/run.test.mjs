@@ -392,6 +392,35 @@ test('--write: if a stale ticket is already gone by the time the lock is acquire
   });
 });
 
+test('--write: a ticket concurrently un-staled (status flipped back to active) between classification and the lock survives, using fresh content and reclassification, not the stale pre-lock snapshot', () => {
+  return withScratchRepoAsync(async (dir) => {
+    // T1 starts "done" — classification (pre-lock) reports it stale.
+    writeTickets(dir, [{ id: 'T1', title: 'Reopened work', status: 'done' }]);
+
+    assert.equal(acquireLock(dir), true);
+
+    // While ticket-prune is blocked on the lock, another writer flips T1
+    // back to "in-progress" — it is no longer stale by any classification
+    // rule, even though the pre-lock snapshot said otherwise.
+    const mutated = { tickets: [{ id: 'T1', title: 'Reopened work', status: 'in-progress' }] };
+    const writerDone = spawnMutateAfterDelay(dir, mutated, 150);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+    await writerDone;
+
+    assert.equal(result.ok, true);
+    // Pre-lock classification still (correctly, for its snapshot) reported
+    // T1 as stale...
+    assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
+    // ...but nothing gets archived: the re-read-under-the-lock content no
+    // longer classifies as stale, so the concurrent edit wins.
+    assert.deepEqual(result.archived, []);
+    assert.equal(existsSync(join(dir, '.adlc', 'tickets.archive.json')), false);
+    // The ticket survives in tickets.json with its fresh, active status.
+    assert.deepEqual(readTickets(dir).tickets, [{ id: 'T1', title: 'Reopened work', status: 'in-progress' }]);
+  });
+});
+
 test('empty tickets.json (no tickets) reports cleanly and is a no-op', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, []);
