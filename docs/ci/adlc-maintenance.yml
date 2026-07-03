@@ -3,11 +3,13 @@
 # OpenCode /adlc-init template source: docs/ci/adlc-maintenance.yml
 #
 # Idle-time metabolism (ADLC C10/C12): the DETERMINISTIC, keyless maintenance
-# checks on a weekly cron. It reports stale skill metadata and the highest-churn
-# files worth re-prosecuting, into the job summary. Findings are ADVISORY — stale
-# skills or hot files keep the run GREEN (treat the summary as a worklist) — but a
-# genuine tool CRASH (command-not-found, regression) FAILS the run so the broken
-# pipeline is not silently swallowed.
+# checks on a weekly cron. It reports stale skill metadata, the highest-churn
+# files worth re-prosecuting, and stale (already-shipped) tickets, into the job
+# summary. Findings are ADVISORY — stale skills, hot files, or stale tickets
+# keep the run GREEN (treat the summary as a worklist) — but a genuine tool
+# CRASH (command-not-found, regression) FAILS the run so the broken pipeline is
+# not silently swallowed. ticket-prune only ever reports here (`--write` is a
+# human-confirmed action, never run unattended on a schedule).
 #
 # The LLM-backed parts (lesson-foundry, rejection-mining, gate-fuzzing) are not
 # here because they need a model. Run those via a scheduled Claude routine that
@@ -98,5 +100,29 @@ jobs:
           # silently swallowed (the job is advisory, but a crash is not advisory).
           if [ "$rc" -ne 0 ]; then
             echo "::error title=model-ratchet::model-ratchet --dry-run exited $rc unexpectedly"
+            exit 1
+          fi
+
+      - name: Ticket prune (stale ticket hygiene) — report only, never --write in CI
+        run: |
+          {
+            echo "## Stale tickets (ticket-prune)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f .adlc/tickets.json ]; then
+            # `if` capture so a nonzero exit does not abort the step under `set -e`.
+            if out="$(adlc ticket-prune --json)"; then rc=0; else rc=$?; fi
+            echo "$out" >> "$GITHUB_STEP_SUMMARY"
+          else
+            rc=0
+            echo "(.adlc/tickets.json not present — nothing to prune)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # ticket-prune is a report, not a gate: exit 0 is the only expected
+          # code, whether or not it found stale tickets. This step never
+          # passes --write — archiving tickets.json is a human-confirmed
+          # action, not something a scheduled job should do unattended.
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=ticket-prune::ticket-prune --json exited $rc unexpectedly"
             exit 1
           fi

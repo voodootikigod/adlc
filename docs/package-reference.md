@@ -30,6 +30,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/runner` | `adlc-runner` | Asserts phase completion from manifest artifacts rather than command success alone. Normal workflows reach it through `adlc run` and `adlc accept`. | [`docs/tools/runner.md`](./tools/runner.md) |
 | `@adlc/skill-rot` | `skill-rot` | Checks skill files for stale validation metadata and optional freshness stamping. | [`docs/tools/skill-rot.md`](./tools/skill-rot.md) |
 | `@adlc/spec-lint` | `spec-lint` | Gates specs for wishes, unverifiable acceptance criteria, and LLM-only verification. | [`docs/tools/spec-lint.md`](./tools/spec-lint.md) |
+| `@adlc/ticket-prune` | `ticket-prune` | Reports and archives stale, already-shipped tickets out of `.adlc/tickets.json`. | [`docs/tools/ticket-prune.md`](./tools/ticket-prune.md) |
 
 ## Command forms
 
@@ -62,6 +63,7 @@ adlc run <p1|p2|p3|p4|p5|p6|p7> [--ticket id for p3-p6] [--revision rev for p5-p
 adlc accept --ticket id --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--revision rev] [--dir .adlc] [--json]
 adlc skill-rot [path ...] [--write] [--json]
 adlc spec-lint <spec.md> [--llm] [--json] [--prompt-only]
+adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]
 ```
 
 ## Package groups
@@ -72,6 +74,7 @@ Spec and ticket shaping:
 - `spec-lint`
 - `premortem`
 - `coldstart`
+- `ticket-prune`
 
 Execution supervision and rails:
 

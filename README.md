@@ -23,7 +23,7 @@ full thesis in [ADLC.md](./ADLC.md).
 
 Each tool is a small CLI that enforces one machine-checkable gate. They share a runtime
 convention (`.adlc/` for tickets, ledgers, and gate evidence) and a common contract
-(see [CONVENTIONS.md](./CONVENTIONS.md)) so 21 independently built tools feel like one
+(see [CONVENTIONS.md](./CONVENTIONS.md)) so 22 independently built tools feel like one
 product.
 
 ## Install
@@ -46,7 +46,7 @@ hooks, CI, and lifecycle docs should use the dispatcher.
 
 | Phase | Packages |
 | --- | --- |
-| **Spec & ticket shaping** | [`parallax`](./packages/parallax) · [`spec-lint`](./packages/spec-lint) · [`premortem`](./packages/premortem) · [`coldstart`](./packages/coldstart) |
+| **Spec & ticket shaping** | [`parallax`](./packages/parallax) · [`spec-lint`](./packages/spec-lint) · [`premortem`](./packages/premortem) · [`coldstart`](./packages/coldstart) · [`ticket-prune`](./packages/ticket-prune) |
 | **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) · [`runner`](./packages/runner) |
 | **Review evidence & calibration** | [`behavior-diff`](./packages/behavior-diff) · [`gate-manifest`](./packages/gate-manifest) · [`hollow-test`](./packages/hollow-test) · [`prosecute`](./packages/prosecute) · [`review-calibration`](./packages/review-calibration) · [`model-ratchet`](./packages/model-ratchet) · [`gate-fuzzing`](./packages/gate-fuzzing) |
 | **Compounding defenses** | [`lesson-foundry`](./packages/lesson-foundry) · [`rejection-mining`](./packages/rejection-mining) · [`skill-rot`](./packages/skill-rot) |
@@ -98,7 +98,7 @@ Each agent tool has its own native integration. See the guides:
 
 | Directory | Contents |
 |---|---|
-| `packages/` | The toolkit: 21 zero-dependency, gate-shaped CLIs |
+| `packages/` | The toolkit: 22 zero-dependency, gate-shaped CLIs |
 | `plugins/adlc-claude-code/` | Claude Code integration (skill, commands, hooks, subagent) |
 | `plugins/adlc-codex/` | Codex integration (hooks and skills; no TypeScript package) |
 | `plugins/adlc-antigravity/` | Google Antigravity integration (native plugin system, skills, hooks) |

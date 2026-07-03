@@ -17,6 +17,7 @@ export const GROUPS = [
       { name: 'spec-lint', packageName: '@adlc/spec-lint', summary: 'Gate specs for acceptance criteria that lack a verification method.' },
       { name: 'premortem', packageName: '@adlc/premortem', summary: 'Stress-test an approved spec before implementation.' },
       { name: 'coldstart', packageName: '@adlc/coldstart', summary: 'Check whether tickets are executable without agent guesswork.' },
+      { name: 'ticket-prune', packageName: '@adlc/ticket-prune', summary: 'Report and archive stale, already-shipped tickets out of tickets.json.' },
     ],
   },
   {
