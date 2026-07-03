@@ -131,9 +131,6 @@ rail-freeze step into the job backing your existing required check (e.g. the mai
 Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
 deliberately after reviewing a release.
 
-Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
-deliberately after reviewing a release.
-
 ## Troubleshooting
 
 ### `Marketplace 'adlc' not found` after a successful `/plugin marketplace add`
