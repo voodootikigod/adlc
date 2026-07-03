@@ -57,7 +57,7 @@ the shipped template.
 ## Verification
 
 ```sh
-node --test scripts/test/adversarial-review-template.test.mjs   # this feature's tests (14 pass)
+node --test scripts/test/adversarial-review-template.test.mjs   # this feature's tests (17 pass)
 npm test                                                         # full repo suite, no regressions
 python3 -c "import yaml; yaml.safe_load(open('docs/ci/adversarial-review.yml'))"  # YAML sanity
 ```

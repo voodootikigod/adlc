@@ -167,6 +167,39 @@ test('AC3b: risk-tier PATTERN actually matches realistic auth/validator file pat
   }
 });
 
+test('AC3d: bare "auth" substring accepted false positive is documented and exercised (e.g. author/AUTHORS.md)', () => {
+  // Regression for a review finding: the classify step's comment used to
+  // assert (incorrectly) that "there is no common non-auth English word
+  // that contains 'auth' as a substring". `author`/`AUTHORS.md` are an
+  // easy, common counterexample -- an `AUTHORS.md` file or an
+  // `src/author.ts` model field has nothing to do with authn/authz but
+  // still matches the bare `auth` alternative. This is an accepted false
+  // positive under the file's own "a false positive just costs one extra
+  // full review" tradeoff (not a bug), but the tradeoff must actually be
+  // exercised here rather than only asserted in prose.
+  const text = readTemplate();
+  const patternLines = text
+    .split('\n')
+    .filter((line) => /^\s*PATTERN=/.test(line))
+    .map((line) => line.trim());
+  assert.ok(patternLines.length > 1, 'expected the multi-line PATTERN construction in the classify step');
+
+  const acceptedFalsePositives = ['AUTHORS.md', 'src/author.ts', 'docs/authors/team.md'];
+  for (const file of acceptedFalsePositives) {
+    const script = `${patternLines.join('\n')}\nprintf '%s\\n' ${JSON.stringify(file)} | grep -qiE "$PATTERN"`;
+    const rc = execFileSync('bash', ['-c', `${script}; echo $?`], { encoding: 'utf8' }).trim();
+    assert.equal(rc, '0',
+      `expected the bare "auth" substring match to (over-inclusively) flag "${file}" as risk=high -- ` +
+      'this is the documented, accepted false-positive tradeoff, not a gap');
+  }
+
+  // The comment must no longer assert the false "no non-auth word contains
+  // auth" claim; it must instead document this as an accepted tradeoff.
+  assert.ok(!/there is no common non-auth/i.test(text),
+    'the classify-step comment must not claim no non-auth English word contains "auth" as a substring -- ' +
+    '"author"/"AUTHORS.md" are a common counterexample');
+});
+
 test('AC3c: ADVERSARIAL_REVIEW_VERSION is pinned to an exact version, not the mutable "latest" tag', () => {
   // Regression for the other half of commit 0790478 ("...and pin
   // adversarial-review version"): AC3b already regression-tests the regex

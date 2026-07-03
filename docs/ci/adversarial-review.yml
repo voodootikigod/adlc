@@ -95,8 +95,11 @@ jobs:
           # a `reauth.ts` file, or CamelCase composites like
           # `OAuthCallback.ts`, `GoogleAuth.java`, `isAuthenticated.ts`. A
           # bare substring match is deliberately over-inclusive (see the
-          # ACTION REQUIRED note above) -- there is no common non-auth
-          # English word that contains "auth" as a substring.
+          # ACTION REQUIRED note above): yes, this also matches unrelated
+          # "auth" substrings like `author`/`AUTHORS.md`/`src/author.ts` --
+          # that is an accepted false positive under the same "a false
+          # positive just costs one extra full review" tradeoff, not a gap
+          # to close.
           PATTERN='auth'
           PATTERN="$PATTERN|trust-boundary"
           PATTERN="$PATTERN|(^|/|-|_)(rails?-)?guard"
@@ -158,10 +161,27 @@ jobs:
           # degrade to a single provider under --loop. This plain one-shot
           # invocation is the only mode that actually delivers the >=2
           # distinct-provider quorum ADR-0007 requires for this risk tier.
+          #
+          # --fail-on-empty is required here (not optional). Per the pinned
+          # v2.6.0 source (bin/cli.js / src/git-context.js): when the
+          # resolved diff is empty (fileCount==0 && diffBytes==0) the tool
+          # logs a warning and exits 0 -- an unconditional approve -- unless
+          # --fail-on-empty is passed, in which case it exits 1 instead. This
+          # job re-fetches origin/$BASE_REF and re-derives the diff itself
+          # (separately from the `changes` job above), so it can end up with
+          # a zero-diff scope even on a PR the `changes` job classified as
+          # risk=high -- e.g. main advances between the two jobs so the
+          # branch is now fully merged/no-op, or a rebased/duplicate PR
+          # re-triggers `synchronize`. Without this flag, that empty-diff
+          # case would exit 0 with no model ever consulted, and the "Record
+          # adversarial-review verdict" step below would permanently record
+          # a false "approve" P6 gate-manifest entry for a high-risk PR that
+          # was never actually reviewed.
           npx --yes "adversarial-review@${ADVERSARIAL_REVIEW_VERSION}" \
             --base "origin/$BASE_REF" \
             --providers auto \
             --fail-on high \
+            --fail-on-empty \
             > review-report.txt 2>&1
           rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
