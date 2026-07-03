@@ -4,6 +4,21 @@
 import { parseArgs as nodeParseArgs } from 'node:util';
 
 export function parseArgs(config) {
+  const args = config?.args ?? process.argv.slice(2);
+  const hasHelp = args.includes('--help') || args.includes('-h');
+  if (hasHelp) {
+    const declaresHelp = config?.options && ('help' in config.options || 'h' in config.options);
+    if (!declaresHelp) {
+      if (config?.usage) {
+        if (typeof config.usage === 'function') {
+          config.usage();
+        } else {
+          console.log(config.usage);
+        }
+        process.exit(0);
+      }
+    }
+  }
   return nodeParseArgs({ allowPositionals: true, ...config });
 }
 

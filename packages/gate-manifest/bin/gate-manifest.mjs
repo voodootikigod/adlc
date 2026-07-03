@@ -9,7 +9,15 @@ import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { ADLC_DIR } from '@adlc/core';
 
+const USAGE =
+  'usage: gate-manifest <verb> [options]\n' +
+  'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c]\n' +
+  '       verify [--json]\n' +
+  '       show   [--ticket id] [--json]\n' +
+  '       attest [--ticket id]';
+
 const { values: flags, positionals } = parseArgs({
+  usage: USAGE,
   options: {
     ticket: { type: 'string' },
     data:   { type: 'string' },
@@ -22,13 +30,7 @@ const { values: flags, positionals } = parseArgs({
 const verb = positionals[0];
 
 if (!verb) {
-  opError(
-    'usage: gate-manifest <verb> [options]\n' +
-    'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c]\n' +
-    '       verify [--json]\n' +
-    '       show   [--ticket id] [--json]\n' +
-    '       attest [--ticket id]'
-  );
+  opError(USAGE);
 }
 
 // ── record ──────────────────────────────────────────────────────────────────

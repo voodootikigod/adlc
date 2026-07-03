@@ -453,3 +453,76 @@ test('agy provider: ADLC_AGY=false/0 do NOT enable the provider', () => {
   assert.equal(detectProvider({ ADLC_AGY: '1' })?.name, 'agy');
   assert.equal(detectProvider({ ADLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
 });
+
+test('parseArgs: pre-scans for --help and prints usage', () => {
+  const originalExit = process.exit;
+  const originalLog = console.log;
+  let exitCode = null;
+  let loggedMsg = null;
+  
+  process.exit = (code) => {
+    exitCode = code;
+    throw new Error('exited');
+  };
+  console.log = (msg) => {
+    loggedMsg = msg;
+  };
+  
+  try {
+    assert.throws(() => {
+      corePublic.parseArgs({
+        args: ['--help'],
+        usage: 'my custom usage text',
+        options: {
+          foo: { type: 'boolean' }
+        }
+      });
+    }, /exited/);
+    
+    assert.equal(exitCode, 0);
+    assert.equal(loggedMsg, 'my custom usage text');
+  } finally {
+    process.exit = originalExit;
+    console.log = originalLog;
+  }
+});
+
+test('parseArgs: calls callback usage if it is a function', () => {
+  const originalExit = process.exit;
+  let exitCode = null;
+  let called = false;
+  
+  process.exit = (code) => {
+    exitCode = code;
+    throw new Error('exited');
+  };
+  
+  try {
+    assert.throws(() => {
+      corePublic.parseArgs({
+        args: ['-h'],
+        usage: () => {
+          called = true;
+        },
+        options: {
+          foo: { type: 'boolean' }
+        }
+      });
+    }, /exited/);
+    
+    assert.equal(exitCode, 0);
+    assert.equal(called, true);
+  } finally {
+    process.exit = originalExit;
+  }
+});
+
+test('parseArgs: does not intercept help if options explicitly declares it', () => {
+  const parsed = corePublic.parseArgs({
+    args: ['--help'],
+    options: {
+      help: { type: 'boolean' }
+    }
+  });
+  assert.equal(parsed.values.help, true);
+});

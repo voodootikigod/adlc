@@ -23,7 +23,28 @@ import {
 import { renderReport, renderRouteConflict } from '../lib/scoring.mjs';
 import { runSpecMode, runEdgeMode, runRouteMode } from '../lib/modes.mjs';
 
+const USAGE = `parallax — measured-ambiguity interrogation (ADLC D3)
+
+Usage:
+  parallax --request "feature request text"
+  parallax --file req.md
+  echo "request" | parallax
+  parallax --edge T1 T2 [--tickets path]
+  parallax --route "question" [--context file ...]
+
+Flags:
+  --n <int>           fan width (default 3)
+  --threshold <0-1>   ambiguity gate threshold (default 0.25)
+  --tier cheap|mid|frontier  override LLM tier
+  --json              machine-readable output
+  --prompt-only       print prompts and exit 0 (no API key needed)
+  --tickets <path>    tickets file (default .adlc/tickets.json)
+  --context <file>    context file(s) for --route mode (repeatable)
+
+Exit codes: 0 = gate passes, 1 = operational error, 2 = gate fails`;
+
 const { values, positionals } = parseArgs({
+  usage: USAGE,
   options: {
     // SPEC MODE
     request: { type: 'string', short: 'r' },
@@ -186,26 +207,7 @@ if (!request) {
 
 if (!request) {
   // Print usage to stderr and exit 1
-  process.stderr.write(`parallax — measured-ambiguity interrogation (ADLC D3)
-
-Usage:
-  parallax --request "feature request text"
-  parallax --file req.md
-  echo "request" | parallax
-  parallax --edge T1 T2 [--tickets path]
-  parallax --route "question" [--context file ...]
-
-Flags:
-  --n <int>           fan width (default 3)
-  --threshold <0-1>   ambiguity gate threshold (default 0.25)
-  --tier cheap|mid|frontier  override LLM tier
-  --json              machine-readable output
-  --prompt-only       print prompts and exit 0 (no API key needed)
-  --tickets <path>    tickets file (default .adlc/tickets.json)
-  --context <file>    context file(s) for --route mode (repeatable)
-
-Exit codes: 0 = gate passes, 1 = operational error, 2 = gate fails
-`);
+  process.stderr.write(USAGE + '\n');
   process.exit(1);
 }
 

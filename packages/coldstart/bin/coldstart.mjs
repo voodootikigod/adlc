@@ -15,7 +15,10 @@ import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll } from '../lib/gate.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 
+const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--json]';
+
 const { values, positionals } = parseArgs({
+  usage: USAGE,
   options: {
     tickets: { type: 'string', default: '.adlc/tickets.json' },
     all: { type: 'boolean', default: false },
@@ -56,9 +59,7 @@ if (runAll) {
 } else {
   const ticketId = positionals[0];
   if (!ticketId) {
-    opError(
-      'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--json]'
-    );
+    opError(USAGE);
   }
   const ticket = tickets.find((t) => t.id === ticketId);
   if (!ticket) {

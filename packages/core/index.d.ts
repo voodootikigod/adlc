@@ -7,7 +7,7 @@ export type ParsedArgs = {
   readonly values: Record<string, string | boolean | string[] | boolean[] | undefined>;
   readonly positionals: string[];
 };
-export function parseArgs(config?: ParseArgsConfig): ParsedArgs;
+export function parseArgs(config?: ParseArgsConfig & { usage?: string | (() => void) }): ParsedArgs;
 export function pass(message?: string): never;
 export function gateFail(message?: string, details?: unknown): never;
 export function opError(message?: string): never;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
 
 function fail(message) {
   console.error(`adlc-rails-guard: ${message}`);
@@ -306,10 +306,25 @@ function resolveActiveTicketId() {
   return envTicket ?? fileTicket;
 }
 
+function safeRealpath(fp) {
+  try {
+    return realpathSync(fp);
+  } catch {
+    const parent = dirname(fp);
+    if (parent === fp) return fp;
+    try {
+      return resolve(safeRealpath(parent), basename(fp));
+    } catch {
+      return fp;
+    }
+  }
+}
+
 function normalizePath(path, baseCwd = process.cwd()) {
   const normalized = path.replaceAll('\\', '/');
-  const absolute = isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized);
-  const projectRelative = relative(process.cwd(), absolute).replaceAll('\\', '/');
+  const absolute = safeRealpath(isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized));
+  const projectRoot = safeRealpath(process.cwd());
+  const projectRelative = relative(projectRoot, absolute).replaceAll('\\', '/');
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 

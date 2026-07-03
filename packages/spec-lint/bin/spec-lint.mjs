@@ -9,7 +9,10 @@ import { classifyAll, applyLlmDemotion } from '../lib/classify.mjs';
 import { buildJsonResult, buildHumanReport } from '../lib/report.mjs';
 import { buildVacuousPrompt, detectVacuous } from '../lib/llm.mjs';
 
+const USAGE = 'usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]';
+
 const { values: flags, positionals } = parseArgs({
+  usage: USAGE,
   options: {
     llm: { type: 'boolean', default: false },
     tier: { type: 'string', default: 'cheap' },
@@ -21,7 +24,7 @@ const { values: flags, positionals } = parseArgs({
 const specPath = positionals[0];
 
 if (!specPath) {
-  opError('usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]');
+  opError(USAGE);
 }
 
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
