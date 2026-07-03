@@ -65,3 +65,37 @@ test('index.mdx is a real landing page (no "coming soon" stub) enumerating all s
     );
   }
 });
+
+test('index.mdx discloses that the stub harness pages (codex, cursor, opencode, pi) are still being written', () => {
+  const p = path.join(integrationsDir, 'index.mdx');
+  const content = readFileSync(p, 'utf8');
+
+  const STUB_HARNESSES = ['codex', 'cursor', 'opencode', 'pi'];
+  const WRITTEN_HARNESSES = ['claude-code', 'antigravity'];
+
+  for (const harness of STUB_HARNESSES) {
+    const bulletMatch = content.match(
+      new RegExp(`- \\*\\*\\[[^\\]]+\\]\\(/docs/integrations/${harness}\\)\\*\\*[\\s\\S]*?(?=\\n- \\*\\*|\\n\\nSee)`)
+    );
+    assert.ok(bulletMatch, `index.mdx should have a bullet for ${harness}`);
+    assert.match(
+      bulletMatch[0],
+      /full walkthrough still being written/,
+      `the ${harness} bullet should disclose that its full walkthrough is still being written`
+    );
+  }
+
+  // The two harnesses with real, complete pages must NOT carry the disclosure —
+  // otherwise it would misleadingly undersell finished documentation.
+  for (const harness of WRITTEN_HARNESSES) {
+    const bulletMatch = content.match(
+      new RegExp(`- \\*\\*\\[[^\\]]+\\]\\(/docs/integrations/${harness}\\)\\*\\*[\\s\\S]*?(?=\\n- \\*\\*|\\n\\nSee)`)
+    );
+    assert.ok(bulletMatch, `index.mdx should have a bullet for ${harness}`);
+    assert.doesNotMatch(
+      bulletMatch[0],
+      /still being written/,
+      `the ${harness} bullet documents a finished page and should not claim it is still being written`
+    );
+  }
+});
