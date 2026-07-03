@@ -251,6 +251,42 @@ test('auditAdversarialReview: recorded with --files overlapping the gated path �
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('auditAdversarialReview: diffs against the merge-base, not the trunk candidate\'s live tip', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '' },
+      'git ls-files': { status: 0, stdout: '' },
+      'git rev-parse --verify --quiet main^{commit}': { status: 0, stdout: '' },
+      'git merge-base main HEAD': { status: 0, stdout: 'deadbeefcafe\n' },
+      'git diff --name-only deadbeefcafe --': { status: 0, stdout: 'src/auth/login.mjs\n' },
+      // If the implementation regressed to diffing straight against the
+      // candidate's tip, THIS is the call it would make instead — assert
+      // that path never surfaces.
+      'git diff --name-only main --': { status: 0, stdout: 'docs/unrelated-trunk-only-change.md\n' },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, true);
+    assert.equal(r.matches.length, 1);
+    assert.equal(r.matches[0].path, 'src/auth/login.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: merge-base unresolvable → diff step skipped (no false positives from a bad base)', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '' },
+      'git ls-files': { status: 0, stdout: '' },
+      'git rev-parse --verify --quiet main^{commit}': { status: 0, stdout: '' },
+      'git merge-base main HEAD': { status: 1, stdout: '', stderr: 'fatal: no merge base' },
+      'git diff --name-only main --': { status: 0, stdout: 'src/auth/login.mjs\n' },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 // ---- the real hooks are advisory: never throw ----
 test('session.created / session.idle hooks never throw (advisory)', async () => {
   const root = initAdlc(mkroot());

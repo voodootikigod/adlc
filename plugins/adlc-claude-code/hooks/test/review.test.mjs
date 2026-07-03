@@ -298,3 +298,55 @@ test('risk-gated change already COMMITTED on the branch (vs main) still triggers
     cleanup(dir);
   }
 });
+
+// ---- diff base is the merge-base (fork point), not main's live tip ----
+
+test('main moves a risk-tier file AFTER branch divergence → branch that never touched it stays silent', () => {
+  const dir = initRepo();
+  try {
+    git(['checkout', '-b', 'feature/harmless'], dir);
+    writeFileSync(join(dir, 'notes.md'), 'just notes\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'add notes'], dir);
+
+    // Trunk advances AFTER the fork point, touching a risk-tier path the
+    // feature branch never touched.
+    git(['checkout', 'main'], dir);
+    mkdirSync(join(dir, 'src', 'auth'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'auth', 'login.mjs'), 'export function login() {}\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'add auth on main'], dir);
+
+    git(['checkout', 'feature/harmless'], dir);
+    const r = runReview(dir, { env: { PATH: WITH_ADLC } });
+    assert.equal(r.hasNotice, false, `expected silence (only main advanced), got: ${r.out}`);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---- loop guard: enforcement never re-blocks once Stop already forced a continuation ----
+
+test('ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1 + stop_hook_active=true → advisory only, does not block again', () => {
+  const dir = initRepo();
+  try {
+    mkdirSync(join(dir, 'src', 'auth'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'auth', 'login.mjs'), 'export function login() {}\n');
+    const input = JSON.stringify({ cwd: dir, stop_hook_active: true });
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'review'], {
+        input,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: WITH_ADLC, ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT: '1' },
+        cwd: dir,
+      });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    assert.ok(out.includes('adversarial-review'), `expected a notice, got: ${out}`);
+    assert.equal(out.includes('"decision":"block"'), false, `must not re-block: ${out}`);
+  } finally {
+    cleanup(dir);
+  }
+});

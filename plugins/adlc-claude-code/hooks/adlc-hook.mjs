@@ -217,7 +217,7 @@ function main() {
   if (MODE === 'preflight') return preflight();
   if (MODE === 'flail') return flail(input);
   if (MODE === 'manifest') return manifest();
-  if (MODE === 'review') return review();
+  if (MODE === 'review') return review(input);
   if (MODE === 'rails') return rails(input);
   if (MODE === 'buildgate') return buildgate(input);
   // unknown mode → no-op
@@ -626,9 +626,9 @@ function gitChangedPaths() {
     }
   }
 
-  // First reachable trunk candidate is the diff base — same candidate order as
-  // @adlc/core's resolveBase (packages/core/lib/git.mjs), so this hook's notion
-  // of "the branch" matches the rest of the toolkit's freeze/diff gates.
+  // First reachable trunk candidate — same candidate order as @adlc/core's
+  // resolveBase (packages/core/lib/git.mjs), so this hook's notion of "the
+  // branch" matches the rest of the toolkit's freeze/diff gates.
   // Overridable via ADLC_ADVERSARIAL_REVIEW_BASE for repos with a different trunk.
   const base = (process.env.ADLC_ADVERSARIAL_REVIEW_BASE ?? '').trim() ||
     ['main', 'master', 'origin/main', 'origin/master'].find((c) => {
@@ -636,10 +636,19 @@ function gitChangedPaths() {
       return !r.error && r.status === 0;
     });
   if (base) {
-    const diff = runGit(['diff', '--name-only', base, '--']);
-    if (!diff.error && diff.status === 0 && diff.stdout) {
-      for (const p of diff.stdout.split('\n')) {
-        if (p.trim()) paths.add(p.trim());
+    // Diff against the MERGE-BASE (fork point of `base` and HEAD), NOT
+    // `base`'s live tip — resolveBase() itself resolves to `git merge-base
+    // <candidate> HEAD`, and diffing straight against the tip would flag any
+    // file trunk changed *after* this branch diverged as "changed" on this
+    // branch too, producing false-positive risk-tier matches on stable code.
+    const mergeBase = runGit(['merge-base', base, 'HEAD']);
+    const diffBase = !mergeBase.error && mergeBase.status === 0 ? mergeBase.stdout.trim() : '';
+    if (diffBase) {
+      const diff = runGit(['diff', '--name-only', diffBase, '--']);
+      if (!diff.error && diff.status === 0 && diff.stdout) {
+        for (const p of diff.stdout.split('\n')) {
+          if (p.trim()) paths.add(p.trim());
+        }
       }
     }
   }
@@ -657,7 +666,18 @@ function gitChangedPaths() {
 // sessions by default would be a much bigger behavior change than this bug fix
 // warrants, and the manifest record it checks for can always be produced by
 // running `npx adversarial-review` + `adlc gate-manifest record` directly.
-function review() {
+//
+// Loop guard: Claude Code sets `stop_hook_active: true` on the hook input when
+// a PRIOR Stop hook in this same turn already returned `decision: "block"` and
+// forced a continuation. review()'s block condition (git state + manifest
+// state) is otherwise stable across re-invocations, so without this check a
+// risk-gated change that never gets an `adversarial-review` gate-manifest
+// record (model forgets, or the record command itself errors) would re-block
+// every subsequent Stop forever — the session could never end short of an
+// operator killing it or unsetting the enforcement env var. Once
+// `stop_hook_active` is true we still surface the systemMessage (so the
+// operator sees it) but never block again this turn.
+function review(input = {}) {
   if (!existsSync('.adlc')) return; // not an ADLC repo
 
   const changed = gitChangedPaths();
@@ -690,7 +710,7 @@ function review() {
     `--data '{"providers":"<a,b>","verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>"}'\` ` +
     `before merging.`;
 
-  if (process.env.ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT === '1') {
+  if (process.env.ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT === '1' && input.stop_hook_active !== true) {
     emit({ decision: 'block', reason: msg, systemMessage: msg });
     return;
   }

@@ -152,10 +152,19 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
       return !r.error && r.status === 0;
     });
   if (resolvedBase) {
-    const diff = run(spawnImpl, 'git', ['diff', '--name-only', resolvedBase, '--'], root);
-    if (!diff.error && diff.status === 0 && diff.stdout) {
-      for (const p of diff.stdout.split('\n')) {
-        if (p.trim()) paths.add(p.trim());
+    // Diff against the MERGE-BASE (fork point of `resolvedBase` and HEAD), NOT
+    // `resolvedBase`'s live tip — resolveBase() itself resolves to
+    // `git merge-base <candidate> HEAD`. Diffing straight against the tip would
+    // flag any file trunk changed *after* this branch diverged as "changed" on
+    // this branch too, producing false-positive risk-tier matches.
+    const mergeBase = run(spawnImpl, 'git', ['merge-base', resolvedBase, 'HEAD'], root);
+    const diffBase = !mergeBase.error && mergeBase.status === 0 ? mergeBase.stdout.trim() : '';
+    if (diffBase) {
+      const diff = run(spawnImpl, 'git', ['diff', '--name-only', diffBase, '--'], root);
+      if (!diff.error && diff.status === 0 && diff.stdout) {
+        for (const p of diff.stdout.split('\n')) {
+          if (p.trim()) paths.add(p.trim());
+        }
       }
     }
   }
