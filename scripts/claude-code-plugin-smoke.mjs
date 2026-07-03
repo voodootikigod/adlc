@@ -478,6 +478,54 @@ if (!skillSource.includes('ADLC_CC_SENTINEL_PHASE_ROUTER_V1')) {
   fail('plugins/adlc-claude-code/skills/adlc/SKILL.md missing sentinel ADLC_CC_SENTINEL_PHASE_ROUTER_V1');
 }
 
+// --- Guard: no bare, non-namespaced command recommendations (closes #50) ---
+// The plugin is named "adlc" (plugins/adlc-claude-code/.claude-plugin/plugin.json),
+// so inside Claude Code the actual invocable form of a plugin command is the
+// namespaced "/adlc:adlc-<name>" — a bare "/adlc-<name>" is not a real command and
+// silently fails to invoke when a user (or the agent itself) follows the guidance.
+// This scans every .md/.mjs file under commands/, skills/, agents/, and hooks/ for
+// a bare reference to one of the plugin's real commands and fails loudly if found,
+// so a future edit can't reintroduce the bug fixed in #50.
+const namespacedCommandNames = ['init', 'ticket', 'distill', 'maintain'];
+// Matches "/adlc-init" etc. but NOT "/adlc:adlc-init" (scoped form, via the
+// negative lookbehind) and NOT a file-path reference like "commands/adlc-init.md"
+// or "docs/ci/adlc-maintenance.yml" (via the trailing negative lookahead + \b).
+const bareCommandPattern = new RegExp(
+  `(?<!adlc:)/adlc-(?:${namespacedCommandNames.join('|')})\\b(?!\\.(?:md|mjs|yml|yaml))`,
+  'g'
+);
+const guidanceDirs = ['commands', 'skills', 'agents', 'hooks'];
+const guidanceFiles = [];
+for (const dir of guidanceDirs) {
+  const dirPath = join(pluginSourceDir, dir);
+  if (!existsSync(dirPath)) continue;
+  const stack = [dirPath];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const entryPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+      } else if (entry.name.endsWith('.md') || entry.name.endsWith('.mjs')) {
+        guidanceFiles.push(entryPath);
+      }
+    }
+  }
+}
+for (const filePath of guidanceFiles) {
+  const source = readFileSync(filePath, 'utf8');
+  const matches = source.match(bareCommandPattern);
+  if (matches) {
+    const relPath = filePath.slice(repo.length + 1);
+    fail(
+      `bare, non-namespaced command reference found in ${relPath}: ${[...new Set(matches)].join(', ')}\n` +
+      `  The plugin is namespaced "adlc" — the actual invocable form inside Claude Code is\n` +
+      `  "/adlc:adlc-<name>", not the bare "/adlc-<name>". Update the guidance text to the\n` +
+      `  scoped form (see issue #50).`
+    );
+  }
+}
+
 // IMPORTANT: A passing smoke test does NOT confirm hook execution correctness or
 // live marketplace install behavior. Two unverified assumptions remain (see Pre-GA
 // checklist in docs/adr/0003-adlc-claude-code-plugin.md):

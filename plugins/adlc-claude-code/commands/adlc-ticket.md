@@ -3,7 +3,7 @@ description: Author and triage an ADLC ticket (P0) into .adlc/tickets.json, then
 argument-hint: [short description of the work]
 ---
 
-# /adlc-ticket — author a ticket (P0 Triage)
+# /adlc:adlc-ticket — author a ticket (P0 Triage)
 
 Tickets are the contract every downstream ADLC tool reads (`coldstart`,
 `model-router`, `merge-forecast`, `rails-guard`). This command turns a request
@@ -15,7 +15,7 @@ for).
 ## 0. Preconditions
 
 - Ensure `.adlc/tickets.json` exists. If it does not, tell the user to run
-  `/adlc-init` first (do not silently create the workspace here).
+  `/adlc:adlc-init` first (do not silently create the workspace here).
 - Read the current `.adlc/tickets.json` so you know the existing ticket ids and
   can pick the next unused one.
 
