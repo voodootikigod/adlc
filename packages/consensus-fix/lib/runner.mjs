@@ -58,7 +58,20 @@ export function validateCandidate(parsed, allowedPaths) {
  * @param {string[]} opts.files        — absolute paths
  * @param {number} opts.n              — fan width
  * @param {string} opts.tier           — 'cheap' | 'mid' | 'frontier'
- * @param {Function} opts.completeFn   — async (prompt) => string (injectable for testing)
+ * @param {Function} opts.completeFn   — async (prompt, providerName?) => string
+ *                                       (injectable for testing). `providerName`
+ *                                       is only passed when `opts.providerNames`
+ *                                       is supplied — otherwise it is called
+ *                                       with just `(prompt)`, unchanged from
+ *                                       prior behavior.
+ * @param {string[]} [opts.providerNames] — issue #63: draw ONE candidate per
+ *                                       named provider family (e.g.
+ *                                       ['anthropic', 'openai', 'gemini'])
+ *                                       instead of `n` resamples of a single
+ *                                       auto-detected provider. When supplied,
+ *                                       overrides `n` (the fan width becomes
+ *                                       providerNames.length). Additive only —
+ *                                       omit it and behavior is unchanged.
  * @param {string} [opts.railsCmd]     — full frozen rail suite; regression gate.
  *                                       A candidate survives only if BOTH testCmd
  *                                       and railsCmd pass. If omitted, candidates
@@ -74,9 +87,13 @@ export async function runConsensusFix({
   n,
   tier,
   completeFn,
+  providerNames,
   railsCmd,
   onProgress = () => {},
 }) {
+  // Fan width: one candidate per named provider when --providers is supplied,
+  // otherwise the usual n resamples of the single auto-detected provider.
+  const fanWidth = providerNames ? providerNames.length : n;
   const railsChecked = Boolean(railsCmd);
   if (!railsChecked) {
     onProgress(
@@ -101,24 +118,33 @@ export async function runConsensusFix({
   // 3. Build prompt.
   const prompt = buildPrompt({ testCmd, testOutput, snapshot });
 
-  // 4. Fan N completions.
-  onProgress(`Fanning ${n} completions (tier: ${tier})...`);
+  // 4. Fan completions: one per named provider family (--providers), or n
+  //    resamples of the single auto-detected provider (default).
+  onProgress(
+    providerNames
+      ? `Fanning ${fanWidth} completions across providers [${providerNames.join(', ')}] (tier: ${tier})...`
+      : `Fanning ${fanWidth} completions (tier: ${tier})...`
+  );
   const rawResponses = await Promise.allSettled(
-    Array.from({ length: n }, () => completeFn(prompt))
+    providerNames
+      ? providerNames.map((name) => completeFn(prompt, name))
+      : Array.from({ length: fanWidth }, () => completeFn(prompt))
   );
 
   // 5. Evaluate each candidate SEQUENTIALLY.
-  const results = [];  // { index, changes, changedLines, passed, discarded, reason }
+  const results = [];  // { index, changes, changedLines, passed, discarded, reason, provider? }
 
   for (let i = 0; i < rawResponses.length; i++) {
     const res = rawResponses[i];
-    onProgress(`Evaluating candidate ${i + 1}/${n}...`);
+    const provider = providerNames ? providerNames[i] : undefined;
+    onProgress(`Evaluating candidate ${i + 1}/${fanWidth}...`);
 
     if (res.status !== 'fulfilled') {
       results.push({
         index: i,
         discarded: true,
         reason: `LLM call failed: ${res.reason}`,
+        provider,
       });
       continue;
     }
@@ -132,6 +158,7 @@ export async function runConsensusFix({
         index: i,
         discarded: true,
         reason: `JSON parse failed: ${err.message}`,
+        provider,
       });
       continue;
     }
@@ -143,6 +170,7 @@ export async function runConsensusFix({
         index: i,
         discarded: true,
         reason: `validation failed: ${validation.reason}`,
+        provider,
       });
       continue;
     }
@@ -194,6 +222,7 @@ export async function runConsensusFix({
       railsChecked,
       testRunOutput,
       railsRunOutput,
+      provider,
     });
 
     let label;
@@ -218,7 +247,7 @@ export async function runConsensusFix({
 
   // 7. Group by agreement.
   const groups = groupByChangeset(survivors);
-  const allDivergent = isAllDivergent(groups, n);
+  const allDivergent = isAllDivergent(groups, fanWidth);
   const selectionResult = selectWinner(groups);
 
   return {

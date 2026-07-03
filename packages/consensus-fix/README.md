@@ -24,8 +24,10 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--rails <cmd>` | _(none)_ | The **regression gate**: a command that runs the FULL frozen rail suite (all tests + types). A candidate survives only if BOTH `--test-cmd` and `--rails` exit 0. A candidate that fixes the repro but reddens the rails is **rejected**, not ranked. If omitted, candidates are checked only against `--test-cmd` and a **WARNING** is printed (no silent caps). |
-| `--n <int>` | `3` | Number of independent fix candidates to generate. |
+| `--n <int>` | `3` | Number of independent fix candidates to generate. Ignored when `--providers` is given (fan width becomes the number of providers named). |
 | `--tier cheap\|mid\|frontier` | `mid` | LLM tier to use for completions. |
+| `--provider <name>` | _(auto-detect)_ | Force a single provider (`anthropic\|openai\|gemini\|agy`) for the whole run, overriding `ADLC_PROVIDER` for this invocation only. Additive — omit it and single-provider auto-detect is unchanged. Mutually exclusive with `--providers`. |
+| `--providers <a,b,c>` | _(none)_ | Draw **one** candidate fix per named provider family instead of `--n` resamples of one auto-detected provider — cross-family diversity per [ADR-0007](../../docs/adr/0007-multimodel-adversarial-review.md). Each survivor records which provider produced it. Mutually exclusive with `--provider`. |
 | `--apply` | off | Write the winning fix. Default is dry-run (report only). |
 | `--allow-dirty` | off | Skip dirty-tree check. Useful in CI with staged-only changes. |
 | `--json` | off | Machine-readable output (JSON to stdout). |
@@ -99,6 +101,18 @@ consensus-fix --test-cmd "pytest tests/test_core.py::test_sum" \
 consensus-fix --test-cmd "node --test test/*.test.mjs" \
               --files lib/broken.mjs \
               --allow-dirty --n 3
+
+# Draw one candidate fix per distinct provider family instead of 3 samples
+# of one auto-detected model (requires an API key for each named provider).
+consensus-fix --test-cmd "node --test test/math.test.mjs" \
+              --rails    "node --test test/*.test.mjs" \
+              --files src/math.mjs \
+              --providers anthropic,openai,gemini
+
+# Force a single non-default provider for the whole run
+consensus-fix --test-cmd "node --test test/math.test.mjs" \
+              --files src/math.mjs \
+              --provider gemini --n 3
 ```
 
 ---
@@ -143,7 +157,9 @@ consensus-fix --test-cmd "node --test test/*.test.mjs" \
 
 ## LLM provider detection
 
-Inherits from `@adlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`. Force a provider with `ADLC_PROVIDER`. Override the model per tier via `ADLC_MODEL_CHEAP`, `ADLC_MODEL_MID`, `ADLC_MODEL_FRONTIER`.
+Inherits from `@adlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (then `agy` if `ADLC_AGY` is set). Force a provider with `ADLC_PROVIDER` (env, whole shell) or `--provider <name>` (per-invocation, overrides `ADLC_PROVIDER`). Override the model per tier via `ADLC_MODEL_CHEAP`, `ADLC_MODEL_MID`, `ADLC_MODEL_FRONTIER`.
+
+Single-provider auto-detect remains the default (cost/latency per ADR-0007) — `--provider`/`--providers` are additive, not a default-behavior change. Use `--providers <a,b,c>` when you want N candidate fixes drawn from N distinct model families instead of N samples of one model; each requested provider must have its own API key configured, or the run fails closed before any LLM call with a list of the missing ones.
 
 ---
 
@@ -158,4 +174,4 @@ Inherits from `@adlc/core`. Checks (in order): `ANTHROPIC_API_KEY`, `OPENAI_API_
 
 ## Core gaps
 
-None. `fan`, `complete`, `extractJson`, `detectProvider`, `resolveModel`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `promptOnly`, and `isDirty` are all provided by `@adlc/core`.
+None. `fan`, `complete`, `extractJson`, `detectProvider`, `resolveModel`, `PROVIDER_NAMES`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `promptOnly`, and `isDirty` are all provided by `@adlc/core`.

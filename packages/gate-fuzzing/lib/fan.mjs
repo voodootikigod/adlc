@@ -3,7 +3,6 @@
 // The adversary is N fanned cheap/mid models (frontier-free, E2).
 // Each call is stateless — fresh contexts by construction.
 
-import { fan as coreFan } from '@adlc/core';
 import { sampleSeeds, NOVEL_SEED } from './seeds.mjs';
 
 /**
@@ -100,56 +99,80 @@ export function buildUserPrompt(gate, seed, baselineManifest = '') {
 }
 
 /**
- * Fan the adversary across N instances with seeded strategies.
- * Each instance gets a different seed from the 12-class taxonomy.
+ * Fan the adversary across N instances with seeded strategies (default), or
+ * across DISTINCT named provider families when `providerNames` is supplied
+ * (issue #63) — one candidate per requested provider instead of N resamples
+ * of one auto-detected provider. Each instance gets a different seed from
+ * the 12-class taxonomy, cycling through gates.
  * Injectable completeFn for offline tests (never calls real LLM in tests).
  *
  * @param {object} opts
  * @param {object[]} opts.gates - Gate descriptors to target
  * @param {object[]} [opts.priorDefeats] - For feedback prompting
- * @param {number} [opts.n] - Fan width, default 6
+ * @param {number} [opts.n] - Fan width, default 6. Ignored when `providerNames`
+ *   is supplied (fan width becomes providerNames.length instead).
+ * @param {string|null} [opts.provider] - single-provider override (mirrors a
+ *   CLI `--provider` flag): every fan instance uses this SAME provider
+ *   instead of letting `complete()` auto-detect. Ignored when `providerNames`
+ *   is also supplied (mutually exclusive at the CLI layer).
+ * @param {string[]|null} [opts.providerNames] - e.g. ['anthropic', 'openai'];
+ *   when supplied, assigns one distinct provider per fan instance instead of
+ *   letting every instance auto-detect the same provider. Additive only —
+ *   omit it and behavior is unchanged.
  * @param {string} [opts.tier] - Model tier, default 'mid'
  * @param {number} [opts.maxTokens] - Max tokens per response, default 4096
- * @param {Function|null} [opts.completeFn] - Injectable: async (fanOpts, n) => results
- *   If null, uses core fan(). MUST be injected in tests.
- * @returns {Promise<Array<{ok:boolean, value?:string, error?:string}>>}
+ * @param {Function|null} [opts.completeFn] - Injectable: async (fanOpts) => string,
+ *   called once per fan instance. If null, uses core `complete()` per instance
+ *   (dynamic import keeps @adlc/core optional for pure prompt-builder tests).
+ * @returns {Promise<Array<{ok:boolean, value?:string, error?:string, provider?:string}>>}
  */
 export async function fanAdversary(opts) {
   const {
     gates,
     priorDefeats = [],
     n = 6,
+    provider = null,
+    providerNames = null,
     tier = 'mid',
     maxTokens = 4096,
     completeFn = null,
   } = opts;
 
-  // Sample N seeds for this round
-  const seeds = sampleSeeds(n);
+  const fanWidth = providerNames ? providerNames.length : n;
 
-  // Build prompts for each fan instance, cycling through gates
+  // Sample fanWidth seeds for this round
+  const seeds = sampleSeeds(fanWidth);
+
+  // Build prompts for each fan instance, cycling through gates. When
+  // providerNames is supplied, each instance also gets a distinct provider
+  // override — genuinely different model families, not resamples. When only
+  // the singular `provider` override is supplied, every instance uses that
+  // same forced provider (still n resamples, just not auto-detected).
   const fanCalls = seeds.map((seed, i) => {
     const gate = gates[i % gates.length];
     const system = buildSystemPrompt(gate, priorDefeats);
     const prompt = buildUserPrompt(gate, seed);
-    return { tier, system, prompt, maxTokens };
+    return {
+      tier,
+      system,
+      prompt,
+      maxTokens,
+      ...(providerNames ? { provider: providerNames[i] } : provider ? { provider } : {}),
+    };
   });
 
-  // Use injectable completeFn (for tests) or core fan
-  if (completeFn) {
-    // Injectable: completeFn is a fan-like function
-    return completeFn(fanCalls[0], n); // simplified: one call for the batch
-  }
+  // Injectable: completeFn(call) => Promise<string>, one call per fan
+  // instance. Real: core `complete()` per instance.
+  const runOne = completeFn
+    ? (call) => completeFn(call)
+    : (call) => import('@adlc/core').then(({ complete }) => complete(call));
 
-  // Real: fan all instances in parallel
-  const results = await Promise.allSettled(
-    fanCalls.map((call) => import('@adlc/core').then(({ complete }) => complete(call)))
-  );
+  const results = await Promise.allSettled(fanCalls.map(runOne));
 
-  return results.map((r) =>
+  return results.map((r, i) =>
     r.status === 'fulfilled'
-      ? { ok: true, value: r.value }
-      : { ok: false, error: String(r.reason) }
+      ? { ok: true, value: r.value, provider: fanCalls[i].provider }
+      : { ok: false, error: String(r.reason), provider: fanCalls[i].provider }
   );
 }
 
