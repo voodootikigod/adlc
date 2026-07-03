@@ -11,13 +11,24 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 
 ## Install
 
+**Local Checkout (Recommended/Verified).** Currently, the most reliable way to install the plugin is directly from a local checkout:
+
 ```sh
-agy plugin install adlc-antigravity@adlc     # via the .agents marketplace
-# or, from a local checkout:
-agy plugin install /abs/path/plugins/adlc-antigravity
+agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 ```
 
-Then `/adlc-init`. Enforcement: `export ADLC_P4_ENFORCEMENT=1` with an active ticket.
+Then run `/adlc-init` inside your agent session (or execute the steps manually to bootstrap `.adlc/` in your repository).
+
+**Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
+
+```sh
+npx plugins add voodootikigod/adlc
+```
+
+
+**Note on native marketplace:** The native `.agents` marketplace registration command (`agy plugin install adlc-antigravity@adlc`) is currently subject to a CLI limitation where the CLI rejects unregistered third-party marketplaces with `unknown marketplace: adlc`. Local installation is the recommended path.
+
+Then `/adlc-init` (or manual bootstrap). Enforcement: `export ADLC_P4_ENFORCEMENT=1` with an active ticket.
 
 ## Formal ADLC Coverage
 
