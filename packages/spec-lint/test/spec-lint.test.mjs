@@ -117,6 +117,81 @@ describe('parseCriteria', () => {
     assert.equal(criteria[0].line, 3);
     assert.equal(criteria[1].line, 4);
   });
+
+  // -------------------------------------------------------------------------
+  // #71 — bold-only pseudo-heading section detection
+  // -------------------------------------------------------------------------
+
+  it('recognises a bold-only pseudo-heading as a criteria section (#71)', () => {
+    const md = `### Ticket 1\n\n**Acceptance criteria**:\n- AC1: Foo returns true.\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: Foo returns true.');
+  });
+
+  it('recognises a bold-only pseudo-heading with no trailing colon', () => {
+    const md = `**Requirements**\n- Req A\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'Req A');
+  });
+
+  it('does not treat bold text embedded mid-sentence as a pseudo-heading', () => {
+    const md = `## Background\nThis paragraph mentions **acceptance criteria** inline, not as a heading.\n- ignored item\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 0);
+  });
+
+  it('turns a bold pseudo-heading section off when a non-matching bold pseudo-heading follows', () => {
+    const md = `**Acceptance criteria**:\n- included\n**Background**:\n- excluded\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'included');
+  });
+
+  // -------------------------------------------------------------------------
+  // #71 — wrapped multi-line list-item continuation
+  // -------------------------------------------------------------------------
+
+  it('joins a wrapped bullet continuation line into one logical criterion (#71)', () => {
+    const md = [
+      '### Ticket',
+      '',
+      '**Acceptance criteria**:',
+      '- AC1: Foo returns true when bar is set.',
+      '  Verified via `node --test foo.test.js`.',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.match(criteria[0].text, /Verified via `node --test foo\.test\.js`/);
+  });
+
+  it('stops continuation consumption at the next list item, a blank line, or a heading', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '- AC1: first',
+      '  continued text for first',
+      '- AC2: second',
+      '',
+      'not a criterion',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 2);
+    assert.equal(criteria[0].text, 'AC1: first continued text for first');
+    assert.equal(criteria[1].text, 'AC2: second');
+  });
+
+  it('joins multiple consecutive continuation lines', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '- AC1: first line',
+      '  second physical line',
+      '  third physical line',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: first line second physical line third physical line');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -175,6 +250,38 @@ describe('classifyCriterion', () => {
   it('WISH: vague description only', () => {
     const r = classifyCriterion('System should be reliable');
     assert.ok(!r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // #45 — vacuous / unrelated backtick spans must not count as verification
+  // -------------------------------------------------------------------------
+
+  it('WISH: an unrelated backtick filename is not a verification method (#45)', () => {
+    const r = classifyCriterion('Config schema matches: see `vitest.config.ts` for reference');
+    assert.ok(!r.verified);
+    assert.match(r.reason, /no verification/);
+  });
+
+  it('VERIFIED: backtick command with a command word survives the tightened check', () => {
+    const r = classifyCriterion('Auth works: `run tests`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: backtick containing flags is recognised as a command', () => {
+    const r = classifyCriterion('The user can pay: `stripe-test --card=valid`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: backtick preceded by "Verified via" phrasing counts even without a command word', () => {
+    const r = classifyCriterion('Runs cleanly. Verified via `foo123.bin`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: a continuation-joined criterion finds the command on its wrapped line (#45/#71)', () => {
+    const r = classifyCriterion(
+      'AC1: Foo returns true when bar is set. Verified via `node --test foo.test.js`.'
+    );
+    assert.ok(r.verified);
   });
 });
 
@@ -404,6 +511,24 @@ describe('fixture: vacuous-candidate.md — demotion round-trip', () => {
     assert.match(result[2].reason, /no concrete/);
     // criterion 3 (specific curl command) survives
     assert.equal(result[3].status, 'VERIFIED');
+  });
+});
+
+describe('fixture: bold-heading-wrapped.md (#71 repro)', () => {
+  it('finds the criterion under a bold pseudo-heading and classifies it VERIFIED via the wrapped verification line', () => {
+    const text = readFileSync(fixture('bold-heading-wrapped.md'), 'utf8');
+    const criteria = classifyAll(parseCriteria(text));
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].status, 'VERIFIED');
+  });
+});
+
+describe('fixture: vacuous-filename.md (#45 repro)', () => {
+  it('does not treat an unrelated backtick filename as a verification method', () => {
+    const text = readFileSync(fixture('vacuous-filename.md'), 'utf8');
+    const criteria = classifyAll(parseCriteria(text));
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].status, 'WISH');
   });
 });
 

@@ -5,12 +5,17 @@
  * Patterns that indicate a verification method is present.
  *
  * A criterion is VERIFIED if its text contains ANY of:
- *   1. A backtick command  → `something`
+ *   1. A backtick span that looks like a command/assertion  → `npm test`
  *   2. A test/spec file path  → foo.test.js / bar.spec.ts etc.
  *   3. 'verify:' or 'verified by' followed by text
  *   4. 'test:' followed by text
  *   5. The phrase 'exit code'
  *   6. The word 'assert'
+ *
+ * A bare backtick span alone is NOT sufficient (#45) — an unrelated code
+ * span (e.g. a filename like `vitest.config.ts` mentioned in passing) must
+ * not count as a verification method. The span must look like a command or
+ * assertion, or be introduced by phrasing like "Verified via"/"Run ".
  */
 
 const BACKTICK_RE = /`[^`]+`/;
@@ -21,11 +26,48 @@ const EXIT_CODE_RE = /exit\s+code/i;
 const ASSERT_RE = /\bassert\b/i;
 
 /**
+ * Words that suggest the backtick span itself is a command/assertion,
+ * rather than a bare filename or other incidental code span.
+ */
+const COMMAND_WORD_RE =
+  /\b(run|npm|npx|yarn|pnpm|node|python|pytest|curl|wget|make|cargo|go|sh|bash|git|docker|kubectl|jest|mocha|rspec|dotnet|ruby|java|test|check|verify|assert|exec|deploy|build|lint|ci)\b/i;
+/** A CLI flag, e.g. "--card=valid" or "-v". */
+const FLAG_RE = /(?:^|[\s(])--?[A-Za-z][\w-]*/;
+/** Shell pipe/redirection operators. */
+const SHELL_OP_RE = /[|><]/;
+/** A function-call shape, e.g. "db.write()". */
+const CALL_RE = /\w\(\)/;
+/** Phrasing immediately preceding a backtick span that implies it's being run/checked. */
+const PRECEDING_PHRASE_RE = /(verified\s+via|run)\s*:?\s*$/i;
+
+/**
+ * Whether a backtick span in `text` (matched by `BACKTICK_RE`) looks like a
+ * genuine command or assertion, rather than an incidental code span (e.g. a
+ * bare filename).
+ *
+ * @param {string} text  Full criterion text.
+ * @param {RegExpExecArray} backtickMatch  Result of `BACKTICK_RE.exec(text)`.
+ * @returns {boolean}
+ */
+function looksLikeVerificationCommand(text, backtickMatch) {
+  const content = backtickMatch[0].slice(1, -1);
+  const before = text.slice(0, backtickMatch.index);
+  return (
+    COMMAND_WORD_RE.test(content) ||
+    FLAG_RE.test(content) ||
+    SHELL_OP_RE.test(content) ||
+    CALL_RE.test(content) ||
+    PRECEDING_PHRASE_RE.test(before)
+  );
+}
+
+/**
  * @param {string} text  Criterion text.
  * @returns {{ verified: boolean, reason: string }}
  */
 export function classifyCriterion(text) {
-  if (BACKTICK_RE.test(text)) {
+  const backtickMatch = BACKTICK_RE.exec(text);
+  if (backtickMatch && looksLikeVerificationCommand(text, backtickMatch)) {
     return { verified: true, reason: 'contains backtick command' };
   }
   if (SPEC_FILE_RE.test(text)) {

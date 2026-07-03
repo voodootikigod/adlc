@@ -8,6 +8,14 @@
 const CRITERIA_HEADING_RE = /acceptance|criteria|requirements|definition of done|success/i;
 
 /**
+ * A bold-only pseudo-heading line, e.g. "**Acceptance criteria**:" or
+ * "**Requirements**". Scoped to a line containing ONLY the bold label
+ * (with an optional trailing colon) so it doesn't false-trigger on a bold
+ * phrase embedded mid-sentence (see #71).
+ */
+const BOLD_HEADING_RE = /^\s*\*\*(.+?)\*\*:?\s*$/;
+
+/**
  * List-item prefixes: -, *, 1., 2., …, - [ ], - [x]
  * Matches the leading marker and optional checkbox, capturing rest of line.
  */
@@ -18,6 +26,26 @@ const LIST_ITEM_RE = /^[ \t]*(?:[-*]|\d+\.)(?:\s+\[[ xX]\])?\s+(.+)/;
  * Matches lines that start with MUST or SHOULD (possibly after whitespace).
  */
 const MUST_SHOULD_RE = /^[ \t]*(MUST|SHOULD)\b(.+)/;
+
+/**
+ * A literal markdown heading line, e.g. "## Acceptance Criteria".
+ */
+const HEADING_RE = /^#{1,6}\s+/;
+
+/**
+ * Whether `line` is a wrapped continuation of the preceding list item:
+ * non-blank, indented, and not itself a new list marker/heading/pseudo-heading.
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isContinuationLine(line) {
+  if (line.trim() === '') return false;
+  if (HEADING_RE.test(line)) return false;
+  if (BOLD_HEADING_RE.test(line)) return false;
+  if (LIST_ITEM_RE.test(line)) return false;
+  return /^[ \t]+\S/.test(line);
+}
 
 /**
  * Parse a markdown string and return an array of criterion objects.
@@ -35,16 +63,34 @@ export function parseCriteria(text) {
     const lineNo = i + 1; // 1-based
 
     // Heading detection — switch section context.
-    if (/^#{1,6}\s+/.test(raw)) {
-      const heading = raw.replace(/^#{1,6}\s+/, '').trim();
+    if (HEADING_RE.test(raw)) {
+      const heading = raw.replace(HEADING_RE, '').trim();
       inCriteriaSection = CRITERIA_HEADING_RE.test(heading);
+      continue;
+    }
+
+    // Bold-only pseudo-heading — a line that is nothing but a bold label
+    // (e.g. "**Acceptance criteria**:") acts like a heading for section
+    // detection purposes (#71).
+    const boldHeadingMatch = BOLD_HEADING_RE.exec(raw);
+    if (boldHeadingMatch) {
+      inCriteriaSection = CRITERIA_HEADING_RE.test(boldHeadingMatch[1]);
       continue;
     }
 
     if (inCriteriaSection) {
       const listMatch = LIST_ITEM_RE.exec(raw);
       if (listMatch) {
-        criteria.push({ line: lineNo, text: listMatch[1].trim(), source: 'list' });
+        // Join wrapped continuation lines into this same logical criterion,
+        // matching how markdown renderers treat a single list item (#71).
+        let combinedText = listMatch[1].trim();
+        let j = i + 1;
+        while (j < lines.length && isContinuationLine(lines[j])) {
+          combinedText += ' ' + lines[j].trim();
+          j++;
+        }
+        criteria.push({ line: lineNo, text: combinedText, source: 'list' });
+        i = j - 1; // skip over the consumed continuation lines
         continue;
       }
     }
