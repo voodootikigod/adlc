@@ -47,8 +47,15 @@ cd packages/ticket-prune && npm test
 # CLI dispatcher wiring (registry, resolveBin, --help, tool count)
 cd packages/cli && npm test
 
-# Consolidated phase-router content stays byte-identical to the generator
-# (this ticket edited the shared "Maintenance" section in scripts/router/router-model.mjs)
+# Consolidated phase-router content stays byte-identical to the generator.
+# NOTE: this ticket did NOT edit scripts/router/router-model.mjs — the six
+# generated phase-router files still list only skill-rot/model-ratchet/
+# gate-fuzzing under "Maintenance" and do not mention ticket-prune (unlike
+# README.md, docs/toolkit.md, docs/package-reference.md, and
+# adlc-maintain.md, which were updated). Adding ticket-prune to the shared
+# router model is tracked as follow-up work, not part of this ticket; running
+# this test here only confirms the (unrelated) generator itself has not
+# drifted from its committed output.
 node --test scripts/test/router-drift.test.mjs
 
 # Manual smoke, dry-run then archive

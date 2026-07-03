@@ -2,7 +2,7 @@
 // function. bin/ticket-prune.mjs stays a thin arg-parse + exit-code shell
 // around this (CONVENTIONS layout rule).
 
-import { join } from 'node:path';
+import { resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { classifyTickets, listTrackedFiles } from './detect.mjs';
 import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs';
@@ -25,8 +25,11 @@ export function runTicketPrune(options = {}) {
     write = false,
   } = options;
 
-  const absTicketsPath = join(cwd, ticketsPath);
-  const absArchivePath = join(cwd, archivePath);
+  // path.resolve (unlike path.join) treats an absolute ticketsPath/archivePath
+  // as an override of cwd rather than concatenating onto it, so `--tickets
+  // /abs/path.json` behaves the way users naturally expect.
+  const absTicketsPath = resolve(cwd, ticketsPath);
+  const absArchivePath = resolve(cwd, archivePath);
 
   const { tickets, errors } = loadTickets(absTicketsPath);
   if (errors.length) {

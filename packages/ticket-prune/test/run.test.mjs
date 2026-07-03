@@ -73,6 +73,62 @@ test('dry-run reports a stale ticket (mocked done signal: shipped scope) without
   });
 });
 
+test('dry-run: absolute --tickets/--archive paths are honored, not joined onto cwd', () => {
+  withScratchRepo((dir) => {
+    // Place tickets.json and the archive somewhere entirely outside `dir`
+    // (which is itself the cwd passed to runTicketPrune) to prove an
+    // absolute ticketsPath/archivePath overrides cwd instead of being
+    // concatenated onto it (path.join would produce cwd + absolutePath).
+    const outside = mkdtempSync(join(tmpdir(), 'ticket-prune-abs-'));
+    try {
+      const absTickets = join(outside, 'tickets.json');
+      const absArchive = join(outside, 'tickets.archive.json');
+      writeFileSync(
+        absTickets,
+        JSON.stringify(
+          {
+            tickets: [
+              { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] },
+              { id: 'T2', title: 'Still building', scope: ['packages/never-built/**'] },
+            ],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const result = runTicketPrune({ cwd: dir, ticketsPath: absTickets, archivePath: absArchive });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
+      assert.deepEqual(result.active.map((r) => r.id), ['T2']);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test('--write with an absolute --archive path archives outside cwd correctly', () => {
+  withScratchRepo((dir) => {
+    const outside = mkdtempSync(join(tmpdir(), 'ticket-prune-abs-write-'));
+    try {
+      writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+      const absArchive = join(outside, 'tickets.archive.json');
+
+      const result = runTicketPrune({ cwd: dir, archivePath: absArchive, write: true });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.archived.map((t) => t.id), ['T1']);
+      assert.equal(existsSync(absArchive), true);
+      assert.deepEqual(JSON.parse(readFileSync(absArchive, 'utf8')).tickets.map((t) => t.id), ['T1']);
+      // Default (relative) tickets.json location is unaffected.
+      assert.deepEqual(readTickets(dir).tickets, []);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 test('dry-run: an explicit non-done status overrides a shipped-looking scope', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [
