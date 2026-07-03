@@ -88,7 +88,16 @@ jobs:
           #   data-loss / destructive / irreversible ops
           #   schema / migration changes
           #   CI/CD / supply-chain config
-          PATTERN='(^|/|-|_)auth[a-z]*(/|-|_|\.|$)'
+          # No before/after separator boundary here (unlike the `guard`
+          # alternative below) -- a boundary requirement misses extremely
+          # common real-world auth filenames that don't have a separator
+          # directly adjacent to the literal "auth": an `oauth/` directory,
+          # a `reauth.ts` file, or CamelCase composites like
+          # `OAuthCallback.ts`, `GoogleAuth.java`, `isAuthenticated.ts`. A
+          # bare substring match is deliberately over-inclusive (see the
+          # ACTION REQUIRED note above) -- there is no common non-auth
+          # English word that contains "auth" as a substring.
+          PATTERN='auth'
           PATTERN="$PATTERN|trust-boundary"
           PATTERN="$PATTERN|(^|/|-|_)(rails?-)?guard"
           PATTERN="$PATTERN|validat(e|or|ion)"

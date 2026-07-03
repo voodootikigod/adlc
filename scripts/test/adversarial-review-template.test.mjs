@@ -17,7 +17,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +41,50 @@ function stripComments(text) {
     .split('\n')
     .filter((line) => !line.trim().startsWith('#'))
     .join('\n');
+}
+
+// Extracts and dedents the `run: |` script body of the step whose `- name:`
+// line contains `stepNameSubstring`, so tests can actually execute a step's
+// script under bash -eo pipefail (GitHub Actions' default shell) rather than
+// only pattern-matching its text. This is what lets AC12/AC13 catch a
+// regression even if a future edit reorders or rewrites the surrounding
+// lines while dropping the behavior under test.
+function extractStepScript(text, stepNameSubstring) {
+  const lines = text.split('\n');
+  const startIdx = lines.findIndex(
+    (l) => l.trim().startsWith('- name:') && l.includes(stepNameSubstring),
+  );
+  assert.ok(startIdx >= 0, `expected to find a step named like "${stepNameSubstring}"`);
+  const stepIndent = lines[startIdx].match(/^(\s*)/)[1].length;
+
+  let runIdx = -1;
+  for (let i = startIdx + 1; i < lines.length; i += 1) {
+    const l = lines[i];
+    const indent = l.match(/^(\s*)/)[1].length;
+    if (l.trim().startsWith('- name:') && indent <= stepIndent) break;
+    if (/^\s*run:\s*\|\s*$/.test(l)) {
+      runIdx = i;
+      break;
+    }
+  }
+  assert.ok(runIdx >= 0, `expected a "run: |" block for step "${stepNameSubstring}"`);
+  const runIndent = lines[runIdx].match(/^(\s*)/)[1].length;
+
+  const scriptLines = [];
+  for (let i = runIdx + 1; i < lines.length; i += 1) {
+    const l = lines[i];
+    if (l.trim() === '') {
+      scriptLines.push('');
+      continue;
+    }
+    const indent = l.match(/^(\s*)/)[1].length;
+    if (indent <= runIndent) break;
+    scriptLines.push(l);
+  }
+
+  const nonEmpty = scriptLines.filter((l) => l.trim() !== '');
+  const minIndent = Math.min(...nonEmpty.map((l) => l.match(/^(\s*)/)[1].length));
+  return scriptLines.map((l) => (l.trim() === '' ? '' : l.slice(minIndent))).join('\n');
 }
 
 test('AC1: docs/ci/adversarial-review.yml exists and is a documented template (not force-installed)', () => {
@@ -96,6 +142,15 @@ test('AC3b: risk-tier PATTERN actually matches realistic auth/validator file pat
     'src/validation.ts',
     'src/input-validation.ts',
     'src/auth/handler.js',
+    // Regression for a round-3 review finding: the previous PATTERN required
+    // a `/`/`-`/`_`/start-of-string boundary immediately before the literal
+    // "auth", which missed these extremely common real-world auth file
+    // names that don't have a separator directly adjacent to "auth".
+    'src/oauth/callback.ts',
+    'src/OAuthCallback.ts',
+    'src/GoogleAuth.java',
+    'src/isAuthenticated.ts',
+    'lib/reauth.ts',
   ];
   const mustNotNecessarilyBlockUnrelated = ['src/components/Button.tsx', 'README.md'];
 
@@ -231,4 +286,103 @@ test('AC10: docs/toolkit.md\'s gate-manifest record example uses the real --data
 test('AC11: docs/README.md CI templates section lists the new template, mirroring adlc-maintenance.yml', () => {
   const readme = readFileSync(join(ROOT, 'docs', 'README.md'), 'utf8');
   assert.match(readme, /ci\/adversarial-review\.yml/);
+});
+
+test('AC12: "Record adversarial-review verdict" step tolerates a review-report.txt with no provider token under bash -eo pipefail (regression for a missing `set +e`)', () => {
+  // Regression for a round-3 review finding: commit 4e347ff added `set +e`
+  // before the provider-extraction grep specifically because GitHub Actions
+  // runs `run:` blocks with `bash -eo pipefail` by default, and a
+  // review-report.txt without a literal claude/gpt/codex/gemini token makes
+  // that grep exit 1 -- which, without `set +e`, aborts the step *before*
+  // `adlc gate-manifest record` runs. This actually executes the extracted
+  // step script (not just a text match) under that same shell mode, so a
+  // future edit that drops or reorders the guard fails this test.
+  const text = readTemplate();
+  let script = extractStepScript(text, 'Record adversarial-review verdict');
+  // Substitute the one GitHub Actions expression the runner would normally
+  // resolve before invoking the shell.
+  script = script.replace('${{ steps.review.outputs.rc }}', '0');
+
+  const dir = mkdtempSync(join(tmpdir(), 'adv-review-record-'));
+  try {
+    // Deliberately no claude/gpt/codex/gemini token -- this is exactly the
+    // input that made the unguarded grep exit 1.
+    writeFileSync(join(dir, 'review-report.txt'), 'no matching provider tokens in this report\n');
+
+    // Stub `adlc` on PATH: touch a marker file so we can prove the script
+    // reached this command instead of aborting earlier under pipefail.
+    const stubDir = join(dir, 'bin');
+    mkdirSync(stubDir);
+    const marker = join(dir, 'adlc-was-called');
+    writeFileSync(join(stubDir, 'adlc'), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 0\n`);
+    chmodSync(join(stubDir, 'adlc'), 0o755);
+
+    const fullScript = `set -eo pipefail\n${script}`;
+    execFileSync('bash', ['-c', fullScript], {
+      cwd: dir,
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` },
+    });
+
+    assert.ok(
+      existsSync(marker),
+      'expected `adlc gate-manifest record` to run even when review-report.txt has no ' +
+        'provider token -- if this fails, the step is missing (or lost) its `set +e` guard ' +
+        'against bash -eo pipefail aborting the provider-extraction grep',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AC13: both "Post ... PR comment" steps tolerate a failing `gh pr comment` (forked PR, read-only GITHUB_TOKEN)', () => {
+  // Regression for a round-3 review finding: commit 4e347ff appended
+  // `|| echo "::warning..."` to both `gh pr comment` invocations so a
+  // forked PR's read-only GITHUB_TOKEN can't fail the job. For the "cheap"
+  // job this also protects the documented "advisory only, never blocks the
+  // PR" contract. This both text-checks the fallback and actually executes
+  // each step's script with a `gh` stub that always fails, so a future edit
+  // that drops the `|| echo` (or reintroduces a bare `gh pr comment`) fails
+  // this test instead of shipping unnoticed.
+  const text = readTemplate();
+  const stepNames = [
+    'Post review report as a PR comment',
+    'Post informational review as a PR comment',
+  ];
+
+  for (const stepName of stepNames) {
+    const script = extractStepScript(text, stepName);
+    assert.match(
+      script,
+      /gh pr comment[\s\S]*\|\|\s*echo\s+"::warning/,
+      `expected "${stepName}" to fall back with "|| echo ::warning" instead of letting ` +
+        '`gh pr comment` fail the job',
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), 'adv-review-comment-'));
+    try {
+      writeFileSync(join(dir, 'review-report.txt'), 'some review output\n');
+
+      // Stub `gh` on PATH to always fail, simulating a forked PR's
+      // read-only GITHUB_TOKEN rejecting `gh pr comment`.
+      const stubDir = join(dir, 'bin');
+      mkdirSync(stubDir);
+      writeFileSync(join(stubDir, 'gh'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(stubDir, 'gh'), 0o755);
+
+      const fullScript = `set -eo pipefail\n${script}`;
+      assert.doesNotThrow(() => {
+        execFileSync('bash', ['-c', fullScript], {
+          cwd: dir,
+          env: {
+            ...process.env,
+            PATH: `${stubDir}:${process.env.PATH}`,
+            GH_TOKEN: 'fake',
+            PR_NUMBER: '123',
+          },
+        });
+      }, `expected "${stepName}" to survive a failing \`gh pr comment\` under bash -eo pipefail`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });
