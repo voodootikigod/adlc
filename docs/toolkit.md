@@ -78,16 +78,27 @@ Run the review itself via `adlc review` (dispatcher passthrough to `npx
 adversarial-review`) or invoke `npx adversarial-review` directly. The adversarial-review
 loop emits NDJSON events (`loop_start` / `review` / `fix` /
 `loop_end`); `loop_end.exitReason === "clean"` is the SHIP signal. Record the verdict as
-first-class human-gate evidence:
+first-class human-gate evidence. `gate-manifest record` only accepts a `--data '{json}'`
+payload (there is no `--evidence 'k=v; k=v'` flag — node's strict-mode `parseArgs` throws
+`ERR_PARSE_ARGS_UNKNOWN_OPTION` on it), so shape the same fields as JSON:
 
     adlc gate-manifest record adversarial-review \
-      --evidence 'providers=<a,b>; iterations=<n>; verdict=<approve|needs-attention>; exitReason=<clean|no-progress|ceiling>; surviving=<n>; accepted=<n>'
+      --data '{"providers":"<a,b>","iterations":<n>,"verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>","surviving":<n>,"accepted":<n>}'
 
 Capture: providers used, iterations, final verdict, exit reason, surviving findings, and
 accepted-with-justification findings. See
 [ADR-0008](./adr/0008-adversarial-review-coverage-map.md). (A helper to emit this record
 directly from the loop is a deferred `adversarial-review` follow-on — the loop-convergence
 summary.)
+
+A risk-gated CI wiring of this exact recording step — path-filtered to the ADR-0007 risk
+tiers, running the full `--providers` quorum only on matching PRs and a cheap single-model
+pass otherwise — ships as a documented, not-force-installed template at
+[`ci/adversarial-review.yml`](./ci/adversarial-review.yml) (mirrors the
+[`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) "template, not force-installed"
+pattern). It also uses plain, non-loop review mode throughout — see the template's header
+comment for why `--loop` is deliberately avoided
+([voodootikigod/adversarial-review#9](https://github.com/voodootikigod/adversarial-review/issues/9)).
 
 The package READMEs define each tool's exact schema. Treat these docs as a routing map,
 then follow the linked README for command-specific details.

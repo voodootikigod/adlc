@@ -46,6 +46,10 @@ package READMEs.
   for folding this check into an already-required job instead.
 - [`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) — weekly advisory cron for
   skill-rot, model-ratchet, and gate-fuzzing checks.
+- [`ci/adversarial-review.yml`](./ci/adversarial-review.yml) — risk-gated PR check that
+  runs the `adversarial-review` multi-provider quorum on ADR-0007 high-blast-radius paths
+  (auth/trust boundary, deny paths, secrets, data-loss ops, schema/migration, CI/CD) and a
+  cheap single-model pass otherwise; records the verdict via `gate-manifest`.
 
 ## Repository shape
 
