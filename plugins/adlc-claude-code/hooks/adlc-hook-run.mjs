@@ -27,18 +27,23 @@ if (!existsSync(hookScript)) {
 
 // Self-terminate before CC's outer timeout fires to prevent silent session hangs.
 // Timeouts mirror hooks.json values minus a 5 s buffer so the wrapper exits cleanly
-// before CC sends SIGKILL. 'rails' uses 10 s (hooks.json: 15 s) because it is the
-// security-critical enforcing hook — a timeout here must be a hard deny, not silence.
-// If CC reliably sends SIGKILL at its own timeout boundary this is belt-and-suspenders;
-// confirm CC timeout enforcement during the live install test.
+// before CC sends SIGKILL. 'rails'/'buildgate' use 10 s (hooks.json: 15 s) because
+// they are the security-critical enforcing hooks — a timeout here must be a hard
+// deny, not silence. If CC reliably sends SIGKILL at its own timeout boundary this
+// is belt-and-suspenders; confirm CC timeout enforcement during the live install test.
 const mode = process.argv[2] ?? '';
 const TIMEOUTS_MS = {
-  preflight: 55_000, // hooks.json: 60 s
-  flail: 25_000,     // hooks.json: 30 s
-  manifest: 25_000,  // hooks.json: 30 s
-  rails: 10_000,     // hooks.json: 15 s — enforcing hook: deny on timeout
+  preflight: 55_000,  // hooks.json: 60 s
+  flail: 25_000,      // hooks.json: 30 s
+  manifest: 25_000,   // hooks.json: 30 s
+  rails: 10_000,      // hooks.json: 15 s — enforcing hook: deny on timeout
+  buildgate: 10_000,  // hooks.json: 15 s — enforcing hook: deny on timeout
 };
 const timeoutMs = TIMEOUTS_MS[mode] ?? 25_000;
+
+// The enforcing modes (rails, buildgate) must deny — not silently allow — on a
+// timeout or a kill signal. Advisory modes exit 0 so they never block the user.
+const ENFORCING_MODES = new Set(['rails', 'buildgate']);
 
 const result = spawnSync(
   process.execPath,
@@ -56,9 +61,7 @@ if (result.error) {
     process.stderr.write(
       `adlc-hook-run: hook timed out after ${timeoutMs} ms (mode: ${mode || '(none)'})\n`
     );
-    // rails mode is enforcing — deny the structured edit on timeout (fail closed).
-    // Advisory hooks exit 0 on timeout so they never block the user.
-    process.exit(mode === 'rails' ? 1 : 0);
+    process.exit(ENFORCING_MODES.has(mode) ? 1 : 0);
   }
   process.stderr.write(`adlc-hook-run: failed to spawn adlc-hook.mjs: ${result.error.message}\n`);
   process.exit(1);
@@ -69,7 +72,7 @@ if (result.signal) {
   process.stderr.write(
     `adlc-hook-run: hook killed by signal ${result.signal} (mode: ${mode || '(none)'})\n`
   );
-  process.exit(mode === 'rails' ? 1 : 0);
+  process.exit(ENFORCING_MODES.has(mode) ? 1 : 0);
 }
 
 process.exit(result.status ?? 0);

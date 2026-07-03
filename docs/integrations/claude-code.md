@@ -99,10 +99,21 @@ supplies independent model judgment with cross-lens verification.
 | flail-detection | PostToolUse | Advisory: flags repeated-error / churn loops over a bounded recent window of the transcript. |
 | gate-manifest audit | Stop | Advisory: warns only if the gate-evidence chain is broken. |
 | **rails-guard** | PreToolUse | **Enforcing**: denies structured edits (Edit/Write/MultiEdit) to frozen rail paths declared in tickets. Bash is not gated in-session (a shell can't be reliably parsed); Bash rail mutations are caught by the CI diff gate at commit time. |
+| **build-gate** | PreToolUse | **Enforcing** (issue #48): for the *active* ticket (`ADLC_TICKET` env var or `.adlc/current-ticket.json`), denies a structured edit when the ticket is high-risk (declared `risk: 'high'`, or derived from category/external-effect/identity-mutation/trust-root-touch signals) AND this session's context-fitness signal (transcript tool-call depth or byte size) is past threshold — i.e. a context-rot backstop on the riskiest builds. |
 
 All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
-into a repo with no rails can never block editing.
+into a repo with no rails can never block editing. The build-gate similarly
+no-ops until an active ticket is resolved via `ADLC_TICKET`/
+`.adlc/current-ticket.json` — see [`docs/specs/build-gate-fitness.md`](../specs/build-gate-fitness.md)
+and [`@adlc/build-gate`](../../packages/build-gate/README.md).
+
+**Build-gate bypass.** `ADLC_BUILD_GATE_BYPASS=1` overrides a build-gate deny
+only if the override is durably recorded to the gate-manifest (an un-auditable
+bypass is refused) — the same posture as `ADLC_RAILS_BYPASS` above. The
+recommended response to a deny is to resume the ticket in a fresh session (or
+an isolated subagent) rather than overriding — the ticket is coldstart-certified
+to be safely resumable with no conversation context.
 
 **Rails must be tracked files.** The commit-time CI gate inspects the git diff,
 so it only protects files under version control. A gitignored/untracked rail

@@ -14,6 +14,7 @@ through the stable `adlc <tool>` dispatcher.
 | P1 / C1-C2 | Is the spec testable and stress-tested? | [`adlc spec-lint`](./tools/spec-lint.md), [`adlc premortem`](./tools/premortem.md), [`adlc parallax`](./tools/parallax.md) |
 | P2 / C3 | Can an agent execute this ticket without guessing? | [`adlc coldstart`](./tools/coldstart.md), [`adlc merge-forecast`](./tools/merge-forecast.md), [`adlc model-router`](./tools/model-router.md) |
 | P3-P4 / C5-C6 | Are frozen rails protected, and is an agent flailing? | [`adlc rails-guard`](./tools/rails-guard.md), [`adlc flail-detector`](./tools/flail-detector.md) |
+| P3→P4 / C13 | Is it safe to START a high-risk ticket's build in THIS session? | [`adlc build-gate`](../packages/build-gate/README.md) |
 | P4 / C7 | Can diverse candidates resolve a hard failing test without breaking rails? | [`adlc consensus-fix`](./tools/consensus-fix.md) |
 | P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | `adlc review` (runs the model review — see [seam note](#p5-recorder-vs-reviewer-seam)), [`adlc prosecute`](./tools/prosecute.md) (records its evidence — it runs no model review itself), [`adlc behavior-diff`](./tools/behavior-diff.md), [`adlc gate-manifest`](./tools/gate-manifest.md), [`adlc hollow-test`](./tools/hollow-test.md) |
 | C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md), [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md) |
@@ -43,8 +44,10 @@ statement.
    accepted spec has verifiable criteria and known divergences.
 3. Use [`adlc coldstart`](./tools/coldstart.md) to check ticket executability, then [`adlc merge-forecast`](./tools/merge-forecast.md) and [`adlc model-router`](./tools/model-router.md)
    to manage fan-out width and model assignment.
-4. During implementation, use [`adlc rails-guard`](./tools/rails-guard.md) for frozen-test and suppression controls and
-   [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn, or oversized logs.
+4. During implementation, use [`adlc rails-guard`](./tools/rails-guard.md) for frozen-test and suppression controls,
+   [`adlc build-gate`](../packages/build-gate/README.md) to deny starting a high-risk ticket's build in a degraded
+   session, and [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn,
+   or oversized logs.
 5. For hard failing tests, use [`adlc consensus-fix`](./tools/consensus-fix.md) to fan out independent candidate repairs
    and select a gated consensus winner.
 6. Before review, use [`adlc hollow-test`](./tools/hollow-test.md) to prove tests are load-bearing. Run the actual

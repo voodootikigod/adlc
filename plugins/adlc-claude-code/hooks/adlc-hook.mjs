@@ -1,17 +1,30 @@
 #!/usr/bin/env node
-// ADLC hooks — one helper, four modes:
+// ADLC hooks — one helper, five modes:
 //   preflight  (SessionStart)  → environment readiness before fan-out  [advisory]
 //   flail      (PostToolUse)    → flail-detection over the transcript    [advisory]
 //   manifest   (Stop)           → gate-evidence chain integrity audit    [advisory]
 //   rails      (PreToolUse)     → block edits to frozen rail paths        [ENFORCING]
+//   buildgate  (PreToolUse)     → fitness-to-build gate (issue #48)        [ENFORCING]
 //
 // CONTRACT: the three advisory modes must NEVER block and stay SILENT unless
-// there is something to flag. The `rails` mode is the ONE enforcement hook — it
-// can DENY an Edit/Write (via a permissionDecision in its JSON output, not via
-// exit code). All four modes still ALWAYS exit 0 and never surface their own
-// errors; if the toolkit isn't installed or the repo isn't ADLC-initialized,
-// every mode no-ops. The rails enforcement is itself a no-op until a ticket
-// declares `rails` paths, so installing the plugin can't brick a clean repo.
+// there is something to flag. `rails` and `buildgate` are the two enforcement
+// hooks — either can DENY an Edit/Write (via a permissionDecision in its JSON
+// output, not via exit code, though exit 2 is also set as a fail-closed
+// belt-and-suspenders). All five modes still ALWAYS exit 0 on the allow path
+// and never surface their own errors; if the toolkit isn't installed or the
+// repo isn't ADLC-initialized, every mode no-ops. Both enforcing gates are
+// themselves a no-op until a ticket declares `rails` paths / an active ticket
+// is resolved, so installing the plugin can't brick a clean repo.
+//
+// `buildgate`'s core decision (risk-tier derivation, the depth/session-bytes
+// context-fitness signal, and the allow/deny decision) is computed ENTIRELY
+// LOCALLY in this file — it does not shell out to `adlc` for the decision,
+// mirroring how `rails` never needs `adlc` for its own core decision either.
+// `adlc` (via gate-manifest) is used ONLY to durably record an audited
+// override, exactly like rails' ADLC_RAILS_BYPASS. The toolkit package
+// @adlc/build-gate is the canonical source of this logic (reusable by other
+// harnesses per issue #48's Path A); the copies here are verbatim ports
+// marked "KEEP IN SYNC", the same convention already used for globMatch.
 //
 // Output: when there is something to say, print ONE JSON object using fields
 // Claude Code recognizes (`systemMessage`; `hookSpecificOutput.additionalContext`
@@ -105,12 +118,17 @@ function parseJson(text) {
 
 function main() {
   const parsed = parseJson(readStdin());
-  // The enforcing rails hook must FAIL CLOSED if it cannot even read/parse its own
-  // input (empty stdin, malformed JSON) — it cannot verify rails. Advisory modes
-  // tolerate a missing payload and no-op.
+  // The enforcing rails/buildgate hooks must FAIL CLOSED if they cannot even
+  // read/parse their own input (empty stdin, malformed JSON) — they cannot
+  // verify rails or the fitness-to-build gate. Advisory modes tolerate a
+  // missing payload and no-op.
   if (MODE === 'rails' && parsed === null) {
     denyRail('rails hook received unreadable/malformed input — failing closed');
     return; // unreachable: denyRail exits 2
+  }
+  if (MODE === 'buildgate' && parsed === null) {
+    denyBuildGate('build-gate hook received unreadable/malformed input — failing closed');
+    return; // unreachable: denyBuildGate exits 2
   }
   const input = parsed ?? {};
 
@@ -125,11 +143,20 @@ function main() {
   try {
     process.chdir(dir);
   } catch {
-    // The enforcing rails hook must FAIL CLOSED if it can't even enter the project
-    // dir (it cannot verify rails). Advisory modes just no-op.
+    // The enforcing rails/buildgate hooks must FAIL CLOSED if they can't even
+    // enter the project dir (they cannot verify rails or the build gate).
+    // Advisory modes just no-op.
     if (MODE === 'rails') {
       try {
         denyRail('rails hook could not enter the project directory — failing closed');
+      } catch {
+        /* deny emit failed; the exit 2 below still blocks */
+      }
+      process.exit(2);
+    }
+    if (MODE === 'buildgate') {
+      try {
+        denyBuildGate('build-gate hook could not enter the project directory — failing closed');
       } catch {
         /* deny emit failed; the exit 2 below still blocks */
       }
@@ -159,10 +186,18 @@ function main() {
     try {
       process.chdir(root);
     } catch {
-      // Found the ADLC root but can't enter it → can't verify rails → fail closed.
+      // Found the ADLC root but can't enter it → can't verify rails/build-gate → fail closed.
       if (MODE === 'rails') {
         try {
           denyRail('rails hook found the ADLC root but could not enter it — failing closed');
+        } catch {
+          /* exit 2 below still blocks */
+        }
+        process.exit(2);
+      }
+      if (MODE === 'buildgate') {
+        try {
+          denyBuildGate('build-gate hook found the ADLC root but could not enter it — failing closed');
         } catch {
           /* exit 2 below still blocks */
         }
@@ -176,6 +211,7 @@ function main() {
   if (MODE === 'flail') return flail(input);
   if (MODE === 'manifest') return manifest();
   if (MODE === 'rails') return rails(input);
+  if (MODE === 'buildgate') return buildgate(input);
   // unknown mode → no-op
 }
 
@@ -739,16 +775,253 @@ function rails(input) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// build-gate (issue #48) — machine-checkable fitness-to-build gate.
+//
+// PreToolUse (Edit/Write/MultiEdit/NotebookEdit, same matcher as rails): for
+// the ACTIVE ticket (resolved the same way every other ADLC harness
+// integration resolves it — ADLC_TICKET env var OR .adlc/current-ticket.json,
+// conflict fails closed), deny the build when the ticket is HIGH RISK and
+// this session's context-fitness signal (transcript depth/bytes) is past
+// threshold, unless an audited override is recorded.
+//
+// Fail-safe contract, mirroring rails():
+//   • no .adlc / no tickets.json / no active ticket resolved → ALLOW (no-op);
+//     installing this hook cannot brick a session that hasn't opted into the
+//     active-ticket convention.
+//   • a conflicting active-ticket signal, an unloadable/malformed
+//     tickets.json, or an active ticket id not found → DENY (fail closed —
+//     the ticket's risk cannot be verified).
+//   • active ticket resolved but risk tier is 'normal' → ALLOW (this gate
+//     only guards high-risk tickets).
+//   • high-risk ticket, session not degraded → ALLOW.
+//   • high-risk ticket, session degraded, transcript_path unreadable → DENY
+//     (the context-fitness signal cannot be computed for a ticket we already
+//     know is high-risk).
+//   • high-risk ticket, session degraded → DENY, unless
+//     ADLC_BUILD_GATE_BYPASS=1 AND the override is durably recorded to the
+//     gate-manifest; an unaudited override is refused.
+// ---------------------------------------------------------------------------
+
+/**
+ * Active-ticket resolution — KEEP IN SYNC with
+ * packages/build-gate/lib/active-ticket.mjs's resolveActiveTicketId(). Ported
+ * verbatim (same reason globMatch is ported above: this hook cannot resolve
+ * @adlc/build-gate at runtime, it only shells to the globally-installed
+ * `adlc` binary). Also mirrors plugins/adlc-codex/hooks/adlc-rails-guard.mjs
+ * and plugins/adlc-antigravity/rails-checker.mjs's resolveActiveTicketId().
+ */
+function resolveActiveTicketIdForBuildGate() {
+  const env = process.env;
+  const envTicket = (env.ADLC_TICKET ?? '').trim() || null;
+  let fileTicket = null;
+  const currentPath = join('.adlc', 'current-ticket.json');
+  if (existsSync(currentPath)) {
+    try {
+      const data = JSON.parse(readFileSync(currentPath, 'utf8'));
+      const raw = typeof data === 'string' ? data : (data?.id ?? data?.ticket);
+      fileTicket = (raw ?? '').toString().trim() || null;
+    } catch {
+      return { id: null, conflict: true }; // unparseable pointer is itself a tamper signal
+    }
+  }
+  if (envTicket && fileTicket && envTicket !== fileTicket) {
+    return { id: null, conflict: true };
+  }
+  return { id: envTicket ?? fileTicket, conflict: false };
+}
+
+/** Trust-root paths — KEEP IN SYNC with packages/build-gate/lib/risk.mjs's TRUST_ROOT_PATHS. */
+const BUILD_GATE_TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
+/** KEEP IN SYNC with packages/build-gate/lib/risk.mjs's MANIFEST_PATH. */
+const BUILD_GATE_MANIFEST_PATH = '.adlc/manifest.jsonl';
+/** KEEP IN SYNC with packages/build-gate/lib/risk.mjs's HIGH_RISK_CATEGORIES. */
+const BUILD_GATE_HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
+
+function buildGateTouchesAny(globs, paths) {
+  return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch(g, p)));
+}
+
+/**
+ * Risk-tier derivation — KEEP IN SYNC with packages/build-gate/lib/risk.mjs's
+ * deriveRiskSignals()/computeRiskTier(). A declared risk:'normal' can never
+ * downgrade a derived-high signal (see that module's header comment for why).
+ */
+function computeRiskTierForBuildGate(ticket) {
+  const t = ticket ?? {};
+  const signals = [];
+  if (t.risk === 'high') signals.push('declared-risk-high');
+  if (t.external === true) signals.push('external-system-effect');
+  if (t.mutatesIdentity === true) signals.push('mutates-identity');
+  const combinedGlobs = [
+    ...(Array.isArray(t.scope) ? t.scope : []),
+    ...(Array.isArray(t.rails) ? t.rails : []),
+  ];
+  if (buildGateTouchesAny(combinedGlobs, [BUILD_GATE_MANIFEST_PATH])) signals.push('mutates-manifest');
+  if (buildGateTouchesAny(combinedGlobs, BUILD_GATE_TRUST_ROOT_PATHS)) signals.push('touches-trust-root');
+  if (BUILD_GATE_HIGH_RISK_CATEGORIES.has(t.category)) signals.push(`high-risk-category:${t.category}`);
+  return { tier: signals.length > 0 ? 'high' : 'normal', signals };
+}
+
+/** KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs's DEFAULT_DEPTH_THRESHOLD. */
+const BUILD_GATE_DEPTH_THRESHOLD = 40;
+/** KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs's DEFAULT_BYTES_THRESHOLD. */
+const BUILD_GATE_BYTES_THRESHOLD = 256 * 1024;
+
+/**
+ * Tool-call-count depth signal — KEEP IN SYNC with
+ * packages/build-gate/lib/depth-signal.mjs's countToolCalls(). A plain
+ * occurrence count over a (possibly windowed) transcript chunk.
+ */
+function countToolCallsForBuildGate(text) {
+  if (!text) return 0;
+  const toolUseBlocks = text.match(/"type"\s*:\s*"tool_use"/g) ?? [];
+  const proseToolLines = text.match(/^(?:Writing|Editing|Created)\s+\S+/gim) ?? [];
+  return toolUseBlocks.length + proseToolLines.length;
+}
+
+/**
+ * Emit a PreToolUse DENY and exit 2 for the build-gate. Fails closed two ways,
+ * exactly like denyRail: the structured `permissionDecision: deny` payload,
+ * AND a non-zero exit.
+ */
+function denyBuildGate(reason) {
+  emit({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+    systemMessage: `ADLC build-gate: ${reason}`,
+  });
+  process.exit(2);
+}
+
+/**
+ * Audit an ADLC_BUILD_GATE_BYPASS override to the gate-manifest via the real
+ * `adlc gate-manifest record` command (chain-linked, optionally HMAC-signed —
+ * the same mechanism rails' recordBypass uses). Returns true ONLY if the
+ * record was durably written.
+ */
+function recordBuildGateBypass(ticketId, signals, depth, sessionBytes) {
+  const r = runAdlc([
+    'gate-manifest',
+    'record',
+    'build-gate-bypass',
+    '--ticket',
+    ticketId,
+    '--data',
+    JSON.stringify({ signals, depth, sessionBytes }),
+  ]);
+  return !!r && r.status === 0;
+}
+
+function buildgate(input) {
+  if (!existsSync('.adlc')) return; // not an ADLC repo → allow
+  const ticketsPath = join('.adlc', 'tickets.json');
+  if (!existsSync(ticketsPath)) return; // no tickets → nothing to gate → allow
+
+  const active = resolveActiveTicketIdForBuildGate();
+  if (active.conflict) {
+    return denyBuildGate(
+      'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json) — failing closed'
+    );
+  }
+  if (!active.id) return; // no active ticket declared → allow (opt-in gate)
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(ticketsPath, 'utf8'));
+  } catch (e) {
+    return denyBuildGate(
+      `cannot read .adlc/tickets.json (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`
+    );
+  }
+  const isObject = parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  if (!isObject || !Array.isArray(parsed.tickets)) {
+    return denyBuildGate(
+      '.adlc/tickets.json is not in the expected { "tickets": [...] } shape — failing closed'
+    );
+  }
+  const ticket = parsed.tickets.find((t) => t && typeof t === 'object' && t.id === active.id);
+  if (!ticket) {
+    return denyBuildGate(`active ticket ${active.id} not found in .adlc/tickets.json — failing closed`);
+  }
+
+  const { tier, signals } = computeRiskTierForBuildGate(ticket);
+  if (tier !== 'high') return; // this gate only guards high-risk tickets → allow
+
+  // Context-fitness signal: bounded transcript scan, mirroring flail()'s own
+  // MAX_SCAN_BYTES windowing so this stays O(MAX_SCAN_BYTES) regardless of how
+  // long the session runs. `sessionBytes` reflects the WHOLE transcript file
+  // (fileSize), while the tool-call count is over a bounded recent window —
+  // same split flail() already makes.
+  const tp = input.transcript_path;
+  if (!tp || !existsSync(tp)) {
+    // We already know the ticket is high-risk; without a readable transcript
+    // we cannot compute the context-fitness signal at all — fail closed
+    // rather than assume "shallow".
+    return denyBuildGate(
+      `active ticket ${active.id} is high-risk but no readable transcript_path was supplied — ` +
+        `the context-fitness signal cannot be verified, failing closed`
+    );
+  }
+
+  let sessionBytes = fileSize(tp);
+  if (sessionBytes < 0) sessionBytes = 0;
+
+  let windowText;
+  if (sessionBytes > MAX_SCAN_BYTES) {
+    windowText = tailBytes(tp, MAX_SCAN_BYTES);
+  } else {
+    try {
+      windowText = readFileSync(tp, 'utf8');
+    } catch {
+      windowText = null;
+    }
+  }
+  const depth = windowText ? countToolCallsForBuildGate(windowText) : 0;
+
+  const degraded = depth > BUILD_GATE_DEPTH_THRESHOLD || sessionBytes > BUILD_GATE_BYTES_THRESHOLD;
+  if (!degraded) return; // high-risk, but this session isn't deep yet → allow
+
+  const bypass = process.env.ADLC_BUILD_GATE_BYPASS === '1';
+  if (bypass) {
+    if (recordBuildGateBypass(active.id, signals, depth, sessionBytes)) return; // audited → allow
+    return denyBuildGate(
+      `ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest ` +
+        `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the build is blocked.`
+    );
+  }
+
+  return denyBuildGate(
+    `active ticket ${active.id} is high-risk (${signals.join(', ') || 'declared'}) and this session's ` +
+      `context-fitness signal is past threshold (depth=${depth}, sessionBytes=${sessionBytes}). Continuing a ` +
+      `high-blast-radius build in a degraded/deep session risks context-rot bugs. Resume in a FRESH session ` +
+      `(or an isolated subagent) rather than continuing here. To override deliberately, set ` +
+      `ADLC_BUILD_GATE_BYPASS=1 (the bypass is recorded to the gate-manifest).`
+  );
+}
+
 try {
   main();
 } catch (err) {
-  // The `rails` mode is ENFORCING — a crash must FAIL CLOSED, never fall through
-  // to exit 0 (which the harness reads as "allow"). Emit a deny and exit 2 so the
-  // PreToolUse call is blocked even if the deny payload is missed. The advisory
-  // modes (preflight/flail/manifest) legitimately swallow their own errors.
+  // The `rails`/`buildgate` modes are ENFORCING — a crash must FAIL CLOSED,
+  // never fall through to exit 0 (which the harness reads as "allow"). Emit a
+  // deny and exit 2 so the PreToolUse call is blocked even if the deny
+  // payload is missed. The advisory modes (preflight/flail/manifest)
+  // legitimately swallow their own errors.
   if (MODE === 'rails') {
     try {
       denyRail(`rails hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+    } catch {
+      /* even emit failed — the non-zero exit below still blocks */
+    }
+    process.exit(2);
+  }
+  if (MODE === 'buildgate') {
+    try {
+      denyBuildGate(`build-gate hook errored (${err?.message ?? 'unknown'}) — failing closed`);
     } catch {
       /* even emit failed — the non-zero exit below still blocks */
     }

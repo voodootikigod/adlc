@@ -27,6 +27,7 @@ export const GROUPS = [
       { name: 'model-router', packageName: '@adlc/model-router', summary: 'Assign tickets to frontier, direct, or ladder model strategies.' },
       { name: 'merge-forecast', packageName: '@adlc/merge-forecast', summary: 'Estimate fan-out width, dependency pressure, and merge backpressure.' },
       { name: 'rails-guard', packageName: '@adlc/rails-guard', summary: 'Enforce frozen rails, declared suppressions, and manifest recording.' },
+      { name: 'build-gate', packageName: '@adlc/build-gate', summary: 'Deny starting a high-risk ticket build in a degraded (context-rot) session unless audited.' },
       { name: 'flail-detector', packageName: '@adlc/flail-detector', summary: 'Detect repeated errors, scope violations, edit churn, and oversized logs.' },
       { name: 'consensus-fix', packageName: '@adlc/consensus-fix', summary: 'Fan out candidate fixes and select the gated consensus winner.' },
     ],

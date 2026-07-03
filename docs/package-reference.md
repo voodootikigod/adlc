@@ -8,6 +8,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | Package | Binary | Role | Source |
 | --- | --- | --- | --- |
 | `@adlc/behavior-diff` | `behavior-diff` | Captures and compares HTTP/API behavior snapshots for the P6 human gate. | [`docs/tools/behavior-diff.md`](./tools/behavior-diff.md) |
+| `@adlc/build-gate` | `build-gate` | Denies starting a high-risk ticket's build in a degraded (context-rot) session unless an audited override is recorded. | [`packages/build-gate/README.md`](../packages/build-gate/README.md) |
 | `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`docs/tools/cli.md`](./tools/cli.md) |
 | `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`docs/tools/coldstart.md`](./tools/coldstart.md) |
 | `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`docs/tools/consensus-fix.md`](./tools/consensus-fix.md) |
@@ -57,6 +58,7 @@ adlc preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 adlc premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only]
 adlc prosecute --input p5-passes.json --ticket id [--target label] [--revision rev] [--dir .adlc] [--json]
 adlc rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] [--rails <glob>...] [--record] [--json]
+adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <path>] [--depth-threshold <n>] [--bytes-threshold <n>] [--tickets <path>] [--reason <text>] [--json]
 adlc rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--llm] [--prompt-only] [--json]
 adlc review-calibration --review-cmd "cmd with {base} placeholder" [options]
 adlc run <p1|p2|p3|p4|p5|p6|p7> [--ticket id for p3-p6] [--revision rev for p5-p6] [--dir .adlc] [--json]
@@ -82,6 +84,7 @@ Execution supervision and rails:
 - `model-router`
 - `merge-forecast`
 - `rails-guard`
+- `build-gate`
 - `flail-detector`
 - `consensus-fix`
 - `runner`

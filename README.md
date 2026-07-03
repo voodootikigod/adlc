@@ -47,7 +47,7 @@ hooks, CI, and lifecycle docs should use the dispatcher.
 | Phase | Packages |
 | --- | --- |
 | **Spec & ticket shaping** | [`parallax`](./packages/parallax) · [`spec-lint`](./packages/spec-lint) · [`premortem`](./packages/premortem) · [`coldstart`](./packages/coldstart) · [`ticket-prune`](./packages/ticket-prune) |
-| **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) · [`runner`](./packages/runner) |
+| **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`build-gate`](./packages/build-gate) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) · [`runner`](./packages/runner) |
 | **Review evidence & calibration** | [`behavior-diff`](./packages/behavior-diff) · [`gate-manifest`](./packages/gate-manifest) · [`hollow-test`](./packages/hollow-test) · [`prosecute`](./packages/prosecute) · [`review-calibration`](./packages/review-calibration) · [`model-ratchet`](./packages/model-ratchet) · [`gate-fuzzing`](./packages/gate-fuzzing) |
 | **Compounding defenses** | [`lesson-foundry`](./packages/lesson-foundry) · [`rejection-mining`](./packages/rejection-mining) · [`skill-rot`](./packages/skill-rot) |
 | **Shared foundation** | [`@adlc/cli`](./packages/cli) · [`@adlc/core`](./packages/core) |
