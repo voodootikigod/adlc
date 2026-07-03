@@ -107,6 +107,14 @@ test('ensureGitignore does not duplicate a standalone negation line when the .ad
   assert.equal(occurrences, 1, '!.adlc/tickets.json must not be duplicated');
   assert.match(body, /^\.adlc\/\*$/m);
   assert.match(body, /^!\.adlc\/specs\/$/m);
+  // Order matters for git's last-match-wins semantics: `.adlc/*` MUST
+  // come before the negation lines, otherwise it re-ignores them.
+  const resultLines = body.split('\n').filter((l) => l.length > 0);
+  const anchorPos = resultLines.indexOf('.adlc/*');
+  const ticketsPos = resultLines.indexOf('!.adlc/tickets.json');
+  const specsPos = resultLines.indexOf('!.adlc/specs/');
+  assert.ok(anchorPos < ticketsPos, '.adlc/* must precede !.adlc/tickets.json');
+  assert.ok(anchorPos < specsPos, '.adlc/* must precede !.adlc/specs/');
 });
 
 test('scaffold() wires ensureGitignore in so /adlc-init tracks specs/ by default', () => {

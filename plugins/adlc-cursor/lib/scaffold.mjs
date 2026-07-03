@@ -132,7 +132,7 @@ export function ensureGitignore(projectRoot) {
   const path = join(projectRoot, '.gitignore');
   const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
   const hadTrailingNewline = existing.endsWith('\n');
-  const lines = existing.length ? existing.split('\n') : [];
+  let lines = existing.length ? existing.split('\n') : [];
   if (hadTrailingNewline && lines[lines.length - 1] === '') lines.pop();
 
   const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
@@ -140,11 +140,19 @@ export function ensureGitignore(projectRoot) {
 
   const anchorIdx = lines.indexOf('.adlc/*');
   if (anchorIdx === -1) {
-    // Push only the entries actually missing — some negation lines may
-    // already exist standalone in the file (without the anchor immediately
-    // preceding them); re-pushing the full stanza would duplicate those.
+    // The `.adlc/*` anchor is absent. A pre-existing negation line (e.g. a
+    // lone `!.adlc/tickets.json` left over from a partial/legacy edit) may
+    // already be present standalone, earlier in the file. Simply pushing
+    // the missing entries (which always includes `.adlc/*` itself here) to
+    // the END of the file would place the broad ignore AFTER that earlier
+    // negation — git applies patterns with last-match-wins semantics, so
+    // the later `.adlc/*` would re-ignore the file the negation was meant
+    // to keep tracked. To guarantee correct order, strip out any
+    // pre-existing standalone stanza lines and re-append the complete
+    // stanza together, in its canonical anchor-first order.
+    lines = lines.filter((line) => !GITIGNORE_STANZA.includes(line));
     if (lines.length > 0) lines.push('');
-    lines.push(...missing);
+    lines.push(...GITIGNORE_STANZA);
   } else {
     let insertAt = anchorIdx + 1;
     while (insertAt < lines.length && lines[insertAt].startsWith('!')) insertAt++;
