@@ -304,6 +304,36 @@ test('auditAdversarialReview: merge-base unresolvable → diff step skipped (no 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Regression for 00cd52e: `main` can EXIST as a ref (orphan branch, stale ref
+// after a history rewrite, shallow clone) yet share no common history with
+// HEAD, so `git merge-base main HEAD` fails even though `git rev-parse
+// --verify main^{commit}` succeeds. The old `.find(existsAsRef)` logic stopped
+// at the first EXISTING candidate and never tried `master`, silently dropping
+// the committed-diff contribution to `changed` even though `master` is a real,
+// resolvable ancestor. This test only passes if the retry-on-merge-base-
+// failure loop keeps trying candidates past an existing-but-unrelated `main`.
+test('auditAdversarialReview: main exists but shares no history with HEAD → retries master, which resolves', () => {
+  const root = initAdlc(mkroot());
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '' },
+      'git ls-files': { status: 0, stdout: '' },
+      // `main` exists as a ref...
+      'git rev-parse --verify --quiet main^{commit}': { status: 0, stdout: '' },
+      // ...but has no common ancestor with HEAD (orphan/stale/shallow).
+      'git merge-base main HEAD': { status: 1, stdout: '', stderr: 'fatal: no merge base' },
+      // `master` is the real, resolvable ancestor — the retry loop must reach it.
+      'git rev-parse --verify --quiet master^{commit}': { status: 0, stdout: '' },
+      'git merge-base master HEAD': { status: 0, stdout: 'cafebabe1234\n' },
+      'git diff --name-only cafebabe1234 --': { status: 0, stdout: 'src/auth/login.mjs\n' },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, true);
+    assert.equal(r.matches.length, 1);
+    assert.equal(r.matches[0].path, 'src/auth/login.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 // ---- the real hooks are advisory: never throw ----
 test('session.created / session.idle hooks never throw (advisory)', async () => {
   const root = initAdlc(mkroot());

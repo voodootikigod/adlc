@@ -319,6 +319,51 @@ test('risk-gated change already COMMITTED on the branch (vs main) still triggers
   }
 });
 
+// Regression for 00cd52e: `main` can EXIST as a ref (orphan branch, stale ref
+// after a history rewrite, shallow clone) yet share no common history with
+// HEAD, so `git merge-base main HEAD` fails even though
+// `git rev-parse --verify main^{commit}` succeeds. The old `.find(existsAsRef)`
+// logic stopped at the first EXISTING candidate and never tried `master`,
+// silently dropping the committed-diff contribution to `changed` even though
+// `master` is a real, resolvable ancestor of the feature branch. This test
+// only passes if the retry-on-merge-base-failure loop keeps trying candidates
+// past an existing-but-unrelated `main`.
+test('main exists but shares no history with HEAD (orphan ref) → retries master, which is the real ancestor, and still triggers a notice', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-review-orphan-main-'));
+  try {
+    // Real trunk is `master`, not `main`.
+    git(['init', '-b', 'master'], dir);
+    git(['config', 'user.email', 'test@example.com'], dir);
+    git(['config', 'user.name', 'Test'], dir);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[]}');
+    writeFileSync(join(dir, 'README.md'), 'baseline\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'baseline'], dir);
+
+    // Feature branch off master, with a risk-gated file committed on it.
+    git(['checkout', '-b', 'feature/x'], dir);
+    mkdirSync(join(dir, 'src', 'auth'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'auth', 'login.mjs'), 'export function login() {}\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'add auth'], dir);
+
+    // Now create `main` as an ORPHAN ref — exists, but shares zero history
+    // with feature/x (or master). Simulates a stale ref after a history
+    // rewrite / an unrelated shallow-clone ref.
+    git(['checkout', '--orphan', 'main'], dir);
+    writeFileSync(join(dir, 'unrelated.txt'), 'orphan history\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'unrelated orphan commit'], dir);
+
+    git(['checkout', 'feature/x'], dir);
+    const r = runReview(dir, { env: { PATH: WITH_ADLC } });
+    assert.equal(r.hasNotice, true, `expected notice despite main being an unrelated orphan ref, got: ${r.out}`);
+  } finally {
+    cleanup(dir);
+  }
+});
+
 // ---- diff base is the merge-base (fork point), not main's live tip ----
 
 test('main moves a risk-tier file AFTER branch divergence → branch that never touched it stays silent', () => {
