@@ -18,7 +18,7 @@
  * assertion, or be introduced by phrasing like "Verified via"/"Run ".
  */
 
-const BACKTICK_RE = /`[^`]+`/;
+const BACKTICK_RE = /`[^`]+`/g;
 const SPEC_FILE_RE = /\.(test|spec)\.[a-z]+/i;
 const VERIFY_RE = /(?:verify\s*:|verified\s+by)\s+\S/i;
 const TEST_LABEL_RE = /test\s*:\s*\S/i;
@@ -37,23 +37,38 @@ const FLAG_RE = /(?:^|[\s(])--?[A-Za-z][\w-]*/;
 const SHELL_OP_RE = /[|><]/;
 /** A function-call shape, e.g. "db.write()". */
 const CALL_RE = /\w\(\)/;
-/** Phrasing immediately preceding a backtick span that implies it's being run/checked. */
-const PRECEDING_PHRASE_RE = /(verified\s+via|run)\s*:?\s*$/i;
+/**
+ * Phrasing immediately preceding a backtick span that implies it's being
+ * run/checked. `\b` guards the `run` alternative so words that merely END in
+ * "run" (overrun, underrun, rerun) don't falsely satisfy it.
+ */
+const PRECEDING_PHRASE_RE = /(verified\s+via|\brun)\s*:?\s*$/i;
+/**
+ * A backtick span whose entire content is a single bare filename/path token
+ * (no whitespace) — e.g. `vitest.config.ts`, `ci-config.yaml`, `/var/log/run`.
+ * These must not be treated as a genuine command merely because a
+ * COMMAND_WORD_RE token happens to appear as a path/kebab-case segment
+ * (e.g. "ci", "build", "go", "run" inside a filename) — see #45 follow-up.
+ */
+const FILENAME_LIKE_RE = /^[\w][\w./-]*\.[A-Za-z0-9]+$/;
+/** A bare absolute/relative path with no whitespace and no file extension. */
+const PATH_LIKE_RE = /^\.{0,2}\/[\w./-]+$/;
 
 /**
- * Whether a backtick span in `text` (matched by `BACKTICK_RE`) looks like a
- * genuine command or assertion, rather than an incidental code span (e.g. a
- * bare filename).
+ * Whether a backtick span in `text` looks like a genuine command or
+ * assertion, rather than an incidental code span (e.g. a bare filename).
  *
  * @param {string} text  Full criterion text.
- * @param {RegExpExecArray} backtickMatch  Result of `BACKTICK_RE.exec(text)`.
+ * @param {RegExpExecArray} backtickMatch  A single backtick match (from
+ *   iterating all matches of `BACKTICK_RE` over `text`).
  * @returns {boolean}
  */
 function looksLikeVerificationCommand(text, backtickMatch) {
   const content = backtickMatch[0].slice(1, -1);
   const before = text.slice(0, backtickMatch.index);
+  const isFileLike = FILENAME_LIKE_RE.test(content) || PATH_LIKE_RE.test(content);
   return (
-    COMMAND_WORD_RE.test(content) ||
+    (!isFileLike && COMMAND_WORD_RE.test(content)) ||
     FLAG_RE.test(content) ||
     SHELL_OP_RE.test(content) ||
     CALL_RE.test(content) ||
@@ -66,8 +81,11 @@ function looksLikeVerificationCommand(text, backtickMatch) {
  * @returns {{ verified: boolean, reason: string }}
  */
 export function classifyCriterion(text) {
-  const backtickMatch = BACKTICK_RE.exec(text);
-  if (backtickMatch && looksLikeVerificationCommand(text, backtickMatch)) {
+  // Inspect EVERY backtick span, not just the first — a genuine verification
+  // command can appear after an earlier, incidental backtick span (e.g. a
+  // filename mentioned before a `npm test` invocation). See #45 follow-up.
+  const backtickMatches = [...text.matchAll(BACKTICK_RE)];
+  if (backtickMatches.some(m => looksLikeVerificationCommand(text, m))) {
     return { verified: true, reason: 'contains backtick command' };
   }
   if (SPEC_FILE_RE.test(text)) {

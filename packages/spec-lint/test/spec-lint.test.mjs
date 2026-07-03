@@ -192,6 +192,24 @@ describe('parseCriteria', () => {
     assert.equal(criteria.length, 1);
     assert.equal(criteria[0].text, 'AC1: first line second physical line third physical line');
   });
+
+  it('does not absorb an indented standalone MUST/SHOULD line into the preceding bullet (review round 1)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '- AC1: Foo returns true. Verified via `foo.test.js`.',
+      '  MUST also handle empty input correctly',
+      '- AC2: bar',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 3);
+    assert.equal(criteria[0].text, 'AC1: Foo returns true. Verified via `foo.test.js`.');
+    assert.equal(criteria[1].text, 'MUST also handle empty input correctly');
+    assert.equal(criteria[1].source, 'must-should');
+    assert.equal(criteria[2].text, 'AC2: bar');
+
+    const classified = classifyAll(criteria);
+    assert.equal(classified[1].status, 'WISH');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -281,6 +299,69 @@ describe('classifyCriterion', () => {
     const r = classifyCriterion(
       'AC1: Foo returns true when bar is set. Verified via `node --test foo.test.js`.'
     );
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round 1 — every backtick span must be inspected, not just the first
+  // -------------------------------------------------------------------------
+
+  it('VERIFIED: a genuine command is found even when an incidental filename backtick comes first', () => {
+    const r = classifyCriterion('See `vitest.config.ts` then run `npm test`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: a genuine command after a bare filename in the same sentence', () => {
+    const r = classifyCriterion('Uses config in `package.json`; validated by running `npm test`.');
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round 1 — COMMAND_WORD_RE must not fire on command-like substrings
+  // that are really just filename/path segments
+  // -------------------------------------------------------------------------
+
+  it('WISH: a bare filename containing "ci" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('Deployment config matches expectations: see `ci-config.yaml` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare filename containing "build" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('see `build-output.txt` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare filename containing "docker" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('see `docker-data.json` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare filename containing "go" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('see `app-go-live.json` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare path containing "run" as a path segment is not a command', () => {
+    const r = classifyCriterion('see `/var/log/run` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: a real hyphenated command (docker-compose) is still recognised', () => {
+    const r = classifyCriterion('Deploys correctly: `docker-compose up` succeeds');
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round 1 — PRECEDING_PHRASE_RE's "run" alternative needs a left \b
+  // -------------------------------------------------------------------------
+
+  it('WISH: a word merely ending in "run" (overrun) does not count as the "run" phrase', () => {
+    const r = classifyCriterion('The buffer overrun `b.txt` was noted');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: standalone "Run" immediately before a backtick still counts', () => {
+    const r = classifyCriterion('Run `npm test` to verify');
     assert.ok(r.verified);
   });
 });

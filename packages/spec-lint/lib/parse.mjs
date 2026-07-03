@@ -34,7 +34,14 @@ const HEADING_RE = /^#{1,6}\s+/;
 
 /**
  * Whether `line` is a wrapped continuation of the preceding list item:
- * non-blank, indented, and not itself a new list marker/heading/pseudo-heading.
+ * non-blank, indented, and not itself a new list marker/heading/pseudo-heading/
+ * standalone MUST-SHOULD criterion.
+ *
+ * A standalone MUST/SHOULD line must always be emitted as its own criterion
+ * (see parseCriteria's unconditional MUST_SHOULD_RE pass below) — even when
+ * it's indented and immediately follows a list bullet with no blank line in
+ * between, it must NOT be absorbed into the preceding bullet's text (#71
+ * follow-up: this previously hid genuine WISH-classified MUST/SHOULD lines).
  *
  * @param {string} line
  * @returns {boolean}
@@ -44,6 +51,7 @@ function isContinuationLine(line) {
   if (HEADING_RE.test(line)) return false;
   if (BOLD_HEADING_RE.test(line)) return false;
   if (LIST_ITEM_RE.test(line)) return false;
+  if (MUST_SHOULD_RE.test(line)) return false;
   return /^[ \t]+\S/.test(line);
 }
 
