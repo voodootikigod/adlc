@@ -12,11 +12,16 @@ the "unbypassable" framing for a common repo configuration.
 
 ## Fix
 
-Documented the 403 constraint directly in the rails-guard CI template
-(`docs/ci/rails-guard.yml`) and appended a worked fallback: fold the rail-freeze
-step into an already-required job (e.g. the main `test` job) instead of shipping it
-as a standalone, non-requireable check. Added a matching caveat + pointer to that
-fallback everywhere the docs tell an adopter to "make it a required check":
+Documented the 403 constraint and the worked fallback (fold the rail-freeze step
+into an already-required job, e.g. the main `test` job, instead of shipping it as
+a standalone, non-requireable check) in a new standalone doc,
+`docs/ci/rails-guard-private-repo-fallback.md` — **not** inside
+`docs/ci/rails-guard.yml` itself, because that file is one of this repo's own
+immutable ADLC trust roots (`scripts/rails-guard-ci.mjs`'s `immutableTrustRoots`
+list) and editing it trips the very rail-freeze gate it implements (confirmed:
+an earlier draft of this fix edited it directly and failed this repo's own
+`rails-guard` CI check). Added a matching caveat + pointer to the new doc
+everywhere the docs tell an adopter to "make it a required check":
 `docs/README.md`, `docs/integrations/claude-code.md`, `docs/integrations/opencode.md`,
 `docs/integrations/antigravity.md`, and `docs/integrations/cursor.md`. This repo
 (`voodootikigod/adlc`) is itself public, so its own CI is unaffected and continues
@@ -25,15 +30,16 @@ for downstream adopters, not a change to this repo's `.github/workflows/ci.yml`.
 
 ## Acceptance criteria
 
-1. `docs/ci/rails-guard.yml` names the 403 constraint (both the branch-protection
-   and rulesets endpoints) and sketches the fold-into-existing-job fallback.
+1. `docs/ci/rails-guard-private-repo-fallback.md` names the 403 constraint (both
+   the branch-protection and rulesets endpoints) and sketches the
+   fold-into-existing-job fallback. `docs/ci/rails-guard.yml` itself is untouched.
 2. Every integration doc that recommends "make it a required check"
    (claude-code, opencode, antigravity, cursor) also surfaces the private-repo
-   caveat and points at the fallback.
-3. `docs/README.md`'s CI-templates index flags the caveat.
-4. No regression in the existing `rails-guard` CI-template test suite (the
-   hash-locked bootstrap/rail-freeze script extraction tests), since the fix is
-   comment-only inside `docs/ci/rails-guard.yml`.
+   caveat and points at the fallback doc.
+3. `docs/README.md`'s CI-templates index flags the caveat and links the fallback doc.
+4. No regression in the existing `rails-guard` CI-template test suite, and this
+   repo's own `rails-guard` CI check stays green (the fix touches zero trust-root
+   files).
 
 ## Verification
 

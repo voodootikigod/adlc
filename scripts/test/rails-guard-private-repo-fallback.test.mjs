@@ -8,9 +8,12 @@
 // can never actually block a merge for that common repo configuration.
 //
 // This test asserts:
-//   1. The rails-guard CI template documents the private-repo/free-plan 403
-//      constraint and sketches the fallback (fold the check into an already-
-//      required job).
+//   1. docs/ci/rails-guard-private-repo-fallback.md documents the private-repo/
+//      free-plan 403 constraint and sketches the fallback (fold the check into
+//      an already-required job). This lives in its own file rather than inside
+//      docs/ci/rails-guard.yml because that file is itself one of this repo's
+//      immutable ADLC trust roots (scripts/rails-guard-ci.mjs) — editing it
+//      trips the rail-freeze gate it implements.
 //   2. Every integration doc that tells adopters to "make it a required
 //      check" also surfaces the caveat/fallback, so the recommendation isn't
 //      left undercut in isolation.
@@ -28,43 +31,52 @@ function read(relPath) {
   return readFileSync(join(ROOT, relPath), 'utf8');
 }
 
-const RAILS_GUARD_YML = 'docs/ci/rails-guard.yml';
+const FALLBACK_DOC = 'docs/ci/rails-guard-private-repo-fallback.md';
 
-test('rails-guard.yml documents the private-repo/free-plan 403 constraint', () => {
-  const content = read(RAILS_GUARD_YML);
+test('rails-guard-private-repo-fallback.md documents the private-repo/free-plan 403 constraint', () => {
+  const content = read(FALLBACK_DOC);
   assert.match(
     content,
     /private[- ]repo/i,
-    'rails-guard.yml should mention the private-repo constraint'
+    'fallback doc should mention the private-repo constraint'
   );
   assert.match(
     content,
     /403/,
-    'rails-guard.yml should mention the 403 both required-status-check APIs return'
+    'fallback doc should mention the 403 both required-status-check APIs return'
   );
   assert.match(
     content,
     /branches\/main\/protection/,
-    'rails-guard.yml should name the branch-protection API that 403s'
+    'fallback doc should name the branch-protection API that 403s'
   );
   assert.match(
     content,
     /rulesets/,
-    'rails-guard.yml should name the rulesets API that also 403s'
+    'fallback doc should name the rulesets API that also 403s'
   );
 });
 
-test('rails-guard.yml sketches the fold-into-existing-required-job fallback', () => {
-  const content = read(RAILS_GUARD_YML);
+test('rails-guard-private-repo-fallback.md sketches the fold-into-existing-required-job fallback', () => {
+  const content = read(FALLBACK_DOC);
   assert.match(
     content,
     /fallback/i,
-    'rails-guard.yml should offer a named fallback pattern'
+    'fallback doc should offer a named fallback pattern'
   );
   assert.match(
     content,
     /fold/i,
-    'rails-guard.yml fallback should describe folding the check into an existing job'
+    'fallback doc should describe folding the check into an existing job'
+  );
+});
+
+test('docs/ci/rails-guard.yml itself is untouched (it is an immutable ADLC trust root)', () => {
+  const content = read('docs/ci/rails-guard.yml');
+  assert.doesNotMatch(
+    content,
+    /PRIVATE-REPO \/ FREE-PLAN CAVEAT/,
+    'the private-repo fallback content must live in rails-guard-private-repo-fallback.md, not inside the frozen rails-guard.yml trust root'
   );
 });
 
