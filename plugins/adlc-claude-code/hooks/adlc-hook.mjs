@@ -871,6 +871,10 @@ function computeRiskTierForBuildGate(ticket) {
   if (t.risk === 'high') signals.push('declared-risk-high');
   if (t.external === true) signals.push('external-system-effect');
   if (t.mutatesIdentity === true) signals.push('mutates-identity');
+  // A malformed (present but non-array) scope/rails field is ambiguous, not
+  // proof of safety — it must fire a signal, not be silently ignored.
+  if (t.scope !== undefined && !Array.isArray(t.scope)) signals.push('malformed-scope');
+  if (t.rails !== undefined && !Array.isArray(t.rails)) signals.push('malformed-rails');
   const combinedGlobs = [
     ...(Array.isArray(t.scope) ? t.scope : []),
     ...(Array.isArray(t.rails) ? t.rails : []),

@@ -115,6 +115,40 @@ test('deriveRiskSignals is pure and returns [] for an empty ticket', () => {
   assert.deepEqual(deriveRiskSignals({}), []);
 });
 
+// ---- fail closed on malformed ticket data (not a crash, not a silent allow) ----
+
+test('non-array scope (e.g. a number) does not throw and fails closed to high tier', () => {
+  const result = computeRiskTier({ id: 'T1', title: 'x', scope: 42 });
+  assert.equal(result.tier, 'high');
+  assert.ok(result.signals.includes('malformed-scope'));
+});
+
+test('non-array rails (e.g. an object) does not throw and fails closed to high tier', () => {
+  const result = computeRiskTier({ id: 'T1', title: 'x', rails: { foo: 'bar' } });
+  assert.equal(result.tier, 'high');
+  assert.ok(result.signals.includes('malformed-rails'));
+});
+
+test('non-array scope (a single string glob, a plausible authoring mistake) fails closed', () => {
+  const result = computeRiskTier({ id: 'T1', title: 'x', scope: 'src/**' });
+  assert.equal(result.tier, 'high');
+  assert.ok(result.signals.includes('malformed-scope'));
+});
+
+test('malformed scope alongside a valid rails array still evaluates the valid rails globs', () => {
+  const result = computeRiskTier({ id: 'T1', title: 'x', scope: 42, rails: ['.adlc/manifest.jsonl'] });
+  assert.equal(result.tier, 'high');
+  assert.ok(result.signals.includes('malformed-scope'));
+  assert.ok(result.signals.includes('mutates-manifest'));
+});
+
+test('undefined scope/rails are not "malformed" — no false-positive signal', () => {
+  const result = computeRiskTier({ id: 'T1', title: 'x' });
+  assert.equal(result.tier, 'normal');
+  assert.equal(result.signals.includes('malformed-scope'), false);
+  assert.equal(result.signals.includes('malformed-rails'), false);
+});
+
 test('exported constants document the trust-root paths and high-risk categories', () => {
   assert.ok(TRUST_ROOT_PATHS.includes('.adlc/tickets.json'));
   assert.equal(MANIFEST_PATH, '.adlc/manifest.jsonl');

@@ -62,7 +62,18 @@ export function deriveRiskSignals(ticket) {
   // Mutates identity (e.g. reassigning a ticket's own id/edges store-wide).
   if (t.mutatesIdentity === true) signals.push('mutates-identity');
 
-  const combinedGlobs = [...(t.scope ?? []), ...(t.rails ?? [])];
+  // A malformed (present but non-array) scope/rails field is ambiguous ticket
+  // data, not proof of safety — per the fail-closed design at the top of this
+  // file, ambiguity must fire a signal rather than be silently ignored or
+  // allowed to crash the caller. Array.isArray guards the spread below; the
+  // signal push ensures the malformed field still drives the tier to 'high'.
+  if (t.scope !== undefined && !Array.isArray(t.scope)) signals.push('malformed-scope');
+  if (t.rails !== undefined && !Array.isArray(t.rails)) signals.push('malformed-rails');
+
+  const combinedGlobs = [
+    ...(Array.isArray(t.scope) ? t.scope : []),
+    ...(Array.isArray(t.rails) ? t.rails : []),
+  ];
 
   if (touchesAny(combinedGlobs, [MANIFEST_PATH])) signals.push('mutates-manifest');
   if (touchesAny(combinedGlobs, TRUST_ROOT_PATHS)) signals.push('touches-trust-root');

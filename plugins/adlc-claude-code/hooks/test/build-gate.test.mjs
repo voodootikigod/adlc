@@ -242,6 +242,26 @@ test('declared risk:"normal" cannot downgrade a derived-high signal → still de
   assert.equal(r.verdict, 'deny');
 });
 
+// ---- fail closed on malformed ticket data (not a silent allow) ----
+
+test('non-array scope field on the active ticket → fails closed to high risk, deny once deep', () => {
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', scope: 42 }],
+    activeTicketEnv: 'T1',
+    transcriptToolCalls: 500,
+  });
+  assert.equal(r.verdict, 'deny');
+});
+
+test('non-array rails field on the active ticket → fails closed to high risk, deny once deep', () => {
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', rails: { foo: 'bar' } }],
+    activeTicketEnv: 'T1',
+    transcriptToolCalls: 500,
+  });
+  assert.equal(r.verdict, 'deny');
+});
+
 test('.adlc/current-ticket.json alone (no env var) resolves the active ticket and gates it', () => {
   const r = runBuildGate({
     tickets: [{ id: 'T9', title: 'x', category: 'contract' }],

@@ -66,6 +66,31 @@ test('normal-risk ticket, deep session → allow, exit 0', () => {
   });
 });
 
+// ---- fail closed on a malformed (non-array) scope/rails field, instead of
+// crashing with an uncaught TypeError (issue #48 review round 3 finding) ----
+
+test('non-array scope field → fails closed to high risk (deny once deep), not a crash', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', scope: 42 }], (dir) => {
+    const r = run(['T1', '--depth', '999', '--json'], { cwd: dir });
+    assert.equal(r.code, 2);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'deny');
+    assert.equal(out.riskTier, 'high');
+    assert.ok(out.signals.includes('malformed-scope'));
+  });
+});
+
+test('non-array rails field (object) → fails closed to high risk, not a crash', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', rails: { foo: 'bar' } }], (dir) => {
+    const r = run(['T1', '--depth', '999', '--json'], { cwd: dir });
+    assert.equal(r.code, 2);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'deny');
+    assert.equal(out.riskTier, 'high');
+    assert.ok(out.signals.includes('malformed-rails'));
+  });
+});
+
 test('high-risk ticket (contract), shallow session → allow, exit 0', () => {
   withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
     const r = run(['T1', '--depth', '1', '--json'], { cwd: dir });
