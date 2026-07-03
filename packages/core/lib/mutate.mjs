@@ -45,10 +45,71 @@ function splitTopLevelCommas(str) {
   return parts;
 }
 
-// A single-line ternary `cond ? whenTrue : whenFalse`. Branch bodies exclude
-// `?:{}` so the operator never mis-fires on nested ternaries or object
-// literals — it fails closed (no mutation) rather than corrupt one.
-const TERNARY_RE = /^(.*?)\?(?!\.)\s*([^?:{}]+?)\s*:\s*([^?:{}]+?)(;?)\s*$/;
+// A single-line ternary `cond ? whenTrue : whenFalse`. Matches the `cond ?
+// whenTrue :` head with a regex (whenTrue excludes `?:{}` so it never
+// mis-fires on nested ternaries or object literals), then hands the rest of
+// the line to a depth-aware scanner (see parseTernary/findTernaryEnd below)
+// that finds where whenFalse actually ends — instead of assuming it runs to
+// end-of-line. A naive `$`-anchored regex would happily absorb a trailing
+// `//` comment or the remainder of an enclosing array/call-argument list
+// into whenFalse and relocate it during the swap, corrupting the line
+// rather than producing a clean mutant or failing closed.
+const TERNARY_HEAD_RE = /^(.*?)\?(?!\.)\s*([^?:{}]+?)\s*:\s*/;
+
+/**
+ * Parse a single-line ternary into its four parts, or return null if the
+ * line isn't a clean, swappable single-line ternary.
+ *
+ * whenFalse's true end is found with a bracket-depth scan (findTernaryEnd)
+ * rather than assumed to run to end-of-line: it stops at the first
+ * top-level `,`, `;`, `//` comment start, or unmatched closing `)`/`]` —
+ * any of which mean the ternary is embedded in, or followed by, something
+ * else on the line. Whatever trails whenFalse must then be nothing but an
+ * optional `;` and whitespace, and whenFalse itself must not contain a
+ * stray `?`, `:`, `{`, or `}` (nested ternary / object literal) — otherwise
+ * this fails closed (returns null) instead of guessing.
+ */
+function parseTernary(line) {
+  const head = line.match(TERNARY_HEAD_RE);
+  if (!head) return null;
+  const [full, prefix, whenTrue] = head;
+  const rest = line.slice(full.length);
+  const end = findTernaryEnd(rest);
+  const whenFalse = rest.slice(0, end);
+  const trailing = rest.slice(end);
+  if (/[?:{}]/.test(whenFalse)) return null;
+  if (!/^;?\s*$/.test(trailing)) return null;
+  const suffix = trailing.includes(';') ? ';' : '';
+  return { prefix, whenTrue, whenFalse, suffix };
+}
+
+/**
+ * Find the index in `rest` (the text after the ternary's `:`) where
+ * whenFalse actually ends: the first top-level (bracket-depth-0) `,`, `;`,
+ * or `//`, or an unmatched closing `)`/`]` that must belong to an
+ * enclosing construct rather than to whenFalse. Falls back to the full
+ * string length when nothing stops it first.
+ */
+function findTernaryEnd(rest) {
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === '(' || ch === '[') {
+      depth++;
+      continue;
+    }
+    if (ch === ')' || ch === ']') {
+      if (depth === 0) return i;
+      depth--;
+      continue;
+    }
+    if (depth === 0) {
+      if (ch === ',' || ch === ';') return i;
+      if (ch === '/' && rest[i + 1] === '/') return i;
+    }
+  }
+  return rest.length;
+}
 
 export const OPERATORS = [
   {
@@ -142,12 +203,15 @@ export const OPERATORS = [
   {
     // Swaps the two branches of a single-line ternary — the classic shape of
     // a recursive array-processing guard (`Array.isArray(x) ? recurse(x) :
-    // x`). Fails closed (no match) on nested ternaries/object literals.
+    // x`). Fails closed (no match) on nested ternaries/object literals, and
+    // on a ternary followed by anything other than optional whitespace/`;`
+    // (a trailing comment, or embedding as one element of an array/object/
+    // call-argument list) — see parseTernary.
     name: 'ternary-swap',
     apply(line) {
-      const m = line.match(TERNARY_RE);
-      if (!m) return null;
-      const [, prefix, whenTrue, whenFalse, suffix] = m;
+      const parsed = parseTernary(line);
+      if (!parsed) return null;
+      const { prefix, whenTrue, whenFalse, suffix } = parsed;
       const trueTrim = whenTrue.trim();
       const falseTrim = whenFalse.trim();
       if (!trueTrim || !falseTrim || trueTrim === falseTrim) return null;

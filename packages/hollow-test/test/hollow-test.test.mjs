@@ -224,6 +224,63 @@ function createRailsAuthoringRepo(dir) {
   return dir;
 }
 
+/**
+ * "overlap" repo: commit 1 adds a file containing an UNTESTED function;
+ * commit 2 adds a second, well-tested function to the SAME file without
+ * touching the untested function's lines. `git diff HEAD~1` therefore
+ * includes this file, but only the well-tested function's lines are
+ * diff-changed — the untested function sits outside the diff.
+ *
+ * This is the fixture for AC2 (docs/specs/hollow-test-target-mode.md):
+ * --target on a file that ALSO appears in the diff must drop the
+ * diff-line restriction and mutate the WHOLE file, reaching the untested
+ * function too — not just silently keep the diff-scoped subset.
+ */
+function createOverlapRepo(dir) {
+  initRepo(dir);
+  mkdirSync(join(dir, 'src'));
+  mkdirSync(join(dir, 'test'));
+
+  writeFileSync(join(dir, 'src', 'overlap.mjs'), [
+    'export function untested(n) {',
+    '  return n < 0;',
+    '}',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'init: add overlap.mjs with an untested function');
+
+  // Second commit adds `tested` to the SAME file — real coverage — without
+  // touching `untested`'s lines above (lines 1-3 are unchanged).
+  writeFileSync(join(dir, 'src', 'overlap.mjs'), [
+    'export function untested(n) {',
+    '  return n < 0;',
+    '}',
+    '',
+    'export function tested(n) {',
+    '  return n > 0;',
+    '}',
+    '',
+  ].join('\n'));
+
+  writeFileSync(join(dir, 'test', 'overlap.test.mjs'), [
+    "import { describe, it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { tested } from '../src/overlap.mjs';",
+    "describe('tested', () => {",
+    "  it('detects positive, zero, and negative', () => {",
+    '    assert.strictEqual(tested(1), true);',
+    '    assert.strictEqual(tested(0), false);',
+    '    assert.strictEqual(tested(-1), false);',
+    '  });',
+    '});',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'add tested() with real coverage; untested() left unchanged');
+  return dir;
+}
+
 // ── CLI runner ───────────────────────────────────────────────────────────────
 
 const BIN = resolve(new URL('.', import.meta.url).pathname, '../bin/hollow-test.mjs');
@@ -788,6 +845,66 @@ describe('CLI: --rails reads declared rail globs from a ticket file', () => {
     assert.ok(parsed.summary.total > 0,
       `Expected --rails to expand to a mutable file (total=${parsed.summary.total})`);
     assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'));
+  });
+});
+
+// ── --target overrides diff-line restriction on an overlapping file (AC2) ──
+// docs/specs/hollow-test-target-mode.md AC2 documents that --target mutates
+// the whole file "even if the file also happens to appear in the diff" —
+// implemented by `delete effectiveChangedLines[f]` in hollow-test.mjs. No
+// prior test exercised the overlap case (a file that is both diff-eligible
+// AND passed via --target); this pins that behavior against regression.
+
+describe('CLI: --target on a file that also appears in the diff mutates the whole file', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-overlap-'));
+    createOverlapRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('diff-only run (no --target): untested() sits outside the diff-changed lines and is never mutated', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '10', '--json'],
+      dir
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0 (only diff-changed, well-tested tested() lines mutated), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); });
+    assert.ok(parsed.summary.total > 0, 'Expected the diff-scoped run to still generate some mutants');
+    assert.ok(
+      parsed.mutants.every((m) => m.line > 3),
+      `Expected diff-scoped mutants to stay off untested()'s lines (1-3): ${JSON.stringify(parsed.mutants)}`
+    );
+  });
+
+  it('--target on the same file drops the diff-line restriction and reaches untested(), producing a survivor', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/overlap.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 2,
+      `Expected exit 2 (--target's whole-file mutation reaches untested() outside the diff), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); });
+    assert.ok(
+      parsed.mutants.some((m) => m.line <= 3),
+      `Expected --target to override the diff-line restriction and mutate untested()'s lines (1-3): ${JSON.stringify(parsed.mutants)}`
+    );
+    assert.ok(parsed.summary.survived > 0, 'Expected the untested() mutant to survive uncaught');
   });
 });
 
