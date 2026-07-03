@@ -15,6 +15,11 @@ invoke when followed, on every communication (issue #50).
 - No `.md`/`.mjs` file under `plugins/adlc-claude-code/{commands,skills,agents,hooks}`
   recommends a bare `/adlc-init`, `/adlc-ticket`, `/adlc-distill`, or `/adlc-maintain`
   — all such references use the scoped `/adlc:adlc-<name>` form.
+- `docs/integrations/claude-code.md` — the plugin's own homepage doc (`plugin.json`'s
+  `homepage` field points at it) — is in scope too: its Install quick-start blocks,
+  Commands reference table, and Lifecycle coverage table all use the scoped
+  `/adlc:adlc-<name>` form. This is the first doc a user reads after installing, so a
+  bare recommendation there is the exact regression #50 was filed against.
 - The five other harness integrations (`adlc-antigravity`, `adlc-cursor`,
   `adlc-opencode`, `adlc-codex`, `adlc-pi`) are left unscoped where their harness has
   no plugin-namespace command convention (verified per-harness against each
@@ -30,7 +35,8 @@ invoke when followed, on every communication (issue #50).
 - `scripts/claude-code-plugin-smoke.mjs` gained a regression guard: it fails (exit 2)
   if any bare, non-namespaced `/adlc-init|adlc-ticket|adlc-distill|adlc-maintain`
   reference is found in a commands/skills/agents/hooks `.md`/`.mjs` file (excluding
-  file-path mentions like `commands/adlc-init.md`).
+  file-path mentions like `commands/adlc-init.md`), or in
+  `docs/integrations/claude-code.md`.
 
 ## Verify
 

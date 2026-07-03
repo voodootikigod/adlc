@@ -45,3 +45,32 @@ test('claude-code-plugin-smoke fails on a bare, non-namespaced command recommend
     rmSync(tmpRepo, { recursive: true, force: true });
   }
 });
+
+// Regression coverage for the review-round-1 finding on issue #50: the guard must
+// also cover docs/integrations/claude-code.md, the plugin's own homepage doc
+// (plugin.json's "homepage" field points at it), not just the
+// plugins/adlc-claude-code/{commands,skills,agents,hooks} tree. A bare command
+// recommendation there is the exact bug #50 was filed against, since it's the
+// first thing a user reads right after installing the plugin.
+test('claude-code-plugin-smoke fails on a bare command recommendation in the homepage doc', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    const docPath = join(tmpRepo, 'docs/integrations/claude-code.md');
+    const original = readFileSync(docPath, 'utf8');
+    assert.ok(original.includes('/adlc:adlc-init'), 'fixture assumption stale: expected the scoped form to be present before regression injection');
+    const regressed = original.replace('/adlc:adlc-init', '/adlc-init');
+    writeFileSync(docPath, regressed);
+
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'smoke test should fail when the homepage doc recommends a bare /adlc-init');
+    assert.match(result.stderr, /bare, non-namespaced command reference/);
+    assert.match(result.stderr, /docs\/integrations\/claude-code\.md/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});

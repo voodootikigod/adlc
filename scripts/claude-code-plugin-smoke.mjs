@@ -512,6 +512,15 @@ for (const dir of guidanceDirs) {
     }
   }
 }
+// Also scan the plugin's own primary onboarding doc. plugin.json's "homepage" field
+// points at docs/integrations/claude-code.md (asserted above) and it is the first
+// thing a user reads after installing — a bare command recommendation here is the
+// exact regression #50 was filed against, so it must be covered by the same guard
+// as the in-plugin guidance files, not just the plugins/adlc-claude-code/* tree.
+const homepageDocPath = join(repo, 'docs/integrations/claude-code.md');
+if (existsSync(homepageDocPath)) {
+  guidanceFiles.push(homepageDocPath);
+}
 for (const filePath of guidanceFiles) {
   const source = readFileSync(filePath, 'utf8');
   const matches = source.match(bareCommandPattern);
