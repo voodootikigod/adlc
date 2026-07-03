@@ -85,6 +85,30 @@ export function classifyRiskTier(paths) {
 }
 
 /**
+ * Does a manifest entry's recorded `files` map (from `gate-manifest record
+ * ... --files a,b,c`, see packages/gate-manifest/lib/record.mjs) overlap the
+ * currently gated paths? An entry with NO `files` recorded (the common case
+ * today — the documented `--evidence`-only recording convention in
+ * docs/toolkit.md doesn't require `--files`) is neither confirmed nor refuted
+ * by this check, so it's treated as "not scoped either way" (returns true —
+ * falls back to ticket-only scoping in decideAdversarialReviewNotice). An
+ * entry that DOES record files but shares none with the current gated
+ * matches was demonstrably reviewing a different changeset, so it must not
+ * silently satisfy this one.
+ * @param {object} entry
+ * @param {Array<{path: string}>} matches
+ * @returns {boolean}
+ */
+function filesOverlapOrUnscoped(entry, matches) {
+  const files = entry && entry.files;
+  if (!files || typeof files !== 'object') return true;
+  const recorded = Object.keys(files);
+  if (recorded.length === 0) return true;
+  const gatedPaths = new Set(matches.map((m) => m.path));
+  return recorded.some((p) => gatedPaths.has(p));
+}
+
+/**
  * The hook-mode decision: given the changed paths and the (already-loaded)
  * gate-manifest entries, decide whether a mechanical adversarial-review notice
  * is warranted. Pure — callers own the I/O (git diffing, `adlc gate-manifest
@@ -98,9 +122,19 @@ export function classifyRiskTier(paths) {
  * satisfy the requirement when the entry is recorded against a DIFFERENT
  * ticket than the one currently active.
  *
+ * The manifest has no field naming which commit/diff a review covered, so
+ * ticket-scoping alone can't tell a review of THIS change apart from a stale
+ * or unrelated review recorded under the same (or no) ticket — see
+ * filesOverlapOrUnscoped's doc comment. As an ADDITIONAL (never looser)
+ * constraint on top of the ticket rule above: when an entry carries a
+ * `files` map (i.e. it was recorded with `--files`), that map must overlap
+ * the currently gated paths to count; entries recorded without `--files`
+ * are unaffected and keep falling back to ticket-only scoping, so existing
+ * recording conventions (docs/toolkit.md) keep working unchanged.
+ *
  * @param {object} [opts]
  * @param {string[]} [opts.changedPaths]
- * @param {object[]} [opts.manifestEntries]  parsed gate-manifest entries ({gate, ticket, ...})
+ * @param {object[]} [opts.manifestEntries]  parsed gate-manifest entries ({gate, ticket, files, ...})
  * @param {string|null} [opts.ticketId]  the active ticket id, or null if none resolved
  * @returns {{needed: boolean, matches: Array<{path: string, tier: string, pattern: string}>}}
  */
@@ -109,7 +143,11 @@ export function decideAdversarialReviewNotice({ changedPaths = [], manifestEntri
   if (!gated) return { needed: false, matches: [] };
 
   const hasRecord = (manifestEntries ?? []).some(
-    (e) => e && e.gate === 'adversarial-review' && (!ticketId || !e.ticket || e.ticket === ticketId)
+    (e) =>
+      e &&
+      e.gate === 'adversarial-review' &&
+      (!ticketId || !e.ticket || e.ticket === ticketId) &&
+      filesOverlapOrUnscoped(e, matches)
   );
   return { needed: !hasRecord, matches };
 }

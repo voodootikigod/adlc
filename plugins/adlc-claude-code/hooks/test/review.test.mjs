@@ -226,6 +226,61 @@ test('risk-gated change + only an UNRELATED gate recorded → still advisory not
   }
 });
 
+test('risk-gated change + adversarial-review recorded with --files for a DIFFERENT (non-overlapping) path → still advisory notice', () => {
+  const dir = initRepo({
+    manifestLines: `${JSON.stringify({ seq: 1, gate: 'adversarial-review', ts: '2026-07-01T00:00:00.000Z', files: { 'unrelated/file.mjs': 'deadbeef' } })}\n`,
+  });
+  try {
+    mkdirSync(join(dir, 'src', 'auth'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'auth', 'login.mjs'), 'export function login() {}\n');
+    const r = runReview(dir, { env: { PATH: WITH_ADLC } });
+    assert.equal(r.hasNotice, true);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('risk-gated change + adversarial-review recorded with --files overlapping the gated path → silent', () => {
+  const dir = initRepo({
+    manifestLines: `${JSON.stringify({ seq: 1, gate: 'adversarial-review', ts: '2026-07-01T00:00:00.000Z', files: { 'src/auth/login.mjs': 'deadbeef' } })}\n`,
+  });
+  try {
+    mkdirSync(join(dir, 'src', 'auth'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'auth', 'login.mjs'), 'export function login() {}\n');
+    const r = runReview(dir, { env: { PATH: WITH_ADLC } });
+    assert.equal(r.hasNotice, false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---- quoted git-status paths (space/unusual chars) are correctly unquoted ----
+
+test('modified TRACKED file with a space in its path + no resolvable trunk base → git status quoting is unquoted, notice still fires', () => {
+  // git status --porcelain (unlike git diff --name-only) C-quotes any path
+  // containing a space, e.g. ` M "secrets/api key.pem"`. Init WITHOUT a
+  // main/master branch so the diff-vs-trunk fallback (which never quotes) is
+  // unavailable and detection depends entirely on the status parse.
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-review-quoted-'));
+  git(['init', '-b', 'trunk'], dir); // deliberately not main/master/origin/*
+  git(['config', 'user.email', 'test@example.com'], dir);
+  git(['config', 'user.name', 'Test'], dir);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[]}');
+  mkdirSync(join(dir, 'secrets'), { recursive: true });
+  writeFileSync(join(dir, 'secrets', 'api key.pem'), 'orig\n');
+  git(['add', '-A'], dir);
+  git(['commit', '-m', 'baseline'], dir);
+  try {
+    writeFileSync(join(dir, 'secrets', 'api key.pem'), 'modified\n');
+    const r = runReview(dir, { env: { PATH: WITH_ADLC } });
+    assert.equal(r.hasNotice, true);
+    assert.equal(r.blocked, false);
+  } finally {
+    cleanup(dir);
+  }
+});
+
 // ---- committed (not just untracked) risk-gated changes on the branch ----
 
 test('risk-gated change already COMMITTED on the branch (vs main) still triggers a notice', () => {

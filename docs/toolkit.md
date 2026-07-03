@@ -94,6 +94,22 @@ accepted-with-justification findings. See
 directly from the loop is a deferred `adversarial-review` follow-on — the loop-convergence
 summary.)
 
+**Scope the record to what it actually covered.** The mechanical trigger
+(`decideAdversarialReviewNotice` — [packages/core/lib/risk-tier.mjs](../packages/core/lib/risk-tier.mjs))
+treats a matching `adversarial-review` record as satisfying ANY later risk-gated change under the
+same ticket (or any change at all, if no ticket-scoped/unscoped record exists to disambiguate).
+Without evidence tying a record to the paths it reviewed, a single old or unrelated review can
+silently satisfy every subsequent risk-gated change forever. Pass `--files` naming the exact
+risk-gated paths the review covered so the record is scoped:
+
+    adlc gate-manifest record adversarial-review --ticket <id> \
+      --files 'secrets/api-key.pem,.github/workflows/deploy.yml' \
+      --data '{"providers":"<a,b>","verdict":"approve","exitReason":"clean"}'
+
+An entry with no `--files` recorded still counts under ticket-scoping alone (unchanged behavior,
+for compatibility with existing records); an entry that DOES record `--files` must overlap the
+currently gated paths to count.
+
 A risk-gated CI wiring of this exact recording step — path-filtered to the ADR-0007 risk
 tiers, running the full `--providers` quorum only on matching PRs and a cheap single-model
 pass otherwise — ships as a documented, not-force-installed template at

@@ -71,6 +71,54 @@ export function auditGateManifest(root, { spawnImpl = spawnSync } = {}) {
 }
 
 /**
+ * Unquote a path token from `git status --porcelain` (non -z form). Git
+ * C-quotes any path containing a space or other "unusual" character by
+ * wrapping it in double quotes and backslash-escaping the contents (e.g.
+ * ` M "secrets/api key.pem"`), unlike `git diff --name-only`/`git ls-files`,
+ * which never quote. Left as-is, the literal surrounding `"` (and any `\\`
+ * escapes) become part of the path string and silently defeat the `$`-anchored
+ * risk-tier globs in classifyRiskTier. Pass-through for the common (unquoted)
+ * case; only unquotes tokens that are actually wrapped in `"..."`.
+ * KEEP IN SYNC with plugins/adlc-claude-code/hooks/adlc-hook.mjs's copy.
+ */
+function unquoteGitStatusPath(raw) {
+  if (raw.length < 2 || raw[0] !== '"' || raw[raw.length - 1] !== '"') return raw;
+  const inner = raw.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (c !== '\\') {
+      for (const b of Buffer.from(c, 'utf8')) bytes.push(b);
+      continue;
+    }
+    const next = inner[++i];
+    if (next === undefined) break; // malformed trailing backslash — drop it
+    switch (next) {
+      case 'n': bytes.push(0x0a); break;
+      case 't': bytes.push(0x09); break;
+      case 'r': bytes.push(0x0d); break;
+      case '"': bytes.push(0x22); break;
+      case '\\': bytes.push(0x5c); break;
+      case 'a': bytes.push(0x07); break;
+      case 'b': bytes.push(0x08); break;
+      case 'f': bytes.push(0x0c); break;
+      case 'v': bytes.push(0x0b); break;
+      default:
+        if (next >= '0' && next <= '7') {
+          let oct = next;
+          while (oct.length < 3 && inner[i + 1] >= '0' && inner[i + 1] <= '7') {
+            oct += inner[++i];
+          }
+          bytes.push(parseInt(oct, 8) & 0xff);
+        } else {
+          for (const b of Buffer.from(next, 'utf8')) bytes.push(b);
+        }
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/**
  * Repo-relative changed paths covering BOTH the working tree (uncommitted
  * modifications + untracked files) and the committed branch diff against the
  * first reachable trunk candidate (or `base`, if given). Best-effort: any git
@@ -83,7 +131,7 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
   const status = run(spawnImpl, 'git', ['status', '--porcelain', '--no-renames'], root);
   if (!status.error && status.status === 0 && status.stdout) {
     for (const line of status.stdout.split('\n')) {
-      const p = line.slice(3).trim();
+      const p = unquoteGitStatusPath(line.slice(3).trim());
       if (p) paths.add(p);
     }
   }

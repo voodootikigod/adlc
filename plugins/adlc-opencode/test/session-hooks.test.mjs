@@ -138,6 +138,19 @@ test('auditAdversarialReview: risk-tier path changed, no manifest at all → nee
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('auditAdversarialReview: quoted git-status path (space in filename) is unquoted before risk-tier matching → needed', () => {
+  const root = initAdlc(mkroot());
+  try {
+    // git status --porcelain C-quotes paths with a space, e.g. ` M "secrets/api key.pem"`;
+    // a naive slice(3) parse would keep the literal quotes and miss the **/secrets/** match.
+    const spawnImpl = stub({ 'git status': { status: 0, stdout: ' M "secrets/api key.pem"\n' } });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, true);
+    assert.equal(r.matches.length, 1);
+    assert.equal(r.matches[0].path, 'secrets/api key.pem');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('auditAdversarialReview: risk-tier path changed but adlc unreachable → still needed (cannot prove satisfied)', () => {
   const root = initAdlc(mkroot());
   writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"rails-bypass"}\n');
@@ -202,6 +215,38 @@ test('auditAdversarialReview: conflicting ADLC_TICKET vs current-ticket.json deg
     // ADLC_TICKET ('T1') conflicts with current-ticket.json ('T9') — must not throw
     // or fail closed; degrades to "no active ticket", so the untargeted record above still satisfies it.
     const r = auditAdversarialReview(root, { spawnImpl, env: { ADLC_TICKET: 'T1' } });
+    assert.equal(r.needed, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: recorded with --files for a DIFFERENT (non-overlapping) path → still needed', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review","files":{"unrelated/file.mjs":"deadbeef"}}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': {
+        status: 0,
+        stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review', files: { 'unrelated/file.mjs': 'deadbeef' } }] }),
+      },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
+    assert.equal(r.needed, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('auditAdversarialReview: recorded with --files overlapping the gated path → not needed', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review","files":{"src/auth/login.mjs":"deadbeef"}}\n');
+  try {
+    const spawnImpl = stub({
+      'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
+      'adlc gate-manifest show': {
+        status: 0,
+        stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review', files: { 'src/auth/login.mjs': 'deadbeef' } }] }),
+      },
+    });
+    const r = auditAdversarialReview(root, { spawnImpl, env: {} });
     assert.equal(r.needed, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

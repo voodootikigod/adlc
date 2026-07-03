@@ -160,6 +160,42 @@ test('decideAdversarialReviewNotice: gated + no active ticket resolved + ANY adv
   assert.equal(res.needed, false);
 });
 
+test('decideAdversarialReviewNotice: gated + adversarial-review recorded with --files for a DIFFERENT path (same ticket) → still needed', () => {
+  const res = decideAdversarialReviewNotice({
+    changedPaths: ['src/auth/login.mjs'],
+    manifestEntries: [{ gate: 'adversarial-review', ticket: 'T1', files: { 'unrelated/file.mjs': 'deadbeef' } }],
+    ticketId: 'T1',
+  });
+  assert.equal(res.needed, true);
+});
+
+test('decideAdversarialReviewNotice: gated + adversarial-review recorded with --files for a DIFFERENT path, no ticket at all → still needed', () => {
+  const res = decideAdversarialReviewNotice({
+    changedPaths: ['src/auth/login.mjs'],
+    manifestEntries: [{ gate: 'adversarial-review', files: { 'unrelated/file.mjs': 'deadbeef' } }],
+    ticketId: null,
+  });
+  assert.equal(res.needed, true);
+});
+
+test('decideAdversarialReviewNotice: gated + adversarial-review recorded with --files overlapping the gated path → not needed', () => {
+  const res = decideAdversarialReviewNotice({
+    changedPaths: ['src/auth/login.mjs'],
+    manifestEntries: [{ gate: 'adversarial-review', ticket: 'T1', files: { 'src/auth/login.mjs': 'deadbeef' } }],
+    ticketId: 'T1',
+  });
+  assert.equal(res.needed, false);
+});
+
+test('decideAdversarialReviewNotice: gated + adversarial-review recorded with an EMPTY --files map → falls back to ticket-only scoping (not needed)', () => {
+  const res = decideAdversarialReviewNotice({
+    changedPaths: ['src/auth/login.mjs'],
+    manifestEntries: [{ gate: 'adversarial-review', ticket: 'T1', files: {} }],
+    ticketId: 'T1',
+  });
+  assert.equal(res.needed, false);
+});
+
 test('decideAdversarialReviewNotice: defaults (no args) → not needed, no throw', () => {
   const res = decideAdversarialReviewNotice();
   assert.equal(res.needed, false);

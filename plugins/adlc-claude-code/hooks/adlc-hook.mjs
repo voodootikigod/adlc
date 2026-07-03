@@ -435,9 +435,10 @@ function manifest() {
 // surfaces a notice.
 //
 // KEEP IN SYNC with packages/core/lib/risk-tier.mjs — RISK_TIER_PATTERNS,
-// matchRiskTier, classifyRiskTier, and decideAdversarialReviewNotice below are
-// ported VERBATIM from there (this hook can't resolve @adlc/core at runtime,
-// same constraint documented on the ported `globMatch` just below).
+// matchRiskTier, classifyRiskTier, filesOverlapOrUnscoped, and
+// decideAdversarialReviewNotice below are ported VERBATIM from there (this
+// hook can't resolve @adlc/core at runtime, same constraint documented on the
+// ported `globMatch` just below).
 // ---------------------------------------------------------------------------
 
 const RISK_TIER_PATTERNS = Object.freeze({
@@ -490,6 +491,23 @@ function classifyRiskTier(paths) {
 }
 
 /**
+ * Does a manifest entry's recorded `files` map (from `gate-manifest record
+ * ... --files a,b,c`) overlap the currently gated paths? An entry with no
+ * `files` recorded is neither confirmed nor refuted (falls back to
+ * ticket-only scoping); an entry that DOES record files but shares none with
+ * the current gated matches was reviewing a different changeset and must not
+ * silently satisfy this one. Ported verbatim from packages/core/lib/risk-tier.mjs.
+ */
+function filesOverlapOrUnscoped(entry, matches) {
+  const files = entry && entry.files;
+  if (!files || typeof files !== 'object') return true;
+  const recorded = Object.keys(files);
+  if (recorded.length === 0) return true;
+  const gatedPaths = new Set(matches.map((m) => m.path));
+  return recorded.some((p) => gatedPaths.has(p));
+}
+
+/**
  * The hook-mode decision, pure and unit-testable against a mocked manifest
  * state: given changed paths and already-loaded gate-manifest entries, is a
  * mechanical adversarial-review notice warranted?
@@ -498,7 +516,11 @@ function decideAdversarialReviewNotice({ changedPaths = [], manifestEntries = []
   const { gated, matches } = classifyRiskTier(changedPaths);
   if (!gated) return { needed: false, matches: [] };
   const hasRecord = (manifestEntries ?? []).some(
-    (e) => e && e.gate === 'adversarial-review' && (!ticketId || !e.ticket || e.ticket === ticketId)
+    (e) =>
+      e &&
+      e.gate === 'adversarial-review' &&
+      (!ticketId || !e.ticket || e.ticket === ticketId) &&
+      filesOverlapOrUnscoped(e, matches)
   );
   return { needed: !hasRecord, matches };
 }
@@ -530,6 +552,54 @@ function resolveActiveTicketIdAdvisory() {
 }
 
 /**
+ * Unquote a path token from `git status --porcelain` (non -z form). Git
+ * C-quotes any path containing a space or other "unusual" character by
+ * wrapping it in double quotes and backslash-escaping the contents (e.g.
+ * ` M "secrets/api key.pem"`), unlike `git diff --name-only`/`git ls-files`,
+ * which never quote. Left as-is, the literal surrounding `"` (and any `\\`
+ * escapes) become part of the path string and silently defeat the `$`-anchored
+ * risk-tier globs in matchRiskTier. Pass-through for the common (unquoted)
+ * case; only unquotes tokens that are actually wrapped in `"..."`.
+ * KEEP IN SYNC with plugins/adlc-opencode/lib/session-hooks.mjs's copy.
+ */
+function unquoteGitStatusPath(raw) {
+  if (raw.length < 2 || raw[0] !== '"' || raw[raw.length - 1] !== '"') return raw;
+  const inner = raw.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (c !== '\\') {
+      for (const b of Buffer.from(c, 'utf8')) bytes.push(b);
+      continue;
+    }
+    const next = inner[++i];
+    if (next === undefined) break; // malformed trailing backslash — drop it
+    switch (next) {
+      case 'n': bytes.push(0x0a); break;
+      case 't': bytes.push(0x09); break;
+      case 'r': bytes.push(0x0d); break;
+      case '"': bytes.push(0x22); break;
+      case '\\': bytes.push(0x5c); break;
+      case 'a': bytes.push(0x07); break;
+      case 'b': bytes.push(0x08); break;
+      case 'f': bytes.push(0x0c); break;
+      case 'v': bytes.push(0x0b); break;
+      default:
+        if (next >= '0' && next <= '7') {
+          let oct = next;
+          while (oct.length < 3 && inner[i + 1] >= '0' && inner[i + 1] <= '7') {
+            oct += inner[++i];
+          }
+          bytes.push(parseInt(oct, 8) & 0xff);
+        } else {
+          for (const b of Buffer.from(next, 'utf8')) bytes.push(b);
+        }
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/**
  * Repo-relative changed paths covering BOTH the working tree (uncommitted
  * modifications + untracked files) and the committed branch diff against the
  * first reachable trunk candidate — "diffs the working tree/branch" per the
@@ -544,7 +614,7 @@ function gitChangedPaths() {
   const status = runGit(['status', '--porcelain', '--no-renames']);
   if (!status.error && status.status === 0 && status.stdout) {
     for (const line of status.stdout.split('\n')) {
-      const p = line.slice(3).trim();
+      const p = unquoteGitStatusPath(line.slice(3).trim());
       if (p) paths.add(p);
     }
   }
