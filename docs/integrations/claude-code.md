@@ -99,7 +99,7 @@ supplies independent model judgment with cross-lens verification.
 | flail-detection | PostToolUse | Advisory: flags repeated-error / churn loops over a bounded recent window of the transcript. |
 | gate-manifest audit | Stop | Advisory: warns only if the gate-evidence chain is broken. |
 | **rails-guard** | PreToolUse | **Enforcing**: denies structured edits (Edit/Write/MultiEdit) to frozen rail paths declared in tickets. Bash is not gated in-session (a shell can't be reliably parsed); Bash rail mutations are caught by the CI diff gate at commit time. |
-| **build-gate** | PreToolUse | **Enforcing** (issue #48): for the *active* ticket (`ADLC_TICKET` env var or `.adlc/current-ticket.json`), denies a structured edit when the ticket is high-risk (declared `risk: 'high'`, or derived from category/external-effect/identity-mutation/trust-root-touch signals) AND this session's context-fitness signal (transcript tool-call depth or byte size) is past threshold — i.e. a context-rot backstop on the riskiest builds. |
+| **build-gate** | PreToolUse | **Enforcing** (issue #48): for the *active* ticket (`ADLC_TICKET` env var or `.adlc/current-ticket.json`), denies a structured edit when the ticket is high-risk (declared `risk: 'high'`, or derived from category/external-effect/identity-mutation/trust-root-touch signals) AND this session's context-fitness signal (transcript tool-call depth or byte size) is past threshold — i.e. a context-rot backstop on the riskiest builds. Bash is not gated in-session (same reason as rails-guard) and, unlike rails, there is no CI backstop for it — see Gaps below. |
 
 All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
@@ -291,6 +291,29 @@ Current gaps relative to the formal ADLC doctrine:
 3. **Skill discovery depends on description matching.** The `adlc` phase router
    is one skill with a broad trigger set, but a poorly-phrased request may not
    match the description and will not route through the lifecycle.
+4. **The build-gate active-ticket pointer has no Bash or CI backstop
+   (intentional design, partially mitigated).** `.adlc/current-ticket.json`
+   is frozen as a rails trust root (same as `.adlc/tickets.json`) whenever
+   the ticket set declares ANY rails, so a structured edit that overwrites
+   the pointer is denied. But like rails-guard, build-gate's PreToolUse hook
+   only matches `Edit|Write|MultiEdit|NotebookEdit` — a Bash command can
+   still delete or overwrite `.adlc/current-ticket.json` mid-session (this is
+   never gated, trust-root or not), after which `resolveActiveTicketIdForBuildGate`
+   sees "no active ticket" and every subsequent structured edit is allowed
+   with **zero** risk evaluation and **zero** manifest entry (a strictly
+   weaker outcome than even `ADLC_BUILD_GATE_BYPASS=1`, which at least
+   requires a durably-recorded gate-manifest entry). A ticket that is
+   high-risk without declaring any `rails` (e.g. purely via `category:
+   'contract'`) gets no trust-root protection at all. Unlike the rails Bash
+   gap (#2 above), this one has **no CI diff backstop**:
+   `.adlc/current-ticket.json` is gitignored local session state (see
+   `.gitignore`), not a tracked file, so there is no diff for a commit-time
+   gate to inspect — and build-gate's degradation signal (transcript
+   tool-call depth) can't be reconstructed after the fact anyway. Mitigate by
+   treating `.adlc/current-ticket.json` deletion/edits as a reviewable signal
+   in your own audit tooling (e.g. session logging), and by not relying on
+   build-gate as the sole safeguard for a high-risk ticket — pair it with
+   human review at P5/P6.
 
 ## Boundary
 

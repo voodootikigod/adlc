@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +37,15 @@ function makeTranscript(dir, name, toolUseCount, { padBytes = 0 } = {}) {
  * Run the buildgate hook in a throwaway repo.
  * @returns {{ verdict: 'deny'|'allow', out: string, manifest: string, dir: string }}
  */
-function runBuildGate({ tickets, activeTicketEnv, currentTicketFile, transcriptToolCalls, transcriptPadBytes, env = {} }) {
+function runBuildGate({
+  tickets,
+  activeTicketEnv,
+  currentTicketFile,
+  transcriptToolCalls,
+  transcriptPadBytes,
+  transcriptPathOverride,
+  env = {},
+}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-buildgate-'));
   try {
     mkdirSync(join(dir, '.adlc'));
@@ -50,6 +58,13 @@ function runBuildGate({ tickets, activeTicketEnv, currentTicketFile, transcriptT
     let transcriptPath;
     if (transcriptToolCalls !== undefined) {
       transcriptPath = makeTranscript(dir, 'transcript.jsonl', transcriptToolCalls, { padBytes: transcriptPadBytes ?? 0 });
+    }
+    // Lets a test point transcript_path at something that EXISTS (so the
+    // hook's existsSync guard passes) but cannot actually be read — a
+    // directory, or a chmod'd-unreadable file — to exercise the post-exists
+    // read-failure path distinctly from "no transcript_path at all".
+    if (transcriptPathOverride !== undefined) {
+      transcriptPath = transcriptPathOverride(dir);
     }
     const input = JSON.stringify({
       cwd: dir,
@@ -139,6 +154,42 @@ test('high-risk active ticket but no transcript_path supplied → deny (cannot v
     tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
     activeTicketEnv: 'T1',
     // transcriptToolCalls omitted → no transcript_path in the payload
+  });
+  assert.equal(r.verdict, 'deny');
+});
+
+// ---- fail closed: transcript_path exists (passes existsSync) but a later
+// read fails — TOCTOU / permissions / wrong file type. Must deny, not
+// silently treat the unreadable file as "zero bytes, not degraded". ----
+
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+test(
+  'high-risk ticket, transcript_path exists but is unreadable (chmod 0) → deny, not silently allow',
+  { skip: isRoot ? 'chmod 0o000 has no effect when running as root' : false },
+  () => {
+    const r = runBuildGate({
+      tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+      activeTicketEnv: 'T1',
+      transcriptPathOverride: (dir) => {
+        const p = makeTranscript(dir, 'unreadable-transcript.jsonl', 500);
+        chmodSync(p, 0o000);
+        return p;
+      },
+    });
+    assert.equal(r.verdict, 'deny');
+  }
+);
+
+test('high-risk ticket, transcript_path exists but is a directory (EISDIR on read) → deny', () => {
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+    activeTicketEnv: 'T1',
+    transcriptPathOverride: (dir) => {
+      const p = join(dir, 'transcript-is-a-dir.jsonl');
+      mkdirSync(p);
+      return p;
+    },
   });
   assert.equal(r.verdict, 'deny');
 });

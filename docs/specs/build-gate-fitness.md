@@ -74,3 +74,34 @@ node --test plugins/adlc-claude-code/hooks/test/build-gate.test.mjs
 node --test packages/cli/test/*.test.mjs
 npm test   # full suite, from the repo root
 ```
+
+## Known limitations
+
+- **Unreadable transcript_path fails closed.** If a high-risk ticket's
+  `transcript_path` exists at hook time (passes `existsSync`) but a subsequent
+  `fileSize`/`readFileSync` fails — permission error, or a TOCTOU race where
+  the file is deleted/replaced between the two checks — the hook denies
+  rather than treating the unreadable file as "zero bytes, not degraded". The
+  context-fitness signal cannot be computed for a ticket already known to be
+  high-risk, so an unverifiable session must not be allowed through.
+- **The active-ticket pointer is a Bash-reachable escape hatch (partially
+  mitigated).** Build-gate is an opt-in gate: "no active ticket declared →
+  allow" is by design (it mirrors rails' "no rails declared → allow").
+  `.adlc/current-ticket.json` is now frozen as a rails trust root (same
+  treatment as `.adlc/tickets.json`) whenever the ticket set declares ANY
+  rails, so a structured edit (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`)
+  that overwrites the pointer is denied. Two gaps remain: (1) the PreToolUse
+  hook only matches those structured-edit tools — never Bash (same reason as
+  rails-guard — see `docs/integrations/claude-code.md`'s Gaps section) — so
+  `rm .adlc/current-ticket.json` or an out-of-band overwrite via Bash still
+  clears the pointer with zero risk evaluation and zero manifest entry,
+  weaker than even `ADLC_BUILD_GATE_BYPASS=1` (which is at least audited);
+  and (2) a ticket that is high-risk *without* declaring any `rails` (e.g.
+  purely via `category: 'contract'`) gets no trust-root protection at all,
+  since rails() no-ops when the ticket set declares zero rails. Unlike
+  rails' equivalent Bash gap, there is **no CI diff backstop** possible here:
+  `.adlc/current-ticket.json` is gitignored local session state (not
+  tracked), so there is no commit-time diff for a CI gate to inspect, and
+  the degradation signal (transcript depth) can't be reconstructed after
+  the fact regardless. Treat build-gate as a strong in-session backstop, not
+  a substitute for human review at P5/P6 on high-risk tickets.

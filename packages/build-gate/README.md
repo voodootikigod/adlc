@@ -97,4 +97,7 @@ cannot be recorded is refused, never silently allowed.
 supplies the in-session context signal (the same transcript-window staging
 the `flail` mode already does) and shells to
 `adlc build-gate <id> --depth <n> --session-bytes <n>` for the active
-high-risk ticket. See `docs/specs/build-gate-fitness.md`.
+high-risk ticket. See `docs/specs/build-gate-fitness.md`, including its
+**Known limitations** section (unreadable-transcript fail-closed behavior,
+and the unprotected `.adlc/current-ticket.json` pointer as a Bash-reachable,
+CI-unbackstopped escape hatch).

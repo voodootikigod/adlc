@@ -733,6 +733,24 @@ function rails(input) {
     railDecls.push({ glob: ticketsResolved, ticket: '(rail trust root, resolved)' });
   }
 
+  // .adlc/current-ticket.json is the OTHER half of the shared trust root (see
+  // BUILD_GATE_TRUST_ROOT_PATHS below): build-gate's active-ticket resolution
+  // trusts this pointer file, so once any rails exist, a structured edit
+  // (Edit/Write/MultiEdit/NotebookEdit) that overwrites it to point away from
+  // a high-risk ticket must be frozen exactly like tickets.json itself — an
+  // unprotected pointer would otherwise let a single edit silently disable
+  // build-gate for the rest of the session with no risk evaluation and no
+  // manifest entry. This does not cover Bash (see this hook's matcher and
+  // docs/integrations/claude-code.md's Gaps section for that documented,
+  // unbackstopped limitation — current-ticket.json is gitignored local state,
+  // so there is no commit-time diff for a CI gate to inspect either).
+  const currentTicketPath = join('.adlc', 'current-ticket.json');
+  railDecls.push({ glob: '.adlc/current-ticket.json', ticket: '(rail trust root)' });
+  const currentTicketResolved = toRepoRelative(currentTicketPath);
+  if (currentTicketResolved && currentTicketResolved !== '.adlc/current-ticket.json') {
+    railDecls.push({ glob: currentTicketResolved, ticket: '(rail trust root, resolved)' });
+  }
+
   // A structured edit whose target path we couldn't extract, while rails are
   // declared, can't be verified → fail closed.
   if (fps.length === 0) {
@@ -967,8 +985,20 @@ function buildgate(input) {
     );
   }
 
-  let sessionBytes = fileSize(tp);
-  if (sessionBytes < 0) sessionBytes = 0;
+  const sessionBytes = fileSize(tp);
+  if (sessionBytes < 0) {
+    // existsSync(tp) passed above, but the file could not be stat'd/opened
+    // here — a permissions error, or a TOCTOU race where the file was
+    // deleted/replaced/swapped for a directory between the two checks. Either
+    // way the context-fitness signal cannot be computed for a ticket we
+    // already know is high-risk, so this must fail closed rather than treat
+    // the unreadable file as "zero bytes, not degraded".
+    return denyBuildGate(
+      `active ticket ${active.id} is high-risk but transcript_path could not be read after the ` +
+        `existence check (permission error, or the file changed underneath us) — the context-fitness ` +
+        `signal cannot be verified, failing closed`
+    );
+  }
 
   let windowText;
   if (sessionBytes > MAX_SCAN_BYTES) {
@@ -980,7 +1010,17 @@ function buildgate(input) {
       windowText = null;
     }
   }
-  const depth = windowText ? countToolCallsForBuildGate(windowText) : 0;
+  if (windowText == null) {
+    // Same fail-closed reasoning as above: fileSize succeeded but the actual
+    // read of the (possibly windowed) transcript failed. Silently treating
+    // this as depth=0 would let an unverifiable session through, exactly the
+    // bypass this gate exists to prevent.
+    return denyBuildGate(
+      `active ticket ${active.id} is high-risk but the transcript window could not be read — the ` +
+        `context-fitness signal cannot be verified, failing closed`
+    );
+  }
+  const depth = countToolCallsForBuildGate(windowText);
 
   const degraded = depth > BUILD_GATE_DEPTH_THRESHOLD || sessionBytes > BUILD_GATE_BYTES_THRESHOLD;
   if (!degraded) return; // high-risk, but this session isn't deep yet → allow
