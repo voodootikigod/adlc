@@ -95,9 +95,14 @@ cannot be recorded is refused, never silently allowed.
 
 `plugins/adlc-claude-code/hooks/adlc-hook.mjs`'s `buildgate` PreToolUse mode
 supplies the in-session context signal (the same transcript-window staging
-the `flail` mode already does) and shells to
-`adlc build-gate <id> --depth <n> --session-bytes <n>` for the active
-high-risk ticket. See `docs/specs/build-gate-fitness.md`, including its
-**Known limitations** section (unreadable-transcript fail-closed behavior,
-and the unprotected `.adlc/current-ticket.json` pointer as a Bash-reachable,
-CI-unbackstopped escape hatch).
+the `flail` mode already does) and computes the risk tier, context-fitness
+signal, and allow/deny decision **entirely locally** — verbatim ports of
+this package's `lib/risk.mjs` / `lib/depth-signal.mjs` / `lib/decide.mjs`
+logic, marked "KEEP IN SYNC" in the hook source. It does **not** shell out to
+`adlc build-gate` for the decision; `adlc` (via `gate-manifest`) is invoked
+only to durably record an audited override, mirroring how `rails` never
+needs `adlc` for its own core decision either. See
+`docs/specs/build-gate-fitness.md`, including its **Known limitations**
+section (unreadable-transcript fail-closed behavior, and the unprotected
+`.adlc/current-ticket.json` pointer as a Bash-reachable, CI-unbackstopped
+escape hatch).
