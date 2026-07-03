@@ -25,9 +25,13 @@ didn't know the gate existed.
    quorum, informational only (never blocks, no gate-manifest record) — cost control per
    ADR-0007.
 5. Uses **plain (non-loop)** review mode throughout, never `--loop`, with a comment explaining
-   why: per [voodootikigod/adversarial-review#9](https://github.com/voodootikigod/adversarial-review/issues/9),
-   `--loop` currently silently drops `--providers`, which would defeat the multi-provider quorum
-   without any visible error.
+   why. Historically ([voodootikigod/adversarial-review#9](https://github.com/voodootikigod/adversarial-review/issues/9),
+   filed against v2.5.1) `--loop` silently dropped `--providers`, which would have defeated the
+   multi-provider quorum without any visible error; that bug is fixed as of the 2.6.0 pin this
+   template uses. The durable reason plain mode is required here is unrelated to #9: `--loop`
+   only supports `--scope working-tree` and hard-errors on `--base <ref>`/`--scope branch`
+   (confirmed against 2.6.0's `src/loop.js`), which is incompatible with this gate's read-only
+   `--base origin/$BASE_REF` diff review of a PR.
 6. `docs/toolkit.md` and `docs/README.md` reference the new template, mirroring how
    `docs/ci/adlc-maintenance.yml` is referenced elsewhere in the repo.
 

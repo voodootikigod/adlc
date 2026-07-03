@@ -223,11 +223,25 @@ test('AC3c: ADVERSARIAL_REVIEW_VERSION is pinned to an exact version, not the mu
   assert.equal(npxInvocations, 2, 'expected both the high-risk and cheap jobs to invoke the pinned version');
 });
 
-test('AC4: uses plain (non-loop) review mode and documents why, citing adversarial-review#9', () => {
+test('AC4: uses plain (non-loop) review mode and documents the durable reason (--loop is incompatible with --base/branch-scope review, independent of the now-closed adversarial-review#9)', () => {
+  // Round-5 adversarial-review finding: adversarial-review#9 ("--loop
+  // silently drops --providers") was closed upstream and the fix shipped in
+  // the exact 2.6.0 version this template pins -- verified directly against
+  // the published 2.6.0 package (--help text + src/loop.js's
+  // runProviderRound path). So #9 is no longer a valid reason to avoid
+  // --loop, and this test must not encode "cites #9" as the thing that
+  // makes the design correct. The durable, still-true reason plain mode is
+  // required is that 2.6.0's --loop hard-errors on --base <ref> / --scope
+  // branch (it only supports --scope working-tree), which is incompatible
+  // with this gate's read-only branch-diff review -- that's what this test
+  // now asserts is documented, alongside the historical #9 context.
   const text = readTemplate();
   const executable = stripComments(text);
-  assert.ok(!/--loop\b/.test(executable), 'no executable line may pass --loop (silently drops --providers per adversarial-review#9)');
-  assert.match(text, /adversarial-review#9/, 'must document the reason, citing the upstream issue');
+  assert.ok(!/--loop\b/.test(executable), 'no executable line may pass --loop (incompatible with --base/branch-scope review)');
+  assert.match(text, /adversarial-review#9/, 'should still document the historical #9 context');
+  assert.match(text, /2\.6\.0/, 'must note the fix shipped in the pinned 2.6.0 version, not leave #9 looking open');
+  assert.match(text, /--base(?: <ref>| "?origin)?.{0,40}(incompatible|refuses|hard-errors|exits 1)|(incompatible|refuses|hard-errors|exits 1).{0,60}--base/is,
+    'must document the real, durable blocker: --loop is incompatible with --base/branch-scope review');
   assert.match(text, /--providers/);
 });
 

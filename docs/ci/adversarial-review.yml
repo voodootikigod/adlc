@@ -21,14 +21,32 @@
 #      else defaults to single cross-model review"). Advisory only: it never
 #      blocks the PR and does not record gate-manifest evidence.
 #
-# --loop vs plain mode (IMPORTANT): per voodootikigod/adversarial-review#9,
-# `--loop` (the local fix-and-reconverge mode) currently silently drops
-# `--providers` — a multi-provider request would quietly degrade to a single
-# provider under `--loop`, defeating the whole point of the ADR-0007 risk gate
-# without any visible error. This template therefore uses the PLAIN
-# (non-loop, one-shot) review mode everywhere, which does respect
-# `--providers`. Do not add `--loop` to either job below without first
-# re-checking that upstream issue is closed.
+# --loop vs plain mode (IMPORTANT): historically (voodootikigod/adversarial-
+# review#9, filed against v2.5.1), `--loop` silently dropped `--providers` —
+# a multi-provider request would quietly degrade to a single provider under
+# `--loop`, defeating the whole point of the ADR-0007 risk gate without any
+# visible error. That bug is FIXED as of adversarial-review 2.6.0 (the exact
+# version this template pins) — confirmed directly against the published
+# 2.6.0 package: its own `--help` states `--loop` "Composes with --providers:
+# each round is reviewed by every requested provider and gated by the quorum
+# verdict", and `src/loop.js`'s `runProviderRound` is reached whenever
+# `args.providers` is set. Issue #9 itself was closed upstream. Do NOT use
+# that closed issue as license to add `--loop` here, though — see the next
+# paragraph for the real, independent, still-true blocker.
+#
+# This template uses PLAIN (non-loop, one-shot) review mode for a *different*
+# and durable reason, unrelated to #9: `--loop` only supports reviewing the
+# working tree. Per 2.6.0's own `src/loop.js` (`runLoop`), it hard-exits
+# (exit 1) if invoked with `--base <ref>` or `--scope branch` — exactly the
+# branch-diff invocation (`--base "origin/$BASE_REF"`) this CI gate needs to
+# review a PR's committed changes against its base branch without checking
+# the PR out and mutating the working tree. Swapping to `--loop` here isn't
+# a flag change; it would mean re-architecting this gate around checking out
+# the PR branch and running the loop's local fix-and-reconverge flow instead
+# of a read-only diff review — a materially different design. Do not add
+# `--loop` to either job below without doing that redesign deliberately (and
+# re-confirming this scope/base restriction still holds in whatever version
+# you pin at the time).
 #
 # ACTION REQUIRED before enabling this workflow:
 #   1. `adversarial-review` lives in a separate repo
@@ -155,12 +173,17 @@ jobs:
           ADVERSARIAL_REVIEW_VERSION: 2.6.0
         run: |
           set +e
-          # Plain (non-loop) review mode -- NOT --loop. Per
-          # voodootikigod/adversarial-review#9, --loop currently silently
-          # drops --providers, so a multi-provider request would silently
-          # degrade to a single provider under --loop. This plain one-shot
-          # invocation is the only mode that actually delivers the >=2
-          # distinct-provider quorum ADR-0007 requires for this risk tier.
+          # Plain (non-loop) review mode -- NOT --loop. Historically
+          # (voodootikigod/adversarial-review#9, now fixed as of the 2.6.0
+          # pin above) --loop silently dropped --providers; that is no
+          # longer why plain mode is used here. The real, still-true reason:
+          # --loop refuses to run against --base/branch-scope (2.6.0's
+          # src/loop.js exits 1 on --base or --scope branch -- it only
+          # supports --scope working-tree), and this job needs a read-only
+          # diff of origin/$BASE_REF against the PR head, not a working-tree
+          # fix-and-reconverge. This plain one-shot invocation is the mode
+          # that delivers the >=2 distinct-provider quorum ADR-0007 requires
+          # for this risk tier without mutating the checkout.
           #
           # --fail-on-empty is required here (not optional). Per the pinned
           # v2.6.0 source (bin/cli.js / src/git-context.js): when the
@@ -301,7 +324,8 @@ jobs:
           set +e
           # No --providers here on purpose: today's default single
           # cross-model behavior, not the multi-provider quorum. Still plain
-          # (non-loop) mode for the same --loop/#9 reason noted above.
+          # (non-loop) mode for the same --loop/--base incompatibility
+          # reason noted above (not the now-fixed #9 provider-drop bug).
           npx --yes "adversarial-review@${ADVERSARIAL_REVIEW_VERSION}" \
             --base "origin/$BASE_REF" \
             --fail-on high \

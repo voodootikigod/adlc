@@ -97,8 +97,10 @@ pass otherwise — ships as a documented, not-force-installed template at
 [`ci/adversarial-review.yml`](./ci/adversarial-review.yml) (mirrors the
 [`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) "template, not force-installed"
 pattern). It also uses plain, non-loop review mode throughout — see the template's header
-comment for why `--loop` is deliberately avoided
-([voodootikigod/adversarial-review#9](https://github.com/voodootikigod/adversarial-review/issues/9)).
+comment for why `--loop` is deliberately avoided (not because of
+[voodootikigod/adversarial-review#9](https://github.com/voodootikigod/adversarial-review/issues/9),
+which is fixed as of the pinned version, but because `--loop` is incompatible with the
+`--base <ref>` branch-diff review this gate needs).
 
 The package READMEs define each tool's exact schema. Treat these docs as a routing map,
 then follow the linked README for command-specific details.
