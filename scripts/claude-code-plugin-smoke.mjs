@@ -488,10 +488,19 @@ if (!skillSource.includes('ADLC_CC_SENTINEL_PHASE_ROUTER_V1')) {
 // so a future edit can't reintroduce the bug fixed in #50.
 const namespacedCommandNames = ['init', 'ticket', 'distill', 'maintain'];
 // Matches "/adlc-init" etc. but NOT "/adlc:adlc-init" (scoped form, via the
-// negative lookbehind) and NOT a file-path reference like "commands/adlc-init.md"
-// or "docs/ci/adlc-maintenance.yml" (via the trailing negative lookahead + \b).
+// negative lookbehind) and NOT a file-path or URL reference such as
+// "commands/adlc-init.md", "docs/ci/adlc-maintenance.yml",
+// "/adlc-init-helper.mjs", or "https://example.com/adlc-init-docs":
+//   - the leading negative lookbehind requires the "/" to NOT be preceded by a
+//     word character, ":", ".", "/" or "-" — this rules out nested paths and
+//     URL path segments (e.g. "example.com/adlc-init"), where the "/" is just
+//     a path separator, not the start of a slash-command.
+//   - the trailing negative lookaheads require what follows the command name
+//     to NOT continue as a longer identifier ("-helper") or a known file
+//     extension (".md" / ".mjs" / ".yml" / ".yaml"), so "adlc-init-helper.mjs"
+//     and "adlc-init.md" are not mistaken for the bare command "/adlc-init".
 const bareCommandPattern = new RegExp(
-  `(?<!adlc:)/adlc-(?:${namespacedCommandNames.join('|')})\\b(?!\\.(?:md|mjs|yml|yaml))`,
+  `(?<!adlc:)(?<![\\w:./-])/adlc-(?:${namespacedCommandNames.join('|')})\\b(?!-)(?!\\.(?:md|mjs|yml|yaml))`,
   'g'
 );
 const guidanceDirs = ['commands', 'skills', 'agents', 'hooks'];

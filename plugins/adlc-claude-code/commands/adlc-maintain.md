@@ -34,7 +34,8 @@ adlc model-ratchet --dry-run --json
 - Lists the highest-churn / highest-dependency files (`score`), which are the
   best candidates to re-prosecute after model or repo drift. This is a *plan*,
   not a gate — it does not fail. Report the top files and suggest running the
-  prosecutor (`/adlc-prosecute` or the `prosecutor` subagent) against them.
+  `prosecutor` subagent against them (there is no standalone prosecute command
+  in this plugin — invoke the subagent directly).
 - With a `--review-cmd`, model-ratchet can run a review over those files and
   append findings to `.adlc/findings.jsonl` (which later feeds `/adlc:adlc-distill`).
 
