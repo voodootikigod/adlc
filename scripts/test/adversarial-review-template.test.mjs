@@ -112,6 +112,29 @@ test('AC3b: risk-tier PATTERN actually matches realistic auth/validator file pat
   }
 });
 
+test('AC3c: ADVERSARIAL_REVIEW_VERSION is pinned to an exact version, not the mutable "latest" tag', () => {
+  // Regression for the other half of commit 0790478 ("...and pin
+  // adversarial-review version"): AC3b already regression-tests the regex
+  // fix from that commit, but nothing previously asserted the version pin
+  // itself, so a future edit could silently reintroduce `latest` -- exactly
+  // the supply-chain risk the "ACTION REQUIRED item 1" comment warns
+  // against -- and still pass a fully green test suite.
+  const text = readTemplate();
+  const executable = stripComments(text);
+  const pinLines = executable.match(/ADVERSARIAL_REVIEW_VERSION:\s*\S+/g) || [];
+  assert.ok(pinLines.length > 0, 'expected at least one ADVERSARIAL_REVIEW_VERSION: env assignment');
+  for (const line of pinLines) {
+    assert.ok(!/latest/i.test(line), `ADVERSARIAL_REVIEW_VERSION must not be pinned to the mutable "latest" tag: "${line}"`);
+    assert.match(line, /ADVERSARIAL_REVIEW_VERSION:\s*['"]?\d+\.\d+\.\d+['"]?/,
+      `ADVERSARIAL_REVIEW_VERSION must be an exact semver pin, got: "${line}"`);
+  }
+  // Both jobs (adversarial-review and adversarial-review-cheap) invoke
+  // npx with this version -- both must be pinned identically, not just one.
+  assert.match(executable, /npx --yes ["']?adversarial-review@\$\{ADVERSARIAL_REVIEW_VERSION\}/);
+  const npxInvocations = (executable.match(/npx --yes ["']?adversarial-review@\$\{ADVERSARIAL_REVIEW_VERSION\}/g) || []).length;
+  assert.equal(npxInvocations, 2, 'expected both the high-risk and cheap jobs to invoke the pinned version');
+});
+
 test('AC4: uses plain (non-loop) review mode and documents why, citing adversarial-review#9', () => {
   const text = readTemplate();
   const executable = stripComments(text);

@@ -173,11 +173,26 @@ jobs:
             echo
             echo '```'
           } > pr-comment-body.md
-          gh pr comment "$PR_NUMBER" --body-file pr-comment-body.md
+          # Never let a comment-posting failure fail the job: PRs from forks
+          # get a read-only GITHUB_TOKEN regardless of the `pull-requests:
+          # write` permission declared above, so `gh pr comment` predictably
+          # fails there. That must not mask/override the actual review
+          # verdict (the dedicated gate step below decides pass/fail).
+          gh pr comment "$PR_NUMBER" --body-file pr-comment-body.md \
+            || echo "::warning::could not post PR comment (forked PR? read-only GITHUB_TOKEN?)"
 
       - name: Record adversarial-review verdict (P6 gate evidence)
         if: always()
         run: |
+          set +e
+          # GitHub Actions runs `run:` blocks with `bash -eo pipefail` by
+          # default. Without `set +e` here, a review-report.txt that happens
+          # not to contain a literal claude/gpt/codex/gemini token makes the
+          # `grep` below exit 1, which -- under errexit+pipefail -- would abort
+          # this whole step *before* `gate-manifest record` runs, silently
+          # dropping the P6 evidence and skipping the actual gate decision in
+          # the next step. See the sibling review-invocation steps, which
+          # already `set +e` for the same reason.
           rc="${{ steps.review.outputs.rc }}"
           case "$rc" in
             0) verdict=approve ;;
@@ -278,4 +293,11 @@ jobs:
             echo
             echo '```'
           } > pr-comment-body.md
-          gh pr comment "$PR_NUMBER" --body-file pr-comment-body.md
+          # Never let a comment-posting failure fail the job: PRs from forks
+          # get a read-only GITHUB_TOKEN regardless of the `pull-requests:
+          # write` permission declared above, so `gh pr comment` predictably
+          # fails there. This is the last step in this job, so an unhandled
+          # failure here would fail the whole job -- directly contradicting
+          # this job's "advisory only, never blocks the PR" contract.
+          gh pr comment "$PR_NUMBER" --body-file pr-comment-body.md \
+            || echo "::warning::could not post PR comment (forked PR? read-only GITHUB_TOKEN?)"
