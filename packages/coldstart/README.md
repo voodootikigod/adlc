@@ -24,6 +24,7 @@ coldstart --all     [options]
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
 | `--all` | off | Run the gate on every ticket in the file |
 | `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made |
+| `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` — see below |
 | `--json` | off | Machine-readable JSON output for orchestrators |
 
 ---
@@ -53,6 +54,33 @@ coldstart T1 --prompt-only
 # Use a custom tickets file
 coldstart T3 --tickets path/to/tickets.json
 ```
+
+---
+
+## Recording the operator's prompt-only verdict
+
+In Claude Code (and similar harnesses without a bare API key) `--prompt-only` is
+how coldstart is normally run: the tool prints the audit prompt, and the
+operator (the model itself) answers it and applies judgment. Without
+`--record-verdict`, that self-assessed verdict is never captured — only the
+fact that a prompt was printed is observable. `--record-verdict <file|->`
+closes that gap: after printing the prompt(s) as usual, it reads the
+operator's answer from `<file>` (or stdin when `-`) and records it into
+`.adlc/manifest.jsonl` via `@adlc/gate-manifest`'s own `record()` — reusing its
+hash-chaining/signing logic rather than reimplementing it.
+
+```sh
+# Operator writes their answer to a file, then records it
+coldstart T1 --prompt-only --record-verdict verdict.txt
+
+# Or pipe the answer straight from stdin
+echo "PASS: no gaps found" | coldstart T1 --prompt-only --record-verdict -
+```
+
+`--record-verdict` requires `--prompt-only` (exit 1 otherwise). The recorded
+entry's `gate` is `coldstart`, `data.verdict` holds the operator's text
+verbatim, and `data.ticketIds` lists every ticket the prompt covered (useful
+with `--all`).
 
 ---
 

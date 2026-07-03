@@ -53,6 +53,7 @@ parallax --route "question" --context spec.md --context arch.md
 | `--tier cheap\|mid\|frontier` | cheap for fan, mid for divergence | Override LLM tier |
 | `--json` | false | Machine-readable output (score + divergences) |
 | `--prompt-only` | false | Print exact prompts, exit 0 — no API key needed |
+| `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` (all three modes) |
 
 ---
 
@@ -151,6 +152,37 @@ The score is the key output: a spec that converged at N=5 with score 0.00 is a m
 
 ---
 
+## Recording the operator's prompt-only verdict
+
+In Claude Code (and similar harnesses without a bare API key) `--prompt-only`
+is how parallax is normally run: the tool prints the fan-out prompt(s), and the
+operator (the model itself) answers them and applies judgment. Without
+`--record-verdict`, that self-assessed verdict never enters the audit trail —
+only the fact that prompts were printed is observable. `--record-verdict
+<file|->` closes that gap, in every mode (spec / edge / route): after printing
+the prompts as usual, it reads the operator's answer from `<file>` (or stdin
+when `-`) and records it into `.adlc/manifest.jsonl` via
+`@adlc/gate-manifest`'s own `record()` — reusing its hash-chaining/signing
+logic rather than reimplementing it.
+
+```sh
+# Spec mode
+parallax --request "Add a login page" --prompt-only --record-verdict verdict.txt
+
+# Edge mode
+parallax --edge T1 T2 --prompt-only --record-verdict -
+
+# Route mode
+parallax --route "What is the retry policy?" --prompt-only --record-verdict verdict.txt
+```
+
+`--record-verdict` requires `--prompt-only` (exit 1 otherwise). The recorded
+entry's `gate` is `parallax`, `data.verdict` holds the operator's text
+verbatim, and `data.mode` plus mode-specific context (`tickets` for edge,
+`question` for route, `request` for spec) identify what was analysed.
+
+---
+
 ## Core gaps
 
-None. All required functions (`fan`, `complete`, `extractJson`, `loadTickets`, `promptOnly`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `readStdin`) are present in `@adlc/core`.
+None. All required functions (`fan`, `complete`, `extractJson`, `loadTickets`, `promptOnly`, `parseArgs`, `pass`, `gateFail`, `opError`, `printJson`, `readStdin`) are present in `@adlc/core`. Recording prompt-only verdicts reuses `@adlc/gate-manifest`'s `record()` directly (see `lib/verdict.mjs`) rather than reimplementing its hash-chain/signing logic.

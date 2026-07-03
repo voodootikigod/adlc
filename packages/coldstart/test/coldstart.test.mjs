@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -660,5 +660,91 @@ describe('F5 regression — mock gate backdoor closed in production', () => {
       !(result.status === 0 && result.stdout.includes('[PASS]')),
       `mock backdoor produced a green verdict outside test env.\nstdout: ${result.stdout}`
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// --record-verdict — captures the operator's prompt-only verdict into
+// .adlc/manifest.jsonl via gate-manifest's record() (closes #44).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('--record-verdict (prompt-only verdict capture)', () => {
+  let tmpDir;
+
+  test.before(() => {
+    tmpDir = makeTempDir();
+  });
+
+  test.after(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('--prompt-only --record-verdict <file> writes a gate-manifest entry with the verdict', () => {
+    const ticketsPath = writeTickets(tmpDir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
+    const verdictPath = join(tmpDir, 'verdict.txt');
+    writeFileSync(verdictPath, 'PASS: ticket is self-contained, no gaps found.\n', 'utf8');
+
+    const result = runCLI(
+      ['T1', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', verdictPath],
+      { cwd: tmpDir }
+    );
+
+    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    // Prompt is still printed (unchanged evidence surface).
+    assert.ok(result.stdout.includes('Login form'), 'prompt output should still include ticket title');
+
+    const manifestPath = join(tmpDir, '.adlc', 'manifest.jsonl');
+    const lines = readFileSync(manifestPath, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 1, 'exactly one manifest entry recorded');
+
+    const entry = JSON.parse(lines[0]);
+    assert.equal(entry.gate, 'coldstart');
+    assert.equal(entry.ticket, 'T1');
+    assert.equal(entry.data.promptOnly, true);
+    assert.ok(entry.data.verdict.includes('PASS: ticket is self-contained'), 'entry captures the operator verdict text');
+    assert.deepEqual(entry.data.ticketIds, ['T1']);
+  });
+
+  test('--record-verdict - reads the verdict from stdin', () => {
+    const dir = makeTempDir();
+    try {
+      const ticketsPath = writeTickets(dir, [{ id: 'T2', title: 'Checkout flow' }]);
+      const result = spawnSync(process.execPath, [
+        CLI, 'T2', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', '-',
+      ], {
+        cwd: dir,
+        input: 'FAIL: missing target file path.\n',
+        encoding: 'utf8',
+        env: { ...process.env, ANTHROPIC_API_KEY: undefined, OPENAI_API_KEY: undefined, GEMINI_API_KEY: undefined },
+      });
+
+      assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+      const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
+      assert.equal(entry.gate, 'coldstart');
+      assert.ok(entry.data.verdict.includes('FAIL: missing target file path'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--record-verdict without --prompt-only → exit 1 with clear error', () => {
+    const ticketsPath = writeTickets(tmpDir, [{ id: 'T1', title: 'Foo' }]);
+    const result = runCLI(['T1', '--tickets', ticketsPath, '--record-verdict', join(tmpDir, 'v.txt')]);
+    assert.equal(result.status, 1, `expected exit 1, got ${result.status}`);
+    assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
+  });
+
+  test('omitting --record-verdict preserves current --prompt-only behavior (no manifest file written)', () => {
+    const dir = makeTempDir();
+    try {
+      const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
+      const result = runCLI(['T1', '--tickets', ticketsPath, '--prompt-only'], { cwd: dir });
+      assert.equal(result.status, 0);
+      assert.ok(result.stdout.includes('Login form'));
+      assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest file when flag omitted');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

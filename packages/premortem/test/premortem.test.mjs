@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -338,6 +338,93 @@ test('--json: run() emits JSON causes array to stdout (mocked LLM)', () => {
       !result.stdout.includes('# Premortem Report'),
       '--json must not emit markdown',
     );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// --record-verdict — captures the operator's prompt-only verdict into
+// .adlc/manifest.jsonl via gate-manifest's record() (closes #44).
+// ---------------------------------------------------------------------------
+
+test('CLI: --prompt-only --record-verdict <file> writes a gate-manifest entry with the verdict', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+    const verdictPath = join(tmpDir, 'verdict.txt');
+    writeFileSync(
+      verdictPath,
+      'Confirmed: process.chdir throws under Vitest default threads pool; spec hardened to require --pool=forks.\n',
+      'utf8'
+    );
+
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--prompt-only', '--record-verdict', verdictPath,
+    ], { cwd: tmpDir, encoding: 'utf8' });
+
+    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+    assert.ok(result.stdout.includes('Lightning Checkout v2'), 'prompt is still printed');
+
+    const manifestPath = join(tmpDir, '.adlc', 'manifest.jsonl');
+    const lines = readFileSync(manifestPath, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 1, 'exactly one manifest entry recorded');
+
+    const entry = JSON.parse(lines[0]);
+    assert.equal(entry.gate, 'premortem');
+    assert.equal(entry.data.promptOnly, true);
+    assert.ok(entry.data.verdict.includes('process.chdir throws'), 'entry captures the operator verdict text');
+    assert.equal(entry.data.specPath, specPath);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --record-verdict - reads the verdict from stdin', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--prompt-only', '--record-verdict', '-',
+    ], { cwd: tmpDir, input: 'No failure modes found.\n', encoding: 'utf8' });
+
+    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+    const manifestPath = join(tmpDir, '.adlc', 'manifest.jsonl');
+    const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
+    assert.equal(entry.gate, 'premortem');
+    assert.ok(entry.data.verdict.includes('No failure modes found'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --record-verdict without --prompt-only → exit 1 with clear error', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--record-verdict', join(tmpDir, 'v.txt'),
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 1, `expected exit 1, got ${result.status}`);
+    assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: omitting --record-verdict preserves current --prompt-only behavior (no manifest written)', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+    const result = spawnSync(process.execPath, [CLI, specPath, '--prompt-only'], { cwd: tmpDir, encoding: 'utf8' });
+    assert.equal(result.status, 0);
+    assert.ok(result.stdout.includes('Lightning Checkout v2'));
+    assert.equal(existsSync(join(tmpDir, '.adlc', 'manifest.jsonl')), false, 'no manifest file when flag omitted');
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

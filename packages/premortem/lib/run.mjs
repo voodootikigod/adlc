@@ -4,6 +4,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { complete, extractJson, detectProvider, promptOnly, opError, printJson } from '@adlc/core';
 import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
 import { renderReport } from './render.mjs';
+// verdict.mjs (and the gate-manifest package it pulls in) is imported lazily,
+// only when --record-verdict is actually used — see the promptOnlyMode branch
+// below — so plain --prompt-only runs never pay for or depend on it.
 
 /**
  * Main premortem flow.
@@ -14,9 +17,12 @@ import { renderReport } from './render.mjs';
  * @param {string}  [opts.outPath]      — if set, write report to this path
  * @param {boolean} [opts.json]         — emit machine-readable JSON
  * @param {boolean} [opts.promptOnlyMode] — print prompt and exit 0 without calling LLM
+ * @param {string}  [opts.recordVerdictSource] — with promptOnlyMode: file path (or '-'
+ *                  for stdin) to read the operator's verdict from and record into
+ *                  the gate-manifest ledger
  */
 export async function run(opts) {
-  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode } = opts;
+  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode, recordVerdictSource } = opts;
 
   // --- read spec ---
   let specContent;
@@ -32,6 +38,19 @@ export async function run(opts) {
   if (promptOnlyMode) {
     const display =
       `--- system ---\n${SYSTEM_PROMPT}\n\n--- user ---\n${prompt}`;
+
+    if (recordVerdictSource) {
+      // Print the prompt — same evidence surface as plain --prompt-only —
+      // then capture the operator's answer into the gate-manifest ledger so
+      // the audit trail shows the gate was answered *and* what it concluded.
+      console.log(display);
+      const { readVerdictSource, recordVerdict } = await import('./verdict.mjs');
+      const verdict = await readVerdictSource(recordVerdictSource);
+      const entry = recordVerdict({ verdict, extra: { specPath } });
+      console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
+      process.exit(0);
+    }
+
     promptOnly(display);
     // promptOnly exits; this line is unreachable
   }

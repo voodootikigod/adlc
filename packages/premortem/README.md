@@ -14,7 +14,7 @@ Runs once per spec. Cheap. No bespoke judgement needed.
 ## Usage
 
 ```
-premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only]
+premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|->]
 ```
 
 ### Arguments
@@ -26,6 +26,7 @@ premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--pr
 | `--out <path>` | Write markdown report to this file instead of stdout | stdout |
 | `--json` | Emit machine-readable JSON `{ causes: [...] }` | false |
 | `--prompt-only` | Print the exact system + user prompt, then exit 0 — **no API key needed** | false |
+| `--record-verdict <file\|->` | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` | — |
 | `--help` | Print usage and exit 0 | false |
 
 ### Examples
@@ -95,10 +96,41 @@ key is available.
 
 ---
 
+## Recording the operator's prompt-only verdict
+
+In Claude Code (and similar harnesses without a bare API key) `--prompt-only`
+is how premortem is normally run: the tool prints the failure-mode prompt, and
+the operator (the model itself) answers it and applies judgment. Without
+`--record-verdict`, that self-assessed verdict — and any spec hardening it
+produced — never enters the audit trail; only the fact that a prompt was
+printed is observable. `--record-verdict <file|->` closes that gap: after
+printing the prompt as usual, it reads the operator's answer from `<file>` (or
+stdin when `-`) and records it into `.adlc/manifest.jsonl` via
+`@adlc/gate-manifest`'s own `record()` — reusing its hash-chaining/signing
+logic rather than reimplementing it.
+
+```sh
+# Operator writes their conclusion to a file, then records it
+premortem specs/checkout-v2.md --prompt-only --record-verdict verdict.txt
+
+# Or pipe the answer straight from stdin
+echo "confirmed: process.chdir throws under vitest threads pool" \
+  | premortem specs/checkout-v2.md --prompt-only --record-verdict -
+```
+
+`--record-verdict` requires `--prompt-only` (exit 1 otherwise). The recorded
+entry's `gate` is `premortem`, `data.verdict` holds the operator's text
+verbatim, and `data.specPath` records which spec the prompt covered.
+
+---
+
 ## Core gaps
 
 None.  All required functionality (`complete`, `extractJson`, `detectProvider`,
-`promptOnly`, `opError`, `parseArgs`, `printJson`) is available in `@adlc/core`.
+`promptOnly`, `opError`, `parseArgs`, `printJson`, `readStdin`) is available in
+`@adlc/core`. Recording prompt-only verdicts reuses `@adlc/gate-manifest`'s
+`record()` directly (see `lib/verdict.mjs`) rather than reimplementing its
+hash-chain/signing logic.
 
 ---
 

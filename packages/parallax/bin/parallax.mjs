@@ -38,6 +38,9 @@ Flags:
   --tier cheap|mid|frontier  override LLM tier
   --json              machine-readable output
   --prompt-only       print prompts and exit 0 (no API key needed)
+  --record-verdict <file|->  with --prompt-only: read the operator's answer
+                      from <file> (or stdin when '-') and record it into
+                      .adlc/manifest.jsonl via gate-manifest
   --tickets <path>    tickets file (default .adlc/tickets.json)
   --context <file>    context file(s) for --route mode (repeatable)
 
@@ -61,6 +64,7 @@ const { values, positionals } = parseArgs({
     tier: { type: 'string' },
     json: { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },
+    'record-verdict': { type: 'string' },
   },
 });
 
@@ -77,7 +81,30 @@ if (values.tier !== undefined && !VALID_TIERS.includes(values.tier)) {
   opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
 }
 
+if (values['record-verdict'] && !values['prompt-only']) {
+  opError('--record-verdict requires --prompt-only');
+}
+
 const tierOverride = values.tier ?? undefined;
+
+// lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
+// imported lazily, only when --record-verdict is actually used, so plain
+// --prompt-only runs never pay for or depend on it.
+//
+// Print `prompts` (same evidence surface as plain --prompt-only), then
+// capture the operator's answer into the gate-manifest ledger so the audit
+// trail shows the gate was answered *and* what it concluded, and exit 0.
+async function recordPromptOnlyVerdict(prompts, extra) {
+  for (const [i, p] of prompts.entries()) {
+    if (prompts.length > 1) console.log(`--- prompt ${i + 1} of ${prompts.length} ---`);
+    console.log(p);
+  }
+  const { readVerdictSource, recordVerdict } = await import('../lib/verdict.mjs');
+  const verdict = await readVerdictSource(values['record-verdict']);
+  const entry = recordVerdict({ verdict, extra });
+  console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
+  process.exit(0);
+}
 
 // --------------------------------------------------------------------------
 // EDGE MODE: parallax --edge T1 T2 [--tickets path]
@@ -106,7 +133,13 @@ if (values.edge) {
       assumptions: [`<assumption ${i + 1}>`],
       decisions: [{ point: `<point ${i + 1}>`, choice: `<choice ${i + 1}>` }],
     }));
-    promptOnly([edgeFanPrompt, buildDivergencePrompt(placeholderEdgeReadings)]);
+    const divergencePrompt = buildDivergencePrompt(placeholderEdgeReadings);
+
+    if (values['record-verdict']) {
+      await recordPromptOnlyVerdict([edgeFanPrompt, divergencePrompt], { mode: 'edge', tickets: [idA, idB] });
+    }
+
+    promptOnly([edgeFanPrompt, divergencePrompt]);
   }
 
   let result;
@@ -154,6 +187,11 @@ if (values.route) {
     const answerPrompt = buildRouteAnswerPrompt(question, contextFiles);
     const placeholderAnswers = Array.from({ length: n }, (_, i) => `<answer ${i + 1}>`);
     const judgePrompt = buildRouteJudgePrompt(question, placeholderAnswers);
+
+    if (values['record-verdict']) {
+      await recordPromptOnlyVerdict([answerPrompt, judgePrompt], { mode: 'route', question });
+    }
+
     promptOnly([answerPrompt, judgePrompt]);
   }
 
@@ -218,7 +256,13 @@ if (values['prompt-only']) {
     assumptions: [`<assumption ${i + 1}>`],
     decisions: [{ point: `<point ${i + 1}>`, choice: `<choice ${i + 1}>` }],
   }));
-  promptOnly([specFanPrompt, buildDivergencePrompt(placeholderSpecReadings)]);
+  const divergencePrompt = buildDivergencePrompt(placeholderSpecReadings);
+
+  if (values['record-verdict']) {
+    await recordPromptOnlyVerdict([specFanPrompt, divergencePrompt], { mode: 'spec', request });
+  }
+
+  promptOnly([specFanPrompt, divergencePrompt]);
 }
 
 let result;

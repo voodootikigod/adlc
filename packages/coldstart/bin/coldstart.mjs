@@ -14,8 +14,11 @@ import {
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll } from '../lib/gate.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
+// lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
+// imported lazily, only when --record-verdict is actually used — see below —
+// so plain --prompt-only runs never pay for or depend on it.
 
-const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--json]';
+const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--record-verdict <file|->] [--json]';
 
 const { values, positionals } = parseArgs({
   usage: USAGE,
@@ -24,6 +27,7 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     tier: { type: 'string', default: 'cheap' },
     'prompt-only': { type: 'boolean', default: false },
+    'record-verdict': { type: 'string' },
     json: { type: 'boolean', default: false },
   },
 });
@@ -31,6 +35,10 @@ const { values, positionals } = parseArgs({
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
 if (!VALID_TIERS.includes(values.tier)) {
   opError(`--tier must be cheap|mid|frontier, got: ${values.tier}`);
+}
+
+if (values['record-verdict'] && !values['prompt-only']) {
+  opError('--record-verdict requires --prompt-only');
 }
 
 const promptOnlyMode = values['prompt-only'];
@@ -74,6 +82,28 @@ if (promptOnlyMode) {
   const prompts = targets.map(
     (t) => `=== system ===\n${SYSTEM_PROMPT}\n\n=== user (${t.id}) ===\n${buildPrompt(t)}`
   );
+
+  if (values['record-verdict']) {
+    // Print the prompt(s) — same evidence surface as plain --prompt-only —
+    // then capture the operator's answer into the gate-manifest ledger so
+    // the audit trail shows the gate was answered *and* what it concluded.
+    for (const [i, p] of prompts.entries()) {
+      if (prompts.length > 1) console.log(`--- prompt ${i + 1} of ${prompts.length} ---`);
+      console.log(p);
+    }
+
+    const { readVerdictSource, recordVerdict } = await import('../lib/verdict.mjs');
+    const verdict = await readVerdictSource(values['record-verdict']);
+    const ticket = runAll ? undefined : targets[0].id;
+    const entry = recordVerdict({
+      ticket,
+      verdict,
+      extra: { ticketIds: targets.map((t) => t.id), tier },
+    });
+    console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}${ticket ? ` ticket=${ticket}` : ''}`);
+    process.exit(0);
+  }
+
   promptOnly(prompts);
   // promptOnly() calls process.exit(0) internally
 }

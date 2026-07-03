@@ -10,12 +10,13 @@ const { values, positionals } = parseArgs({
     out:          { type: 'string' },
     json:         { type: 'boolean', default: false },
     'prompt-only':{ type: 'boolean', default: false },
+    'record-verdict': { type: 'string' },
     help:         { type: 'boolean', default: false },
   },
 });
 
 if (values.help) {
-  console.log(`premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only]
+  console.log(`premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|->]
 
 Failure-first spec stress test (ADLC C2).
 
@@ -24,6 +25,9 @@ Failure-first spec stress test (ADLC C2).
   --out            Write markdown report to this file instead of stdout
   --json           Emit machine-readable JSON {causes:[...]}
   --prompt-only    Print the exact prompt and exit 0 (no API key needed)
+  --record-verdict <file|->  With --prompt-only: read the operator's answer
+                   from <file> (or stdin when '-') and record it into
+                   .adlc/manifest.jsonl via gate-manifest
   --help           Show this help
 
 Exit codes:
@@ -43,10 +47,15 @@ if (!VALID_TIERS.includes(values.tier)) {
   opError(`invalid --tier '${values.tier}' — must be one of: ${VALID_TIERS.join(', ')}`);
 }
 
+if (values['record-verdict'] && !values['prompt-only']) {
+  opError('--record-verdict requires --prompt-only');
+}
+
 await run({
   specPath,
   tier: values.tier,
   outPath: values.out,
   json: values.json,
   promptOnlyMode: values['prompt-only'],
+  recordVerdictSource: values['record-verdict'],
 });
