@@ -791,18 +791,27 @@ describe('CLI: --max budget cannot silently starve an explicit --target', () => 
       ],
       dir
     );
-    // The untested file must actually be mutated and its survivors must be
-    // visible — it must NOT vacuously exit 0.
-    assert.notEqual(result.status, 0,
-      `Explicit target with zero test coverage must not vacuously pass: ` +
-      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
-    if (result.status === 2) {
-      const parsed = JSON.parse(result.stdout);
-      assert.ok(
-        parsed.mutants.some((m) => m.file === 'src/never_in_diff.mjs'),
-        `Expected the explicit target to actually be mutated: ${result.stdout}`
-      );
-    }
+    // This must land on exit 2 (a real mutation run found a survivor),
+    // NOT exit 1 (the pre-existing starvedByBudget operational-refusal
+    // guard in bin/hollow-test.mjs). A plain `notEqual(result.status, 0)`
+    // here would also be satisfied by status 1 if the priorityFiles
+    // reservation in buildFileTargets() were deleted entirely — starvedByBudget
+    // would still catch the resulting quota-0 explicit target and refuse to
+    // run, making this test pass for the wrong reason and leaving the
+    // reservation mechanism itself unpinned at the CLI level. Asserting
+    // status === 2 unconditionally (with the same fail-closed reasoning
+    // this PR (#70/#41/#35) exists to enforce) forces the reservation to
+    // have actually granted the target a mutable quota.
+    assert.equal(result.status, 2,
+      `Explicit target with zero test coverage must be mutated by a real run ` +
+      `(status 2), not silently pass (0) or be blocked by the operational ` +
+      `starved-budget guard (1): status=${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.ok(
+      parsed.mutants.some((m) => m.file === 'src/never_in_diff.mjs'),
+      `Expected the explicit target to actually be mutated: ${result.stdout}`
+    );
   });
 });
 
