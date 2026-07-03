@@ -149,6 +149,28 @@ describe('parseCriteria', () => {
     assert.equal(criteria[0].text, 'included');
   });
 
+  it('does not treat a prose line with two separate bold spans as a pseudo-heading (review round 3)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '**Login** endpoint must return **401**',
+      '- AC1: Foo works',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: Foo works');
+  });
+
+  it('does not treat a prose line with two adjacent bold spans as a pseudo-heading (review round 3)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '**Status:** **Done**',
+      '- AC1: Foo works',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: Foo works');
+  });
+
   // -------------------------------------------------------------------------
   // #71 — wrapped multi-line list-item continuation
   // -------------------------------------------------------------------------

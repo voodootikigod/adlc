@@ -13,6 +13,19 @@ const CRITERIA_HEADING_RE = /acceptance|criteria|requirements|definition of done
  * (with an optional trailing colon) so it doesn't false-trigger on a bold
  * phrase embedded mid-sentence (see #71).
  *
+ * The label group is `(?:(?!\*\*).)+` rather than a plain lazy `.+?`: a
+ * lazy quantifier is still willing to backtrack across an *interior*
+ * `**...**` pair to satisfy the trailing `\*\*:?\s*$` anchor, so a prose
+ * line containing two unrelated bold spans — e.g.
+ * "**Login** endpoint must return **401**" — would otherwise match, with
+ * the whole "Login** endpoint must return **401" swallowed into the
+ * capture group. That silently flips `inCriteriaSection` to false (since
+ * the bogus label doesn't match CRITERIA_HEADING_RE) and drops every
+ * criterion after it even though no real heading intervened (review
+ * round 3 / #71 follow-up). Forbidding `**` inside the label means the
+ * regex only matches a line that is a *single* bold span from start to
+ * end, which is what a genuine pseudo-heading looks like.
+ *
  * Deliberately anchored with NO leading whitespace tolerance: a real
  * pseudo-heading is a top-level line, not something nested inside a list
  * item's body. If this were allowed to match indented text, an indented
@@ -23,7 +36,7 @@ const CRITERIA_HEADING_RE = /acceptance|criteria|requirements|definition of done
  * criteria section and dropping every criterion after it (see #71/#45
  * follow-up).
  */
-const BOLD_HEADING_RE = /^\*\*(.+?)\*\*:?\s*$/;
+const BOLD_HEADING_RE = /^\*\*((?:(?!\*\*).)+)\*\*:?\s*$/;
 
 /**
  * List-item prefixes: -, *, 1., 2., …, - [ ], - [x]
