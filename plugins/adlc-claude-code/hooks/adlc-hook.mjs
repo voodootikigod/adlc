@@ -686,7 +686,9 @@ function review() {
     `ADLC adversarial-review: this change touches a risk-gated path (${tiers}: ${sample}` +
     `${decision.matches.length > 3 ? ', …' : ''}) with no adversarial-review gate-manifest ` +
     `record${ticketId ? ` for ticket ${ticketId}` : ''}. Run \`npx adversarial-review\` and record ` +
-    `the verdict via \`adlc gate-manifest record adversarial-review --evidence '...'\` before merging.`;
+    `the verdict via \`adlc gate-manifest record adversarial-review --files '<paths>' ` +
+    `--data '{"providers":"<a,b>","verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>"}'\` ` +
+    `before merging.`;
 
   if (process.env.ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT === '1') {
     emit({ decision: 'block', reason: msg, systemMessage: msg });

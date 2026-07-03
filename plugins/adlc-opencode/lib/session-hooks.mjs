@@ -211,6 +211,8 @@ export function auditAdversarialReview(root, { spawnImpl = spawnSync, env = proc
   const warning =
     `risk-gated change (${tiers}) with no adversarial-review gate-manifest record` +
     `${ticketId ? ` for ticket ${ticketId}` : ''}. Run \`npx adversarial-review\` and record the verdict ` +
-    `via \`adlc gate-manifest record adversarial-review --evidence '...'\` before merging.`;
+    `via \`adlc gate-manifest record adversarial-review --files '<paths>' ` +
+    `--data '{"providers":"<a,b>","verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>"}'\` ` +
+    `before merging.`;
   return { needed: true, skipped: false, warning, matches: decision.matches };
 }
