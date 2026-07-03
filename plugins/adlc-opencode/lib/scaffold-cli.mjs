@@ -14,11 +14,12 @@ console.log(`adlc-init: plugin ${plugin.alreadyPresent ? 'already registered' : 
 console.log(`adlc-init: deployed ${commands.length} command(s) → .opencode/commands/`);
 console.log(`adlc-init: deployed ${agents.length} agent(s) → .opencode/agents/`);
 console.log(`adlc-init: deployed ${skills.length} skill(s) → .opencode/skill/`);
-console.log(
-  gitignore.changed
+const gitignoreStatus = gitignore.changed
+  ? gitignore.added.length > 0
     ? `adlc-init: .gitignore updated (added ${gitignore.added.join(', ')})`
-    : 'adlc-init: .gitignore already tracks tickets.json + specs/'
-);
+    : 'adlc-init: .gitignore updated (repaired duplicate/misplaced entries)'
+  : 'adlc-init: .gitignore already tracks tickets.json + specs/';
+console.log(gitignoreStatus);
 const logToolLine = (name, r) => {
   if (r.changed) console.log(`adlc-init: excluded .adlc/ from ${name} (${r.path})`);
   else if (r.skipped) console.log(`adlc-init: ${name} detected but needs a manual .adlc/ ignore entry — ${r.skipped} (${r.path})`);

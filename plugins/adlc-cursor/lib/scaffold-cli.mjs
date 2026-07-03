@@ -20,9 +20,12 @@ if (hooks.backedUp) {
   console.log(`  ⚠ existing .cursor/hooks.json was unparseable — preserved verbatim at ${hooks.backedUp} before writing a fresh file`);
 }
 console.log(`  .cursor/rules/adlc.mdc — ${tag(rule)}`);
-console.log(
-  `  .gitignore             — ${gitignore.changed ? `updated (added ${gitignore.added.join(', ')})` : 'already tracks tickets.json + specs/'}`
-);
+const gitignoreStatus = gitignore.changed
+  ? gitignore.added.length > 0
+    ? `updated (added ${gitignore.added.join(', ')})`
+    : 'updated (repaired duplicate/misplaced entries)'
+  : 'already tracks tickets.json + specs/';
+console.log(`  .gitignore             — ${gitignoreStatus}`);
 const logToolLine = (name, r) => {
   if (r.changed) console.log(`  ${name} — excluded .adlc/ (${r.path})`);
   else if (r.skipped) console.log(`  ${name} — detected but needs a manual .adlc/ ignore entry: ${r.skipped} (${r.path})`);
