@@ -43,4 +43,4 @@ node --test test/review-calibration.test.mjs
 npm test   # full package suite (all *.test.mjs)
 ```
 
-All of the above pass (85/85 tests across the three files as of this change).
+All of the above pass (98/98 tests across the three files as of this change).

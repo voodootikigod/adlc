@@ -125,6 +125,20 @@ describe('checkProviderIndependence', () => {
     assert.equal(checkProviderIndependence('anthropic', undefined).same, false);
     assert.equal(checkProviderIndependence(undefined, undefined).same, false);
   });
+
+  it('is NOT defeated by a "--review-provider __proto__" prototype-pollution bypass', () => {
+    // A plain-object alias lookup (`ALIASES[n] ?? n`) resolves '__proto__' to
+    // Object.prototype (a non-nullish value), so the `??` fallback never
+    // fires and normalization silently returns an object instead of a
+    // string. An object is never === a string, so `same` would always be
+    // false for '__proto__' regardless of the true underlying provider —
+    // silently defeating both the warning and --strict. PROVIDER_ALIASES
+    // must be looked up in a way immune to this (e.g. a Map), so '__proto__'
+    // is treated like any other unrecognized name and normalizes to itself.
+    const bypassAttempt = checkProviderIndependence('__proto__', '__proto__');
+    assert.equal(bypassAttempt.same, true); // both sides identical -> correctly flagged
+    assert.equal(checkProviderIndependence('__proto__', 'anthropic').same, false);
+  });
 });
 
 // ── resolveEffectiveProvider (agy tier-dependent model family, issue #64) ─────
@@ -173,5 +187,25 @@ describe('resolveEffectiveProvider', () => {
     const effective = resolveEffectiveProvider(agyProvider, 'mid');
     const result = checkProviderIndependence('anthropic', effective);
     assert.equal(result.same, true);
+  });
+
+  // packages/core/lib/llm.mjs resolveModel() checks env[`ADLC_MODEL_${TIER}`]
+  // BEFORE falling back to provider.models[tier] — this is what complete()
+  // actually dispatches to. Reading the static table alone (ignoring the
+  // override) would let ADLC_MODEL_MID=<openai model> silently defeat the
+  // guard: the judge really runs on OpenAI while this function kept
+  // reporting 'anthropic' from the stale static default.
+  it('honors an ADLC_MODEL_MID override, not just the static default table', () => {
+    const env = { ADLC_MODEL_MID: 'gpt-5.1-some-openai-model' };
+    assert.equal(resolveEffectiveProvider(agyProvider, 'mid', env), 'openai');
+  });
+
+  it('honors an ADLC_MODEL_CHEAP override matching a different family than the default', () => {
+    const env = { ADLC_MODEL_CHEAP: 'claude-haiku-4-5' };
+    assert.equal(resolveEffectiveProvider(agyProvider, 'cheap', env), 'anthropic');
+  });
+
+  it('falls back to the static table when no override env is set', () => {
+    assert.equal(resolveEffectiveProvider(agyProvider, 'mid', {}), 'anthropic');
   });
 });

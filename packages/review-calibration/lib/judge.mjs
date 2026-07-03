@@ -4,6 +4,8 @@
 // (find the bug) — the generator–verifier gap — so a cheap model judges well.
 // The judge is itself calibrated against a labeled fixture (calibrateJudge).
 
+import { resolveModel } from '@adlc/core';
+
 /**
  * A judge is `async (plant, finding) => boolean` — true iff the finding
  * identifies the plant's defect.
@@ -121,17 +123,17 @@ export async function calibrateJudge(fixture, judge) {
 // model family reviewing itself.
 
 /** Known aliases that name the same provider family as `detectProvider`. */
-const PROVIDER_ALIASES = {
-  claude: 'anthropic',
-  gpt: 'openai',
-  gpt4: 'openai',
-  chatgpt: 'openai',
-  google: 'gemini',
-};
+const PROVIDER_ALIASES = new Map([
+  ['claude', 'anthropic'],
+  ['gpt', 'openai'],
+  ['gpt4', 'openai'],
+  ['chatgpt', 'openai'],
+  ['google', 'gemini'],
+]);
 
 function normalizeProviderName(name) {
   const n = String(name).trim().toLowerCase();
-  return PROVIDER_ALIASES[n] ?? n;
+  return PROVIDER_ALIASES.get(n) ?? n;
 }
 
 /**
@@ -176,19 +178,32 @@ const MODEL_FAMILY_PATTERNS = [
  * declared --review-provider, silently defeating the guard exactly when agy is
  * transparently running the same model family as the reviewer-under-test.
  *
- * Resolves by inspecting the actual model name for the given tier and matching
- * it against known family substrings. Falls back to the literal provider name
- * (never silently claims independence) when the provider isn't 'agy' or its
- * model name doesn't match a known family.
+ * Resolves the ACTUAL model id `complete()` will dispatch to — via core's
+ * `resolveModel`, which checks `ADLC_MODEL_<TIER>` env overrides FIRST and only
+ * falls back to the provider's static `models[tier]` table when unset — then
+ * matches that model id against known family substrings. Using the static
+ * table directly (without the override) would let an operator's
+ * `ADLC_MODEL_MID=<openai-model>` override silently defeat the guard: the judge
+ * would actually run on OpenAI while this function kept reporting 'anthropic'.
+ * Falls back to the literal provider name (never silently claims independence)
+ * when the provider isn't 'agy' or its resolved model name doesn't match a
+ * known family.
  *
  * @param {{name: string, models?: Record<string,string>}|null|undefined} provider  detectProvider() result
  * @param {string} tier
+ * @param {NodeJS.ProcessEnv} [env]  defaults to process.env; accepts ADLC_MODEL_<TIER> overrides
  * @returns {string|undefined}
  */
-export function resolveEffectiveProvider(provider, tier) {
+export function resolveEffectiveProvider(provider, tier, env = process.env) {
   if (!provider) return undefined;
   if (provider.name !== 'agy') return provider.name;
-  const model = String(provider.models?.[tier] ?? '').toLowerCase();
+  let modelId;
+  try {
+    modelId = resolveModel(provider, { tier }, env);
+  } catch {
+    return provider.name; // unknown tier — fall back, don't guess a match
+  }
+  const model = String(modelId ?? '').toLowerCase();
   for (const [pattern, family] of MODEL_FAMILY_PATTERNS) {
     if (pattern.test(model)) return family;
   }
