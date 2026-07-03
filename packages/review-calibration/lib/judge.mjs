@@ -110,3 +110,48 @@ export async function calibrateJudge(fixture, judge) {
   const n = fixture.length;
   return { agreement: n > 0 ? agree / n : 0, n, disagreements };
 }
+
+// ── provider-independence guard (issue #64) ───────────────────────────────────
+// The judge is resolved through the same auto-detect provider path as
+// everything else in the toolkit, while the reviewer-under-test runs as an
+// opaque subprocess via --review-cmd — it can't be introspected generically.
+// The caller states its provider explicitly via --review-provider; this
+// compares that declaration against the judge's resolved provider so the
+// "who reviews the reviewer" claim can't be silently satisfied by the same
+// model family reviewing itself.
+
+/** Known aliases that name the same provider family as `detectProvider`. */
+const PROVIDER_ALIASES = {
+  claude: 'anthropic',
+  gpt: 'openai',
+  gpt4: 'openai',
+  chatgpt: 'openai',
+  google: 'gemini',
+};
+
+function normalizeProviderName(name) {
+  const n = String(name).trim().toLowerCase();
+  return PROVIDER_ALIASES[n] ?? n;
+}
+
+/**
+ * Compare the caller-declared reviewer-under-test provider against the
+ * judge's resolved provider. Neither side can be compared if undeclared
+ * (a missing --review-provider, or a judge that isn't LLM-backed, e.g.
+ * --scorer string) — in that case `same` is false because no comparison was
+ * possible, not because independence was verified.
+ *
+ * @param {string|undefined} reviewProvider  caller-declared --review-provider value
+ * @param {string|undefined} judgeProvider   judge's resolved provider name (detectProvider().name)
+ * @returns {{ same: boolean, reviewProvider: string|undefined, judgeProvider: string|undefined }}
+ */
+export function checkProviderIndependence(reviewProvider, judgeProvider) {
+  if (!reviewProvider || !judgeProvider) {
+    return { same: false, reviewProvider, judgeProvider };
+  }
+  return {
+    same: normalizeProviderName(reviewProvider) === normalizeProviderName(judgeProvider),
+    reviewProvider,
+    judgeProvider,
+  };
+}
