@@ -74,3 +74,57 @@ test('claude-code-plugin-smoke fails on a bare command recommendation in the hom
     rmSync(tmpRepo, { recursive: true, force: true });
   }
 });
+
+// Regression coverage for the review-round-4 finding on issue #50: the guard must
+// also cover the repo's top-level README.md — the first file a GitHub visitor
+// reads, with its own "Use it in Claude Code" quick-start — not just the
+// plugins/adlc-claude-code/* tree and docs/integrations/claude-code.md.
+test('claude-code-plugin-smoke fails on a bare command recommendation in README.md', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    const readmePath = join(tmpRepo, 'README.md');
+    const original = readFileSync(readmePath, 'utf8');
+    assert.ok(original.includes('/adlc:adlc-init'), 'fixture assumption stale: expected the scoped form to be present before regression injection');
+    const regressed = original.replace('/adlc:adlc-init', '/adlc-init');
+    writeFileSync(readmePath, regressed);
+
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'smoke test should fail when README.md recommends a bare /adlc-init');
+    assert.match(result.stderr, /bare, non-namespaced command reference/);
+    assert.match(result.stderr, /README\.md/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+// Regression coverage for the review-round-4 finding on issue #50: the guard must
+// also cover docs/adr/0003-adlc-claude-code-plugin.md — the plugin's own design
+// ADR, cross-linked from docs/integrations/claude-code.md — not just the
+// plugins/adlc-claude-code/* tree and the two other guidance docs.
+test('claude-code-plugin-smoke fails on a bare command recommendation in the design ADR', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    const adrPath = join(tmpRepo, 'docs/adr/0003-adlc-claude-code-plugin.md');
+    const original = readFileSync(adrPath, 'utf8');
+    assert.ok(original.includes('/adlc:adlc-init'), 'fixture assumption stale: expected the scoped form to be present before regression injection');
+    const regressed = original.replace('/adlc:adlc-init', '/adlc-init');
+    writeFileSync(adrPath, regressed);
+
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'smoke test should fail when the design ADR recommends a bare /adlc-init');
+    assert.match(result.stderr, /bare, non-namespaced command reference/);
+    assert.match(result.stderr, /docs\/adr\/0003-adlc-claude-code-plugin\.md/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});

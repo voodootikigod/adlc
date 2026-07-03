@@ -119,13 +119,13 @@ shape that embraces the lifecycle "in total."
 
 ### 4. Commands (explicit, user-invoked)
 
-- `/adlc-init` — bootstrap `.adlc/`, split the committable ticket contract from
+- `/adlc:adlc-init` — bootstrap `.adlc/`, split the committable ticket contract from
   runtime evidence in `.gitignore`, run preflight.
-- `/adlc-ticket` (P0) — author a schema-valid, self-contained ticket (the contract
+- `/adlc:adlc-ticket` (P0) — author a schema-valid, self-contained ticket (the contract
   every gate reads).
-- `/adlc-distill` (P7) — mine repeated findings + PR rejections into deterministic
+- `/adlc:adlc-distill` (P7) — mine repeated findings + PR rejections into deterministic
   defenses.
-- `/adlc-maintain` (C10/C12) — decay-driven checks (skill-rot, model-ratchet,
+- `/adlc:adlc-maintain` (C10/C12) — decay-driven checks (skill-rot, model-ratchet,
   gate-fuzzing).
 
 ### 5. Prosecutor subagent (P5)
@@ -179,7 +179,7 @@ a decision that should require a human, not an environment variable.
 
 ### 8. P7 distill → skill-mining handoff
 
-`/adlc-distill`'s `lesson-foundry` only *scaffolds* a `SKILL.md` stub; it does not
+`/adlc:adlc-distill`'s `lesson-foundry` only *scaffolds* a `SKILL.md` stub; it does not
 dedup against the public skill ecosystem or confirm the skill is usable cold. Per
 doctrine ("lesson-foundry emits stubs; skill-mining manages the registry"), skill
 defenses are routed through the existing **skill-mining** skill for dedup + a
@@ -215,10 +215,10 @@ Each phase was independently shippable and looped through `/adversarial-review`
 (counter-model: `agy`) until clean.
 
 - **Phase A — dispatcher.** `@adlc/cli` umbrella bin.
-- **Phase B — plugin skeleton + discovery skill + `/adlc-init`/`/adlc-ticket`.**
+- **Phase B — plugin skeleton + discovery skill + `/adlc:adlc-init`/`/adlc:adlc-ticket`.**
 - **Phase C — advisory hooks** (preflight/flail/manifest).
 - **Phase D — enforcing rail-guard hook + prosecutor subagent + CI backstop.**
-- **Phase E — `/adlc-distill` + `/adlc-maintain` + maintenance cron.**
+- **Phase E — `/adlc:adlc-distill` + `/adlc:adlc-maintain` + maintenance cron.**
 - **Phase F — marketplace publish + adoption docs** (`docs/integrations/claude-code.md`).
 
 ---
