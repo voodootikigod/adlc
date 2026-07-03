@@ -2,10 +2,22 @@
 //
 // `consecutiveDry` (lib/run.mjs ~L206, ~L246, ~L257) increments on every dry pass and resets
 // to 0 the moment a non-dry pass is seen (findings.length > 0, regardless of disposition --
-// even an all-killed pass is non-dry per classifyPass()). The gate at ~L295 requires
-// `consecutiveDry >= 2`. Each entry in `result.passes` records the counter's value as of that
-// pass, so we can assert the increment/reset behavior per-pass rather than only the aggregate
-// pass/fail outcome.
+// even an all-killed pass is non-dry per classifyPass()). Each entry in `result.passes` records
+// the counter's value as of that pass, so we can assert the increment/reset behavior per-pass
+// rather than only the aggregate pass/fail outcome.
+//
+// Known blind spot (pre-existing on main, not introduced or fixed here): the pass gate at
+// ~L295 reads `consecutiveDry >= 2 && openFindings.size === 0 && dryLenses.size >= 3`, but that
+// `>= 2` is NOT an independently-testable boundary at this file's granularity. `dryLenses` (from
+// `finalDryLenses()`) draws its distinct-lens set from the same trailing dry-pass run that
+// increments `consecutiveDry`, and a set of >= 3 distinct lenses can only be built from a
+// trailing streak of >= 3 passes -- so `dryLenses.size >= 3` already implies
+// `consecutiveDry >= 3` on every path where the gate can actually pass. Deleting the
+// `consecutiveDry >= 2 &&` clause from L295 entirely does not change this suite's outcome; a
+// real mutation test for that clause would require exercising it against the dry-lens condition
+// directly (or removing the dry-lens requirement), which is out of scope for a test-only file
+// split. The *other* use of `consecutiveDry >= 2`, at ~L331 (selects which gate-fail message to
+// return), IS correctly boundary-tested below by the "increments on each dry pass..." case.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runProsecution } from '../lib/run.mjs';
