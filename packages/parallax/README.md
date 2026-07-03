@@ -181,6 +181,26 @@ entry's `gate` is `parallax`, `data.verdict` holds the operator's text
 verbatim, and `data.mode` plus mode-specific context (`tickets` for edge,
 `question` for route, `request` for spec) identify what was analysed.
 
+**Spec mode + `--record-verdict -` gotcha:** in spec mode, if the request text
+is *also* being read from stdin (i.e. neither `--request` nor `--file` was
+given), `--record-verdict -` can't be used — both would try to drain the same
+stdin stream, and the request read always runs first. Parallax detects this
+combination and exits 1 with a clear error rather than silently misreading
+input. Use `--request`/`--file` for the request text, or write the verdict to
+a file and pass `--record-verdict <file>` instead:
+
+```sh
+# Does NOT work: both request and verdict want stdin — exits 1 with an
+# explanatory error instead of silently misreading input
+echo "Add a login page" | parallax --prompt-only --record-verdict -
+
+# Works: request via --request, verdict via stdin
+parallax --request "Add a login page" --prompt-only --record-verdict -
+
+# Works: request via stdin, verdict via file
+echo "Add a login page" | parallax --prompt-only --record-verdict verdict.txt
+```
+
 ---
 
 ## Core gaps

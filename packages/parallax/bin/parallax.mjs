@@ -239,6 +239,19 @@ if (!request && values.file) {
 if (!request) {
   // Try stdin (non-interactive only)
   if (!process.stdin.isTTY) {
+    // Spec mode's request text and `--record-verdict -` both want to drain
+    // the same stdin stream. Reading it twice would either (a) starve the
+    // verdict read (stdin is already at EOF, so it always looks "empty"
+    // and errors out) or (b) if the two were piped together, silently
+    // swallow the intended verdict text into the recorded `request` while
+    // the verdict read still fails. Fail fast with a clear message instead
+    // of letting either of those play out.
+    if (values['record-verdict'] === '-') {
+      opError(
+        "--record-verdict - can't be combined with reading the request from stdin (both would read the same stream). " +
+          'Pass the request via --request/--file, or write the verdict to a file and use --record-verdict <file> instead.'
+      );
+    }
     request = (await readStdin()).trim();
   }
 }
