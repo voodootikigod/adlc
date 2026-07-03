@@ -51,8 +51,16 @@ const PRECEDING_PHRASE_RE = /(verified\s+via|\brun)\s*:?\s*$/i;
  * (e.g. "ci", "build", "go", "run" inside a filename) — see #45 follow-up.
  */
 const FILENAME_LIKE_RE = /^[\w][\w./-]*\.[A-Za-z0-9]+$/;
-/** A bare absolute/relative path with no whitespace and no file extension. */
-const PATH_LIKE_RE = /^\.{0,2}\/[\w./-]+$/;
+/**
+ * A bare absolute/relative path with no whitespace and no file extension.
+ * Each path segment after the leading `.`/`..`/`/` must consist only of
+ * word characters and hyphens (no dots) — a segment containing a dot (e.g.
+ * the "verify.sh" in `../scripts/verify.sh`) means the path has a file
+ * extension and must NOT be treated as file-like here: it's exactly the
+ * kind of script-path verification command (#45/#71 follow-up) that should
+ * still be checked against COMMAND_WORD_RE.
+ */
+const PATH_LIKE_RE = /^\.{0,2}\/(?:[\w-]+\/)*[\w-]+$/;
 
 /**
  * Whether a backtick span in `text` looks like a genuine command or

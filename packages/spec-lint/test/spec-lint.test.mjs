@@ -403,6 +403,37 @@ describe('classifyCriterion', () => {
     const r = classifyCriterion('Run `npm test` to verify');
     assert.ok(r.verified);
   });
+
+  // -------------------------------------------------------------------------
+  // review round — PATH_LIKE_RE must not swallow real script-path commands
+  // that happen to carry a file extension (e.g. `./deploy.sh`). Only a path
+  // with NO extension (e.g. `/var/log/run`) should be treated as file-like.
+  // -------------------------------------------------------------------------
+
+  it('VERIFIED: a relative script path with an extension is a genuine command', () => {
+    const r = classifyCriterion('Deploys via `./deploy.sh` script');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: "Execute" plus a relative script path is a genuine command', () => {
+    const r = classifyCriterion('Execute `./deploy.sh` to confirm success');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: a parent-relative script path is a genuine command', () => {
+    const r = classifyCriterion('Confirmed by `../scripts/verify.sh`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: an absolute script path is a genuine command', () => {
+    const r = classifyCriterion('Confirmed by `/opt/tools/verify.sh` output');
+    assert.ok(r.verified);
+  });
+
+  it('WISH: an absolute path with no extension is still file-like', () => {
+    const r = classifyCriterion('see `/var/log/run` for reference');
+    assert.ok(!r.verified);
+  });
 });
 
 // ---------------------------------------------------------------------------
