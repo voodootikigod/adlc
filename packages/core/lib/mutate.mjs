@@ -3,6 +3,53 @@
 // Text-based by design: language-agnostic-enough for JS/TS/Python-style code,
 // cheap, and deterministic.
 
+// Loose-equality null checks. Deliberately excludes strict === / !== (which
+// invert-comparison already handles) via negative look-around: a run of
+// exactly two '=' (or '!' + '=') not adjacent to another '='.
+const LOOSE_EQ_NULL_RE = /(?<![=!])==(?!=)\s*null\b/;
+const LOOSE_NEQ_NULL_RE = /(?<!!)!=(?!=)\s*null\b/;
+
+// A simple array literal of 2+ quoted-string / bare-word elements, e.g.
+// `['id', 'title', 'scope']` or `[a, b, c]`. Deliberately excludes nested
+// brackets/braces/parens so it never mis-grabs function calls or object
+// literals.
+const ARRAY_LITERAL_ELEMENT = String.raw`(?:'[^']*'|"[^"]*"|\`[^\`]*\`|[\w$.]+)`;
+const ARRAY_LITERAL_RE = new RegExp(
+  `\\[\\s*(${ARRAY_LITERAL_ELEMENT}(?:\\s*,\\s*${ARRAY_LITERAL_ELEMENT})+)\\s*\\]`
+);
+
+/** Split a comma-joined element blob on top-level commas, quote-aware. */
+function splitTopLevelCommas(str) {
+  const parts = [];
+  let current = '';
+  let quote = null;
+  for (const ch of str) {
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ',') {
+      parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+// A single-line ternary `cond ? whenTrue : whenFalse`. Branch bodies exclude
+// `?:{}` so the operator never mis-fires on nested ternaries or object
+// literals — it fails closed (no mutation) rather than corrupt one.
+const TERNARY_RE = /^(.*?)\?(?!\.)\s*([^?:{}]+?)\s*:\s*([^?:{}]+?)(;?)\s*$/;
+
 export const OPERATORS = [
   {
     name: 'invert-comparison',
@@ -49,6 +96,62 @@ export const OPERATORS = [
       if (/&&/.test(line)) return line.replace(/&&/, '||');
       if (/\|\|/.test(line)) return line.replace(/\|\|/, '&&');
       return null;
+    },
+  },
+  {
+    // Negates one recognized guard sub-clause independently of the rest of
+    // the condition on the line: an Array.isArray(...) call, a bare
+    // identifier used for truthiness (`if (value)`), or a loose (`==`/`!=`)
+    // null check. logic-swap only flips the combinator (&&/||) between
+    // sub-clauses; this operator flips a sub-clause itself.
+    name: 'negate-guard-subclause',
+    apply(line) {
+      if (/!Array\.isArray\(/.test(line)) {
+        return line.replace(/!Array\.isArray\(/, 'Array.isArray(');
+      }
+      if (/\bArray\.isArray\(/.test(line)) {
+        return line.replace(/\bArray\.isArray\(/, '!Array.isArray(');
+      }
+      const bareIf = line.match(/\bif\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/);
+      if (bareIf) {
+        return line.replace(bareIf[0], `if (!${bareIf[1]})`);
+      }
+      if (LOOSE_EQ_NULL_RE.test(line)) {
+        return line.replace(LOOSE_EQ_NULL_RE, '!= null');
+      }
+      if (LOOSE_NEQ_NULL_RE.test(line)) {
+        return line.replace(LOOSE_NEQ_NULL_RE, '== null');
+      }
+      return null;
+    },
+  },
+  {
+    // Drops the last element of a simple array literal — catches a
+    // silently-shrinkable list (e.g. a shared-fields constant) that no
+    // comparison/boolean/return operator above can reach.
+    name: 'array-literal-shrink',
+    apply(line) {
+      const m = line.match(ARRAY_LITERAL_RE);
+      if (!m) return null;
+      const items = splitTopLevelCommas(m[1]);
+      if (items.length < 2) return null;
+      const shrunk = items.slice(0, -1).join(', ');
+      return `${line.slice(0, m.index)}[${shrunk}]${line.slice(m.index + m[0].length)}`;
+    },
+  },
+  {
+    // Swaps the two branches of a single-line ternary — the classic shape of
+    // a recursive array-processing guard (`Array.isArray(x) ? recurse(x) :
+    // x`). Fails closed (no match) on nested ternaries/object literals.
+    name: 'ternary-swap',
+    apply(line) {
+      const m = line.match(TERNARY_RE);
+      if (!m) return null;
+      const [, prefix, whenTrue, whenFalse, suffix] = m;
+      const trueTrim = whenTrue.trim();
+      const falseTrim = whenFalse.trim();
+      if (!trueTrim || !falseTrim || trueTrim === falseTrim) return null;
+      return `${prefix}? ${falseTrim} : ${trueTrim}${suffix}`;
     },
   },
 ];

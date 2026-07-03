@@ -4,9 +4,13 @@
 // restores them via finally blocks + SIGINT handler.
 
 import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
-import { gitDiff, isDirty, isGitRepo, resolveBase, mutate } from '@adlc/core';
-import { filterTargetFiles, buildFileTargets, readFileSafe } from '../lib/targets.mjs';
+import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git } from '@adlc/core';
+import {
+  filterTargetFiles, buildFileTargets, readFileSafe,
+  readRailsFromTicketFile, expandRailsToFiles,
+} from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
 
@@ -18,6 +22,8 @@ const { values } = parseArgs({
     base:         { type: 'string' },
     max:          { type: 'string', default: '20' },
     'timeout-ms': { type: 'string', default: '120000' },
+    target:       { type: 'string', multiple: true },
+    rails:        { type: 'string', multiple: true },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -36,12 +42,19 @@ Options:
                         main/master; fails closed if none can be resolved)
   --max <n>             Max mutants across all files (default: 20)
   --timeout-ms <n>      Test command timeout in ms (default: 120000)
+  --target <file>       Mutate this file directly, independent of the diff
+                        (repeatable; bypasses the test/spec path exclusion).
+                        Use for characterization/rails-authoring tickets
+                        where the behavior file isn't in the diff.
+  --rails <ticket-file> Path to a ticket JSON file; its declared "rails"
+                        globs are expanded against tracked files and added
+                        as mutation targets (repeatable).
   --json                Machine-readable JSON output
   --help                Show this help
 
 Exit codes:
   0  All mutants killed (gate passes)
-  1  Operational error (dirty tree, not a git repo, bad args)
+  1  Operational error (dirty tree, not a git repo, bad args, nothing to mutate)
   2  One or more mutants survived (hollow coverage)
 `);
   process.exit(values.help ? 0 : 1);
@@ -108,8 +121,67 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const eligibleFiles = filterTargetFiles(changedLines);
-const fileTargets = buildFileTargets(eligibleFiles, changedLines, maxMutants, cwd);
+const diffEligibleFiles = filterTargetFiles(changedLines);
+
+// ── explicit --target / --rails resolution ──────────────────────────────────
+// These bypass EXCLUDE_PATH_RE deliberately: the caller is asking, by name,
+// to mutate a specific file that may not even appear in the diff (the P3
+// rails-authoring / characterization-test ticket shapes — issues #70, #41).
+
+const explicitTargets = values.target ?? [];
+
+let railsGlobs = [];
+for (const ticketFile of (values.rails ?? [])) {
+  let globs;
+  try {
+    globs = readRailsFromTicketFile(resolve(cwd, ticketFile));
+  } catch (err) {
+    opError(`--rails ${ticketFile}: ${err.message}`);
+  }
+  if (globs.length === 0) {
+    opError(`--rails ${ticketFile}: no "rails" declared (expected a non-empty array of paths/globs)`);
+  }
+  railsGlobs.push(...globs);
+}
+
+let railsFiles = [];
+if (railsGlobs.length > 0) {
+  let allFiles;
+  try {
+    allFiles = git(['ls-files'], { cwd }).split('\n').filter(Boolean);
+  } catch (err) {
+    opError(`git ls-files failed: ${err.message}`);
+  }
+  railsFiles = expandRailsToFiles(railsGlobs, allFiles);
+  if (railsFiles.length === 0) {
+    opError(`--rails declared globs matched no tracked files: ${railsGlobs.join(', ')}`);
+  }
+}
+
+const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
+
+// ── fail closed: a diff with nothing eligible and no explicit target/rails ──
+// is indistinguishable, in the OLD behavior, from a genuinely strong suite
+// (0 mutants, exit 0). A rails-only or test-only diff (P3 characterization /
+// rails-authoring tickets) must not silently satisfy this gate — refuse to
+// run instead, and point the caller at --target/--rails (issues #70, #41).
+
+if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
+  opError(
+    'nothing to mutate — the diff contains no eligible source files ' +
+    '(only test/spec/non-code files changed). Pass --target <file> or ' +
+    '--rails <ticket-file> to declare mutation target(s) explicitly ' +
+    '(e.g. for a rails-authoring or characterization-test ticket).'
+  );
+}
+
+// Explicit targets always mutate the WHOLE file, not just diff-changed
+// lines — drop any diff line-restriction for files the caller named directly.
+const effectiveChangedLines = { ...changedLines };
+for (const f of explicitFiles) delete effectiveChangedLines[f];
+
+const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, cwd);
 
 // ── SIGINT handler: track which file is currently mutated so we can restore ──
 

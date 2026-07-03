@@ -184,6 +184,46 @@ function createWeakTestRepo(dir) {
   return dir;
 }
 
+/**
+ * "rails-authoring" repo: commit 1 adds a real source file with NO tests;
+ * commit 2 adds ONLY a test file for it (nothing in src/ changes). This is
+ * exactly the diff shape of a P3 characterization/rails-authoring ticket
+ * (issues #70 / #41 / #35B) — `git diff HEAD~1` contains a single new test
+ * file and nothing mutable.
+ */
+function createRailsAuthoringRepo(dir) {
+  initRepo(dir);
+  mkdirSync(join(dir, 'src'));
+  mkdirSync(join(dir, 'test'));
+
+  writeFileSync(join(dir, 'src', 'guarded.mjs'), [
+    'export function isPositive(n) {',
+    '  return n > 0;',
+    '}',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'init: add guarded.mjs, no tests yet');
+
+  // Second commit adds ONLY a test file — src/guarded.mjs does not change.
+  writeFileSync(join(dir, 'test', 'guarded.test.mjs'), [
+    "import { describe, it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { isPositive } from '../src/guarded.mjs';",
+    "describe('isPositive', () => {",
+    "  it('detects positive, zero, and negative', () => {",
+    '    assert.strictEqual(isPositive(1), true);',
+    '    assert.strictEqual(isPositive(0), false);',
+    '    assert.strictEqual(isPositive(-1), false);',
+    '  });',
+    '});',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'add rails for guarded.mjs (test-only diff)');
+  return dir;
+}
+
 // ── CLI runner ───────────────────────────────────────────────────────────────
 
 const BIN = resolve(new URL('.', import.meta.url).pathname, '../bin/hollow-test.mjs');
@@ -435,6 +475,141 @@ describe('CLI: default base fails closed', () => {
       result.stderr.includes('could not resolve a base ref'),
       `Expected 'could not resolve a base ref' in stderr, got: ${result.stderr}`
     );
+  });
+});
+
+// ── test-only diff: exit 1 with no --target/--rails (issues #70/#41/#35B) ───
+
+describe('CLI: test-only diff has nothing to mutate', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-railsonly-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (operational error), NOT 0, when the diff contains only test files', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '10'],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `Expected exit 1 (nothing to mutate), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /nothing to mutate|no eligible/i.test(result.stderr),
+      `Expected an explanatory "nothing to mutate" error, got stderr: ${result.stderr}`
+    );
+  });
+
+  it('does not silently report a vacuous 0/0/0 JSON pass on a test-only diff', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '10', '--json'],
+      dir
+    );
+    assert.notEqual(result.status, 0,
+      `A test-only diff must not exit 0 — this is the exact bug reported in #70: ` +
+      `stdout: ${result.stdout}`);
+  });
+});
+
+// ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
+
+describe('CLI: --target mutates a file outside the diff', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates src/guarded.mjs (unchanged in the diff) and the rails kill it', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/guarded.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0 (rails kill every mutant), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.summary.total > 0,
+      `Expected --target to generate mutants for a file outside the diff (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'),
+      'expected all mutants to target the explicitly given file');
+    assert.equal(parsed.summary.survived, 0, 'expected the real rails to kill every mutant');
+  });
+
+  it('restores src/guarded.mjs byte-identical after mutating a non-diff target', () => {
+    const srcPath = join(dir, 'src', 'guarded.mjs');
+    const before = readFileSync(srcPath, 'utf8');
+    runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/guarded.mjs',
+        '--max', '10',
+      ],
+      dir
+    );
+    const after = readFileSync(srcPath, 'utf8');
+    assert.equal(after, before, 'File content was not restored after --target mutation run');
+  });
+});
+
+describe('CLI: --rails reads declared rail globs from a ticket file', () => {
+  let dir;
+  let ticketPath;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-flag-'));
+    createRailsAuthoringRepo(dir);
+    // Kept OUTSIDE the repo (a separate tmp dir) — the ticket file is metadata
+    // about the build, not a tracked repo file; writing it inside `dir` would
+    // dirty the working tree and trip the dirty-tree guard.
+    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-ticket-'));
+    ticketPath = join(ticketDir, 'ticket.json');
+    writeFileSync(ticketPath, JSON.stringify({
+      tickets: [{ id: 'T1', title: 'characterize guarded.mjs', rails: ['src/guarded.mjs'] }],
+    }));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('expands the ticket-declared rails glob to a mutation target and passes', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--rails', ticketPath,
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); });
+    assert.ok(parsed.summary.total > 0,
+      `Expected --rails to expand to a mutable file (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'));
   });
 });
 

@@ -3,8 +3,14 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { filterTargetFiles, buildFileTargets } from '../lib/targets.mjs';
+import {
+  filterTargetFiles, buildFileTargets,
+  readRailsFromTicketFile, expandRailsToFiles,
+} from '../lib/targets.mjs';
 import { buildJsonReport } from '../lib/report.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
@@ -87,6 +93,73 @@ describe('buildFileTargets', () => {
   it('returns empty array for empty files', () => {
     const targets = buildFileTargets([], {}, 20, '/tmp');
     assert.deepEqual(targets, []);
+  });
+});
+
+// ── readRailsFromTicketFile / expandRailsToFiles (issues #70, #41) ─────────
+
+describe('readRailsFromTicketFile', () => {
+  let dir;
+
+  it('reads rails from a single-ticket-shaped JSON file', () => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+    const p = join(dir, 'ticket.json');
+    writeFileSync(p, JSON.stringify({ id: 'T1', rails: ['src/a.mjs', 'src/b.mjs'] }));
+    assert.deepEqual(readRailsFromTicketFile(p), ['src/a.mjs', 'src/b.mjs']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('merges rails across all tickets in a full tickets.json-shaped file, deduplicated', () => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+    const p = join(dir, 'tickets.json');
+    writeFileSync(p, JSON.stringify({
+      tickets: [
+        { id: 'T1', rails: ['src/a.mjs'] },
+        { id: 'T2', rails: ['src/a.mjs', 'src/c.mjs'] },
+      ],
+    }));
+    assert.deepEqual(readRailsFromTicketFile(p), ['src/a.mjs', 'src/c.mjs']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns an empty array when no rails are declared', () => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+    const p = join(dir, 'ticket.json');
+    writeFileSync(p, JSON.stringify({ id: 'T1', title: 'no rails here' }));
+    assert.deepEqual(readRailsFromTicketFile(p), []);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('throws on missing file', () => {
+    assert.throws(() => readRailsFromTicketFile('/definitely/not/a/file.json'));
+  });
+
+  it('throws on malformed JSON', () => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+    const p = join(dir, 'ticket.json');
+    writeFileSync(p, '{ not json');
+    assert.throws(() => readRailsFromTicketFile(p));
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('expandRailsToFiles', () => {
+  it('matches globs against a candidate file list', () => {
+    const allFiles = ['src/foo.mjs', 'src/bar.mjs', 'test/foo.test.mjs', 'README.md'];
+    assert.deepEqual(expandRailsToFiles(['src/**'], allFiles), ['src/foo.mjs', 'src/bar.mjs']);
+  });
+
+  it('deduplicates when multiple globs match the same file', () => {
+    const allFiles = ['src/foo.mjs'];
+    assert.deepEqual(expandRailsToFiles(['src/*.mjs', 'src/foo.mjs'], allFiles), ['src/foo.mjs']);
+  });
+
+  it('returns empty array for empty rails', () => {
+    assert.deepEqual(expandRailsToFiles([], ['src/foo.mjs']), []);
+  });
+
+  it('returns empty array when no files match', () => {
+    assert.deepEqual(expandRailsToFiles(['nomatch/**'], ['src/foo.mjs']), []);
   });
 });
 

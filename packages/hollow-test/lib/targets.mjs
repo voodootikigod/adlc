@@ -3,6 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { globMatch } from '@adlc/core';
 
 // Patterns to exclude from mutation: test/spec files and non-code files.
 const EXCLUDE_PATH_RE = /(?:test|spec)/i;
@@ -58,4 +59,56 @@ export function readFileSafe(absolutePath) {
   } catch {
     return null;
   }
+}
+
+// ── explicit --target / --rails support (issues #70, #41, #35B) ────────────
+// filterTargetFiles()/buildFileTargets() above are strictly diff-scoped. The
+// functions below let a caller declare mutation targets independent of the
+// diff — the P3 rails-authoring and characterization-test ticket shapes have
+// nothing (or nothing relevant) in the diff to mutate otherwise.
+
+/**
+ * Read the `rails` glob array declared in a ticket file. Accepts either:
+ *  - a single-ticket JSON object: `{ "rails": [...], ... }`
+ *  - a full tickets.json-shaped file: `{ "tickets": [ { "rails": [...] }, … ] }`
+ *    — rails from every ticket in the file are merged (deduplicated).
+ *
+ * @param {string} absolutePath
+ * @returns {string[]} declared rail globs (empty array if none declared)
+ * @throws {Error} if the file cannot be read or is not valid JSON
+ */
+export function readRailsFromTicketFile(absolutePath) {
+  let raw;
+  try {
+    raw = readFileSync(absolutePath, 'utf8');
+  } catch (err) {
+    throw new Error(`could not read ${absolutePath}: ${err.message}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`invalid JSON in ${absolutePath}: ${err.message}`);
+  }
+  const rails = [];
+  if (Array.isArray(data.rails)) rails.push(...data.rails);
+  if (Array.isArray(data.tickets)) {
+    for (const t of data.tickets) {
+      if (t && Array.isArray(t.rails)) rails.push(...t.rails);
+    }
+  }
+  return [...new Set(rails)];
+}
+
+/**
+ * Expand a list of rail glob patterns to concrete repo-relative file paths,
+ * matched against a candidate file list (e.g. `git ls-files` output).
+ *
+ * @param {string[]} rails - glob patterns
+ * @param {string[]} allFiles - repo-relative candidate paths
+ * @returns {string[]} matching file paths, deduplicated, in allFiles order
+ */
+export function expandRailsToFiles(rails, allFiles) {
+  if (!rails || rails.length === 0) return [];
+  return allFiles.filter((file) => rails.some((glob) => globMatch(glob, file)));
 }

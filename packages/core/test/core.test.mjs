@@ -13,7 +13,7 @@ import {
   validateTicket, loadTickets, topoSort, computeFloat,
   globMatch, inScope, scopesOverlap,
 } from '../lib/tickets.mjs';
-import { generateMutants, applyMutant, changedLinesFromDiff } from '../lib/mutate.mjs';
+import { generateMutants, applyMutant, changedLinesFromDiff, OPERATORS } from '../lib/mutate.mjs';
 import { resolveRevision as resolveWorktreeRevision } from '../lib/revision.mjs';
 
 const repoRoot = new URL('../../../', import.meta.url).pathname;
@@ -178,6 +178,84 @@ test('generateMutants: produces mutants on target lines only, skips comments', (
   assert.ok(scoped.every((m) => m.line === 2));
   const inverted = scoped.find((m) => m.operator === 'invert-comparison');
   assert.ok(inverted.mutated.includes('!=='));
+});
+
+// ── new operators (issue #35 section B: broaden mutation operator set) ──────
+// The original five operators (invert-comparison, bool-flip, null-return,
+// off-by-one, logic-swap) never reach guard sub-terms (Array.isArray, a bare
+// truthiness check, a loose null check), array-literal contents, or a
+// recursive array-processing branch (ternary swap). For each case below we
+// first assert the ORIGINAL five produce zero mutants for the line (the gap),
+// then assert the new operator does.
+
+const ORIGINAL_OPERATOR_NAMES = new Set([
+  'invert-comparison', 'bool-flip', 'null-return', 'off-by-one', 'logic-swap',
+]);
+
+function mutantsFromOriginalOperators(line) {
+  return OPERATORS
+    .filter((op) => ORIGINAL_OPERATOR_NAMES.has(op.name))
+    .map((op) => op.apply(line))
+    .filter((m) => m !== null && m !== line);
+}
+
+test('negate-guard-subclause: un-negates a bare Array.isArray guard (old operators miss it)', () => {
+  const line = '  if (!Array.isArray(items)) return [];';
+  assert.deepEqual(mutantsFromOriginalOperators(line), [],
+    'expected the original operator set to produce zero mutants for this guard line');
+  const [m] = generateMutants(line, { targetLines: [1] })
+    .filter((m) => m.operator === 'negate-guard-subclause');
+  assert.ok(m, 'expected negate-guard-subclause to produce a mutant');
+  assert.equal(m.mutated, '  if (Array.isArray(items)) return [];');
+});
+
+test('negate-guard-subclause: negates a bare identifier truthiness guard (old operators miss it)', () => {
+  const line = '  if (value) return process(value);';
+  assert.deepEqual(mutantsFromOriginalOperators(line), [],
+    'expected the original operator set to produce zero mutants for this guard line');
+  const [m] = generateMutants(line, { targetLines: [1] })
+    .filter((m) => m.operator === 'negate-guard-subclause');
+  assert.ok(m, 'expected negate-guard-subclause to produce a mutant');
+  assert.equal(m.mutated, '  if (!value) return process(value);');
+});
+
+test('negate-guard-subclause: flips a loose (==) null check the strict-only invert-comparison misses', () => {
+  const line = '  if (v == null) return doDefault();';
+  assert.deepEqual(mutantsFromOriginalOperators(line), [],
+    'expected the original operator set to produce zero mutants for this guard line');
+  const [m] = generateMutants(line, { targetLines: [1] })
+    .filter((m) => m.operator === 'negate-guard-subclause');
+  assert.ok(m, 'expected negate-guard-subclause to produce a mutant');
+  assert.equal(m.mutated, '  if (v != null) return doDefault();');
+  // Strict equality must NOT be touched by this operator (invert-comparison's job).
+  assert.equal(OPERATORS.find((op) => op.name === 'negate-guard-subclause')
+    .apply('  if (v === null) return doDefault();'), null);
+});
+
+test('array-literal-shrink: drops the last element of a shrinkable array literal (old operators miss it)', () => {
+  const line = "export const CORE_SHARED_FIELDS = ['id', 'title', 'scope'];";
+  assert.deepEqual(mutantsFromOriginalOperators(line), [],
+    'expected the original operator set to produce zero mutants for this array-literal line');
+  const [m] = generateMutants(line, { targetLines: [1] })
+    .filter((m) => m.operator === 'array-literal-shrink');
+  assert.ok(m, 'expected array-literal-shrink to produce a mutant');
+  assert.equal(m.mutated, "export const CORE_SHARED_FIELDS = ['id', 'title'];");
+});
+
+test('array-literal-shrink: does not touch a single-element array', () => {
+  const op = OPERATORS.find((o) => o.name === 'array-literal-shrink');
+  assert.equal(op.apply("const only = ['id'];"), null);
+});
+
+test('ternary-swap: swaps the recursive/leaf branches of an array-processing ternary (old operators miss it)', () => {
+  const line = '    const result = Array.isArray(item) ? flatten(item) : item;';
+  const originalMutants = mutantsFromOriginalOperators(line);
+  assert.deepEqual(originalMutants, [],
+    'expected the original operator set to produce zero mutants for this ternary line');
+  const [m] = generateMutants(line, { targetLines: [1] })
+    .filter((m) => m.operator === 'ternary-swap');
+  assert.ok(m, 'expected ternary-swap to produce a mutant');
+  assert.equal(m.mutated, '    const result = Array.isArray(item) ? item : flatten(item);');
 });
 
 test('applyMutant: applies and refuses stale content', () => {
