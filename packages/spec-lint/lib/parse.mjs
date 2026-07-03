@@ -12,8 +12,18 @@ const CRITERIA_HEADING_RE = /acceptance|criteria|requirements|definition of done
  * "**Requirements**". Scoped to a line containing ONLY the bold label
  * (with an optional trailing colon) so it doesn't false-trigger on a bold
  * phrase embedded mid-sentence (see #71).
+ *
+ * Deliberately anchored with NO leading whitespace tolerance: a real
+ * pseudo-heading is a top-level line, not something nested inside a list
+ * item's body. If this were allowed to match indented text, an indented
+ * bold-only aside embedded in a bullet's wrapped body (e.g. "  **Note**"
+ * on its own physical line) would be excluded from continuation-line
+ * absorption by isContinuationLine() and then get reprocessed by the
+ * outer loop as a section-toggling pseudo-heading, silently ending the
+ * criteria section and dropping every criterion after it (see #71/#45
+ * follow-up).
  */
-const BOLD_HEADING_RE = /^\s*\*\*(.+?)\*\*:?\s*$/;
+const BOLD_HEADING_RE = /^\*\*(.+?)\*\*:?\s*$/;
 
 /**
  * List-item prefixes: -, *, 1., 2., …, - [ ], - [x]

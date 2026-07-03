@@ -210,6 +210,23 @@ describe('parseCriteria', () => {
     const classified = classifyAll(criteria);
     assert.equal(classified[1].status, 'WISH');
   });
+
+  it('absorbs an indented bold-only aside inside a bullet body instead of treating it as a pseudo-heading (review round 2)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '',
+      '- AC1: Foo works. Verified via `npm test`.',
+      '  **Note**',
+      '- AC2: Bar must not crash on null input',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 2);
+    assert.equal(criteria[0].text, 'AC1: Foo works. Verified via `npm test`. **Note**');
+    assert.equal(criteria[1].text, 'AC2: Bar must not crash on null input');
+
+    const classified = classifyAll(criteria);
+    assert.equal(classified[1].status, 'WISH');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -601,6 +618,16 @@ describe('fixture: bold-heading-wrapped.md (#71 repro)', () => {
     const criteria = classifyAll(parseCriteria(text));
     assert.equal(criteria.length, 1);
     assert.equal(criteria[0].status, 'VERIFIED');
+  });
+});
+
+describe('fixture: bold-aside-mid-list.md (review round 2 repro)', () => {
+  it('does not drop criteria that follow an indented bold-only aside mid-list', () => {
+    const text = readFileSync(fixture('bold-aside-mid-list.md'), 'utf8');
+    const criteria = classifyAll(parseCriteria(text));
+    assert.equal(criteria.length, 2);
+    assert.equal(criteria[0].status, 'VERIFIED');
+    assert.equal(criteria[1].status, 'WISH');
   });
 });
 
