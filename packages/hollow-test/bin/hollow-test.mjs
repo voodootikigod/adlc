@@ -160,6 +160,24 @@ if (railsGlobs.length > 0) {
 
 const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
 
+// ── fail closed: every explicit --target/--rails file must be readable ─────
+// Unlike diff-derived files (which came from a real git diff and should
+// always exist), a --target path is caller-typed and a --rails glob can be
+// stale. Previously an unreadable explicit file only produced a console.warn
+// (nothing at all in --json mode) and was silently dropped — if it was the
+// only target, `results` ended up empty and the pre-existing empty-results
+// fallback exited 0 ("nothing mutable"), reporting a vacuous pass instead of
+// surfacing the real cause. Refuse to run instead.
+for (const f of explicitFiles) {
+  if (readFileSafe(resolve(cwd, f)) === null) {
+    opError(
+      `--target/--rails file not found or unreadable: ${f} — ` +
+      'a mistyped path, deleted/renamed file, or stale rails entry would ' +
+      'otherwise silently produce a vacuous 0-mutant pass'
+    );
+  }
+}
+
 // ── fail closed: a diff with nothing eligible and no explicit target/rails ──
 // is indistinguishable, in the OLD behavior, from a genuinely strong suite
 // (0 mutants, exit 0). A rails-only or test-only diff (P3 characterization /
@@ -181,7 +199,27 @@ const effectiveChangedLines = { ...changedLines };
 for (const f of explicitFiles) delete effectiveChangedLines[f];
 
 const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
-const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, cwd);
+// explicitFiles are passed as a priority list so the --max budget can't
+// starve them to quota 0 when diff-derived files alone would consume it —
+// see buildFileTargets() in lib/targets.mjs.
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, cwd, explicitFiles);
+
+// ── fail closed: --max too small to cover every explicit target ────────────
+// buildFileTargets() reserves 1 quota per explicit file when the budget
+// allows it. If --max is smaller than the number of explicit targets, some
+// of them still can't be guaranteed a slot — refuse to run rather than
+// silently mutating a subset and reporting a full pass.
+const starvedByBudget = fileTargets.filter(
+  (t) => explicitFiles.includes(t.file) && t.quota === 0
+);
+if (starvedByBudget.length > 0) {
+  opError(
+    `--max ${maxMutants} is too small to allocate mutation budget to explicit ` +
+    `target(s): ${starvedByBudget.map((t) => t.file).join(', ')} — increase ` +
+    `--max to at least ${explicitFiles.length}, or reduce the number of ` +
+    'explicit --target/--rails files'
+  );
+}
 
 // ── SIGINT handler: track which file is currently mutated so we can restore ──
 
@@ -258,6 +296,32 @@ for (const target of fileTargets) {
       original: mutant.original,
       mutated: mutant.mutated,
     });
+  }
+}
+
+// ── fail closed: an explicit target that generated zero mutants was never ──
+// actually verified. A file can be readable and have nonzero quota yet still
+// produce no mutants (comment-only, blank, re-export-only, or otherwise no
+// line matches any operator). Falling through to the generic
+// "results.length === 0 -> pass" shortcut below (or a legitimate pass driven
+// entirely by unrelated diff-derived mutants) would silently report a full
+// pass without ever exercising the file the caller explicitly asked to
+// prosecute — exactly the vacuous-pass class issues #70/#41/#35 exist to
+// close. Distinguish this from the legitimate "every mutant was killed" case
+// by checking per-file counts rather than results.length overall.
+if (explicitFiles.length > 0) {
+  const mutantCountByFile = {};
+  for (const r of results) {
+    mutantCountByFile[r.file] = (mutantCountByFile[r.file] ?? 0) + 1;
+  }
+  const starvedExplicitFiles = explicitFiles.filter((f) => !mutantCountByFile[f]);
+  if (starvedExplicitFiles.length > 0) {
+    opError(
+      'explicit --target/--rails file(s) produced zero mutants — ' +
+      `${starvedExplicitFiles.join(', ')}: no mutable line was found (comment-only, ` +
+      'blank, or a shape none of the mutation operators recognize). The requested ' +
+      'target was never actually verified; refusing to report a pass.'
+    );
   }
 }
 

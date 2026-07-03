@@ -94,6 +94,61 @@ describe('buildFileTargets', () => {
     const targets = buildFileTargets([], {}, 20, '/tmp');
     assert.deepEqual(targets, []);
   });
+
+  // ── priorityFiles reservation (review round 1: budget starvation) ────────
+
+  it('guarantees a priority file at least 1 quota even when the budget equals the diff-file count', () => {
+    const changedLines = {
+      'a.mjs': new Set([1]),
+      'b.mjs': new Set([2]),
+      'c.mjs': new Set([3]),
+      'explicit.mjs': new Set(),
+    };
+    const files = ['a.mjs', 'b.mjs', 'c.mjs', 'explicit.mjs'];
+    // Old round-robin-by-index math gives explicit.mjs (last index) quota 0
+    // when maxTotal === diffFiles.length. The priority reservation must
+    // prevent that.
+    const targets = buildFileTargets(files, changedLines, 3, '/tmp', ['explicit.mjs']);
+    const explicitTarget = targets.find((t) => t.file === 'explicit.mjs');
+    assert.ok(explicitTarget.quota >= 1,
+      `Expected explicit.mjs to receive at least 1 quota, got ${explicitTarget.quota}`);
+    const totalQuota = targets.reduce((s, t) => s + t.quota, 0);
+    assert.equal(totalQuota, 3, 'total quota must still equal maxTotal');
+  });
+
+  it('reserves 1 quota per priority file before distributing the remainder', () => {
+    const changedLines = {
+      'a.mjs': new Set([1]),
+      'explicit1.mjs': new Set(),
+      'explicit2.mjs': new Set(),
+    };
+    const files = ['a.mjs', 'explicit1.mjs', 'explicit2.mjs'];
+    const targets = buildFileTargets(files, changedLines, 2, '/tmp', ['explicit1.mjs', 'explicit2.mjs']);
+    const byFile = Object.fromEntries(targets.map((t) => [t.file, t.quota]));
+    assert.equal(byFile['explicit1.mjs'], 1);
+    assert.equal(byFile['explicit2.mjs'], 1);
+    assert.equal(byFile['a.mjs'], 0);
+    const totalQuota = targets.reduce((s, t) => s + t.quota, 0);
+    assert.equal(totalQuota, 2);
+  });
+
+  it('cannot reserve more than maxTotal when priority files outnumber the budget', () => {
+    const changedLines = { 'e1.mjs': new Set(), 'e2.mjs': new Set(), 'e3.mjs': new Set() };
+    const files = ['e1.mjs', 'e2.mjs', 'e3.mjs'];
+    const targets = buildFileTargets(files, changedLines, 1, '/tmp', files);
+    const totalQuota = targets.reduce((s, t) => s + t.quota, 0);
+    assert.equal(totalQuota, 1, 'total quota must never exceed maxTotal');
+    const zeroQuotaCount = targets.filter((t) => t.quota === 0).length;
+    assert.equal(zeroQuotaCount, 2, 'exactly 2 of the 3 priority files can not be covered by a budget of 1');
+  });
+
+  it('is backward compatible when priorityFiles is omitted (no reservation)', () => {
+    const changedLines = { 'a.mjs': new Set([1]), 'b.mjs': new Set([2]) };
+    const files = ['a.mjs', 'b.mjs'];
+    const targets = buildFileTargets(files, changedLines, 4, '/tmp');
+    assert.equal(targets.find((t) => t.file === 'a.mjs').quota, 2);
+    assert.equal(targets.find((t) => t.file === 'b.mjs').quota, 2);
+  });
 });
 
 // ── readRailsFromTicketFile / expandRailsToFiles (issues #70, #41) ─────────

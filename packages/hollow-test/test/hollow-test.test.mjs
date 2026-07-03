@@ -557,17 +557,195 @@ describe('CLI: --target mutates a file outside the diff', () => {
   it('restores src/guarded.mjs byte-identical after mutating a non-diff target', () => {
     const srcPath = join(dir, 'src', 'guarded.mjs');
     const before = readFileSync(srcPath, 'utf8');
-    runCli(
+    const result = runCli(
       [
         '--test-cmd', 'node --test test/*.test.mjs',
         '--base', 'HEAD~1',
         '--target', 'src/guarded.mjs',
         '--max', '10',
+        '--json',
       ],
       dir
     );
+    // Verify --target actually ran (exit 0 + mutants generated) — otherwise
+    // this test would trivially pass if --target were reverted/unrecognized,
+    // since parseArgs would error out before ever touching the file.
+    assert.equal(result.status, 0,
+      `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.summary.total > 0,
+      `Expected --target to actually generate mutants for src/guarded.mjs (total=${parsed.summary.total}) — ` +
+      'restoration proof is meaningless if the file was never mutated');
     const after = readFileSync(srcPath, 'utf8');
     assert.equal(after, before, 'File content was not restored after --target mutation run');
+  });
+});
+
+// ── --target/--rails fail-closed edge cases (review round 1) ───────────────
+
+describe('CLI: --target with a nonexistent file fails closed', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-missing-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (NOT 0) with a clear error, not a vacuous 0/0/0 JSON pass', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/does_not_exist.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A missing --target file must fail closed, not silently pass: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /not found or unreadable/i.test(result.stderr),
+      `Expected an explanatory "not found or unreadable" error, got stderr: ${result.stderr}`
+    );
+    // Nothing resembling a passing JSON summary should reach stdout.
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed error, got stdout: ${result.stdout}`
+    );
+  });
+});
+
+describe('CLI: --target pointing at a file with no mutable content fails closed', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-decoy-'));
+    createRailsAuthoringRepo(dir);
+    // A decoy file with zero mutable lines — the critical-severity repro:
+    // an explicit target that exists and is readable but can never generate
+    // a mutant must not be treated the same as "all mutants killed".
+    writeFileSync(join(dir, 'src', 'decoy.mjs'), [
+      '// nothing to see here',
+      'export {}',
+      '',
+    ].join('\n'));
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'add decoy file'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (NOT 0) instead of falling through to the empty-results pass', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/decoy.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `An explicit target with zero mutable content must fail closed, not silently pass: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /produced zero mutants/i.test(result.stderr),
+      `Expected an explanatory "produced zero mutants" error, got stderr: ${result.stderr}`
+    );
+  });
+});
+
+describe('CLI: --max budget cannot silently starve an explicit --target', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-budget-'));
+    initRepo(dir);
+    mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'test'));
+
+    // Commit 1: the explicit target, with ZERO test coverage — never
+    // referenced by any test — committed FIRST so it is outside the diff.
+    writeFileSync(join(dir, 'src', 'never_in_diff.mjs'), [
+      'export function neverTested(n) {',
+      '  return n > 0;',
+      '}',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'init: untested file, outside the future diff');
+
+    // Commit 2: 3 diff-eligible files, each with a real, killing test —
+    // these show up in `git diff HEAD~1`.
+    for (const name of ['one', 'two', 'three']) {
+      writeFileSync(join(dir, 'src', `${name}.mjs`), [
+        `export function ${name}(n) {`,
+        '  return n > 0;',
+        '}',
+        '',
+      ].join('\n'));
+    }
+    writeFileSync(join(dir, 'test', 'diff.test.mjs'), [
+      "import { describe, it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { one } from '../src/one.mjs';",
+      "import { two } from '../src/two.mjs';",
+      "import { three } from '../src/three.mjs';",
+      "describe('diff files', () => {",
+      "  it('kill every mutant', () => {",
+      '    assert.strictEqual(one(1), true);',
+      '    assert.strictEqual(one(-1), false);',
+      '    assert.strictEqual(two(1), true);',
+      '    assert.strictEqual(two(-1), false);',
+      '    assert.strictEqual(three(1), true);',
+      '    assert.strictEqual(three(-1), false);',
+      '  });',
+      '});',
+      '',
+    ].join('\n'));
+
+    commitAll(dir, 'add three diff files (tested)');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reserves budget for the explicit target instead of silently zeroing its quota', () => {
+    // --max equals the number of diff-eligible files: under the old
+    // round-robin-by-index allocation, the explicit target got quota 0 and
+    // this printed a false "all mutants killed" 0-survivor pass.
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/never_in_diff.mjs',
+        '--max', '3',
+        '--json',
+      ],
+      dir
+    );
+    // The untested file must actually be mutated and its survivors must be
+    // visible — it must NOT vacuously exit 0.
+    assert.notEqual(result.status, 0,
+      `Explicit target with zero test coverage must not vacuously pass: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    if (result.status === 2) {
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(
+        parsed.mutants.some((m) => m.file === 'src/never_in_diff.mjs'),
+        `Expected the explicit target to actually be mutated: ${result.stdout}`
+      );
+    }
   });
 });
 

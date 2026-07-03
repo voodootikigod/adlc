@@ -28,22 +28,46 @@ export function filterTargetFiles(changedLines) {
  * Distribute a total mutation budget across files in round-robin fashion.
  * Returns an array of { file, targetLines, quota } objects.
  *
+ * `priorityFiles` (e.g. explicit --target/--rails files) are guaranteed at
+ * least 1 mutant of quota each — reserved off the top of `maxTotal` — before
+ * the remainder is distributed round-robin across ALL files. Without this,
+ * plain round-robin-by-index starves an explicitly-named target to quota 0
+ * whenever diff-derived files alone consume the whole budget (the file the
+ * caller most wants mutated — the whole point of --target/--rails — would
+ * silently never be touched). See issues #70/#41/#35.
+ *
  * @param {string[]} files          - Filtered file paths.
  * @param {{ [file: string]: Set<number> }} changedLines
  * @param {number} maxTotal         - Total mutant budget.
  * @param {string} cwd              - Repository root (to resolve relative paths).
+ * @param {string[]} [priorityFiles] - Files to guarantee a minimum quota of 1
+ *                                     (subject to maxTotal), before the
+ *                                     remaining budget is split round-robin.
  * @returns {Array<{ file: string, absolutePath: string, targetLines: Set<number>, quota: number }>}
  */
-export function buildFileTargets(files, changedLines, maxTotal, cwd) {
+export function buildFileTargets(files, changedLines, maxTotal, cwd, priorityFiles = []) {
   if (files.length === 0) return [];
-  const base = Math.floor(maxTotal / files.length);
-  const remainder = maxTotal % files.length;
+
+  const prioritySet = new Set(priorityFiles);
+  // Preserves `files` order — first `reserved` priority files (by that
+  // order) get a guaranteed slot; if maxTotal is smaller than the number of
+  // priority files, the rest legitimately can't be guaranteed (the caller
+  // is told to raise --max — see hollow-test.mjs's post-build check).
+  const priorityInFiles = files.filter((f) => prioritySet.has(f));
+  const reserved = Math.min(priorityInFiles.length, maxTotal);
+  const remaining = maxTotal - reserved;
+
+  const reservedQuota = new Map();
+  priorityInFiles.forEach((f, i) => reservedQuota.set(f, i < reserved ? 1 : 0));
+
+  const base = Math.floor(remaining / files.length);
+  const remainder = remaining % files.length;
 
   return files.map((file, idx) => ({
     file,
     absolutePath: resolve(cwd, file),
     targetLines: changedLines[file],
-    quota: base + (idx < remainder ? 1 : 0),
+    quota: (reservedQuota.get(file) ?? 0) + base + (idx < remainder ? 1 : 0),
   }));
 }
 
