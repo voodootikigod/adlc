@@ -19,9 +19,21 @@ console.log(
     ? `adlc-init: .gitignore updated (added ${gitignore.added.join(', ')})`
     : 'adlc-init: .gitignore already tracks tickets.json + specs/'
 );
+const logToolLine = (name, r) => {
+  if (r.changed) console.log(`adlc-init: excluded .adlc/ from ${name} (${r.path})`);
+  else if (r.skipped) console.log(`adlc-init: ${name} detected but needs a manual .adlc/ ignore entry — ${r.skipped} (${r.path})`);
+  else console.log(`adlc-init: ${name} already excludes .adlc/`);
+};
 for (const [tool, r] of Object.entries(formatterIgnores)) {
   if (!r.detected) continue;
-  if (r.changed) console.log(`adlc-init: excluded .adlc/ from ${tool} (${r.path})`);
-  else if (r.skipped) console.log(`adlc-init: ${tool} detected but needs a manual .adlc/ ignore entry — ${r.skipped} (${r.path})`);
-  else console.log(`adlc-init: ${tool} already excludes .adlc/`);
+  // `eslint` may cover both `.eslintrc*` and `.eslintignore` at once when a
+  // repo has both — report each source file individually so neither
+  // mutation is dropped from the summary.
+  if (r.sources) {
+    for (const sr of Object.values(r.sources)) {
+      if (sr.detected) logToolLine(tool, sr);
+    }
+    continue;
+  }
+  logToolLine(tool, r);
 }

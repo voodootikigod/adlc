@@ -135,6 +135,15 @@ const GITIGNORE_STANZA = ['.adlc/*', '!.adlc/tickets.json', '!.adlc/specs/'];
  * differently-ordered legacy stanza — is therefore relocated to after the
  * anchor rather than left in place (checked unconditionally, even when
  * every stanza line is nominally "present somewhere" in the file).
+ *
+ * A file can also end up with MORE THAN ONE `.adlc/*` line (e.g. a merge of
+ * two branches that each independently appended the stanza, or a second
+ * tool emitting its own copy). Because last-match-wins applies across the
+ * WHOLE file, a later `.adlc/*` anchor re-ignores any negation that
+ * precedes it — including one that was already correctly placed right
+ * after an earlier anchor. Every anchor beyond the first is therefore
+ * collapsed away (not just misplaced negations) before this function
+ * reasons about ordering, so only one anchor ever needs to be considered.
  */
 export function ensureGitignore(projectRoot) {
   const path = join(projectRoot, '.gitignore');
@@ -143,9 +152,9 @@ export function ensureGitignore(projectRoot) {
   let lines = existing.length ? existing.split('\n') : [];
   if (hadTrailingNewline && lines[lines.length - 1] === '') lines.pop();
 
-  const anchorIdx = lines.indexOf('.adlc/*');
+  const anchorCount = lines.filter((line) => line === '.adlc/*').length;
 
-  if (anchorIdx === -1) {
+  if (anchorCount === 0) {
     const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
     // The `.adlc/*` anchor is absent. A pre-existing negation line (e.g. a
     // lone `!.adlc/tickets.json` left over from a partial/legacy edit) may
@@ -164,6 +173,24 @@ export function ensureGitignore(projectRoot) {
     return { path, added: missing, changed: true };
   }
 
+  // One or more anchors are present. Collapse every `.adlc/*` line beyond
+  // the first — keeping the earliest occurrence — so the rest of this
+  // function only ever has to reason about a single anchor position. This
+  // is itself a repair (dropping a duplicate anchor changes the file), even
+  // when no negation line is missing or relocated below.
+  let dedupedAnchor = false;
+  if (anchorCount > 1) {
+    let seenAnchors = 0;
+    lines = lines.filter((line) => {
+      if (line !== '.adlc/*') return true;
+      seenAnchors += 1;
+      return seenAnchors === 1;
+    });
+    dedupedAnchor = true;
+  }
+
+  const anchorIdx = lines.indexOf('.adlc/*');
+
   // The anchor IS present. Relocate any stanza negation line that sits
   // BEFORE it — leaving it there would be silently overridden by the
   // anchor (last-match-wins), re-ignoring the file it was meant to protect.
@@ -175,7 +202,7 @@ export function ensureGitignore(projectRoot) {
 
   const newAnchorIdx = lines.indexOf('.adlc/*');
   const missing = GITIGNORE_STANZA.filter((entry) => !lines.includes(entry));
-  if (missing.length === 0 && !relocated) return { path, added: [], changed: false };
+  if (missing.length === 0 && !relocated && !dedupedAnchor) return { path, added: [], changed: false };
 
   let insertAt = newAnchorIdx + 1;
   while (insertAt < lines.length && lines[insertAt].startsWith('!')) insertAt++;
@@ -264,19 +291,44 @@ function ensureEslintRcIgnore(projectRoot) {
 }
 
 /**
+ * Combine the independent `.eslintrc*` and `.eslintignore` outcomes into one
+ * report. Both are always checked/mutated unconditionally by
+ * `ensureFormatterIgnores` — a pre-flat-config repo commonly has BOTH files
+ * at once — so picking only one would silently under-report a real mutation
+ * made to the other. When only one is detected, that single result is
+ * returned unchanged (keeping the common single-file case simple); when
+ * both are detected, `sources` exposes each outcome individually so nothing
+ * is dropped.
+ */
+function mergeEslintReports(eslintrc, eslintignore) {
+  if (!eslintrc.detected) return eslintignore;
+  if (!eslintignore.detected) return eslintrc;
+  const skipped = [eslintrc.skipped, eslintignore.skipped].filter(Boolean).join('; ');
+  return {
+    detected: true,
+    changed: eslintrc.changed || eslintignore.changed,
+    path: [eslintrc.path, eslintignore.path],
+    ...(skipped ? { skipped } : {}),
+    sources: { eslintrc, eslintignore },
+  };
+}
+
+/**
  * Detect and update whichever formatter/linter configs already exist in the
  * repo so none of them touch `.adlc/`: Biome (`biome.json` overrides),
  * Prettier (`.prettierignore`), ESLint (`ignorePatterns` in a JSON
  * `.eslintrc*`, `.eslintignore`, or detection-only for flat config). Never
  * creates a config for a tool that isn't already in use. Returns a summary
- * keyed by tool.
+ * keyed by tool. `eslint` reflects BOTH `.eslintrc*` and `.eslintignore`
+ * when a repo has both (see `mergeEslintReports`) — `eslint.sources` carries
+ * the per-file detail in that case.
  */
 export function ensureFormatterIgnores(projectRoot) {
   const biome = ensureBiomeIgnore(projectRoot);
   const prettier = ensureTextIgnoreFile(projectRoot, '.prettierignore', '.adlc/');
   const eslintrc = ensureEslintRcIgnore(projectRoot);
   const eslintignore = ensureTextIgnoreFile(projectRoot, '.eslintignore', '.adlc/');
-  return { biome, prettier, eslint: eslintrc.detected ? eslintrc : eslintignore };
+  return { biome, prettier, eslint: mergeEslintReports(eslintrc, eslintignore) };
 }
 
 /** Full bootstrap: config + hooks + rule + .gitignore contract + formatter ignores. */

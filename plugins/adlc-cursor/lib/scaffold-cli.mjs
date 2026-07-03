@@ -23,10 +23,22 @@ console.log(`  .cursor/rules/adlc.mdc — ${tag(rule)}`);
 console.log(
   `  .gitignore             — ${gitignore.changed ? `updated (added ${gitignore.added.join(', ')})` : 'already tracks tickets.json + specs/'}`
 );
+const logToolLine = (name, r) => {
+  if (r.changed) console.log(`  ${name} — excluded .adlc/ (${r.path})`);
+  else if (r.skipped) console.log(`  ${name} — detected but needs a manual .adlc/ ignore entry: ${r.skipped} (${r.path})`);
+  else console.log(`  ${name} — already excludes .adlc/`);
+};
 for (const [tool, r] of Object.entries(formatterIgnores)) {
   if (!r.detected) continue;
-  if (r.changed) console.log(`  ${tool} — excluded .adlc/ (${r.path})`);
-  else if (r.skipped) console.log(`  ${tool} — detected but needs a manual .adlc/ ignore entry: ${r.skipped} (${r.path})`);
-  else console.log(`  ${tool} — already excludes .adlc/`);
+  // `eslint` may cover both `.eslintrc*` and `.eslintignore` at once when a
+  // repo has both — report each source file individually so neither
+  // mutation is dropped from the summary.
+  if (r.sources) {
+    for (const sr of Object.values(r.sources)) {
+      if (sr.detected) logToolLine(tool, sr);
+    }
+    continue;
+  }
+  logToolLine(tool, r);
 }
 console.log('Next: author a ticket in .adlc/tickets.json, then `adlc rails-guard` to freeze rails.');

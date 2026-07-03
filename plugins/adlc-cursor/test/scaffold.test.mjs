@@ -170,6 +170,46 @@ test('ensureGitignore does not duplicate a negation line that already correctly 
   assert.ok(anchorPos < ticketsPos, '.adlc/* must precede !.adlc/tickets.json');
 });
 
+test('ensureGitignore repairs a duplicate .adlc/* anchor that re-ignores a negation placed after the first anchor', () => {
+  const root = mkRepo();
+  // Two `.adlc/*` anchors (e.g. from a merge of two branches that each
+  // appended the stanza). Git's last-match-wins semantics mean the SECOND
+  // anchor re-ignores `!.adlc/tickets.json`, which sits between the two
+  // anchors — even though every stanza line is nominally "present" and
+  // negations look correctly placed relative to the FIRST anchor alone.
+  writeFileSync(
+    join(root, '.gitignore'),
+    '.adlc/*\n!.adlc/tickets.json\nfoo\n.adlc/*\n!.adlc/specs/\n'
+  );
+  const r = ensureGitignore(root);
+  assert.equal(r.changed, true, 'a duplicate anchor must be treated as a repair, not a no-op');
+  const body = readFileSync(join(root, '.gitignore'), 'utf8');
+  const resultLines = body.split('\n').filter((l) => l.length > 0);
+  const anchorOccurrences = resultLines.filter((l) => l === '.adlc/*').length;
+  assert.equal(anchorOccurrences, 1, 'duplicate .adlc/* anchor must be collapsed to one');
+  assert.match(body, /foo/); // unrelated line untouched
+  const anchorPos = resultLines.indexOf('.adlc/*');
+  const ticketsPos = resultLines.indexOf('!.adlc/tickets.json');
+  const specsPos = resultLines.indexOf('!.adlc/specs/');
+  assert.ok(anchorPos < ticketsPos && anchorPos < specsPos, 'sole anchor must precede both negations');
+  assert.ok(
+    resultLines.lastIndexOf('.adlc/*') < ticketsPos && resultLines.lastIndexOf('.adlc/*') < specsPos,
+    'no anchor may follow either negation (last-match-wins hazard)'
+  );
+});
+
+test('ensureGitignore is idempotent after repairing a duplicate anchor (second call reports no-op)', () => {
+  const root = mkRepo();
+  writeFileSync(
+    join(root, '.gitignore'),
+    '.adlc/*\n!.adlc/tickets.json\nfoo\n.adlc/*\n!.adlc/specs/\n'
+  );
+  ensureGitignore(root);
+  const r2 = ensureGitignore(root);
+  assert.equal(r2.changed, false);
+  assert.deepEqual(r2.added, []);
+});
+
 test('scaffold() wires ensureGitignore in so /adlc-init tracks specs/ by default', () => {
   const root = mkRepo();
   const out = scaffold(root);
@@ -241,6 +281,24 @@ test('ensureFormatterIgnores detects but does not silently mutate a flat eslint.
   assert.ok(eslint.skipped, 'must document the manual fallback');
   const body = readFileSync(join(root, 'eslint.config.js'), 'utf8');
   assert.equal(body, 'export default [];\n'); // untouched
+});
+
+test('ensureFormatterIgnores reports BOTH .eslintrc.json and .eslintignore outcomes when a repo has both', () => {
+  const root = mkRepo();
+  writeFileSync(join(root, '.eslintrc.json'), JSON.stringify({ extends: ['eslint:recommended'] }));
+  writeFileSync(join(root, '.eslintignore'), 'dist/\n');
+  const { eslint } = ensureFormatterIgnores(root);
+  assert.equal(eslint.detected, true);
+  assert.equal(eslint.changed, true);
+  // Both files must actually be mutated on disk...
+  const rc = readJson(join(root, '.eslintrc.json'));
+  assert.ok(rc.ignorePatterns.includes('.adlc/**'));
+  const ignoreBody = readFileSync(join(root, '.eslintignore'), 'utf8');
+  assert.match(ignoreBody, /^\.adlc\/$/m);
+  // ...and the returned report must not silently drop either mutation.
+  assert.ok(eslint.sources, 'must expose per-file detail when both are present');
+  assert.equal(eslint.sources.eslintrc.changed, true);
+  assert.equal(eslint.sources.eslintignore.changed, true);
 });
 
 test('ensureFormatterIgnores reports nothing detected when no formatter/linter configs exist', () => {
