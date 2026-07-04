@@ -7,9 +7,19 @@ Native ADLC integration for the Antigravity CLI. Two layers:
    hook crash/timeout/Windows-path failure can let a rail write through.
 2. **CI diff gate (the guarantee).** `scripts/rails-guard-ci.mjs` (documented in
    [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) is the unbypassable,
-   cross-platform control. Make it a required check.
+   cross-platform control. Make it a required check. **Private-repo / free-plan
+   caveat:** on a private repo on GitHub's free plan, the required-status-check
+   APIs 403 — see the fallback below.
 
 ## Install
+
+> **⚠️ Fail-open, CI is the real backstop.** The in-session `PreToolUse` rail hook
+> installed below is **advisory only** — `agy` fails **OPEN** on a non-zero hook
+> exit (crash, timeout, unsupported platform), so a frozen-rail write can slip
+> through. Do not treat the hook as a hard block. The unbypassable control is the
+> CI diff gate (`scripts/rails-guard-ci.mjs`, wired via
+> [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) — **make it a required
+> check** before relying on this integration for enforcement.
 
 **Local Checkout (Recommended/Verified).** Currently, the most reliable way to install the plugin is directly from a local checkout:
 
@@ -58,6 +68,15 @@ Antigravity's hooks are a **best-effort, in-session** layer, not the control:
    (`scripts/rails-guard-ci.mjs`). It reads the frozen rail set **from the trusted base
    ref** and rejects any PR that edits a path frozen there, regardless of how the edit
    was made. **Make it a required check.**
+
+   **Private-repo / free-plan caveat:** on a private repo on GitHub's free plan,
+   both required-status-check mechanisms (`PUT .../branches/main/protection` and
+   `POST .../rulesets`) return 403 ("Upgrade to GitHub Pro or make this repository
+   public") — you cannot make this gate a required check there, so a maintainer
+   can merge past a failing run. Fold the rail-freeze step into your existing
+   required CI job instead (e.g. the main test job) — see the "Private-repo
+   fallback" sketch at the bottom of
+   [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml).
 
    **Scope limit:** because the rail set is read from the base ref, the gate protects
    rails **already frozen on the base branch**. A PR that *introduces* a new rail

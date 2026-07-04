@@ -19,6 +19,14 @@ passes · `1` = operational error · `2` = gate fails.
 Prerequisites: `adlc --version` works (else tell the user `npm i -g @adlc/cli`),
 and you are on the branch under review with a clean working tree.
 
+This subagent runs three deterministic gates over the change as a whole. For the
+independent multi-lens adversarial loop (fan-out across five review lenses,
+cross-lens dedupe, independent verifier refutation, loop until two consecutive
+dry rounds) see `/adlc-prosecute` instead — the two are complementary, not
+redundant: this subagent's gates are mechanical (mutation testing, capture/
+compare, recall scoring), while `/adlc-prosecute`'s lenses are independent
+model judgment on the diff.
+
 ## Prosecution sequence
 
 Run the gates that apply to the change. Do not fabricate evidence — if a gate
@@ -84,7 +92,18 @@ After a clean prosecution, record informal provenance with:
 adlc gate-manifest record prosecution --files <changed files>
 ```
 
-**Limitation:** this entry carries `gate: "prosecution"` and does **not** satisfy
-`adlc run p5`. Formal P5 phase assertion requires the Codex path (`adlc prosecute`
-→ `adlc run p5`). If P5 formal assertion is required, use the Codex integration
-or document the assertion gap explicitly.
+**Note:** this subagent's own `gate-manifest record prosecution` entry carries
+`gate: "prosecution"`, which alone does not satisfy `adlc run p5` — that requires
+the runner's `type: "p5-complete"` provenance chain (ticket- and revision-bound,
+two consecutive dry passes). That runner path is harness-agnostic (`adlc
+prosecute` → `adlc run p5`), not exclusive to any one CLI or agent tool.
+
+For the full adversarial engine — independent fan-out across lenses, cross-lens
+dedupe, and independent verifier refutation with loop-until-dry convergence — use
+`/adlc-prosecute`, which invokes the `prosecutor-{correctness,security,contract,
+diff,tests,verifier}` subagents. That command replicates the same fan-out →
+dedupe → independent-verify → repeat-until-two-dry-rounds shape as the OpenCode
+integration's `/adlc-prosecute`, so Claude Code no longer needs to punt to a
+different harness to run the multi-lens loop; it can additionally feed its
+surviving findings to the `adlc prosecute` runner path for formal `adlc run p5`
+phase assertion when that is required.

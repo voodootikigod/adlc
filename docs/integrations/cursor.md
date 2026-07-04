@@ -81,6 +81,14 @@ Cursor's hooks are a **best-effort, in-session** layer, not the control:
    set **from the trusted base ref** and rejects any PR that edits a path frozen
    there, regardless of how the edit was made. **Make it a required check.**
 
+   **Private-repo / free-plan caveat:** on a private repo on GitHub's free plan,
+   both required-status-check mechanisms (`PUT .../branches/main/protection` and
+   `POST .../rulesets`) return 403 ("Upgrade to GitHub Pro or make this repository
+   public") — this gate cannot be made a required check there, so a maintainer
+   can merge past a failing run. Fold the rail-freeze step into your existing
+   required CI job instead — see the "Private-repo fallback" sketch at the bottom
+   of [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml).
+
    **Scope limit (read the template's own SECURITY LIMITATION):** because the rail
    set is read from the base ref, the gate protects rails **already frozen on the
    base branch**. A PR that *introduces* a new rail **and** edits that path in the

@@ -40,10 +40,11 @@ function withTempSpec(contents, fn) {
 }
 
 test('registry exposes the suite tools and omits internal packages', () => {
-  assert.equal(TOOLS.length, 21);
+  assert.equal(TOOLS.length, 22);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
+  assert.equal(isTool('review'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });
@@ -61,6 +62,10 @@ test('resolves package-local tool bins without PATH lookup', () => {
   assert.equal(resolveBin('definitely-not-real'), null);
 });
 
+test('external verbs like "review" have no local bin to resolve (they are npx passthroughs)', () => {
+  assert.equal(resolveBin('review'), null);
+});
+
 test('resolves runner bin for run and accept verbs', () => {
   assert.match(resolveRunnerBin() ?? '', /packages\/runner\/bin\/adlc\.mjs$/);
 });
@@ -74,7 +79,7 @@ test('help lists every routed tool and exits 0', () => {
 test('renderHelp embeds version and tool count', () => {
   const output = renderHelp('9.9.9');
   assert.match(output, /adlc 9\.9\.9/);
-  assert.match(output, /Tools \(21\)/);
+  assert.match(output, /Tools \(22\)/);
 });
 
 test('version prints a semver-shaped string', () => {

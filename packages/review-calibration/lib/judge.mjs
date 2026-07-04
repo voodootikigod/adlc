@@ -4,6 +4,8 @@
 // (find the bug) — the generator–verifier gap — so a cheap model judges well.
 // The judge is itself calibrated against a labeled fixture (calibrateJudge).
 
+import { resolveModel } from '@adlc/core';
+
 /**
  * A judge is `async (plant, finding) => boolean` — true iff the finding
  * identifies the plant's defect.
@@ -109,4 +111,101 @@ export async function calibrateJudge(fixture, judge) {
   }
   const n = fixture.length;
   return { agreement: n > 0 ? agree / n : 0, n, disagreements };
+}
+
+// ── provider-independence guard (issue #64) ───────────────────────────────────
+// The judge is resolved through the same auto-detect provider path as
+// everything else in the toolkit, while the reviewer-under-test runs as an
+// opaque subprocess via --review-cmd — it can't be introspected generically.
+// The caller states its provider explicitly via --review-provider; this
+// compares that declaration against the judge's resolved provider so the
+// "who reviews the reviewer" claim can't be silently satisfied by the same
+// model family reviewing itself.
+
+/** Known aliases that name the same provider family as `detectProvider`. */
+const PROVIDER_ALIASES = new Map([
+  ['claude', 'anthropic'],
+  ['gpt', 'openai'],
+  ['gpt4', 'openai'],
+  ['chatgpt', 'openai'],
+  ['google', 'gemini'],
+]);
+
+function normalizeProviderName(name) {
+  const n = String(name).trim().toLowerCase();
+  return PROVIDER_ALIASES.get(n) ?? n;
+}
+
+/**
+ * Compare the caller-declared reviewer-under-test provider against the
+ * judge's resolved provider. Neither side can be compared if undeclared
+ * (a missing --review-provider, or a judge that isn't LLM-backed, e.g.
+ * --scorer string) — in that case `same` is false because no comparison was
+ * possible, not because independence was verified.
+ *
+ * @param {string|undefined} reviewProvider  caller-declared --review-provider value
+ * @param {string|undefined} judgeProvider   judge's resolved provider name (detectProvider().name)
+ * @returns {{ same: boolean, reviewProvider: string|undefined, judgeProvider: string|undefined }}
+ */
+export function checkProviderIndependence(reviewProvider, judgeProvider) {
+  if (!reviewProvider || !judgeProvider) {
+    return { same: false, reviewProvider, judgeProvider };
+  }
+  return {
+    same: normalizeProviderName(reviewProvider) === normalizeProviderName(judgeProvider),
+    reviewProvider,
+    judgeProvider,
+  };
+}
+
+/** Substring → family, checked against the actual model name agy dispatches to. */
+const MODEL_FAMILY_PATTERNS = [
+  [/claude/, 'anthropic'],
+  [/gemini/, 'gemini'],
+  [/gpt/, 'openai'],
+];
+
+/**
+ * Resolve the judge's EFFECTIVE provider family for `checkProviderIndependence`.
+ *
+ * `detectProvider().name` is a literal identifier ('anthropic' | 'openai' |
+ * 'gemini' | 'agy') — accurate for the three API-key providers, whose name
+ * already equals the model family they call. The 'agy' provider is different:
+ * it proxies to the Antigravity CLI, whose ACTUAL model family is tier-dependent
+ * (see packages/core/lib/llm.mjs PROVIDERS[3].models — models.cheap is
+ * Gemini-family while models.mid/frontier are Claude/anthropic-family). Passing
+ * the literal string 'agy' into checkProviderIndependence would never match a
+ * declared --review-provider, silently defeating the guard exactly when agy is
+ * transparently running the same model family as the reviewer-under-test.
+ *
+ * Resolves the ACTUAL model id `complete()` will dispatch to — via core's
+ * `resolveModel`, which checks `ADLC_MODEL_<TIER>` env overrides FIRST and only
+ * falls back to the provider's static `models[tier]` table when unset — then
+ * matches that model id against known family substrings. Using the static
+ * table directly (without the override) would let an operator's
+ * `ADLC_MODEL_MID=<openai-model>` override silently defeat the guard: the judge
+ * would actually run on OpenAI while this function kept reporting 'anthropic'.
+ * Falls back to the literal provider name (never silently claims independence)
+ * when the provider isn't 'agy' or its resolved model name doesn't match a
+ * known family.
+ *
+ * @param {{name: string, models?: Record<string,string>}|null|undefined} provider  detectProvider() result
+ * @param {string} tier
+ * @param {NodeJS.ProcessEnv} [env]  defaults to process.env; accepts ADLC_MODEL_<TIER> overrides
+ * @returns {string|undefined}
+ */
+export function resolveEffectiveProvider(provider, tier, env = process.env) {
+  if (!provider) return undefined;
+  if (provider.name !== 'agy') return provider.name;
+  let modelId;
+  try {
+    modelId = resolveModel(provider, { tier }, env);
+  } catch {
+    return provider.name; // unknown tier — fall back, don't guess a match
+  }
+  const model = String(modelId ?? '').toLowerCase();
+  for (const [pattern, family] of MODEL_FAMILY_PATTERNS) {
+    if (pattern.test(model)) return family;
+  }
+  return provider.name; // unrecognized model name — fall back, don't guess a match
 }

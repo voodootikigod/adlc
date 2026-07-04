@@ -19,7 +19,10 @@ import { filterCodeFiles, selectPlants, loadPlantsFile } from '../lib/targets.mj
 import { runWithPlants } from '../lib/runner.mjs';
 import { parseFindings } from '../lib/findings.mjs';
 import { scorePlants } from '../lib/scorer.mjs';
-import { makeLlmJudge, referenceJudge, JUDGE_SYSTEM, buildJudgePrompt } from '../lib/judge.mjs';
+import {
+  makeLlmJudge, referenceJudge, JUDGE_SYSTEM, buildJudgePrompt, checkProviderIndependence,
+  resolveEffectiveProvider,
+} from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
 import { echoReviewer, oracleReviewer } from '../lib/controls.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
@@ -37,6 +40,8 @@ const { values } = parseArgs({
     files:          { type: 'string' },
     'plants-file':  { type: 'string' },
     tier:           { type: 'string', default: 'cheap' },
+    'review-provider': { type: 'string' },
+    strict:         { type: 'boolean', default: false },
     json:           { type: 'boolean', default: false },
     'prompt-only':  { type: 'boolean', default: false },
     help:           { type: 'boolean', default: false },
@@ -68,6 +73,17 @@ Options:
   --plants-file <path>  JSON array of authored plants:
                         [{file,line,original,mutated,category?,defect?,witness?}]
   --tier cheap|mid|frontier  Model tier for the LLM judge (default: cheap)
+  --review-provider <name>  Provider/model family the --review-cmd subprocess
+                        actually uses (e.g. anthropic, openai, gemini). The
+                        subprocess can't be introspected generically, so the
+                        caller must state it. Compared against the judge's
+                        own resolved provider — if they match, the "who
+                        reviews the reviewer" independence claim is
+                        undermined (same-family blind spots go undetected).
+                        Warns by default; see --strict.
+  --strict              Gate-fail (exit 2) instead of warning when
+                        --review-provider matches the judge's resolved
+                        provider. Requires --review-provider.
   --json                Machine-readable JSON output
   --prompt-only         Print a representative judge prompt and exit 0 (no
                         API key or git repo needed)
@@ -77,7 +93,7 @@ Exit codes:
   0  Recall (and precision, if set) meet thresholds
   1  Operational error (dirty tree, no plants, review crashed, no judge available,
      or the scorer's own control self-test failed)
-  2  Recall/precision below thresholds (gate fails)
+  2  Recall/precision below thresholds (gate fails), or --strict provider match
 
 ADLC phase: P5 meta-gate — "who reviews the reviewer"
 `;
@@ -129,6 +145,8 @@ const filesFlag  = values.files ?? '';
 const tier       = values.tier;
 const useJson    = values.json;
 const cwd        = process.cwd();
+const reviewProvider = values['review-provider'];
+const strict     = values.strict;
 
 if (isNaN(maxPlants) || maxPlants < 1)  opError('--plants must be a positive integer');
 if (isNaN(minRecall) || minRecall < 0 || minRecall > 1) opError('--min-recall must be between 0 and 1');
@@ -137,6 +155,9 @@ if (minPrecision != null && (isNaN(minPrecision) || minPrecision < 0 || minPreci
 }
 if (scorerMode !== 'judge' && scorerMode !== 'string') {
   opError(`--scorer must be "judge" or "string" (got "${scorerMode}")`);
+}
+if (strict && !reviewProvider) {
+  opError('--strict requires --review-provider — nothing to compare the judge against');
 }
 
 // ── safety checks ────────────────────────────────────────────────────────────
@@ -147,6 +168,7 @@ if (isDirty(cwd)) opError('commit or stash first — review-calibration plants b
 // ── resolve the judge BEFORE expensive work (fail closed, never string-match silently) ──
 
 let judge;
+let judgeProviderName;
 if (scorerMode === 'string') {
   console.error(
     'WARNING: --scorer string is location-only and is defeated by a reviewer that ' +
@@ -155,13 +177,41 @@ if (scorerMode === 'string') {
   );
   judge = () => true; // any locating finding counts — the gameable legacy behavior
 } else {
-  if (!detectProvider()) {
+  const judgeProvider = detectProvider();
+  if (!judgeProvider) {
     opError(
       'no LLM provider for the judge — set ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY, ' +
       'or pass --scorer string (gameable, warned). Refusing to emit a string-matched recall number.'
     );
   }
+  // agy's actual model family is tier-dependent (e.g. --tier cheap runs
+  // Gemini, --tier mid/frontier run Claude/anthropic) — resolve to the
+  // family it will really dispatch to, not the literal 'agy' provider name,
+  // so the independence guard below can't be silently defeated (issue #64).
+  judgeProviderName = resolveEffectiveProvider(judgeProvider, tier);
   judge = makeLlmJudge(coreComplete, coreExtractJson, tier);
+}
+
+// ── provider-independence guard (issue #64) ──────────────────────────────────
+// "Who reviews the reviewer" is undermined if the judge and the reviewer
+// under test (--review-cmd, an opaque subprocess we cannot introspect) are
+// silently the same model family. --review-provider is the caller's explicit
+// declaration of what --review-cmd actually runs on.
+
+const independence = checkProviderIndependence(reviewProvider, judgeProviderName);
+if (independence.same) {
+  const msg =
+    `judge and --review-provider are both "${judgeProviderName}" — the reviewer-under-test ` +
+    'and the judge scoring it share the same model family, undermining the "who reviews ' +
+    'the reviewer" independence this gate exists to check';
+  if (strict) {
+    gateFail(msg);
+  } else {
+    console.error(
+      `WARNING: ${msg}. Use --strict to fail the gate on this, or pass --review-provider ` +
+      'for a provider different from the judge\'s.'
+    );
+  }
 }
 
 // ── select plants ────────────────────────────────────────────────────────────
