@@ -10,6 +10,7 @@ import {
   writeFileSync,
   readFileSync,
   mkdirSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -1008,6 +1009,142 @@ describe('CLI: --target rejects a path that escapes the repo root', () => {
     assert.ok(
       /resolves outside the repository root/i.test(result.stderr),
       `Expected an explanatory containment error, got stderr: ${result.stderr}`
+    );
+  });
+});
+
+// ── --target/--rails must not escape the repo root via a symlink ───────────
+// escapesRoot() (used by both --target and, as of this fix, --rails) is a
+// purely LEXICAL check — path.resolve()/path.relative() never dereference
+// symlinks. A symlink that lives INSIDE the repo but points OUTSIDE it
+// resolves (textually) to a path under the repo root and would sail through
+// that check, while every actual filesystem read/write against that path
+// (readFileSafe, the mutation loop's writeFileSync) is done by the OS, which
+// DOES follow the symlink straight through to wherever it points. This is a
+// real containment bypass (confirmed by direct reproduction against the
+// pre-fix binary: an unmutated outside file was read, mutated, tested, and
+// restored, entirely outside the "resolves inside the repository root"
+// guarantee promised by --help), not just a theoretical one. Pin the
+// symlink-aware real-path check for both entry points.
+
+describe('CLI: --target/--rails reject a symlink that escapes the repo root', () => {
+  let dir;
+  let outsideDir;
+  let outsideFile;
+  let ticketPath;
+
+  const outsideContent = [
+    'export function check(a, b) {',
+    '  if (a > b) {',
+    '    return true;',
+    '  }',
+    '  return false;',
+    '}',
+    '',
+  ].join('\n');
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-symlink-'));
+    createRailsAuthoringRepo(dir);
+
+    // A real, mutable file OUTSIDE the repo entirely (a separate temp dir,
+    // not just above `dir`) — content chosen so a successful escape would
+    // actually generate and apply mutants, proving read+mutate rather than a
+    // coincidental ENOENT or a comment-only false negative.
+    outsideDir = mkdtempSync(join(tmpdir(), 'hollow-outside-'));
+    outsideFile = join(outsideDir, 'secret.mjs');
+    writeFileSync(outsideFile, outsideContent);
+
+    // A symlink INSIDE the repo pointing at the outside directory — the
+    // vector for --target, which resolves an arbitrary caller-typed path on
+    // the filesystem directly (`escape-link/secret.mjs` walks through the
+    // symlinked directory to the file beyond it). It must be committed (not
+    // merely present) — hollow-test refuses to run on a dirty tree, so an
+    // untracked symlink alone would fail via the dirty-tree guard before
+    // ever reaching the containment check this test targets.
+    symlinkSync(outsideDir, join(dir, 'escape-link'));
+
+    // A second symlink, this one a direct file->file link tracked at its OWN
+    // path — the vector for --rails: `git ls-files` lists a tracked symlink
+    // as a single leaf entry (it does not traverse "through" a symlink the
+    // way a real directory would), so a rails glob can only ever match the
+    // symlink's own tracked name, never a path "inside" it. Naming that
+    // tracked symlink directly is the realistic rails-side escape.
+    symlinkSync(outsideFile, join(dir, 'escape-link-file.mjs'));
+    commitAll(dir, 'add symlinks pointing outside the repo');
+
+    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-symlink-ticket-'));
+    ticketPath = join(ticketDir, 'ticket.json');
+    writeFileSync(ticketPath, JSON.stringify({
+      tickets: [{
+        id: 'T1',
+        title: 'symlink escape via rails',
+        rails: ['escape-link-file.mjs'],
+      }],
+    }));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (NOT 0) for a --target path through a symlink that escapes the repo root', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'escape-link/secret.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A --target path through a symlink escaping the repo root must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /escapes it via a symlink/i.test(result.stderr),
+      `Expected a symlink-aware containment error, got stderr: ${result.stderr}`
+    );
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed containment error, got stdout: ${result.stdout}`
+    );
+    // The outside file must be untouched — no mutation was ever applied to it.
+    assert.equal(
+      readFileSync(outsideFile, 'utf8'),
+      outsideContent,
+      'The file outside the repo must not have been read or mutated'
+    );
+  });
+
+  it('exits 1 (NOT 0) for a --rails glob matching a symlink that escapes the repo root', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--rails', ticketPath,
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A --rails glob matching a symlink escaping the repo root must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /escapes it via a symlink/i.test(result.stderr),
+      `Expected a symlink-aware containment error, got stderr: ${result.stderr}`
+    );
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed containment error, got stdout: ${result.stdout}`
+    );
+    assert.equal(
+      readFileSync(outsideFile, 'utf8'),
+      outsideContent,
+      'The file outside the repo must not have been read or mutated'
     );
   });
 });

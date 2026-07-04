@@ -3,7 +3,7 @@
 // Refuses to run on a dirty working tree. Mutates files in place and
 // restores them via finally blocks + SIGINT handler.
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
@@ -93,6 +93,17 @@ try {
   opError(`could not resolve repository root: ${err.message}`);
 }
 
+// Symlink-free real path of the repo root, used by symlinkEscapesRoot() below.
+// `repoRoot()` itself already runs `git rev-parse --show-toplevel`, which
+// resolves symlinks in its own path components, so this should normally
+// equal `root` — but resolve it independently rather than assume that.
+let rootReal;
+try {
+  rootReal = realpathSync(root);
+} catch (err) {
+  opError(`could not resolve real path of repository root: ${err.message}`);
+}
+
 // ── base ref resolution ──────────────────────────────────────────────────────
 // When --base is not passed, resolve the merge-base with a trunk candidate
 // (main/master/origin/*). Defaulting to literal 'HEAD' would diff HEAD vs HEAD
@@ -155,11 +166,43 @@ function escapesRoot(relPath) {
   return relPath === '' || relPath.split(sep)[0] === '..' || isAbsolute(relPath);
 }
 
+// Textual containment (escapesRoot() above) only catches `..`/absolute
+// escapes in the path AS WRITTEN. It does nothing about a symlink that lives
+// INSIDE the repo but points outside it: `path.resolve()`/`path.relative()`
+// are purely lexical and never dereference symlinks, so `--target
+// some-tracked-symlink/secret.mjs` resolves (textually) to a path under
+// `root` and sails through escapesRoot() — while every actual read/write
+// against that path (readFileSafe, the mutation loop's writeFileSync) is
+// done by the OS, which DOES follow the symlink, straight through to
+// wherever it points. Close that gap by re-resolving the real,
+// symlink-free path and re-checking containment against the repo's real
+// root. Returns the escaping real path (for the error message) or null if
+// containment holds or the path doesn't exist yet (the caller's later
+// "not found" check handles that case).
+function symlinkEscapesRoot(absolutePath) {
+  let real;
+  try {
+    real = realpathSync(absolutePath);
+  } catch {
+    return null;
+  }
+  const rel = relative(rootReal, real);
+  return escapesRoot(rel) ? real : null;
+}
+
 const explicitTargets = (values.target ?? []).map((t) => {
-  const rel = relative(root, resolve(cwd, t));
+  const abs = resolve(cwd, t);
+  const rel = relative(root, abs);
   if (escapesRoot(rel)) {
     opError(
       `--target ${t} resolves outside the repository root (${root}) — refusing to read or mutate it`
+    );
+  }
+  const realEscape = symlinkEscapesRoot(abs);
+  if (realEscape !== null) {
+    opError(
+      `--target ${t} resolves inside the repository root textually but escapes it via a ` +
+      `symlink (real path: ${realEscape}) — refusing to read or mutate it`
     );
   }
   return rel;
@@ -197,6 +240,22 @@ if (railsGlobs.length > 0) {
   railsFiles = expandRailsToFiles(railsGlobs, allFiles);
   if (railsFiles.length === 0) {
     opError(`--rails declared globs matched no tracked files: ${railsGlobs.join(', ')}`);
+  }
+  // Defense in depth: git tracks symlinks as ordinary blobs, so a rails glob
+  // can legitimately match a checked-in symlink whose target points outside
+  // the repo — "globs can only ever match git ls-files output" (see the
+  // comment above --target's resolution) is a guarantee about which
+  // repo-relative PATHS can be named, not about what those paths dereference
+  // to on disk. Apply the same real-path containment check used for
+  // --target.
+  for (const f of railsFiles) {
+    const realEscape = symlinkEscapesRoot(resolve(root, f));
+    if (realEscape !== null) {
+      opError(
+        `--rails matched ${f}, which resolves inside the repository root textually but ` +
+        `escapes it via a symlink (real path: ${realEscape}) — refusing to read or mutate it`
+      );
+    }
   }
 }
 
