@@ -434,6 +434,51 @@ describe('classifyCriterion', () => {
     const r = classifyCriterion('see `/var/log/run` for reference');
     assert.ok(!r.verified);
   });
+
+  // -------------------------------------------------------------------------
+  // adversarial follow-up — PATH_LIKE_RE's "no dots anywhere" rule was too
+  // broad: it also rejected extensionless paths whose ONLY dots live in an
+  // intermediate directory segment (e.g. a version number) or that end in a
+  // bare trailing separator (a directory-only reference). Both shapes have
+  // no file extension and must still be classified file-like so an
+  // incidental command word in a path segment doesn't get misread as a
+  // verification command.
+  // -------------------------------------------------------------------------
+
+  it('WISH: a trailing-slash directory reference is file-like even with a command word inside', () => {
+    const r = classifyCriterion('Config lives in `./deploy/` folder');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a trailing-slash directory reference containing "build" is not a command', () => {
+    const r = classifyCriterion('Artifacts land in `./build/` after packaging');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: an extensionless path with a dotted version-number directory segment is file-like', () => {
+    const r = classifyCriterion('Artifacts land in `/opt/releases/v1.2.3/build` after packaging');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: an extensionless path with a dotted directory segment does not resurrect the /var/log/run regression', () => {
+    const r = classifyCriterion('Logs are written to `/var/log/v2.0/run`');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: an extensioned path under a dotted version-number directory is still a genuine command', () => {
+    const r = classifyCriterion('Config lives in `./v1.2.3/deploy.sh` for reference');
+    assert.ok(r.verified);
+  });
+
+  it('WISH: a Windows-style backslash directory reference is file-like even with a command word inside', () => {
+    const r = classifyCriterion('Config lives in `.\\deploy\\` folder');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: a Windows-style backslash script path with an extension is a genuine command', () => {
+    const r = classifyCriterion('Confirmed by `.\\scripts\\verify.ps1`');
+    assert.ok(r.verified);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -52,15 +52,31 @@ const PRECEDING_PHRASE_RE = /(verified\s+via|\brun)\s*:?\s*$/i;
  */
 const FILENAME_LIKE_RE = /^[\w][\w./-]*\.[A-Za-z0-9]+$/;
 /**
- * A bare absolute/relative path with no whitespace and no file extension.
- * Each path segment after the leading `.`/`..`/`/` must consist only of
- * word characters and hyphens (no dots) — a segment containing a dot (e.g.
- * the "verify.sh" in `../scripts/verify.sh`) means the path has a file
- * extension and must NOT be treated as file-like here: it's exactly the
- * kind of script-path verification command (#45/#71 follow-up) that should
- * still be checked against COMMAND_WORD_RE.
+ * A bare absolute/relative path with no whitespace and no file extension on
+ * its FINAL segment. Separators may be `/` (POSIX) or `\` (Windows).
+ *
+ * Only the last segment determines "does this path have an extension" — a
+ * segment containing a dot (e.g. the "verify.sh" in `../scripts/verify.sh`)
+ * as the FINAL component means the path has a file extension and must NOT
+ * be treated as file-like here: it's exactly the kind of script-path
+ * verification command (#45/#71 follow-up) that should still be checked
+ * against COMMAND_WORD_RE.
+ *
+ * Intermediate (non-final) segments MAY contain dots — a directory name
+ * like a version number (`v1.2.3/`) is common and does not itself imply
+ * the path is a runnable script; restricting the "no dots anywhere" rule
+ * to only the final segment avoids misclassifying an otherwise-genuine
+ * extensionless path/directory reference (e.g. `/opt/releases/v1.2.3/build`,
+ * `/var/log/v2.0/run`) as a command merely because a directory segment
+ * happens to contain a dot.
+ *
+ * A trailing separator (e.g. `./deploy/`) is also allowed — an
+ * unambiguous directory-only reference has no extension either, and
+ * previously fell through to COMMAND_WORD_RE purely because the regex
+ * required the string to end in a bare segment with no trailing slash
+ * (round-5 follow-up).
  */
-const PATH_LIKE_RE = /^\.{0,2}\/(?:[\w-]+\/)*[\w-]+$/;
+const PATH_LIKE_RE = /^\.{0,2}[/\\](?:[\w.-]+[/\\])*[\w-]+[/\\]?$/;
 
 /**
  * Whether a backtick span in `text` looks like a genuine command or
