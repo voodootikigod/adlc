@@ -3,7 +3,7 @@
 // Exit codes: 0 = no gate defeated (earned clean), 2 = gate defeated, 1 = op error
 
 import { parseArgs, opError, pass, gateFail, printJson } from '@adlc/core';
-import { detectProvider } from '@adlc/core';
+import { detectProvider, PROVIDER_NAMES } from '@adlc/core';
 import { runLoop } from '../lib/loop.mjs';
 import { classifyCandidate } from '../lib/classify.mjs';
 import { computeVerdict } from '../lib/verdict.mjs';
@@ -19,6 +19,8 @@ const { values } = parseArgs({
     suite:              { type: 'string' },
     n:                  { type: 'string', default: '6' },
     tier:               { type: 'string', default: 'mid' },
+    provider:           { type: 'string' },
+    providers:          { type: 'string' },
     'max-rounds':       { type: 'string', default: '10' },
     'dry-rounds':       { type: 'string', default: '3' },
     'token-budget':     { type: 'string', default: '200000' },
@@ -46,6 +48,7 @@ gate-fuzzing — standing red-team / gate calibration (ADLC C-tool)
 
 Usage:
   gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
+               [--provider <name> | --providers <a,b,c>]
                [--max-rounds <int>] [--dry-rounds <int>] [--token-budget <int>]
                [--witness-trials <int>] [--max-fail-rate <float>] [--canary-budget <int>]
                [--behavioral-witness] [--allow-cmd <name>...] [--unsafe-no-sandbox]
@@ -56,6 +59,15 @@ Options:
   --suite <path>          Gate suite JSON (default: .adlc/gate-suite.json)
   --n <int>               Fan width per round (default: 6)
   --tier cheap|mid        Adversary model tier (default: mid; frontier rejected)
+  --provider <name>       Force a single provider for the whole run (anthropic|
+                          openai|gemini|agy), overriding ADLC_PROVIDER for this
+                          invocation only. Default: single-provider auto-detect.
+  --providers <a,b,c>     Fan mutation strategies across DISTINCT named
+                          providers (one candidate per provider) instead of
+                          --n resamples of one auto-detected provider —
+                          cross-family diversity per ADR-0007. Overrides --n
+                          (fan width becomes the number of providers named).
+                          Mutually exclusive with --provider.
   --max-rounds <int>      Hard round ceiling (default: 10)
   --dry-rounds <int>      K consecutive no-new-defeat rounds to stop (default: 3)
   --token-budget <int>    Estimated token ceiling (default: 200000)
@@ -109,6 +121,39 @@ if (!['cheap', 'mid'].includes(tier)) opError('--tier must be cheap or mid');
 
 const allowedCmds = new Set(['node', 'git', 'npm', 'npx', ...(values['allow-cmd'] ?? [])]);
 
+// ── --provider / --providers: per-invocation provider selection (issue #63) ──
+// Additive only — omit both and behavior is unchanged (single auto-detected
+// provider, --n resamples).
+
+const providerOverride = values['provider'] || undefined;
+const providersRaw = values['providers'] || undefined;
+
+if (providerOverride && providersRaw) {
+  opError('--provider and --providers are mutually exclusive — use one or the other');
+}
+if (providerOverride && !PROVIDER_NAMES.includes(providerOverride)) {
+  opError(`--provider must be one of: ${PROVIDER_NAMES.join(', ')}, got: ${providerOverride}`);
+}
+
+let providerNames;
+if (providersRaw) {
+  providerNames = providersRaw.split(',').map((p) => p.trim()).filter(Boolean);
+  if (providerNames.length === 0) opError('--providers must list at least one provider name');
+  const unknown = providerNames.filter((p) => !PROVIDER_NAMES.includes(p));
+  if (unknown.length > 0) {
+    opError(`--providers has unknown provider name(s): ${unknown.join(', ')} (known: ${PROVIDER_NAMES.join(', ')})`);
+  }
+  const dupes = [...new Set(providerNames.filter((p, i) => providerNames.indexOf(p) !== i))];
+  if (dupes.length > 0) {
+    opError(`--providers must name DISTINCT providers — duplicate(s): ${dupes.join(', ')}`);
+  }
+}
+
+// Fan width: one candidate per named provider when --providers is supplied,
+// otherwise the usual --n resamples of the single auto-detected (or
+// --provider-forced) provider.
+const fanWidth = providerNames ? providerNames.length : n;
+
 // ── sandbox check (§1.7, Fix 1) ────────────────────────────────────────────
 
 const sandboxType = detectSandbox();
@@ -124,12 +169,27 @@ if (!sandboxType && !values['unsafe-no-sandbox'] && !values['prompt-only']) {
 // ── provider check (if not prompt-only) ────────────────────────────────────
 
 if (!values['prompt-only']) {
-  const provider = detectProvider();
-  if (!provider) {
-    opError(
-      'No LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY\n' +
-      'Or use --prompt-only to print prompts without calling a provider.'
-    );
+  if (providerNames) {
+    // --providers: confirm EACH named provider is actually available up
+    // front, so a missing API key surfaces as a clean opError instead of a
+    // buried per-instance fan failure.
+    const missing = providerNames.filter((name) => !detectProvider(process.env, name));
+    if (missing.length > 0) {
+      opError(
+        `--providers requested provider(s) not available (missing API key): ${missing.join(', ')}\n` +
+          'Set the corresponding API key env var for each requested provider, or use --prompt-only.'
+      );
+    }
+  } else {
+    const provider = detectProvider(process.env, providerOverride);
+    if (!provider) {
+      opError(
+        providerOverride
+          ? `--provider ${providerOverride} is not available — set its API key (or ADLC_AGY for agy)`
+          : 'No LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY\n' +
+            'Or use --prompt-only to print prompts without calling a provider.'
+      );
+    }
   }
 }
 
@@ -148,7 +208,7 @@ const gates = suite.gates;
 // ── prompt-only (§8) ────────────────────────────────────────────────────────
 
 if (values['prompt-only']) {
-  const prompts = buildPromptOnlyOutput(gates, n);
+  const prompts = buildPromptOnlyOutput(gates, fanWidth);
   for (const p of prompts) console.log(p + '\n');
   process.exit(0);
 }
@@ -198,6 +258,8 @@ const fanFn = async (opts, nFan) => {
     gates,
     n: nFan,
     tier,
+    provider: providerOverride,
+    providerNames,
     maxTokens: 4096,
     completeFn: null, // uses core fan for real runs
   });
@@ -233,7 +295,7 @@ const loopResult = await runLoop(gates, { dir: repoRoot }, {
   dryRounds,
   tokenBudget,
   maxFailRate,
-  n,
+  n: fanWidth,
   allowedCmds,
 });
 
@@ -263,7 +325,7 @@ if (values.json) {
     exhaustive: loopResult.exhaustive,
     stoppedBy: loopResult.stoppedBy,
     rounds: loopResult.rounds,
-    candidatesGenerated: loopResult.rounds * n,
+    candidatesGenerated: loopResult.rounds * fanWidth,
     defeats: verdict.defeats.map((d) => ({
       id: d.id,
       strategy: d.strategy,

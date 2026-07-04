@@ -5,12 +5,21 @@
  * Usage:
  *   consensus-fix --test-cmd "npm test" --files src/foo.mjs,src/bar.mjs
  *                 [--rails "npm test"] [--n 3] [--tier mid] [--apply]
+ *                 [--provider <name> | --providers <a,b,c>]
  *                 [--allow-dirty] [--json] [--prompt-only]
  *
  *   --test-cmd is the repro gate (the specific failing test).
  *   --rails    is the regression gate (the FULL frozen rail suite). A candidate
  *              survives only if BOTH gates pass. Without --rails, candidates are
  *              not checked against the rails and a WARNING is printed.
+ *   --provider forces a single provider for the whole run (anthropic|openai|
+ *              gemini|agy), overriding ADLC_PROVIDER for this invocation only.
+ *              Default (no flag): single-provider auto-detect, unchanged.
+ *   --providers <a,b,c> draws ONE candidate fix per named provider family
+ *              instead of --n resamples of one auto-detected provider —
+ *              cross-family diversity per ADR-0007. Overrides --n (the fan
+ *              width becomes the number of providers named). Mutually
+ *              exclusive with --provider.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -25,6 +34,7 @@ import {
   complete,
   resolveModel,
   detectProvider,
+  PROVIDER_NAMES,
 } from '@adlc/core';
 import { runConsensusFix } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
@@ -38,6 +48,8 @@ const { values } = parseArgs({
     files: { type: 'string' },
     n: { type: 'string', default: '3' },
     tier: { type: 'string', default: 'mid' },
+    provider: { type: 'string' },
+    providers: { type: 'string' },
     apply: { type: 'boolean', default: false },
     'allow-dirty': { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
@@ -62,6 +74,37 @@ if (!['cheap', 'mid', 'frontier'].includes(tier)) {
   opError(`--tier must be cheap|mid|frontier, got: ${tier}`);
 }
 
+// --provider / --providers: per-invocation provider selection (issue #63).
+// Additive only — omit both and behavior is unchanged (single auto-detected
+// provider, --n resamples).
+const providerOverride = values['provider'] || undefined;
+const providersRaw = values['providers'] || undefined;
+
+if (providerOverride && providersRaw) {
+  opError('--provider and --providers are mutually exclusive — use one or the other');
+}
+if (providerOverride && !PROVIDER_NAMES.includes(providerOverride)) {
+  opError(`--provider must be one of: ${PROVIDER_NAMES.join(', ')}, got: ${providerOverride}`);
+}
+
+let providerNames;
+if (providersRaw) {
+  providerNames = providersRaw.split(',').map((p) => p.trim()).filter(Boolean);
+  if (providerNames.length === 0) opError('--providers must list at least one provider name');
+  const unknown = providerNames.filter((p) => !PROVIDER_NAMES.includes(p));
+  if (unknown.length > 0) {
+    opError(`--providers has unknown provider name(s): ${unknown.join(', ')} (known: ${PROVIDER_NAMES.join(', ')})`);
+  }
+  const dupes = [...new Set(providerNames.filter((p, i) => providerNames.indexOf(p) !== i))];
+  if (dupes.length > 0) {
+    opError(`--providers must name DISTINCT providers — duplicate(s): ${dupes.join(', ')}`);
+  }
+}
+
+// Fan width: one candidate per named provider when --providers is supplied,
+// otherwise the usual --n resamples of the single auto-detected provider.
+const fanWidth = providerNames ? providerNames.length : n;
+
 // --prompt-only: build and print prompts without running LLM.
 if (values['prompt-only']) {
   let snapshot;
@@ -76,7 +119,7 @@ if (values['prompt-only']) {
     testOutput: '<test output will appear here>',
     snapshot,
   });
-  promptOnly(Array.from({ length: n }, () => prompt));
+  promptOnly(Array.from({ length: fanWidth }, () => prompt));
   // promptOnly exits 0
 }
 
@@ -94,17 +137,35 @@ if (!values['allow-dirty']) {
 }
 
 // Build completeFn using core, with provider/model resolution.
-const provider = detectProvider();
-if (!provider) {
-  opError(
-    'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY (or use --prompt-only)'
-  );
+if (providerNames) {
+  // --providers: confirm EACH named provider is actually available up front,
+  // so a missing API key surfaces as a clean opError instead of an N-deep
+  // "LLM call failed" discard buried in the report.
+  const missing = providerNames.filter((name) => !detectProvider(process.env, name));
+  if (missing.length > 0) {
+    opError(
+      `--providers requested provider(s) not available (missing API key): ${missing.join(', ')}\n` +
+        'Set the corresponding API key env var for each requested provider, or use --prompt-only.'
+    );
+  }
+} else {
+  const provider = detectProvider(process.env, providerOverride);
+  if (!provider) {
+    opError(
+      providerOverride
+        ? `--provider ${providerOverride} is not available — set its API key (or ADLC_AGY for agy)`
+        : 'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY (or use --prompt-only)'
+    );
+  }
+  // modelId resolved for reference (complete() handles resolution internally).
+  resolveModel(provider, { tier });
 }
-// modelId resolved for reference (complete() handles resolution internally).
-resolveModel(provider, { tier });
 
-async function completeFn(prompt) {
-  return complete({ tier, prompt });
+// `providerName` is only passed by runConsensusFix when --providers is set
+// (one call per named provider); otherwise it's undefined and `provider:
+// providerOverride` falls back to --provider (or plain auto-detect if unset).
+async function completeFn(prompt, providerName) {
+  return complete({ tier, prompt, provider: providerName ?? providerOverride });
 }
 
 // SIGINT handler — restore files from snapshot on interrupt.
@@ -136,6 +197,7 @@ try {
     files: filePaths,
     n,
     tier,
+    providerNames,
     completeFn,
     onProgress: (msg) => {
       if (!values['json']) console.log(msg);

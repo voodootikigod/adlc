@@ -30,6 +30,7 @@ This turns "we found 11 bypasses once" into "finding bypasses is a CI gate."
 
 ```
 gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
+             [--provider <name> | --providers <a,b,c>]
              [--max-rounds <int>] [--dry-rounds <int>] [--token-budget <int>]
              [--witness-trials <int>] [--max-fail-rate <float>] [--canary-budget <int>]
              [--behavioral-witness] [--allow-cmd <name>...] [--unsafe-no-sandbox]
@@ -50,8 +51,10 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--suite <path>` | `.adlc/gate-suite.json` | Gate suite descriptor (refuses if absent) |
-| `--n <int>` | `6` | Fan width per round |
+| `--n <int>` | `6` | Fan width per round. Ignored when `--providers` is given (fan width becomes the number of providers named). |
 | `--tier cheap\|mid` | `mid` | Adversary tier (frontier rejected) |
+| `--provider <name>` | _(auto-detect)_ | Force a single provider (`anthropic\|openai\|gemini\|agy`) for every fan instance, overriding `ADLC_PROVIDER` for this invocation only. Additive — omit it and single-provider auto-detect is unchanged. Mutually exclusive with `--providers`. |
+| `--providers <a,b,c>` | _(none)_ | Fan mutation strategies across **distinct** named providers (one instance per provider) instead of `--n` resamples of one auto-detected provider — cross-family diversity per [ADR-0007](../../docs/adr/0007-multimodel-adversarial-review.md). Mutually exclusive with `--provider`. |
 | `--max-rounds <int>` | `10` | Hard round ceiling |
 | `--dry-rounds <int>` | `3` | K consecutive dry rounds to stop |
 | `--token-budget <int>` | `200000` | Estimated token ceiling (chars/4) |

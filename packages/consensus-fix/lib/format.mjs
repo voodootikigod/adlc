@@ -38,7 +38,8 @@ export function formatReport({
     lines.push('');
     lines.push('Discarded candidates:');
     for (const d of discarded) {
-      lines.push(`  [${d.index + 1}] ${d.reason}`);
+      const providerSuffix = d.provider ? ` (provider: ${d.provider})` : '';
+      lines.push(`  [${d.index + 1}]${providerSuffix} ${d.reason}`);
     }
   }
 
@@ -52,7 +53,12 @@ export function formatReport({
   lines.push(`Agreement groups : ${groups.size}`);
   for (const group of groups.values()) {
     const indices = group.map((c) => c.index + 1).join(', ');
-    lines.push(`  Group (${group.length} member${group.length !== 1 ? 's' : ''}): candidates [${indices}]`);
+    const providerSuffix = group.some((c) => c.provider)
+      ? ` (providers: ${group.map((c) => c.provider ?? '?').join(', ')})`
+      : '';
+    lines.push(
+      `  Group (${group.length} member${group.length !== 1 ? 's' : ''}): candidates [${indices}]${providerSuffix}`
+    );
   }
 
   if (allDivergent) {
@@ -65,6 +71,7 @@ export function formatReport({
     const { winner, largestGroupSize } = selectionResult;
     lines.push('');
     lines.push(`Winner: candidate [${winner.index + 1}]`);
+    if (winner.provider) lines.push(`  Provider             : ${winner.provider}`);
     lines.push(`  Agreement group size : ${largestGroupSize}`);
     lines.push(`  Changed lines        : ${winner.changedLines}`);
     lines.push('');
@@ -109,6 +116,9 @@ export function formatJson({
       groupIndex: gi++,
       size: group.length,
       candidateIndices: group.map((c) => c.index),
+      // Per-candidate provider (issue #63 --providers); null entries when a
+      // candidate wasn't drawn from a named provider (default --n sampling).
+      candidateProviders: group.map((c) => c.provider ?? null),
     });
   }
 
@@ -126,12 +136,17 @@ export function formatJson({
     winner: selectionResult
       ? {
           index: selectionResult.winner.index,
+          provider: selectionResult.winner.provider ?? null,
           changedLines: selectionResult.winner.changedLines,
           largestGroupSize: selectionResult.largestGroupSize,
           changes: selectionResult.winner.changes,
           applied,
         }
       : null,
-    discardedDetails: discarded.map((d) => ({ index: d.index, reason: d.reason })),
+    discardedDetails: discarded.map((d) => ({
+      index: d.index,
+      provider: d.provider ?? null,
+      reason: d.reason,
+    })),
   };
 }

@@ -20,12 +20,13 @@ function makeGroups(candidates) {
   return map;
 }
 
-function makeCandidate(index, content, changedLines = 1) {
+function makeCandidate(index, content, changedLines = 1, provider) {
   return {
     index,
     changes: [{ file: 'src/a.mjs', content }],
     changedLines,
     passed: true,
+    ...(provider ? { provider } : {}),
   };
 }
 
@@ -368,4 +369,155 @@ test('formatJson summary.groups equals number of distinct groups', () => {
   });
 
   assert.equal(result.summary.groups, 2);
+});
+
+// ─── --providers surfacing (issue #63 review-round-2) ────────────────────────
+//
+// Docs promise "each survivor records which provider produced it" — verify
+// that promise actually reaches formatJson()/formatReport() output, not just
+// the internal candidate objects runConsensusFix builds.
+
+test('formatJson winner includes provider when candidate was drawn from --providers', () => {
+  const winner = makeCandidate(0, 'fix', 1, 'anthropic');
+  const groups = makeGroups([winner]);
+
+  const result = formatJson({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    applied: false,
+  });
+
+  assert.equal(result.winner.provider, 'anthropic');
+});
+
+test('formatJson winner.provider is null when --providers was not used', () => {
+  const winner = makeCandidate(0, 'fix');
+  const groups = makeGroups([winner]);
+
+  const result = formatJson({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    applied: false,
+  });
+
+  assert.equal(result.winner.provider, null);
+});
+
+test('formatJson discardedDetails includes provider for each discarded candidate', () => {
+  const discarded = [
+    { index: 0, reason: 'LLM call failed: timeout', provider: 'openai' },
+    { index: 1, reason: 'validation failed: bad shape' }, // no --providers
+  ];
+
+  const result = formatJson({
+    survivors: [],
+    discarded,
+    failed: [],
+    groups: new Map(),
+    allDivergent: false,
+    selectionResult: null,
+    applied: false,
+  });
+
+  assert.equal(result.discardedDetails[0].provider, 'openai');
+  assert.equal(result.discardedDetails[1].provider, null);
+});
+
+test('formatJson groups expose candidateProviders alongside candidateIndices', () => {
+  const c1 = makeCandidate(0, 'fix', 1, 'anthropic');
+  const c2 = makeCandidate(1, 'fix', 1, 'openai'); // same changeset -> same group
+  const groups = makeGroups([c1, c2]);
+
+  const result = formatJson({
+    survivors: [c1, c2],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner: c1, largestGroupSize: 2 },
+    applied: false,
+  });
+
+  assert.deepEqual(result.groups[0].candidateIndices, [0, 1]);
+  assert.deepEqual(result.groups[0].candidateProviders, ['anthropic', 'openai']);
+});
+
+test('formatReport shows winner provider when --providers was used', () => {
+  const winner = makeCandidate(0, 'fix', 1, 'gemini');
+  const groups = makeGroups([winner]);
+
+  const out = formatReport({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    applied: false,
+    dryRun: true,
+  });
+
+  assert.ok(out.includes('gemini'), 'winner provider should appear in report text');
+});
+
+test('formatReport omits provider line when --providers was not used', () => {
+  const winner = makeCandidate(0, 'fix');
+  const groups = makeGroups([winner]);
+
+  const out = formatReport({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    applied: false,
+    dryRun: true,
+  });
+
+  assert.ok(!out.includes('Provider'), 'no provider line when candidates have no provider field');
+});
+
+test('formatReport lists provider next to each discarded candidate', () => {
+  const discarded = [{ index: 0, reason: 'validation failed', provider: 'openai' }];
+
+  const out = formatReport({
+    survivors: [],
+    discarded,
+    failed: [],
+    groups: new Map(),
+    allDivergent: false,
+    selectionResult: null,
+    applied: false,
+    dryRun: true,
+  });
+
+  assert.ok(out.includes('openai'), 'discarded candidate provider should be visible in the report');
+});
+
+test('formatReport shows providers for each member of an agreement group', () => {
+  const c1 = makeCandidate(0, 'fix', 1, 'anthropic');
+  const c2 = makeCandidate(1, 'fix', 1, 'gemini'); // same changeset -> same group
+  const groups = makeGroups([c1, c2]);
+
+  const out = formatReport({
+    survivors: [c1, c2],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner: c1, largestGroupSize: 2 },
+    applied: false,
+    dryRun: true,
+  });
+
+  assert.ok(out.includes('anthropic') && out.includes('gemini'));
 });
