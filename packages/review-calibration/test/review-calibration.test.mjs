@@ -17,9 +17,9 @@ import {
   parseCommitFiles, filterCodeFiles, selectPlants, loadPlantsFile,
   operatorToCategory, describeDefect,
 } from '../lib/targets.mjs';
-import { scorePlants, locatingFindings, countFalsePositives } from '../lib/scorer.mjs';
+import { locatingFindings } from '../lib/scorer.mjs';
 import { parseFindings, parseProseFindings } from '../lib/findings.mjs';
-import { referenceJudge, defectTokens, calibrateJudge, makeLlmJudge } from '../lib/judge.mjs';
+import { referenceJudge } from '../lib/judge.mjs';
 import { echoReviewer, oracleReviewer } from '../lib/controls.mjs';
 import { verifyWitness, filterEquivalentMutants } from '../lib/verify.mjs';
 import {
@@ -254,135 +254,10 @@ describe('parseFindings', () => {
   });
 });
 
-// ── judge (reference) ─────────────────────────────────────────────────────────
-
-describe('referenceJudge / defectTokens', () => {
-  const plant = {
-    file: 'src/auth.mjs', line: 5, category: 'logic-inversion',
-    defect: 'Inverted comparison: the conditional now matches the opposite case.',
-    original: 'if (x > 0)', mutated: 'if (x <= 0)',
-  };
-
-  it('extracts content tokens from the defect text', () => {
-    const t = defectTokens(plant);
-    assert.ok(t.includes('inverted'));
-    assert.ok(t.includes('comparison'));
-    assert.ok(!t.includes('the')); // stopword / too short
-  });
-
-  it('accepts a finding that describes the defect', () => {
-    assert.equal(referenceJudge(plant, { description: 'The comparison is inverted, matching the opposite case' }), true);
-  });
-
-  it('REJECTS a content-free echo finding (this is the whole fix)', () => {
-    assert.equal(referenceJudge(plant, { description: 'auth.mjs:5 changed' }), false);
-  });
-
-  it('rejects a finding quoting only the raw mutated line with no defect claim', () => {
-    assert.equal(referenceJudge(plant, { description: 'if (x <= 0)' }), false);
-  });
-});
-
-// ── scorePlants — verifier-based scoring ──────────────────────────────────────
-
-describe('scorePlants', () => {
-  const plants = [
-    { file: 'src/math.mjs', line: 5, operator: 'off-by-one', category: 'off-by-one',
-      defect: 'Off-by-one error: boundary shifted by one.', original: 'n + 1', mutated: 'n + 2' },
-    { file: 'src/math.mjs', line: 10, operator: 'bool-flip', category: 'logic-inversion',
-      defect: 'Inverted boolean flips the branch taken.', original: 'return true', mutated: 'return false' },
-    { file: 'src/auth.mjs', line: 20, operator: 'invert-comparison', category: 'logic-inversion',
-      defect: 'Inverted comparison matches the opposite case.', original: 'x > 0', mutated: 'x <= 0' },
-  ];
-
-  it('throws without a judge — refuses to string-match', async () => {
-    await assert.rejects(() => scorePlants(plants, [], {}), /requires a judge/);
-  });
-
-  it('oracle reviewer (perfect findings) → recall 1.0', async () => {
-    const findings = oracleReviewer(plants);
-    const score = await scorePlants(plants, findings, { judge: referenceJudge });
-    assert.equal(score.recall, 1);
-    assert.equal(score.caught, 3);
-  });
-
-  it('echo reviewer (content-free) → recall ~0  [INVERTED: this used to score 1.0]', async () => {
-    const findings = echoReviewer(plants);
-    const score = await scorePlants(plants, findings, { judge: referenceJudge });
-    assert.equal(score.caught, 0);
-    assert.equal(score.recall, 0);
-  });
-
-  it('a finding must LOCATE and IDENTIFY — locating without identifying misses', async () => {
-    // located at the right line, but the description identifies nothing
-    const findings = [{ file: 'math.mjs', line: 5, description: 'line 5 was modified', evidence: 'n + 2' }];
-    const score = await scorePlants(plants, findings, { judge: referenceJudge });
-    assert.equal(score.caught, 0);
-  });
-
-  it('identifying at the wrong location does not count', async () => {
-    const findings = [{ file: 'math.mjs', line: 99, description: 'off-by-one boundary error' }];
-    const score = await scorePlants(plants, findings, { judge: referenceJudge });
-    assert.equal(score.caught, 0);
-  });
-
-  it('partial catch → fractional recall, keyed per category', async () => {
-    const findings = [
-      { file: 'math.mjs', line: 5, description: 'off-by-one: boundary shifted' },
-      { file: 'auth.mjs', line: 20, description: 'comparison inverted, opposite case' },
-    ];
-    const score = await scorePlants(plants, findings, { judge: referenceJudge });
-    assert.equal(score.caught, 2);
-    assert.ok(Math.abs(score.recall - 2 / 3) < 1e-6);
-    assert.equal(score.perCategory['off-by-one'].caught, 1);
-    assert.equal(score.perCategory['logic-inversion'].total, 2);
-    assert.equal(score.perCategory['logic-inversion'].caught, 1);
-  });
-
-  it('precision falls when findings flag unplanted locations', async () => {
-    const findings = [
-      { file: 'math.mjs', line: 5, description: 'off-by-one boundary shifted' }, // TP
-      { file: 'other.mjs', line: 99, description: 'spurious' },                   // FP (no plant)
-    ];
-    const score = await scorePlants(plants, findings, { judge: referenceJudge });
-    assert.equal(score.truePositives, 1);
-    assert.equal(score.falsePositives, 1);
-    assert.equal(score.precision, 0.5);
-  });
-
-  it('uses a reviewer-supplied repro behaviorally when present (verifyRepro)', async () => {
-    const findings = [{ file: 'math.mjs', line: 5, description: 'anything', repro: { cmd: 'x' } }];
-    // verifyRepro discriminates → caught even though the judge would say no
-    const judge = () => false;
-    const verifyRepro = () => true;
-    const score = await scorePlants(plants, findings, { judge, verifyRepro });
-    assert.equal(score.results.find((r) => r.line === 5).caught, true);
-  });
-
-  it('a repro that does NOT discriminate is not a catch', async () => {
-    const findings = [{ file: 'math.mjs', line: 5, description: 'x', repro: { cmd: 'x' } }];
-    const score = await scorePlants(plants, findings, { judge: () => true, verifyRepro: () => false });
-    assert.equal(score.results.find((r) => r.line === 5).caught, false);
-  });
-});
-
-// ── countFalsePositives (new signature: findings, plants) ─────────────────────
-
-describe('countFalsePositives', () => {
-  it('counts findings located at no plant', () => {
-    const plants = [{ file: 'math.mjs', line: 10 }];
-    const findings = [{ file: 'math.mjs', line: 10 }, { file: 'other.mjs', line: 5 }];
-    assert.equal(countFalsePositives(findings, plants), 1);
-  });
-
-  it('±3 proximity counts as matching a plant', () => {
-    assert.equal(countFalsePositives([{ file: 'a.mjs', line: 12 }], [{ file: 'a.mjs', line: 10 }]), 0);
-  });
-
-  it('zero findings → zero false positives', () => {
-    assert.equal(countFalsePositives([], [{ file: 'x.mjs', line: 1 }]), 0);
-  });
-});
+// Note: judge.mjs and scorer.mjs unit tests now live in their own dedicated
+// files (test/judge.test.mjs, test/scorer.test.mjs) per the per-concern
+// test-file pattern (issue #64). This file keeps CLI/E2E and other-module
+// coverage.
 
 // ── control reviewers + locatingFindings ──────────────────────────────────────
 
@@ -400,54 +275,6 @@ describe('controls + locatingFindings', () => {
   it('oracleReviewer emits findings that both locate and identify', () => {
     const f = oracleReviewer(plants);
     assert.equal(referenceJudge(plants[0], f[0]), true);
-  });
-});
-
-// ── calibrateJudge ────────────────────────────────────────────────────────────
-
-describe('calibrateJudge', () => {
-  it('measures agreement of a judge against labeled pairs', async () => {
-    const p = { defect: 'Inverted comparison opposite case.', category: 'logic-inversion' };
-    const fixture = [
-      { plant: p, finding: { description: 'comparison inverted, opposite case' }, expected: true },
-      { plant: p, finding: { description: 'a.mjs:1 changed' }, expected: false },
-      { plant: p, finding: { description: 'the comparison is now inverted' }, expected: true },
-    ];
-    const { agreement, n } = await calibrateJudge(fixture, referenceJudge);
-    assert.equal(n, 3);
-    assert.equal(agreement, 1); // reference judge agrees with all three labels
-  });
-
-  it('reports disagreements when the judge is wrong', async () => {
-    const p = { defect: 'Off-by-one boundary error.', category: 'off-by-one' };
-    const alwaysTrue = () => true;
-    const fixture = [{ plant: p, finding: { description: 'noise' }, expected: false }];
-    const { agreement, disagreements } = await calibrateJudge(fixture, alwaysTrue);
-    assert.equal(agreement, 0);
-    assert.equal(disagreements.length, 1);
-  });
-});
-
-// ── makeLlmJudge (injected completion, no network) ────────────────────────────
-
-describe('makeLlmJudge', () => {
-  it('builds the judge prompt from plant + finding and parses {match}', async () => {
-    let seen;
-    const completeFn = async (opts) => { seen = opts; return '{"match": true}'; };
-    const extractJsonFn = (t) => JSON.parse(t);
-    const judge = makeLlmJudge(completeFn, extractJsonFn);
-    const plant = { file: 'a.mjs', line: 5, category: 'off-by-one', defect: 'boundary shifted', original: 'i<=n', mutated: 'i<n' };
-    const finding = { file: 'a.mjs', line: 5, description: 'loop misses last element' };
-    const out = await judge(plant, finding);
-    assert.equal(out, true);
-    assert.equal(seen.tier, 'cheap');
-    assert.ok(seen.prompt.includes('boundary shifted'));
-    assert.ok(seen.prompt.includes('loop misses last element'));
-  });
-
-  it('returns false when the model does not answer match:true', async () => {
-    const judge = makeLlmJudge(async () => '{"match": false}', (t) => JSON.parse(t));
-    assert.equal(await judge({ defect: 'x' }, { description: 'y' }), false);
   });
 });
 
@@ -855,6 +682,158 @@ describe('E2E: file restoration after run', () => {
 
     const after = readFileSync(srcPath, 'utf8');
     assert.equal(after, before, 'File was not restored after calibration run');
+  });
+});
+
+// ── E2E: --review-provider / --strict guard (issue #64) ───────────────────────
+// The judge is resolved via the same auto-detect provider path as everything
+// else, while --review-cmd runs as an opaque subprocess. These tests force a
+// detectable (but fake) judge provider via env vars and drive the CLI with a
+// reviewer that reports nothing, so no locating findings exist and the judge
+// function is never actually invoked (no network needed) — only the
+// provider-name comparison, which happens before any findings are scored.
+
+describe('E2E: --review-provider / --strict provider-independence guard', () => {
+  let dir;
+  const fakeProviderEnv = {
+    ...process.env,
+    ANTHROPIC_API_KEY: 'dummy-key-for-detection-only',
+    OPENAI_API_KEY: '',
+    GEMINI_API_KEY: '',
+    ADLC_PROVIDER: 'anthropic',
+  };
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'rc-provider-guard-'));
+    createRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function run(args) {
+    return spawnSync('node', [BIN, ...args], {
+      cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: 60000, env: fakeProviderEnv,
+    });
+  }
+
+  it('same-family judge + --review-provider → warns by default, still passes the gate', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--review-provider', 'anthropic', '--json',
+    ]);
+    assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
+    assert.ok(/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+
+  it('same-family judge + --review-provider + --strict → gate-fails (exit 2)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--review-provider', 'anthropic', '--strict', '--json',
+    ]);
+    assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
+    assert.ok(/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+
+  it('a claude alias for --review-provider is still recognized as the same family under --strict', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--review-provider', 'claude', '--strict', '--json',
+    ]);
+    assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
+  });
+
+  it('different --review-provider from the judge → no warning, gate governed only by recall', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--review-provider', 'openai', '--json',
+    ]);
+    assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
+    assert.ok(!/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+
+  it('--strict without --review-provider is an operational error (exit 1)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--strict',
+    ]);
+    assert.equal(result.status, 1, `expected opError exit 1, got ${result.status}: ${result.stderr}`);
+    assert.ok(/--strict requires --review-provider/.test(result.stderr), result.stderr);
+  });
+
+  it('no --review-provider at all → no comparison, no warning', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--json',
+    ]);
+    assert.equal(result.status, 0);
+    assert.ok(!/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+});
+
+// ── E2E: agy provider's tier-dependent model family (issue #64 follow-up) ─────
+// detectProvider().name for 'agy' is the literal string 'agy', but agy proxies
+// to a tier-dependent underlying model (Gemini on --tier cheap, Claude on
+// --tier mid/frontier — see packages/core/lib/llm.mjs PROVIDERS[3].models).
+// These tests force ADLC_PROVIDER=agy (no real agy binary needed — the fake
+// reviewer reports nothing, so the judge function itself is never invoked)
+// and verify the guard compares against the RESOLVED family, not 'agy'.
+
+describe('E2E: agy provider resolves to its tier-dependent model family', () => {
+  let dir;
+  const agyEnv = {
+    ...process.env,
+    ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '',
+    ADLC_PROVIDER: 'agy',
+  };
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'rc-agy-guard-'));
+    createRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function run(args) {
+    return spawnSync('node', [BIN, ...args], {
+      cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: 60000, env: agyEnv,
+    });
+  }
+
+  it('agy + --tier mid + --review-provider anthropic --strict → gate-fails (both are Claude)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--tier', 'mid', '--review-provider', 'anthropic', '--strict', '--json',
+    ]);
+    assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
+    assert.ok(/same model family|independence/i.test(result.stderr), result.stderr);
+  });
+
+  it('agy + --tier cheap + --review-provider gemini --strict → gate-fails (both are Gemini)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--tier', 'cheap', '--review-provider', 'gemini', '--strict', '--json',
+    ]);
+    assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
+  });
+
+  it('agy + --tier cheap + --review-provider anthropic → no warning (genuinely different families)', () => {
+    const result = run([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--tier', 'cheap', '--review-provider', 'anthropic', '--json',
+    ]);
+    assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
+    assert.ok(!/same model family|independence/i.test(result.stderr), result.stderr);
   });
 });
 

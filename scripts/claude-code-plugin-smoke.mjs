@@ -368,13 +368,94 @@ if (
 }
 
 // --- commands ---
-const requiredCommands = ['adlc-init.md', 'adlc-ticket.md', 'adlc-distill.md', 'adlc-maintain.md'];
+const requiredCommands = ['adlc-init.md', 'adlc-ticket.md', 'adlc-distill.md', 'adlc-maintain.md', 'adlc-prosecute.md'];
 for (const cmd of requiredCommands) {
   if (!existsSync(join(repo, 'plugins/adlc-claude-code/commands', cmd))) fail(`missing plugins/adlc-claude-code/commands/${cmd}`);
 }
 
+// --- adlc-prosecute.md command must actually describe the fan-out/dedupe/verify/loop shape ---
+// (issue #61: parity with plugins/adlc-opencode/command/adlc-prosecute.md — a passing smoke
+// test must not be satisfiable by an empty stub file that merely exists.)
+const prosecuteCmdPath = join(repo, 'plugins/adlc-claude-code/commands/adlc-prosecute.md');
+const prosecuteCmdSource = readFileSync(prosecuteCmdPath, 'utf8');
+if (prosecuteCmdSource.slice(0, 3) !== '---') {
+  fail('plugins/adlc-claude-code/commands/adlc-prosecute.md must begin with YAML frontmatter (---)');
+}
+if (!/^description:\s*\S/m.test(prosecuteCmdSource)) {
+  fail('plugins/adlc-claude-code/commands/adlc-prosecute.md frontmatter missing "description" field');
+}
+const requiredProsecuteMentions = [
+  'prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff',
+  'prosecutor-tests', 'prosecutor-verifier',
+];
+for (const name of requiredProsecuteMentions) {
+  if (!prosecuteCmdSource.includes(name)) {
+    fail(`plugins/adlc-claude-code/commands/adlc-prosecute.md must mention the ${name} subagent`);
+  }
+}
+// Must describe all shape elements from the issue, not just fan-out.
+const requiredProsecuteConcepts = [
+  { label: 'dedupe', pattern: /dedup/i },
+  { label: 'independent verification', pattern: /verif/i },
+  { label: 'loop-until-dry convergence', pattern: /dry/i },
+];
+for (const { label, pattern } of requiredProsecuteConcepts) {
+  if (!pattern.test(prosecuteCmdSource)) {
+    fail(`plugins/adlc-claude-code/commands/adlc-prosecute.md must describe ${label}`);
+  }
+}
+
 // --- agents ---
 if (!existsSync(join(repo, 'plugins/adlc-claude-code/agents/prosecutor.md'))) fail('missing plugins/adlc-claude-code/agents/prosecutor.md');
+
+// --- prosecutor-{correctness,security,contract,diff,tests,verifier} lens/verifier subagents ---
+const requiredProsecutionAgents = [
+  'prosecutor-correctness.md', 'prosecutor-security.md', 'prosecutor-contract.md',
+  'prosecutor-diff.md', 'prosecutor-tests.md', 'prosecutor-verifier.md',
+];
+for (const agentFile of requiredProsecutionAgents) {
+  const agentPath = join(repo, 'plugins/adlc-claude-code/agents', agentFile);
+  if (!existsSync(agentPath)) fail(`missing plugins/adlc-claude-code/agents/${agentFile}`);
+  const agentSource = readFileSync(agentPath, 'utf8');
+  const agentName = agentFile.replace(/\.md$/, '');
+  // Claude Code subagent frontmatter: name / description / tools (not OpenCode's
+  // description / mode / permission block).
+  if (!new RegExp(`^---\\nname:\\s*${agentName}\\s*\\n`).test(agentSource)) {
+    fail(`plugins/adlc-claude-code/agents/${agentFile} frontmatter must open with "name: ${agentName}"`);
+  }
+  if (!/\ndescription:\s*\S/.test(agentSource)) {
+    fail(`plugins/adlc-claude-code/agents/${agentFile} frontmatter missing "description" field`);
+  }
+  if (!/\ntools:\s*\S/.test(agentSource)) {
+    fail(`plugins/adlc-claude-code/agents/${agentFile} frontmatter missing "tools" field`);
+  }
+  const frontmatterEnd = agentSource.indexOf('\n---', 4);
+  if (frontmatterEnd === -1) fail(`plugins/adlc-claude-code/agents/${agentFile} frontmatter is unclosed`);
+  const agentFrontmatter = agentSource.slice(0, frontmatterEnd);
+  // These are hostile read-only reviewers (5 lenses + verifier): granting Edit/Write/
+  // MultiEdit/Bash would let a "reviewer" tamper with the code or tests it is supposed
+  // to adversarially assess, or silently mutate evidence instead of just reporting it.
+  if (/tools:.*\b(Edit|Write|MultiEdit|Bash)\b/.test(agentFrontmatter)) {
+    fail(`plugins/adlc-claude-code/agents/${agentFile} must not grant Edit/Write/MultiEdit/Bash tools (read-only prosecution lens)`);
+  }
+}
+
+// --- lib/prosecutor.mjs: the pure dedupe/verify/convergence contract must exist and be
+// wired into the workspace test suite, not just present as an inert file ---
+const prosecutorLibPath = join(repo, 'plugins/adlc-claude-code/lib/prosecutor.mjs');
+if (!existsSync(prosecutorLibPath)) fail('missing plugins/adlc-claude-code/lib/prosecutor.mjs');
+const prosecutorLibSource = readFileSync(prosecutorLibPath, 'utf8');
+for (const exportName of ['LENSES', 'VERIFIER', 'ALL_AGENTS', 'findingKey', 'dedupeFindings', 'survivesVerification', 'shouldContinue']) {
+  if (!new RegExp(`export (const|function) ${exportName}\\b`).test(prosecutorLibSource)) {
+    fail(`plugins/adlc-claude-code/lib/prosecutor.mjs must export ${exportName}`);
+  }
+}
+const prosecutorLibTestPath = join(repo, 'plugins/adlc-claude-code/lib/test/prosecutor.test.mjs');
+if (!existsSync(prosecutorLibTestPath)) fail('missing plugins/adlc-claude-code/lib/test/prosecutor.test.mjs');
+const rootPackageJson = readJson(join(repo, 'package.json'));
+if (!(rootPackageJson.scripts?.test ?? '').includes('plugins/adlc-claude-code/lib/test')) {
+  fail('root package.json "test" script must run plugins/adlc-claude-code/lib/test/*.test.mjs so the prosecution convergence contract is exercised in CI');
+}
 
 // --- plugins/adlc-claude-code/skills/adlc/SKILL.md + frontmatter + sentinel ---
 const skillPath = join(repo, 'plugins/adlc-claude-code/skills/adlc/SKILL.md');
@@ -427,7 +508,8 @@ console.log(JSON.stringify({
   hooksJson: hooksConfigPath,
   hookTypes: Object.keys(hooks),
   commands: requiredCommands,
-  agents: ['prosecutor.md'],
+  agents: ['prosecutor.md', ...requiredProsecutionAgents],
+  lib: ['prosecutor.mjs'],
   skills: ['adlc/SKILL.md'],
   docs: requiredDocs,
   warnings: [

@@ -39,7 +39,11 @@ package READMEs.
 ## CI templates
 
 - [`ci/rails-guard.yml`](./ci/rails-guard.yml) — required check blocking PRs that
-  touch frozen rails. Works with both integrations.
+  touch frozen rails. Works with both integrations. **Private-repo caveat:** on a
+  private repo on GitHub's free plan, both required-status-check APIs (branch
+  protection, rulesets) return 403 — see
+  [`ci/rails-guard-private-repo-fallback.md`](./ci/rails-guard-private-repo-fallback.md)
+  for folding this check into an already-required job instead.
 - [`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) — weekly advisory cron for
   skill-rot, model-ratchet, and gate-fuzzing checks.
 
