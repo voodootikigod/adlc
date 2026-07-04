@@ -11,6 +11,14 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 
 ## Install
 
+> **⚠️ Fail-open, CI is the real backstop.** The in-session `PreToolUse` rail hook
+> installed below is **advisory only** — `agy` fails **OPEN** on a non-zero hook
+> exit (crash, timeout, unsupported platform), so a frozen-rail write can slip
+> through. Do not treat the hook as a hard block. The unbypassable control is the
+> CI diff gate (`scripts/rails-guard-ci.mjs`, wired via
+> [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) — **make it a required
+> check** before relying on this integration for enforcement.
+
 **Local Checkout (Recommended/Verified).** Currently, the most reliable way to install the plugin is directly from a local checkout:
 
 ```sh
