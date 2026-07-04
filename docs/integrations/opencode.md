@@ -136,6 +136,13 @@ deliberately advisory**:
    inspects the git diff, it already covers OpenCode-authored changes and the
    shell-driven writes the in-session hook cannot see.
 
+   **Private-repo / free-plan caveat:** on a private repo on GitHub's free plan,
+   both required-status-check mechanisms (branch-protection `PUT`, rulesets
+   `POST`) return 403, so this gate can never actually be made a required check
+   there. Fold the rail-freeze step into your existing required job instead —
+   see the "Private-repo fallback" sketch at the bottom of
+   [`../ci/rails-guard.yml`](../ci/rails-guard.yml).
+
 ## Rail contract
 
 Mirrors the sibling integrations (`adlc-codex`, `adlc-pi`), delegating all

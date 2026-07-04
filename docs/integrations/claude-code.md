@@ -60,6 +60,7 @@ install above) and Node 18+.
 | --- | --- | --- |
 | `/adlc-init` | — | Bootstrap `.adlc/`, split the committable ticket contract from runtime evidence in `.gitignore`, run preflight. |
 | `/adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](../ticket-authoring.md). |
+| `/adlc-prosecute` | P5 | Multi-lens adversarial pre-merge review: fan out five independent lens subagents, dedupe findings, independently verify each via a sixth verifier subagent, loop until two consecutive dry rounds. |
 | `/adlc-distill` | P7 | Mine repeated findings and PR rejections into deterministic defenses (lint rules, skills, review lenses). |
 | `/adlc-maintain` | C10/C12 | Decay-driven checks: stale skills, hot files to re-prosecute, gate calibration. |
 
@@ -69,12 +70,26 @@ The `adlc` skill is a phase-routing flowchart: describe what you're doing ("shap
 this spec", "is this safe to merge") and it routes you to the right gate. It is
 how the model embraces the lifecycle in total.
 
-### The prosecutor subagent
+### The prosecutor subagent and `/adlc-prosecute`
 
 `prosecutor` is a hostile pre-merge (P5) reviewer: it runs `hollow-test` (are the
 tests load-bearing?), `behavior-diff` (is the behavior change visible?), and
 `review-calibration` (would the review catch a planted defect?) and returns an
-evidence-backed verdict.
+evidence-backed verdict. These are mechanical, deterministic-gate checks.
+
+`/adlc-prosecute` is the independent multi-lens adversarial loop, matching the
+OpenCode integration's `/adlc-prosecute` shape: it fans out five independent lens
+subagents (`prosecutor-correctness`, `prosecutor-security`, `prosecutor-contract`,
+`prosecutor-diff`, `prosecutor-tests`) on the diff, dedupes findings across
+lenses by file + line range + title (keeping the highest severity), independently
+verifies each deduped finding via a sixth `prosecutor-verifier` subagent (a
+finding survives only on a strict majority "real" vote — fail-closed to
+"survives" if no valid vote is obtained), and repeats until two consecutive
+rounds surface no new confirmed findings. The pure dedupe/verify/convergence
+logic is unit-tested at `plugins/adlc-claude-code/lib/prosecutor.mjs`
+(`plugins/adlc-claude-code/lib/test/prosecutor.test.mjs`). The two mechanisms are
+complementary: `prosecutor` supplies mechanical evidence, `/adlc-prosecute`
+supplies independent model judgment with cross-lens verification.
 
 ### Hooks (automatic)
 
@@ -118,6 +133,16 @@ gate so obfuscated shell writes are still caught. Copy these into
 - [`ci/adlc-maintenance.yml`](../ci/adlc-maintenance.yml) — a weekly advisory cron
   running the deterministic maintenance checks into the job summary.
 
+**Private-repo / free-plan caveat.** "Make it a required check" assumes your
+GitHub plan allows configuring one. On a **private repo on GitHub's free plan**,
+both required-status-check mechanisms (`PUT .../branches/main/protection`,
+`POST .../rulesets`) return 403 ("Upgrade to GitHub Pro or make this repository
+public") — the gate still runs on every PR, but nothing stops a merge past a red
+run. If that's your setup, don't ship `rails-guard` as a standalone job; fold the
+rail-freeze step into the job backing your existing required check (e.g. the main
+`test` job) instead. See the "Private-repo fallback" sketch at the bottom of
+[`ci/rails-guard.yml`](../ci/rails-guard.yml).
+
 Both templates pin `@adlc/cli` and their actions to exact versions/SHAs; bump
 deliberately after reviewing a release.
 
@@ -153,6 +178,36 @@ $EDITOR ~/.claude/plugins/installed_plugins.json   # delete the "adlc@adlc" key
 claude plugin install adlc@adlc
 ```
 
+### `npm warn Unknown user config "min-release-age"` during install
+
+**This is not caused by @adlc.** Neither `npx plugins add voodootikigod/adlc`
+nor `npm install -g @adlc/cli` sets, reads, or ships an `.npmrc` — the toolkit
+has no `config` field and no install/postinstall script. Reproduce the
+documented install commands from a clean environment against the real registry
+and neither one emits this warning.
+
+**Actual cause:** `min-release-age` is a real npm config (the "install
+cooldown" supply-chain-safety feature that delays installing a package version
+until it has been public for N days). npm only added it to its list of known
+config keys in **npm 11.10.0**. If your `~/.npmrc` (npm's *user* config, not
+this repo's) already has `min-release-age` set — e.g. because you or your org
+adopted npm's cooldown feature — and your active npm is anywhere in the 11.x
+line *before* 11.10.0, npm treats the key as unrecognized and warns on **every**
+`npm install`/`npm install -g` you run, not just the `@adlc/cli` one. (npm's
+own bundled version in Node 20, 10.x, predates the unknown-config check
+entirely and never warns either way; npm >= 11.10.0 recognizes the key and
+never warns.) The `npm install -g @adlc/cli` step in these docs is simply the
+first npm command most readers run after cloning, so it takes the blame.
+
+**Fix:** upgrade npm past the version boundary where it learns the key:
+
+```sh
+npm install -g npm@latest
+```
+
+Then re-run the install command; the warning is gone because your npm now
+recognizes `min-release-age`, not because anything was suppressed.
+
 ---
 
 ## Lifecycle coverage
@@ -164,7 +219,7 @@ claude plugin install adlc@adlc
 | P2 Decompose | Strong | `coldstart`, `model-router`, `merge-forecast` |
 | P3 Rail | Strong | rails-guard PreToolUse hook + CI backstop |
 | P4 Build | Strong | flail-detection hook, `consensus-fix` |
-| P5 Prosecute | Partial | `prosecutor` subagent runs the gates; formal phase assertion (`adlc run p5`) is not available on the CC path — see Gaps below. |
+| P5 Prosecute | Strong | `/adlc-prosecute` runs the full multi-lens fan-out/dedupe/verify/converge loop (parity with OpenCode); `prosecutor` subagent runs complementary deterministic gates. Formal `adlc run p5` phase assertion is a harness-agnostic runner path (see below), not blocked on any one CLI. |
 | P6 Integrate | Conditional | gate-manifest evidence surfaced for the human gate; strong when backed by valid P5 evidence. |
 | P7 Distill | Strong | `/adlc-distill` |
 | Maintenance | Strong | `/adlc-maintain` + CI cron |
@@ -174,9 +229,9 @@ automate the judgment.
 
 After a prosecution that returns CLEAR, record informal evidence with
 `adlc gate-manifest record prosecution --files <changed files>`. This entry is
-useful for provenance auditing but does **not** satisfy `adlc run p5` — see the
-Gaps section below for the full explanation and the Codex path for formal phase
-assertion.
+useful for provenance auditing but does **not** by itself satisfy `adlc run p5`
+— see the Gaps section below for the full explanation and the runner path for
+formal phase assertion.
 
 ## Using with Codex
 
@@ -200,17 +255,23 @@ reconciliation rationale.
 
 Current gaps relative to the formal ADLC doctrine:
 
-1. **P5 formal assertion is not available on the CC path.** The `prosecutor`
-   subagent runs `hollow-test`, `behavior-diff`, and `review-calibration` and
-   returns an evidence-backed verdict. After a CLEAR verdict, `adlc gate-manifest
-   record prosecution` records provenance evidence — but this entry carries
-   `gate: "prosecution"`, which does not satisfy `adlc run p5`. The runner
-   requires `type: "p5-complete"` plus provenance, transcript hashes, and a
-   completed dry-pass convergence chain that the `gate-manifest` command does not
-   produce. Formal P5 phase assertion requires the Codex path
-   (`adlc prosecute` → `adlc run p5`). There is no example fixture for the CC
-   path comparable to `docs/examples/p5-passes.json`; the Codex fixture is the
-   authoritative reference.
+1. **Recording formal `adlc run p5` phase assertion from the CC path is not yet
+   wired up end-to-end (narrower than before issue #61).** The independent
+   multi-lens loop itself — fan-out, dedupe, verifier refutation, loop-until-dry
+   — now runs natively on Claude Code via `/adlc-prosecute` and the
+   `prosecutor-{correctness,security,contract,diff,tests,verifier}` subagents,
+   the same shape as the OpenCode integration. What remains unwired is the
+   *recording* step: `/adlc-prosecute`'s default evidence path is `adlc
+   gate-manifest record prosecution --files <changed files>`, which carries
+   `gate: "prosecution"` and does not by itself satisfy `adlc run p5`. Formal
+   assertion requires `@adlc/prosecute`'s `type: "p5-complete"` provenance chain
+   (ticket- and revision-bound, transcript hashes, two consecutive dry passes) —
+   a harness-agnostic runner path (`adlc prosecute --input <file> --ticket <id>`
+   → `adlc run p5`), not exclusive to the Codex integration; any harness that can
+   produce the `@adlc/prosecute` input JSON from its own lens findings can drive
+   it. There is no example fixture yet for a CC-native run comparable to
+   `docs/examples/p5-passes.json`; the Codex fixture remains the authoritative
+   reference until one exists.
 2. **In-session Bash rail enforcement is absent (intentional).** A shell is
    Turing-complete and cannot be reliably parsed for mutation targets; every
    parser attempted had further bypasses. Rail mutations via Bash are caught at
