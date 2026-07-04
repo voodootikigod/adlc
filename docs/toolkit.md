@@ -15,10 +15,25 @@ through the stable `adlc <tool>` dispatcher.
 | P2 / C3 | Can an agent execute this ticket without guessing? | [`adlc coldstart`](./tools/coldstart.md), [`adlc merge-forecast`](./tools/merge-forecast.md), [`adlc model-router`](./tools/model-router.md) |
 | P3-P4 / C5-C6 | Are frozen rails protected, and is an agent flailing? | [`adlc rails-guard`](./tools/rails-guard.md), [`adlc flail-detector`](./tools/flail-detector.md) |
 | P4 / C7 | Can diverse candidates resolve a hard failing test without breaking rails? | [`adlc consensus-fix`](./tools/consensus-fix.md) |
-| P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | [`adlc prosecute`](./tools/prosecute.md), [`adlc behavior-diff`](./tools/behavior-diff.md), [`adlc gate-manifest`](./tools/gate-manifest.md), [`adlc hollow-test`](./tools/hollow-test.md) |
+| P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | `adlc review` (runs the model review — see [seam note](#p5-recorder-vs-reviewer-seam)), [`adlc prosecute`](./tools/prosecute.md) (records its evidence — it runs no model review itself), [`adlc behavior-diff`](./tools/behavior-diff.md), [`adlc gate-manifest`](./tools/gate-manifest.md), [`adlc hollow-test`](./tools/hollow-test.md) |
 | C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md), [`adlc skill-rot`](./tools/skill-rot.md) |
 | P7 | Which repeated findings should become deterministic defenses? | [`adlc lesson-foundry`](./tools/lesson-foundry.md), [`adlc rejection-mining`](./tools/rejection-mining.md) |
 | Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) |
+
+## P5: recorder vs. reviewer seam
+
+**This is a deliberate design decision, not a gap:** `adlc prosecute` makes zero model
+calls. It is a P5 evidence ledger — it validates input, hashes and verifies artifact
+paths, and appends normalized reviewer-produced pass records to `.adlc/manifest.jsonl`.
+It never judges code itself. The actual model-judged adversarial review is a separate
+tool, reachable from the dispatcher as `adlc review`, which passes its arguments
+straight through to `npx adversarial-review` (or the Codex/OpenCode
+multi-lens loop — see [ADR-0007](./adr/0007-multimodel-adversarial-review.md)). Run the
+reviewer first, then feed its normalized output into `adlc prosecute --input` as the
+evidence to record. Control flow (gating, dry-pass convergence, manifest evidence) is
+code; judgment (finding bugs) is models — see the package summary in
+[`packages/prosecute/README.md`](../packages/prosecute/README.md) for the full seam
+statement.
 
 ## Typical flow
 
@@ -32,9 +47,12 @@ through the stable `adlc <tool>` dispatcher.
    [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn, or oversized logs.
 5. For hard failing tests, use [`adlc consensus-fix`](./tools/consensus-fix.md) to fan out independent candidate repairs
    and select a gated consensus winner.
-6. Before review, use [`adlc hollow-test`](./tools/hollow-test.md), [`adlc prosecute`](./tools/prosecute.md), [`adlc behavior-diff`](./tools/behavior-diff.md), and [`adlc gate-manifest`](./tools/gate-manifest.md)
-   to prove that tests are load-bearing, prosecution reached two dry passes, behavior
-   changes are visible, and gate evidence is recorded. For **high-blast-radius** changes
+6. Before review, use [`adlc hollow-test`](./tools/hollow-test.md) to prove tests are load-bearing. Run the actual
+   model-judged review with [`adlc review`](#p5-recorder-vs-reviewer-seam) (passthrough to `npx adversarial-review`), then
+   record its normalized output with [`adlc prosecute`](./tools/prosecute.md) — prosecute runs no model review of its
+   own, it only records that one already happened and reached two dry passes. Use [`adlc behavior-diff`](./tools/behavior-diff.md)
+   and [`adlc gate-manifest`](./tools/gate-manifest.md) so behavior changes are visible and gate evidence is recorded.
+   For **high-blast-radius** changes
    (trust boundary, deny path, auth, secrets, data-loss, schema/migration, CI/CD), run the
    adversarial review against **≥2 distinct-family providers** and treat a single
    provider's clean approve as advisory, not a gate-pass — different models have different
@@ -56,7 +74,9 @@ Several tools use `.adlc/` as the shared workspace for machine-readable state:
 
 ### Recording an adversarial-review verdict (P6)
 
-The adversarial-review loop emits NDJSON events (`loop_start` / `review` / `fix` /
+Run the review itself via `adlc review` (dispatcher passthrough to `npx
+adversarial-review`) or invoke `npx adversarial-review` directly. The adversarial-review
+loop emits NDJSON events (`loop_start` / `review` / `fix` /
 `loop_end`); `loop_end.exitReason === "clean"` is the SHIP signal. Record the verdict as
 first-class human-gate evidence:
 
