@@ -27,6 +27,9 @@ export function renderHelp(version) {
   lines.push('');
   lines.push('Note: "ticket" is the dispatcher shorthand for the @adlc/ticket-sync package');
   lines.push('      (adlc ticket ... routes to ticket-sync\'s bin).');
+  lines.push('Note: "review" is a passthrough to `npx adversarial-review`, an external');
+  lines.push('      package (not a workspace tool). `prosecute` only records the P5');
+  lines.push('      evidence a review like this one produces -- it does not review.');
 
   return lines.join('\n');
 }

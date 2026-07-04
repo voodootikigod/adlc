@@ -22,6 +22,9 @@ Bootstrap the ADLC runtime for use with `agy`.
    !.adlc/tickets.json
    ```
 4. **Wire the CI gate** (the real guarantee): copy `docs/ci/rails-guard.yml` into your
-   pipeline and make it a required check. The in-session hook is advisory.
+   pipeline and make it a required check. The in-session hook is advisory — `agy`
+   fails **open** on a non-zero hook exit, so it cannot substitute for CI. The
+   workflow template runs `scripts/rails-guard-ci.mjs` directly; treat that script
+   as a required check in branch protection, not just an informational job.
 5. **Activate enforcement** for a build: `export ADLC_P4_ENFORCEMENT=1` with an active
    ticket whose `rails[]` are frozen.
