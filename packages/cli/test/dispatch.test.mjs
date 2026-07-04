@@ -40,12 +40,15 @@ function withTempSpec(contents, fn) {
 }
 
 test('registry exposes the suite tools and omits internal packages', () => {
-  assert.equal(TOOLS.length, 23);
+  // 24 as of build-gate's registration (issue #48) — bump deliberately when a
+  // tool is intentionally added/removed from the registry.
+  assert.equal(TOOLS.length, 24);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
   assert.equal(isTool('review'), true);
   assert.equal(isTool('ticket-prune'), true);
+  assert.equal(isTool('build-gate'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });
@@ -81,7 +84,11 @@ test('help lists every routed tool and exits 0', () => {
 test('renderHelp embeds version and tool count', () => {
   const output = renderHelp('9.9.9');
   assert.match(output, /adlc 9\.9\.9/);
-  assert.match(output, /Tools \(23\)/);
+  // Derived from the live registry rather than a hardcoded literal: a
+  // hardcoded count (e.g. `/Tools \(22\)/`) silently goes stale every time a
+  // tool is registered/removed (this exact test was still asserting 22 after
+  // build-gate's registration bumped TOOLS.length to 23 — closes #48 CI red).
+  assert.match(output, new RegExp(`Tools \\(${TOOLS.length}\\)`));
 });
 
 test('version prints a semver-shaped string', () => {
