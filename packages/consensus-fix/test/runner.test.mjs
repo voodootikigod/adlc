@@ -390,6 +390,128 @@ test('runConsensusFix: competing candidate that passes both gates wins over a sm
   }
 });
 
+// ─── providerNames (--providers) ──────────────────────────────────────────────
+// Issue #63: draw one candidate per requested provider family instead of N
+// samples of one auto-detected provider. completeFn receives (prompt, providerName)
+// so the injected fn can route to the right provider without a real network call.
+
+test('runConsensusFix: providerNames issues exactly one completeFn call per named provider, in order', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+
+    const seenProviders = [];
+    const completeFn = async (prompt, providerName) => {
+      seenProviders.push(providerName);
+      return JSON.stringify({ changes: [{ file: f, content: `fix-from-${providerName}` }] });
+    };
+
+    const result = await runConsensusFix({
+      testCmd,
+      files: [f],
+      n: 3, // --n is ignored/overridden when providerNames is supplied
+      tier: 'mid',
+      providerNames: ['anthropic', 'openai', 'gemini'],
+      completeFn,
+    });
+
+    assert.deepEqual(seenProviders, ['anthropic', 'openai', 'gemini']);
+    assert.equal(result.survivors.length, 3);
+    // Each survivor's changeset is genuinely distinct (three different providers).
+    assert.equal(result.groups.size, 3);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix: providerNames results record which provider produced which candidate', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+
+    const completeFn = async (prompt, providerName) =>
+      JSON.stringify({ changes: [{ file: f, content: `fix-from-${providerName}` }] });
+
+    const result = await runConsensusFix({
+      testCmd,
+      files: [f],
+      providerNames: ['anthropic', 'openai'],
+      tier: 'mid',
+      completeFn,
+    });
+
+    assert.deepEqual(
+      result.survivors.map((s) => s.provider).sort(),
+      ['anthropic', 'openai']
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix: providerNames + a failing provider surfaces as a discarded candidate, not a thrown error', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+
+    const completeFn = async (prompt, providerName) => {
+      if (providerName === 'openai') throw new Error('provider "openai" is not available');
+      return JSON.stringify({ changes: [{ file: f, content: `fix-from-${providerName}` }] });
+    };
+
+    const result = await runConsensusFix({
+      testCmd,
+      files: [f],
+      providerNames: ['anthropic', 'openai'],
+      tier: 'mid',
+      completeFn,
+    });
+
+    assert.equal(result.discarded.length, 1);
+    assert.match(result.discarded[0].reason, /openai/);
+    assert.equal(result.survivors.length, 1);
+    assert.equal(result.survivors[0].provider, 'anthropic');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix: without providerNames, behavior is unchanged (n resamples, no provider field)', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+
+    let callCount = 0;
+    const completeFn = async (prompt, providerName) => {
+      callCount++;
+      assert.equal(providerName, undefined, 'no per-invocation provider override by default');
+      return JSON.stringify({ changes: [{ file: f, content: 'same fix' }] });
+    };
+
+    const result = await runConsensusFix({
+      testCmd,
+      files: [f],
+      n: 2,
+      tier: 'mid',
+      completeFn,
+    });
+
+    assert.equal(callCount, 2);
+    assert.equal(result.survivors.length, 2);
+    assert.ok(result.survivors.every((s) => s.provider === undefined));
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test('runConsensusFix: without --rails, emits a warning and survivors are repro-only', async () => {
   const dir = makeTmp();
   try {

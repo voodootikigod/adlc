@@ -28,6 +28,13 @@ export type CompletionOptions = {
   readonly system?: string;
   readonly prompt: string;
   readonly maxTokens?: number;
+  /**
+   * Per-invocation provider override (e.g. a CLI `--provider` flag), mirroring
+   * ADLC_PROVIDER but scoped to this one call; takes precedence over
+   * ADLC_PROVIDER. Omit it and single-provider auto-detect remains the
+   * default (cost/latency per ADR-0007).
+   */
+  readonly provider?: string;
 };
 export type CompletionRequest = CompletionOptions & {
   readonly apiKey: string;
@@ -36,12 +43,23 @@ export type CompletionRequest = CompletionOptions & {
 export type FanResult =
   | { readonly ok: true; readonly value: string }
   | { readonly ok: false; readonly error: string };
+export type FanProvidersResult =
+  | { readonly ok: true; readonly value: string; readonly provider: string }
+  | { readonly ok: false; readonly error: string; readonly provider: string };
+
+/** Names of all known providers, in auto-detect priority order. */
+export const PROVIDER_NAMES: readonly string[];
 
 export function isAgyTimeout(output: string): boolean;
-export function complete(options: CompletionOptions): Promise<string>;
-export function fan(options: CompletionOptions, count: number): Promise<FanResult[]>;
+export function complete(options: CompletionOptions, env?: Record<string, string | undefined>): Promise<string>;
+export function fan(options: CompletionOptions, count: number, env?: Record<string, string | undefined>): Promise<FanResult[]>;
+export function fanProviders(
+  options: CompletionOptions,
+  providerNames: readonly string[],
+  env?: Record<string, string | undefined>
+): Promise<FanProvidersResult[]>;
 export function extractJson(text: string): unknown;
-export function detectProvider(env?: Record<string, string | undefined>): Provider | null;
+export function detectProvider(env?: Record<string, string | undefined>, forceProvider?: string): Provider | null;
 export function resolveModel(
   provider: Pick<Provider, 'models'>,
   options?: { readonly tier?: ModelTier | string; readonly model?: string },

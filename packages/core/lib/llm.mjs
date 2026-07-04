@@ -152,12 +152,23 @@ const PROVIDERS = [
   },
 ];
 
+/** Names of all known providers, in auto-detect priority order. */
+export const PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
+
 /**
- * Detect the first available provider (or the one forced via ADLC_PROVIDER).
- * Returns { name, apiKey, models } or null when no key is present.
+ * Detect the first available provider (or the one forced).
+ *
+ * `forceProvider` is a per-invocation override (e.g. a CLI `--provider` flag)
+ * and, when given, takes precedence over the `ADLC_PROVIDER` env var — it is
+ * additive to the env override, not a replacement for it: omit it and
+ * behavior is unchanged (env override, then auto-detect by cost/latency
+ * order per ADR-0007).
+ *
+ * Returns { name, apiKey, models } or null when no key is present (or the
+ * override/env name doesn't match a known provider).
  */
-export function detectProvider(env = process.env) {
-  const forced = env.ADLC_PROVIDER;
+export function detectProvider(env = process.env, forceProvider) {
+  const forced = forceProvider || env.ADLC_PROVIDER;
   const candidates = forced ? PROVIDERS.filter((p) => p.name === forced) : PROVIDERS;
   for (const p of candidates) {
     const apiKey = env[p.envKey];
@@ -185,36 +196,79 @@ export function resolveModel(provider, { tier = 'mid', model } = {}, env = proce
 
 /**
  * Single completion. Throws on missing provider or HTTP error.
- * opts: { tier, model, system, prompt, maxTokens }
+ * opts: { tier, model, system, prompt, maxTokens, provider }
+ *   opts.provider — optional per-invocation override (e.g. a CLI `--provider`
+ *   flag), mirroring ADLC_PROVIDER but scoped to this one call; takes
+ *   precedence over ADLC_PROVIDER. Omit it and single-provider auto-detect
+ *   remains the default (cost/latency per ADR-0007) — additive only.
+ * env — defaults to process.env; overridable for tests.
  */
-export async function complete(opts) {
-  const provider = detectProvider();
+export async function complete(opts, env = process.env) {
+  const provider = detectProvider(env, opts.provider);
   if (!provider) {
     throw new Error(
-      'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY (or use --prompt-only)'
+      opts.provider
+        ? `provider "${opts.provider}" is not available — set its API key ` +
+          `(or ADLC_AGY for agy), or omit --provider to auto-detect`
+        : 'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY (or use --prompt-only)'
     );
   }
-  const model = resolveModel(provider, opts);
-  return provider.send({
-    apiKey: provider.apiKey,
-    model,
-    system: opts.system,
-    prompt: opts.prompt,
-    maxTokens: opts.maxTokens ?? 4096,
-  });
+  const model = resolveModel(provider, opts, env);
+  return provider.send(
+    {
+      apiKey: provider.apiKey,
+      model,
+      system: opts.system,
+      prompt: opts.prompt,
+      maxTokens: opts.maxTokens ?? 4096,
+    },
+    env
+  );
 }
 
 /**
  * Fan out N independent completions of the same prompt (fresh "contexts" by
  * construction — each call is stateless). Settles all; returns array of
  * { ok, value | error } in order.
+ *
+ * This samples the SAME (auto-detected or opts.provider-forced) provider N
+ * times. For N distinct provider families instead, use `fanProviders`.
  */
-export async function fan(opts, n) {
+export async function fan(opts, n, env = process.env) {
   const results = await Promise.allSettled(
-    Array.from({ length: n }, () => complete(opts))
+    Array.from({ length: n }, () => complete(opts, env))
   );
   return results.map((r) =>
     r.status === 'fulfilled' ? { ok: true, value: r.value } : { ok: false, error: String(r.reason) }
+  );
+}
+
+/**
+ * Fan a single prompt across N DISTINCT named providers — one completion per
+ * requested provider family, instead of N resamples of one auto-detected
+ * provider (see `fan`). Per ADR-0007, cross-family diversity catches blind
+ * spots a single model family shares; this is the primitive that gives
+ * consumers (e.g. consensus-fix, gate-fuzzing) access to that diversity via a
+ * `--providers <a,b,c>` flag.
+ *
+ * Each entry in `providerNames` is passed to `complete` as a per-call
+ * `provider` override, so a name with no configured API key surfaces as a
+ * normal `{ ok: false }` result for THAT entry — it never aborts the other
+ * providers' calls.
+ *
+ * @param {object} opts - same shape as `complete` (without `provider`)
+ * @param {string[]} providerNames - e.g. ['anthropic', 'openai', 'gemini']
+ * @param {object} [env] - defaults to process.env; overridable for tests
+ * @returns {Promise<Array<{ok:boolean, value?:string, error?:string, provider:string}>>}
+ */
+export async function fanProviders(opts, providerNames, env = process.env) {
+  const results = await Promise.allSettled(
+    providerNames.map((name) => complete({ ...opts, provider: name }, env))
+  );
+  return results.map((r, i) =>
+    r.status === 'fulfilled'
+      ? { ok: true, value: r.value, provider: providerNames[i] }
+      : { ok: false, error: String(r.reason), provider: providerNames[i] }
   );
 }
 

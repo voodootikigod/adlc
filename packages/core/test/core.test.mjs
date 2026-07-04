@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -452,6 +452,191 @@ test('agy provider: ADLC_AGY=false/0 do NOT enable the provider', () => {
   assert.equal(detectProvider({ ADLC_AGY: 'off' }), null);
   assert.equal(detectProvider({ ADLC_AGY: '1' })?.name, 'agy');
   assert.equal(detectProvider({ ADLC_AGY: '/usr/local/bin/agy' })?.apiKey, '/usr/local/bin/agy');
+});
+
+// Review-round-2 (issue #63): complete()/fan()/fanProviders() accept an
+// injectable `env` but historically did not forward it to provider.send(),
+// so the agy provider always fell back to process.env for ADLC_AGY_TIMEOUT /
+// ADLC_AGY_SANDBOX regardless of what env was passed in. This stubs a fake
+// `agy` binary (a shell script that just echoes its argv) so we can assert
+// the timeout/sandbox flags actually came from the injected env, not from
+// real process.env, without needing the real Antigravity CLI installed.
+test('complete: injected env reaches the agy provider send() (timeout/sandbox honored, not process.env)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-agy-stub-'));
+  const stubPath = join(dir, 'fake-agy.sh');
+  // Drain stdin fully before exiting — otherwise the parent's stdin.end()
+  // can race the child's exit and surface as an unrelated EPIPE.
+  writeFileSync(stubPath, '#!/bin/sh\ncat >/dev/null\necho "ARGS: $@"\n');
+  chmodSync(stubPath, 0o755);
+
+  // Leave a DIFFERENT value in real process.env to prove it is NOT what
+  // gets used — if the bug regresses, this is what `agySend` would read.
+  const prevTimeout = process.env.ADLC_AGY_TIMEOUT;
+  const prevSandbox = process.env.ADLC_AGY_SANDBOX;
+  process.env.ADLC_AGY_TIMEOUT = '999s-WRONG-PROCESS-ENV';
+  delete process.env.ADLC_AGY_SANDBOX;
+
+  try {
+    const injectedEnv = {
+      ADLC_AGY: stubPath,
+      ADLC_AGY_TIMEOUT: '5s',
+      ADLC_AGY_SANDBOX: '1',
+    };
+    const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'agy' }, injectedEnv);
+    assert.match(out, /--print-timeout 5s/, 'should use the injected timeout, not process.env');
+    assert.match(out, /--sandbox/, 'should pass --sandbox from the injected env');
+    assert.ok(!out.includes('999s-WRONG-PROCESS-ENV'), 'must not fall back to process.env');
+  } finally {
+    if (prevTimeout === undefined) delete process.env.ADLC_AGY_TIMEOUT;
+    else process.env.ADLC_AGY_TIMEOUT = prevTimeout;
+    if (prevSandbox === undefined) delete process.env.ADLC_AGY_SANDBOX;
+    else process.env.ADLC_AGY_SANDBOX = prevSandbox;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- per-invocation provider selection (issue #63) ---
+
+import { fanProviders, PROVIDER_NAMES } from '../lib/llm.mjs';
+
+test('detectProvider: explicit override wins over ADLC_PROVIDER env and auto-detect order', () => {
+  const env = {
+    ADLC_PROVIDER: 'openai',
+    ANTHROPIC_API_KEY: 'k-anthropic',
+    OPENAI_API_KEY: 'k-openai',
+    GEMINI_API_KEY: 'k-gemini',
+  };
+  // Without override: env's ADLC_PROVIDER wins (existing behavior).
+  assert.equal(detectProvider(env).name, 'openai');
+  // Explicit override beats the env var.
+  assert.equal(detectProvider(env, 'gemini').name, 'gemini');
+  assert.equal(detectProvider(env, 'anthropic').name, 'anthropic');
+});
+
+test('detectProvider: explicit override without ADLC_PROVIDER set still selects the named provider', () => {
+  const env = { ANTHROPIC_API_KEY: 'k1', OPENAI_API_KEY: 'k2' };
+  // Auto-detect default would pick anthropic (first in list) — override picks openai instead.
+  assert.equal(detectProvider(env).name, 'anthropic');
+  assert.equal(detectProvider(env, 'openai').name, 'openai');
+});
+
+test('detectProvider: override naming a provider with no key present returns null (fails closed)', () => {
+  const env = { OPENAI_API_KEY: 'k2' };
+  assert.equal(detectProvider(env, 'anthropic'), null);
+});
+
+test('detectProvider: unknown override name returns null', () => {
+  assert.equal(detectProvider({ ANTHROPIC_API_KEY: 'k1' }, 'not-a-real-provider'), null);
+});
+
+test('PROVIDER_NAMES: lists all known provider names for CLI validation', () => {
+  assert.deepEqual(PROVIDER_NAMES, ['anthropic', 'openai', 'gemini', 'agy']);
+});
+
+test('complete: opts.provider overrides auto-detect (mocked fetch, no real API keys/network)', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
+  const calledUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    calledUrls.push(String(url));
+    if (String(url).includes('openai.com')) {
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'from-openai' } }] }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ content: [{ text: 'from-anthropic' }] }),
+    };
+  };
+  try {
+    // Auto-detect would pick anthropic (first in list) — override picks openai.
+    const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'openai' }, env);
+    assert.equal(out, 'from-openai');
+    assert.ok(calledUrls.some((u) => u.includes('openai.com')));
+    assert.ok(!calledUrls.some((u) => u.includes('anthropic.com')));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: without opts.provider, falls back to auto-detect (unchanged default behavior)', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
+  const calledUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    calledUrls.push(String(url));
+    return { ok: true, json: async () => ({ content: [{ text: 'from-anthropic' }] }) };
+  };
+  try {
+    const out = await complete({ tier: 'mid', prompt: 'hi' }, env);
+    assert.equal(out, 'from-anthropic');
+    assert.ok(calledUrls.every((u) => u.includes('anthropic.com')));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: naming an unavailable provider throws a clear, provider-specific error', async () => {
+  const env = { OPENAI_API_KEY: 'k-openai' };
+  await assert.rejects(
+    () => complete({ tier: 'mid', prompt: 'hi', provider: 'anthropic' }, env),
+    /provider "anthropic"/
+  );
+});
+
+test('fanProviders: issues ONE completion per distinct named provider, not N samples of one provider', async () => {
+  const env = {
+    ANTHROPIC_API_KEY: 'k-anthropic',
+    OPENAI_API_KEY: 'k-openai',
+    GEMINI_API_KEY: 'k-gemini',
+  };
+  const seenUrls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    seenUrls.push(String(url));
+    if (String(url).includes('openai.com')) {
+      return { ok: true, json: async () => ({ choices: [{ message: { content: 'openai-out' } }] }) };
+    }
+    if (String(url).includes('generativelanguage.googleapis.com')) {
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'gemini-out' }] } }] }) };
+    }
+    return { ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) };
+  };
+  try {
+    const results = await fanProviders(
+      { tier: 'mid', prompt: 'find the bug' },
+      ['anthropic', 'openai', 'gemini'],
+      env
+    );
+    assert.equal(results.length, 3);
+    assert.ok(results.every((r) => r.ok));
+    assert.deepEqual(results.map((r) => r.provider), ['anthropic', 'openai', 'gemini']);
+    assert.deepEqual(results.map((r) => r.value), ['anthropic-out', 'openai-out', 'gemini-out']);
+    // Exactly one call landed on each provider's host — genuinely distinct
+    // families, not N resamples of the same detected provider.
+    assert.equal(seenUrls.filter((u) => u.includes('anthropic.com')).length, 1);
+    assert.equal(seenUrls.filter((u) => u.includes('openai.com')).length, 1);
+    assert.equal(seenUrls.filter((u) => u.includes('generativelanguage.googleapis.com')).length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fanProviders: a provider missing its API key surfaces as a per-provider failure, not a thrown exception', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' }; // no OPENAI_API_KEY
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) });
+  try {
+    const results = await fanProviders({ tier: 'mid', prompt: 'x' }, ['anthropic', 'openai'], env);
+    assert.equal(results[0].ok, true);
+    assert.equal(results[1].ok, false);
+    assert.match(results[1].error, /provider "openai"/);
+    assert.equal(results[1].provider, 'openai');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('parseArgs: pre-scans for --help and prints usage', () => {

@@ -8,7 +8,7 @@ the gap in your README — do not edit core.
 Import surface (from a tool at `packages/<name>/`):
 
 ```js
-import { complete, fan, extractJson, detectProvider, resolveModel } from '../../core/index.mjs';
+import { complete, fan, fanProviders, extractJson, detectProvider, resolveModel, PROVIDER_NAMES } from '../../core/index.mjs';
 import { git, gitDiff, changedFiles, isDirty, isGitRepo, coChange, pairKey, churn } from '../../core/index.mjs';
 import { parseArgs, pass, gateFail, opError, printJson, readStdin, promptOnly } from '../../core/index.mjs';
 import { ADLC_DIR, appendEntry, readEntries, ledgerPath, sha256, hashFiles } from '../../core/index.mjs';
@@ -18,10 +18,12 @@ import { mutate } from '../../core/index.mjs'; // mutate.generateMutants / apply
 
 ## llm
 
-- `detectProvider(env?)` → `{ name, apiKey, models } | null`. Order: anthropic, openai, gemini. Force with `ADLC_PROVIDER`.
+- `detectProvider(env?, forceProvider?)` → `{ name, apiKey, models } | null`. Order: anthropic, openai, gemini, agy. Force with `ADLC_PROVIDER` (env) or the `forceProvider` arg (per-invocation, e.g. a CLI `--provider` flag — takes precedence over `ADLC_PROVIDER`).
+- `PROVIDER_NAMES` → `['anthropic', 'openai', 'gemini', 'agy']`, for CLI validation of `--provider`/`--providers`.
 - `resolveModel(provider, { tier, model }, env?)` → model id. Tiers: `cheap | mid | frontier`. Override via `ADLC_MODEL_CHEAP/MID/FRONTIER`.
-- `complete({ tier, model, system, prompt, maxTokens })` → `Promise<string>`. Throws if no provider (tools must catch and offer `--prompt-only`).
-- `fan(opts, n)` → `Promise<[{ ok, value | error }]>` — n independent stateless completions.
+- `complete({ tier, model, system, prompt, maxTokens, provider? }, env?)` → `Promise<string>`. Throws if no provider (tools must catch and offer `--prompt-only`). `provider` is a per-invocation override, additive only — omit it and single-provider auto-detect remains the default (cost/latency per ADR-0007).
+- `fan(opts, n, env?)` → `Promise<[{ ok, value | error }]>` — n independent stateless completions of the SAME (auto-detected or `opts.provider`-forced) provider.
+- `fanProviders(opts, providerNames, env?)` → `Promise<[{ ok, value | error, provider }]>` — one completion per DISTINCT named provider (e.g. `['anthropic', 'openai', 'gemini']`), instead of N resamples of one provider. A named provider missing its API key surfaces as `{ ok: false }` for that entry only.
 - `extractJson(text)` → parsed JSON value from messy model output. Throws if none.
 
 ## git

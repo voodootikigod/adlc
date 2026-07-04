@@ -47,7 +47,7 @@ export function resolveRunnerBin() {
   return binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
 }
 
-function runBin(label, bin, args) {
+function runBin(label, bin, args, spawnFn) {
   if (!bin) {
     return {
       code: 1,
@@ -55,16 +55,33 @@ function runBin(label, bin, args) {
     };
   }
 
-  const result = spawnSync(process.execPath, [bin, ...args], { stdio: 'inherit' });
+  const result = spawnFn(process.execPath, [bin, ...args], { stdio: 'inherit' });
   if (result.error) return { code: 1, error: `failed to run ${label}: ${result.error.message}` };
   if (result.signal) return { code: 1, error: `${label} terminated by signal ${result.signal}` };
   return { code: typeof result.status === 'number' ? result.status : 1 };
 }
 
-export function dispatch(toolName, args) {
-  return runBin(`@adlc/${toolName}`, resolveBin(toolName), args);
+// External verbs (registry.mjs `external: true`) are not workspace packages, so there is
+// no local bin to resolve. They shell out to `npx <packageName>` with full argument
+// passthrough instead -- this is how `adlc review` reaches the separate
+// `adversarial-review` CLI without vendoring it into this monorepo (issue #65).
+function runExternal(packageName, args, spawnFn) {
+  const result = spawnFn('npx', [packageName, ...args], { stdio: 'inherit' });
+  if (result.error) return { code: 1, error: `failed to run npx ${packageName}: ${result.error.message}` };
+  if (result.signal) return { code: 1, error: `${packageName} terminated by signal ${result.signal}` };
+  return { code: typeof result.status === 'number' ? result.status : 1 };
 }
 
-export function dispatchRunner(args) {
-  return runBin('@adlc/runner', resolveRunnerBin(), args);
+export function dispatch(toolName, args, opts = {}) {
+  const spawnFn = opts.spawnFn ?? spawnSync;
+  const tool = getTool(toolName);
+  if (tool?.external) {
+    return runExternal(tool.packageName, args, spawnFn);
+  }
+  return runBin(`@adlc/${toolName}`, resolveBin(toolName), args, spawnFn);
+}
+
+export function dispatchRunner(args, opts = {}) {
+  const spawnFn = opts.spawnFn ?? spawnSync;
+  return runBin('@adlc/runner', resolveRunnerBin(), args, spawnFn);
 }

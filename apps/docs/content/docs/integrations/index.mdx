@@ -1,8 +1,26 @@
 ---
 title: Integrations
-description: Integrations documentation (coming soon).
+description: Native ADLC integrations for six agentic coding harnesses — Claude Code, Codex, Cursor, opencode, pi, and Antigravity.
 ---
 
 # Integrations
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+ADLC gates are implemented once in [`@adlc/core`](/docs/lifecycle) and wired into each
+harness through its own native mechanism — skills, hooks, plugins, or agents. Pick your
+harness below.
+
+- **[Claude Code](/docs/integrations/claude-code)** — phase-routing skill, gate
+  commands, a `prosecutor` subagent, and hooks that fire the gates automatically.
+- **[Codex](/docs/integrations/codex)** — the OpenAI Codex CLI integration for the
+  ADLC toolkit; full walkthrough still being written.
+- **[Cursor](/docs/integrations/cursor)** — the Cursor editor integration for the
+  ADLC toolkit; full walkthrough still being written.
+- **[opencode](/docs/integrations/opencode)** — the opencode CLI integration for the
+  ADLC toolkit; full walkthrough still being written.
+- **[pi](/docs/integrations/pi)** — the pi CLI integration for the ADLC toolkit;
+  full walkthrough still being written.
+- **[Antigravity](/docs/integrations/antigravity)** — native `agy` plugin with an
+  in-session rails-guard hook, backed by the unbypassable CI rail-freeze gate.
+
+See the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory) for
+the gates these integrations wire up.

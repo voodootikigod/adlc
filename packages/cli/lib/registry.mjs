@@ -1,7 +1,12 @@
 /**
- * @typedef {{ name: string, packageName: string, binName?: string, summary: string }} Tool
+ * @typedef {{ name: string, packageName: string, binName?: string, summary: string, external?: boolean }} Tool
  * @typedef {{ title: string, tools: Tool[] }} Group
  */
+// `external: true` marks a verb that is not one of this monorepo's @adlc/* workspace
+// packages. It dispatches via `npx <packageName>` instead of resolving a local bin
+// (see runExternal in dispatch.mjs). `review` is the one example today: it routes to
+// the separate `adversarial-review` CLI -- the actual model-judged reviewer that
+// `@adlc/prosecute` records evidence *for* but never runs itself (see issue #65).
 
 /** @type {Group[]} */
 export const GROUPS = [
@@ -35,6 +40,7 @@ export const GROUPS = [
       { name: 'review-calibration', packageName: '@adlc/review-calibration', summary: 'Measure reviewer recall by scoring whether review catches mutants.' },
       { name: 'model-ratchet', packageName: '@adlc/model-ratchet', summary: 'Identify hot files for re-prosecution after model or repo drift.' },
       { name: 'gate-fuzzing', packageName: '@adlc/gate-fuzzing', summary: 'Run hostile candidates against gate suites to find defeats.' },
+      { name: 'review', packageName: 'adversarial-review', external: true, summary: 'Run the model-judged adversarial review (via `npx adversarial-review`) that `prosecute` records evidence for.' },
     ],
   },
   {
