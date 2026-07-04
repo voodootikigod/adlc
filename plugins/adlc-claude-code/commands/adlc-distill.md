@@ -3,7 +3,7 @@ description: Distill repeated review findings and PR rejections into permanent, 
 argument-hint: (no arguments)
 ---
 
-# /adlc-distill — compound the lifecycle (P7)
+# /adlc:adlc-distill — compound the lifecycle (P7)
 
 P7 is where the lifecycle compounds: repeated findings become deterministic
 defenses (lint checks, skills, spec-gap templates) so the same mistake cannot
@@ -90,7 +90,7 @@ adlc lesson-foundry --prompt-only
      This step is **keyless** (skill-mining is agentic — Claude is the agent, no
      API key), but it is **not** a deterministic gate: no `--prompt-only`/exit-code
      contract, and `npx skills add` is an interactive, once-per-machine developer
-     action — never run it from a scheduled/headless `/adlc-distill` (see
+     action — never run it from a scheduled/headless `/adlc:adlc-distill` (see
      "Scheduling"). If skill-mining is unavailable, **do not PR the skill stubs** —
      hold them for explicit human review rather than landing default-worded,
      un-deduped, cold-untested skills. Report them as held-unvalidated in the
@@ -116,13 +116,13 @@ defenses proposed, which were written (if any), and which gates were skipped
 (e.g. rejection-mining when `gh` is unavailable) so the coverage is honest. For
 any *skill* defense, report its skill-mining verdict (REUSE/EXTEND/BUILD/REJECT +
 Gate B SHIP/FIX/REJECT), or flag it as **held for human review (not PR'd)** if
-skill-mining was not run. Point the user at `/adlc-maintain` for the decay-driven
+skill-mining was not run. Point the user at `/adlc:adlc-maintain` for the decay-driven
 checks.
 
 ## Scheduling
 
 This command is idle-time metabolism. To run it automatically, schedule a Claude
-routine (e.g. via `/schedule`) that invokes `/adlc-distill` on a cadence — Claude
+routine (e.g. via `/schedule`) that invokes `/adlc:adlc-distill` on a cadence — Claude
 is the model, so no API keys are needed.
 
 **Headless runs are advisory by default.** The write steps above require human
@@ -134,5 +134,5 @@ auto-`--write` routine if you have explicitly accepted that the generated
 defenses land without review. The skill-mining handoff (step 1.3) is likewise
 **interactive only** — a headless run must never `npx skills add` or auto-validate
 skills; it surfaces the scaffolded stubs for a human to validate later. The
-deterministic maintenance checks (`/adlc-maintain`) can additionally run in CI on
+deterministic maintenance checks (`/adlc:adlc-maintain`) can additionally run in CI on
 a cron; see `docs/ci/adlc-maintenance.yml`.

@@ -3,7 +3,7 @@ description: Bootstrap the ADLC runtime (.adlc/) in this repo and verify the too
 argument-hint: (no arguments)
 ---
 
-# /adlc-init — bootstrap the ADLC workspace
+# /adlc:adlc-init — bootstrap the ADLC workspace
 
 Set up the shared `.adlc/` runtime that every ADLC gate reads and writes, and
 confirm the gate toolkit is reachable. Run this once per repository.
@@ -66,6 +66,6 @@ this command.
 
 Report: toolkit version, whether `.adlc/tickets.json` was created or already
 present, what (if anything) was added to `.gitignore`, and the preflight verdict.
-Then point the user at `/adlc-ticket` to author their first ticket (P0), and note
+Then point the user at `/adlc:adlc-ticket` to author their first ticket (P0), and note
 that the `adlc` discovery skill will route them through the rest of the
 lifecycle.

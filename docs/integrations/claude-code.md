@@ -18,7 +18,7 @@ Code, Cursor) and installs into each, so the same one-liner works everywhere:
 ```sh
 npx plugins add voodootikigod/adlc           # install the plugin into your agent tool(s)
 npm install -g @adlc/cli                     # the gate toolkit the plugin shells out to
-/adlc-init                                    # bootstrap .adlc/ in your repo (once)
+/adlc:adlc-init                               # bootstrap .adlc/ in your repo (once)
 ```
 
 The plugin's gates shell out to the `adlc` binary, so the `@adlc/cli` toolkit is a
@@ -33,7 +33,7 @@ built-in plugin marketplace commands, they resolve the same `marketplace.json`:
 npm install -g @adlc/cli                     # the toolkit, behind one `adlc <tool>` command
 /plugin marketplace add voodootikigod/adlc   # register this repo as a marketplace
 /plugin install adlc@adlc                     # install the plugin
-/adlc-init                                    # bootstrap .adlc/ in your repo (once)
+/adlc:adlc-init                               # bootstrap .adlc/ in your repo (once)
 ```
 
 Local install verification:
@@ -58,11 +58,11 @@ install above) and Node 18+.
 
 | Command | Phase | What it does |
 | --- | --- | --- |
-| `/adlc-init` | — | Bootstrap `.adlc/`, split the committable ticket contract from runtime evidence in `.gitignore`, run preflight. |
-| `/adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](../ticket-authoring.md). |
-| `/adlc-prosecute` | P5 | Multi-lens adversarial pre-merge review: fan out five independent lens subagents, dedupe findings, independently verify each via a sixth verifier subagent, loop until two consecutive dry rounds. |
-| `/adlc-distill` | P7 | Mine repeated findings and PR rejections into deterministic defenses (lint rules, skills, review lenses). |
-| `/adlc-maintain` | C10/C12 | Decay-driven checks: stale skills, hot files to re-prosecute, gate calibration. |
+| `/adlc:adlc-init` | — | Bootstrap `.adlc/`, split the committable ticket contract from runtime evidence in `.gitignore`, run preflight. |
+| `/adlc:adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](../ticket-authoring.md). |
+| `/adlc:adlc-prosecute` | P5 | Multi-lens adversarial pre-merge review: fan out five independent lens subagents, dedupe findings, independently verify each via a sixth verifier subagent, loop until two consecutive dry rounds. |
+| `/adlc:adlc-distill` | P7 | Mine repeated findings and PR rejections into deterministic defenses (lint rules, skills, review lenses). |
+| `/adlc:adlc-maintain` | C10/C12 | Decay-driven checks: stale skills, hot files to re-prosecute, gate calibration. |
 
 ### The discovery skill
 
@@ -214,15 +214,15 @@ recognizes `min-release-age`, not because anything was suppressed.
 
 | Phase | Coverage | Wired via |
 | --- | --- | --- |
-| P0 Triage | Strong | `/adlc-ticket` |
+| P0 Triage | Strong | `/adlc:adlc-ticket` |
 | P1 Interrogate | Strong | `spec-lint`, `premortem`, `parallax` (via the `adlc` skill) |
 | P2 Decompose | Strong | `coldstart`, `model-router`, `merge-forecast` |
 | P3 Rail | Strong | rails-guard PreToolUse hook + CI backstop |
 | P4 Build | Strong | flail-detection hook, `consensus-fix` |
 | P5 Prosecute | Strong | `/adlc-prosecute` runs the full multi-lens fan-out/dedupe/verify/converge loop (parity with OpenCode); `prosecutor` subagent runs complementary deterministic gates. Formal `adlc run p5` phase assertion is a harness-agnostic runner path (see below), not blocked on any one CLI. |
 | P6 Integrate | Conditional | gate-manifest evidence surfaced for the human gate; strong when backed by valid P5 evidence. |
-| P7 Distill | Strong | `/adlc-distill` |
-| Maintenance | Strong | `/adlc-maintain` + CI cron |
+| P7 Distill | Strong | `/adlc:adlc-distill` |
+| Maintenance | Strong | `/adlc:adlc-maintain` + CI cron |
 
 P6 is a human decision by design; the plugin surfaces the evidence, it does not
 automate the judgment.
