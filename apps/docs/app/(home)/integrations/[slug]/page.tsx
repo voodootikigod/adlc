@@ -36,7 +36,7 @@ export default async function IntegrationPage({
 
   return (
     <main>
-      <MarketingSection kicker="Integrations" title={`ADLC, native in ${integration.name}`}>
+      <MarketingSection headingLevel={1} kicker="Integrations" title={`ADLC, native in ${integration.name}`}>
         <p className="mb-8 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           {integration.tagline}
         </p>

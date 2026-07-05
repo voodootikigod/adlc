@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default function ToolkitPage() {
   return (
     <main>
-      <MarketingSection kicker="The toolkit" title="Small CLIs, one gate each, zero dependencies">
+      <MarketingSection headingLevel={1} kicker="The toolkit" title="Small CLIs, one gate each, zero dependencies">
         <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           Each package enforces a single machine-checkable gate, and they all share a
           runtime convention, so tools built independently still feel like one product.

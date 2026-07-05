@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 export default function IntegrationsPage() {
   return (
     <main>
-      <MarketingSection kicker="Integrations" title="Pick your agent">
+      <MarketingSection headingLevel={1} kicker="Integrations" title="Pick your agent">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {INTEGRATIONS.map((i) => (
             <Link

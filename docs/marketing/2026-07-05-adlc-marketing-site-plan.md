@@ -2233,4 +2233,4 @@ Not agent-executable — record here so the merge PR can link it.
 - **Task-order note:** T5's route test goes fully green only at T11 — expected and called out in both tasks.
 - **Gate-funnel visual (spec §4 Layer 1):** substituted by the hero gate-sequence animation plus the terminal verdict cards; recorded as a deliberate deviation.
 - **Image manifest:** only `hero-backdrop` currently has a consuming `Backdrop`; the 5 other page backdrops and `og-base` need pages wired for `Backdrop` (or OG routes) before committed PNGs become visible — T15 checklist item.
-- **llms.txt** remains docs-only (marketing routes not indexed) — recorded decision.
+- **llms.txt** now leads with the marketing pages and integrations, then the docs index (reversed during the SEO/GEO pass; the original docs-only decision predated that work).

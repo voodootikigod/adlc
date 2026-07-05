@@ -30,7 +30,7 @@ const HUMAN_GATES = new Set(['P1', 'P6']);
 export default function LifecyclePage() {
   return (
     <main>
-      <MarketingSection kicker="The lifecycle" title="Eight phases. A gate between every one.">
+      <MarketingSection headingLevel={1} kicker="The lifecycle" title="Eight phases. A gate between every one.">
         <LifecyclePipeline />
         <div className="mt-12 grid gap-4 md:grid-cols-2">
           {PHASES.map((p) => (

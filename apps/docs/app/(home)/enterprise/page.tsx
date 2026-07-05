@@ -17,7 +17,7 @@ const ROLLOUT = [
 export default function EnterprisePage() {
   return (
     <main>
-      <MarketingSection kicker="Enterprise" title="Unreviewable agent output is an audit problem">
+      <MarketingSection headingLevel={1} kicker="Enterprise" title="Unreviewable agent output is an audit problem">
         <p className="mk-fade-up max-w-2xl text-lg" style={{ color: 'var(--mk-muted)' }}>
           When agents write most of the code, &ldquo;a human approved the PR&rdquo; stops being
           evidence of anything. Regulators, auditors, and your own security team will ask what

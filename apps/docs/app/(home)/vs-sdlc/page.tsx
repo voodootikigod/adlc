@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default function VsSdlcPage() {
   return (
     <main>
-      <MarketingSection kicker="The argument" title="60 years of process, built for the wrong failure modes">
+      <MarketingSection headingLevel={1} kicker="The argument" title="60 years of process, built for the wrong failure modes">
         <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           Code review, standups, and sprint ceremonies all exist because humans forget,
           tire, and protect their egos. Models do none of that. They fail in their own

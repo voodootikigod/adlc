@@ -4,6 +4,7 @@ import { FAILURE_MODES } from '@/lib/failure-modes.mjs';
 import { INTEGRATIONS } from '@/lib/integration-facts.mjs';
 import { SERIES_BASE } from '@/lib/theory-links.mjs';
 import { ALL_PACKAGES } from '@/lib/toolkit-packages.mjs';
+import { SITE_URL } from '@/lib/routes.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { TerminalCard } from '@/components/marketing/terminal-card';
 import { Backdrop } from '@/components/marketing/backdrop';
@@ -13,6 +14,20 @@ import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
 export const metadata: Metadata = {
   description:
     'The SDLC defends against human failure modes. Your agents fail differently. ADLC is a lifecycle built around how models actually fail, with a machine-checkable gate at every phase.',
+};
+
+const APP_STRUCTURED_DATA = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'ADLC Toolkit',
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'Node.js >= 18',
+  url: `${SITE_URL}/toolkit`,
+  license: 'https://github.com/voodootikigod/adlc/blob/main/LICENSE',
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  description:
+    'Zero-dependency CLIs that each enforce one machine-checkable gate of the Agentic Development Lifecycle.',
+  sameAs: ['https://github.com/voodootikigod/adlc'],
 };
 
 const HERO_TOOLS = [
@@ -46,6 +61,10 @@ function TerminalOutput({ output }: { output: string }) {
 export default function HomePage() {
   return (
     <main>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(APP_STRUCTURED_DATA) }}
+      />
       {/* 1 — Hero */}
       <Backdrop slug="hero-backdrop">
         <div className="mx-auto flex max-w-5xl flex-col gap-8 px-6 pb-24 pt-20 md:pt-32">

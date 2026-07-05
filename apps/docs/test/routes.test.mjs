@@ -8,8 +8,8 @@ import { MARKETING_ROUTES, SITE_URL } from '../lib/routes.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const homeDir = path.join(__dirname, '..', 'app', '(home)');
 
-test('SITE_URL is the production apex', () => {
-  assert.equal(SITE_URL, 'https://agenticlifecycle.ai');
+test('SITE_URL is the canonical production host (www — apex 308s to it)', () => {
+  assert.equal(SITE_URL, 'https://www.agenticlifecycle.ai');
 });
 
 test('routes are unique and well-formed', () => {
