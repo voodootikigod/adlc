@@ -18,8 +18,11 @@ import {
   ADLC_DIR,
 } from '@adlc/core';
 
+import { readFileSync } from 'node:fs';
+
 import { runChecks } from '../lib/check.mjs';
 import { formatViolations, buildResult } from '../lib/output.mjs';
+import { computeFencedLines, isMdxFile } from '../lib/suppressions.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -114,9 +117,28 @@ try {
   opError(`git error: ${err.message}`);
 }
 
+// --- authoritative `.mdx` fenced-code lookup ---
+// Compute fenced-block membership from the FULL working-tree file (HEAD content is
+// exactly what MDX compiles), memoized per file. Fails CLOSED: any file that cannot
+// be read yields an empty set, so its markers are scanned rather than skipped.
+const fenceCache = new Map();
+function isFenced(file, lineNo) {
+  if (!isMdxFile(file)) return false;
+  let fenced = fenceCache.get(file);
+  if (fenced === undefined) {
+    try {
+      fenced = computeFencedLines(readFileSync(file, 'utf8'));
+    } catch {
+      fenced = new Set(); // unreadable → fail closed (scan every line)
+    }
+    fenceCache.set(file, fenced);
+  }
+  return fenced.has(lineNo);
+}
+
 // --- run checks ---
 const { railGlobs, railGlobError, violations, railsDiffEmpty, suppressionsClean } =
-  runChecks({ changedFiles: files, diffText: diff, cliRails, ticket });
+  runChecks({ changedFiles: files, diffText: diff, cliRails, ticket, isFenced });
 
 const result = buildResult({
   violations,

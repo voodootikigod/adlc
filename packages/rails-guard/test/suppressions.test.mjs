@@ -2,7 +2,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAddedLines, findSuppressions, isMarkerAllowed, isDocFile } from '../lib/suppressions.mjs';
+import { parseAddedLines, findSuppressions, isMarkerAllowed, isDocFile, computeFencedLines } from '../lib/suppressions.mjs';
 
 describe('parseAddedLines', () => {
   test('extracts added lines with correct file and line numbers', () => {
@@ -173,6 +173,143 @@ describe('findSuppressions', () => {
     // A code file whose name merely contains ".md" is NOT a doc — only the final extension counts.
     const lines = [{ file: 'src/render.md.mjs', lineNo: 1, content: `x${SKIP}` }];
     assert.equal(findSuppressions(lines).length, 1);
+  });
+
+  // --- MDX prose code-contexts: markers inside Markdown inline-code spans and fenced
+  //     code blocks render as literal text and can never be an operative suppression.
+  //     They are exempt for .mdx; a marker in the MDX ESM/JSX layer stays scanned.
+  test('does NOT flag a marker inside an .mdx inline-code span (prose false positive)', () => {
+    const lines = [{ file: 'apps/docs/x.mdx', lineNo: 24, content: `markers (\`${TSIG}\`, \`${SKIP}\`, …) are reverted` }];
+    assert.deepEqual(findSuppressions(lines), []);
+  });
+
+  test('DOES flag a real marker OUTSIDE the inline-code span on the same .mdx line', () => {
+    // First occurrence is prose in a span; a second, bare occurrence is operative ESM.
+    const lines = [{ file: 'apps/docs/x.mdx', lineNo: 5, content: `see \`${TSIG}\` — then const a = 1; ${TSIG}` }];
+    assert.equal(findSuppressions(lines).length, 1);
+  });
+
+  test('DOES flag a call-marker hidden in a template-literal interpolation (HIT 3)', () => {
+    // A test-focus call inside a ${...} interpolation is operative JS, not an inert
+    // Markdown span, so it must not be stripped. (Marker assembled to avoid self-trip.)
+    const only = '.on' + 'ly(';
+    const lines = [{ file: 'apps/docs/x.mdx', lineNo: 9, content: '<X>{`${describe' + only + 't)}`}</X>' }];
+    assert.equal(findSuppressions(lines).length, 1);
+  });
+
+  test('does NOT flag a marker on an .mdx line the isFenced predicate marks as fenced', () => {
+    const lines = [{ file: 'apps/docs/rails-guard.mdx', lineNo: 55, content: `  [suppression] src/foo.ts:12  marker: ${TSIG}` }];
+    const isFenced = (file, lineNo) => file === 'apps/docs/rails-guard.mdx' && lineNo === 55;
+    assert.deepEqual(findSuppressions(lines, { isFenced }), []);
+  });
+
+  test('DOES flag a real .mdx marker on a line the isFenced predicate marks NOT fenced', () => {
+    const lines = [{ file: 'apps/docs/x.mdx', lineNo: 80, content: `export const meta = {}; // ${TSIG}` }];
+    const isFenced = () => false; // outside any fence
+    assert.equal(findSuppressions(lines, { isFenced }).length, 1);
+  });
+
+  test('isFenced predicate does NOT apply to code files (only .mdx is prose)', () => {
+    // Even if a predicate lied about a .ts line, findSuppressions never consults it for code.
+    const lines = [{ file: 'src/a.ts', lineNo: 10, content: `// ${TSIG}` }];
+    const isFenced = () => true;
+    assert.equal(findSuppressions(lines, { isFenced }).length, 1);
+  });
+
+  test('fails CLOSED: a fenced .mdx marker is scanned when no isFenced predicate is supplied', () => {
+    const lines = [{ file: 'apps/docs/x.mdx', lineNo: 5, content: `bare operative ${TSIG}` }];
+    assert.equal(findSuppressions(lines).length, 1);
+  });
+});
+
+describe('computeFencedLines', () => {
+  const fence = '```';
+  const TSIG = '@ts-' + 'ignore';
+
+  test('marks interior lines of a fenced block, not the delimiters', () => {
+    const content = [
+      'intro prose',       // 1
+      `${fence}sh`,        // 2  opener
+      `marker ${TSIG}`,    // 3  interior — fenced
+      'more output',       // 4  interior — fenced
+      `${fence}`,          // 5  closer
+      'trailing prose',    // 6
+    ].join('\n');
+    const fenced = computeFencedLines(content);
+    assert.deepEqual([...fenced].sort((a, b) => a - b), [3, 4]);
+  });
+
+  test('an unclosed fence extends to end of file (fails closed by marking everything inside)', () => {
+    const content = ['before', `${fence}`, 'a', 'b'].join('\n');
+    assert.deepEqual([...computeFencedLines(content)].sort((a, b) => a - b), [3, 4]);
+  });
+
+  test('returns an empty set for empty or non-string input', () => {
+    assert.equal(computeFencedLines('').size, 0);
+    assert.equal(computeFencedLines(null).size, 0);
+    assert.equal(computeFencedLines(undefined).size, 0);
+  });
+
+  test('supports tilde fences and indented delimiters', () => {
+    const content = ['x', '  ~~~', '  fenced', '  ~~~', 'y'].join('\n');
+    assert.deepEqual([...computeFencedLines(content)], [3]);
+  });
+
+  test('a shorter run does NOT close a longer fence — nested fences do not desync (HIT 1)', () => {
+    const bt4 = '````', bt3 = '```';
+    const content = [
+      'intro',        // 1
+      `${bt4}mdx`,    // 2  opener (4 backticks)
+      bt3,            // 3  interior 3-backtick — too short to close
+      'sample',       // 4  interior
+      bt4,            // 5  real closer (4 backticks)
+      'operative',    // 6  OUTSIDE the fence — must NOT be marked
+    ].join('\n');
+    const fenced = computeFencedLines(content);
+    assert.deepEqual([...fenced].sort((a, b) => a - b), [3, 4]);
+    assert.equal(fenced.has(6), false, 'line after the real closer must be operative, not fenced');
+  });
+
+  test('a tilde run does NOT close a backtick fence (fence character must match)', () => {
+    const content = ['```', 'interior', '~~~', 'still interior'].join('\n');
+    // The ~~~ does not close the ``` fence; both interior lines stay fenced (unclosed → EOF).
+    assert.deepEqual([...computeFencedLines(content)].sort((a, b) => a - b), [2, 3, 4]);
+  });
+
+  test('a fewer-than-three backtick/tilde line does NOT open a fence (HIT 2)', () => {
+    for (const delim of ['`', '``', '~', '~~']) {
+      const content = ['before', delim, 'neighbor', delim, 'after'].join('\n');
+      assert.equal(computeFencedLines(content).size, 0, `"${delim}" must not open a fence`);
+    }
+  });
+
+  test('a closer with trailing content does NOT close the fence (CommonMark)', () => {
+    const content = ['```', 'interior', '``` trailing text', 'still interior'].join('\n');
+    // "``` trailing text" is not a valid closer → fence stays open to EOF.
+    assert.deepEqual([...computeFencedLines(content)].sort((a, b) => a - b), [2, 3, 4]);
+  });
+
+  test('a CRLF fence closer still closes the fence — no line-ending desync (CRLF HIT)', () => {
+    const bt = '```';
+    // LF opener, CRLF closer, LF operative line after. The `\r` must not defeat the closer.
+    const content = `${bt}sh\ninterior\n${bt}\r\noperative after closer\n`;
+    const fenced = computeFencedLines(content);
+    assert.deepEqual([...fenced].sort((a, b) => a - b), [2]);
+    assert.equal(fenced.has(4), false, 'operative line after a CRLF closer must be scanned, not fenced');
+  });
+
+  test('a CRLF-throughout fenced block is detected (Windows-authored docs, no false positives)', () => {
+    const bt = '```';
+    const content = `${bt}sh\r\ninterior1\r\ninterior2\r\n${bt}\r\nafter\r\n`;
+    assert.deepEqual([...computeFencedLines(content)].sort((a, b) => a - b), [2, 3]);
+  });
+
+  test('an embedded bare CR fails CLOSED — the line is not treated as inert', () => {
+    const bt = '```';
+    // Fence opens, then a line carrying a bare mid-line CR — must not stay fenced.
+    const content = `${bt}\ninterior\nmarker\rmore\nplain\n`;
+    const fenced = computeFencedLines(content);
+    assert.equal(fenced.has(3), false, 'a line with an embedded CR must be scanned, not fenced');
   });
 });
 

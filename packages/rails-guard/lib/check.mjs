@@ -12,6 +12,9 @@ import { parseAddedLines, findSuppressions, isMarkerAllowed } from './suppressio
  * @param {string}    opts.diffText      - raw git diff output
  * @param {string[]}  opts.cliRails      - globs from --rails flags (may be empty)
  * @param {object|null} opts.ticket      - loaded ticket object or null
+ * @param {(file: string, lineNo: number) => boolean} [opts.isFenced]
+ *        Authoritative `.mdx` fenced-code predicate (see findSuppressions). Omitted
+ *        in pure/unit contexts, where it fails closed.
  *
  * @returns {{
  *   railGlobs: string[],
@@ -25,7 +28,7 @@ import { parseAddedLines, findSuppressions, isMarkerAllowed } from './suppressio
  *   { file, type: 'rail-edit', globs }          — froze path was edited
  *   { file, type: 'suppression', marker, lineNo }  — unapproved marker added
  */
-export function runChecks({ changedFiles, diffText, cliRails, ticket }) {
+export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced }) {
   const { globs: railGlobs, error: railGlobError } = resolveRailGlobs(cliRails, ticket);
 
   const violations = [];
@@ -40,7 +43,7 @@ export function runChecks({ changedFiles, diffText, cliRails, ticket }) {
 
   // CHECK 2: suppression markers in added lines
   const addedLines = parseAddedLines(diffText);
-  const suppressions = findSuppressions(addedLines);
+  const suppressions = findSuppressions(addedLines, { isFenced });
   const ticketBody = ticket?.body ?? '';
 
   for (const s of suppressions) {
