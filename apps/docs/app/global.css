@@ -39,3 +39,54 @@ html > body[data-scroll-locked] {
   --adlc-wish: #e5cd52;
   --adlc-highlight: #ef7c2a;
 }
+
+/* Marketing motion — every animation is opt-out via prefers-reduced-motion */
+@keyframes mk-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.mk-fade-up {
+  animation: mk-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Stagger helpers for orchestrated entrances (pair with .mk-fade-up) */
+.mk-delay-1 {
+  animation-delay: 90ms;
+}
+.mk-delay-2 {
+  animation-delay: 180ms;
+}
+.mk-delay-3 {
+  animation-delay: 270ms;
+}
+
+.mk-pulse {
+  animation: mk-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mk-fade-up,
+  .mk-pulse,
+  .mk-gate-line {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
