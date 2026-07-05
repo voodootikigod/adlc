@@ -2,7 +2,7 @@
 //
 // Claude Code port of plugins/adlc-opencode/lib/prosecutor.mjs (issue #61). The
 // lenses and verifier are Claude Code subagents (agents/prosecutor-*.md), invoked
-// via the Task tool from /adlc-prosecute. This module is the machine-checkable
+// via the Task tool from /adlc:adlc-prosecute. This module is the machine-checkable
 // contract for the fan-out: which lenses exist, how findings are deduped across
 // lenses, and how the verifier's votes decide whether a finding survives. The
 // model calls live in the subagents; the decision logic here is pure and

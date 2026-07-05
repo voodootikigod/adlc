@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 
 function fail(message) {
   console.error(`claude-code-plugin-smoke: ${message}`);
@@ -478,15 +478,30 @@ if (!skillSource.includes('ADLC_CC_SENTINEL_PHASE_ROUTER_V1')) {
   fail('plugins/adlc-claude-code/skills/adlc/SKILL.md missing sentinel ADLC_CC_SENTINEL_PHASE_ROUTER_V1');
 }
 
-// --- Guard: no bare, non-namespaced command recommendations (closes #50) ---
+// --- Guard: no bare, non-namespaced command recommendations (closes #50, #96) ---
 // The plugin is named "adlc" (plugins/adlc-claude-code/.claude-plugin/plugin.json),
 // so inside Claude Code the actual invocable form of a plugin command is the
 // namespaced "/adlc:adlc-<name>" — a bare "/adlc-<name>" is not a real command and
 // silently fails to invoke when a user (or the agent itself) follows the guidance.
-// This scans every .md/.mjs file under commands/, skills/, agents/, and hooks/ for
-// a bare reference to one of the plugin's real commands and fails loudly if found,
-// so a future edit can't reintroduce the bug fixed in #50.
-const namespacedCommandNames = ['init', 'ticket', 'distill', 'maintain'];
+// This scans every .md/.mjs file under commands/, skills/, agents/, and hooks/,
+// plus every markdown doc in the repo (see the doc-wide scan below), for a bare
+// reference to one of the plugin's real commands and fails loudly if found.
+//
+// The command-name list is DERIVED from the commands/ directory itself, not
+// hardcoded — a hardcoded list (['init', 'ticket', 'distill', 'maintain']) is
+// exactly the kind of allowlist #96 exists to eliminate: it silently missed
+// '/adlc-prosecute' after #61 added a fifth command, and a live instance of that
+// exact gap (docs/integrations/claude-code.md, and the command file's own
+// heading) was found and fixed while building this guard.
+const commandsDir = join(pluginSourceDir, 'commands');
+const namespacedCommandNames = existsSync(commandsDir)
+  ? readdirSync(commandsDir)
+      .filter((name) => name.startsWith('adlc-') && name.endsWith('.md'))
+      .map((name) => name.slice('adlc-'.length, -'.md'.length))
+  : [];
+if (namespacedCommandNames.length === 0) {
+  fail('no adlc-*.md command files found under plugins/adlc-claude-code/commands — cannot derive namespacedCommandNames (the bare-command guard would silently match nothing)');
+}
 // Matches "/adlc-init" etc. but NOT "/adlc:adlc-init" (scoped form, via the
 // negative lookbehind) and NOT a file-path or URL reference such as
 // "commands/adlc-init.md", "docs/ci/adlc-maintenance.yml",
@@ -521,24 +536,64 @@ for (const dir of guidanceDirs) {
     }
   }
 }
-// Also scan the plugin's own primary onboarding doc, the repo's top-level README,
-// and the plugin's design ADR. plugin.json's "homepage" field points at
-// docs/integrations/claude-code.md (asserted above) and it is the first thing a
-// user reads after installing, but README.md is the very first file a GitHub
-// visitor reads (it has its own "Use it in Claude Code" quick-start), and
-// docs/adr/0003-adlc-claude-code-plugin.md is the plugin's own design doc,
-// cross-linked from docs/integrations/claude-code.md and checked above via
-// crossDocLinks. A bare command recommendation in any of these is the exact
-// regression #50 was filed against, so they must be covered by the same guard
-// as the in-plugin guidance files, not just the plugins/adlc-claude-code/* tree.
-const extraDocPaths = [
-  join(repo, 'docs/integrations/claude-code.md'),
-  join(repo, 'README.md'),
-  join(repo, 'docs/adr/0003-adlc-claude-code-plugin.md'),
+// Doc-wide scan (closes #96): the previous version of this guard scanned only a
+// hardcoded allowlist of "extra" doc paths outside the plugin's own tree
+// (docs/integrations/claude-code.md, README.md, the design ADR). Every one of
+// #50/#89's adversarial-review rounds after the first found a NEW doc surface
+// with a bare reference the allowlist hadn't been told about — the allowlist
+// itself was the recurring vulnerability. Scan every markdown doc in the repo
+// instead, with an explicit, reviewed EXCLUSION list for paths that are
+// genuinely not Claude-Code-specific live guidance (each entry states why).
+// Adding a new doc anywhere under docs/ or at the repo root is covered
+// automatically from now on; nothing has to remember to list it.
+const DOC_SCAN_ROOTS = ['docs', 'README.md'];
+// AGENTS.md / CLAUDE.md are common cross-harness instruction files; scan them
+// too if this repo ever adds one — they're exactly the kind of top-level
+// guidance surface #50 was filed about.
+for (const name of ['AGENTS.md', 'CLAUDE.md']) {
+  if (existsSync(join(repo, name))) DOC_SCAN_ROOTS.push(name);
+}
+// Each entry is a POSIX-style path (file or directory prefix, relative to repo
+// root) excluded from the doc-wide scan, with the reason it is not a live
+// Claude-Code guidance surface. This list is reviewed, not implicit — a new doc
+// that doesn't match any entry here is scanned by default.
+const EXCLUDED_DOC_PATHS = [
+  ['docs/archive/', 'superseded/historical record, not live guidance — see docs/archive/README.md'],
+  ['docs/specs/', 'P1 spec/acceptance-criteria docs describe issues (including this bug class) as illustrative examples, not live guidance'],
+  ['docs/superpowers/', 'internal planning/spec scratch docs for in-flight work, not published guidance'],
+  ['docs/tools/', 'harness-agnostic package reference docs (per docs/README.md: "follow the linked README for command-specific detail"), not per-harness invocation guidance'],
+  ['docs/integrations/antigravity.md', "Antigravity's own doc; that harness has no plugin-namespace convention (verified in #50)"],
+  ['docs/integrations/codex.md', "Codex's own doc; skill-driven, not command-namespaced (verified in #50)"],
+  ['docs/integrations/cursor.md', "Cursor's own doc; bare \"/adlc-*\" is that harness's correct, intentional syntax"],
+  ['docs/integrations/opencode.md', "OpenCode's own doc; bare \"/adlc-*\" is that harness's correct, intentional syntax"],
+  ['docs/integrations/pi.md', "Pi's own doc; skill-driven, not command-namespaced (verified in #50)"],
+  ['docs/adr/0006-adlc-cursor-integration.md', "ADR specific to the Cursor integration; bare form is Cursor's correct syntax"],
+  ['docs/opencode.md', 'OpenCode-specific planning/reference doc, not a Claude Code guidance surface'],
+  ['docs/opencode-integration-plan.md', 'OpenCode-specific planning doc, not a Claude Code guidance surface'],
+  ['docs/ticket-sync.md', 'uses "/adlc-ticket" as generic ADLC-lifecycle prose, not a Claude-Code-specific command recommendation (judged out of scope during #50\'s review)'],
 ];
-for (const docPath of extraDocPaths) {
-  if (existsSync(docPath)) {
-    guidanceFiles.push(docPath);
+function isExcludedDocPath(relPosixPath) {
+  return EXCLUDED_DOC_PATHS.some(([prefix]) => relPosixPath === prefix || relPosixPath.startsWith(prefix));
+}
+function collectMarkdownFiles(dirPath, out = []) {
+  for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+    const entryPath = join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      collectMarkdownFiles(entryPath, out);
+    } else if (entry.name.endsWith('.md')) {
+      out.push(entryPath);
+    }
+  }
+  return out;
+}
+for (const scanRoot of DOC_SCAN_ROOTS) {
+  const fullPath = join(repo, scanRoot);
+  if (!existsSync(fullPath)) continue;
+  const candidates = statSync(fullPath).isDirectory() ? collectMarkdownFiles(fullPath) : [fullPath];
+  for (const filePath of candidates) {
+    const relPosixPath = filePath.slice(repo.length + 1).split(sep).join('/');
+    if (isExcludedDocPath(relPosixPath)) continue;
+    guidanceFiles.push(filePath);
   }
 }
 for (const filePath of guidanceFiles) {

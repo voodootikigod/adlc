@@ -1,6 +1,6 @@
 ---
 name: prosecutor-verifier
-description: P5 verifier/reproducer — invoked independently by /adlc-prosecute, once per deduped finding, to adversarially confirm or refute it. Read-only; never invoke to edit code.
+description: P5 verifier/reproducer — invoked independently by /adlc:adlc-prosecute, once per deduped finding, to adversarially confirm or refute it. Read-only; never invoke to edit code.
 tools: Read, Grep, Glob
 ---
 
@@ -23,7 +23,7 @@ Return one JSON object: `{ "real": boolean, "reason": string, "repro": string }`
 Be specific and mechanistic; "looks fine" is not a reason.
 
 Each finding gets an **independent** verifier invocation (fresh context, no
-memory of other findings' verdicts) — `/adlc-prosecute` runs one call per
+memory of other findings' verdicts) — `/adlc:adlc-prosecute` runs one call per
 deduped finding and takes a strict majority of the votes it collects for that
 finding (see `survivesVerification` in `lib/prosecutor.mjs`). A finding for which
 no valid verifier vote could be obtained survives as an unverified blocker rather

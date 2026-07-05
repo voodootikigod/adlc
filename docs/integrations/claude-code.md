@@ -70,15 +70,15 @@ The `adlc` skill is a phase-routing flowchart: describe what you're doing ("shap
 this spec", "is this safe to merge") and it routes you to the right gate. It is
 how the model embraces the lifecycle in total.
 
-### The prosecutor subagent and `/adlc-prosecute`
+### The prosecutor subagent and `/adlc:adlc-prosecute`
 
 `prosecutor` is a hostile pre-merge (P5) reviewer: it runs `hollow-test` (are the
 tests load-bearing?), `behavior-diff` (is the behavior change visible?), and
 `review-calibration` (would the review catch a planted defect?) and returns an
 evidence-backed verdict. These are mechanical, deterministic-gate checks.
 
-`/adlc-prosecute` is the independent multi-lens adversarial loop, matching the
-OpenCode integration's `/adlc-prosecute` shape: it fans out five independent lens
+`/adlc:adlc-prosecute` is the independent multi-lens adversarial loop, matching the
+OpenCode integration's `/adlc:adlc-prosecute` shape: it fans out five independent lens
 subagents (`prosecutor-correctness`, `prosecutor-security`, `prosecutor-contract`,
 `prosecutor-diff`, `prosecutor-tests`) on the diff, dedupes findings across
 lenses by file + line range + title (keeping the highest severity), independently
@@ -88,7 +88,7 @@ finding survives only on a strict majority "real" vote — fail-closed to
 rounds surface no new confirmed findings. The pure dedupe/verify/convergence
 logic is unit-tested at `plugins/adlc-claude-code/lib/prosecutor.mjs`
 (`plugins/adlc-claude-code/lib/test/prosecutor.test.mjs`). The two mechanisms are
-complementary: `prosecutor` supplies mechanical evidence, `/adlc-prosecute`
+complementary: `prosecutor` supplies mechanical evidence, `/adlc:adlc-prosecute`
 supplies independent model judgment with cross-lens verification.
 
 ### Hooks (automatic)
@@ -231,7 +231,7 @@ recognizes `min-release-age`, not because anything was suppressed.
 | P2 Decompose | Strong | `coldstart`, `model-router`, `merge-forecast` |
 | P3 Rail | Strong | rails-guard PreToolUse hook + CI backstop |
 | P4 Build | Strong | flail-detection hook, `consensus-fix` |
-| P5 Prosecute | Strong | `/adlc-prosecute` runs the full multi-lens fan-out/dedupe/verify/converge loop (parity with OpenCode); `prosecutor` subagent runs complementary deterministic gates. Formal `adlc run p5` phase assertion is a harness-agnostic runner path (see below), not blocked on any one CLI. |
+| P5 Prosecute | Strong | `/adlc:adlc-prosecute` runs the full multi-lens fan-out/dedupe/verify/converge loop (parity with OpenCode); `prosecutor` subagent runs complementary deterministic gates. Formal `adlc run p5` phase assertion is a harness-agnostic runner path (see below), not blocked on any one CLI. |
 | P6 Integrate | Conditional | gate-manifest evidence surfaced for the human gate; strong when backed by valid P5 evidence. |
 | P7 Distill | Strong | `/adlc:adlc-distill` |
 | Maintenance | Strong | `/adlc:adlc-maintain` + CI cron |
@@ -270,10 +270,10 @@ Current gaps relative to the formal ADLC doctrine:
 1. **Recording formal `adlc run p5` phase assertion from the CC path is not yet
    wired up end-to-end (narrower than before issue #61).** The independent
    multi-lens loop itself — fan-out, dedupe, verifier refutation, loop-until-dry
-   — now runs natively on Claude Code via `/adlc-prosecute` and the
+   — now runs natively on Claude Code via `/adlc:adlc-prosecute` and the
    `prosecutor-{correctness,security,contract,diff,tests,verifier}` subagents,
    the same shape as the OpenCode integration. What remains unwired is the
-   *recording* step: `/adlc-prosecute`'s default evidence path is `adlc
+   *recording* step: `/adlc:adlc-prosecute`'s default evidence path is `adlc
    gate-manifest record prosecution --files <changed files>`, which carries
    `gate: "prosecution"` and does not by itself satisfy `adlc run p5`. Formal
    assertion requires `@adlc/prosecute`'s `type: "p5-complete"` provenance chain

@@ -1,6 +1,6 @@
 ---
 name: prosecutor-security
-description: P5 security lens — one of five independent prosecution subagents invoked by /adlc-prosecute. Hunts for auth/trust-boundary holes, injection, secrets, and unsafe data flow in a change diff. Read-only; never invoke to edit code.
+description: P5 security lens — one of five independent prosecution subagents invoked by /adlc:adlc-prosecute. Hunts for auth/trust-boundary holes, injection, secrets, and unsafe data flow in a change diff. Read-only; never invoke to edit code.
 tools: Read, Grep, Glob
 ---
 
