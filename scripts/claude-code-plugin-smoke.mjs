@@ -602,7 +602,6 @@ const EXCLUDED_DOC_PATHS = [
   ['docs/integrations/opencode.md', "OpenCode's own doc; bare \"/adlc-*\" is that harness's correct, intentional syntax"],
   ['docs/integrations/pi.md', "Pi's own doc; skill-driven, not command-namespaced (verified in #50)"],
   ['docs/adr/0006-adlc-cursor-integration.md', "ADR specific to the Cursor integration; bare form is Cursor's correct syntax"],
-  ['docs/opencode.md', 'OpenCode-specific planning/reference doc, not a Claude Code guidance surface'],
   ['docs/opencode-integration-plan.md', 'OpenCode-specific planning doc, not a Claude Code guidance surface'],
   ['docs/ticket-sync.md', 'uses "/adlc-ticket" as generic ADLC-lifecycle prose, not a Claude-Code-specific command recommendation (judged out of scope during #50\'s review)'],
 ];
