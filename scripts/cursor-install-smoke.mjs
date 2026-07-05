@@ -177,10 +177,14 @@ else {
   // AC7: the command must instruct recording the adversarial-review outcome so
   // the risk-tier stop-audit (decideAdversarialReviewNotice) has a satisfiable
   // record instead of nagging unconditionally.
-  if (!/gate-manifest record adversarial-review/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record adversarial-review` instruction');
-  else ok('adlc-prosecute.md instructs recording the adversarial-review gate');
-  if (!/gate-manifest record prosecution/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record prosecution` instruction');
-  else ok('adlc-prosecute.md instructs recording the prosecution gate');
+  // --ticket is load-bearing on both record forms (P5 round-1 finding): a
+  // ticketless adversarial-review entry satisfies the risk-tier stop-audit
+  // for ANY later ticket touching the same files, so the pinned assertion
+  // includes the flag — the bare pre-round-1 form must not silently return.
+  if (!/gate-manifest record adversarial-review --ticket/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record adversarial-review --ticket` instruction (ticket-scoped form required)');
+  else ok('adlc-prosecute.md instructs recording the adversarial-review gate, ticket-scoped');
+  if (!/gate-manifest record prosecution --ticket/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record prosecution --ticket` instruction (ticket-scoped form required)');
+  else ok('adlc-prosecute.md instructs recording the prosecution gate, ticket-scoped');
 }
 
 // ---- AC3: run the real enforcement unit tests (always-on proof) ----
