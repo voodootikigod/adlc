@@ -37,7 +37,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
           {STATUS_LABEL[integration.status]}
         </span>
       </div>
-      <TerminalCard title={`install — ${integration.name}`}>
+      <TerminalCard title={`install: ${integration.name}`}>
         <InstallLines lines={integration.install} />
       </TerminalCard>
       {note ? (

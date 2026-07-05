@@ -22,20 +22,20 @@ export const INTEGRATIONS = [
       'git clone https://github.com/voodootikigod/adlc && cd adlc',
       'node scripts/codex-install-smoke.mjs .',
     ],
-    note: 'There is no published-package fallback yet, and git-backed marketplace install is not yet supported — verify from a repo checkout.',
+    note: 'No published package yet, and git-backed marketplace install is not supported either, so work from a repo checkout.',
   },
   {
     slug: 'cursor',
     name: 'Cursor',
     status: 'source',
-    tagline: 'Hooks, rules, and commands scaffolded into .cursor/ — no plugin runtime needed.',
+    tagline: 'Hooks, rules, and commands scaffolded straight into .cursor/, no plugin runtime needed.',
     install: [
       'npm install -g @adlc/cli',
       'cd /path/to/adlc && npm install',
       'node /path/to/adlc/plugins/adlc-cursor/lib/scaffold-cli.mjs .',
       'node scripts/cursor-install-smoke.mjs .',
     ],
-    note: '@adlc/cursor-package is not yet on npm — scaffold from a repo checkout.',
+    note: '@adlc/cursor-package is not on npm yet, so scaffold from a repo checkout.',
   },
   {
     slug: 'opencode',
@@ -49,7 +49,7 @@ export const INTEGRATIONS = [
       'node /path/to/adlc/plugins/adlc-opencode/lib/scaffold-cli.mjs .   # first-time bootstrap if /adlc-init is not available yet',
       '/adlc-init                        # run in the OpenCode TUI, then restart OpenCode',
     ],
-    note: '@adlc/opencode-package is not yet on npm — install from source.',
+    note: '@adlc/opencode-package is not on npm yet, so install from source.',
   },
   {
     slug: 'pi',
@@ -60,7 +60,7 @@ export const INTEGRATIONS = [
       'git clone https://github.com/voodootikigod/adlc',
       'pi --extension plugins/adlc-pi/index.ts',
     ],
-    note: 'No formal install guide yet — pi.md is an architecture doc, not an install guide. The extension loads via `pi --extension plugins/adlc-pi/index.ts` from a repo checkout.',
+    note: 'No formal install guide yet; the integration doc covers architecture. The extension loads with `pi --extension plugins/adlc-pi/index.ts` from a repo checkout.',
   },
   {
     slug: 'antigravity',

@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 };
 
 const ROLLOUT = [
-  { phase: 'Pilot', detail: 'One team, full gates, dials conservative. Two weeks to first prosecuted merge.' },
+  { phase: 'Pilot', detail: 'One team, full gates, conservative dials. Two weeks to the first prosecuted merge.' },
   { phase: 'Rails', detail: 'Freeze org-wide conventions as rails: CI gates, protected specs, calibrated review.' },
   { phase: 'Org-wide', detail: 'Native integrations for every agent your teams use. Same gates everywhere.' },
 ] as const;
@@ -33,7 +33,7 @@ export default function EnterprisePage() {
           <GateBadge state="pass" />
           <GateBadge state="fail" />
           <GateBadge state="wish" />
-          <span>— artifacts your auditors can read without an engineer translating.</span>
+          <span>verdicts your auditors can read without an engineer translating.</span>
         </div>
       </MarketingSection>
 
@@ -58,7 +58,7 @@ export default function EnterprisePage() {
       <MarketingSection kicker="Talk to us" title="Doing agentic development right?">
         <p className="max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           If you&apos;re rolling agentic development out across an organization and want it
-          gated, auditable, and defensible — get in touch.
+          gated, auditable, and defensible, get in touch.
         </p>
         <a
           href="mailto:chris@voodootikigod.com?subject=ADLC%20enterprise"

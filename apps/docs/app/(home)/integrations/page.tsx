@@ -5,7 +5,7 @@ import { MarketingSection } from '@/components/marketing/section';
 import { STATUS_LABEL } from '@/components/marketing/integration-card';
 
 export const metadata: Metadata = {
-  title: 'Integrations — Native to Your Agent',
+  title: 'Integrations: Native to Your Agent',
   description:
     'Install the ADLC natively in Claude Code, Codex, Cursor, OpenCode, Pi, or Google Antigravity.',
 };

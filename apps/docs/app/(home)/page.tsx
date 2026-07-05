@@ -12,14 +12,14 @@ import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
 
 export const metadata: Metadata = {
   description:
-    'The SDLC defends against human failure modes. Your agents fail differently. ADLC is the lifecycle designed for how models actually fail — with machine-checkable gates at every phase.',
+    'The SDLC defends against human failure modes. Your agents fail differently. ADLC is a lifecycle built around how models actually fail, with a machine-checkable gate at every phase.',
 };
 
 const HERO_TOOLS = [
-  { name: 'spec-lint', gate: 'Is the spec executable?', output: '$ adlc spec-lint ticket.md\n✓ PASS — 0 ambiguities, acceptance criteria machine-checkable' },
-  { name: 'rails-guard', gate: 'Are the frozen tests untouched?', output: '$ adlc rails-guard --check\n✗ FAIL — test/auth.test.mjs modified after freeze' },
-  { name: 'hollow-test', gate: 'Do the tests assert anything?', output: '$ adlc hollow-test suite/\n✗ FAIL — 1 hollow test: asserts its own fixture' },
-  { name: 'prosecute', gate: 'Would review catch a planted defect?', output: '$ adlc prosecute HEAD\n✓ PASS — 3 probes, all caught by the suite' },
+  { name: 'spec-lint', gate: 'Is the spec executable?', output: '$ adlc spec-lint ticket.md\n✓ PASS: 0 ambiguities, acceptance criteria machine-checkable' },
+  { name: 'rails-guard', gate: 'Are the frozen tests untouched?', output: '$ adlc rails-guard --check\n✗ FAIL: test/auth.test.mjs modified after freeze' },
+  { name: 'hollow-test', gate: 'Do the tests assert anything?', output: '$ adlc hollow-test suite/\n✗ FAIL: 1 hollow test asserts its own fixture' },
+  { name: 'prosecute', gate: 'Would review catch a planted defect?', output: '$ adlc prosecute HEAD\n✓ PASS: 3 probes, all caught by the suite' },
 ];
 
 // Gate results stay glyph + word (spec §4); color only reinforces the verdict.
@@ -57,9 +57,9 @@ export default function HomePage() {
             <span style={{ color: '#4fb4d8' }}>Stop managing them like humans.</span>
           </h1>
           <p className="max-w-2xl text-lg leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
-            The Agentic Development Lifecycle rebuilds every phase, gate, and loop of software
-            delivery around how frontier models actually fail — with machine-checkable gates
-            and evidence you can audit.
+            The Agentic Development Lifecycle rebuilds software delivery around the ways
+            models actually fail. Every phase ends in a machine-checkable gate, and every
+            gate leaves evidence you can audit.
           </p>
           <div className="flex flex-wrap gap-4">
             <Link
@@ -87,7 +87,7 @@ export default function HomePage() {
       </Backdrop>
 
       {/* 2 — The problem */}
-      <MarketingSection kicker="The problem" title="Eight ways agents fail — none of them human">
+      <MarketingSection kicker="The problem" title="Eight ways agents fail. None of them human.">
         <div className="overflow-hidden rounded-lg border" style={{ borderColor: '#3f4044' }}>
           <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-4" style={{ background: '#3f4044' }}>
             {Object.entries(FAILURE_MODES).map(([id, fm]) => (
@@ -116,7 +116,7 @@ export default function HomePage() {
       <MarketingSection kicker="Gates, not vibes" title="Every claim gets checked by a machine">
         <div className="grid gap-4 md:grid-cols-2">
           {HERO_TOOLS.map((t) => (
-            <TerminalCard key={t.name} title={`${t.name} — ${t.gate}`}>
+            <TerminalCard key={t.name} title={`${t.name}: ${t.gate}`}>
               <TerminalOutput output={t.output} />
             </TerminalCard>
           ))}

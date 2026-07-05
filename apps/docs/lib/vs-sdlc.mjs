@@ -7,17 +7,17 @@ export const VS_SDLC_ROWS = [
   {
     dimension: 'The spec',
     sdlc: 'A requirements document humans interpret',
-    adlc: 'Tests are the spec — rails frozen before the build starts',
+    adlc: 'Tests are the spec, frozen as rails before the build starts',
   },
   {
     dimension: 'Review',
     sdlc: 'Peer code review: does a colleague approve?',
-    adlc: 'Prosecution: fresh contexts chartered to refute, findings verified by reproduction before reaching the builder',
+    adlc: 'Prosecution: fresh reviewers charged with breaking the change, and findings must reproduce before the builder sees them',
   },
   {
     dimension: 'Unit of trust',
     sdlc: 'The engineer who wrote it',
-    adlc: 'The gate evidence — machine-checkable artifacts per phase',
+    adlc: 'Gate evidence: machine-checkable artifacts at every phase',
   },
   {
     dimension: 'Audit trail',
@@ -27,6 +27,6 @@ export const VS_SDLC_ROWS = [
   {
     dimension: 'Cost over time',
     sdlc: 'Process overhead compounds',
-    adlc: 'Lifecycle gets cheaper — findings distill into permanent defenses',
+    adlc: 'Gets cheaper over time, because findings distill into permanent defenses',
   },
 ];

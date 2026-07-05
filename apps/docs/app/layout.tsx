@@ -11,11 +11,11 @@ const inter = Inter({
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: 'ADLC — The Agentic Development Lifecycle',
+    default: 'ADLC: The Agentic Development Lifecycle',
     template: '%s · ADLC',
   },
   description:
-    'The software lifecycle designed for how frontier models actually fail — machine-checkable gates, auditable evidence, native to your coding agent.',
+    'A software lifecycle built around how AI models actually fail: machine-checkable gates, auditable evidence, and native support for your coding agent.',
   openGraph: {
     siteName: 'ADLC',
     type: 'website',

@@ -7,7 +7,7 @@ import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
 import { ThreeDials } from '@/components/marketing/three-dials';
 
 export const metadata: Metadata = {
-  title: 'The Lifecycle — Phases & Gates',
+  title: 'The Lifecycle: Phases and Gates',
   description:
     'Eight phases, P0–P7, each ending in a machine-checkable gate. The ADLC pipeline from triage to distillation.',
 };
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 const PHASE_DETAIL: Record<string, string> = {
   P0: 'Triage the ticket: is this executable by an agent at all, and at what dial settings?',
   P1: 'Interrogate the spec until it is unambiguous. Human gate one.',
-  P2: 'Decompose into cold-startable units — an agent with zero context can pick each up.',
+  P2: 'Decompose into cold-startable units that an agent with zero context can pick up.',
   P3: 'Rail the work: write and freeze the tests that define done.',
   P4: 'Build inside the rails. Supervision tooling watches for flailing and drift.',
   P5: 'Prosecute the change: prove the tests are load-bearing, not hollow.',
@@ -67,8 +67,8 @@ export default function LifecyclePage() {
 
       <MarketingSection kicker="Calibration" title="Three dials, set per ticket">
         <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
-          Not every ticket deserves the same autonomy. ADLC sets three dials at triage —
-          and the gates enforce whatever you chose.
+          Not every ticket deserves the same autonomy. You set three dials at triage,
+          and the gates hold you to whatever you chose.
         </p>
         <ThreeDials />
         <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
