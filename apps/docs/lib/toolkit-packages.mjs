@@ -1,7 +1,7 @@
 export const TOOLKIT_GROUPS = [
   {
     group: 'Spec & ticket shaping',
-    packages: ['parallax', 'spec-lint', 'premortem', 'coldstart'],
+    packages: ['parallax', 'spec-lint', 'premortem', 'coldstart', 'ticket-sync'],
   },
   {
     group: 'Execution supervision & rails',
@@ -17,7 +17,7 @@ export const TOOLKIT_GROUPS = [
   },
   {
     group: 'Shared foundation',
-    packages: ['cli', 'core', 'ticket-sync'],
+    packages: ['cli', 'core'],
   },
 ];
 
