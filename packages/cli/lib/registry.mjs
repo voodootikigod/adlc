@@ -17,6 +17,7 @@ export const GROUPS = [
       { name: 'spec-lint', packageName: '@adlc/spec-lint', summary: 'Gate specs for acceptance criteria that lack a verification method.' },
       { name: 'premortem', packageName: '@adlc/premortem', summary: 'Stress-test an approved spec before implementation.' },
       { name: 'coldstart', packageName: '@adlc/coldstart', summary: 'Check whether tickets are executable without agent guesswork.' },
+      { name: 'ticket-prune', packageName: '@adlc/ticket-prune', summary: 'Report and archive stale, already-shipped tickets out of tickets.json.' },
     ],
   },
   {
@@ -26,6 +27,7 @@ export const GROUPS = [
       { name: 'model-router', packageName: '@adlc/model-router', summary: 'Assign tickets to frontier, direct, or ladder model strategies.' },
       { name: 'merge-forecast', packageName: '@adlc/merge-forecast', summary: 'Estimate fan-out width, dependency pressure, and merge backpressure.' },
       { name: 'rails-guard', packageName: '@adlc/rails-guard', summary: 'Enforce frozen rails, declared suppressions, and manifest recording.' },
+      { name: 'build-gate', packageName: '@adlc/build-gate', summary: 'Deny starting a high-risk ticket build in a degraded (context-rot) session unless audited.' },
       { name: 'flail-detector', packageName: '@adlc/flail-detector', summary: 'Detect repeated errors, scope violations, edit churn, and oversized logs.' },
       { name: 'consensus-fix', packageName: '@adlc/consensus-fix', summary: 'Fan out candidate fixes and select the gated consensus winner.' },
     ],

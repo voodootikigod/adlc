@@ -1,6 +1,6 @@
 ---
 name: prosecutor-contract
-description: P5 contract lens — one of five independent prosecution subagents invoked by /adlc-prosecute. Hunts for API/schema/type conformance drift against the declared contract in a change diff. Read-only; never invoke to edit code.
+description: P5 contract lens — one of five independent prosecution subagents invoked by /adlc:adlc-prosecute. Hunts for API/schema/type conformance drift against the declared contract in a change diff. Read-only; never invoke to edit code.
 tools: Read, Grep, Glob
 ---
 

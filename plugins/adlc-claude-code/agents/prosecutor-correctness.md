@@ -1,6 +1,6 @@
 ---
 name: prosecutor-correctness
-description: P5 correctness lens — one of five independent prosecution subagents invoked by /adlc-prosecute. Hunts for logic errors, broken invariants, and wrong results in a change diff. Read-only; never invoke to edit code.
+description: P5 correctness lens — one of five independent prosecution subagents invoked by /adlc:adlc-prosecute. Hunts for logic errors, broken invariants, and wrong results in a change diff. Read-only; never invoke to edit code.
 tools: Read, Grep, Glob
 ---
 

@@ -77,6 +77,7 @@ export function gitDiff(base?: string, cwd?: string): string;
 export function changedFiles(base?: string, cwd?: string): string[];
 export function isDirty(cwd?: string): boolean;
 export function isGitRepo(cwd?: string): boolean;
+export function repoRoot(cwd?: string): string;
 export function refExists(ref: string, cwd?: string): boolean;
 export function resolveBase(cwd?: string, candidates?: string[]): string | null;
 export function coChange(limit?: number, cwd?: string): {
@@ -116,6 +117,21 @@ export function resolveRevision(options?: {
   revision?: string | null;
   ignorePaths?: string[];
 }): string | null;
+
+export const RISK_TIER_PATTERNS: Readonly<Record<string, readonly string[]>>;
+export function matchRiskTier(path: string): { tier: string; pattern: string } | null;
+export function classifyRiskTier(paths?: readonly string[]): {
+  gated: boolean;
+  matches: Array<{ path: string; tier: string; pattern: string }>;
+};
+export function decideAdversarialReviewNotice(options?: {
+  changedPaths?: readonly string[];
+  manifestEntries?: readonly unknown[];
+  ticketId?: string | null;
+}): {
+  needed: boolean;
+  matches: Array<{ path: string; tier: string; pattern: string }>;
+};
 
 export namespace mutate {
   export const OPERATORS: ReadonlyArray<{

@@ -24,6 +24,8 @@ hollow-test --test-cmd "node --test test/" [options]
 | `--base <ref>` | `HEAD` | Git base ref for the diff (e.g. `HEAD~1`, `main`, a SHA). |
 | `--max <n>` | `20` | Maximum total mutants across all files. Budget is spread round-robin. |
 | `--timeout-ms <n>` | `120000` | Per-mutant test-command timeout in milliseconds. |
+| `--target <file>` | *(none)* | Mutate this file directly, independent of the diff (repeatable). Bypasses the test/spec path exclusion and mutates the whole file, not just diff-changed lines. |
+| `--rails <ticket-file>` | *(none)* | Path to a ticket JSON file; its declared `rails` globs are expanded against `git ls-files` and added as mutation targets (repeatable). |
 | `--json` | *(off)* | Machine-readable JSON output (for orchestrators). |
 | `--help` | *(off)* | Show usage and exit 0. |
 
@@ -31,9 +33,29 @@ hollow-test --test-cmd "node --test test/" [options]
 
 | Code | Meaning |
 |------|---------|
-| `0` | Gate passes — all mutants were killed (or no mutable lines in diff). |
-| `1` | Operational error — dirty working tree, not a git repo, bad arguments. |
+| `0` | Gate passes — all mutants were killed. |
+| `1` | Operational error — dirty working tree, not a git repo, bad arguments, or **nothing to mutate** (the diff contains no eligible source files and neither `--target` nor `--rails` was given). |
 | `2` | Gate fails — one or more mutants survived (hollow coverage). |
+
+### `--target` / `--rails`: the P3 rails-authoring / characterization-test case
+
+A diff that adds **only test files** — exactly the shape of a P3 rails-authoring ticket, or
+a characterization-test ticket that pins existing, unchanged (frozen-rail) behavior — has
+nothing in `filterTargetFiles()`'s diff scope to mutate. Rather than silently reporting a
+vacuous `0`/`0`/`0` pass (indistinguishable from a genuinely strong suite), `hollow-test`
+exits `1` in that case unless an explicit target is given:
+
+```bash
+# Diff is test-only (new rails for src/foo.mjs, which itself didn't change) — mutate
+# src/foo.mjs directly so the new rails are actually prosecuted:
+hollow-test --test-cmd "node --test test/foo-rails.test.mjs" --base main \
+  --target src/foo.mjs
+
+# Same, but read the target from a ticket's declared "rails" (single-ticket object or a
+# full tickets.json — rails merged across all tickets in the file):
+hollow-test --test-cmd "node --test test/foo-rails.test.mjs" --base main \
+  --rails .adlc/tickets.json
+```
 
 ## Examples
 
@@ -63,11 +85,13 @@ hollow-test --test-cmd "node --test test/*.test.mjs" --json
 
 ## What is mutated (and what is skipped)
 
-Files are **excluded** from mutation if their path contains `test` or `spec`,
-or if they have extensions `.md`, `.json`, `.yml`, `.yaml`, `.lock`, `.txt`,
-`.toml`, or `.snap`.
+Files from the diff are **excluded** from mutation if their path contains `test`
+or `spec`, or if they have extensions `.md`, `.json`, `.yml`, `.yaml`, `.lock`,
+`.txt`, `.toml`, or `.snap`. `--target`/`--rails` files bypass this exclusion —
+the caller is deliberately naming a mutation target.
 
-Within eligible files, only lines changed in the diff are targeted. Lines that
+Within diff-derived eligible files, only lines changed in the diff are
+targeted; `--target`/`--rails` files are mutated in their entirety. Lines that
 are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 
 ### Mutation operators (from `@adlc/core`)
@@ -79,6 +103,9 @@ are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 | `null-return` | `return expr` → `return null` |
 | `off-by-one` | literal `n` → `n+1` |
 | `logic-swap` | `&&` → `\|\|` |
+| `negate-guard-subclause` | `Array.isArray(x)` ↔ `!Array.isArray(x)`; `if (value)` → `if (!value)`; loose `v == null` ↔ `v != null` |
+| `array-literal-shrink` | `['id', 'title', 'scope']` → `['id', 'title']` |
+| `ternary-swap` | `cond ? a : b` → `cond ? b : a` |
 
 ## JSON output schema
 
@@ -117,10 +144,10 @@ are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 
 ## Core gaps
 
-None. All required functionality (`gitDiff`, `isDirty`, `isGitRepo`,
-`mutate.generateMutants`, `mutate.applyMutant`, `mutate.changedLinesFromDiff`,
-`parseArgs`, `pass`, `gateFail`, `opError`, `printJson`) is available in
-`@adlc/core`.
+None. All required functionality (`gitDiff`, `isDirty`, `isGitRepo`, `git`,
+`globMatch`, `mutate.generateMutants`, `mutate.applyMutant`,
+`mutate.changedLinesFromDiff`, `parseArgs`, `pass`, `gateFail`, `opError`,
+`printJson`) is available in `@adlc/core`.
 
 ## Implementation notes
 

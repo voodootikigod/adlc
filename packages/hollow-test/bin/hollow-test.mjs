@@ -3,10 +3,14 @@
 // Refuses to run on a dirty working tree. Mutates files in place and
 // restores them via finally blocks + SIGINT handler.
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, realpathSync } from 'node:fs';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
-import { gitDiff, isDirty, isGitRepo, resolveBase, mutate } from '@adlc/core';
-import { filterTargetFiles, buildFileTargets, readFileSafe } from '../lib/targets.mjs';
+import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
+import {
+  filterTargetFiles, buildFileTargets, readFileSafe,
+  readRailsFromTicketFile, expandRailsToFiles,
+} from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
 
@@ -18,6 +22,8 @@ const { values } = parseArgs({
     base:         { type: 'string' },
     max:          { type: 'string', default: '20' },
     'timeout-ms': { type: 'string', default: '120000' },
+    target:       { type: 'string', multiple: true },
+    rails:        { type: 'string', multiple: true },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -36,12 +42,21 @@ Options:
                         main/master; fails closed if none can be resolved)
   --max <n>             Max mutants across all files (default: 20)
   --timeout-ms <n>      Test command timeout in ms (default: 120000)
+  --target <file>       Mutate this file directly, independent of the diff
+                        (repeatable; bypasses the test/spec path exclusion).
+                        Use for characterization/rails-authoring tickets
+                        where the behavior file isn't in the diff. Must
+                        resolve inside the repository root; paths that
+                        escape it (e.g. via ../../) are refused.
+  --rails <ticket-file> Path to a ticket JSON file; its declared "rails"
+                        globs are expanded against tracked files and added
+                        as mutation targets (repeatable).
   --json                Machine-readable JSON output
   --help                Show this help
 
 Exit codes:
   0  All mutants killed (gate passes)
-  1  Operational error (dirty tree, not a git repo, bad args)
+  1  Operational error (dirty tree, not a git repo, bad args, nothing to mutate)
   2  One or more mutants survived (hollow coverage)
 `);
   process.exit(values.help ? 0 : 1);
@@ -64,6 +79,29 @@ if (!isGitRepo(cwd)) {
 
 if (isDirty(cwd)) {
   opError('commit or stash first — hollow-test mutates files in place and restores them');
+}
+
+// Repo root — NOT necessarily `cwd`. hollow-test may be invoked from any
+// subdirectory (e.g. a per-package script that `cd`s into packages/foo/
+// first), so anything that needs to reason about the repo as a whole
+// (rails-glob matching, --target containment) must resolve against this,
+// not `cwd`.
+let root;
+try {
+  root = repoRoot(cwd);
+} catch (err) {
+  opError(`could not resolve repository root: ${err.message}`);
+}
+
+// Symlink-free real path of the repo root, used by symlinkEscapesRoot() below.
+// `repoRoot()` itself already runs `git rev-parse --show-toplevel`, which
+// resolves symlinks in its own path components, so this should normally
+// equal `root` — but resolve it independently rather than assume that.
+let rootReal;
+try {
+  rootReal = realpathSync(root);
+} catch (err) {
+  opError(`could not resolve real path of repository root: ${err.message}`);
 }
 
 // ── base ref resolution ──────────────────────────────────────────────────────
@@ -108,8 +146,181 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const eligibleFiles = filterTargetFiles(changedLines);
-const fileTargets = buildFileTargets(eligibleFiles, changedLines, maxMutants, cwd);
+const diffEligibleFiles = filterTargetFiles(changedLines);
+
+// ── explicit --target / --rails resolution ──────────────────────────────────
+// These bypass EXCLUDE_PATH_RE deliberately: the caller is asking, by name,
+// to mutate a specific file that may not even appear in the diff (the P3
+// rails-authoring / characterization-test ticket shapes — issues #70, #41).
+
+// --target is resolved relative to `cwd` (ordinary CLI-arg convention — the
+// caller types it relative to wherever they invoked hollow-test from), but
+// normalized to a repo-root-relative path before use so it: (a) matches the
+// path convention every other file in this tool uses (diff output, rails
+// globs), and (b) can be containment-checked against the repo root. A path
+// like `--target ../../../etc/passwd` (or an absolute path outside the repo)
+// must be rejected rather than silently read/mutated — unlike --rails, whose
+// globs can only ever match `git ls-files` output and therefore can never
+// escape the repo, --target has no such structural guarantee on its own.
+function escapesRoot(relPath) {
+  return relPath === '' || relPath.split(sep)[0] === '..' || isAbsolute(relPath);
+}
+
+// Textual containment (escapesRoot() above) only catches `..`/absolute
+// escapes in the path AS WRITTEN. It does nothing about a symlink that lives
+// INSIDE the repo but points outside it: `path.resolve()`/`path.relative()`
+// are purely lexical and never dereference symlinks, so `--target
+// some-tracked-symlink/secret.mjs` resolves (textually) to a path under
+// `root` and sails through escapesRoot() — while every actual read/write
+// against that path (readFileSafe, the mutation loop's writeFileSync) is
+// done by the OS, which DOES follow the symlink, straight through to
+// wherever it points. Close that gap by re-resolving the real,
+// symlink-free path and re-checking containment against the repo's real
+// root. Returns the escaping real path (for the error message) or null if
+// containment holds or the path doesn't exist yet (the caller's later
+// "not found" check handles that case).
+function symlinkEscapesRoot(absolutePath) {
+  let real;
+  try {
+    real = realpathSync(absolutePath);
+  } catch {
+    return null;
+  }
+  const rel = relative(rootReal, real);
+  return escapesRoot(rel) ? real : null;
+}
+
+const explicitTargets = (values.target ?? []).map((t) => {
+  const abs = resolve(cwd, t);
+  const rel = relative(root, abs);
+  if (escapesRoot(rel)) {
+    opError(
+      `--target ${t} resolves outside the repository root (${root}) — refusing to read or mutate it`
+    );
+  }
+  const realEscape = symlinkEscapesRoot(abs);
+  if (realEscape !== null) {
+    opError(
+      `--target ${t} resolves inside the repository root textually but escapes it via a ` +
+      `symlink (real path: ${realEscape}) — refusing to read or mutate it`
+    );
+  }
+  return rel;
+});
+
+let railsGlobs = [];
+for (const ticketFile of (values.rails ?? [])) {
+  let globs;
+  try {
+    globs = readRailsFromTicketFile(resolve(cwd, ticketFile));
+  } catch (err) {
+    opError(`--rails ${ticketFile}: ${err.message}`);
+  }
+  if (globs.length === 0) {
+    opError(`--rails ${ticketFile}: no "rails" declared (expected a non-empty array of paths/globs)`);
+  }
+  railsGlobs.push(...globs);
+}
+
+let railsFiles = [];
+if (railsGlobs.length > 0) {
+  let allFiles;
+  try {
+    // --full-name: `git ls-files` normally returns paths relative to the
+    // CURRENT WORKING DIRECTORY it was invoked from (unlike `git diff`,
+    // which is always repo-root-relative). Rails globs are naturally
+    // authored repo-root-relative in ticket files, and every other path
+    // this tool works with (diff-derived changedLines/filterTargetFiles) is
+    // also repo-root-relative — so without --full-name, running hollow-test
+    // from any subdirectory makes rails globs silently fail to match.
+    allFiles = git(['ls-files', '--full-name'], { cwd }).split('\n').filter(Boolean);
+  } catch (err) {
+    opError(`git ls-files failed: ${err.message}`);
+  }
+  railsFiles = expandRailsToFiles(railsGlobs, allFiles);
+  if (railsFiles.length === 0) {
+    opError(`--rails declared globs matched no tracked files: ${railsGlobs.join(', ')}`);
+  }
+  // Defense in depth: git tracks symlinks as ordinary blobs, so a rails glob
+  // can legitimately match a checked-in symlink whose target points outside
+  // the repo — "globs can only ever match git ls-files output" (see the
+  // comment above --target's resolution) is a guarantee about which
+  // repo-relative PATHS can be named, not about what those paths dereference
+  // to on disk. Apply the same real-path containment check used for
+  // --target.
+  for (const f of railsFiles) {
+    const realEscape = symlinkEscapesRoot(resolve(root, f));
+    if (realEscape !== null) {
+      opError(
+        `--rails matched ${f}, which resolves inside the repository root textually but ` +
+        `escapes it via a symlink (real path: ${realEscape}) — refusing to read or mutate it`
+      );
+    }
+  }
+}
+
+const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
+
+// ── fail closed: every explicit --target/--rails file must be readable ─────
+// Unlike diff-derived files (which came from a real git diff and should
+// always exist), a --target path is caller-typed and a --rails glob can be
+// stale. Previously an unreadable explicit file only produced a console.warn
+// (nothing at all in --json mode) and was silently dropped — if it was the
+// only target, `results` ended up empty and the pre-existing empty-results
+// fallback exited 0 ("nothing mutable"), reporting a vacuous pass instead of
+// surfacing the real cause. Refuse to run instead.
+for (const f of explicitFiles) {
+  if (readFileSafe(resolve(root, f)) === null) {
+    opError(
+      `--target/--rails file not found or unreadable: ${f} — ` +
+      'a mistyped path, deleted/renamed file, or stale rails entry would ' +
+      'otherwise silently produce a vacuous 0-mutant pass'
+    );
+  }
+}
+
+// ── fail closed: a diff with nothing eligible and no explicit target/rails ──
+// is indistinguishable, in the OLD behavior, from a genuinely strong suite
+// (0 mutants, exit 0). A rails-only or test-only diff (P3 characterization /
+// rails-authoring tickets) must not silently satisfy this gate — refuse to
+// run instead, and point the caller at --target/--rails (issues #70, #41).
+
+if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
+  opError(
+    'nothing to mutate — the diff contains no eligible source files ' +
+    '(only test/spec/non-code files changed). Pass --target <file> or ' +
+    '--rails <ticket-file> to declare mutation target(s) explicitly ' +
+    '(e.g. for a rails-authoring or characterization-test ticket).'
+  );
+}
+
+// Explicit targets always mutate the WHOLE file, not just diff-changed
+// lines — drop any diff line-restriction for files the caller named directly.
+const effectiveChangedLines = { ...changedLines };
+for (const f of explicitFiles) delete effectiveChangedLines[f];
+
+const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
+// explicitFiles are passed as a priority list so the --max budget can't
+// starve them to quota 0 when diff-derived files alone would consume it —
+// see buildFileTargets() in lib/targets.mjs.
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, explicitFiles);
+
+// ── fail closed: --max too small to cover every explicit target ────────────
+// buildFileTargets() reserves 1 quota per explicit file when the budget
+// allows it. If --max is smaller than the number of explicit targets, some
+// of them still can't be guaranteed a slot — refuse to run rather than
+// silently mutating a subset and reporting a full pass.
+const starvedByBudget = fileTargets.filter(
+  (t) => explicitFiles.includes(t.file) && t.quota === 0
+);
+if (starvedByBudget.length > 0) {
+  opError(
+    `--max ${maxMutants} is too small to allocate mutation budget to explicit ` +
+    `target(s): ${starvedByBudget.map((t) => t.file).join(', ')} — increase ` +
+    `--max to at least ${explicitFiles.length}, or reduce the number of ` +
+    'explicit --target/--rails files'
+  );
+}
 
 // ── SIGINT handler: track which file is currently mutated so we can restore ──
 
@@ -186,6 +397,32 @@ for (const target of fileTargets) {
       original: mutant.original,
       mutated: mutant.mutated,
     });
+  }
+}
+
+// ── fail closed: an explicit target that generated zero mutants was never ──
+// actually verified. A file can be readable and have nonzero quota yet still
+// produce no mutants (comment-only, blank, re-export-only, or otherwise no
+// line matches any operator). Falling through to the generic
+// "results.length === 0 -> pass" shortcut below (or a legitimate pass driven
+// entirely by unrelated diff-derived mutants) would silently report a full
+// pass without ever exercising the file the caller explicitly asked to
+// prosecute — exactly the vacuous-pass class issues #70/#41/#35 exist to
+// close. Distinguish this from the legitimate "every mutant was killed" case
+// by checking per-file counts rather than results.length overall.
+if (explicitFiles.length > 0) {
+  const mutantCountByFile = {};
+  for (const r of results) {
+    mutantCountByFile[r.file] = (mutantCountByFile[r.file] ?? 0) + 1;
+  }
+  const starvedExplicitFiles = explicitFiles.filter((f) => !mutantCountByFile[f]);
+  if (starvedExplicitFiles.length > 0) {
+    opError(
+      'explicit --target/--rails file(s) produced zero mutants — ' +
+      `${starvedExplicitFiles.join(', ')}: no mutable line was found (comment-only, ` +
+      'blank, or a shape none of the mutation operators recognize). The requested ' +
+      'target was never actually verified; refusing to report a pass.'
+    );
   }
 }
 

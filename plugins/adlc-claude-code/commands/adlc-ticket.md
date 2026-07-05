@@ -103,7 +103,35 @@ ticket set while rails are frozen is a deliberate, audited action.
 
 Add `.adlc/tickets.lock` to the evidence-ignore set if it is not already covered.
 
-## 3. Check executability (coldstart gate)
+## 3. Warn (don't fail) if the repo's formatter/linter would reformat the write
+
+The atomic write in step 2 just changed `.adlc/tickets.json` on disk. If the
+repo's formatter or linter is not excluding `.adlc/` (see `/adlc:adlc-init` step 4),
+this file can go on to silently red the next PR — nothing in the authoring flow
+would otherwise have caught it before that point. Check now, non-blocking:
+
+1. Read `package.json` at the repo root. Look for a `scripts.check` entry, else
+   a `scripts.lint` entry (in that order). If neither exists, skip this step
+   silently — there is no quality script to run.
+2. Detect the package manager from the lockfile present: `pnpm-lock.yaml` →
+   `pnpm`, `yarn.lock` → `yarn`, `bun.lockb` → `bun`, else `npm`.
+3. Run that check **scoped to the ticket file** if the underlying tool supports
+   a path argument (e.g. the script wraps `biome check` → run
+   `<pm> exec biome check .adlc/tickets.json`; `eslint` → `<pm> exec eslint
+   .adlc/tickets.json`; `prettier --check` → `<pm> exec prettier --check
+   .adlc/tickets.json`). If you can't confidently scope it to one file, run the
+   full `<pm> run check` (or `lint`) script instead.
+4. If the check **fails**, do NOT undo the write or treat this as a command
+   failure. Warn the user plainly: the ticket was written successfully, but the
+   repo's formatter/linter flagged `.adlc/tickets.json` — once this ticket
+   declares `rails`, the file becomes a frozen trust root that can't be
+   reformatted on a branch without tripping `rails-guard`. Point them at
+   `/adlc:adlc-init` step 4 (or the manual fallback) to add a permanent `.adlc/`
+   exclusion so this doesn't recur on every future ticket write.
+5. If the check passes (or no script was found), continue silently — no need
+   to call this out in the summary beyond a one-line confirmation.
+
+## 4. Check executability (coldstart gate)
 
 `coldstart` is LLM-backed, and inside Claude Code **you are the model** — there
 are no API keys. Do NOT run the bare `adlc coldstart <id>` form; with no provider
@@ -123,8 +151,10 @@ configured it exits `1`. Use the prompt-only flow instead:
 call, `adlc coldstart <id> --json` returns the same verdict as exit `0`/`2`; but
 prompt-only is the default in-Claude path.)
 
-## 4. Summarize
+## 5. Summarize
 
-Report the new ticket id and title, what scope/rails it declared, and the
-coldstart verdict. If the ticket passed, point the user at the `adlc` discovery
-skill (or `/adlc-spec`-style spec gates) for the P1 interrogation phase next.
+Report the new ticket id and title, what scope/rails it declared, the
+formatter/linter check result from step 3 (pass, warned, or skipped/no script),
+and the coldstart verdict. If the ticket passed, point the user at the `adlc`
+discovery skill (or `/adlc-spec`-style spec gates) for the P1 interrogation
+phase next.

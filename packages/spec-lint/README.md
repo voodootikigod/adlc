@@ -34,7 +34,10 @@ spec-lint <spec.md> [--llm] [--json] [--prompt-only]
 
 A criterion is **VERIFIED** if its text contains any of:
 
-- A backtick command: `` `npm test` ``
+- A backtick span that looks like a command or assertion: `` `npm test` ``, `` `curl -s ... | jq .` ``,
+  `` `stripe-test --card=valid` ``, or a bare span immediately preceded by phrasing like
+  "Verified via" / "Run ". A bare backtick span with no command-like content (e.g. a filename
+  mentioned in passing, `` `vitest.config.ts` ``) is **not** sufficient on its own.
 - A path matching `*.test.<ext>` or `*.spec.<ext>`: `auth.spec.ts`
 - `verify:` or `verified by` followed by text
 - `test:` followed by text
@@ -48,7 +51,11 @@ Everything else is a **WISH**.
 Criteria are extracted from:
 
 1. **List items** (`-`, `*`, `1.`, `- [ ]`, `- [x]`) under any heading matching
-   `/acceptance|criteria|requirements|definition of done|success/i`
+   `/acceptance|criteria|requirements|definition of done|success/i` — this includes a literal
+   markdown heading (`## Acceptance Criteria`) or a bold-only pseudo-heading line
+   (`**Acceptance criteria**:`). A list item's wrapped continuation lines (indented, non-blank,
+   not themselves a new list marker/heading) are joined into the same logical criterion before
+   classification, matching how markdown renderers treat a single list item.
 2. **Standalone lines** starting with `MUST` or `SHOULD` (anywhere in the file)
 
 ## LLM demotion (--llm)

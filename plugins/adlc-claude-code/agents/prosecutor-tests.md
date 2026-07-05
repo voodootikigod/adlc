@@ -1,6 +1,6 @@
 ---
 name: prosecutor-tests
-description: P5 test-audit lens — one of five independent prosecution subagents invoked by /adlc-prosecute. Hunts for hollow/mock-only tests and missing coverage of the change's core behavior. Read-only; never invoke to edit code.
+description: P5 test-audit lens — one of five independent prosecution subagents invoked by /adlc:adlc-prosecute. Hunts for hollow/mock-only tests and missing coverage of the change's core behavior. Read-only; never invoke to edit code.
 tools: Read, Grep, Glob
 ---
 

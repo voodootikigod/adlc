@@ -14,9 +14,10 @@ through the stable `adlc <tool>` dispatcher.
 | P1 / C1-C2 | Is the spec testable and stress-tested? | [`adlc spec-lint`](./tools/spec-lint.md), [`adlc premortem`](./tools/premortem.md), [`adlc parallax`](./tools/parallax.md) |
 | P2 / C3 | Can an agent execute this ticket without guessing? | [`adlc coldstart`](./tools/coldstart.md), [`adlc merge-forecast`](./tools/merge-forecast.md), [`adlc model-router`](./tools/model-router.md) |
 | P3-P4 / C5-C6 | Are frozen rails protected, and is an agent flailing? | [`adlc rails-guard`](./tools/rails-guard.md), [`adlc flail-detector`](./tools/flail-detector.md) |
+| P3→P4 / C13 | Is it safe to START a high-risk ticket's build in THIS session? | [`adlc build-gate`](../packages/build-gate/README.md) |
 | P4 / C7 | Can diverse candidates resolve a hard failing test without breaking rails? | [`adlc consensus-fix`](./tools/consensus-fix.md) |
 | P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | `adlc review` (runs the model review — see [seam note](#p5-recorder-vs-reviewer-seam)), [`adlc prosecute`](./tools/prosecute.md) (records its evidence — it runs no model review itself), [`adlc behavior-diff`](./tools/behavior-diff.md), [`adlc gate-manifest`](./tools/gate-manifest.md), [`adlc hollow-test`](./tools/hollow-test.md) |
-| C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md), [`adlc skill-rot`](./tools/skill-rot.md) |
+| C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md), [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md) |
 | P7 | Which repeated findings should become deterministic defenses? | [`adlc lesson-foundry`](./tools/lesson-foundry.md), [`adlc rejection-mining`](./tools/rejection-mining.md) |
 | Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) |
 
@@ -43,8 +44,10 @@ statement.
    accepted spec has verifiable criteria and known divergences.
 3. Use [`adlc coldstart`](./tools/coldstart.md) to check ticket executability, then [`adlc merge-forecast`](./tools/merge-forecast.md) and [`adlc model-router`](./tools/model-router.md)
    to manage fan-out width and model assignment.
-4. During implementation, use [`adlc rails-guard`](./tools/rails-guard.md) for frozen-test and suppression controls and
-   [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn, or oversized logs.
+4. During implementation, use [`adlc rails-guard`](./tools/rails-guard.md) for frozen-test and suppression controls,
+   [`adlc build-gate`](../packages/build-gate/README.md) to deny starting a high-risk ticket's build in a degraded
+   session, and [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn,
+   or oversized logs.
 5. For hard failing tests, use [`adlc consensus-fix`](./tools/consensus-fix.md) to fan out independent candidate repairs
    and select a gated consensus winner.
 6. Before review, use [`adlc hollow-test`](./tools/hollow-test.md) to prove tests are load-bearing. Run the actual
@@ -61,7 +64,7 @@ statement.
 7. After review, use [`adlc lesson-foundry`](./tools/lesson-foundry.md) and [`adlc rejection-mining`](./tools/rejection-mining.md) to convert repeated review
    findings into deterministic lint checks, skills, or spec-gap templates.
 8. On a schedule or after model changes, use [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md),
-   [`adlc skill-rot`](./tools/skill-rot.md), and [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) to re-check assumptions that can decay over time.
+   [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md), and [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) to re-check assumptions that can decay over time.
 
 ## Evidence conventions
 
@@ -78,16 +81,45 @@ Run the review itself via `adlc review` (dispatcher passthrough to `npx
 adversarial-review`) or invoke `npx adversarial-review` directly. The adversarial-review
 loop emits NDJSON events (`loop_start` / `review` / `fix` /
 `loop_end`); `loop_end.exitReason === "clean"` is the SHIP signal. Record the verdict as
-first-class human-gate evidence:
+first-class human-gate evidence. `gate-manifest record` only accepts a `--data '{json}'`
+payload (there is no `--evidence 'k=v; k=v'` flag — node's strict-mode `parseArgs` throws
+`ERR_PARSE_ARGS_UNKNOWN_OPTION` on it), so shape the same fields as JSON:
 
     adlc gate-manifest record adversarial-review \
-      --evidence 'providers=<a,b>; iterations=<n>; verdict=<approve|needs-attention>; exitReason=<clean|no-progress|ceiling>; surviving=<n>; accepted=<n>'
+      --data '{"providers":"<a,b>","iterations":"<n>","verdict":"<approve|needs-attention>","exitReason":"<clean|no-progress|ceiling>","surviving":"<n>","accepted":"<n>"}'
 
 Capture: providers used, iterations, final verdict, exit reason, surviving findings, and
 accepted-with-justification findings. See
 [ADR-0008](./adr/0008-adversarial-review-coverage-map.md). (A helper to emit this record
 directly from the loop is a deferred `adversarial-review` follow-on — the loop-convergence
 summary.)
+
+**Scope the record to what it actually covered.** The mechanical trigger
+(`decideAdversarialReviewNotice` — [packages/core/lib/risk-tier.mjs](../packages/core/lib/risk-tier.mjs))
+treats a matching `adversarial-review` record as satisfying ANY later risk-gated change under the
+same ticket (or any change at all, if no ticket-scoped/unscoped record exists to disambiguate).
+Without evidence tying a record to the paths it reviewed, a single old or unrelated review can
+silently satisfy every subsequent risk-gated change forever. Pass `--files` naming the exact
+risk-gated paths the review covered so the record is scoped:
+
+    adlc gate-manifest record adversarial-review --ticket <id> \
+      --files 'secrets/api-key.pem,.github/workflows/deploy.yml' \
+      --data '{"providers":"<a,b>","verdict":"approve","exitReason":"clean"}'
+
+An entry with no `--files` recorded still counts under ticket-scoping alone (unchanged behavior,
+for compatibility with existing records); an entry that DOES record `--files` must overlap the
+currently gated paths to count.
+
+A risk-gated CI wiring of this exact recording step — path-filtered to the ADR-0007 risk
+tiers, running the full `--providers` quorum only on matching PRs and a cheap single-model
+pass otherwise — ships as a documented, not-force-installed template at
+[`ci/adversarial-review.yml`](./ci/adversarial-review.yml) (mirrors the
+[`ci/adlc-maintenance.yml`](./ci/adlc-maintenance.yml) "template, not force-installed"
+pattern). It also uses plain, non-loop review mode throughout — see the template's header
+comment for why `--loop` is deliberately avoided (not because of
+[voodootikigod/adversarial-review#9](https://github.com/voodootikigod/adversarial-review/issues/9),
+which is fixed as of the pinned version, but because `--loop` is incompatible with the
+`--base <ref>` branch-diff review this gate needs).
 
 The package READMEs define each tool's exact schema. Treat these docs as a routing map,
 then follow the linked README for command-specific details.

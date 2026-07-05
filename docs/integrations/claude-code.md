@@ -70,15 +70,16 @@ The `adlc` skill is a phase-routing flowchart: describe what you're doing ("shap
 this spec", "is this safe to merge") and it routes you to the right gate. It is
 how the model embraces the lifecycle in total.
 
-### The prosecutor subagent and `/adlc-prosecute`
+### The prosecutor subagent and `/adlc:adlc-prosecute`
 
 `prosecutor` is a hostile pre-merge (P5) reviewer: it runs `hollow-test` (are the
 tests load-bearing?), `behavior-diff` (is the behavior change visible?), and
 `review-calibration` (would the review catch a planted defect?) and returns an
 evidence-backed verdict. These are mechanical, deterministic-gate checks.
 
-`/adlc-prosecute` is the independent multi-lens adversarial loop, matching the
-OpenCode integration's `/adlc-prosecute` shape: it fans out five independent lens
+`/adlc:adlc-prosecute` is the independent multi-lens adversarial loop, matching the
+shape of OpenCode's own `adlc-prosecute` command (invoked bare there, since
+OpenCode has no plugin-namespace convention): it fans out five independent lens
 subagents (`prosecutor-correctness`, `prosecutor-security`, `prosecutor-contract`,
 `prosecutor-diff`, `prosecutor-tests`) on the diff, dedupes findings across
 lenses by file + line range + title (keeping the highest severity), independently
@@ -88,7 +89,7 @@ finding survives only on a strict majority "real" vote — fail-closed to
 rounds surface no new confirmed findings. The pure dedupe/verify/convergence
 logic is unit-tested at `plugins/adlc-claude-code/lib/prosecutor.mjs`
 (`plugins/adlc-claude-code/lib/test/prosecutor.test.mjs`). The two mechanisms are
-complementary: `prosecutor` supplies mechanical evidence, `/adlc-prosecute`
+complementary: `prosecutor` supplies mechanical evidence, `/adlc:adlc-prosecute`
 supplies independent model judgment with cross-lens verification.
 
 ### Hooks (automatic)
@@ -98,11 +99,23 @@ supplies independent model judgment with cross-lens verification.
 | preflight | SessionStart | Advisory: warns if the environment isn't ready for fan-out. |
 | flail-detection | PostToolUse | Advisory: flags repeated-error / churn loops over a bounded recent window of the transcript. |
 | gate-manifest audit | Stop | Advisory: warns only if the gate-evidence chain is broken. |
+| **adversarial-review trigger** | Stop | Advisory by default: diffs the working tree/branch against the [ADR-0007](../adr/0007-multimodel-adversarial-review.md) §1 risk-tier path patterns (auth/trust boundary, security controls/deny paths, secrets, data-loss ops, schema/migration, CI/CD/supply-chain) and warns if a risk-gated change has no `adversarial-review` gate-manifest record. This is the mechanical trigger [ADR-0005](../adr/0005-adversarial-design-review-gate.md)/[ADR-0007](../adr/0007-multimodel-adversarial-review.md) deferred pending operator-reliance proving insufficient — set `ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1` to make it block (Stop `decision: "block"`) instead of just warn. |
 | **rails-guard** | PreToolUse | **Enforcing**: denies structured edits (Edit/Write/MultiEdit) to frozen rail paths declared in tickets. Bash is not gated in-session (a shell can't be reliably parsed); Bash rail mutations are caught by the CI diff gate at commit time. |
+| **build-gate** | PreToolUse | **Enforcing** (issue #48): for the *active* ticket (`ADLC_TICKET` env var or `.adlc/current-ticket.json`), denies a structured edit when the ticket is high-risk (declared `risk: 'high'`, or derived from category/external-effect/identity-mutation/trust-root-touch signals) AND this session's context-fitness signal (transcript tool-call depth or byte size) is past threshold — i.e. a context-rot backstop on the riskiest builds. Bash is not gated in-session (same reason as rails-guard) and, unlike rails, there is no CI backstop for it — see Gaps below. |
 
 All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
-into a repo with no rails can never block editing.
+into a repo with no rails can never block editing. The build-gate similarly
+no-ops until an active ticket is resolved via `ADLC_TICKET`/
+`.adlc/current-ticket.json` — see [`docs/specs/build-gate-fitness.md`](../specs/build-gate-fitness.md)
+and [`@adlc/build-gate`](../../packages/build-gate/README.md).
+
+**Build-gate bypass.** `ADLC_BUILD_GATE_BYPASS=1` overrides a build-gate deny
+only if the override is durably recorded to the gate-manifest (an un-auditable
+bypass is refused) — the same posture as `ADLC_RAILS_BYPASS` above. The
+recommended response to a deny is to resume the ticket in a fresh session (or
+an isolated subagent) rather than overriding — the ticket is coldstart-certified
+to be safely resumable with no conversation context.
 
 **Rails must be tracked files.** The commit-time CI gate inspects the git diff,
 so it only protects files under version control. A gitignored/untracked rail
@@ -219,7 +232,7 @@ recognizes `min-release-age`, not because anything was suppressed.
 | P2 Decompose | Strong | `coldstart`, `model-router`, `merge-forecast` |
 | P3 Rail | Strong | rails-guard PreToolUse hook + CI backstop |
 | P4 Build | Strong | flail-detection hook, `consensus-fix` |
-| P5 Prosecute | Strong | `/adlc-prosecute` runs the full multi-lens fan-out/dedupe/verify/converge loop (parity with OpenCode); `prosecutor` subagent runs complementary deterministic gates. Formal `adlc run p5` phase assertion is a harness-agnostic runner path (see below), not blocked on any one CLI. |
+| P5 Prosecute | Strong | `/adlc:adlc-prosecute` runs the full multi-lens fan-out/dedupe/verify/converge loop (parity with OpenCode); `prosecutor` subagent runs complementary deterministic gates. Formal `adlc run p5` phase assertion is a harness-agnostic runner path (see below), not blocked on any one CLI. |
 | P6 Integrate | Conditional | gate-manifest evidence surfaced for the human gate; strong when backed by valid P5 evidence. |
 | P7 Distill | Strong | `/adlc:adlc-distill` |
 | Maintenance | Strong | `/adlc:adlc-maintain` + CI cron |
@@ -258,10 +271,10 @@ Current gaps relative to the formal ADLC doctrine:
 1. **Recording formal `adlc run p5` phase assertion from the CC path is not yet
    wired up end-to-end (narrower than before issue #61).** The independent
    multi-lens loop itself — fan-out, dedupe, verifier refutation, loop-until-dry
-   — now runs natively on Claude Code via `/adlc-prosecute` and the
+   — now runs natively on Claude Code via `/adlc:adlc-prosecute` and the
    `prosecutor-{correctness,security,contract,diff,tests,verifier}` subagents,
    the same shape as the OpenCode integration. What remains unwired is the
-   *recording* step: `/adlc-prosecute`'s default evidence path is `adlc
+   *recording* step: `/adlc:adlc-prosecute`'s default evidence path is `adlc
    gate-manifest record prosecution --files <changed files>`, which carries
    `gate: "prosecution"` and does not by itself satisfy `adlc run p5`. Formal
    assertion requires `@adlc/prosecute`'s `type: "p5-complete"` provenance chain
@@ -280,6 +293,29 @@ Current gaps relative to the formal ADLC doctrine:
 3. **Skill discovery depends on description matching.** The `adlc` phase router
    is one skill with a broad trigger set, but a poorly-phrased request may not
    match the description and will not route through the lifecycle.
+4. **The build-gate active-ticket pointer has no Bash or CI backstop
+   (intentional design, partially mitigated).** `.adlc/current-ticket.json`
+   is frozen as a rails trust root (same as `.adlc/tickets.json`) whenever
+   the ticket set declares ANY rails, so a structured edit that overwrites
+   the pointer is denied. But like rails-guard, build-gate's PreToolUse hook
+   only matches `Edit|Write|MultiEdit|NotebookEdit` — a Bash command can
+   still delete or overwrite `.adlc/current-ticket.json` mid-session (this is
+   never gated, trust-root or not), after which `resolveActiveTicketIdForBuildGate`
+   sees "no active ticket" and every subsequent structured edit is allowed
+   with **zero** risk evaluation and **zero** manifest entry (a strictly
+   weaker outcome than even `ADLC_BUILD_GATE_BYPASS=1`, which at least
+   requires a durably-recorded gate-manifest entry). A ticket that is
+   high-risk without declaring any `rails` (e.g. purely via `category:
+   'contract'`) gets no trust-root protection at all. Unlike the rails Bash
+   gap (#2 above), this one has **no CI diff backstop**:
+   `.adlc/current-ticket.json` is gitignored local session state (see
+   `.gitignore`), not a tracked file, so there is no diff for a commit-time
+   gate to inspect — and build-gate's degradation signal (transcript
+   tool-call depth) can't be reconstructed after the fact anyway. Mitigate by
+   treating `.adlc/current-ticket.json` deletion/edits as a reviewable signal
+   in your own audit tooling (e.g. session logging), and by not relying on
+   build-gate as the sole safeguard for a high-risk ticket — pair it with
+   human review at P5/P6.
 
 ## Boundary
 

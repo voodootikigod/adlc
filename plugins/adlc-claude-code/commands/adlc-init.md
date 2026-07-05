@@ -38,34 +38,74 @@ Run `adlc --version`.
 
 ## 3. Separate the contract from the runtime evidence in git
 
-The ticket file is the **source-of-truth contract** between tools and is worth
-committing. Everything else under `.adlc/` — append-only ledgers, gate evidence,
-the ticket lock, and hook runtime state — is a **runtime artifact** and should
-not be. If a `.gitignore` exists (create one if it does not), ensure it ignores
-all of `.adlc/` *except* the ticket file — add these two lines if absent:
+The ticket file and the P1 specs are the **source-of-truth contracts** between
+tools and are worth committing. Everything else under `.adlc/` — append-only
+ledgers, gate evidence, the ticket lock, and hook runtime state — is a
+**runtime artifact** and should not be. If a `.gitignore` exists (create one if
+it does not), ensure it ignores all of `.adlc/` *except* the ticket file and the
+specs directory — add these three lines if absent:
 
 ```
 .adlc/*
 !.adlc/tickets.json
+!.adlc/specs/
 ```
 
-This negation keeps `tickets.json` tracked while ignoring all current and future
-runtime files (ledgers, `lessons/`, `tickets.lock/`, …) without you having to
-enumerate them. If the repo already has a blanket `.adlc/`
-ignore (which would also hide `tickets.json`), point that out and ask the user
-whether they want to track `tickets.json` (recommended) before changing it.
+These negations keep `tickets.json` and `.adlc/specs/` (the P1 spec for every
+ticket — arguably the most important contract in the lifecycle) tracked while
+ignoring all current and future runtime files (ledgers, `lessons/`,
+`tickets.lock/`, …) without you having to enumerate them. If the repo already
+has a blanket `.adlc/` ignore (which would also hide `tickets.json` and
+`specs/`), point that out and ask the user whether they want to track them
+(recommended) before changing it. If `.gitignore` already has the older
+two-line form (`.adlc/*` + `!.adlc/tickets.json` but no `!.adlc/specs/`), add
+just the missing `!.adlc/specs/` line — don't touch anything else.
 
-## 4. Run a preflight check
+## 4. Exclude `.adlc/` from the repo's formatters and linters
+
+`.adlc/tickets.json` is machine-written (`JSON.stringify(…, null, 2)`,
+multi-line arrays). Once any ticket declares `rails`, this file becomes a
+**frozen trust root** — it cannot be reformatted on a ticket branch without
+tripping `rails-guard`. A repo formatter/linter that reformats it will silently
+break the next PR. Check for the following configs and, only for the ones that
+already exist in this repo, add an `.adlc/` exclusion:
+
+- **Biome** (`biome.json`): add an override that disables the formatter and
+  linter for the directory:
+  ```json
+  {
+    "overrides": [
+      { "include": [".adlc/**"], "formatter": { "enabled": false }, "linter": { "enabled": false } }
+    ]
+  }
+  ```
+  Merge this into any existing `overrides` array — do not replace it.
+- **Prettier** (`.prettierignore`): append a `.adlc/` line.
+- **ESLint**: for a JSON `.eslintrc`/`.eslintrc.json`, add `.adlc/**` to
+  `ignorePatterns`. For an `.eslintignore` file, append a `.adlc/` line. For a
+  flat `eslint.config.js`/`.mjs`/`.cjs`, do not attempt an automated text edit —
+  report it and tell the user to add `{ ignores: ['.adlc/**'] }` to the
+  exported config array themselves.
+
+Only touch a config file that is already present — never create a new
+formatter/linter config just to add this exclusion. If none of these configs
+exist, or the repo uses a formatter/linter not listed here (e.g. StandardJS,
+Ruff, golangci-lint), say so explicitly and document the manual fallback: add
+a `.adlc/` (or `.adlc/**`) ignore/exclude entry to that tool's config yourself
+before the first ticket with `rails` is committed.
+
+## 5. Run a preflight check
 
 Run `adlc preflight --json` and summarize the verdict. This surfaces missing
 tools, a dirty tree, or provider problems before any work fans out. A non-zero
 exit here is informational for setup — report it, do not treat it as a failure of
 this command.
 
-## 5. Summarize
+## 6. Summarize
 
 Report: toolkit version, whether `.adlc/tickets.json` was created or already
-present, what (if anything) was added to `.gitignore`, and the preflight verdict.
-Then point the user at `/adlc:adlc-ticket` to author their first ticket (P0), and note
-that the `adlc` discovery skill will route them through the rest of the
-lifecycle.
+present, what (if anything) was added to `.gitignore`, which formatter/linter
+configs (if any) were updated to exclude `.adlc/` and which need a manual entry,
+and the preflight verdict. Then point the user at `/adlc:adlc-ticket` to author
+their first ticket (P0), and note that the `adlc` discovery skill will route
+them through the rest of the lifecycle.

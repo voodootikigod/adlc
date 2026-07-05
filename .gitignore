@@ -1,5 +1,21 @@
+resume.md
+handoff.md
 node_modules/
 .worktrees/
+# .omo/ is otherwise-ignored scratch state, EXCEPT the three files below, which
+# are deliberately tracked, load-bearing fixture content, not disposable
+# handoff/resume artifacts: docs/examples/p5-passes.json (the bundled
+# prosecution example) references them as its provenance transcript/prompt/
+# inputs, and packages/prosecute/test/prosecute-cli.test.mjs exercises that
+# exact path. They must stay under .omo/evidence/ specifically (not moved
+# elsewhere, e.g. docs/examples/) because packages/prosecute/lib/run.mjs's
+# isEvidencePath() enforces that a referenced provenance file living inside
+# the worktree lives under .adlc/ or .omo/evidence/ ONLY — a trust-boundary
+# check preventing review "evidence" from pointing at an arbitrary,
+# potentially-spoofed file elsewhere in the repo. Do not delete these three
+# files as "cleanup" (see issue in PR #98's history) without also updating
+# docs/examples/p5-passes.json and re-running
+# packages/prosecute/test/prosecute-cli.test.mjs.
 .omo/*
 !.omo/evidence/
 .omo/evidence/*

@@ -3,7 +3,7 @@ description: Prosecute a change before merge (P5) — fan out five lens subagent
 argument-hint: [ticket-id] (defaults to the active ticket)
 ---
 
-# /adlc-prosecute — hostile pre-merge review (P5)
+# /adlc:adlc-prosecute — hostile pre-merge review (P5)
 
 Prosecute the change for the active ticket. Prerequisite: a clean G4 build (rails
 green, build + lint clean, no suppressions) for **$ARGUMENTS** (default to the

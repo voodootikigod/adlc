@@ -1,0 +1,356 @@
+# ADLC adversarial-review CI gate — copy into your repo as
+# .github/workflows/adversarial-review.yml
+#
+# Risk-gated per ADR-0007/ADR-0008: `adversarial-review` with a multi-provider
+# quorum is a real LLM cost, so it must not run unconditionally on every PR.
+# This template mirrors the docs/ci/adlc-maintenance.yml pattern — a
+# DOCUMENTED TEMPLATE, not force-installed into .github/workflows/ by this
+# repo. Copy it in deliberately and configure the ACTION REQUIRED items below.
+#
+# What it does:
+#   1. `changes` — diffs the PR against its base and classifies it into the
+#      ADR-0007 risk tiers (auth/trust boundary, security controls/deny paths,
+#      secrets, data-loss/destructive/irreversible ops, schema/migration,
+#      CI/CD/supply-chain config).
+#   2. `adversarial-review` (risk=high) — runs the full `--providers auto`
+#      quorum, fails on a `high`-or-above finding, posts the report as a PR
+#      comment, and records the verdict via `gate-manifest record
+#      adversarial-review` (P6 evidence — see docs/toolkit.md).
+#   3. `adversarial-review-cheap` (risk=low) — a single-model informational
+#      pass instead of the full quorum (cost control per ADR-0007's "everything
+#      else defaults to single cross-model review"). Advisory only: it never
+#      blocks the PR and does not record gate-manifest evidence.
+#
+# --loop vs plain mode (IMPORTANT): historically (voodootikigod/adversarial-
+# review#9, filed against v2.5.1), `--loop` silently dropped `--providers` —
+# a multi-provider request would quietly degrade to a single provider under
+# `--loop`, defeating the whole point of the ADR-0007 risk gate without any
+# visible error. That bug is FIXED as of adversarial-review 2.6.0 (the exact
+# version this template pins) — confirmed directly against the published
+# 2.6.0 package: its own `--help` states `--loop` "Composes with --providers:
+# each round is reviewed by every requested provider and gated by the quorum
+# verdict", and `src/loop.js`'s `runProviderRound` is reached whenever
+# `args.providers` is set. Issue #9 itself was closed upstream. Do NOT use
+# that closed issue as license to add `--loop` here, though — see the next
+# paragraph for the real, independent, still-true blocker.
+#
+# This template uses PLAIN (non-loop, one-shot) review mode for a *different*
+# and durable reason, unrelated to #9: `--loop` only supports reviewing the
+# working tree. Per 2.6.0's own `src/loop.js` (`runLoop`), it hard-exits
+# (exit 1) if invoked with `--base <ref>` or `--scope branch` — exactly the
+# branch-diff invocation (`--base "origin/$BASE_REF"`) this CI gate needs to
+# review a PR's committed changes against its base branch without checking
+# the PR out and mutating the working tree. Swapping to `--loop` here isn't
+# a flag change; it would mean re-architecting this gate around checking out
+# the PR branch and running the loop's local fix-and-reconverge flow instead
+# of a read-only diff review — a materially different design. Do not add
+# `--loop` to either job below without doing that redesign deliberately (and
+# re-confirming this scope/base restriction still holds in whatever version
+# you pin at the time).
+#
+# ACTION REQUIRED before enabling this workflow:
+#   1. `adversarial-review` lives in a separate repo
+#      (voodootikigod/adversarial-review) and is not vendored anywhere in
+#      *this* repo, so this template cannot ship a pre-audited version pin the
+#      way docs/ci/adlc-maintenance.yml pins `@adlc/cli` against an in-repo
+#      release process. `ADVERSARIAL_REVIEW_VERSION` below defaults to
+#      `2.6.0` (latest at the time this template was last reviewed) rather
+#      than a mutable `latest` tag, so a copy of this file does not silently
+#      start running a different, unaudited release on every PR. Re-audit and
+#      bump this pin deliberately when you adopt the template and periodically
+#      thereafter -- do not widen it back to `latest`.
+#   2. Provider credentials: `--providers auto` needs whichever provider
+#      API keys / local CLIs your `adversarial-review` install expects
+#      (e.g. Anthropic/OpenAI/Gemini API keys as repo secrets). Wire those
+#      into `env:` on the `adversarial-review` job before enabling it.
+#   3. The risk-tier PATTERN below is deliberately conservative/over-inclusive
+#      (a false positive just costs one extra full review; a false negative
+#      skips the gate entirely) — tune it to your own directory layout.
+
+name: Adversarial Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      risk: ${{ steps.classify.outputs.risk }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history so the base-ref diff is meaningful
+
+      - name: Classify PR against the ADR-0007 risk tiers
+        id: classify
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          set -e
+          git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          CHANGED="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+          echo "changed files:"
+          echo "$CHANGED"
+
+          # ADR-0007 risk tiers, one alternative per category. Path/name based
+          # (not content-based) — deliberately over-inclusive; see ACTION
+          # REQUIRED item 3 above.
+          #   auth / authn / authz / trust boundary
+          #   security controls / deny paths: rail guards, validators, sandboxes
+          #   secrets handling
+          #   data-loss / destructive / irreversible ops
+          #   schema / migration changes
+          #   CI/CD / supply-chain config
+          # No before/after separator boundary here (unlike the `guard`
+          # alternative below) -- a boundary requirement misses extremely
+          # common real-world auth filenames that don't have a separator
+          # directly adjacent to the literal "auth": an `oauth/` directory,
+          # a `reauth.ts` file, or CamelCase composites like
+          # `OAuthCallback.ts`, `GoogleAuth.java`, `isAuthenticated.ts`. A
+          # bare substring match is deliberately over-inclusive (see the
+          # ACTION REQUIRED note above): yes, this also matches unrelated
+          # "auth" substrings like `author`/`AUTHORS.md`/`src/author.ts` --
+          # that is an accepted false positive under the same "a false
+          # positive just costs one extra full review" tradeoff, not a gap
+          # to close.
+          PATTERN='auth'
+          PATTERN="$PATTERN|trust-boundary"
+          PATTERN="$PATTERN|(^|/|-|_)(rails?-)?guard"
+          PATTERN="$PATTERN|validat(e|or|ion)"
+          PATTERN="$PATTERN|sandbox"
+          PATTERN="$PATTERN|secret"
+          PATTERN="$PATTERN|destructive|irreversible|data-loss"
+          PATTERN="$PATTERN|migrat(e|ion)"
+          PATTERN="$PATTERN|schema"
+          PATTERN="$PATTERN|(^|/)\.github/workflows/"
+          PATTERN="$PATTERN|(^|/)package(-lock)?\.json$"
+          PATTERN="$PATTERN|(^|/)(Dockerfile|\.dockerignore)$"
+
+          if printf '%s\n' "$CHANGED" | grep -qiE "$PATTERN"; then
+            echo "risk=high" >> "$GITHUB_OUTPUT"
+            echo "Matched an ADR-0007 risk-tier path -- full multi-provider quorum required."
+          else
+            echo "risk=low" >> "$GITHUB_OUTPUT"
+            echo "No ADR-0007 risk-tier path matched -- cheap single-model pass only."
+          fi
+
+  adversarial-review:
+    needs: changes
+    if: needs.changes.outputs.risk == 'high'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # to post the report as a PR comment via `gh`
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Install the ADLC toolkit (for gate-manifest recording)
+        # Pinned to an exact, audited version for the same supply-chain reason
+        # as docs/ci/adlc-maintenance.yml. Bump deliberately after review.
+        run: npm install -g --ignore-scripts @adlc/cli@1.1.0
+
+      - name: Fetch base ref
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Run multi-provider adversarial review (plain, non-loop mode)
+        id: review
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+          # See ACTION REQUIRED item 1 above -- re-audit and bump deliberately.
+          ADVERSARIAL_REVIEW_VERSION: 2.6.0
+        run: |
+          set +e
+          # Plain (non-loop) review mode -- NOT --loop. Historically
+          # (voodootikigod/adversarial-review#9, now fixed as of the 2.6.0
+          # pin above) --loop silently dropped --providers; that is no
+          # longer why plain mode is used here. The real, still-true reason:
+          # --loop refuses to run against --base/branch-scope (2.6.0's
+          # src/loop.js exits 1 on --base or --scope branch -- it only
+          # supports --scope working-tree), and this job needs a read-only
+          # diff of origin/$BASE_REF against the PR head, not a working-tree
+          # fix-and-reconverge. This plain one-shot invocation is the mode
+          # that delivers the >=2 distinct-provider quorum ADR-0007 requires
+          # for this risk tier without mutating the checkout.
+          #
+          # --fail-on-empty is required here (not optional). Per the pinned
+          # v2.6.0 source (bin/cli.js / src/git-context.js): when the
+          # resolved diff is empty (fileCount==0 && diffBytes==0) the tool
+          # logs a warning and exits 0 -- an unconditional approve -- unless
+          # --fail-on-empty is passed, in which case it exits 1 instead. This
+          # job re-fetches origin/$BASE_REF and re-derives the diff itself
+          # (separately from the `changes` job above), so it can end up with
+          # a zero-diff scope even on a PR the `changes` job classified as
+          # risk=high -- e.g. main advances between the two jobs so the
+          # branch is now fully merged/no-op, or a rebased/duplicate PR
+          # re-triggers `synchronize`. Without this flag, that empty-diff
+          # case would exit 0 with no model ever consulted, and the "Record
+          # adversarial-review verdict" step below would permanently record
+          # a false "approve" P6 gate-manifest entry for a high-risk PR that
+          # was never actually reviewed.
+          npx --yes "adversarial-review@${ADVERSARIAL_REVIEW_VERSION}" \
+            --base "origin/$BASE_REF" \
+            --providers auto \
+            --fail-on high \
+            --fail-on-empty \
+            > review-report.txt 2>&1
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          cat review-report.txt
+          exit 0 # never fail this step -- the dedicated gate step decides pass/fail
+
+      - name: Post review report as a PR comment
+        if: always() && github.event.pull_request.number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "### Adversarial review (risk-tier: high, providers: auto)"
+            echo
+            echo '```'
+            head -c 60000 review-report.txt
+            echo
+            echo '```'
+          } > pr-comment-body.md
+          # Never let a comment-posting failure fail the job: PRs from forks
+          # get a read-only GITHUB_TOKEN regardless of the `pull-requests:
+          # write` permission declared above, so `gh pr comment` predictably
+          # fails there. That must not mask/override the actual review
+          # verdict (the dedicated gate step below decides pass/fail).
+          gh pr comment "$PR_NUMBER" --body-file pr-comment-body.md \
+            || echo "::warning::could not post PR comment (forked PR? read-only GITHUB_TOKEN?)"
+
+      - name: Record adversarial-review verdict (P6 gate evidence)
+        if: always()
+        run: |
+          set +e
+          # GitHub Actions runs `run:` blocks with `bash -eo pipefail` by
+          # default. Without `set +e` here, a review-report.txt that happens
+          # not to contain a literal claude/gpt/codex/gemini token makes the
+          # `grep` below exit 1, which -- under errexit+pipefail -- would abort
+          # this whole step *before* `gate-manifest record` runs, silently
+          # dropping the P6 evidence and skipping the actual gate decision in
+          # the next step. See the sibling review-invocation steps, which
+          # already `set +e` for the same reason.
+          rc="${{ steps.review.outputs.rc }}"
+          case "$rc" in
+            0) verdict=approve ;;
+            2) verdict=needs-attention ;;
+            *) verdict=error ;;
+          esac
+
+          # Best-effort provider extraction from the report text -- "auto" is
+          # what was requested, but adversarial-review resolves it internally
+          # to specific distinct-family providers. Fall back to "auto" if none
+          # of the known provider identifiers appear in the report text.
+          providers="$(grep -oiE '\b(claude|gpt|codex|gemini)\b' review-report.txt | sort -u | tr '\n' ',' | sed 's/,$//')"
+          [ -n "$providers" ] || providers=auto
+
+          if [ "$rc" = "2" ]; then surviving=unknown-see-report; else surviving=0; fi
+
+          # NOTE: this is the plain (non-loop) mode, so there is no
+          # loop_start/review/fix/loop_end NDJSON stream -- iterations is
+          # always 1 and there is no loop exitReason to report (see
+          # docs/toolkit.md's "Recording an adversarial-review verdict" note).
+          #
+          # gate-manifest record only supports --data '{json}' (not the
+          # --evidence 'k=v; k=v' string previously documented in
+          # docs/toolkit.md, which node's strict-mode parseArgs rejects with
+          # ERR_PARSE_ARGS_UNKNOWN_OPTION) -- see docs/toolkit.md for the
+          # corrected convention.
+          adlc gate-manifest record adversarial-review \
+            --data "{\"providers\":\"$providers\",\"iterations\":1,\"verdict\":\"$verdict\",\"exitReason\":\"n/a-non-loop-single-pass\",\"surviving\":\"$surviving\",\"accepted\":0}"
+
+      - name: Gate on adversarial-review verdict
+        run: |
+          rc="${{ steps.review.outputs.rc }}"
+          if [ "$rc" = "1" ]; then
+            echo "::error::adversarial-review could not complete (exit 1) -- provider/config error, see the report above."
+            exit 1
+          elif [ "$rc" = "2" ]; then
+            echo "::error::adversarial-review found a material finding at/above --fail-on high."
+            exit 1
+          elif [ "$rc" != "0" ]; then
+            echo "::error::adversarial-review exited $rc (unexpected)."
+            exit 1
+          fi
+          echo "adversarial-review: clean approve."
+
+  adversarial-review-cheap:
+    # Cost control per ADR-0007: "everything else defaults to single
+    # cross-model review (today's behavior)". Advisory only -- posts an
+    # informational comment, never blocks the PR, and does not record
+    # gate-manifest evidence (that ledger is reserved for the risk-gated
+    # quorum verdict above).
+    needs: changes
+    if: needs.changes.outputs.risk == 'low'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Fetch base ref
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Run single-model adversarial review (plain, non-loop mode)
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+          # See ACTION REQUIRED item 1 above -- re-audit and bump deliberately.
+          ADVERSARIAL_REVIEW_VERSION: 2.6.0
+        run: |
+          set +e
+          # No --providers here on purpose: today's default single
+          # cross-model behavior, not the multi-provider quorum. Still plain
+          # (non-loop) mode for the same --loop/--base incompatibility
+          # reason noted above (not the now-fixed #9 provider-drop bug).
+          npx --yes "adversarial-review@${ADVERSARIAL_REVIEW_VERSION}" \
+            --base "origin/$BASE_REF" \
+            --fail-on high \
+            > review-report.txt 2>&1
+          echo "(informational only -- this job's exit code is not the gate)"
+
+      - name: Post informational review as a PR comment
+        if: always() && github.event.pull_request.number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "### Adversarial review (risk-tier: low, single-model, informational only)"
+            echo
+            echo '```'
+            head -c 60000 review-report.txt
+            echo
+            echo '```'
+          } > pr-comment-body.md
+          # Never let a comment-posting failure fail the job: PRs from forks
+          # get a read-only GITHUB_TOKEN regardless of the `pull-requests:
+          # write` permission declared above, so `gh pr comment` predictably
+          # fails there. This is the last step in this job, so an unhandled
+          # failure here would fail the whole job -- directly contradicting
+          # this job's "advisory only, never blocks the PR" contract.
+          gh pr comment "$PR_NUMBER" --body-file pr-comment-body.md \
+            || echo "::warning::could not post PR comment (forked PR? read-only GITHUB_TOKEN?)"

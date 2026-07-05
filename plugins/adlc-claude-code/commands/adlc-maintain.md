@@ -1,5 +1,5 @@
 ---
-description: Run the decay-driven ADLC maintenance checks — stale skills, hot files to re-prosecute, and gate calibration (C10/C12).
+description: Run the decay-driven ADLC maintenance checks — stale skills, hot files to re-prosecute, stale tickets, and gate calibration (C10/C12).
 argument-hint: (no arguments)
 ---
 
@@ -39,7 +39,25 @@ adlc model-ratchet --dry-run --json
 - With a `--review-cmd`, model-ratchet can run a review over those files and
   append findings to `.adlc/findings.jsonl` (which later feeds `/adlc:adlc-distill`).
 
-## 3. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
+## 3. Ticket prune — stale ticket hygiene
+
+```
+adlc ticket-prune --json
+```
+
+- Dry-run by default (this call never writes): reports tickets that look
+  already shipped — either an explicit `status: done`-shaped field, or every
+  declared `scope` glob resolving to a file already tracked on `HEAD`. This is
+  a *plan*, not a gate — it does not fail on stale tickets (exit `0` either
+  way; exit `1` only on an operational error such as a missing/invalid
+  `.adlc/tickets.json`).
+- List the stale tickets it finds and recommend confirming them by hand, then
+  re-running with `adlc ticket-prune --write` to archive them into the
+  gitignored `.adlc/tickets.archive.json` (never deletes outright). Treat
+  `--write` as a human-confirmed action, not something this command should
+  run unattended — `.adlc/tickets.json` is a shared, hand-edited file.
+
+## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 
 Only run this if a gate suite exists at `.adlc/gate-suite.json`; without one the
 tool exits `1` (`Gate suite not found`) — note that calibration was skipped.
@@ -53,15 +71,17 @@ adlc gate-fuzzing --suite .adlc/gate-suite.json --prompt-only
   report it; the gate needs strengthening (this is the gate-fuzzing exit-`2`
   condition when run with a provider).
 
-## 4. Summarize
+## 5. Summarize
 
-Report: stale skills (if any), the top hot files to re-prosecute, gate-fuzzing
-result or why it was skipped, and the recommended next actions. Repeated findings
-surfaced here flow into `/adlc:adlc-distill`.
+Report: stale skills (if any), the top hot files to re-prosecute, any stale
+tickets found (and whether they were archived), gate-fuzzing result or why it
+was skipped, and the recommended next actions. Repeated findings surfaced here
+flow into `/adlc:adlc-distill`.
 
 ## Scheduling
 
-The deterministic checks here (`skill-rot`, `model-ratchet`) are keyless and run
-well on a cron — see the ready-to-use workflow at `docs/ci/adlc-maintenance.yml`.
+The deterministic checks here (`skill-rot`, `model-ratchet`, `ticket-prune`) are
+keyless and run well on a cron — see the ready-to-use workflow at
+`docs/ci/adlc-maintenance.yml`.
 The LLM-backed gate-fuzzing runs via a scheduled Claude routine (`/schedule`
 invoking `/adlc:adlc-maintain`), where Claude is the model and no API keys are needed.

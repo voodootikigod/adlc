@@ -10,6 +10,7 @@ import {
   writeFileSync,
   readFileSync,
   mkdirSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -181,6 +182,103 @@ function createWeakTestRepo(dir) {
   ].join('\n'));
 
   commitAll(dir, 'add divide');
+  return dir;
+}
+
+/**
+ * "rails-authoring" repo: commit 1 adds a real source file with NO tests;
+ * commit 2 adds ONLY a test file for it (nothing in src/ changes). This is
+ * exactly the diff shape of a P3 characterization/rails-authoring ticket
+ * (issues #70 / #41 / #35B) — `git diff HEAD~1` contains a single new test
+ * file and nothing mutable.
+ */
+function createRailsAuthoringRepo(dir) {
+  initRepo(dir);
+  mkdirSync(join(dir, 'src'));
+  mkdirSync(join(dir, 'test'));
+
+  writeFileSync(join(dir, 'src', 'guarded.mjs'), [
+    'export function isPositive(n) {',
+    '  return n > 0;',
+    '}',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'init: add guarded.mjs, no tests yet');
+
+  // Second commit adds ONLY a test file — src/guarded.mjs does not change.
+  writeFileSync(join(dir, 'test', 'guarded.test.mjs'), [
+    "import { describe, it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { isPositive } from '../src/guarded.mjs';",
+    "describe('isPositive', () => {",
+    "  it('detects positive, zero, and negative', () => {",
+    '    assert.strictEqual(isPositive(1), true);',
+    '    assert.strictEqual(isPositive(0), false);',
+    '    assert.strictEqual(isPositive(-1), false);',
+    '  });',
+    '});',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'add rails for guarded.mjs (test-only diff)');
+  return dir;
+}
+
+/**
+ * "overlap" repo: commit 1 adds a file containing an UNTESTED function;
+ * commit 2 adds a second, well-tested function to the SAME file without
+ * touching the untested function's lines. `git diff HEAD~1` therefore
+ * includes this file, but only the well-tested function's lines are
+ * diff-changed — the untested function sits outside the diff.
+ *
+ * This is the fixture for AC2 (docs/specs/hollow-test-target-mode.md):
+ * --target on a file that ALSO appears in the diff must drop the
+ * diff-line restriction and mutate the WHOLE file, reaching the untested
+ * function too — not just silently keep the diff-scoped subset.
+ */
+function createOverlapRepo(dir) {
+  initRepo(dir);
+  mkdirSync(join(dir, 'src'));
+  mkdirSync(join(dir, 'test'));
+
+  writeFileSync(join(dir, 'src', 'overlap.mjs'), [
+    'export function untested(n) {',
+    '  return n < 0;',
+    '}',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'init: add overlap.mjs with an untested function');
+
+  // Second commit adds `tested` to the SAME file — real coverage — without
+  // touching `untested`'s lines above (lines 1-3 are unchanged).
+  writeFileSync(join(dir, 'src', 'overlap.mjs'), [
+    'export function untested(n) {',
+    '  return n < 0;',
+    '}',
+    '',
+    'export function tested(n) {',
+    '  return n > 0;',
+    '}',
+    '',
+  ].join('\n'));
+
+  writeFileSync(join(dir, 'test', 'overlap.test.mjs'), [
+    "import { describe, it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { tested } from '../src/overlap.mjs';",
+    "describe('tested', () => {",
+    "  it('detects positive, zero, and negative', () => {",
+    '    assert.strictEqual(tested(1), true);',
+    '    assert.strictEqual(tested(0), false);',
+    '    assert.strictEqual(tested(-1), false);',
+    '  });',
+    '});',
+    '',
+  ].join('\n'));
+
+  commitAll(dir, 'add tested() with real coverage; untested() left unchanged');
   return dir;
 }
 
@@ -435,6 +533,679 @@ describe('CLI: default base fails closed', () => {
       result.stderr.includes('could not resolve a base ref'),
       `Expected 'could not resolve a base ref' in stderr, got: ${result.stderr}`
     );
+  });
+});
+
+// ── test-only diff: exit 1 with no --target/--rails (issues #70/#41/#35B) ───
+
+describe('CLI: test-only diff has nothing to mutate', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-railsonly-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (operational error), NOT 0, when the diff contains only test files', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '10'],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `Expected exit 1 (nothing to mutate), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /nothing to mutate|no eligible/i.test(result.stderr),
+      `Expected an explanatory "nothing to mutate" error, got stderr: ${result.stderr}`
+    );
+  });
+
+  it('does not silently report a vacuous 0/0/0 JSON pass on a test-only diff', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '10', '--json'],
+      dir
+    );
+    assert.notEqual(result.status, 0,
+      `A test-only diff must not exit 0 — this is the exact bug reported in #70: ` +
+      `stdout: ${result.stdout}`);
+  });
+});
+
+// ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
+
+describe('CLI: --target mutates a file outside the diff', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates src/guarded.mjs (unchanged in the diff) and the rails kill it', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/guarded.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0 (rails kill every mutant), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.summary.total > 0,
+      `Expected --target to generate mutants for a file outside the diff (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'),
+      'expected all mutants to target the explicitly given file');
+    assert.equal(parsed.summary.survived, 0, 'expected the real rails to kill every mutant');
+  });
+
+  it('restores src/guarded.mjs byte-identical after mutating a non-diff target', () => {
+    const srcPath = join(dir, 'src', 'guarded.mjs');
+    const before = readFileSync(srcPath, 'utf8');
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/guarded.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    // Verify --target actually ran (exit 0 + mutants generated) — otherwise
+    // this test would trivially pass if --target were reverted/unrecognized,
+    // since parseArgs would error out before ever touching the file.
+    assert.equal(result.status, 0,
+      `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.summary.total > 0,
+      `Expected --target to actually generate mutants for src/guarded.mjs (total=${parsed.summary.total}) — ` +
+      'restoration proof is meaningless if the file was never mutated');
+    const after = readFileSync(srcPath, 'utf8');
+    assert.equal(after, before, 'File content was not restored after --target mutation run');
+  });
+});
+
+// ── --target/--rails fail-closed edge cases (review round 1) ───────────────
+
+describe('CLI: --target with a nonexistent file fails closed', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-missing-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (NOT 0) with a clear error, not a vacuous 0/0/0 JSON pass', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/does_not_exist.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A missing --target file must fail closed, not silently pass: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /not found or unreadable/i.test(result.stderr),
+      `Expected an explanatory "not found or unreadable" error, got stderr: ${result.stderr}`
+    );
+    // Nothing resembling a passing JSON summary should reach stdout.
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed error, got stdout: ${result.stdout}`
+    );
+  });
+});
+
+describe('CLI: --target pointing at a file with no mutable content fails closed', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-decoy-'));
+    createRailsAuthoringRepo(dir);
+    // A decoy file with zero mutable lines — the critical-severity repro:
+    // an explicit target that exists and is readable but can never generate
+    // a mutant must not be treated the same as "all mutants killed".
+    writeFileSync(join(dir, 'src', 'decoy.mjs'), [
+      '// nothing to see here',
+      'export {}',
+      '',
+    ].join('\n'));
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'add decoy file'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (NOT 0) instead of falling through to the empty-results pass', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/decoy.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `An explicit target with zero mutable content must fail closed, not silently pass: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /produced zero mutants/i.test(result.stderr),
+      `Expected an explanatory "produced zero mutants" error, got stderr: ${result.stderr}`
+    );
+  });
+});
+
+describe('CLI: --max budget cannot silently starve an explicit --target', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-budget-'));
+    initRepo(dir);
+    mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'test'));
+
+    // Commit 1: the explicit target, with ZERO test coverage — never
+    // referenced by any test — committed FIRST so it is outside the diff.
+    writeFileSync(join(dir, 'src', 'never_in_diff.mjs'), [
+      'export function neverTested(n) {',
+      '  return n > 0;',
+      '}',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'init: untested file, outside the future diff');
+
+    // Commit 2: 3 diff-eligible files, each with a real, killing test —
+    // these show up in `git diff HEAD~1`.
+    for (const name of ['one', 'two', 'three']) {
+      writeFileSync(join(dir, 'src', `${name}.mjs`), [
+        `export function ${name}(n) {`,
+        '  return n > 0;',
+        '}',
+        '',
+      ].join('\n'));
+    }
+    writeFileSync(join(dir, 'test', 'diff.test.mjs'), [
+      "import { describe, it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { one } from '../src/one.mjs';",
+      "import { two } from '../src/two.mjs';",
+      "import { three } from '../src/three.mjs';",
+      "describe('diff files', () => {",
+      "  it('kill every mutant', () => {",
+      '    assert.strictEqual(one(1), true);',
+      '    assert.strictEqual(one(-1), false);',
+      '    assert.strictEqual(two(1), true);',
+      '    assert.strictEqual(two(-1), false);',
+      '    assert.strictEqual(three(1), true);',
+      '    assert.strictEqual(three(-1), false);',
+      '  });',
+      '});',
+      '',
+    ].join('\n'));
+
+    commitAll(dir, 'add three diff files (tested)');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reserves budget for the explicit target instead of silently zeroing its quota', () => {
+    // --max equals the number of diff-eligible files: under the old
+    // round-robin-by-index allocation, the explicit target got quota 0 and
+    // this printed a false "all mutants killed" 0-survivor pass.
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/never_in_diff.mjs',
+        '--max', '3',
+        '--json',
+      ],
+      dir
+    );
+    // This must land on exit 2 (a real mutation run found a survivor),
+    // NOT exit 1 (the pre-existing starvedByBudget operational-refusal
+    // guard in bin/hollow-test.mjs). A plain `notEqual(result.status, 0)`
+    // here would also be satisfied by status 1 if the priorityFiles
+    // reservation in buildFileTargets() were deleted entirely — starvedByBudget
+    // would still catch the resulting quota-0 explicit target and refuse to
+    // run, making this test pass for the wrong reason and leaving the
+    // reservation mechanism itself unpinned at the CLI level. Asserting
+    // status === 2 unconditionally (with the same fail-closed reasoning
+    // this PR (#70/#41/#35) exists to enforce) forces the reservation to
+    // have actually granted the target a mutable quota.
+    assert.equal(result.status, 2,
+      `Explicit target with zero test coverage must be mutated by a real run ` +
+      `(status 2), not silently pass (0) or be blocked by the operational ` +
+      `starved-budget guard (1): status=${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.ok(
+      parsed.mutants.some((m) => m.file === 'src/never_in_diff.mjs'),
+      `Expected the explicit target to actually be mutated: ${result.stdout}`
+    );
+  });
+});
+
+describe('CLI: --rails reads declared rail globs from a ticket file', () => {
+  let dir;
+  let ticketPath;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-flag-'));
+    createRailsAuthoringRepo(dir);
+    // Kept OUTSIDE the repo (a separate tmp dir) — the ticket file is metadata
+    // about the build, not a tracked repo file; writing it inside `dir` would
+    // dirty the working tree and trip the dirty-tree guard.
+    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-ticket-'));
+    ticketPath = join(ticketDir, 'ticket.json');
+    writeFileSync(ticketPath, JSON.stringify({
+      tickets: [{ id: 'T1', title: 'characterize guarded.mjs', rails: ['src/guarded.mjs'] }],
+    }));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('expands the ticket-declared rails glob to a mutation target and passes', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--rails', ticketPath,
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); });
+    assert.ok(parsed.summary.total > 0,
+      `Expected --rails to expand to a mutable file (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'));
+  });
+});
+
+// ── --rails glob matching must survive a non-root cwd (review round 5) ─────
+// `git ls-files` (unlike `git diff`) returns paths relative to the CURRENT
+// WORKING DIRECTORY it is invoked from, not the repo root. Rails globs are
+// authored repo-root-relative in ticket files, so running hollow-test from
+// a subdirectory (e.g. a per-package script that `cd`s into pkgs/sub first)
+// must still match — this pins the --full-name fix against regression.
+
+describe('CLI: --rails matches correctly when invoked from a non-root cwd', () => {
+  let dir;
+  let subDir;
+  let ticketPath;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-subdir-'));
+    initRepo(dir);
+    subDir = join(dir, 'pkgs', 'sub');
+    mkdirSync(join(subDir, 'src'), { recursive: true });
+    mkdirSync(join(subDir, 'test'), { recursive: true });
+
+    writeFileSync(join(subDir, 'src', 'guarded.mjs'), [
+      'export function isPositive(n) {',
+      '  return n > 0;',
+      '}',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'init: add nested guarded.mjs, no tests yet');
+
+    // Second commit adds ONLY a test file — src/guarded.mjs does not change,
+    // producing a test-only diff (the P3 rails-authoring shape).
+    writeFileSync(join(subDir, 'test', 'guarded.test.mjs'), [
+      "import { describe, it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { isPositive } from '../src/guarded.mjs';",
+      "describe('isPositive', () => {",
+      "  it('detects positive, zero, and negative', () => {",
+      '    assert.strictEqual(isPositive(1), true);',
+      '    assert.strictEqual(isPositive(0), false);',
+      '    assert.strictEqual(isPositive(-1), false);',
+      '  });',
+      '});',
+      '',
+    ].join('\n'));
+    commitAll(dir, 'add rails for nested guarded.mjs (test-only diff)');
+
+    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-ticket-subdir-'));
+    ticketPath = join(ticketDir, 'ticket.json');
+    writeFileSync(ticketPath, JSON.stringify({
+      tickets: [{
+        id: 'T1',
+        title: 'characterize nested guarded.mjs',
+        rails: ['pkgs/sub/src/guarded.mjs'],
+      }],
+    }));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('expands a repo-root-relative rails glob even when cwd is a subdirectory of the repo', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--rails', ticketPath,
+        '--max', '10',
+        '--json',
+      ],
+      subDir, // cwd is a subdirectory, NOT the repo root
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0 when hollow-test is invoked from a subdirectory, got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}\n` +
+      'A "declared globs matched no tracked files" error here means `git ls-files` ' +
+      'regressed back to returning cwd-relative paths.');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.summary.total > 0,
+      `Expected --rails to expand to a mutable file from a subdirectory cwd (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'pkgs/sub/src/guarded.mjs'),
+      `Expected mutant file paths to stay repo-root-relative: ${JSON.stringify(parsed.mutants)}`);
+    assert.equal(parsed.summary.survived, 0, 'expected the real rails to kill every mutant');
+  });
+});
+
+// ── --target must not escape the repository root (review round 5) ─────────
+// Unlike --rails (whose globs can only ever match `git ls-files` output, so
+// they structurally can't escape the repo), --target is a literal caller-typed
+// path with no containment check of its own. A path like `--target
+// ../../../etc/passwd` must be rejected, not resolved-and-read.
+
+describe('CLI: --target rejects a path that escapes the repo root', () => {
+  let dir;
+  let outsideFile;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-escape-'));
+    createRailsAuthoringRepo(dir);
+    // A file that exists on disk OUTSIDE the repo, so a successful escape
+    // would be readable (proving the containment check, not a coincidental
+    // ENOENT) if it were not rejected first.
+    outsideFile = join(dir, '..', 'outside-secret.mjs');
+    writeFileSync(outsideFile, 'export const secret = 1;\n');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outsideFile, { force: true });
+  });
+
+  it('exits 1 (NOT 0) for a relative --target that resolves above the repo root', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', '../outside-secret.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A --target path escaping the repo root must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /resolves outside the repository root/i.test(result.stderr),
+      `Expected an explanatory containment error, got stderr: ${result.stderr}`
+    );
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed containment error, got stdout: ${result.stdout}`
+    );
+  });
+
+  it('exits 1 (NOT 0) for an absolute --target path outside the repo', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', outsideFile,
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `An absolute --target path outside the repo must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /resolves outside the repository root/i.test(result.stderr),
+      `Expected an explanatory containment error, got stderr: ${result.stderr}`
+    );
+  });
+});
+
+// ── --target/--rails must not escape the repo root via a symlink ───────────
+// escapesRoot() (used by both --target and, as of this fix, --rails) is a
+// purely LEXICAL check — path.resolve()/path.relative() never dereference
+// symlinks. A symlink that lives INSIDE the repo but points OUTSIDE it
+// resolves (textually) to a path under the repo root and would sail through
+// that check, while every actual filesystem read/write against that path
+// (readFileSafe, the mutation loop's writeFileSync) is done by the OS, which
+// DOES follow the symlink straight through to wherever it points. This is a
+// real containment bypass (confirmed by direct reproduction against the
+// pre-fix binary: an unmutated outside file was read, mutated, tested, and
+// restored, entirely outside the "resolves inside the repository root"
+// guarantee promised by --help), not just a theoretical one. Pin the
+// symlink-aware real-path check for both entry points.
+
+describe('CLI: --target/--rails reject a symlink that escapes the repo root', () => {
+  let dir;
+  let outsideDir;
+  let outsideFile;
+  let ticketPath;
+
+  const outsideContent = [
+    'export function check(a, b) {',
+    '  if (a > b) {',
+    '    return true;',
+    '  }',
+    '  return false;',
+    '}',
+    '',
+  ].join('\n');
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-symlink-'));
+    createRailsAuthoringRepo(dir);
+
+    // A real, mutable file OUTSIDE the repo entirely (a separate temp dir,
+    // not just above `dir`) — content chosen so a successful escape would
+    // actually generate and apply mutants, proving read+mutate rather than a
+    // coincidental ENOENT or a comment-only false negative.
+    outsideDir = mkdtempSync(join(tmpdir(), 'hollow-outside-'));
+    outsideFile = join(outsideDir, 'secret.mjs');
+    writeFileSync(outsideFile, outsideContent);
+
+    // A symlink INSIDE the repo pointing at the outside directory — the
+    // vector for --target, which resolves an arbitrary caller-typed path on
+    // the filesystem directly (`escape-link/secret.mjs` walks through the
+    // symlinked directory to the file beyond it). It must be committed (not
+    // merely present) — hollow-test refuses to run on a dirty tree, so an
+    // untracked symlink alone would fail via the dirty-tree guard before
+    // ever reaching the containment check this test targets.
+    symlinkSync(outsideDir, join(dir, 'escape-link'));
+
+    // A second symlink, this one a direct file->file link tracked at its OWN
+    // path — the vector for --rails: `git ls-files` lists a tracked symlink
+    // as a single leaf entry (it does not traverse "through" a symlink the
+    // way a real directory would), so a rails glob can only ever match the
+    // symlink's own tracked name, never a path "inside" it. Naming that
+    // tracked symlink directly is the realistic rails-side escape.
+    symlinkSync(outsideFile, join(dir, 'escape-link-file.mjs'));
+    commitAll(dir, 'add symlinks pointing outside the repo');
+
+    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-symlink-ticket-'));
+    ticketPath = join(ticketDir, 'ticket.json');
+    writeFileSync(ticketPath, JSON.stringify({
+      tickets: [{
+        id: 'T1',
+        title: 'symlink escape via rails',
+        rails: ['escape-link-file.mjs'],
+      }],
+    }));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('exits 1 (NOT 0) for a --target path through a symlink that escapes the repo root', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'escape-link/secret.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A --target path through a symlink escaping the repo root must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /escapes it via a symlink/i.test(result.stderr),
+      `Expected a symlink-aware containment error, got stderr: ${result.stderr}`
+    );
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed containment error, got stdout: ${result.stdout}`
+    );
+    // The outside file must be untouched — no mutation was ever applied to it.
+    assert.equal(
+      readFileSync(outsideFile, 'utf8'),
+      outsideContent,
+      'The file outside the repo must not have been read or mutated'
+    );
+  });
+
+  it('exits 1 (NOT 0) for a --rails glob matching a symlink that escapes the repo root', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--rails', ticketPath,
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 1,
+      `A --rails glob matching a symlink escaping the repo root must fail closed: ` +
+      `status=${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.ok(
+      /escapes it via a symlink/i.test(result.stderr),
+      `Expected a symlink-aware containment error, got stderr: ${result.stderr}`
+    );
+    assert.ok(
+      !/"summary"/.test(result.stdout),
+      `Expected no JSON summary on a fail-closed containment error, got stdout: ${result.stdout}`
+    );
+    assert.equal(
+      readFileSync(outsideFile, 'utf8'),
+      outsideContent,
+      'The file outside the repo must not have been read or mutated'
+    );
+  });
+});
+
+// ── --target overrides diff-line restriction on an overlapping file (AC2) ──
+// docs/specs/hollow-test-target-mode.md AC2 documents that --target mutates
+// the whole file "even if the file also happens to appear in the diff" —
+// implemented by `delete effectiveChangedLines[f]` in hollow-test.mjs. No
+// prior test exercised the overlap case (a file that is both diff-eligible
+// AND passed via --target); this pins that behavior against regression.
+
+describe('CLI: --target on a file that also appears in the diff mutates the whole file', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-target-overlap-'));
+    createOverlapRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('diff-only run (no --target): untested() sits outside the diff-changed lines and is never mutated', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '10', '--json'],
+      dir
+    );
+    assert.equal(result.status, 0,
+      `Expected exit 0 (only diff-changed, well-tested tested() lines mutated), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); });
+    assert.ok(parsed.summary.total > 0, 'Expected the diff-scoped run to still generate some mutants');
+    assert.ok(
+      parsed.mutants.every((m) => m.line > 3),
+      `Expected diff-scoped mutants to stay off untested()'s lines (1-3): ${JSON.stringify(parsed.mutants)}`
+    );
+  });
+
+  it('--target on the same file drops the diff-line restriction and reaches untested(), producing a survivor', () => {
+    const result = runCli(
+      [
+        '--test-cmd', 'node --test test/*.test.mjs',
+        '--base', 'HEAD~1',
+        '--target', 'src/overlap.mjs',
+        '--max', '10',
+        '--json',
+      ],
+      dir
+    );
+    assert.equal(result.status, 2,
+      `Expected exit 2 (--target's whole-file mutation reaches untested() outside the diff), got ${result.status}\n` +
+      `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); });
+    assert.ok(
+      parsed.mutants.some((m) => m.line <= 3),
+      `Expected --target to override the diff-line restriction and mutate untested()'s lines (1-3): ${JSON.stringify(parsed.mutants)}`
+    );
+    assert.ok(parsed.summary.survived > 0, 'Expected the untested() mutant to survive uncaught');
   });
 });
 

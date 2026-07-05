@@ -117,6 +117,138 @@ describe('parseCriteria', () => {
     assert.equal(criteria[0].line, 3);
     assert.equal(criteria[1].line, 4);
   });
+
+  // -------------------------------------------------------------------------
+  // #71 — bold-only pseudo-heading section detection
+  // -------------------------------------------------------------------------
+
+  it('recognises a bold-only pseudo-heading as a criteria section (#71)', () => {
+    const md = `### Ticket 1\n\n**Acceptance criteria**:\n- AC1: Foo returns true.\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: Foo returns true.');
+  });
+
+  it('recognises a bold-only pseudo-heading with no trailing colon', () => {
+    const md = `**Requirements**\n- Req A\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'Req A');
+  });
+
+  it('does not treat bold text embedded mid-sentence as a pseudo-heading', () => {
+    const md = `## Background\nThis paragraph mentions **acceptance criteria** inline, not as a heading.\n- ignored item\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 0);
+  });
+
+  it('turns a bold pseudo-heading section off when a non-matching bold pseudo-heading follows', () => {
+    const md = `**Acceptance criteria**:\n- included\n**Background**:\n- excluded\n`;
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'included');
+  });
+
+  it('does not treat a prose line with two separate bold spans as a pseudo-heading (review round 3)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '**Login** endpoint must return **401**',
+      '- AC1: Foo works',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: Foo works');
+  });
+
+  it('does not treat a prose line with two adjacent bold spans as a pseudo-heading (review round 3)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '**Status:** **Done**',
+      '- AC1: Foo works',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: Foo works');
+  });
+
+  // -------------------------------------------------------------------------
+  // #71 — wrapped multi-line list-item continuation
+  // -------------------------------------------------------------------------
+
+  it('joins a wrapped bullet continuation line into one logical criterion (#71)', () => {
+    const md = [
+      '### Ticket',
+      '',
+      '**Acceptance criteria**:',
+      '- AC1: Foo returns true when bar is set.',
+      '  Verified via `node --test foo.test.js`.',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.match(criteria[0].text, /Verified via `node --test foo\.test\.js`/);
+  });
+
+  it('stops continuation consumption at the next list item, a blank line, or a heading', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '- AC1: first',
+      '  continued text for first',
+      '- AC2: second',
+      '',
+      'not a criterion',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 2);
+    assert.equal(criteria[0].text, 'AC1: first continued text for first');
+    assert.equal(criteria[1].text, 'AC2: second');
+  });
+
+  it('joins multiple consecutive continuation lines', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '- AC1: first line',
+      '  second physical line',
+      '  third physical line',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].text, 'AC1: first line second physical line third physical line');
+  });
+
+  it('does not absorb an indented standalone MUST/SHOULD line into the preceding bullet (review round 1)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '- AC1: Foo returns true. Verified via `foo.test.js`.',
+      '  MUST also handle empty input correctly',
+      '- AC2: bar',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 3);
+    assert.equal(criteria[0].text, 'AC1: Foo returns true. Verified via `foo.test.js`.');
+    assert.equal(criteria[1].text, 'MUST also handle empty input correctly');
+    assert.equal(criteria[1].source, 'must-should');
+    assert.equal(criteria[2].text, 'AC2: bar');
+
+    const classified = classifyAll(criteria);
+    assert.equal(classified[1].status, 'WISH');
+  });
+
+  it('absorbs an indented bold-only aside inside a bullet body instead of treating it as a pseudo-heading (review round 2)', () => {
+    const md = [
+      '## Acceptance Criteria',
+      '',
+      '- AC1: Foo works. Verified via `npm test`.',
+      '  **Note**',
+      '- AC2: Bar must not crash on null input',
+    ].join('\n');
+    const criteria = parseCriteria(md);
+    assert.equal(criteria.length, 2);
+    assert.equal(criteria[0].text, 'AC1: Foo works. Verified via `npm test`. **Note**');
+    assert.equal(criteria[1].text, 'AC2: Bar must not crash on null input');
+
+    const classified = classifyAll(criteria);
+    assert.equal(classified[1].status, 'WISH');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -175,6 +307,177 @@ describe('classifyCriterion', () => {
   it('WISH: vague description only', () => {
     const r = classifyCriterion('System should be reliable');
     assert.ok(!r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // #45 — vacuous / unrelated backtick spans must not count as verification
+  // -------------------------------------------------------------------------
+
+  it('WISH: an unrelated backtick filename is not a verification method (#45)', () => {
+    const r = classifyCriterion('Config schema matches: see `vitest.config.ts` for reference');
+    assert.ok(!r.verified);
+    assert.match(r.reason, /no verification/);
+  });
+
+  it('VERIFIED: backtick command with a command word survives the tightened check', () => {
+    const r = classifyCriterion('Auth works: `run tests`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: backtick containing flags is recognised as a command', () => {
+    const r = classifyCriterion('The user can pay: `stripe-test --card=valid`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: backtick preceded by "Verified via" phrasing counts even without a command word', () => {
+    const r = classifyCriterion('Runs cleanly. Verified via `foo123.bin`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: a continuation-joined criterion finds the command on its wrapped line (#45/#71)', () => {
+    const r = classifyCriterion(
+      'AC1: Foo returns true when bar is set. Verified via `node --test foo.test.js`.'
+    );
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round 1 — every backtick span must be inspected, not just the first
+  // -------------------------------------------------------------------------
+
+  it('VERIFIED: a genuine command is found even when an incidental filename backtick comes first', () => {
+    const r = classifyCriterion('See `vitest.config.ts` then run `npm test`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: a genuine command after a bare filename in the same sentence', () => {
+    const r = classifyCriterion('Uses config in `package.json`; validated by running `npm test`.');
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round 1 — COMMAND_WORD_RE must not fire on command-like substrings
+  // that are really just filename/path segments
+  // -------------------------------------------------------------------------
+
+  it('WISH: a bare filename containing "ci" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('Deployment config matches expectations: see `ci-config.yaml` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare filename containing "build" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('see `build-output.txt` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare filename containing "docker" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('see `docker-data.json` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare filename containing "go" as a kebab-case segment is not a command', () => {
+    const r = classifyCriterion('see `app-go-live.json` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a bare path containing "run" as a path segment is not a command', () => {
+    const r = classifyCriterion('see `/var/log/run` for reference');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: a real hyphenated command (docker-compose) is still recognised', () => {
+    const r = classifyCriterion('Deploys correctly: `docker-compose up` succeeds');
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round 1 — PRECEDING_PHRASE_RE's "run" alternative needs a left \b
+  // -------------------------------------------------------------------------
+
+  it('WISH: a word merely ending in "run" (overrun) does not count as the "run" phrase', () => {
+    const r = classifyCriterion('The buffer overrun `b.txt` was noted');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: standalone "Run" immediately before a backtick still counts', () => {
+    const r = classifyCriterion('Run `npm test` to verify');
+    assert.ok(r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // review round — PATH_LIKE_RE must not swallow real script-path commands
+  // that happen to carry a file extension (e.g. `./deploy.sh`). Only a path
+  // with NO extension (e.g. `/var/log/run`) should be treated as file-like.
+  // -------------------------------------------------------------------------
+
+  it('VERIFIED: a relative script path with an extension is a genuine command', () => {
+    const r = classifyCriterion('Deploys via `./deploy.sh` script');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: "Execute" plus a relative script path is a genuine command', () => {
+    const r = classifyCriterion('Execute `./deploy.sh` to confirm success');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: a parent-relative script path is a genuine command', () => {
+    const r = classifyCriterion('Confirmed by `../scripts/verify.sh`');
+    assert.ok(r.verified);
+  });
+
+  it('VERIFIED: an absolute script path is a genuine command', () => {
+    const r = classifyCriterion('Confirmed by `/opt/tools/verify.sh` output');
+    assert.ok(r.verified);
+  });
+
+  it('WISH: an absolute path with no extension is still file-like', () => {
+    const r = classifyCriterion('see `/var/log/run` for reference');
+    assert.ok(!r.verified);
+  });
+
+  // -------------------------------------------------------------------------
+  // adversarial follow-up — PATH_LIKE_RE's "no dots anywhere" rule was too
+  // broad: it also rejected extensionless paths whose ONLY dots live in an
+  // intermediate directory segment (e.g. a version number) or that end in a
+  // bare trailing separator (a directory-only reference). Both shapes have
+  // no file extension and must still be classified file-like so an
+  // incidental command word in a path segment doesn't get misread as a
+  // verification command.
+  // -------------------------------------------------------------------------
+
+  it('WISH: a trailing-slash directory reference is file-like even with a command word inside', () => {
+    const r = classifyCriterion('Config lives in `./deploy/` folder');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: a trailing-slash directory reference containing "build" is not a command', () => {
+    const r = classifyCriterion('Artifacts land in `./build/` after packaging');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: an extensionless path with a dotted version-number directory segment is file-like', () => {
+    const r = classifyCriterion('Artifacts land in `/opt/releases/v1.2.3/build` after packaging');
+    assert.ok(!r.verified);
+  });
+
+  it('WISH: an extensionless path with a dotted directory segment does not resurrect the /var/log/run regression', () => {
+    const r = classifyCriterion('Logs are written to `/var/log/v2.0/run`');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: an extensioned path under a dotted version-number directory is still a genuine command', () => {
+    const r = classifyCriterion('Config lives in `./v1.2.3/deploy.sh` for reference');
+    assert.ok(r.verified);
+  });
+
+  it('WISH: a Windows-style backslash directory reference is file-like even with a command word inside', () => {
+    const r = classifyCriterion('Config lives in `.\\deploy\\` folder');
+    assert.ok(!r.verified);
+  });
+
+  it('VERIFIED: a Windows-style backslash script path with an extension is a genuine command', () => {
+    const r = classifyCriterion('Confirmed by `.\\scripts\\verify.ps1`');
+    assert.ok(r.verified);
   });
 });
 
@@ -404,6 +707,34 @@ describe('fixture: vacuous-candidate.md — demotion round-trip', () => {
     assert.match(result[2].reason, /no concrete/);
     // criterion 3 (specific curl command) survives
     assert.equal(result[3].status, 'VERIFIED');
+  });
+});
+
+describe('fixture: bold-heading-wrapped.md (#71 repro)', () => {
+  it('finds the criterion under a bold pseudo-heading and classifies it VERIFIED via the wrapped verification line', () => {
+    const text = readFileSync(fixture('bold-heading-wrapped.md'), 'utf8');
+    const criteria = classifyAll(parseCriteria(text));
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].status, 'VERIFIED');
+  });
+});
+
+describe('fixture: bold-aside-mid-list.md (review round 2 repro)', () => {
+  it('does not drop criteria that follow an indented bold-only aside mid-list', () => {
+    const text = readFileSync(fixture('bold-aside-mid-list.md'), 'utf8');
+    const criteria = classifyAll(parseCriteria(text));
+    assert.equal(criteria.length, 2);
+    assert.equal(criteria[0].status, 'VERIFIED');
+    assert.equal(criteria[1].status, 'WISH');
+  });
+});
+
+describe('fixture: vacuous-filename.md (#45 repro)', () => {
+  it('does not treat an unrelated backtick filename as a verification method', () => {
+    const text = readFileSync(fixture('vacuous-filename.md'), 'utf8');
+    const criteria = classifyAll(parseCriteria(text));
+    assert.equal(criteria.length, 1);
+    assert.equal(criteria[0].status, 'WISH');
   });
 });
 

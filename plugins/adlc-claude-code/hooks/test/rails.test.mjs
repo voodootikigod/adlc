@@ -100,6 +100,17 @@ test('editing .adlc/tickets.json with NO rails declared → allow (authoring the
   assert.equal(runRails('{"tickets":[]}', '.adlc/tickets.json').verdict, 'allow');
 });
 
+// ---- trust root: .adlc/current-ticket.json is frozen once rails exist too
+// (build-gate's active-ticket pointer — see issue #48 follow-up review) ----
+
+test('editing .adlc/current-ticket.json while rails exist → deny (trust root)', () => {
+  assert.equal(runRails(RAIL_T, '.adlc/current-ticket.json').verdict, 'deny');
+});
+
+test('editing .adlc/current-ticket.json with NO rails declared → allow (build-gate not opted into rails)', () => {
+  assert.equal(runRails('{"tickets":[]}', '.adlc/current-ticket.json').verdict, 'allow');
+});
+
 // ---- multi-file / nested-path edit payloads ----
 
 /** Run the hook with an arbitrary tool_input payload; returns 'deny'|'allow'. */
