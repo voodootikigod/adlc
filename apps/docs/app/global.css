@@ -81,6 +81,11 @@ html > body[data-scroll-locked] {
   animation: mk-pulse 1.6s ease-in-out infinite;
 }
 
+.mk-gate-line {
+  opacity: 0;
+  animation: mk-fade-up 0.5s ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mk-fade-up,
   .mk-pulse,
