@@ -1,15 +1,14 @@
-import { Fragment } from 'react';
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { FAILURE_MODES } from '@/lib/failure-modes.mjs';
 import { INTEGRATIONS } from '@/lib/integration-facts.mjs';
 import { SERIES_BASE } from '@/lib/theory-links.mjs';
-import { PHASES } from '@/lib/phase-graph.mjs';
 import { ALL_PACKAGES } from '@/lib/toolkit-packages.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { TerminalCard } from '@/components/marketing/terminal-card';
 import { Backdrop } from '@/components/marketing/backdrop';
 import { GateSequence } from '@/components/marketing/gate-sequence';
+import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
 
 export const metadata: Metadata = {
   description:
@@ -107,23 +106,7 @@ export default function HomePage() {
 
       {/* 3 — The lifecycle */}
       <MarketingSection kicker="The lifecycle" title="Eight phases. A gate between every one.">
-        {/* Inline phase row; LifecyclePipeline (T8) replaces this. Hairline
-            separators between chips are the gates the title claims. */}
-        <div className="flex flex-wrap items-center gap-y-3 font-mono text-sm">
-          {PHASES.map((p, i) => (
-            <Fragment key={p.id}>
-              {i > 0 ? (
-                <span aria-hidden className="mx-2 h-5 w-px" style={{ background: '#3f4044' }} />
-              ) : null}
-              <span
-                className="whitespace-nowrap rounded-sm border px-3 py-1.5"
-                style={{ borderColor: '#3f4044', background: '#26272c', color: '#cbcdd2' }}
-              >
-                <span style={{ color: '#686b78' }}>{p.id}</span> {p.name}
-              </span>
-            </Fragment>
-          ))}
-        </div>
+        <LifecyclePipeline />
         <p className="mt-6 text-sm" style={{ color: '#686b78' }}>
           <Link href="/lifecycle" style={{ color: '#4fb4d8' }}>Explore the phases and gates →</Link>
         </p>
