@@ -25,13 +25,17 @@ dedupe rule, verification rule, stop rule) is defined below.
 
 ## 0. Collect the evidence
 
+Precondition: a CLEAN working tree — commit (or stash) everything first. The
+hollow-test gate in step 5 mutates files in place and refuses to run on a
+dirty tree (exit 1: "commit or stash first"), so an uncommitted change cannot
+complete this prosecution.
+
 Establish the target ticket (its `scope`, spec, and acceptance criteria from
 `.adlc/tickets.json`) and the change under prosecution:
-`git diff <base-branch>...HEAD` (or the working-tree diff if not yet
-committed). Every lens reviews this same diff plus whatever surrounding code it
-needs to read. Lenses are read-only reviewers: while prosecuting, do not edit
-files or run state-changing commands — a reviewer that can rewrite the evidence
-is not a reviewer.
+`git diff <base-branch>...HEAD`. Every lens reviews this same diff plus
+whatever surrounding code it needs to read. Lenses are read-only reviewers:
+while prosecuting, do not edit files or run state-changing commands — a
+reviewer that can rewrite the evidence is not a reviewer.
 
 ## 1. Run the five lenses, sequentially
 
@@ -91,13 +95,17 @@ another one.
 For each deduped finding, run the verifier brief:
 
 > You are given ONE prosecution finding. Try to **refute it**, not to agree.
-> Default to refuted when the evidence is weak or you cannot reproduce the
-> problem from the quoted diff. Steps: (1) re-read the finding's evidence in
-> context; (2) construct the most concrete reproduction or counterexample you
-> can; (3) decide: REAL (a genuine defect a maintainer should act on) or
-> REFUTED (false positive, already-handled, or unreproducible). Record
-> `{ "real": boolean, "reason": string, "repro": string }`. Be specific and
-> mechanistic; "looks fine" is not a reason.
+> Steps: (1) re-read the finding's evidence in context; (2) construct the most
+> concrete reproduction or counterexample you can; (3) decide: REAL (a genuine
+> defect a maintainer should act on — you built a concrete repro or mechanism),
+> REFUTED (you built a concrete counterexample, or proved it is already
+> handled), or CANNOT-DECIDE (neither succeeded). Record
+> `{ "real": boolean | null, "reason": string, "repro": string }` (`null` =
+> cannot-decide). Be specific and mechanistic; "looks fine" is not a reason.
+> (The siblings' "default to refuted" instruction applies to their independent
+> per-vote subagents, where absent votes are handled by majority machinery —
+> here there is one examiner, so cannot-decide is an explicit outcome, not a
+> default in either direction.)
 
 **Honesty note on the verification semantics:** in the sibling integrations a
 finding survives on a **strict majority of independent verifier votes**, each
@@ -121,18 +129,25 @@ going dry, report that as a finding itself ("convergence did not complete").
 
 ## 5. Deterministic gates
 
-These run regardless of what the lenses found — they are mechanical, not
-judgment:
+These are mechanical, not judgment:
 
-- **Hollow-test** — are the tests load-bearing? Run
+- **Hollow-test** (always) — are the tests load-bearing? Run
   `adlc hollow-test --test-cmd "<the project's test command>"`. It mutates the
-  changed code to find tests that pass without actually testing the behavior.
-  Exit `2` = hollow tests found; fix them before merging.
-- **Behavior-diff** — is the change visible? Run
-  `adlc behavior-diff capture --config behavior.json --out before.json` /
-  `--out after.json` (before/after, or against the base branch) and
+  changed code to find tests that pass without actually testing the behavior
+  (hence the clean-tree precondition in step 0 — it mutates in place and
+  restores). On a clone with no resolvable `main`/`master`, pass an explicit
+  `--base <ref>`. Exit `2` = hollow tests found; fix them before merging.
+- **Behavior-diff** (only for HTTP-observable services) — is the change
+  visible? The capture tool probes a RUNNING HTTP target: `behavior.json`
+  must declare `baseUrl` plus a non-empty `routes` array of
+  `{method, path}` entries, and capture errors if no route is reachable.
+  There is no base-branch mode — to get a "before" snapshot, check out and
+  run the base yourself, then capture. Run
+  `adlc behavior-diff capture --config behavior.json --out before.json`,
+  repeat for `after.json` on the change, then
   `adlc behavior-diff compare before.json after.json` to make the behavior
-  change visible for the P6 human gate.
+  change visible for the P6 human gate. For projects with no HTTP surface
+  (CLIs, libraries), skip this gate and note the skip in the verdict.
 
 ## 6. Cross-model adversarial review (the risk gate)
 
@@ -152,11 +167,16 @@ When the review passes, record it so the risk-tier stop-audit has a satisfiable
 record instead of nagging unconditionally:
 
 ```
-adlc gate-manifest record adversarial-review --files <risk-gated paths> --data '{"providers":"<a,b>","verdict":"SHIP"}'
+adlc gate-manifest record adversarial-review --ticket <id> --files <risk-gated paths> --data '{"providers":"<a,b>","verdict":"SHIP"}'
 ```
 
-`--files` must list the risk-gated changed paths the review actually covered —
-a record scoped to different files does not satisfy the audit for this change.
+`--ticket <id>` scopes the record to THIS ticket — a ticketless entry
+satisfies the stop-audit for ANY later ticket touching the same files, letting
+a stale review masquerade as coverage. `--files` is a comma-separated list of
+repo-root-relative paths and must cover the risk-gated changed paths the
+review actually examined — a record scoped to different files does not
+satisfy the audit for this change (and a space-separated list silently
+records only the first path).
 
 ## 7. Record + verdict
 
@@ -165,8 +185,10 @@ ship/no-ship verdict. On CLEAR, record the prosecution evidence for the
 deterministic gate:
 
 ```
-adlc gate-manifest record prosecution --files <changed files>
+adlc gate-manifest record prosecution --ticket <id> --files <changed files>
 ```
+
+(`--files` here too: comma-separated, repo-root-relative.)
 
 Material (surviving, non-refuted) findings block the merge — including
 unverified blockers, until they are verified or refuted.
