@@ -25,4 +25,5 @@ node_modules/
 .adlc/*
 !.adlc/tickets.json
 !.adlc/tickets.example.json
+!.adlc/specs/
 .adlc/tickets.lock
