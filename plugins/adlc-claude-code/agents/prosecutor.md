@@ -103,7 +103,8 @@ dedupe, and independent verifier refutation with loop-until-dry convergence — 
 `/adlc:adlc-prosecute`, which invokes the `prosecutor-{correctness,security,contract,
 diff,tests,verifier}` subagents. That command replicates the same fan-out →
 dedupe → independent-verify → repeat-until-two-dry-rounds shape as the OpenCode
-integration's `/adlc:adlc-prosecute`, so Claude Code no longer needs to punt to a
+integration's own `adlc-prosecute` command (invoked bare there, since OpenCode
+has no plugin-namespace convention), so Claude Code no longer needs to punt to a
 different harness to run the multi-lens loop; it can additionally feed its
 surviving findings to the `adlc prosecute` runner path for formal `adlc run p5`
 phase assertion when that is required.

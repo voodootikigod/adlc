@@ -502,6 +502,14 @@ const namespacedCommandNames = existsSync(commandsDir)
 if (namespacedCommandNames.length === 0) {
   fail('no adlc-*.md command files found under plugins/adlc-claude-code/commands — cannot derive namespacedCommandNames (the bare-command guard would silently match nothing)');
 }
+// Escape regex metacharacters in each derived name before splicing into the
+// alternation below. Names come from filenames on disk, not a hardcoded
+// literal list, so they must be treated as untrusted regex input: an
+// unescaped "." would silently widen the match (matching any character, not
+// a literal dot), and an unescaped "(" would throw an uncaught SyntaxError
+// from `new RegExp(...)`, crashing the script instead of failing cleanly
+// through `fail()`.
+const escapedCommandNames = namespacedCommandNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 // Matches "/adlc-init" etc. but NOT "/adlc:adlc-init" (scoped form, via the
 // negative lookbehind) and NOT a file-path or URL reference such as
 // "commands/adlc-init.md", "docs/ci/adlc-maintenance.yml",
@@ -515,7 +523,7 @@ if (namespacedCommandNames.length === 0) {
 //     extension (".md" / ".mjs" / ".yml" / ".yaml"), so "adlc-init-helper.mjs"
 //     and "adlc-init.md" are not mistaken for the bare command "/adlc-init".
 const bareCommandPattern = new RegExp(
-  `(?<!adlc:)(?<![\\w:./-])/adlc-(?:${namespacedCommandNames.join('|')})\\b(?!-)(?!\\.(?:md|mjs|yml|yaml))`,
+  `(?<!adlc:)(?<![\\w:./-])/adlc-(?:${escapedCommandNames.join('|')})\\b(?!-)(?!\\.(?:md|mjs|yml|yaml))`,
   'g'
 );
 const guidanceDirs = ['commands', 'skills', 'agents', 'hooks'];

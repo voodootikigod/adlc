@@ -205,3 +205,69 @@ test('claude-code-plugin-smoke does not false-positive on excluded, genuinely ou
   assert.match(readFileSync(archivePath, 'utf8'), /\/adlc-init/, 'fixture assumption stale: expected archived doc to still contain bare command text');
   assert.match(readFileSync(cursorDocPath, 'utf8'), /\/adlc-init/, 'fixture assumption stale: expected Cursor doc to still contain its own bare command text');
 });
+
+// Regression coverage: namespacedCommandNames is derived from filenames on disk
+// (plugins/adlc-claude-code/commands/*.md), not a hardcoded literal list, so a
+// derived name must be treated as untrusted regex input, not spliced unescaped
+// into `new RegExp(...)`. Two failure modes if unescaped: (1) a name containing
+// "." would make the pattern match ANY character there (a silent false
+// positive), and (2) a name containing an unbalanced metacharacter like "("
+// would throw an uncaught SyntaxError from `new RegExp(...)`, crashing the
+// script with a raw stack trace instead of the script's own clean fail() path.
+test('claude-code-plugin-smoke escapes regex metacharacters in derived command names (no wildcard false positive)', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    // A command name containing a literal "." — if spliced unescaped into the
+    // regex, "." matches any character, so "/adlc-v1X2" would wrongly match too.
+    writeFileSync(
+      join(tmpRepo, 'plugins/adlc-claude-code/commands/adlc-v1.2.md'),
+      '---\ndescription: a fixture-only versioned command.\n---\n\n# /adlc:adlc-v1.2\n'
+    );
+    const fixtureDocPath = join(tmpRepo, 'docs/fixture-regex-escape.md');
+    writeFileSync(fixtureDocPath, '# Fixture\n\nThis mentions /adlc-v1X2 which must NOT be treated as a bare command match.\n');
+
+    const noFalsePositive = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.strictEqual(
+      noFalsePositive.status,
+      0,
+      `an unescaped "." would wrongly match "/adlc-v1X2" as if it were "/adlc-v1.2"; guard should not fire here:\n${noFalsePositive.stderr}`
+    );
+
+    // Sanity check: the ACTUAL literal form (unnamespaced) is still caught, so
+    // the escaping isn't just accidentally matching nothing at all.
+    writeFileSync(fixtureDocPath, '# Fixture\n\nRun /adlc-v1.2 to use the fixture command.\n');
+    const literalMatchStillCaught = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(literalMatchStillCaught.status, 0, 'the literal bare form "/adlc-v1.2" should still be caught');
+    assert.match(literalMatchStillCaught.stderr, /bare, non-namespaced command reference/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+test('claude-code-plugin-smoke fails cleanly (not an uncaught crash) on a command filename containing an unbalanced regex metacharacter', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    // An unescaped "(" in the alternation would throw "Unterminated group" from
+    // `new RegExp(...)` — an uncaught SyntaxError, not this script's own fail().
+    writeFileSync(
+      join(tmpRepo, 'plugins/adlc-claude-code/commands/adlc-a(b.md'),
+      '---\ndescription: a fixture-only command with a regex-hostile filename.\n---\n\n# fixture\n'
+    );
+
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.doesNotMatch(result.stderr, /SyntaxError/, 'must not crash with an uncaught RegExp SyntaxError');
+    assert.doesNotMatch(result.stderr, /Unterminated group/, 'must not crash with an uncaught RegExp SyntaxError');
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});

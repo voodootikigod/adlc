@@ -78,7 +78,8 @@ tests load-bearing?), `behavior-diff` (is the behavior change visible?), and
 evidence-backed verdict. These are mechanical, deterministic-gate checks.
 
 `/adlc:adlc-prosecute` is the independent multi-lens adversarial loop, matching the
-OpenCode integration's `/adlc:adlc-prosecute` shape: it fans out five independent lens
+shape of OpenCode's own `adlc-prosecute` command (invoked bare there, since
+OpenCode has no plugin-namespace convention): it fans out five independent lens
 subagents (`prosecutor-correctness`, `prosecutor-security`, `prosecutor-contract`,
 `prosecutor-diff`, `prosecutor-tests`) on the diff, dedupes findings across
 lenses by file + line range + title (keeping the highest severity), independently
