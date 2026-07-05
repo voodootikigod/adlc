@@ -5,6 +5,7 @@ import { FAILURE_MODES } from '@/lib/failure-modes.mjs';
 import { INTEGRATIONS } from '@/lib/integration-facts.mjs';
 import { SERIES_BASE } from '@/lib/theory-links.mjs';
 import { PHASES } from '@/lib/phase-graph.mjs';
+import { ALL_PACKAGES } from '@/lib/toolkit-packages.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { TerminalCard } from '@/components/marketing/terminal-card';
 import { Backdrop } from '@/components/marketing/backdrop';
@@ -138,7 +139,7 @@ export default function HomePage() {
           ))}
         </div>
         <p className="mt-6 text-sm" style={{ color: '#686b78' }}>
-          <Link href="/toolkit" style={{ color: '#4fb4d8' }}>All 23 packages, grouped by phase →</Link>
+          <Link href="/toolkit" style={{ color: '#4fb4d8' }}>{`All ${ALL_PACKAGES.length} packages, grouped by phase →`}</Link>
         </p>
       </MarketingSection>
 
