@@ -3,7 +3,7 @@ description: Run the decay-driven ADLC maintenance checks — stale skills, hot 
 argument-hint: (no arguments)
 ---
 
-# /adlc-maintain — fight decay (C10 / C12 + calibration)
+# /adlc:adlc-maintain — fight decay (C10 / C12 + calibration)
 
 Some assumptions rot over time or after a model/repo change: skill cache
 metadata goes stale, files churn enough to deserve re-prosecution, and gates that
@@ -34,9 +34,10 @@ adlc model-ratchet --dry-run --json
 - Lists the highest-churn / highest-dependency files (`score`), which are the
   best candidates to re-prosecute after model or repo drift. This is a *plan*,
   not a gate — it does not fail. Report the top files and suggest running the
-  prosecutor (`/adlc-prosecute` or the `prosecutor` subagent) against them.
+  `prosecutor` subagent against them (there is no standalone prosecute command
+  in this plugin — invoke the subagent directly).
 - With a `--review-cmd`, model-ratchet can run a review over those files and
-  append findings to `.adlc/findings.jsonl` (which later feeds `/adlc-distill`).
+  append findings to `.adlc/findings.jsonl` (which later feeds `/adlc:adlc-distill`).
 
 ## 3. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 
@@ -56,11 +57,11 @@ adlc gate-fuzzing --suite .adlc/gate-suite.json --prompt-only
 
 Report: stale skills (if any), the top hot files to re-prosecute, gate-fuzzing
 result or why it was skipped, and the recommended next actions. Repeated findings
-surfaced here flow into `/adlc-distill`.
+surfaced here flow into `/adlc:adlc-distill`.
 
 ## Scheduling
 
 The deterministic checks here (`skill-rot`, `model-ratchet`) are keyless and run
 well on a cron — see the ready-to-use workflow at `docs/ci/adlc-maintenance.yml`.
 The LLM-backed gate-fuzzing runs via a scheduled Claude routine (`/schedule`
-invoking `/adlc-maintain`), where Claude is the model and no API keys are needed.
+invoking `/adlc:adlc-maintain`), where Claude is the model and no API keys are needed.

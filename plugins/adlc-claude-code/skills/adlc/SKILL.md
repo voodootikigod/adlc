@@ -17,13 +17,13 @@ Code you do not need API keys — run the tool with `--prompt-only`, answer the
 printed prompt yourself, and apply the judgment. Prefer this over wiring keys.
 
 Prerequisite: the toolkit must be installed (`adlc --version` works). If not,
-the user runs `npm i -g @adlc/cli`. Run `/adlc-init` once per repo to create the
+the user runs `npm i -g @adlc/cli`. Run `/adlc:adlc-init` once per repo to create the
 `.adlc/` workspace.
 
 ## Where am I? → which gate
 
 ```
-Vague request, no ticket yet? ───────────────→ P0  /adlc-ticket
+Vague request, no ticket yet? ───────────────→ P0  /adlc:adlc-ticket
 Have a spec / acceptance criteria? ──────────→ P1  adlc spec-lint · premortem · parallax · adversarial-review
 Have tickets, planning fan-out? ─────────────→ P2  adlc coldstart · model-router · merge-forecast
 About to build, want to freeze tests? ───────→ P3  adlc rails-guard · adversarial-review
@@ -31,9 +31,9 @@ Mid-build, agent looping or drifting? ───────→ P4  adlc flail-de
 Hard failing test, need a repair? ───────────→ P4  adlc consensus-fix
 Change done, pre-merge prosecution? ─────────→ P5  adlc hollow-test · behavior-diff · review-calibration · adversarial-review
 Recording / showing gate evidence? ──────────→ —   adlc gate-manifest
-Repeated review findings to bank? ───────────→ P7  /adlc-distill (lesson-foundry · rejection-mining)
+Repeated review findings to bank? ───────────→ P7  /adlc:adlc-distill (lesson-foundry · rejection-mining)
 Mine the repo for reusable skills? ──────────→ P7  skill-mining (npx skills add voodootikigod/skill-mining)
-Idle-time / post-drift maintenance? ─────────→ —   /adlc-maintain (skill-rot · model-ratchet · gate-fuzzing)
+Idle-time / post-drift maintenance? ─────────→ —   /adlc:adlc-maintain (skill-rot · model-ratchet · gate-fuzzing)
 ```
 
 **The adversarial-review loop.** A cross-model, fresh-context ship/no-ship review that
@@ -49,7 +49,7 @@ on PATH. See ADR-0008 (adversarial-review coverage map) in the ADLC repo.
 
 ## The phases
 
-### P0 — Triage → `/adlc-ticket`
+### P0 — Triage → `/adlc:adlc-ticket`
 Turn a request into a self-contained ticket in `.adlc/tickets.json`. Everything
 downstream reads this file; nothing else creates it. Author here first.
 
@@ -115,11 +115,11 @@ This gate is a human decision, not something an agent passes. Surface the
 evidence: `adlc gate-manifest show` and the `behavior-diff compare` output, then
 let the human decide. Record outcomes with `adlc gate-manifest record <gate>`.
 
-### P7 — Distill (turn findings into defenses) → `/adlc-distill`
+### P7 — Distill (turn findings into defenses) → `/adlc:adlc-distill`
 - `adlc lesson-foundry --prompt-only` — mine repeated findings into deterministic
   defenses (lint checks, skills). LLM-backed: answer the printed prompt yourself.
 - `adlc rejection-mining --prompt-only` — mine human PR rejections into reusable
-  review lenses (needs the `gh` CLI). `/adlc-distill` runs both.
+  review lenses (needs the `gh` CLI). `/adlc:adlc-distill` runs both.
 
 P7 has a second, complementary axis — mining the *codebase itself* (not its review
 findings) for reusable capabilities:
@@ -130,16 +130,16 @@ findings) for reusable capabilities:
   a `SKILLS_MINED.md` report. It is an agentic skill, not a deterministic `adlc`
   gate (no `--prompt-only`/exit codes). Two uses: (a) standalone, to bootstrap a
   repo's skill portfolio; (b) as the validation/registry step for `SKILL.md` stubs
-  that `/adlc-distill`'s lesson-foundry scaffolds — dedup + Gate B before they PR.
+  that `/adlc:adlc-distill`'s lesson-foundry scaffolds — dedup + Gate B before they PR.
   lesson-foundry emits stubs; skill-mining manages the registry.
 
-### Maintenance (decay-driven, no human trigger) → `/adlc-maintain`
+### Maintenance (decay-driven, no human trigger) → `/adlc:adlc-maintain`
 - `adlc skill-rot [path…]` — flag skill files with stale validation metadata.
 - `adlc model-ratchet --dry-run` — identify hot files to re-prosecute after model
   or repo drift (a plan, not a gate).
 - `adlc gate-fuzzing --suite .adlc/gate-suite.json --prompt-only` — play the
   adversary against the gate suite to find calibration gaps (needs a suite file).
-- `/adlc-maintain` runs these; the deterministic two also run on a cron
+- `/adlc:adlc-maintain` runs these; the deterministic two also run on a cron
   (`docs/ci/adlc-maintenance.yml`).
 
 ## Notes

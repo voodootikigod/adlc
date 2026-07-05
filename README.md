@@ -70,7 +70,7 @@ installs the plugin into each:
 ```sh
 npx plugins add voodootikigod/adlc   # install the plugin into your agent tool(s)
 npm install -g @adlc/cli             # the gate toolkit the plugin shells out to
-/adlc-init                           # bootstrap .adlc/ in your repo (once)
+/adlc:adlc-init                      # bootstrap .adlc/ in your repo (once)
 ```
 
 Already using Claude Code's native plugin marketplace? That path still works:
@@ -79,7 +79,7 @@ Already using Claude Code's native plugin marketplace? That path still works:
 npm install -g @adlc/cli
 /plugin marketplace add voodootikigod/adlc
 /plugin install adlc@adlc
-/adlc-init
+/adlc:adlc-init
 ```
 
 See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** for the full adoption guide.
