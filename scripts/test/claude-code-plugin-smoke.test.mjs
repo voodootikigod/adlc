@@ -347,3 +347,43 @@ test('claude-code-plugin-smoke follows a symlinked directory under docs/ instead
     rmSync(tmpRepo, { recursive: true, force: true });
   }
 });
+
+// Regression coverage: an earlier version of this guard had TWO independent,
+// hand-duplicated recursive file-collection loops — one for the plugin's own
+// guidance tree (commands/skills/agents/hooks), one for the doc-wide scan
+// (docs/). The symlinked-directory fix (see the test above) was applied to
+// only the doc-wide copy, leaving the plugin-tree copy with the IDENTICAL
+// blind spot: a symlinked directory under commands/ (or skills/, agents/,
+// hooks/) was invisible to the scan. Both now share one traversal
+// (collectFilesRecursively) so this can't recur as "fixed in one of two
+// copies but not the other" a third time. Prove the plugin-tree scan follows
+// a symlinked directory too.
+test('claude-code-plugin-smoke follows a symlinked directory under the plugin guidance tree instead of silently skipping it', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    const externalDir = join(tmpRepo, '..', 'adlc-cc-smoke-external-commands');
+    mkdirSync(externalDir, { recursive: true });
+    writeFileSync(join(externalDir, 'hidden.md'), '# Hidden\n\nRun /adlc-ticket to get started.\n');
+    symlinkSync(externalDir, join(tmpRepo, 'plugins/adlc-claude-code/commands/linked-external'), 'dir');
+
+    try {
+      const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+      assert.notStrictEqual(
+        result.status,
+        0,
+        'smoke test should fail on a bare command reference reached through a symlinked directory under commands/, not silently skip it'
+      );
+      assert.match(result.stderr, /bare, non-namespaced command reference/);
+      assert.match(result.stderr, /linked-external/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});

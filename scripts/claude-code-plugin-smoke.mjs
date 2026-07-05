@@ -534,23 +534,41 @@ const bareCommandPattern = new RegExp(
   `(?<!adlc:)(?<![\\w:./-])/adlc-(?:${escapedCommandNames.join('|')})\\b(?!-)(?!\\.(?:md|mjs|yml|yaml))`,
   'g'
 );
+// Shared symlink-safe recursive file collector, used by BOTH the plugin-tree
+// scan below and the doc-wide scan further down. Uses statSync (follows
+// symlinks), not a Dirent's own type flags: Dirent.isDirectory() reports false
+// for a symlink even when its target IS a directory, so a symlinked directory
+// would otherwise be recursed into by neither branch — invisible to the scan
+// with zero trace in the tool's output. An EARLIER version of this guard had
+// two independent copies of this traversal (one for the plugin tree, one for
+// docs/); the symlink fix was applied to only one of them and the other still
+// had the exact same blind spot — the identical "silent gap in one of two
+// hand-duplicated copies" failure class #96 exists to close in general. One
+// shared implementation now, so a future fix here can't be applied to only
+// one of two copies again.
+function collectFilesRecursively(dirPath, matchExtensions, out = []) {
+  for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+    const entryPath = join(dirPath, entry.name);
+    let isDir;
+    try {
+      isDir = statSync(entryPath).isDirectory();
+    } catch {
+      continue; // broken symlink target — nothing to scan
+    }
+    if (isDir) {
+      collectFilesRecursively(entryPath, matchExtensions, out);
+    } else if (matchExtensions.some((ext) => entry.name.endsWith(ext))) {
+      out.push(entryPath);
+    }
+  }
+  return out;
+}
 const guidanceDirs = ['commands', 'skills', 'agents', 'hooks'];
 const guidanceFiles = [];
 for (const dir of guidanceDirs) {
   const dirPath = join(pluginSourceDir, dir);
   if (!existsSync(dirPath)) continue;
-  const stack = [dirPath];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const entryPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(entryPath);
-      } else if (entry.name.endsWith('.md') || entry.name.endsWith('.mjs')) {
-        guidanceFiles.push(entryPath);
-      }
-    }
-  }
+  collectFilesRecursively(dirPath, ['.md', '.mjs'], guidanceFiles);
 }
 // Doc-wide scan (closes #96): the previous version of this guard scanned only a
 // hardcoded allowlist of "extra" doc paths outside the plugin's own tree
@@ -591,33 +609,10 @@ const EXCLUDED_DOC_PATHS = [
 function isExcludedDocPath(relPosixPath) {
   return EXCLUDED_DOC_PATHS.some(([prefix]) => relPosixPath === prefix || relPosixPath.startsWith(prefix));
 }
-function collectMarkdownFiles(dirPath, out = []) {
-  for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
-    const entryPath = join(dirPath, entry.name);
-    // Use statSync (follows symlinks), not the dirent's own type flags:
-    // Dirent.isDirectory() reports false for a symlink even when its target
-    // IS a directory, so a symlinked doc directory would otherwise be
-    // silently invisible to this scan — recursed into by neither branch below
-    // — reintroducing exactly the kind of blind spot #96 exists to close, via
-    // a filesystem-type route instead of a hardcoded-list route.
-    let isDir;
-    try {
-      isDir = statSync(entryPath).isDirectory();
-    } catch {
-      continue; // broken symlink target — nothing to scan
-    }
-    if (isDir) {
-      collectMarkdownFiles(entryPath, out);
-    } else if (entry.name.endsWith('.md')) {
-      out.push(entryPath);
-    }
-  }
-  return out;
-}
 for (const scanRoot of DOC_SCAN_ROOTS) {
   const fullPath = join(repo, scanRoot);
   if (!existsSync(fullPath)) continue;
-  const candidates = statSync(fullPath).isDirectory() ? collectMarkdownFiles(fullPath) : [fullPath];
+  const candidates = statSync(fullPath).isDirectory() ? collectFilesRecursively(fullPath, ['.md']) : [fullPath];
   for (const filePath of candidates) {
     const relPosixPath = filePath.slice(repo.length + 1).split(sep).join('/');
     if (isExcludedDocPath(relPosixPath)) continue;
