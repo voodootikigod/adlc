@@ -155,6 +155,16 @@ else {
     if (!pr.includes(lens)) fail(`adlc-prosecute.md missing the ${lens} lens brief`);
     else ok(`adlc-prosecute.md has the ${lens} lens`);
   }
+  // Lens COUNT derives from @adlc/core's registry, not a hardcoded number: a
+  // lens added to or removed from the shared registry must be reflected in
+  // the command, and a shrink of the hardcoded title list above cannot
+  // silently weaken this assertion (the titles are a readability check; this
+  // is the load-bearing one).
+  const { LENSES } = await import('@adlc/core');
+  const lensBriefCount = (pr.match(/^### Lens \d+ —/gm) ?? []).length;
+  if (lensBriefCount !== LENSES.length) {
+    fail(`adlc-prosecute.md has ${lensBriefCount} lens briefs; @adlc/core's registry declares ${LENSES.length}`);
+  } else ok(`adlc-prosecute.md lens-brief count matches the @adlc/core registry (${LENSES.length})`);
   if (!/verifier/i.test(pr)) fail('adlc-prosecute.md missing the verifier pass');
   else ok('adlc-prosecute.md has the verifier pass');
   // Binding honesty requirement (spec decision 3): sequential same-context

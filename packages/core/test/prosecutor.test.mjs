@@ -101,3 +101,26 @@ test('shouldContinue: two consecutive dry rounds from a cold start stop the loop
   s = shouldContinue({ freshThisRound: 0, dryStreak: s.dryStreak });
   assert.deepEqual(s, { continue: false, dryStreak: 2 });
 });
+
+// ---- severity ordering (mutation-hardening: a single SEV-map value shift in
+// the decrement direction creates a tie/reorder between adjacent tiers that
+// the single low-vs-high dedupe case above cannot detect) ----
+test('dedupeFindings: every adjacent severity pair keeps the higher tier, in both input orders', () => {
+  const pairs = [
+    ['critical', 'high'],
+    ['high', 'medium'],
+    ['medium', 'low'],
+  ];
+  for (const [higher, lower] of pairs) {
+    for (const input of [
+      [{ file: 'x.mjs', line_start: 1, line_end: 1, title: 'T', severity: higher },
+       { file: 'x.mjs', line_start: 1, line_end: 1, title: 'T', severity: lower }],
+      [{ file: 'x.mjs', line_start: 1, line_end: 1, title: 'T', severity: lower },
+       { file: 'x.mjs', line_start: 1, line_end: 1, title: 'T', severity: higher }],
+    ]) {
+      const out = dedupeFindings(input);
+      assert.equal(out.length, 1, `${higher}/${lower} must dedupe to one`);
+      assert.equal(out[0].severity, higher, `${higher} must beat ${lower} regardless of input order`);
+    }
+  }
+});
