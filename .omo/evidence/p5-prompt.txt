@@ -1,0 +1,3 @@
+Review ticket T1 at revision docs-example-revision with the bundled docs fixture.
+Assess security, correctness, tests, and behavior. Record any findings with evidence,
+then mark findings killed only when the verification evidence refutes the claim.

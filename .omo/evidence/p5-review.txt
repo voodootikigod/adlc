@@ -1,0 +1,7 @@
+ticket: T1
+reviewed revision: docs-example-revision
+
+Bundled docs fixture adversarial review transcript. The reviewer checked the security,
+correctness, tests, and behavior lenses for the docs example packet. One medium
+security finding was recorded and then killed after tracing it to an unreachable test
+fixture. No verified findings remained for the final dry lenses.
