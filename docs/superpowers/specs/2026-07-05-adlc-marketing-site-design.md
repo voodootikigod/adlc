@@ -157,8 +157,20 @@ Speaks to the buyer, not the installer:
   `gate-manifest` produces artifacts auditors can read.
 - **Rollout shape** — pilot team → rails → org-wide.
 - **Contact CTA** — `mailto:` only in v1: no form, so no PII is collected and
-  no privacy policy is required yet. Adding a form later requires publishing a
-  privacy policy first.
+  no privacy policy is required yet.
+
+### Contact capture (v1.1 — after launch)
+
+An on-brand form on `/enterprise` posting to a Next.js API route with a
+**pluggable sink**. The intended sink is **Attio** (free tier — verify API
+access limits before wiring); the route creates a person/company record via
+Attio's REST API. Fallback sink if Attio's free tier blocks API writes:
+email notification (e.g. Resend) + manual CRM entry, form unchanged.
+
+Prerequisites before the form ships:
+- Privacy policy published (form collects PII).
+- Spam defense: honeypot + Cloudflare Turnstile.
+- Rate limiting on the API route.
 
 ## 6. Domains & deployment
 
@@ -188,5 +200,6 @@ Speaks to the buyer, not the installer:
 
 ## 8. Out of scope (v1)
 
-Blog/changelog, CRM/forms backend, analytics beyond Vercel defaults, light
-theme, pricing page, renaming `apps/docs` → `apps/site`.
+Blog/changelog, analytics beyond Vercel defaults, light theme, pricing page,
+renaming `apps/docs` → `apps/site`. Contact capture (form + Attio sink) is
+specced above as v1.1 — deliberately after launch, not in v1.
