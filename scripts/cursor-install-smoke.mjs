@@ -103,6 +103,46 @@ else {
 if (!existsSync(join(PLUGIN, 'lib', 'scaffold-cli.mjs'))) fail('lib/scaffold-cli.mjs missing'); else ok('scaffold-cli present');
 if (!existsSync(join(PLUGIN, 'command', 'adlc-init.md'))) fail('command/adlc-init.md missing'); else ok('command/adlc-init.md present');
 
+// ---- T16 AC1: the scaffolder must DEPLOY command/ into .cursor/commands/ ----
+if (existsSync(scaffoldPath)) {
+  const sc = read(scaffoldPath);
+  if (!/export function deployCommands\b/.test(sc)) fail('scaffold does not export deployCommands() (command palette would be unreachable)');
+  else ok('scaffold deploys the command palette (deployCommands)');
+}
+
+// ---- T16 AC3: full phase-command suite, mirroring the OpenCode per-command checks ----
+const cmdDir = join(PLUGIN, 'command');
+const CURSOR_CMDS = [
+  'adlc-init.md',
+  'adlc-ticket.md',
+  'adlc-spec.md',
+  'adlc-approve-spec.md',
+  'adlc-decompose.md',
+  'adlc-verify-build.md',
+  'adlc-prosecute.md',
+  'adlc-distill.md',
+  'adlc-maintain.md',
+];
+for (const c of CURSOR_CMDS) {
+  const p = join(cmdDir, c);
+  if (!existsSync(p)) { fail(`command/${c} missing`); continue; }
+  const body = read(p);
+  if (!/^---\n[\s\S]*?description:\s*\S+[\s\S]*?\n---/.test(body)) fail(`command/${c} lacks description frontmatter`);
+  else ok(`command/${c} valid`);
+  // Binding design decision 1 (cursor-native-parity spec): Cursor has no plugin
+  // namespace — command bodies must use the bare /adlc-<name> form, never the
+  // Claude Code /adlc:adlc-<name> form.
+  if (/\/adlc:adlc-/.test(body)) fail(`command/${c} uses the namespaced /adlc:adlc-* form (Cursor commands are bare /adlc-*)`);
+}
+// The generated router rule must reference the bare command palette (T16 AC4 companion).
+const rulePath = join(PLUGIN, 'rules', 'adlc.mdc');
+if (existsSync(rulePath)) {
+  const rule = read(rulePath);
+  const missing = CURSOR_CMDS.map((c) => `/${c.replace(/\.md$/, '')}`).filter((name) => !rule.includes(name));
+  if (missing.length) fail(`rules/adlc.mdc does not reference: ${missing.join(', ')}`);
+  else ok('rules/adlc.mdc references every /adlc-* command');
+}
+
 // ---- AC3: run the real enforcement unit tests (always-on proof) ----
 try {
   execFileSync(process.execPath, ['--test', ...globTests(join(PLUGIN, 'test'))], { cwd: ROOT, stdio: 'pipe' });

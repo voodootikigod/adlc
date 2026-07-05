@@ -105,11 +105,15 @@ export const routerModel = {
       slots: {},
       includes: ["table:head","table:rows-rest","table:adversarial"],
       local: {
-        "intro": "\n# ADLC phase router (Cursor)\n\nDescribe what you're doing; this routes you to the gate that fits. Gates run via\nthe `adlc <tool>` dispatcher (`npm i -g @adlc/cli`). LLM-backed gates support\n`--prompt-only` — inside Cursor the model answers the printed prompt, so no API\nkey is required.\n",
-        "p0-row": "| Triage / author a ticket | P0 | `adlc preflight`, author into `.adlc/tickets.json` |\n",
+        "intro": "\n# ADLC phase router (Cursor)\n\nDescribe what you're doing; this routes you to the gate that fits. Gates run via\nthe `adlc <tool>` dispatcher (`npm i -g @adlc/cli`). LLM-backed gates support\n`--prompt-only` — inside Cursor the model answers the printed prompt, so no API\nkey is required. Run `/adlc-init` once per repo to create the `.adlc/` workspace\nand deploy the `/adlc-*` command palette into `.cursor/commands/`.\n",
+        "p0-row": "| Triage / author a ticket | P0 | `adlc preflight`, `/adlc-ticket` |\n",
+        // Cursor has NO plugin-namespace convention: commands are the bare
+        // "/adlc-<name>" form, never Claude Code's "/adlc:adlc-<name>" (spec
+        // cursor-native-parity.md, binding decision 1).
+        "commands": "## Cursor command palette\n\nThe scaffolder (`/adlc-init`) deploys these commands into `.cursor/commands/` —\nbare `/adlc-<name>` form (Cursor has no plugin namespace):\n\n- `/adlc-init` — bootstrap the `.adlc/` workspace + Cursor wiring.\n- `/adlc-ticket` — P0 triage: author a ticket into `.adlc/tickets.json`.\n- `/adlc-spec` · `/adlc-approve-spec` — P1 interrogation + the human approval gate.\n- `/adlc-decompose` — P2 slicing + merge forecast.\n- `/adlc-verify-build` — P4 deterministic build gate (targeted tests + flail check).\n- `/adlc-prosecute` — P5 prosecution gates (`hollow-test` · `behavior-diff` · `adversarial-review`).\n- `/adlc-distill` — P7 lesson-foundry + rejection-mining.\n- `/adlc-maintain` — decay-driven maintenance (`skill-rot` · `model-ratchet` · `ticket-prune` · `gate-fuzzing`).\n\n",
         "rail-enforcement": "## Rail enforcement in this harness\n\nThe bundled hooks wire Cursor's `preToolUse` hook to deny structured `Write`/`Edit`\nto frozen rails declared by the active ticket, and `afterFileEdit` to surface a\npost-edit notice (it cannot block). Both are **best-effort / advisory** — Cursor's\n`permission: \"deny\"` is not guaranteed, and `afterFileEdit` is observational. The\n**unbypassable** layer is the commit-time CI gate (`docs/ci/rails-guard.yml`). See\n[`docs/integrations/cursor.md`](../../../docs/integrations/cursor.md).\n",
       },
-      layout: ["intro","table:head","p0-row","table:rows-rest","table:adversarial","rail-enforcement"],
+      layout: ["intro","table:head","p0-row","table:rows-rest","table:adversarial","commands","rail-enforcement"],
     },
   },
 };

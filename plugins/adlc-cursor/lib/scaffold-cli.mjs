@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
 import { scaffold } from './scaffold.mjs';
 
 const projectRoot = resolve(process.argv[2] ?? '.');
-const { config, hooks, rule, gitignore, formatterIgnores } = scaffold(projectRoot);
+const { config, hooks, rule, commands, gitignore, formatterIgnores } = scaffold(projectRoot);
 
 const tag = (r) => (r.created ? 'created' : 'present');
 console.log(`adlc-cursor scaffold (${projectRoot}):`);
@@ -20,6 +20,7 @@ if (hooks.backedUp) {
   console.log(`  ⚠ existing .cursor/hooks.json was unparseable — preserved verbatim at ${hooks.backedUp} before writing a fresh file`);
 }
 console.log(`  .cursor/rules/adlc.mdc — ${tag(rule)}`);
+console.log(`  .cursor/commands/      — deployed ${commands.length} command(s): ${commands.join(', ')}`);
 const gitignoreStatus = gitignore.changed
   ? gitignore.added.length > 0
     ? `updated (added ${gitignore.added.join(', ')})`

@@ -1,9 +1,10 @@
 // scaffold.mjs — deterministic, idempotent setup of the Cursor integration into a
-// user's repo. Writes `.cursor/hooks.json` (wiring the rails-guard + audit hooks)
-// and `.cursor/rules/adlc.mdc` (the gate-router rule). Never clobbers a user's
-// existing hooks — it MERGES the ADLC entries into the hooks map.
+// user's repo. Writes `.cursor/hooks.json` (wiring the rails-guard + audit hooks),
+// `.cursor/rules/adlc.mdc` (the gate-router rule), and `.cursor/commands/*.md`
+// (the /adlc-* command palette). Never clobbers a user's existing hooks — it
+// MERGES the ADLC entries into the hooks map.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Import the matcher from the dependency-free constants module — NOT rails-checker
@@ -108,6 +109,27 @@ export function ensurePluginRegistered(projectRoot, opts = {}) {
   return { hooks, rule };
 }
 
+/**
+ * Deploy the package's command/*.md files into the project's .cursor/commands/
+ * so Cursor discovers the /adlc-* palette. Mirrors deployDir() in
+ * plugins/adlc-opencode/lib/scaffold.mjs. Idempotent: re-running overwrites
+ * from the package source (the package is the source of truth) but never
+ * deletes unrelated files. Returns the deployed file names.
+ */
+export function deployCommands(projectRoot, { pluginRoot = PLUGIN_ROOT } = {}) {
+  const srcDir = join(pluginRoot, 'command');
+  if (!existsSync(srcDir)) return [];
+  const outDir = join(projectRoot, '.cursor', 'commands');
+  mkdirSync(outDir, { recursive: true });
+  const deployed = [];
+  for (const name of readdirSync(srcDir)) {
+    if (!name.endsWith('.md')) continue;
+    writeFileSync(join(outDir, name), readFileSync(join(srcDir, name), 'utf8'));
+    deployed.push(name);
+  }
+  return deployed;
+}
+
 /** Create `.adlc/config.json` with defaults if absent (never clobber). */
 export function ensureConfig(projectRoot) {
   const adlcDir = join(projectRoot, '.adlc');
@@ -118,11 +140,12 @@ export function ensureConfig(projectRoot) {
   return { path: cfgPath, created: true };
 }
 
-/** Full bootstrap: config + hooks + rule + .gitignore contract + formatter ignores. */
+/** Full bootstrap: config + hooks + rule + commands + .gitignore contract + formatter ignores. */
 export function scaffold(projectRoot, opts = {}) {
   const config = ensureConfig(projectRoot);
   const { hooks, rule } = ensurePluginRegistered(projectRoot, opts);
+  const commands = deployCommands(projectRoot, opts);
   const gitignore = ensureGitignore(projectRoot);
   const formatterIgnores = ensureFormatterIgnores(projectRoot);
-  return { config, hooks, rule, gitignore, formatterIgnores };
+  return { config, hooks, rule, commands, gitignore, formatterIgnores };
 }

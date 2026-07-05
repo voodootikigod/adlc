@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import {
   ensureCursorHooks,
   ensureGitignore,
   ensureFormatterIgnores,
+  PLUGIN_ROOT,
 } from '../lib/scaffold.mjs';
 import {
   ensureGitignore as coreEnsureGitignore,
@@ -88,5 +89,53 @@ test('scaffold() wires ensureGitignore in so /adlc-init tracks specs/ by default
   const body = readFileSync(join(root, '.gitignore'), 'utf8');
   assert.match(body, /^!\.adlc\/specs\/$/m);
   assert.equal(out.gitignore.changed, true);
+});
+
+// T16 AC1: the package ships command/*.md, but until now the scaffolder never
+// deployed them — docs claimed /adlc-init was runnable inside Cursor while
+// .cursor/commands/ did not exist. scaffold() must land EVERY shipped command.
+test('scaffold() deploys every packaged command/*.md into .cursor/commands/ (T16 AC1)', () => {
+  const root = mkRepo();
+  const out = scaffold(root);
+  const shipped = readdirSync(join(PLUGIN_ROOT, 'command')).filter((f) => f.endsWith('.md'));
+  assert.ok(shipped.length > 0, 'the package must ship at least one command');
+  for (const name of shipped) {
+    const dest = join(root, '.cursor', 'commands', name);
+    assert.ok(existsSync(dest), `${name} must be deployed to .cursor/commands/`);
+    assert.equal(
+      readFileSync(dest, 'utf8'),
+      readFileSync(join(PLUGIN_ROOT, 'command', name), 'utf8'),
+      `${name} must match the package source byte-for-byte`,
+    );
+  }
+  assert.deepEqual([...out.commands].sort(), [...shipped].sort(), 'scaffold() reports the deployed commands');
+});
+
+// T16 AC2: re-running is idempotent — the package source wins over a drifted
+// deployed copy, no duplicates appear, and unrelated user files survive.
+test('scaffold() command deployment is idempotent: package source wins, unrelated files survive (T16 AC2)', () => {
+  const root = mkRepo();
+  scaffold(root);
+  const cmdDir = join(root, '.cursor', 'commands');
+  const shipped = readdirSync(join(PLUGIN_ROOT, 'command')).filter((f) => f.endsWith('.md'));
+  const first = shipped[0];
+  // Drift a deployed command and plant an unrelated user command.
+  writeFileSync(join(cmdDir, first), 'user-drifted content\n');
+  writeFileSync(join(cmdDir, 'my-team-command.md'), '---\ndescription: not ours\n---\nkeep me\n');
+
+  scaffold(root);
+
+  assert.equal(
+    readFileSync(join(cmdDir, first), 'utf8'),
+    readFileSync(join(PLUGIN_ROOT, 'command', first), 'utf8'),
+    're-run must restore the package source (package is the source of truth)',
+  );
+  assert.equal(
+    readFileSync(join(cmdDir, 'my-team-command.md'), 'utf8'),
+    '---\ndescription: not ours\n---\nkeep me\n',
+    're-run must never delete or rewrite unrelated files',
+  );
+  const deployed = readdirSync(cmdDir).filter((f) => f.endsWith('.md'));
+  assert.equal(deployed.length, shipped.length + 1, 'no duplicates on re-run');
 });
 

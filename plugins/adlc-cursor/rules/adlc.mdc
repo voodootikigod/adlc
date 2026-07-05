@@ -15,11 +15,12 @@ alwaysApply: false
 Describe what you're doing; this routes you to the gate that fits. Gates run via
 the `adlc <tool>` dispatcher (`npm i -g @adlc/cli`). LLM-backed gates support
 `--prompt-only` — inside Cursor the model answers the printed prompt, so no API
-key is required.
+key is required. Run `/adlc-init` once per repo to create the `.adlc/` workspace
+and deploy the `/adlc-*` command palette into `.cursor/commands/`.
 
 | You're trying to… | Phase | Gate |
 | --- | --- | --- |
-| Triage / author a ticket | P0 | `adlc preflight`, author into `.adlc/tickets.json` |
+| Triage / author a ticket | P0 | `adlc preflight`, `/adlc-ticket` |
 | Pin down a vague spec | P1 | `adlc spec-lint`, `adlc premortem`, `adlc parallax`, `adversarial-review` (today via `--prompt-only`) |
 | Slice work across models | P2 | `adlc coldstart`, `adlc merge-forecast`, `adlc model-router` |
 | Freeze tests/contracts as rails | P3 | `adlc rails-guard` + the in-session rails-guard hook, `adversarial-review` (today via `--prompt-only`) |
@@ -39,6 +40,20 @@ findings), `--loop` (autonomous fix loop over working-tree code changes only, ne
 write sandbox), `--providers` (multi-provider quorum). Installed separately — invoke via
 `npx adversarial-review` if not on PATH. See ADR-0008 (adversarial-review coverage map) in
 the ADLC repo.
+
+## Cursor command palette
+
+The scaffolder (`/adlc-init`) deploys these commands into `.cursor/commands/` —
+bare `/adlc-<name>` form (Cursor has no plugin namespace):
+
+- `/adlc-init` — bootstrap the `.adlc/` workspace + Cursor wiring.
+- `/adlc-ticket` — P0 triage: author a ticket into `.adlc/tickets.json`.
+- `/adlc-spec` · `/adlc-approve-spec` — P1 interrogation + the human approval gate.
+- `/adlc-decompose` — P2 slicing + merge forecast.
+- `/adlc-verify-build` — P4 deterministic build gate (targeted tests + flail check).
+- `/adlc-prosecute` — P5 prosecution gates (`hollow-test` · `behavior-diff` · `adversarial-review`).
+- `/adlc-distill` — P7 lesson-foundry + rejection-mining.
+- `/adlc-maintain` — decay-driven maintenance (`skill-rot` · `model-ratchet` · `ticket-prune` · `gate-fuzzing`).
 
 ## Rail enforcement in this harness
 

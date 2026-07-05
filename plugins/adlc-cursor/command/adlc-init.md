@@ -22,7 +22,8 @@ npm install -g @adlc/cli
 - Create `.adlc/` if missing.
 - If `.adlc/tickets.json` is absent, create it as `{ "tickets": [] }`. If present, leave it.
 - Run the deterministic scaffolder to create `.adlc/config.json` (no clobber),
-  wire `.cursor/hooks.json` + `.cursor/rules/adlc.mdc`, ensure `.gitignore`
+  wire `.cursor/hooks.json` + `.cursor/rules/adlc.mdc`, deploy the packaged
+  `/adlc-*` command palette into `.cursor/commands/`, ensure `.gitignore`
   tracks the ticket + specs contracts, and exclude `.adlc/` from any detected
   repo formatter/linter:
 
@@ -75,8 +76,10 @@ Run `adlc preflight --json` and summarize the verdict (informational for setup).
 ## 6. Summarize
 
 Report: toolkit version, whether `.adlc/tickets.json`/`config.json` were created or
-already present, what was wired into `.cursor/`, gitignore changes, which
-formatter/linter configs were updated (or need a manual entry), and the
-preflight verdict. Remind the user that the in-session hook is **advisory** —
-Cursor's `permission: "deny"` is best-effort — and that the unbypassable control
-is the CI rail-freeze gate (`docs/ci/rails-guard.yml`).
+already present, what was wired into `.cursor/` (hooks, rule, and the deployed
+`.cursor/commands/` palette), gitignore changes, which formatter/linter configs
+were updated (or need a manual entry), and the preflight verdict. Remind the
+user that the in-session hook is **advisory** — Cursor's `permission: "deny"` is
+best-effort — and that the unbypassable control is the CI rail-freeze gate
+(`docs/ci/rails-guard.yml`). Point the user at `/adlc-ticket` to author their
+first ticket.

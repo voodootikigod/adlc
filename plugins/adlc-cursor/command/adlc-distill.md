@@ -1,0 +1,45 @@
+---
+description: Distill repeated review findings and PR rejections into permanent, deterministic defenses (P7).
+---
+
+# /adlc-distill — turn findings into defenses (P7)
+
+P7 is where the lifecycle compounds: repeated findings become deterministic
+defenses (lint checks, skills, spec-gap templates, review lenses) so the same
+class of defect can't recur. This is idle-time work — run it after a batch of
+reviews. Target scope: the text after the command (default to recent history).
+
+Both gates here are LLM-backed, and inside Cursor **you are the model** — use
+`--prompt-only`, answer the printed prompt yourself, and apply the result. No
+API keys. Prerequisite: `adlc --version` works (else `npm i -g @adlc/cli`).
+
+## 1. Lesson foundry — mine repeated findings (C9)
+Run `adlc lesson-foundry --prompt-only`.
+- `(no clusters to refine)` → not enough repeated findings in
+  `.adlc/findings.jsonl` yet; report that and stop here.
+- Otherwise, answer each cluster prompt yourself: decide the cheapest
+  *deterministic* defense that would have caught the whole cluster — a lint
+  rule, a skill, or a spec-gap template — preferring a machine-checkable gate
+  over a prose reminder.
+- After the user approves, materialize with
+  `adlc lesson-foundry --write --out-dir .adlc/lessons` (dry-run by default),
+  then edit the scaffolded files to match the defenses you decided — `--write`
+  alone does not apply your prompt-only refinement.
+
+## 2. Rejection mining — mine human PR objections (C13)
+Run `adlc rejection-mining --prompt-only`.
+- Reads recent PR review rejections via the `gh` CLI. If it errors with a
+  `gh`/auth/repo message, note that this gate was skipped and why, then continue.
+- Otherwise turn each repeated human objection into a reusable **review lens**
+  (a question a future prosecutor should ask). Materialize with `--write` only
+  after approval.
+
+## 3. Check skill decay
+Run `adlc skill-rot --prompt-only` and flag any skills with stale validation
+metadata for re-validation.
+
+## Summarize
+Report: the finding clusters and rejection lenses found, the concrete defenses
+proposed, which were written (if any), and which gates were skipped (e.g.
+rejection-mining without `gh`) so the coverage stays honest. Point the user at
+`/adlc-maintain` for the decay-driven checks.
