@@ -52,10 +52,13 @@ line — the scaffolder above does this automatically (`ensureGitignore` in
 
 ## 4. Exclude `.adlc/` from the repo's formatters and linters
 
-`.adlc/tickets.json` is machine-written and, once a ticket declares `rails`,
-becomes a frozen trust root that a reformat would trip `rails-guard` on. The
-scaffolder's `ensureFormatterIgnores` detects and updates, only if already
-present in the repo:
+`.adlc/tickets.json` is machine-written and is frozen as a rail trust root
+whenever enforcement is active (`ADLC_P4_ENFORCEMENT=1` plus an active
+ticket). A repo formatter that reformats it causes red quality checks and
+diff churn on a file that must stay machine-canonical, and the in-session
+rail hook will advise against the formatter's own write while enforcement is
+on. The scaffolder's `ensureFormatterIgnores` detects and updates, only if
+already present in the repo:
 
 - **Biome** (`biome.json`) — merges an `overrides` entry disabling the
   formatter/linter for `.adlc/**`.
@@ -67,7 +70,7 @@ present in the repo:
 
 If a repo uses a formatter/linter not covered here, document the manual
 fallback: add a `.adlc/` (or `.adlc/**`) ignore/exclude entry to that tool's
-config yourself before the first rails-bearing ticket is committed.
+config yourself before enforcement is first switched on.
 
 ## 5. Preflight
 

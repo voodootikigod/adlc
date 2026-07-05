@@ -27,9 +27,12 @@ Target ticket: the text after the command (default to the active ticket in
 5. On success, record the build evidence:
    `adlc gate-manifest record p4-build --ticket <id> --files <changed files>
    --data '{"tests":"<command run>","result":"green","flail":"<verdict>"}'`.
-   (Note: `adlc-runner run p4` is a read-only ASSERTION of already-recorded
-   evidence — it exits 2 when none exists and records nothing itself; use it
-   afterwards to confirm the phase evidence is now present, not to create it.)
+   (Note: `adlc-runner run p4` is a read-only ASSERTION requiring
+   `rails-green`/`rails-check`/`flail-check` manifest entries — of which the
+   current toolkit only ever emits `rails-check` (via `adlc rails-guard
+   --record`) — so it exits 2 even after this step. Formal `run p4` assertion
+   is not currently satisfiable from this command's flow; the `p4-build`
+   record above IS the P4 evidence.)
 
 ## Summarize
 Report each command's result, the flail verdict, and what was recorded. When

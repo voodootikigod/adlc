@@ -59,9 +59,10 @@ can silently red the next PR. Check now, non-blocking:
 3. Run the check scoped to `.adlc/tickets.json` if the underlying tool supports
    a path arg (biome/eslint/prettier); otherwise run the full script.
 4. On failure: do not undo the write or fail the command — warn that the
-   formatter/linter flagged `.adlc/tickets.json`, which becomes a frozen trust
-   root once a ticket declares `rails`, and point the user at `/adlc-init`
-   step 4 (or the manual fallback) to add a permanent exclusion.
+   formatter/linter flagged `.adlc/tickets.json`, which is frozen as a rail
+   trust root whenever enforcement is active (`ADLC_P4_ENFORCEMENT=1` plus an
+   active ticket — see the trust-root note above), and point the user at
+   `/adlc-init` step 4 (or the manual fallback) to add a permanent exclusion.
 5. On pass (or no script found): continue silently.
 
 ## 5. Check executability (coldstart, keyless)
