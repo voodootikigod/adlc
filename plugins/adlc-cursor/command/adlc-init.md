@@ -55,10 +55,11 @@ line — the scaffolder above does this automatically (`ensureGitignore` in
 `.adlc/tickets.json` is machine-written and is frozen as a rail trust root
 whenever enforcement is active (`ADLC_P4_ENFORCEMENT=1` plus an active
 ticket). A repo formatter that reformats it causes red quality checks and
-diff churn on a file that must stay machine-canonical, and the in-session
-rail hook will advise against the formatter's own write while enforcement is
-on. The scaffolder's `ensureFormatterIgnores` detects and updates, only if
-already present in the repo:
+diff churn on a file that must stay machine-canonical. (The in-session rail
+hook does not see the formatter's write — formatters run out-of-band or via
+shell, which is never gated in-session; the hook only advises against the
+agent's own structured edits.) The scaffolder's `ensureFormatterIgnores`
+detects and updates, only if already present in the repo:
 
 - **Biome** (`biome.json`) — merges an `overrides` entry disabling the
   formatter/linter for `.adlc/**`.

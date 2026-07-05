@@ -27,11 +27,15 @@ Run `adlc lesson-foundry --prompt-only`.
   alone does not apply your prompt-only refinement.
 
 ## 2. Rejection mining — mine human PR objections (C13)
-Run `adlc rejection-mining --prompt-only`.
-- Reads recent PR review rejections via the `gh` CLI. If it errors with a
-  `gh`/auth/repo message, note that this gate was skipped and why, then continue.
-- Otherwise turn each repeated human objection into a reusable **review lens**
-  (a question a future prosecutor should ask). Materialize with `--write` only
+Run `adlc rejection-mining --json` first (deterministic, keyless: it fetches
+recent PR review rejections via the `gh` CLI and clusters them). If it errors
+with a `gh`/auth/repo message, note that this gate was skipped and why, then
+continue. CAUTION: do not use `--prompt-only` for the fetch — it exits BEFORE
+any `gh` call with a placeholder built from fake sample data, so answering it
+looks like a completed gate while mining nothing real. Use `--prompt-only`
+only as the lens-writing template AFTER the real clusters are in hand.
+- Turn each repeated human objection into a reusable **review lens** (a
+  question a future prosecutor should ask). Materialize with `--write` only
   after approval.
 
 ## 3. Check skill decay

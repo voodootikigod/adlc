@@ -24,10 +24,12 @@ visible for the P6 human gate.
 
 ## 3. Cross-model adversarial review
 Run `npx adversarial-review --providers <a,b>` (≥2 distinct providers on the
-risk gate) — a fresh-context, cross-model ship/no-ship review that loops
-review→fix→re-review until clean (`exit 0 = SHIP`). If no API keys are
-configured, use `npx adversarial-review --prompt-only` and answer the review
-prompt yourself, but prefer a genuinely different model for security-critical
+risk gate) — a fresh-context, cross-model ship/no-ship review. The default
+invocation is single-shot: fix its findings and re-run until it exits 0
+(`exit 0 = SHIP`; the autonomous review→fix loop is the separate opt-in
+`--loop` mode, which needs a write sandbox). If no API keys are configured,
+use `npx adversarial-review --prompt-only` and answer the review prompt
+yourself, but prefer a genuinely different model for security-critical
 changes.
 
 ## 4. Record + verdict
