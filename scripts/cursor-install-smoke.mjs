@@ -143,6 +143,36 @@ if (existsSync(rulePath)) {
   else ok('rules/adlc.mdc references every /adlc-* command');
 }
 
+// ---- T17 AC5 + AC7: /adlc-prosecute is the full sequential multi-lens loop ----
+const prosecutePath = join(cmdDir, 'adlc-prosecute.md');
+if (!existsSync(prosecutePath)) fail('command/adlc-prosecute.md missing (T17)');
+else {
+  const pr = read(prosecutePath);
+  // All five lens briefs + the verifier must live INLINE in the command body
+  // (T17 amendment: no separate lens files — the scaffolder would deploy them
+  // as fake palette commands).
+  for (const lens of ['Correctness', 'Security', 'Contract conformance', 'Spec-vs-implementation diff', 'Test audit']) {
+    if (!pr.includes(lens)) fail(`adlc-prosecute.md missing the ${lens} lens brief`);
+    else ok(`adlc-prosecute.md has the ${lens} lens`);
+  }
+  if (!/verifier/i.test(pr)) fail('adlc-prosecute.md missing the verifier pass');
+  else ok('adlc-prosecute.md has the verifier pass');
+  // Binding honesty requirement (spec decision 3): sequential same-context
+  // lenses must be labeled as weaker than the siblings' fresh-context fan-out,
+  // with the cross-model gate recommended.
+  if (!/weaker independence/.test(pr)) fail('adlc-prosecute.md missing the weaker-independence honesty caveat');
+  else ok('adlc-prosecute.md states the weaker-independence caveat');
+  if (!/adversarial-review --providers/.test(pr)) fail('adlc-prosecute.md does not recommend `npx adversarial-review --providers` for the cross-model risk gate');
+  else ok('adlc-prosecute.md recommends the cross-model adversarial review');
+  // AC7: the command must instruct recording the adversarial-review outcome so
+  // the risk-tier stop-audit (decideAdversarialReviewNotice) has a satisfiable
+  // record instead of nagging unconditionally.
+  if (!/gate-manifest record adversarial-review/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record adversarial-review` instruction');
+  else ok('adlc-prosecute.md instructs recording the adversarial-review gate');
+  if (!/gate-manifest record prosecution/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record prosecution` instruction');
+  else ok('adlc-prosecute.md instructs recording the prosecution gate');
+}
+
 // ---- AC3: run the real enforcement unit tests (always-on proof) ----
 try {
   execFileSync(process.execPath, ['--test', ...globTests(join(PLUGIN, 'test'))], { cwd: ROOT, stdio: 'pipe' });

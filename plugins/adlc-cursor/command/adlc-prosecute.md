@@ -1,38 +1,172 @@
 ---
-description: Prosecute a change before merge (P5) — run the deterministic prosecution gates and the cross-model adversarial review.
+description: Prosecute a change before merge (P5) — run the five prosecution lenses sequentially, verify each finding, loop until dry, run the deterministic gates, and record the verdict.
 ---
 
-# /adlc-prosecute — pre-merge prosecution (P5)
+# /adlc-prosecute — hostile pre-merge review (P5)
 
 Prosecute the change for the active ticket. Requires a clean G4 build
 (`/adlc-verify-build`). Target: the text after the command (default to the
-active ticket).
+active ticket in `.adlc/current-ticket.json`).
 
-> **Note:** the full multi-lens prosecution loop (independent lenses, cross-lens
-> dedupe, verifier refutation, loop-until-dry) is not yet wired for Cursor. Until
-> it lands, run the deterministic prosecution gates below directly.
+**How this differs from the sibling integrations — read before trusting the
+verdict.** Cursor has no subagent fan-out (no Task tool, no `@agent` syntax),
+so the five prosecution lenses below run SEQUENTIALLY in this one context,
+worked by the same model that reads this command. Sequential same-context
+lenses have **weaker independence** than the fresh-context subagent fan-out the
+Claude Code and OpenCode integrations use: conclusions from an earlier lens can
+anchor a later one, and a blind spot in this session repeats across all five
+passes. Do not treat this loop as equivalent to an independent review. For the
+cross-model risk gate, run `npx adversarial-review --providers <a,b>` (two
+distinct providers) — step 6 below — so at least one genuinely different model
+examines the change.
 
-## 1. Hollow-test — are the tests load-bearing?
-Run `adlc hollow-test --test-cmd "<the project's test command>"`. It mutates the
-changed code to find tests that pass without actually testing the behavior.
-Exit `2` = hollow tests found; fix them before merging.
+This command is self-contained: everything the loop needs (lens briefs,
+dedupe rule, verification rule, stop rule) is defined below.
 
-## 2. Behavior-diff — is the change visible?
-Run `adlc behavior-diff capture …` before/after (or against the base branch) and
-`adlc behavior-diff compare before.json after.json` to make the behavior change
-visible for the P6 human gate.
+## 0. Collect the evidence
 
-## 3. Cross-model adversarial review
+Establish the target ticket (its `scope`, spec, and acceptance criteria from
+`.adlc/tickets.json`) and the change under prosecution:
+`git diff <base-branch>...HEAD` (or the working-tree diff if not yet
+committed). Every lens reviews this same diff plus whatever surrounding code it
+needs to read. Lenses are read-only reviewers: while prosecuting, do not edit
+files or run state-changing commands — a reviewer that can rewrite the evidence
+is not a reviewer.
+
+## 1. Run the five lenses, sequentially
+
+Work through each lens below **in order, one at a time**. Before starting each
+lens, deliberately set aside the previous lens's conclusions and re-read the
+diff from scratch under the new lens's mandate only — this is the closest a
+single context can get to independent reviewers, and it is imperfect (see the
+caveat above).
+
+Every lens uses the same stance and output shape:
+
+> You are a hostile pre-merge reviewer. Your only job is to **break confidence
+> in the change**, not validate it. For each finding, produce an object with:
+> `severity` (critical|high|medium|low), `file`, `line_start`, `line_end`
+> (post-change line numbers; 0,0 = file-level), `title`, `body`, `evidence`
+> (quoted verbatim from the diff), and `recommendation`. Output a JSON array of
+> findings (empty if none). Do not soften or speculate beyond the evidence — a
+> finding you cannot ground in the diff does not belong.
+
+### Lens 1 — Correctness
+Hunt specifically for: logic errors, off-by-one and boundary mistakes, broken
+invariants, incorrect results, mishandled error/empty/null cases, and state
+that can desync.
+
+### Lens 2 — Security
+Hunt specifically for: auth and trust-boundary holes, injection
+(SQL/shell/path), secrets in code or logs, SSRF, unsafe deserialization,
+missing input validation at boundaries, and who-controls-the-control bypasses.
+
+### Lens 3 — Contract conformance
+Hunt specifically for: API/schema/type drift, backwards-incompatible changes,
+undocumented response shape changes, and violations of the ticket's declared
+contract or shared types.
+
+### Lens 4 — Spec-vs-implementation diff
+Hunt specifically for: places where the implementation diverges from the
+spec/acceptance criteria, behavior changes not reflected in the spec, and scope
+creep beyond the ticket.
+
+### Lens 5 — Test audit
+Hunt specifically for: tests that assert nothing meaningful, mock-only
+verifications, tests that would pass against a broken implementation, missing
+coverage of the change's core behavior, and suppressed/skipped assertions.
+
+Collect every finding from every lens into one list.
+
+## 2. Dedupe
+
+Merge findings across lenses, deduping by **file + line range + normalized
+title** (trim, lowercase, collapse internal whitespace). When two lenses report
+the same defect, keep the **highest severity** (critical > high > medium >
+low). Dedupe only on that key — do not drop a finding because it "sounds like"
+another one.
+
+## 3. Verifier pass — adversarially re-examine each finding
+
+For each deduped finding, run the verifier brief:
+
+> You are given ONE prosecution finding. Try to **refute it**, not to agree.
+> Default to refuted when the evidence is weak or you cannot reproduce the
+> problem from the quoted diff. Steps: (1) re-read the finding's evidence in
+> context; (2) construct the most concrete reproduction or counterexample you
+> can; (3) decide: REAL (a genuine defect a maintainer should act on) or
+> REFUTED (false positive, already-handled, or unreproducible). Record
+> `{ "real": boolean, "reason": string, "repro": string }`. Be specific and
+> mechanistic; "looks fine" is not a reason.
+
+**Honesty note on the verification semantics:** in the sibling integrations a
+finding survives on a **strict majority of independent verifier votes**, each
+from a fresh context. Here there are no independent votes — this is **one model
+(you) re-examining its own findings in the same context**, which is weaker.
+Adapt the contract honestly:
+
+- REAL, with a concrete repro or mechanism → the finding **survives**.
+- REFUTED, with a concrete counterexample or proof it is already handled → the
+  finding is **dropped**. A vague "probably fine" does not refute anything.
+- Cannot decide (evidence unclear, cannot trace the code path) → the finding
+  **survives as an unverified blocker**. A pre-merge gate fails closed: never
+  silently drop a finding because verification did not complete.
+
+## 4. Loop until dry
+
+Repeat steps 1–3 until **two consecutive rounds surface no new confirmed
+findings** (a round is dry when it contributes zero net-new surviving findings
+versus the running set). Cap the loop at 5 rounds; if it is cut off before
+going dry, report that as a finding itself ("convergence did not complete").
+
+## 5. Deterministic gates
+
+These run regardless of what the lenses found — they are mechanical, not
+judgment:
+
+- **Hollow-test** — are the tests load-bearing? Run
+  `adlc hollow-test --test-cmd "<the project's test command>"`. It mutates the
+  changed code to find tests that pass without actually testing the behavior.
+  Exit `2` = hollow tests found; fix them before merging.
+- **Behavior-diff** — is the change visible? Run
+  `adlc behavior-diff capture --config behavior.json --out before.json` /
+  `--out after.json` (before/after, or against the base branch) and
+  `adlc behavior-diff compare before.json after.json` to make the behavior
+  change visible for the P6 human gate.
+
+## 6. Cross-model adversarial review (the risk gate)
+
 Run `npx adversarial-review --providers <a,b>` (≥2 distinct providers on the
-risk gate) — a fresh-context, cross-model ship/no-ship review. The default
-invocation is single-shot: fix its findings and re-run until it exits 0
-(`exit 0 = SHIP`; the autonomous review→fix loop is the separate opt-in
-`--loop` mode, which needs a write sandbox). If no API keys are configured,
-use `npx adversarial-review --prompt-only` and answer the review prompt
-yourself, but prefer a genuinely different model for security-critical
-changes.
+risk gate) — a fresh-context, cross-model ship/no-ship review. Given the
+weaker-independence caveat above, this step carries the cross-model weight for
+Cursor sessions; do not skip it for risk-gated changes (auth/trust boundaries,
+deny paths, secrets, destructive data operations, schema migrations,
+CI/CD/supply chain). The default invocation is single-shot: fix its findings
+and re-run until it exits 0 (`exit 0 = SHIP`; the autonomous review→fix loop is
+the separate opt-in `--loop` mode, which needs a write sandbox). If no API keys
+are configured, use `npx adversarial-review --prompt-only` and answer the
+review prompt yourself, but prefer a genuinely different model for
+security-critical changes.
 
-## 4. Record + verdict
-Report the findings and a ship/no-ship verdict. On CLEAR, record prosecution
-evidence: `adlc gate-manifest record prosecution --files <changed files>`.
-Material findings block the merge.
+When the review passes, record it so the risk-tier stop-audit has a satisfiable
+record instead of nagging unconditionally:
+
+```
+adlc gate-manifest record adversarial-review --files <risk-gated paths> --data '{"providers":"<a,b>","verdict":"SHIP"}'
+```
+
+`--files` must list the risk-gated changed paths the review actually covered —
+a record scoped to different files does not satisfy the audit for this change.
+
+## 7. Record + verdict
+
+Report the surviving findings (severity, file, evidence, recommendation) and a
+ship/no-ship verdict. On CLEAR, record the prosecution evidence for the
+deterministic gate:
+
+```
+adlc gate-manifest record prosecution --files <changed files>
+```
+
+Material (surviving, non-refuted) findings block the merge — including
+unverified blockers, until they are verified or refuted.

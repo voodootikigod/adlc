@@ -7,4 +7,5 @@ export * from './lib/tickets.mjs';
 export * from './lib/revision.mjs';
 export * from './lib/risk-tier.mjs';
 export * from './lib/scaffold-hygiene.mjs';
+export * from './lib/prosecutor.mjs';
 export * as mutate from './lib/mutate.mjs';

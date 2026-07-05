@@ -133,6 +133,37 @@ export function decideAdversarialReviewNotice(options?: {
   matches: Array<{ path: string; tier: string; pattern: string }>;
 };
 
+export type ProsecutionLens = {
+  readonly key: string;
+  readonly agent: string;
+  readonly focus: string;
+};
+export type ProsecutionFinding = {
+  readonly severity?: 'critical' | 'high' | 'medium' | 'low' | string;
+  readonly file?: string;
+  readonly line_start?: number;
+  readonly line_end?: number;
+  readonly title?: string;
+  readonly [key: string]: unknown;
+};
+export type VerifierVote = { readonly real?: boolean };
+export const LENSES: readonly ProsecutionLens[];
+export const VERIFIER: ProsecutionLens;
+export const ALL_AGENTS: readonly string[];
+export function findingKey(finding: ProsecutionFinding): string;
+export function dedupeFindings(
+  findings?: readonly ProsecutionFinding[] | null
+): ProsecutionFinding[];
+export function survivesVerification(
+  votes?: ReadonlyArray<VerifierVote | null | undefined> | null,
+  options?: { threshold?: number }
+): boolean;
+export function shouldContinue(state: {
+  freshThisRound: number;
+  dryStreak: number;
+  maxDry?: number;
+}): { continue: boolean; dryStreak: number };
+
 export function ensureGitignore(root: string): { path: string; added: string[]; changed: boolean };
 export function ensureFormatterIgnores(root: string): {
   biome: { path: string | null; detected: boolean; changed: boolean; skipped?: string };
