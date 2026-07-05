@@ -25,8 +25,11 @@ Target ticket: the text after the command (default to the active ticket in
 4. If any of the above fail, STOP — report the failures; the change is not
    eligible for P5.
 5. On success, record the build evidence:
-   `adlc-runner run p4 --ticket <id>` (or, if the runner is unavailable, append an
-   unsigned `p4-build` entry to `.adlc/manifest.jsonl`, flagged `unsigned_fallback`).
+   `adlc gate-manifest record p4-build --ticket <id> --files <changed files>
+   --data '{"tests":"<command run>","result":"green","flail":"<verdict>"}'`.
+   (Note: `adlc-runner run p4` is a read-only ASSERTION of already-recorded
+   evidence — it exits 2 when none exists and records nothing itself; use it
+   afterwards to confirm the phase evidence is now present, not to create it.)
 
 ## Summarize
 Report each command's result, the flail verdict, and what was recorded. When

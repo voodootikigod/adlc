@@ -35,8 +35,9 @@ Run `adlc rejection-mining --prompt-only`.
   after approval.
 
 ## 3. Check skill decay
-Run `adlc skill-rot --prompt-only` and flag any skills with stale validation
-metadata for re-validation.
+Run `adlc skill-rot --json` (deterministic — it scans skill files' validation
+metadata; it has no LLM/`--prompt-only` mode) and flag any skills with stale
+validation metadata for re-validation.
 
 ## Summarize
 Report: the finding clusters and rejection lenses found, the concrete defenses

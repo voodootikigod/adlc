@@ -39,8 +39,10 @@ Run `adlc ticket-prune --json`.
   with `adlc ticket-prune --write` to archive them into the gitignored
   `.adlc/tickets.archive.json` (never deletes outright). Treat `--write` as a
   human-confirmed action — `.adlc/tickets.json` is the shared rail trust root,
-  so pruning while rails are frozen requires `ADLC_RAILS_BYPASS=1` and is
-  recorded to the gate-manifest.
+  and the commit-time CI gate (`scripts/rails-guard-ci.mjs`) hard-denies
+  removing a base-ref ticket in a PR, so a prune of already-merged tickets
+  can only land through the protected-base ceremony, not a normal PR (known
+  constraint: voodootikigod/adlc#104).
 
 ## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 Only if a gate suite exists at `.adlc/gate-suite.json` (without one the tool

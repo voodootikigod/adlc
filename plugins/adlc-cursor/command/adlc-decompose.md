@@ -24,7 +24,8 @@ answer into `.adlc/manifest.jsonl` so the executability verdict is auditable.
 ## 3. Forecast — `merge-forecast` + `model-router`
 - Run `adlc merge-forecast --json`: confirm a clean DAG (no cycles, no high-risk
   concurrent same-scope pairs). Serialize with edges if it flags conflicts.
-- Run `adlc model-router --json` (or `--prompt-only`) to get a tier/route hint per
+- Run `adlc model-router --json` (deterministic — it has no `--prompt-only`
+  mode; flags are `--tickets`/`--floor`/`--json`) to get a tier/route hint per
   ticket (cheap / mid / frontier).
 
 ## 4. Summarize

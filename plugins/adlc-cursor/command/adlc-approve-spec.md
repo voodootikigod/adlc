@@ -14,10 +14,11 @@ Target ticket: the text after the command (default to `.adlc/current-ticket.json
 1. Show the user the converged spec and its acceptance criteria (from `/adlc-spec`).
 2. Ask the user to explicitly approve, request changes, or reject. Do **not**
    proceed on silence or assume approval.
-3. On approval, record the evidence via the runner:
-   `adlc-runner accept --ticket <id> --gate p1` (or, if the runner is unavailable,
-   append an unsigned `spec_approval` entry to `.adlc/manifest.jsonl` noting the
-   approver and the spec hash, flagged `unsigned_fallback: true`).
+3. On approval, record the evidence:
+   `adlc gate-manifest record spec-approval --files <spec path> --data
+   '{"approver":"<who>","spec_hash":"<sha256 of the spec file>","verdict":"approved"}'`.
+   (There is no runner verb for P1 approval — `adlc-runner accept` is the P6
+   acceptance-packet recorder and takes `--packet`, not `--gate`.)
 4. On changes requested, loop back to `/adlc-spec`; on rejection, stop.
 
 ## Summarize

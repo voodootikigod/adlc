@@ -35,12 +35,18 @@ optional `budget`. Ask the user rather than guess if anything required is ambigu
    restore the snapshot and report; else continue.
 7. Release the lock.
 
-Trust-root note: once any ticket declares `rails`, the `preToolUse` rail hook
-freezes `.adlc/tickets.json` itself (it is the rail trust root). If a prior
-ticket already declares rails, the write will be denied — re-run with
-`ADLC_RAILS_BYPASS=1` set, which allows the edit and records it to the
-gate-manifest. Editing the ticket set while rails are frozen is a deliberate,
-audited action.
+Trust-root note: whenever enforcement is active (`ADLC_P4_ENFORCEMENT=1` plus
+a resolved active ticket — even one declaring no rails), `.adlc/tickets.json`
+and `.adlc/current-ticket.json` are frozen as the rail trust roots. In Cursor
+the `preToolUse` rail hook surfaces a **best-effort, advisory** deny for
+structured edits to them (ADR-0006: Cursor's `permission: "deny"` is not
+guaranteed, and shell-driven writes are not gated in-session at all); there
+is no in-session bypass mechanism in this harness.
+The real control is the commit-time CI rail-freeze gate
+(`docs/ci/rails-guard.yml`), which rejects a PR that edits a base-frozen
+trust root regardless of how the edit was made. Treat editing the ticket set
+while rails are frozen as a deliberate, human-reviewed action that must land
+through that gate's documented ceremony.
 
 ## 4. Warn (don't fail) if the repo's formatter/linter would reformat the write
 The write in step 3 just changed `.adlc/tickets.json` on disk. If the repo's
