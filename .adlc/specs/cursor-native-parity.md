@@ -28,8 +28,11 @@ ticket-prune, prosecutor loops) is absent.
   `apps/docs` cursor page.
 
 Dependency order: T16 → {T17, T18} → T19. T17 and T18 are parallelizable after
-T16 lands (disjoint scopes except `scripts/cursor-install-smoke.mjs`, which T17
-touches and T19 finalizes).
+T16 lands, EXCEPT that all four tickets scope
+`scripts/cursor-install-smoke.mjs` (round-2 review correction — the earlier
+"only T17 touches it" claim was false). Smoke edits are append-style
+assertions; T17/T18 merges are sequenced (whichever lands second rebases the
+smoke additions), and T19 finalizes.
 
 ## Design decisions (binding)
 
