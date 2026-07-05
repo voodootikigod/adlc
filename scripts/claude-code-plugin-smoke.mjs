@@ -577,7 +577,7 @@ const EXCLUDED_DOC_PATHS = [
   ['docs/archive/', 'superseded/historical record, not live guidance — see docs/archive/README.md'],
   ['docs/specs/', 'P1 spec/acceptance-criteria docs describe issues (including this bug class) as illustrative examples, not live guidance'],
   ['docs/superpowers/', 'internal planning/spec scratch docs for in-flight work, not published guidance'],
-  ['docs/tools/', 'harness-agnostic package reference docs (per docs/README.md: "follow the linked README for command-specific detail"), not per-harness invocation guidance'],
+  ['docs/tools/', 'harness-agnostic package reference docs (per docs/toolkit.md: "follow the linked README for command-specific detail"), not per-harness invocation guidance'],
   ['docs/integrations/antigravity.md', "Antigravity's own doc; that harness has no plugin-namespace convention (verified in #50)"],
   ['docs/integrations/codex.md', "Codex's own doc; skill-driven, not command-namespaced (verified in #50)"],
   ['docs/integrations/cursor.md', "Cursor's own doc; bare \"/adlc-*\" is that harness's correct, intentional syntax"],
@@ -594,7 +594,19 @@ function isExcludedDocPath(relPosixPath) {
 function collectMarkdownFiles(dirPath, out = []) {
   for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
     const entryPath = join(dirPath, entry.name);
-    if (entry.isDirectory()) {
+    // Use statSync (follows symlinks), not the dirent's own type flags:
+    // Dirent.isDirectory() reports false for a symlink even when its target
+    // IS a directory, so a symlinked doc directory would otherwise be
+    // silently invisible to this scan — recursed into by neither branch below
+    // — reintroducing exactly the kind of blind spot #96 exists to close, via
+    // a filesystem-type route instead of a hardcoded-list route.
+    let isDir;
+    try {
+      isDir = statSync(entryPath).isDirectory();
+    } catch {
+      continue; // broken symlink target — nothing to scan
+    }
+    if (isDir) {
       collectMarkdownFiles(entryPath, out);
     } else if (entry.name.endsWith('.md')) {
       out.push(entryPath);

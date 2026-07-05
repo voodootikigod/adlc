@@ -40,7 +40,7 @@ caught.
 ## Verification
 
 ```sh
-node --test scripts/test/claude-code-plugin-smoke.test.mjs   # 8/8 pass
+node --test scripts/test/claude-code-plugin-smoke.test.mjs   # 12/12 pass
 node scripts/claude-code-plugin-smoke.mjs .                    # exit 0
 npm test                                                       # full repo suite, exit 0
 ```

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'claude-code-plugin-smoke.mjs');
@@ -302,6 +302,47 @@ test('claude-code-plugin-smoke does not let a degenerate empty-name command file
       0,
       `an empty derived name would wrongly widen the match to any "/adlc-<anything>" reference:\n${result.stderr}`
     );
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+// Regression coverage: Node's Dirent.isDirectory() reports false for a symlink
+// even when its target IS a directory, so collectMarkdownFiles() must not rely
+// on the dirent's own type flags — a symlinked doc directory under docs/ would
+// otherwise be recursed into by neither branch (not a directory by the dirent
+// flag, and its name doesn't end in ".md" either), making it silently invisible
+// to the scan with zero trace in the tool's output. This is the same "silent
+// blind spot" failure class #96 exists to close, reached via a filesystem-type
+// route instead of a hardcoded-list route.
+test('claude-code-plugin-smoke follows a symlinked directory under docs/ instead of silently skipping it', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    // A real directory OUTSIDE docs/, containing a bare-command doc, linked
+    // INTO docs/ as a directory symlink (e.g. simulating a vendored/shared docs
+    // tree in a monorepo).
+    const externalDir = join(tmpRepo, '..', 'adlc-cc-smoke-external-docs');
+    mkdirSync(externalDir, { recursive: true });
+    writeFileSync(join(externalDir, 'hidden.md'), '# Hidden\n\nRun /adlc-ticket to get started.\n');
+    symlinkSync(externalDir, join(tmpRepo, 'docs/linked-external'), 'dir');
+
+    try {
+      const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+      assert.notStrictEqual(
+        result.status,
+        0,
+        'smoke test should fail on a bare command reference reached through a symlinked doc directory, not silently skip it'
+      );
+      assert.match(result.stderr, /bare, non-namespaced command reference/);
+      assert.match(result.stderr, /linked-external/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   } finally {
     rmSync(tmpRepo, { recursive: true, force: true });
   }
