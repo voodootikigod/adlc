@@ -89,6 +89,16 @@ The review packet binds the reviewer prompt and reviewed input packet to P5 evid
 `prompt` and `inputs` are file paths, their hashes must match the supplied SHA-256 values,
 and `clean_worktree` must equal the exact reviewed revision.
 
+**Evidence file location is enforced, not just convention.** If `provenance.transcript`,
+`review_packet.prompt`, or `review_packet.inputs` resolves to a path *inside* the worktree,
+it must live under `.adlc/` or `.omo/evidence/` -- `lib/run.mjs`'s `isEvidencePath()` rejects
+any other in-worktree location. This is a trust-boundary control: it stops review "evidence"
+from pointing at an arbitrary file elsewhere in the repo that could be edited to fake a
+clean review. `.omo/evidence/` is otherwise-gitignored scratch space, but the three files
+backing the bundled example (`docs/examples/p5-passes.json`) are deliberately carved out
+of that ignore rule and tracked -- see the comment in `.gitignore` before treating anything
+under `.omo/` as safe to delete.
+
 ## Exit codes
 
 - `0`: two consecutive dry passes were recorded
