@@ -63,6 +63,8 @@ if (!check.ok) {
 const { provider, model } = pickProvider();
 mkdirSync(outDir, { recursive: true });
 
+const failures = [];
+
 for (const img of manifest.images) {
   if (only && img.slug !== only) continue;
   const outFile = path.join(outDir, `${img.slug}.png`);
@@ -72,11 +74,21 @@ for (const img of manifest.images) {
   }
   const prompt = `${manifest.styleGuide}\n\n${img.prompt}`;
   console.log(`generating ${img.slug} via ${provider}/${model}...`);
-  const buf = provider === 'openai' ? await generateOpenAI(prompt, img.size) : await generateGemini(prompt);
-  writeFileSync(outFile, buf);
-  img.provenance = { provider, model, generatedAt: new Date().toISOString().slice(0, 10) };
-  console.log(`wrote ${outFile} (${buf.length} bytes)`);
+  try {
+    const buf = provider === 'openai' ? await generateOpenAI(prompt, img.size) : await generateGemini(prompt);
+    writeFileSync(outFile, buf);
+    img.provenance = { provider, model, generatedAt: new Date().toISOString().slice(0, 10) };
+    console.log(`wrote ${outFile} (${buf.length} bytes)`);
+  } catch (err) {
+    failures.push(img.slug);
+    console.error(`failed ${img.slug}: ${err.message}`);
+  }
 }
 
 writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
 console.log('manifest provenance updated');
+
+if (failures.length > 0) {
+  console.error(`${failures.length} image(s) failed: ${failures.join(', ')}`);
+  process.exit(1);
+}
