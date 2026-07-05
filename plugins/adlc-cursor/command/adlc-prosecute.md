@@ -99,13 +99,18 @@ For each deduped finding, run the verifier brief:
 > concrete reproduction or counterexample you can; (3) decide: REAL (a genuine
 > defect a maintainer should act on — you built a concrete repro or mechanism),
 > REFUTED (you built a concrete counterexample, or proved it is already
-> handled), or CANNOT-DECIDE (neither succeeded). Record
-> `{ "real": boolean | null, "reason": string, "repro": string }` (`null` =
-> cannot-decide). Be specific and mechanistic; "looks fine" is not a reason.
-> (The siblings' "default to refuted" instruction applies to their independent
-> per-vote subagents, where absent votes are handled by majority machinery —
-> here there is one examiner, so cannot-decide is an explicit outcome, not a
-> default in either direction.)
+> handled), or CANNOT-DECIDE (neither succeeded). For REAL/REFUTED record
+> `{ "real": boolean, "reason": string, "repro": string }`; for CANNOT-DECIDE
+> record the vote as a literal `null` and note why in prose — this matches
+> `@adlc/core`'s `survivesVerification` contract exactly, where a `null` vote
+> is discarded and a finding with no valid votes SURVIVES fail-closed. (Do NOT
+> encode cannot-decide as `{ "real": null }`: the shared contract counts that
+> object as a non-real vote, i.e. a refutation — the opposite of what
+> cannot-decide must mean.) Be specific and mechanistic; "looks fine" is not a
+> reason. (The siblings' "default to refuted" instruction applies to their
+> independent per-vote subagents, where absent votes are handled by majority
+> machinery — here there is one examiner, so cannot-decide is an explicit
+> outcome, not a default in either direction.)
 
 **Honesty note on the verification semantics:** in the sibling integrations a
 finding survives on a **strict majority of independent verifier votes**, each
