@@ -271,3 +271,38 @@ test('claude-code-plugin-smoke fails cleanly (not an uncaught crash) on a comman
     rmSync(tmpRepo, { recursive: true, force: true });
   }
 });
+
+// Regression coverage: a command filename of exactly "adlc-.md" derives an
+// EMPTY name, producing an empty alternative in the regex alternation
+// (equivalent to `(?:init|ticket|)`). An empty alternative matches the empty
+// string at any position, which widens "/adlc-<name>" into effectively
+// "/adlc-" matching ANY bare command reference — silently reintroducing the
+// "match too much" failure class the escaping fix exists to close, just via a
+// different route (an empty string, not an unescaped metacharacter).
+test('claude-code-plugin-smoke does not let a degenerate empty-name command file widen the match to any bare reference', () => {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-smoke-'));
+  try {
+    cpSync(REPO, tmpRepo, {
+      recursive: true,
+      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+    });
+
+    // A degenerate command filename that derives an empty name.
+    writeFileSync(join(tmpRepo, 'plugins/adlc-claude-code/commands/adlc-.md'), '---\ndescription: a fixture-only degenerate command file.\n---\n\n# fixture\n');
+
+    // An UNRELATED bare command name that isn't a real command at all — should
+    // never be flagged. If the empty derived name widens the alternation, this
+    // would wrongly match.
+    const fixtureDocPath = join(tmpRepo, 'docs/fixture-empty-name.md');
+    writeFileSync(fixtureDocPath, '# Fixture\n\nThis mentions /adlc-notarealcommand which must NOT be treated as a bare command match.\n');
+
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.strictEqual(
+      result.status,
+      0,
+      `an empty derived name would wrongly widen the match to any "/adlc-<anything>" reference:\n${result.stderr}`
+    );
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});

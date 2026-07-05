@@ -498,6 +498,14 @@ const namespacedCommandNames = existsSync(commandsDir)
   ? readdirSync(commandsDir)
       .filter((name) => name.startsWith('adlc-') && name.endsWith('.md'))
       .map((name) => name.slice('adlc-'.length, -'.md'.length))
+      // A filename of exactly "adlc-.md" (or similarly degenerate) would derive
+      // an empty name, producing an empty alternative in the regex alternation
+      // below. An empty alternative matches everywhere, silently widening
+      // "/adlc-<name>" into "/adlc-" matching ANY bare command reference —
+      // reintroducing exactly the "match too much" class the escaping fix
+      // below exists to close. Drop empty names defensively; there is no
+      // legitimate command with an empty name.
+      .filter((name) => name.length > 0)
   : [];
 if (namespacedCommandNames.length === 0) {
   fail('no adlc-*.md command files found under plugins/adlc-claude-code/commands — cannot derive namespacedCommandNames (the bare-command guard would silently match nothing)');
