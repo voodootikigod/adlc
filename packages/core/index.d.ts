@@ -133,6 +133,19 @@ export function decideAdversarialReviewNotice(options?: {
   matches: Array<{ path: string; tier: string; pattern: string }>;
 };
 
+export function ensureGitignore(root: string): { path: string; added: string[]; changed: boolean };
+export function ensureFormatterIgnores(root: string): {
+  biome: { path: string | null; detected: boolean; changed: boolean; skipped?: string };
+  prettier: { path: string; detected: boolean; changed: boolean };
+  eslint: {
+    path: string | (string | null)[] | null;
+    detected: boolean;
+    changed: boolean;
+    skipped?: string;
+    sources?: { eslintrc: unknown; eslintignore: unknown };
+  };
+};
+
 export namespace mutate {
   export const OPERATORS: ReadonlyArray<{
     readonly name: string;

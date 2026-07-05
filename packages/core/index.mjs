@@ -6,4 +6,5 @@ export * from './lib/ledger.mjs';
 export * from './lib/tickets.mjs';
 export * from './lib/revision.mjs';
 export * from './lib/risk-tier.mjs';
+export * from './lib/scaffold-hygiene.mjs';
 export * as mutate from './lib/mutate.mjs';
