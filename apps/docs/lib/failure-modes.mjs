@@ -4,6 +4,8 @@ export const FAILURE_MODES = {
     tagline: 'Declares victory the moment code plausibly compiles.',
     defense: { tool: 'spec-lint', phase: 'P1' },
   },
+  // ADLC.md names F2 in both P3 ("self-validation") and P5; P5/prosecute is the
+  // canonical kill — prosecution is the adversarial check sycophancy can't satisfy.
   F2: {
     name: 'Sycophancy',
     tagline: 'Agrees with whatever framing the prompt implies.',
@@ -29,11 +31,14 @@ export const FAILURE_MODES = {
     tagline: 'Stops at the usual dozen findings, whether or not more exist.',
     defense: { tool: 'review-calibration', phase: 'P5' },
   },
+  // No packages/simplify exists; lesson-foundry is the nearest real P7 tool (proxy).
   F7: {
     name: 'Generative bloat',
     tagline: 'Writes ten files where a diff would do.',
     defense: { tool: 'lesson-foundry', phase: 'P7' },
   },
+  // model-router self-identifies as a D1 cost-dial tool; it defends F8 where the
+  // damage happens (P4 build), the closest phase id PHASES offers.
   F8: {
     name: 'Coherence loss',
     tagline: 'Switches models mid-task and leaves the seams showing.',
