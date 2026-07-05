@@ -128,11 +128,25 @@ static assets served via `next/image` (AVIF/WebP). One shared style-guide
 paragraph is embedded in every prompt so the set reads as one visual world.
 Prompts live in the manifest so regeneration is reproducible.
 
+**Provenance & rights:** the manifest records provider + model + generation
+date per asset, and each provider's commercial-use terms are confirmed before
+its output ships. Integration card art must pass the
+evocative-not-trademark-reproduction guardrail at review time.
+
 ### Elevation on the shared tokens
 
 Large editorial type scale for headlines, generous section spacing, monospace
 accents for terminal-flavored elements, subtle motion (gate-check animations,
 scroll reveals on diagrams). Dark-only, same tokens as `/docs`.
+
+### Accessibility acceptance criteria
+
+- Gate states never rely on color alone — pass/fail/wish always pair the color
+  with an icon or text label.
+- Theme tokens (text on background, gate colors where used as text) meet WCAG
+  AA contrast; verified once against the palette during build-out.
+- All motion (gate animations, scroll reveals) respects
+  `prefers-reduced-motion` with a static fallback.
 
 ## 5. Enterprise page (`/enterprise`)
 
@@ -142,20 +156,29 @@ Speaks to the buyer, not the installer:
 - **What "doing it right" looks like** — gates as an evidence trail;
   `gate-manifest` produces artifacts auditors can read.
 - **Rollout shape** — pilot team → rails → org-wide.
-- **Contact CTA** — `mailto:` or simple form; no CRM plumbing in v1.
+- **Contact CTA** — `mailto:` only in v1: no form, so no PII is collected and
+  no privacy policy is required yet. Adding a form later requires publishing a
+  privacy policy first.
 
 ## 6. Domains & deployment
 
 - Vercel project rooted at `apps/docs`; domain **agenticlifecycle.ai**.
 - **devlifecycle.ai** and **adlc-docs.vercel.app** 301 → apex via Vercel domain
-  redirect config. Existing docs links keep working because `/docs/**` paths
-  are unchanged.
+  redirect config. Redirects must be **path-preserving**
+  (`adlc-docs.vercel.app/docs/x` → `agenticlifecycle.ai/docs/x`); existing docs
+  links keep working because `/docs/**` paths are unchanged.
+- Cutover check: crawl the deployed sitemap plus known legacy docs URLs and
+  assert 200s (a small link-check script, run against preview before pointing
+  domains).
 - Sitemap + per-page metadata/OG for all new routes.
 
 ## 7. Testing & quality bar
 
 - TDD on authored logic: integration-facts data module, nav config,
   redirect/metadata helpers, image-manifest validation.
+- Integration routes are generated from the integration-facts module (grounded
+  in `docs/integrations/*.md`); a test fails if a route's slug has no
+  corresponding ground-truth doc, so a bad slug can't ship a 404.
 - Component render tests for new pages; wired into root `npm test`.
 - P5 prosecution before merge, pre-empting the known hollow-test classes
   (wrong-branch fixtures, swallowed error paths, exact-value assertions on data
