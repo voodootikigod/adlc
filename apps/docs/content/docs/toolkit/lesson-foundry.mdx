@@ -1,8 +1,63 @@
 ---
 title: lesson-foundry
-description: lesson-foundry documentation (coming soon).
+description: Clusters recurring prosecution findings and routes each to its cheapest permanent defense (lint, skill, or spec gap).
 ---
 
 # lesson-foundry
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P7 Compound** · **Gate:** with `--gate`, every recurring finding cluster has a banked defense file — no lesson is re-bought.
+
+<PhaseDiagram phase="P7" />
+
+## What it defends against
+
+<FailureMode id="F7" />
+
+Without a compounding step the lifecycle never gets cheaper: the same finding is
+re-discovered by probabilistic review every run. `lesson-foundry` reads the
+prosecution findings ledger, clusters findings by semantic similarity, and
+routes each recurring cluster to its cheapest permanent defense — a grep-gate
+LINT, a `SKILL.md` stub, or a SPEC-GAP question for P1 — demoting a
+dollars-per-catch LLM finding into a free-forever deterministic one.
+
+## Usage
+
+```sh
+adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [--gate] [--llm] [--prompt-only] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--ledger <name>` | Ledger name under `.adlc/` to read findings from (default `findings`). |
+| `--min <n>` | Minimum cluster size to surface (default `2`). |
+| `--out-dir <path>` | Output directory for defense files (default `.adlc/lessons`). |
+| `--write` | Emit files (default is dry-run — prints what would be written). |
+| `--gate` | Exit 2 if any cluster ≥ `--min` has no defense file in `--out-dir`. |
+| `--llm` | Refine cluster wording via one mid-tier LLM call per cluster. |
+| `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
+| `--prompt-only` | Print the LLM prompts and exit 0 (zero API keys). |
+| `--json` | Machine-readable output. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: no recurring unbanked lessons (or `--gate` not set).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: bad input, unreadable ledger, or a write failure.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more clusters have no defense file in `--out-dir`.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc lesson-foundry --ledger findings --min 2 --gate
+cluster "raw-error-to-client" (4 findings) → LINT   [no defense file]
+cluster "missing-null-check"  (3 findings) → SKILL  [no defense file]
+✗ lesson-foundry: 2 recurring lesson(s) unbanked: raw-error-to-client, missing-null-check
+exit 2
+```
+
+## Go deeper
+
+[packages/lesson-foundry](https://github.com/voodootikigod/adlc/tree/main/packages/lesson-foundry).
+Why recurring findings must be paid for exactly once:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

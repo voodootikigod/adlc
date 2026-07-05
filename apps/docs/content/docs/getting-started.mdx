@@ -1,8 +1,77 @@
 ---
 title: Getting started
-description: Getting started documentation (coming soon).
+description: Install the ADLC toolkit, bootstrap a repo, and run your first gate in under five minutes.
 ---
 
 # Getting started
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+The toolkit is a set of gate-shaped CLIs published under the `@adlc` npm scope.
+One install gives you every gate behind the stable `adlc <tool>` dispatcher.
+
+## 1. Install the CLI
+
+```sh
+npm install -g @adlc/cli
+adlc --help          # lists every tool, grouped by lifecycle phase
+
+# or run without installing
+npx @adlc/cli spec-lint <spec.md>
+```
+
+## 2. Run your first gate
+
+`spec-lint` is the P1 gate: every acceptance criterion in a spec must name how
+it will be verified.
+
+```sh
+adlc spec-lint spec.md
+```
+
+Exit code `0` means the gate passes, `2` means it fails (wishes found — line
+numbers printed), `1` means an operational error. Every gate in the toolkit
+follows this [exit-code convention](/docs/reference/exit-codes), so they compose
+in scripts and CI without special-casing.
+
+No API keys are required for the core checks. Gates with an LLM-assisted pass
+accept `--prompt-only`, which prints the exact prompt and exits `0` — paste it
+into whatever harness you already have.
+
+## 3. Bootstrap a repo
+
+Check the workspace is ready before any fan-out — the P0 gate:
+
+```sh
+adlc preflight        # environment & permissions table, pass/fail verdict
+```
+
+Gates that need shared state (tickets, frozen rails, evidence) read it from a
+committable `.adlc/` directory. Bootstrap it from inside your agent harness with
+`/adlc-init` (see [integrations](/docs/integrations)). The
+[.adlc runtime reference](/docs/reference/adlc-runtime) documents every file the
+gates read and write.
+
+## 4. Wire it into your harness
+
+The lifecycle is meant to run where your agent runs. Native integrations ship
+for six harnesses — skills, hooks, and commands that fire the gates
+automatically:
+
+```sh
+npx plugins add voodootikigod/adlc   # vendor-neutral installer — Claude Code today
+npm install -g @adlc/cli             # the toolkit the plugin shells out to
+```
+
+The [`plugins` installer](https://www.npmjs.com/package/plugins) covers harnesses whose
+plugin packages are published (Claude Code today); every integration page below also
+documents its native install path.
+
+Then `/adlc-init` once per repo. See the per-harness guides:
+[Claude Code](/docs/integrations/claude-code), [Codex](/docs/integrations/codex),
+[Cursor](/docs/integrations/cursor), [opencode](/docs/integrations/opencode),
+[pi](/docs/integrations/pi), and [Antigravity](/docs/integrations/antigravity).
+
+## Where to go next
+
+- [The Lifecycle](/docs/lifecycle) — which gate guards each phase, end to end.
+- [Toolkit](/docs/toolkit) — every tool's flags, exit codes, and examples.
+- [Theory](/docs/theory) — the eight failure modes the gates defend against.

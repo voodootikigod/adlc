@@ -1,8 +1,77 @@
 ---
-title: Conventions
-description: Conventions documentation (coming soon).
+title: Tool Conventions
+description: The contract every packages/ tool follows so ~20 independently built CLIs feel like one product.
 ---
 
-# Conventions
+# Tool Conventions
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+Every tool under `packages/` follows the same rules. They are the contract that makes a
+suite of independently built CLIs feel like one product. The canonical source is
+[`CONVENTIONS.md`](https://github.com/voodootikigod/adlc/blob/main/CONVENTIONS.md) at the
+repo root; this page summarizes it.
+
+## Layout
+
+Each tool is a self-contained package:
+
+```
+packages/<name>/
+├── package.json        # standard template
+├── bin/<name>.mjs      # CLI entry — thin: parse args, call lib, exit
+├── lib/*.mjs           # logic — pure functions wherever possible
+├── test/*.test.mjs     # node:test — MUST pass offline (no network, no API keys)
+└── README.md           # what it does, usage, exit codes, ADLC phase it serves
+```
+
+The `package.json` is uniform: `@adlc/<name>`, `"type": "module"`, a single `bin` entry,
+`"test": "node --test test/*.test.mjs"`, `"engines": { "node": ">=18" }`, MIT license.
+
+## Hard rules
+
+1. **Zero runtime dependencies.** Node 18+ built-ins and `@adlc/core` only. Core is
+   imported by relative path (`../../core/index.mjs`).
+2. **Core is frozen.** Never edit anything under `packages/core/`. If core lacks
+   something, implement it locally in your `lib/` and note the gap in your README under
+   "Core gaps."
+3. **Scope discipline.** Write ONLY inside your own `packages/<name>/`. Never touch other
+   packages, `ADLC.md`, root files, or `.adlc/`.
+4. **Exit codes are the contract.** `0` = gate passes, `1` = operational error, `2` = gate
+   fails — using `pass` / `opError` / `gateFail` from core. CI gating depends on this. See
+   [Exit Codes](/docs/reference/exit-codes).
+5. **`--prompt-only` on every LLM-backed tool.** Print the exact prompt(s) and exit `0`, so
+   the tool is usable with zero API keys — paste the prompt into any harness. Uses
+   `promptOnly()` from core.
+6. **`--json` on every tool.** Machine-readable output for orchestrators, alongside the
+   default human-readable output.
+7. **Tests run offline and leave no trace.** Test pure logic with fixtures; use
+   `mkdtempSync` temp dirs (with scratch git repos inside them when git behavior is under
+   test) and always clean up. Never call LLM providers in tests.
+8. **Never mutate the working tree without a flag.** Writing tools (e.g. `--write`,
+   `--append`) default to dry-run reporting. Mutation-testing tools restore files in a
+   `finally` block and refuse to run on a dirty tree.
+9. **No silent error swallowing.** Operational failures become `opError` with a clear
+   message; partial data (e.g. skipped ledger lines) is surfaced in the output.
+10. **File size.** Keep files under 400 lines; split `lib/` by concern.
+11. **The README is part of the tool.** It documents usage examples, every flag, exit-code
+    semantics, which ADLC phase (P0–P7 / D1–D3) the tool serves, and its relationship to
+    sibling tools.
+
+## Shared data — read via core, never reinvent
+
+Tools never re-parse shared state; they go through `@adlc/core`:
+
+| Data | Location | Access |
+| --- | --- | --- |
+| Tickets | `.adlc/tickets.json` | `loadTickets()` — schema in `packages/core/lib/tickets.mjs` |
+| Ledgers | `.adlc/<name>.jsonl` | `appendEntry` / `readEntries` |
+| Foundation rails | `rails` paths on a ticket | read-only to builders; enforced by tools that read them |
+
+Well-known ledgers are `manifest` (gate-manifest entries) and `findings` (prosecution
+findings). See [The `.adlc/` Runtime](/docs/reference/adlc-runtime) for the full layout.
+
+## CLI shape
+
+Tools share a verb-and-flags shape (`<name> [verb] [--flags]`) and a common flag
+vocabulary where applicable: `--base <ref>` (git base, default `HEAD`), `--tickets <path>`
+(default `.adlc/tickets.json`), `--json`, `--prompt-only`, `--n <int>` (fan width), and
+`--tier cheap|mid|frontier`.

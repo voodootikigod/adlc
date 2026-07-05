@@ -1,8 +1,61 @@
 ---
 title: model-router
-description: model-router documentation (coming soon).
+description: Deterministically assigns every ticket a model tier and ladder mode from the ticket DAG and ledger history — no LLM calls.
 ---
 
 # model-router
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P2 Decompose** · **Gate:** every ticket routes to a model tier justified by its rail density and DAG float.
+
+<PhaseDiagram phase="P2" />
+
+## What it defends against
+
+<FailureMode id="F8" />
+
+Picking a model per ticket by vibe leaves the seams showing: a cheap model on an
+unrailed, hard-to-verify ticket, or a frontier model burned on slack work.
+`model-router` reads the ticket DAG's rail density and critical-path float, plus
+per-model first-pass rates mined from the manifest ledger, and emits a
+deterministic `tier` + `mode` for every ticket — the same inputs always produce
+the same routing.
+
+## Usage
+
+```sh
+adlc model-router [--tickets <path>] [--floor <number>] [--json]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
+| `--floor <0-1>` | `0.2` | Minimum rail density for cheap-tier assignment; below it a ticket is forced to frontier and flagged as a P3 finding. |
+| `--json` | off | Machine-readable output: `{ assignments, p3Findings }`. |
+
+Assignment is rule-based: `contract`/`spec`/`architecture` categories (or any
+ticket below the rail-density floor) route to `frontier`/`direct`; critical-path
+tickets (`float === 0`) skip the ladder; tickets with slack start `cheap` and
+ladder up on gate failure.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: all tickets assigned.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad tickets file, JSON parse error, cycle in the DAG).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more non-frontier-category tickets fall below the rail-density floor.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc model-router
+id            tier        mode      railDensity  float   reason
+---------------------------------------------------------------
+AUTH-1        cheap       ladder    1.000        3       float=3 → ladder starting at 'cheap' (railDensity=1.000)
+AUTH-2        frontier    direct    0.000        0       category 'spec' requires frontier model
+exit 0
+```
+
+## Go deeper
+
+[packages/model-router](https://github.com/voodootikigod/adlc/tree/main/packages/model-router)

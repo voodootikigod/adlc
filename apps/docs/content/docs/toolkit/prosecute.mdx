@@ -1,8 +1,65 @@
 ---
 title: prosecute
-description: prosecute documentation (coming soon).
+description: A P5 review-evidence recorder — validates, hashes, and records ticket- and revision-bound reviewer findings, passing only after two dry passes across three lenses.
 ---
 
 # prosecute
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P5 Prosecute** · **Gate:** two consecutive dry passes across at least three distinct lenses are recorded before a change may merge.
+
+<PhaseDiagram phase="P5" />
+
+## What it defends against
+
+<FailureMode id="F2" />
+
+`prosecute` is a **recorder, not a reviewer** — it makes zero model calls and finds no bugs
+of its own. The model-judged skeptical review is a separate tool (`npx adversarial-review`,
+which `adlc review` wraps); `adlc prosecute` consumes **that** review's output as evidence.
+It validates the findings, hashes and binds them to the ticket and reviewed revision, and
+appends normalized pass records to `.adlc/manifest.jsonl`. It passes only after two
+consecutive dry passes covering three distinct lenses — so a single sycophantic "looks good"
+cannot stand in for a real prosecution, and the recorded evidence is what P6 later checks.
+
+Note the binary is `adlc-prosecute` (registry `binName`) but it dispatches as `adlc prosecute`.
+
+## Usage
+
+```sh
+adlc-prosecute --input <passes.json> --ticket id [--target label] [--revision rev] [--dir .adlc] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--input <passes.json>` | (required) Normalized reviewer-produced pass evidence to record. |
+| `--ticket id` | (required) Ticket the evidence is bound to; must be referenced by the transcript. |
+| `--target label` | Human-readable label for what was reviewed (e.g. `feature branch`). |
+| `--revision rev` | Reviewed revision string; defaults to `git-worktree:<hash>`. |
+| `--dir path` | Ledger directory (default `.adlc`). |
+| `--json` | Machine-readable result. |
+| `--help` | Show usage and exit 0. |
+
+Evidence files (transcript, prompt, inputs) that resolve inside the worktree must live under
+`.adlc/` or `.omo/evidence/`, and the transcript must reference both the ticket and the
+resolved revision — a trust-boundary control against faked review evidence.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — two consecutive dry passes were recorded.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (unreadable input, missing `--ticket`, bad evidence path).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — verified or needs-human findings remain, or the convergence budget ended before two dry passes.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc-prosecute --input p5-passes.json --ticket T1 --dir .adlc
+recorded 2 consecutive dry passes across 3 lenses (security, correctness, tests)
+exit 0
+```
+
+## Go deeper
+
+- [packages/prosecute](https://github.com/voodootikigod/adlc/tree/main/packages/prosecute)
+- Why prosecution beats code review: [Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

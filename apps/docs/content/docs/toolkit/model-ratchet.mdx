@@ -1,8 +1,59 @@
 ---
 title: model-ratchet
-description: model-ratchet documentation (coming soon).
+description: Ranks hot files (churn × import criticality) for re-prosecution after a model or repo drift.
 ---
 
 # model-ratchet
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: calibration (cross-phase)** · **Gate:** none — it prints a prosecution plan or drives a review over the highest-value files and records findings.
+
+## What it defends against
+
+Every frontier model release is a free re-audit: newer models find what older
+ones missed. `model-ratchet` picks the files worth re-prosecuting first —
+`SCORE = churn × (1 + inDegree)`, high change rate times how many source files
+import it — then either prints a prosecution plan or runs your review command
+over each, appending verified findings to the shared `.adlc/findings` ledger.
+Run it on every model release (or monthly) to ratchet quality monotonically up.
+
+## Usage
+
+```sh
+adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--top <n>` | Number of hotspot files to select (default `10`). |
+| `--review-cmd <cmd>` | Command to run per file; `{file}` is substituted. Omit it and the tool prints the plan only. |
+| `--churn-limit <n>` | Commit-history depth for the churn computation (default `1000`). |
+| `--dry-run` | Print the prosecution plan even when `--review-cmd` is supplied. |
+| `--json` | Machine-readable output. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — success: plan printed, or the review ran and findings were appended to the ledger.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: not a git repo, a `--review-cmd` exit outside {0,2}, or bad arguments.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — not used by model-ratchet itself; review findings route to the ledger rather than failing a gate.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc model-ratchet --top 3
+model-ratchet — Prosecution Plan
+====================================================================
+FILE                        CHURN  IN-DEGREE  SCORE
+--------------------------  -----  ---------  -----
+src/db/query.mjs               31          5    186
+src/auth.mjs                   42          3    168
+src/utils.mjs                  25          1     50
+exit 0
+```
+
+## Go deeper
+
+[packages/model-ratchet](https://github.com/voodootikigod/adlc/tree/main/packages/model-ratchet).
+Why re-prosecution beats a one-time review pass:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

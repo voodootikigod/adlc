@@ -1,8 +1,53 @@
 ---
 title: coldstart
-description: coldstart documentation (coming soon).
+description: A cheap-tier LLM plays a fresh agent and lists every human-only question a ticket leaves unanswered before the build queue.
 ---
 
 # coldstart
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P2 Decompose** · **Gate:** every ticket is self-contained — no human-only questions remain before it enters the build queue.
+
+<PhaseDiagram phase="P2" />
+
+## What it defends against
+
+<FailureMode id="F3" />
+
+A build agent that starts on an under-specified ticket loses the plot fast: it guesses at missing shapes, invents contracts, and drifts. `coldstart` runs the check up front — a cheap-tier model plays a fresh agent with no prior context and lists every question it would have to ask a *human* before it could start. Information derivable from the repo does not count; only genuine gaps (undefined schemas, absent contracts, unverifiable criteria, vague scope) block the gate.
+
+## Usage
+
+```sh
+adlc coldstart <ticket-id> [options]
+adlc coldstart --all [options]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--tickets <path>` | Path to the tickets file (default `.adlc/tickets.json`). |
+| `--all` | Run the gate on every ticket in the file. |
+| `--tier cheap\|mid\|frontier` | Model tier (default `cheap`). |
+| `--json` | Machine-readable JSON output for orchestrators. |
+| `--prompt-only` | Print the exact prompt(s) and exit 0 — no LLM call made. |
+| `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only`. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: ticket(s) are fully executable.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad input, unknown ticket id, missing file, no provider).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more tickets have gaps (printed per ticket).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc coldstart T2
+✗ T2 — 1 gap
+  - UserSchema: shape referenced in body but not defined
+exit 2
+```
+
+## Go deeper
+
+[packages/coldstart](https://github.com/voodootikigod/adlc/tree/main/packages/coldstart) · Why executable tickets matter as much as specs: [Tests Are the Spec](https://voodootikigod.com/adlc-3-tests-are-the-spec).

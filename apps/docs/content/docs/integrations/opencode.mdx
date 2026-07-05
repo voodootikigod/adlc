@@ -1,8 +1,112 @@
 ---
 title: opencode
-description: opencode documentation (coming soon).
+description: Native ADLC integration for the opencode terminal agent — rails-guard plugin hook, eight lifecycle commands, a five-lens prosecutor panel, and a keyless gate bridge.
 ---
 
-# opencode
+# ADLC in opencode
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+Brings the lifecycle into the [opencode](https://opencode.ai) terminal agent as
+a native plugin: an in-session rails-guard hook (`tool.execute.before`),
+advisory session hooks, eight lifecycle commands, the `adlc` phase-routing
+skill, and a six-agent P5 prosecution panel. All six integration phases (A–F of
+the design plan) ship.
+
+## What you get
+
+- **Rails-guard hook** on `tool.execute.before` — denies structured
+  `edit`/`write` to a frozen rail declared by the active ticket.
+- **Advisory session hooks** — `session.created` preflight and a `session.idle`
+  gate-manifest audit; they warn, never throw.
+- **Commands:** `/adlc-init`, `/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`,
+  `/adlc-decompose`, `/adlc-verify-build`, `/adlc-prosecute`, `/adlc-distill`.
+- **Subagents:** the five P5 prosecution lenses
+  (`@prosecutor-correctness|security|contract|diff|tests`) plus
+  `@prosecutor-verifier` — all edit- and bash-denied.
+- **Keyless gate bridge** — every LLM-backed gate runs in `--prompt-only` mode
+  with the prompts routed to the host model; no API keys.
+
+## Install
+
+`@adlc/opencode-package` is **not yet published to npm**, so install from
+source (peer dependency: `@opencode-ai/plugin` ≥ 1.17.11):
+
+```sh
+npm install -g @adlc/cli                 # the gate toolkit the plugin shells out to
+
+# make the plugin available to opencode
+ln -s /path/to/adlc/plugins/adlc-opencode .opencode/plugin/adlc-opencode
+# …or add its path to the "plugin" array in .opencode/opencode.json
+```
+
+Then, inside the opencode TUI, run `/adlc-init` — it bootstraps `.adlc/`,
+deploys the command/agent/skill surface into `.opencode/`, and **registers the
+plugin in `opencode.json` so the rails-guard hook actually loads** (the markdown
+surfaces are inert without it). First-time, before the command exists:
+
+```sh
+node /path/to/adlc/plugins/adlc-opencode/lib/scaffold-cli.mjs .
+```
+
+Restart opencode so the hooks load. Verify locally without an `opencode` binary:
+
+```sh
+node scripts/opencode-install-smoke.mjs .
+```
+
+## Rail enforcement — two layers
+
+1. **In-session (capability-gated).** The hook only *actually blocks* when the
+   host SDK honors a thrown denial — a runtime capability probe decides
+   (`ADLC_OPENCODE_ENFORCES=1/0` forces it). When the capability is unproven,
+   the hook **fails closed** unless `ADLC_ALLOW_ADVISORY_HOOKS=1` explicitly
+   permits advisory mode (surface the violation loudly, don't block). Bash
+   writes are **not** gated in-session; unrecognized structured tools carrying a
+   path fail closed.
+2. **Commit-time (unbypassable).** The real control is
+   `scripts/rails-guard-ci.mjs` (via `docs/ci/rails-guard.yml`): it reads the
+   frozen rail set **from the trusted base ref** and rejects any PR that edits a
+   rail — including the shell-driven writes the in-session hook cannot see.
+   **Make it a required check.**
+
+## Rail contract
+
+Mirrors the sibling integrations; all glob/ticket logic delegates to `@adlc/core`:
+
+- Active ticket via `ADLC_TICKET` **or** `.adlc/current-ticket.json`; a conflict
+  fails closed.
+- Enforcement is phase-scoped to `ADLC_P4_ENFORCEMENT=1`; otherwise no-op.
+- Rails in force = the **single** active ticket's `rails` plus the trust-root
+  rails `.adlc/tickets.json` and `.adlc/current-ticket.json`.
+- Symlink-aware: both the lexical path and the resolved real path are matched.
+
+## Formal ADLC coverage
+
+| Phase | Status | Wired via |
+| --- | --- | --- |
+| P0 Triage | **Yes** | `/adlc-ticket` |
+| P1 Interrogate | **Yes** | `/adlc-spec` + `/adlc-approve-spec` (G1) + the `adlc` skill |
+| P2 Decompose | **Yes** | `/adlc-decompose` |
+| P3 Rail | **MVP** | in-session rails-guard hook + CI gate |
+| P4 Build | Partial | rails-guard hook + `session.created` preflight |
+| P5 Prosecute | **Yes** | `/adlc-verify-build` (G4) + five lenses + verifier + `/adlc-prosecute` |
+| P6 Integrate | Partial | `session.idle` gate-manifest audit; the human gate is by design |
+| P7 Distill | **Yes** | `/adlc-distill` |
+
+## Gaps
+
+1. In-session enforcement depends on the host SDK honoring a thrown denial —
+   until proven, the CI gate is the real control.
+2. The keyless bridge's isolated sub-context call depends on a proposed opencode
+   SDK extension; it degrades or fails closed, never silently skips a gate.
+3. `/adlc-prosecute`'s fan-out → verify → loop-until-dry protocol is executed by
+   the model, not a deterministic first-party runner (the decision helpers are
+   unit-tested).
+4. A live deny-proof against a real opencode binary is the remaining GA gate.
+
+## Go deeper
+
+Source: [`plugins/adlc-opencode/`](https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-opencode)
+· design rationale: [ADR 0004](https://github.com/voodootikigod/adlc/blob/main/docs/adr/0004-adlc-opencode-integration.md).
+
+The prosecution panel this integration ships:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

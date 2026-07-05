@@ -1,8 +1,57 @@
 ---
 title: skill-rot
-description: skill-rot documentation (coming soon).
+description: Verifies the checkable claims inside SKILL.md files still hold against the current repo and stamps fresh ones.
 ---
 
 # skill-rot
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: calibration (cross-phase)** · **Gate:** every skill's verifiable claims (commands, paths, scripts) still resolve against the current repo.
+
+## What it defends against
+
+Skills are caches, and a stale cache delivers misinformation with the authority
+of an expert — worse than no skill at all. `skill-rot` walks each `SKILL.md`,
+extracts the claims it can actually check (command names, file paths, and
+`npm`/`npx`/`pnpm`/`yarn` script references), and verifies them against the
+repo. Verifiable-but-failing claims are `stale` and fail the gate; claims it
+cannot adjudicate (URLs, missing `package.json`) are `unverifiable` and never
+counted against you. Run it weekly in CI to keep the skill corpus honest.
+
+## Usage
+
+```sh
+adlc skill-rot [path ...] [--write] [--json]
+```
+
+Positional paths override the default search roots (`.claude/skills`,
+`.agents/skills`, `skills`), which are searched only when they exist.
+
+| Flag | Description |
+| --- | --- |
+| `--write` | When every claim in a skill is ok, upsert `last-verified: <YYYY-MM-DD>` into its frontmatter. Skills with stale claims are never stamped. |
+| `--json` | Machine-readable output with `skills[]` and a `summary`. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: all skills clean.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: no `SKILL.md` files found, or bad input.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: at least one skill has stale claims.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc skill-rot .claude/skills
+SKILL                          OK  STALE  UNVERIFIABLE
+-----------------------------  --  -----  ------------
+.claude/skills/build/SKILL.md   7      1             2
+✗ 1 skill has stale claims (command `pnpm turbo` no longer resolves)
+exit 2
+```
+
+## Go deeper
+
+[packages/skill-rot](https://github.com/voodootikigod/adlc/tree/main/packages/skill-rot).
+See the [toolkit overview](/docs/lifecycle) for how skill freshness feeds the
+calibration loop.

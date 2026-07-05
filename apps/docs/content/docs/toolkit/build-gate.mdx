@@ -1,8 +1,65 @@
 ---
 title: build-gate
-description: build-gate documentation (coming soon).
+description: Denies starting a high-risk ticket's build in a degraded (context-rot) session unless an audited override is durably recorded.
 ---
 
 # build-gate
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P4 Build** · **Gate:** a high-risk ticket must not begin its build in a context-degraded session.
+
+<PhaseDiagram phase="P4" />
+
+## What it defends against
+
+Nothing else in ADLC deterministically prevents *starting* a high-blast-radius
+build while the executing session is context-rotted — deep, drifted, and past
+the point where it reliably holds the plot. `build-gate` sits at the P3→P4 entry:
+it derives the ticket's risk tier from its own fields (`risk`, `external`,
+`mutatesIdentity`, trust-root scope, `contract`/`architecture` category), checks
+a machine-checkable context-fitness signal (tool-call depth and transcript
+bytes), and denies the build unless an audited override is recorded. A declared
+`"risk": "normal"` can never downgrade a derived-high signal.
+
+## Usage
+
+```sh
+adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <path>]
+                [--depth-threshold <n>] [--bytes-threshold <n>] [--tickets <path>]
+                [--reason <text>] [--json]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `<ticket-id>` | — | Ticket to gate (required positional). |
+| `--depth <n>` | — | Precomputed tool-call-count depth signal. |
+| `--session-bytes <n>` | — | Precomputed transcript byte-size signal. |
+| `--transcript <path>` | — | Derive depth / session-bytes from this transcript file. |
+| `--depth-threshold <n>` | `40` | Tool-call count past which a session is degraded. |
+| `--bytes-threshold <n>` | `262144` | Transcript bytes (256 KiB) past which a session is degraded. |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
+| `--reason <text>` | — | Free-text reason recorded with an override. |
+| `--json` | off | Machine-readable JSON result. |
+
+Supplying no signal defaults to "not degraded" — a gate given no signal cannot
+deny. Set `ADLC_BUILD_GATE_BYPASS=1` to override a deny; the override is honored
+only if it can be durably recorded to `.adlc/manifest.jsonl`.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — allow: gate passes (low risk, not degraded, or an audited override recorded).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad ticket id, missing tickets file, bad thresholds).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — deny: a high-risk ticket in a degraded session with no recorded override.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc build-gate AUTH-9 --depth 61
+build-gate: DENY (AUTH-9, risk=high) — high-risk build in a degraded session; no audited override
+exit 2
+```
+
+## Go deeper
+
+[packages/build-gate](https://github.com/voodootikigod/adlc/tree/main/packages/build-gate)

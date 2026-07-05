@@ -1,8 +1,19 @@
 ---
 title: Reference
-description: Reference documentation (coming soon).
+description: The contracts every ADLC tool honors — conventions, exit codes, the .adlc/ runtime, and the architecture decision records.
 ---
 
 # Reference
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+The ADLC toolkit is ~20 independently built CLIs that behave like one product because
+they all honor the same contracts. This section documents those contracts.
+
+| Page | What it covers |
+| --- | --- |
+| [Tool Conventions](/docs/reference/conventions) | The rules every `packages/<name>/` tool follows — layout, zero dependencies, frozen core, `--json`/`--prompt-only`, and mutation safety. |
+| [Exit Codes](/docs/reference/exit-codes) | The canonical `0` / `1` / `2` convention that makes CI gating deterministic. |
+| [The `.adlc/` Runtime](/docs/reference/adlc-runtime) | The on-disk state gates read and write — tickets, the active-ticket pointer, config, ledgers, and evidence — plus the environment variables that steer them. |
+| [Architecture Decision Records](/docs/reference/adrs) | The accepted ADRs behind the integrations and review gates. |
+
+New to the model itself? Start with [The Lifecycle](/docs/lifecycle) for the phase and
+gate map, then come back here for the contracts underneath it.

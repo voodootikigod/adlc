@@ -1,8 +1,66 @@
 ---
 title: rejection-mining
-description: rejection-mining documentation (coming soon).
+description: Mines human PR review objections into reusable prosecution lenses so recurring "no"s are caught pre-submit.
 ---
 
 # rejection-mining
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P7 Compound** · **Gate:** none — it authors prosecution lens files from clustered PR objections for `adversarial-review` to reuse.
+
+<PhaseDiagram phase="P7" />
+
+## What it defends against
+
+Institutional reviewers reject the same classes of change over and over — the
+"nights of no" that cost days in queue. `rejection-mining` fetches PR review
+threads via the GitHub CLI, filters for negative-signal language, clusters
+similar objections, and authors each cluster into a lens file with a
+prosecution charter and anonymized example quotes. "Would security reject this?"
+becomes a seconds-long pre-flight check instead of a days-long round trip.
+
+## Usage
+
+```sh
+adlc rejection-mining [--limit <n>] [--min <n>] [--out-dir <path>] [--write] [--llm] [--prompt-only] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--limit <n>` | Maximum number of PRs to fetch (default `50`). |
+| `--min <n>` | Minimum cluster size to author a lens (default `2`). |
+| `--out-dir <path>` | Directory to write lens files into (default `.adlc/lenses`). |
+| `--write` | Emit lens files (default is dry-run). |
+| `--llm` | Sharpen each lens title and charter via one mid-tier LLM call per cluster. |
+| `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
+| `--prompt-only` | Print the LLM prompts and exit 0 (zero API keys). |
+| `--json` | Machine-readable output. |
+
+Requires the `gh` CLI installed and authenticated (`gh auth login`).
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — success: mining complete (lenses printed, or written with `--write`).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: `gh` missing, auth failure, no PRs found, or bad arguments.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — reserved for a gate-fail; not currently emitted by this tool.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc rejection-mining --limit 100 --min 3 --write
+rejection-mining results
+═══════════════════════
+  PRs scanned:   47
+  Signals found: 23
+  Lenses:        2
+  wrote: .adlc/lenses/lens-error-expose-raw.md
+  wrote: .adlc/lenses/lens-hardcode-credentials.md
+exit 0
+```
+
+## Go deeper
+
+[packages/rejection-mining](https://github.com/voodootikigod/adlc/tree/main/packages/rejection-mining).
+Why review objections belong in the prosecution loop:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

@@ -1,8 +1,93 @@
 ---
-title: codex
-description: codex documentation (coming soon).
+title: Codex
+description: Native ADLC integration for the OpenAI Codex CLI — five phase skills plus a PreToolUse rail hook that gates structured edits and shell writes.
 ---
 
-# codex
+# ADLC in Codex
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+Native Codex plugin using exactly two Codex surfaces: **progressive-disclosure
+skills** (five, one per lifecycle segment) and one **`PreToolUse` lifecycle
+hook** that protects frozen rails during the build phase. No custom prompts, no
+custom subagents — routing lives in skills, and truth lives in `.adlc/`
+evidence, never in narration.
+
+## Install
+
+The plugin ships in this repo at `plugins/adlc-codex/`, registered in the
+`.agents/plugins/marketplace.json` marketplace manifest. **There is no published
+package or out-of-repo install path yet** — install and verify from a checkout:
+
+```sh
+node scripts/codex-install-smoke.mjs .
+```
+
+That smoke test validates the marketplace entry, plugin manifest, bundled hook,
+and all five skill sentinels — fully offline; it does not run `codex` or mutate
+`~/.codex`.
+
+Maintainers can exercise the real install end-to-end in a **disposable
+environment** (throwaway `CODEX_HOME`, `HOME`, and XDG roots under `/tmp`):
+
+```sh
+ADLC_CODEX_LIVE_INSTALL=1 node scripts/codex-install-smoke.mjs .
+```
+
+## How each phase maps into Codex
+
+| ADLC phase | Skill | Gates it routes to |
+| --- | --- | --- |
+| **P0 Triage** | `adlc` (phase router) | `adlc preflight --json`, work classification |
+| **P1–P2 Interrogate & Decompose** | `adlc-spec` | `adlc spec-lint`, `premortem`, `parallax`, `coldstart`, `merge-forecast`, `model-router`; stops for human spec approval |
+| **P3–P4 Rail & Build** | `adlc-rail-build` + the rail hook | `adlc rails-guard`, `hollow-test`, `flail-detector`, `adlc run p4` |
+| **P5–P6 Prosecute & Integrate** | `adlc-prosecute` | `adlc prosecute` (records reviewer evidence — it does not run the reviewer), `behavior-diff`, `adlc accept`, `adlc run p5/p6` |
+| **P7 Distill** | `adlc-distill` | `lesson-foundry`, `rejection-mining`, `skill-rot`, `model-ratchet` |
+
+Skills route work but can never declare a phase complete from narration — the
+truth is `.adlc/manifest.jsonl` evidence and `adlc run <phase> --json` passing.
+
+## Rail enforcement — two layers
+
+1. **In-session `PreToolUse` hook.** Denies by exiting `2`; inactive
+   (fail-open) unless `ADLC_P4_ENFORCEMENT=1`, and **fail-closed once active**:
+   a missing or conflicting active ticket, a zero-rail ticket, an opaque
+   mutating command, or a shell expansion it can't parse all block. Unlike the
+   sibling integrations, this hook **does gate shell writes**: a read-only
+   allowlist passes, recognized mutations (`> redirects`, `tee`, `rm`, in-place
+   `sed`/`perl`, mutating `git`, interpreter `writeFile` calls, …) are
+   rail-checked, and anything unrecognized fails closed.
+2. **Commit-time CI gate (the guarantee).** `scripts/rails-guard-ci.mjs` reads
+   the frozen rail set **from the trusted base ref** and rejects any PR that
+   edits a rail, however the edit was made. **Make it a required check.** The
+   in-session hook assists it; it never replaces it.
+
+## Rail contract
+
+Identical engine semantics to the sibling integrations:
+
+- Active ticket via `ADLC_TICKET` **or** `.adlc/current-ticket.json`; a conflict
+  between the two fails closed. `ADLC_TICKETS` overrides the tickets-file path.
+- Enforcement is phase-scoped to `ADLC_P4_ENFORCEMENT=1`; otherwise the hook is
+  an explicit no-op.
+- Rails in force = the single active ticket's `rails` plus the trust-root rails
+  `.adlc/tickets.json` and `.adlc/current-ticket.json`.
+- Symlinks are resolved before matching; `apply_patch` bodies and
+  `multi_tool_use.parallel` wrappers are unwrapped and every path checked.
+
+## Gaps
+
+1. **P5 is partial.** Review evidence is machine-checkable, but there is no
+   first-party deterministic orchestrator that fans out lenses and loops until
+   dry — `adlc prosecute` records evidence produced elsewhere.
+2. **No user-facing install path outside a checkout.** Published-package and
+   git-backed marketplace installs are not yet supported.
+
+## Using with Claude Code
+
+The Codex and [Claude Code](/docs/integrations/claude-code) plugins are designed
+to coexist: both read the same `.adlc/` workspace and ticket schema. A common
+split uses Codex for CI workers and Claude Code for interactive sessions.
+
+## Go deeper
+
+Source: [`plugins/adlc-codex/`](https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-codex)
+· design rationale: [ADR 0001](https://github.com/voodootikigod/adlc/blob/main/docs/adr/0001-codex-native-adlc-integration.md).

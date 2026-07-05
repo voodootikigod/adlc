@@ -1,8 +1,68 @@
 ---
 title: consensus-fix
-description: consensus-fix documentation (coming soon).
+description: Fans N independent LLM fixes at a failing test, gates each against the rails, and picks the smallest consensus winner.
 ---
 
 # consensus-fix
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P4 Build** · **Gate:** a fix is only accepted when it passes both the repro test and the full rail suite, and agrees with peers.
+
+<PhaseDiagram phase="P4" />
+
+## What it defends against
+
+Single-shot fixes stall on hard bugs, and a fix that passes the one failing test
+may quietly redden the rest of the suite. `consensus-fix` applies N-version
+programming: it fans N independent, stateless LLM completions at the same broken
+test, applies each candidate in isolation, and keeps only those that pass BOTH the
+repro command and the full rail regression suite. Survivors are grouped by
+agreement and the smallest diff from the largest consensus group wins. When every
+survivor is a singleton (with `--n >= 3`), that divergence is treated as evidence
+the spec is ambiguous — the tool escalates rather than guessing.
+
+## Usage
+
+```sh
+adlc consensus-fix --test-cmd "..." --files a.mjs,b.mjs [--rails "..."] [--n 3] [--tier mid] [--provider <name> | --providers <a,b,c>] [--apply] [--allow-dirty] [--json] [--prompt-only]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--test-cmd <cmd>` | Repro gate: the failing-test command (required). Must exit non-zero while the bug is present. |
+| `--files <paths>` | Comma-separated files the LLM may modify (required). Any candidate touching a file outside this list is discarded. |
+| `--rails <cmd>` | Regression gate: the full frozen rail suite. A candidate survives only if both gates exit 0. Omitting it prints a WARNING and skips the rail check. |
+| `--n <int>` | Number of independent candidates (default 3). Ignored when `--providers` is given. |
+| `--tier cheap\|mid\|frontier` | LLM tier for completions (default `mid`). |
+| `--provider <name>` | Force one provider (`anthropic`/`openai`/`gemini`/`agy`) for the run. Mutually exclusive with `--providers`. |
+| `--providers <a,b,c>` | Draw one candidate per named provider family (cross-family diversity). Each named provider must have its API key set or the run fails closed first. Mutually exclusive with `--provider`. |
+| `--apply` | Write the winning fix. Default is dry-run. Never applies when all-divergent. |
+| `--allow-dirty` | Skip the dirty-tree guard (useful in CI with staged-only changes). |
+| `--json` | Machine-readable output. |
+| `--prompt-only` | Print the prompts that would be sent and exit 0 — works with zero API keys. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: at least one candidate survived both gates with a usable consensus.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad arguments, unreadable files, dirty tree, no provider).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: no survivors, or all survivors are singletons with `--n >= 3` (spec ambiguity — escalate).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc consensus-fix --test-cmd "node --test test/math.test.mjs" \
+                     --rails    "node --test test/*.test.mjs" \
+                     --files src/math.mjs --n 5
+survivors: 3/5   groups: 1   rails: checked
+winner: src/math.mjs (1 changed line, consensus group of 3)
+dry-run — re-run with --apply to write it
+exit 0
+```
+
+## Go deeper
+
+Why prosecution, not code review, is the discipline that makes fixes trustworthy:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).
+
+[packages/consensus-fix](https://github.com/voodootikigod/adlc/tree/main/packages/consensus-fix)

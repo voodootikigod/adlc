@@ -1,8 +1,64 @@
 ---
 title: runner
-description: runner documentation (coming soon).
+description: Asserts that each ADLC phase's required manifest evidence is present, failing closed when reviewed content changes.
 ---
 
 # runner
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: cross-phase (P3–P6 assertions)** · **Gate:** a phase is only complete when its required manifest evidence exists and still matches the reviewed content.
+
+## What it defends against
+
+"A command ran" is not a gate. An orchestrator can call a tool, ignore its result,
+and march on — or edit the code after it was reviewed. The runner refuses that: it
+reads `.adlc/manifest.jsonl` and asserts the specific evidence each phase requires,
+scoped to a ticket for P3–P6. P5 and P6 bind to the current content fingerprint and
+fail closed if reviewed content changes after the fact, so committing the exact
+content reviewed at P5 keeps P6 green while any tampering turns it red. It gives CI
+and Codex skills one stable command for asserting phase completion.
+
+## Usage
+
+The runner ships as the `adlc-runner` binary and also dispatches through the
+umbrella CLI as `adlc run` and `adlc accept`.
+
+```sh
+adlc run <phase> [--dir .adlc] [--ticket <id>] [--revision <rev>] [--json]
+adlc accept --ticket <id> --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--dir .adlc] [--revision <rev>] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--dir <path>` | ADLC control directory (default `.adlc`). |
+| `--ticket <id>` | Ticket to scope evidence to. Required for phases p3, p4, p5, p6. |
+| `--revision <rev>` | Offline selector for recorded manifest/artifact evidence; verifies recorded hashes without comparing against the live worktree. Omit for normal worktree use. |
+| `--packet <path>` | (`accept`) Path to the P6 acceptance packet to record. Must live under `.adlc/` or `.omo/evidence/`. |
+| `--before <path>` / `--after <path>` | (`accept`) Behavior snapshot paths recorded and re-verified at P6. |
+| `--json` | Machine-readable result. |
+| `--help` | Print help and exit 0. |
+
+Phases run p1 through p7; p3–p6 require `--ticket`.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — required phase evidence is present (and still matches the reviewed content).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (unknown phase, missing `--ticket`, bad input).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — required phase evidence is missing.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc run p5 --ticket T1 --dir .adlc
+adlc p5: missing evidence: prosecution-transcript
+exit 2
+
+$ adlc run p6 --ticket T1
+adlc p6: required evidence present
+exit 0
+```
+
+## Go deeper
+
+[packages/runner](https://github.com/voodootikigod/adlc/tree/main/packages/runner)

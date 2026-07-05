@@ -1,8 +1,67 @@
 ---
 title: preflight
-description: preflight documentation (coming soon).
+description: Batches every environment and permission check the agent fleet needs into one pass before fan-out, so failures front-load instead of stalling mid-flight.
 ---
 
 # preflight
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P0 Triage** · **Gate:** every operation class the fleet needs is proven to work before a single agent spawns.
+
+<PhaseDiagram phase="P0" />
+
+## What it defends against
+
+A permission prompt or config failure that surfaces mid-flight is a hidden
+serialization point: one blocked agent stalls its N siblings, races half-started
+state, and wrecks the parallel wall-clock math. `preflight` front-loads bash,
+git, filesystem-write, and branch checks (plus optional worktree, test-command,
+`gh`, and LLM-provider checks) into one batch so the environment is proven
+deterministic before fan-out — not discovered non-deterministic during it.
+
+## Usage
+
+```sh
+adlc preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--test-cmd "CMD"` | Run `CMD` via `sh -c`; expect exit 0. Output tail shown on failure. |
+| `--gh` | Run `gh auth status`; expect exit 0. |
+| `--llm` | Call `detectProvider()` and assert non-null. No API call is made; reports which provider was found. |
+| `--worktrees` | Run a `git worktree add --detach … HEAD` then remove cycle. |
+| `--json` | Machine-readable output: `{ checks, verdict, failedNames }`. |
+
+With no flags, the four required checks (`bash`, `git`, `write`, `branch`) run.
+Each optional flag adds a check that becomes required for that run. Every check
+that creates a side effect cleans up in a `finally` block.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: every required and explicitly requested check passed.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational / internal error.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more required or requested checks failed.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc preflight --gh
+──────────────────────
+check      status  detail
+──────────────────────
+bash       ✓ PASS    echo preflight-ok succeeded
+git        ✓ PASS    git status succeeded
+write      ✓ PASS    .adlc/tmp/preflight-test written and removed
+branch     ✓ PASS    branch 'preflight-test-branch' created and removed
+gh         ✓ PASS    gh auth status exited 0
+──────────────────────
+
+verdict: ALL CHECKS PASSED — environment is ready.
+exit 0
+```
+
+## Go deeper
+
+[packages/preflight](https://github.com/voodootikigod/adlc/tree/main/packages/preflight)

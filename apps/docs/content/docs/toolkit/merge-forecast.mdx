@@ -1,8 +1,61 @@
 ---
 title: merge-forecast
-description: merge-forecast documentation (coming soon).
+description: Predicts merge conflicts before any agent runs, certifies the safe fan-out width, and emits a foundation-first merge schedule.
 ---
 
 # merge-forecast
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P2 Decompose** · **Gate:** the requested fan-out width never exceeds the width that is certified conflict-safe.
+
+<PhaseDiagram phase="P2" />
+
+## What it defends against
+
+Fanning agents out wide only to have their branches collide at merge time burns
+the parallel speedup twice — once building, once untangling. `merge-forecast`
+scores every parallel-eligible ticket pair for scope overlap, namespace
+collision, import radius, and historical co-change, then certifies the largest
+independent set as the safe width and orders the merge foundation-first. A hard
+scope-overlap veto or an over-wide `--width` fails the gate before any agent
+runs.
+
+## Usage
+
+```sh
+adlc merge-forecast [--tickets <path>] [--width <N>] [--build-min <X>] [--merge-min <Y>]
+                    [--co-change-limit <N>] [--conflict-threshold <F>] [--json]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
+| `--width <N>` | — | Desired fan-out width; gate fails if it exceeds the certified width. |
+| `--build-min <X>` | — | Mean ticket build time in minutes (for backpressure width). |
+| `--merge-min <Y>` | — | Mean merge-rebase-regreen time in minutes. |
+| `--co-change-limit <N>` | `500` | Git-log depth for co-change mining. |
+| `--conflict-threshold <F>` | `0.5` | Pair score at or above this triggers a `SEQUENCE` verdict. |
+| `--json` | off | Machine-readable JSON output. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: the schedule is safe at the recommended width.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad tickets file, unresolvable input).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: `--width` exceeds the certified width, or a vetoed / high-risk pair is scheduled concurrently.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc merge-forecast --width 4
+certifiedWidth: 2   recommendedWidth: 2
+AUTH-1 ↔ AUTH-2   SEQUENCE   scope-overlap (1.00) — declared scopes overlap
+
+Gate failed:
+  --width 4 exceeds certifiedWidth 2
+exit 2
+```
+
+## Go deeper
+
+[packages/merge-forecast](https://github.com/voodootikigod/adlc/tree/main/packages/merge-forecast)

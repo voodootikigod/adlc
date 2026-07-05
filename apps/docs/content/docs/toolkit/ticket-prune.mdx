@@ -1,8 +1,50 @@
 ---
 title: ticket-prune
-description: ticket-prune documentation (coming soon).
+description: Reports and archives stale, already-shipped tickets out of .adlc/tickets.json so live work is not buried under leftovers.
 ---
 
 # ticket-prune
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: maintenance / cross-phase (C12)** · **Gate:** none — advisory report; `--write` archives stale tickets, never deletes.
+
+## What it defends against
+
+`.adlc/tickets.json` is a mutable scratchpad, and nothing else prunes it after a ticket ships. Completed tickets accumulate and masquerade as an open backlog — you can't tell live work from leftovers without cross-checking deliverables and merged PRs by hand. `ticket-prune` reports (and, with `--write`, archives) the tickets it can determine are stale, so the backlog reflects what is actually open.
+
+A ticket is stale when it carries an explicit terminal `status` (`done` / `closed` / `complete` / `completed` / `archived` / `shipped`, case-insensitive), or — absent a status — when it declares at least one `scope` glob and every glob resolves to a file tracked at `--base-ref`. A ticket with no scope and no status is never inferred stale.
+
+## Usage
+
+```sh
+adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--tickets <path>` | Ticket file to read (default `.adlc/tickets.json`). |
+| `--archive <path>` | Archive file written under `--write` (default `.adlc/tickets.archive.json`, gitignored). |
+| `--base-ref <ref>` | Git ref to check `scope` globs against (default `HEAD`). Point at `origin/main` to audit a branch's tickets against trunk. |
+| `--write` | Archive stale tickets — move them out of `--tickets` into `--archive` (append/upsert by id; never clobbered, never deleted). |
+| `--json` | Machine-readable `{ baseRef, write, stale[], active[], archived[] }`. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — report or archive succeeded, regardless of how many stale tickets were found. Advisory, not a merge blocker.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad/missing ticket file, invalid JSON, unresolvable `--base-ref`, or the write lock could not be acquired).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc ticket-prune --base-ref origin/main
+stale (2): T3 (status: shipped), T7 (scope shipped on origin/main)
+active (4): T9, T10, T11, T12
+
+Dry run — re-run with --write to archive.
+exit 0
+```
+
+## Go deeper
+
+[packages/ticket-prune](https://github.com/voodootikigod/adlc/tree/main/packages/ticket-prune)

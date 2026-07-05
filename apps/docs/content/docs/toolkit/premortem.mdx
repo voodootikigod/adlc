@@ -1,8 +1,58 @@
 ---
 title: premortem
-description: premortem documentation (coming soon).
+description: Tells a frontier model the project already failed and asks for the postmortem, surfacing concrete risks anchored to the spec.
 ---
 
 # premortem
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P1 Interrogate** · **Gate:** advisory — every surfaced failure cause becomes an interrogation question folded into spec review before the spec is locked.
+
+<PhaseDiagram phase="P1" />
+
+## What it defends against
+
+<FailureMode id="F4" />
+
+Ask a model "any problems with this plan?" and sycophancy answers "looks good." `premortem` inverts the framing: it tells a frontier model the project already failed and asks it to write the postmortem. Forced to explain a failure that already happened, the model produces concrete, checkable risks anchored to the actual spec content instead of confidently hallucinating that everything is fine.
+
+## Usage
+
+```sh
+adlc premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|->]
+```
+
+| Flag | Description |
+| --- | --- |
+| `<spec.md>` | Path to the spec file to analyse (required positional). |
+| `--tier cheap\|mid\|frontier` | Model tier (default `frontier`). |
+| `--out <path>` | Write the markdown report to this file instead of stdout. |
+| `--json` | Emit machine-readable JSON `{ causes: [...] }`. |
+| `--prompt-only` | Print the exact system + user prompt and exit 0 — no API key needed. |
+| `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only`. |
+| `--help` | Print usage and exit 0. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — report produced successfully (or `--prompt-only` / `--help`).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (missing spec file, no LLM provider configured, malformed model response).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — reserved for future gate-fail use; not currently emitted (premortem is advisory).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc premortem specs/checkout-v2.md --tier frontier
+## Failure Causes
+| Cause | Earliest signal | Prevention |
+| --- | --- | --- |
+| Idempotency key reused across retries | duplicate charge in logs | scope key to attempt, not order |
+
+## Questions to fold into interrogation
+1. How is the idempotency key derived, and is it stable across retries?
+exit 0
+```
+
+## Go deeper
+
+[packages/premortem](https://github.com/voodootikigod/adlc/tree/main/packages/premortem) · Why the spec must survive its own postmortem: [Tests Are the Spec](https://voodootikigod.com/adlc-3-tests-are-the-spec).

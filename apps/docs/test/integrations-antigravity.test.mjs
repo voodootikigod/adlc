@@ -66,29 +66,13 @@ test('index.mdx is a real landing page (no "coming soon" stub) enumerating all s
   }
 });
 
-test('index.mdx discloses that the stub harness pages (codex, opencode, pi) are still being written', () => {
-  const p = path.join(integrationsDir, 'index.mdx');
-  const content = readFileSync(p, 'utf8');
+test('every harness page is real content, and index.mdx carries no "still being written" disclosure', () => {
+  const indexContent = readFileSync(path.join(integrationsDir, 'index.mdx'), 'utf8');
 
-  const STUB_HARNESSES = ['codex', 'opencode', 'pi'];
-  const WRITTEN_HARNESSES = ['claude-code', 'antigravity', 'cursor'];
-
-  for (const harness of STUB_HARNESSES) {
-    const bulletMatch = content.match(
-      new RegExp(`- \\*\\*\\[[^\\]]+\\]\\(/docs/integrations/${harness}\\)\\*\\*[\\s\\S]*?(?=\\n- \\*\\*|\\n\\nSee)`)
-    );
-    assert.ok(bulletMatch, `index.mdx should have a bullet for ${harness}`);
-    assert.match(
-      bulletMatch[0],
-      /full walkthrough still being written/,
-      `the ${harness} bullet should disclose that its full walkthrough is still being written`
-    );
-  }
-
-  // The two harnesses with real, complete pages must NOT carry the disclosure —
-  // otherwise it would misleadingly undersell finished documentation.
-  for (const harness of WRITTEN_HARNESSES) {
-    const bulletMatch = content.match(
+  // All six pages are written now; a disclosure anywhere would misleadingly
+  // undersell finished documentation.
+  for (const harness of HARNESSES) {
+    const bulletMatch = indexContent.match(
       new RegExp(`- \\*\\*\\[[^\\]]+\\]\\(/docs/integrations/${harness}\\)\\*\\*[\\s\\S]*?(?=\\n- \\*\\*|\\n\\nSee)`)
     );
     assert.ok(bulletMatch, `index.mdx should have a bullet for ${harness}`);
@@ -96,6 +80,18 @@ test('index.mdx discloses that the stub harness pages (codex, opencode, pi) are 
       bulletMatch[0],
       /still being written/,
       `the ${harness} bullet documents a finished page and should not claim it is still being written`
+    );
+
+    const pageContent = readFileSync(path.join(integrationsDir, `${harness}.mdx`), 'utf8');
+    assert.doesNotMatch(
+      pageContent,
+      /coming soon|This page is being written/i,
+      `${harness}.mdx should be real content, not a stub`
+    );
+    assert.match(
+      pageContent,
+      /rails-guard|rails-guard-ci\.mjs/,
+      `${harness}.mdx should document rail enforcement`
     );
   }
 });

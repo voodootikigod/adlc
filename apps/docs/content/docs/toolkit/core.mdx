@@ -1,8 +1,89 @@
 ---
 title: core
-description: core documentation (coming soon).
+description: The frozen shared foundation every ADLC tool imports — exit-code helpers, provider selection, and the ledger, ticket, rail, and mutation primitives.
 ---
 
 # core
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**Package:** `@adlc/core` · **Role:** the shared library every gate imports · **Status:** frozen contract.
+
+## What it is
+
+`@adlc/core` is the foundation the whole toolkit stands on. Every gate imports
+from it; no gate modifies it. It is a **frozen contract during tool builds** — a
+rail. If a tool needs something core doesn't offer, it works around the gap in
+its own package and notes it in its README rather than editing core. That
+discipline is what keeps twenty-plus independently published tools behaving
+identically at their boundaries.
+
+Downstream tools inherit five things from core: the exit-code convention, LLM
+provider selection, the append-only ledger, the ticket/rail/glob engine, and the
+mutation operators used by prosecution.
+
+## Exit-code convention
+
+This is the contract. Every gate that builds on core reports its result the same
+way, so an orchestrator, hook, or CI job can branch on the exit code without
+parsing output. Core exposes it as three helpers — `pass()`, `opError()`, and
+`gateFail()`:
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — `pass()`: the gate passes or the command succeeds.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — `opError()`: operational error (bad input, unreadable file, failed LLM call).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — `gateFail()`: the gate fails (the finding is real).</span>
+</div>
+
+The split between 1 and 2 matters: an operational error means the gate couldn't
+run, while a gate failure means it ran and found a problem. Collapsing them would
+let a broken environment read as a clean pass.
+
+## Provider selection
+
+Tools that run an LLM pass do not embed provider logic — they call core's
+`detectProvider` / `complete` / `fan` helpers, which auto-detect a provider from
+the environment. Detection runs in a fixed priority order (cheapest and lowest
+latency first, per ADR-0007), matching the first provider whose key is present:
+
+| Order | Provider | Env var |
+| --- | --- | --- |
+| 1 | `anthropic` | `ANTHROPIC_API_KEY` |
+| 2 | `openai` | `OPENAI_API_KEY` |
+| 3 | `gemini` | `GEMINI_API_KEY` |
+| 4 | `agy` | `ADLC_AGY` (Antigravity CLI subprocess; feature-flag gated, last so API-key providers win) |
+
+Force a specific provider with `ADLC_PROVIDER` (env) or a per-invocation
+`--provider` flag, which takes precedence over the env var. Model tiers
+(`cheap` / `mid` / `frontier`) resolve to provider-specific model ids and can be
+overridden with `ADLC_MODEL_CHEAP`, `ADLC_MODEL_MID`, and `ADLC_MODEL_FRONTIER`.
+
+### The keyless `--prompt-only` philosophy
+
+No ADLC gate requires an API key to be useful. Every LLM-backed tool exposes
+`--prompt-only`, backed by core's `promptOnly()` helper: it prints the exact
+prompt the tool would send and exits `0`. You can paste that prompt into any
+harness — a chat window, a different provider, an air-gapped review — and feed
+the answer back. Keys make the gate automatic; they are never a gate to entry.
+
+## Rail-engine primitives
+
+The rest of core is the deterministic machinery the gates share:
+
+- **Ledger** (`.adlc/`): `appendEntry` / `readEntries` back the append-only gate
+  evidence, with `sha256` / `hashFiles` for content hashing. Malformed lines are
+  reported, never silently swallowed.
+- **Tickets & rails** (`.adlc/tickets.json`): `loadTickets`, `validateTicket`,
+  `topoSort`, and `computeFloat` (critical-path method) turn the ticket graph
+  into an executable, dependency-ordered plan.
+- **Scope & glob**: `globMatch` (`*`, `**`), `inScope`, and `scopesOverlap` are
+  the conservative matchers `rails-guard` uses to decide whether an edit is
+  inside a ticket's declared scope.
+- **Git**: `gitDiff`, `changedFiles`, `isDirty`, plus `coChange` and `churn` for
+  the logical-coupling signals hot-file and merge-forecast tools read.
+- **Mutation**: `mutate.OPERATORS` (invert-comparison, bool-flip, null-return,
+  off-by-one, logic-swap) and `generateMutants` / `applyMutant` power
+  `hollow-test`, `review-calibration`, and `gate-fuzzing`.
+
+## Go deeper
+
+The full import surface and frozen-contract notes:
+[packages/core](https://github.com/voodootikigod/adlc/tree/main/packages/core).

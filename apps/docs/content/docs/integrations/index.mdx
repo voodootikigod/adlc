@@ -11,16 +11,16 @@ harness below.
 
 - **[Claude Code](/docs/integrations/claude-code)** — phase-routing skill, gate
   commands, a `prosecutor` subagent, and hooks that fire the gates automatically.
-- **[Codex](/docs/integrations/codex)** — the OpenAI Codex CLI integration for the
-  ADLC toolkit; full walkthrough still being written.
+- **[Codex](/docs/integrations/codex)** — five phase skills plus a `PreToolUse`
+  rail hook that gates structured edits *and* shell writes.
 - **[Cursor](/docs/integrations/cursor)** — a `preToolUse` rails dispatcher, hook
   parity (audit + flail, advisory shell notice, opt-in build-gate), the full
   `/adlc-*` command suite, and the sequential five-lens `/adlc-prosecute` loop,
   backed by the CI rail-freeze gate.
-- **[opencode](/docs/integrations/opencode)** — the opencode CLI integration for the
-  ADLC toolkit; full walkthrough still being written.
-- **[pi](/docs/integrations/pi)** — the pi CLI integration for the ADLC toolkit;
-  full walkthrough still being written.
+- **[opencode](/docs/integrations/opencode)** — rails-guard plugin hook, eight
+  lifecycle commands, a five-lens prosecutor panel, and a keyless gate bridge.
+- **[pi](/docs/integrations/pi)** — native extension with proactive rail blocking,
+  git-diff revert, and a suppression gate; five phase skills wrap the CLIs.
 - **[Antigravity](/docs/integrations/antigravity)** — native `agy` plugin with an
   in-session rails-guard hook, backed by the unbypassable CI rail-freeze gate.
 

@@ -1,8 +1,64 @@
 ---
 title: rails-guard
-description: rails-guard documentation (coming soon).
+description: Blocks builder edits to frozen rail paths and greps added diff lines for undeclared suppression markers.
 ---
 
 # rails-guard
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P4 Build** · **Gate:** frozen rails stay untouched and no added line hides an undeclared suppression marker.
+
+<PhaseDiagram phase="P4" />
+
+## What it defends against
+
+During P4 a builder can quietly edit the very tests, contract types, or CI config
+that are supposed to hold it accountable — or slip a `.skip(`, `.only(`,
+`@ts-ignore`, or `# noqa` into the diff to turn a red gate green. `rails-guard`
+enforces two invariants on the diff: declared rail globs must not be touched, and
+any newly added suppression marker is blocked unless the active ticket body
+carries a matching `allow-suppression:` declaration. Prose files (`.md`,
+`.markdown`) are exempt from the marker scan; `.mdx` is not, because it compiles
+to executable JSX.
+
+## Usage
+
+```sh
+adlc rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] [--rails <glob>...] [--record] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--base <ref>` | Freeze baseline to diff against. When omitted, resolves to the merge-base of HEAD with trunk (`main`/`master`/`origin/main`/`origin/master`) and **fails closed if no trunk ref is found** — it never defaults to HEAD, which would hide already-committed rail edits. |
+| `--ticket <id>` | Load rail globs and `allow-suppression` declarations from this ticket. |
+| `--tickets <path>` | Path to the tickets file (default `.adlc/tickets.json`). |
+| `--rails <glob>` | Frozen-path glob, repeatable. Overrides `ticket.rails` when supplied. |
+| `--record` | On a clean pass, append a `rails-check` proof (with SHA-256 of every rail-matching file) to `.adlc/manifest.jsonl`. |
+| `--json` | Emit a machine-readable result for orchestrators. |
+| `--help` | Print help and exit 0. |
+
+Rails resolve from `--rails` when given, otherwise from `--ticket`; with neither, the run is an operational error.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: no rail edits and no undeclared suppression markers.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (not a git repo, bad input, no rails resolvable, no trunk baseline).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more violations found (list printed to stderr / JSON).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc rails-guard --rails "test/**" --ticket T42 --base origin/main
+rails-guard: 2 violation(s) found
+  [rail-edit]   test/auth.test.ts  (matched globs: test/**)
+  [suppression] src/foo.ts:12  marker: @ts-ignore
+exit 2
+```
+
+## Go deeper
+
+The frozen-rails discipline and why builders must not touch their own tests:
+[Tests Are the Spec](https://voodootikigod.com/adlc-3-tests-are-the-spec).
+
+[packages/rails-guard](https://github.com/voodootikigod/adlc/tree/main/packages/rails-guard)

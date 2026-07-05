@@ -1,8 +1,64 @@
 ---
 title: gate-manifest
-description: gate-manifest documentation (coming soon).
+description: A hash-chained evidence ledger recording what each ADLC gate verified, with optional HMAC signing so the chain attests authorship, not just consistency.
 ---
 
 # gate-manifest
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC: C11 cross-cutting provenance** · **Gate:** every gate's verdict is recorded in a tamper-evident chain that CI and the P6 reviewer can verify.
+
+## What it defends against
+
+Agentic code arrives at the merge gate with no memory of what was checked along the way.
+`gate-manifest` is the append-only ledger the other gates write to — spec-lint, hollow-test,
+rails-guard, review-calibration — each recording what it verified into `.adlc/manifest.jsonl`.
+Every entry's `prev` is the SHA-256 of the previous raw line, so tampering with any line
+breaks the chain. Set `ADLC_MANIFEST_KEY` and each entry is additionally HMAC-SHA256 signed:
+without it the chain proves only internal consistency (anyone who can write the file can
+forge a clean one); with it, the chain attests authorship and defeats the forge-from-scratch
+attack. It spans phases rather than owning one, giving auditors and the P6 gate the provenance
+that agentic code was checked before it shipped.
+
+## Usage
+
+```sh
+adlc gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c] [--dir path] [--json]
+adlc gate-manifest verify [--json] [--dir path]
+adlc gate-manifest show   [--ticket id] [--json] [--dir path]
+adlc gate-manifest attest [--ticket id] [--dir path]
+```
+
+| Verb / Flag | Description |
+| --- | --- |
+| `record <gate-name>` | Append one entry to the ledger; signs it when `ADLC_MANIFEST_KEY` is set. |
+| `verify` | Walk the raw lines and validate the hash chain (and signatures, when keyed). |
+| `show` | Print entries, optionally filtered by ticket. |
+| `attest` | Emit a Markdown gate-evidence table suitable for a PR comment. |
+| `--ticket id` | Associate or filter entries by ticket id. |
+| `--data '{json}'` | Arbitrary JSON payload for `record`; malformed JSON is a hard error. |
+| `--files a,b,c` | Comma-separated paths, each SHA-256 hashed (missing files hash to null). |
+| `--dir path` | Override the ledger directory (default `.adlc`). |
+| `--json` | Machine-readable output. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — `record`, `show`, and `attest` always; `verify` when the chain (and signatures, if keyed) is valid.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: bad input, unreadable file, or malformed `--data` JSON.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — `verify` gate fails: the chain is broken (reports the seq and line of the first break).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc gate-manifest record hollow-test --ticket T-42 --data '{"survived":0}' --files src/calc.mjs
+recorded: seq=2 gate=hollow-test ts=2026-07-05T18:04:11.220Z (unsigned)
+
+$ adlc gate-manifest verify
+chain valid (2 entries)
+exit 0
+```
+
+## Go deeper
+
+- [packages/gate-manifest](https://github.com/voodootikigod/adlc/tree/main/packages/gate-manifest)

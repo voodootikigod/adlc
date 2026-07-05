@@ -1,8 +1,81 @@
 ---
 title: Toolkit
-description: Toolkit documentation (coming soon).
+description: The ADLC toolkit — one deterministic gate per lifecycle phase, installed once through @adlc/cli.
 ---
 
 # Toolkit
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+The toolkit makes the ADLC gates concrete. Each lifecycle phase asks one
+machine-checkable question, and one tool answers it with an exit code — `0`
+passes, `2` fails. The tools publish independently but install together and share
+one command surface: `adlc <tool>`. If you want the phase map first, read
+[The Lifecycle](/docs/lifecycle); this page is the index of every gate.
+
+```sh
+npm install -g @adlc/cli
+adlc --help          # list every tool, grouped
+adlc <tool> [args]   # run any gate
+```
+
+Everything below is reachable as `adlc <tool>`. The groups mirror the phases of
+work: shaping the spec, supervising execution, gathering review evidence,
+compounding defenses, and syncing outward.
+
+## Spec and ticket shaping
+
+| Tool | What it does |
+| --- | --- |
+| [parallax](/docs/toolkit/parallax) | Fan out readers to expose spec ambiguity and route conflicts. |
+| [spec-lint](/docs/toolkit/spec-lint) | Gate specs for acceptance criteria that lack a verification method. |
+| [premortem](/docs/toolkit/premortem) | Stress-test an approved spec before implementation. |
+| [coldstart](/docs/toolkit/coldstart) | Check whether tickets are executable without agent guesswork. |
+| [ticket-prune](/docs/toolkit/ticket-prune) | Report and archive stale, already-shipped tickets out of tickets.json. |
+
+## Execution supervision and rails
+
+| Tool | What it does |
+| --- | --- |
+| [preflight](/docs/toolkit/preflight) | Check baseline environment readiness before fan-out. |
+| [model-router](/docs/toolkit/model-router) | Assign tickets to frontier, direct, or ladder model strategies. |
+| [merge-forecast](/docs/toolkit/merge-forecast) | Estimate fan-out width, dependency pressure, and merge backpressure. |
+| [rails-guard](/docs/toolkit/rails-guard) | Enforce frozen rails, declared suppressions, and manifest recording. |
+| [build-gate](/docs/toolkit/build-gate) | Deny starting a high-risk ticket build in a degraded (context-rot) session unless audited. |
+| [flail-detector](/docs/toolkit/flail-detector) | Detect repeated errors, scope violations, edit churn, and oversized logs. |
+| [consensus-fix](/docs/toolkit/consensus-fix) | Fan out candidate fixes and select the gated consensus winner. |
+
+## Review evidence and calibration
+
+| Tool | What it does |
+| --- | --- |
+| [behavior-diff](/docs/toolkit/behavior-diff) | Capture and compare HTTP/API behavior snapshots for the P6 human gate. |
+| [gate-manifest](/docs/toolkit/gate-manifest) | Record, verify, show, and attest append-only gate evidence. |
+| [hollow-test](/docs/toolkit/hollow-test) | Mutate changed code to find tests that pass without testing behavior. |
+| [prosecute](/docs/toolkit/prosecute) | Record ticket- and revision-bound P5 prosecution evidence. |
+| [review-calibration](/docs/toolkit/review-calibration) | Measure reviewer recall by scoring whether review catches mutants. |
+| [model-ratchet](/docs/toolkit/model-ratchet) | Identify hot files for re-prosecution after model or repo drift. |
+| [gate-fuzzing](/docs/toolkit/gate-fuzzing) | Run hostile candidates against gate suites to find defeats. |
+| `review` | External passthrough — runs the model-judged `npx adversarial-review` that `prosecute` records evidence for. |
+
+## Compounding defenses
+
+| Tool | What it does |
+| --- | --- |
+| [lesson-foundry](/docs/toolkit/lesson-foundry) | Mine repeated findings into deterministic defenses. |
+| [rejection-mining](/docs/toolkit/rejection-mining) | Mine review rejections into reusable review lenses. |
+| [skill-rot](/docs/toolkit/skill-rot) | Check skill files for stale validation metadata and stamp freshness. |
+
+## External integration
+
+| Tool | What it does |
+| --- | --- |
+| [ticket-sync](/docs/toolkit/ticket-sync) | Two-way sync ADLC tickets with external trackers (GitHub Issues). Reached as `adlc ticket`. |
+
+## Shared foundation
+
+Not gates themselves — the layer every gate is built on.
+
+| Package | What it does |
+| --- | --- |
+| [cli](/docs/toolkit/cli) | The `adlc <tool>` dispatcher — one stable command surface for the whole suite. |
+| [core](/docs/toolkit/core) | Frozen shared library: exit-code helpers, provider selection, ledger, ticket, rail, and mutation primitives. |
+| [runner](/docs/toolkit/runner) | Backs `adlc run` and `adlc accept` — asserts phase evidence and records P6 acceptance. |

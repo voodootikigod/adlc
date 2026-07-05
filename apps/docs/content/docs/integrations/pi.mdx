@@ -1,8 +1,87 @@
 ---
 title: pi
-description: pi documentation (coming soon).
+description: Native ADLC extension for the pi coding agent — in-session rail, scope, and suppression enforcement with git-diff revert, plus five phase skills.
 ---
 
-# pi
+# ADLC in pi
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+A native [pi](https://pi.dev) TypeScript extension plus five skills. pi
+intentionally skips built-in orchestrators, so ADLC slots in through pi's
+Extension API: the extension enforces rails in-session while the skills route
+each phase to the deterministic `adlc` gates.
+
+## What you get
+
+- **Proactive rail gate** (`tool_call`) — blocks `write`/`edit`/`bash` before it
+  touches disk when the target is a frozen rail, out of the ticket's scope, or
+  the ADLC trust roots. **Bash writes are gated here** — redirects, `tee`,
+  `rm`/`mv`/`cp`, in-place `sed`/`perl`, mutating `git` subcommands, and
+  interpreter file-write APIs are recognized and rail-checked.
+- **Reactive revert gate** (`tool_result`) — after any write/edit/bash, reads
+  the actual `git diff`; a rail violation is reverted via
+  `git checkout HEAD -- <file>` and the tool result is replaced with a
+  `GATE FAILED` error. Added lines are scanned for undeclared suppression
+  markers (`@ts-ignore`, `eslint-disable`, `.skip(`, `# noqa`, …) and reverted
+  unless the ticket allows them.
+- **Ticket doctrine injection** (`before_agent_start`) — the active ticket's
+  scope, rails, and spec are appended to the system prompt every turn
+  (sanitized; the ticket body is fenced as untrusted), defending premature
+  satisfaction and context rot.
+- **`/ticket` command + footer status pill** — constant visibility into the
+  active enforcement context.
+- **Skills:** `adlc` (phase router), `adlc-spec` (P0–P2), `adlc-rail-build`
+  (P3–P4), `adlc-prosecute` (P5–P6), `adlc-distill` (P7) — each wraps the
+  deterministic `adlc` CLIs; hooks are assistive, `adlc rails-guard` is the
+  proof.
+
+## Install
+
+`@adlc/pi-package` is **not yet published to npm**; load it from a checkout:
+
+```sh
+npm install -g @adlc/cli                       # the gate toolkit the skills wrap
+pi --extension /path/to/adlc/plugins/adlc-pi/index.ts
+```
+
+Peer dependency: `@earendil-works/pi-coding-agent` ≥ 0.79.0.
+
+## Enforcement model
+
+Enforcement is **opt-in by activating a ticket** — set `ADLC_TICKET` or write
+`.adlc/current-ticket.json` (tickets file overridable via `ADLC_TICKETS`). With
+no active ticket the extension is inert. Once a ticket id resolves, the
+extension **fails closed**: an unreadable or unparseable tickets file, or an
+unknown ticket id, blocks *all* tool calls until fixed (with a red status pill
+telling you why). Unlike the sibling integrations, this plugin does not use
+`ADLC_P4_ENFORCEMENT` — the active ticket is the switch.
+
+`.adlc/tickets.json` and `.adlc/current-ticket.json` are unconditionally
+blocked from edits regardless of rails — the agent can't rewrite its own
+constraints. An empty ticket `scope` means unrestricted; `.adlc/` and `.omo/`
+stay writable for evidence.
+
+The commit-time backstop is the same harness-agnostic CI gate as every other
+integration: `scripts/rails-guard-ci.mjs` reads the frozen rail set **from the
+trusted base ref** and rejects any PR that edits a rail, however the edit was
+made. **Make it a required check.**
+
+## Formal ADLC coverage
+
+| Phase | pi surface |
+| --- | --- |
+| P0–P2 Triage → Decompose | `adlc-spec` skill (`parallax`, `spec-lint`, `premortem`, `coldstart`, `merge-forecast`, `model-router`); ticket resolution on `session_start` |
+| **P3–P4 Rail & Build** | **the extension** — proactive `tool_call` block + reactive `tool_result` revert + suppression gate |
+| P5–P6 Prosecute & Integrate | `adlc-prosecute` skill (`prosecute`, `behavior-diff`, `accept`, `adlc run p5/p6`) |
+| P7 Distill | `adlc-distill` skill (`lesson-foundry`, `rejection-mining`, `skill-rot`, `model-ratchet`) |
+
+Automated P5 subagent prosecution, a `session_shutdown` P6 capture, and
+scheduled P7 runs are design intent (see the integration plan), not shipped
+features — P5–P7 run through the skills and the `adlc` CLIs today.
+
+## Go deeper
+
+Source: [`plugins/adlc-pi/`](https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-pi)
+· design plan: [docs/integrations/pi.md](https://github.com/voodootikigod/adlc/blob/main/docs/integrations/pi.md).
+
+The rail-freeze gate this extension enforces in-session:
+[Tests Are the Spec](https://voodootikigod.com/adlc-3-tests-are-the-spec).

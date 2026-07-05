@@ -1,8 +1,63 @@
 ---
 title: hollow-test
-description: hollow-test documentation (coming soon).
+description: Diff-scoped mutation gate — mutates only the lines your change touched and fails if any mutant survives your test suite, proving coverage is load-bearing.
 ---
 
 # hollow-test
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P3 Rail (C4)** · **Gate:** every changed line is constrained by an assertion — no mutant survives.
+
+<PhaseDiagram phase="P3" />
+
+## What it defends against
+
+<FailureMode id="F5" />
+
+Executed lines are not tested lines. A suite can run every changed statement and still
+assert nothing about its behavior — hollow coverage that a reward-seeking model will
+happily produce. `hollow-test` mutates only the lines in your diff (invert a comparison,
+flip a boolean, null a return), reruns the suite against each mutant, and fails if any
+survives. A survivor is proof the line's behavior is unconstrained. Diff-scoping keeps
+the run in seconds-to-minutes instead of the hours whole-codebase mutation testing costs.
+
+## Usage
+
+```sh
+adlc hollow-test --test-cmd "node --test test/" [--base <ref>] [--max <n>] [--timeout-ms <n>] [--target <file>] [--rails <ticket-file>] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--test-cmd <cmd>` | (required) Shell command to run the suite; must exit non-zero on failure. |
+| `--base <ref>` | Git base ref for the diff. Defaults to the merge-base with a trunk; fails closed if none resolves. |
+| `--max <n>` | Max mutants across all files (default `20`), spread round-robin. |
+| `--timeout-ms <n>` | Per-mutant test-command timeout (default `120000`). |
+| `--target <file>` | Mutate this file whole, independent of the diff (repeatable). For rails-authoring / characterization tickets where the behavior file itself did not change. |
+| `--rails <ticket-file>` | Expand a ticket's declared `rails` globs against tracked files and mutate them (repeatable). |
+| `--json` | Machine-readable output for orchestrators. |
+| `--help` | Show usage and exit 0. |
+
+Refuses to run on a dirty working tree, and requires a green baseline before mutating
+so a failing suite cannot masquerade as killing every mutant.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: every generated mutant was killed by the suite.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: dirty tree, not a git repo, bad arguments, non-green baseline, or nothing eligible to mutate with no `--target`/`--rails`.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more mutants survived (hollow coverage).</span>
+</div>
+
+## Example
+
+```sh
+$ adlc hollow-test --test-cmd "node --test test/" --base main
+src/calc.mjs:7  null-return   survived   return a + b;  →  return null;
+hollow coverage — 1 mutation(s) pass your tests
+exit 2
+```
+
+## Go deeper
+
+- [packages/hollow-test](https://github.com/voodootikigod/adlc/tree/main/packages/hollow-test)
+- Why prosecution beats code review: [Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

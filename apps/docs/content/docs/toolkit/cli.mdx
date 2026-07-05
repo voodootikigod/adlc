@@ -1,8 +1,75 @@
 ---
 title: cli
-description: cli documentation (coming soon).
+description: The umbrella dispatcher — one stable command surface that routes every adlc verb to the right gate in the suite.
 ---
 
 # cli
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**Package:** `@adlc/cli` · **Role:** one stable command prefix for skills, hooks, CI, and humans.
+
+## What it is
+
+Every ADLC gate ships as its own `@adlc/*` package, but an agent harness needs a
+single stable prefix — a skill or hook that shells out to twenty different
+binaries is brittle and easy to route around. `@adlc/cli` installs the suite and
+makes every gate reachable through one verb: `adlc <tool>`.
+
+The dispatcher is a router and nothing more. It forwards argv verbatim to the
+routed tool and propagates the child's exit code unchanged, so `adlc spec-lint
+spec.md --json` behaves exactly as the standalone tool would. It resolves
+package-local binaries from its own `@adlc/*` dependencies and never searches
+your `PATH`, so a stale global binary can't silently satisfy a gate.
+
+## Install
+
+```sh
+npm install -g @adlc/cli
+```
+
+## Usage
+
+```sh
+adlc <tool> [args...]        # run any ADLC gate (argv forwarded verbatim)
+adlc run <phase> [args...]   # assert phase evidence via the runner
+adlc accept [args...]        # record P6 acceptance evidence via the runner
+adlc --help                  # list all tools, grouped
+adlc --version               # print the dispatcher version
+```
+
+Every tool listed on the [Toolkit landing page](/docs/toolkit) is reachable as
+`adlc <tool>`. A few verbs are worth calling out:
+
+| Verb | What it does |
+| --- | --- |
+| `adlc <tool>` | Resolves the local `@adlc/<tool>` bin and runs it with the remaining args. |
+| `adlc run` / `adlc accept` | Runner verbs — route to `@adlc/runner` to assert phase evidence (`run`) or record P6 acceptance (`accept`). |
+| `adlc review` | External passthrough — shells out to `npx adversarial-review`, the model-judged reviewer that `prosecute` records evidence for but never runs itself. |
+| `adlc ticket` | Dispatcher shorthand for the `@adlc/ticket-sync` package (routes to its bin). |
+
+### Unknown tools
+
+An unrecognized verb fails fast with a Levenshtein-based suggestion:
+
+```sh
+$ adlc spec-lnt spec.md
+error: unknown tool: spec-lnt
+did you mean "spec-lint"?
+run "adlc --help" for the list of 24 tools.
+exit 1
+```
+
+## Exit-code convention
+
+The dispatcher mirrors the routed tool's exit code exactly — it adds none of its
+own semantics:
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes or command succeeds.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (including dispatcher-level failures: unknown tool, missing package).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails.</span>
+</div>
+
+## Go deeper
+
+Source and the full dependency list:
+[packages/cli](https://github.com/voodootikigod/adlc/tree/main/packages/cli).

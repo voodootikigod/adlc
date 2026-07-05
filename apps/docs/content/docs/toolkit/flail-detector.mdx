@@ -1,8 +1,64 @@
 ---
 title: flail-detector
-description: flail-detector documentation (coming soon).
+description: Analyzes a build-session log for flail signatures and fails the gate when an agent is spinning.
 ---
 
 # flail-detector
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: P4 Build** · **Gate:** a build session that shows flail signatures is killed, not retried indefinitely.
+
+<PhaseDiagram phase="P4" />
+
+## What it defends against
+
+A build agent that has lost the thread will loop: hitting the same error over and
+over, wandering outside its declared scope, or churning the same file. Left alone
+it burns context and produces noise. `flail-detector` encodes the mechanical
+two-strike rule — it reads a session log and fails closed when it finds any of
+four signatures: a normalized error signature repeating past `--max-repeat`, a
+written path outside every `--scope` glob, one file edited three or more times, or
+a log exceeding `--max-bytes`. It is fully deterministic and makes no LLM calls.
+
+## Usage
+
+```sh
+adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `<log-file>` | Path to the session log to analyze (required positional). Treated as JSONL when more than half its non-empty lines parse as JSON objects, otherwise plain text. |
+| `--scope <glob>` | Declared-scope glob, repeatable. When given, written paths outside all globs are scope violations. |
+| `--max-repeat <n>` | Trigger the repeated-error signal at n identical normalized signatures (default 2). |
+| `--max-bytes <n>` | Trigger the size signal when the log exceeds n bytes (default: no limit). |
+| `--json` | Machine-readable JSON output for orchestrators. |
+| `--help` | Print help and exit 0. |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — clean: no flail signals detected, the session may continue.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (log file not found, bad argument).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — flail: one or more signals triggered; kill the session and append the dead-ends to the ticket.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc flail-detector session.log --scope 'src/**' --scope 'test/**'
+flail-detector: FLAIL
+  signals:
+    repeated-error (1 signature(s)):
+      [2x] error: cannot resolve module at line in
+    scope-violation (1 path(s) outside scope):
+      /etc/hosts
+  recommendation:
+    Kill the session. Append these dead-ends to the ticket.
+exit 2
+```
+
+On a second trigger, escalate to P2: the ticket is wrong, not the agent.
+
+## Go deeper
+
+[packages/flail-detector](https://github.com/voodootikigod/adlc/tree/main/packages/flail-detector)

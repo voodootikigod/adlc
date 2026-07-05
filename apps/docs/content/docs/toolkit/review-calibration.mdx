@@ -1,8 +1,63 @@
 ---
 title: review-calibration
-description: review-calibration documentation (coming soon).
+description: Measures reviewer recall by planting bugs and scoring whether the review command catches them.
 ---
 
 # review-calibration
 
-This page is being written. In the meantime, see the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory).
+**ADLC phase: calibration (cross-phase)** · **Gate:** the reviewer catches at least `--min-recall` of planted bugs, proven against a controlled scorer.
+
+## What it defends against
+
+<FailureMode id="F6" />
+
+"We do adversarial review" is a vibe until it is a number. `review-calibration`
+plants real bugs into files changed by a commit, runs your review command, and
+scores recall — with a built-in echo control that scores ~0 and an oracle
+control that scores 1.0, so the recall figure is trustworthy rather than gamed
+by a reviewer that merely echoes changed lines.
+
+## Usage
+
+```sh
+adlc review-calibration --review-cmd "cmd with {base} placeholder" [options]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--review-cmd <cmd>` | Required. Command that runs the reviewer; `{base}` is substituted with the commit ref. |
+| `--commit <ref>` | Commit whose changed files are the plant targets (default `HEAD`). |
+| `--plants <n>` | Number of bugs to plant (default `8`). |
+| `--min-recall <f>` | Minimum recall fraction to pass, 0–1 (default `0.5`). |
+| `--min-precision <f>` | Optional minimum precision to also require. |
+| `--scorer judge\|string` | `judge` (default) is cheap-model semantic match; `string` is the gameable legacy location-only fallback (warns). |
+| `--files <list>` | Comma-separated fallback file list when the commit has no eligible code. |
+| `--plants-file <path>` | JSON array of authored plants `[{file,line,original,mutated,category?,defect?,witness?}]`. |
+| `--tier cheap\|mid\|frontier` | Model tier for the LLM judge (default `cheap`). |
+| `--review-provider <name>` | Provider family `--review-cmd` runs on; compared against the judge for independence. |
+| `--strict` | Gate-fail instead of warn when `--review-provider` matches the judge's provider. |
+| `--json` | Machine-readable output. |
+| `--prompt-only` | Print a representative judge prompt and exit 0 (no API key or git repo needed). |
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: recall (and precision, if set) meet the thresholds.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: dirty tree, no plants generatable, review command crashed (exit not in {0,2}), no judge provider, or a control self-test failed.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: recall/precision below the thresholds, or a `--strict` provider match.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc review-calibration --review-cmd "adversarial-review --base {base} --json" --plants 8 --min-recall 0.6
+recall 62.5% (5/8 caught) · precision 83%
+✗ gate fails — recall 62.5% (min 60.0%)
+exit 2
+```
+
+## Go deeper
+
+[packages/review-calibration](https://github.com/voodootikigod/adlc/tree/main/packages/review-calibration).
+Why the review itself must be prosecuted:
+[Prosecution, Not Code Review](https://voodootikigod.com/adlc-4-prosecution-not-code-review).

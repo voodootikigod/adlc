@@ -19,12 +19,13 @@ turns unverifiable criteria into blocking failures.
 ## Usage
 
 ```sh
-adlc spec-lint <spec.md> [--llm] [--json] [--prompt-only]
+adlc spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--llm` | Cheap-tier LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly", "run tests"). Demoted criteria become WISH. Requires a provider env var (see core). |
+| `--llm` | LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly", "run tests"). Demoted criteria become WISH. Requires a provider env var (see core). |
+| `--tier` | Model tier for the `--llm` pass: `cheap` (default), `mid`, or `frontier`. |
 | `--json` | Machine-readable output for orchestrators. All other output is suppressed. |
 | `--prompt-only` | Print the exact LLM prompt and exit 0 — works with zero API keys; paste into any harness. |
 

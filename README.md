@@ -64,8 +64,10 @@ prosecutor subagent, and hooks that fire the gates automatically), with no API
 keys (Claude is the model via `--prompt-only`).
 
 **Recommended:** install with [`plugins`](https://www.npmjs.com/package/plugins), the
-vendor-neutral installer that auto-detects your agent tools (Claude Code, Cursor) and
-installs the plugin into each:
+vendor-neutral installer that auto-detects your agent tools and installs the plugin
+into each (Claude Code today; other harnesses as their plugin packages publish — each
+has a native install path below; see [ADR-0009](./docs/adr/0009-universal-install-via-plugins.md)
+for why this is the preferred path):
 
 ```sh
 npx plugins add voodootikigod/adlc   # install the plugin into your agent tool(s)
