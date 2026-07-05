@@ -10,6 +10,7 @@ export const INTEGRATIONS = [
     install: [
       'npx plugins add voodootikigod/adlc',
       'npm install -g @adlc/cli',
+      '/adlc:adlc-init',
     ],
   },
   {
@@ -21,7 +22,7 @@ export const INTEGRATIONS = [
       'git clone https://github.com/voodootikigod/adlc && cd adlc',
       'node scripts/codex-install-smoke.mjs .',
     ],
-    note: 'Git-backed marketplace install is not yet supported — install from a repo checkout.',
+    note: 'There is no published-package fallback yet, and git-backed marketplace install is not yet supported — verify from a repo checkout.',
   },
   {
     slug: 'cursor',
@@ -30,7 +31,9 @@ export const INTEGRATIONS = [
     tagline: 'Hooks, rules, and commands scaffolded into .cursor/ — no plugin runtime needed.',
     install: [
       'npm install -g @adlc/cli',
+      'cd /path/to/adlc && npm install',
       'node /path/to/adlc/plugins/adlc-cursor/lib/scaffold-cli.mjs .',
+      'node scripts/cursor-install-smoke.mjs .',
     ],
     note: '@adlc/cursor-package is not yet on npm — scaffold from a repo checkout.',
   },
@@ -40,8 +43,10 @@ export const INTEGRATIONS = [
     status: 'source',
     tagline: 'Rails-guard plugin plus /adlc-* commands and agents for OpenCode.',
     install: [
-      'git clone https://github.com/voodootikigod/adlc',
-      '# register plugins/adlc-opencode in .opencode/opencode.json, then /adlc-init',
+      'npm install -g @adlc/cli',
+      'ln -s /path/to/adlc/plugins/adlc-opencode .opencode/plugin/adlc-opencode',
+      '# ...or add that path to the "plugin" array in .opencode/opencode.json',
+      '/adlc-init                        # run in the OpenCode TUI, then restart OpenCode',
     ],
     note: '@adlc/opencode-package is not yet on npm — install from source.',
   },
@@ -52,8 +57,9 @@ export const INTEGRATIONS = [
     tagline: 'Proactive and reactive gating via Pi tool_call/tool_result hooks, with TUI gate display.',
     install: [
       'git clone https://github.com/voodootikigod/adlc',
-      '# package lives at plugins/adlc-pi — see the integration guide',
+      'pi --extension plugins/adlc-pi/index.ts',
     ],
+    note: 'No formal install guide yet — pi.md is an architecture doc, not an install guide. The extension loads via `pi --extension plugins/adlc-pi/index.ts` from a repo checkout.',
   },
   {
     slug: 'antigravity',
