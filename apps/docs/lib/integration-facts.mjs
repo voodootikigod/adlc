@@ -46,6 +46,7 @@ export const INTEGRATIONS = [
       'npm install -g @adlc/cli',
       'ln -s /path/to/adlc/plugins/adlc-opencode .opencode/plugin/adlc-opencode',
       '# ...or add that path to the "plugin" array in .opencode/opencode.json',
+      'node /path/to/adlc/plugins/adlc-opencode/lib/scaffold-cli.mjs .   # first-time bootstrap if /adlc-init is not available yet',
       '/adlc-init                        # run in the OpenCode TUI, then restart OpenCode',
     ],
     note: '@adlc/opencode-package is not yet on npm — install from source.',

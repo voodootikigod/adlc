@@ -30,7 +30,7 @@ function TerminalOutput({ output }: { output: string }) {
         const color = line.startsWith('✓')
           ? 'var(--adlc-pass)'
           : line.startsWith('✗')
-            ? 'var(--adlc-fail)'
+            ? 'var(--mk-fail-text)'
             : '#cbcdd2';
         return (
           <span key={i} style={{ color }}>
@@ -56,7 +56,7 @@ export default function HomePage() {
             Your agents don&apos;t fail like humans.{' '}
             <span style={{ color: '#4fb4d8' }}>Stop managing them like humans.</span>
           </h1>
-          <p className="max-w-2xl text-lg leading-relaxed" style={{ color: '#686b78' }}>
+          <p className="max-w-2xl text-lg leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
             The Agentic Development Lifecycle rebuilds every phase, gate, and loop of software
             delivery around how frontier models actually fail — with machine-checkable gates
             and evidence you can audit.
@@ -94,12 +94,12 @@ export default function HomePage() {
               <div key={id} className="p-5" style={{ background: '#26272c' }}>
                 <p className="font-mono text-xs" style={{ color: '#ef7c2a' }}>{id}</p>
                 <p className="mt-1 font-semibold" style={{ color: '#cbcdd2' }}>{fm.name}</p>
-                <p className="mt-2 text-sm leading-relaxed" style={{ color: '#686b78' }}>{fm.tagline}</p>
+                <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>{fm.tagline}</p>
               </div>
             ))}
           </div>
         </div>
-        <p className="mt-6 text-sm" style={{ color: '#686b78' }}>
+        <p className="mt-6 text-sm" style={{ color: 'var(--mk-muted)' }}>
           <Link href="/failure-modes" style={{ color: '#4fb4d8' }}>See which gate kills each one →</Link>
         </p>
       </MarketingSection>
@@ -107,7 +107,7 @@ export default function HomePage() {
       {/* 3 — The lifecycle */}
       <MarketingSection kicker="The lifecycle" title="Eight phases. A gate between every one.">
         <LifecyclePipeline />
-        <p className="mt-6 text-sm" style={{ color: '#686b78' }}>
+        <p className="mt-6 text-sm" style={{ color: 'var(--mk-muted)' }}>
           <Link href="/lifecycle" style={{ color: '#4fb4d8' }}>Explore the phases and gates →</Link>
         </p>
       </MarketingSection>
@@ -121,7 +121,7 @@ export default function HomePage() {
             </TerminalCard>
           ))}
         </div>
-        <p className="mt-6 text-sm" style={{ color: '#686b78' }}>
+        <p className="mt-6 text-sm" style={{ color: 'var(--mk-muted)' }}>
           <Link href="/toolkit" style={{ color: '#4fb4d8' }}>{`All ${ALL_PACKAGES.length} packages, grouped by phase →`}</Link>
         </p>
       </MarketingSection>
@@ -137,7 +137,7 @@ export default function HomePage() {
               style={{ borderColor: '#3f4044', background: '#26272c' }}
             >
               <p className="font-semibold" style={{ color: '#cbcdd2' }}>{i.name}</p>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: '#686b78' }}>{i.tagline}</p>
+              <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>{i.tagline}</p>
             </Link>
           ))}
         </div>
@@ -146,7 +146,7 @@ export default function HomePage() {
       {/* 6 — Enterprise band */}
       <div className="border-y" style={{ borderColor: '#3f4044', background: '#26272c' }}>
         <MarketingSection kicker="Enterprise" title="Rolling out agentic development across an org?">
-          <p className="max-w-2xl text-lg leading-relaxed" style={{ color: '#686b78' }}>
+          <p className="max-w-2xl text-lg leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
             Unreviewable agent output is an audit problem, not just an engineering problem.
             ADLC produces a gate-by-gate evidence trail your auditors can actually read.
           </p>
@@ -163,7 +163,7 @@ export default function HomePage() {
       {/* 7 — Theory footer band */}
       <div className="border-t" style={{ borderColor: '#3f4044' }}>
         <div className="mx-auto max-w-5xl px-6 py-12">
-          <p className="text-sm" style={{ color: '#686b78' }}>
+          <p className="text-sm" style={{ color: 'var(--mk-muted)' }}>
             ADLC began as an essay series.{' '}
             <a href={`${SERIES_BASE}/series/adlc`} style={{ color: '#4fb4d8' }}>
               Read the original theory at voodootikigod.com ↗

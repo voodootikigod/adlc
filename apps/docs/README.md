@@ -75,10 +75,10 @@ pages, `/enterprise`) alongside Fumadocs at `/docs`, unaffected.
   in the environment (exits 1 with neither set); output is gitignored and
   regenerated from the checked-in provenance manifest. Use `--force` to
   regenerate existing images and `--only <slug>` to target a single image.
-- **`scripts/check-links.mjs <base-url>`** — crawls every marketing and docs
-  route against a running server and fails on any non-2xx response or broken
-  internal link. This is the **cutover gate**: run it against a local build
-  before flipping the marketing site live.
+- **`scripts/check-links.mjs <base-url>`** — fetches every URL in the running
+  server's `sitemap.xml`, plus four known legacy docs paths, and fails on any
+  non-2xx response. It does not crawl in-page links. This is the **cutover
+  gate**: run it against a local build before flipping the marketing site live.
 
 ## Documentation Structure
 
@@ -86,7 +86,7 @@ pages, `/enterprise`) alongside Fumadocs at `/docs`, unaffected.
 - **Theory:** ADLC principles, lifecycle phases, failure modes
 - **Lifecycle:** Gate-by-gate walkthrough with role guidance
 - **Toolkit:** Tool reference pages with lifecycle positioning
-- **Integrations:** Claude Code, Codex, Cursor, OpenCode, and Pi
+- **Integrations:** Claude Code, Codex, Cursor, OpenCode, Pi, and Antigravity
 - **Reference:** conventions, exit codes, the `.adlc/` runtime, and ADRs
 
 ## Deployment Notes

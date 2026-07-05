@@ -53,7 +53,7 @@ function Dial({ name, value, note }: (typeof DIALS)[number]) {
             {pct}%
           </span>
         </span>
-        <span className="mt-1 block max-w-44 text-xs leading-relaxed" style={{ color: '#686b78' }}>
+        <span className="mt-1 block max-w-44 text-xs leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
           {note}
         </span>
       </figcaption>

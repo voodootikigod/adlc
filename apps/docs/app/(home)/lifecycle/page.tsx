@@ -54,7 +54,7 @@ export default function LifecyclePage() {
                 ) : null}
               </div>
               <p className="mt-1 font-semibold" style={{ color: '#cbcdd2' }}>{p.name}</p>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: '#686b78' }}>
+              <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
                 {PHASE_DETAIL[p.id]}
               </p>
               <a href={theoryLink(p.id)} className="mt-3 inline-block text-sm" style={{ color: '#4fb4d8' }}>
@@ -66,12 +66,12 @@ export default function LifecyclePage() {
       </MarketingSection>
 
       <MarketingSection kicker="Calibration" title="Three dials, set per ticket">
-        <p className="mb-10 max-w-2xl" style={{ color: '#686b78' }}>
+        <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           Not every ticket deserves the same autonomy. ADLC sets three dials at triage —
           and the gates enforce whatever you chose.
         </p>
         <ThreeDials />
-        <p className="mt-8 text-sm" style={{ color: '#686b78' }}>
+        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
           <a href={theoryLink('three-dials')} style={{ color: '#4fb4d8' }}>Read the original essay ↗</a>
           {' · '}
           <Link href="/docs" style={{ color: '#4fb4d8' }}>Full reference in the docs</Link>

@@ -13,14 +13,14 @@ export function VsTable() {
             <th
               scope="col"
               className="p-4 text-left align-bottom font-mono text-xs font-medium uppercase tracking-wider"
-              style={{ color: '#686b78' }}
+              style={{ color: 'var(--mk-muted)' }}
             >
               Dimension
             </th>
             <th
               scope="col"
               className="p-4 text-left align-bottom font-mono text-xs font-medium uppercase tracking-wider"
-              style={{ color: '#686b78' }}
+              style={{ color: 'var(--mk-muted)' }}
             >
               SDLC (built for humans)
             </th>
@@ -43,7 +43,7 @@ export function VsTable() {
               >
                 {r.dimension}
               </th>
-              <td className="p-4 align-top leading-relaxed" style={{ color: '#686b78' }}>
+              <td className="p-4 align-top leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
                 {r.sdlc}
               </td>
               <td

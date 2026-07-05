@@ -1,5 +1,3 @@
-import { GateBadge } from './gate-badge';
-
 const STEPS = [
   { label: 'Ticket', detail: 'Executable spec, dials set at triage' },
   { label: 'Gates', detail: 'spec-lint · premortem · rails-guard · hollow-test · prosecute' },
@@ -47,13 +45,13 @@ export function EvidenceTrail() {
             className="h-full flex-1 rounded-lg border p-4"
             style={{ borderColor: '#3f4044', background: '#26272c' }}
           >
-            <p className="font-mono text-[10px] tracking-[0.2em]" style={{ color: '#686b78' }}>
+            <p className="font-mono text-[10px] tracking-[0.2em]" style={{ color: 'var(--mk-muted)' }}>
               {String(i + 1).padStart(2, '0')}
             </p>
             <p className="mt-1 font-mono text-sm font-semibold" style={{ color: '#4fb4d8' }}>
               {s.label}
             </p>
-            <p className="mt-1 text-xs leading-relaxed" style={{ color: '#686b78' }}>
+            <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
               {s.detail}
             </p>
           </div>

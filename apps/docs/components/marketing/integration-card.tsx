@@ -16,7 +16,7 @@ function InstallLines({ lines }: { lines: readonly string[] }) {
   return (
     <pre className="whitespace-pre-wrap">
       {lines.map((line, i) => (
-        <span key={i} style={{ color: line.startsWith('#') ? '#686b78' : '#cbcdd2' }}>
+        <span key={i} style={{ color: line.startsWith('#') ? 'var(--mk-muted)' : '#cbcdd2' }}>
           {i > 0 ? '\n' : ''}
           {line}
         </span>
@@ -32,7 +32,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
       <div>
         <span
           className="rounded border px-2 py-0.5 font-mono text-xs"
-          style={{ borderColor: '#3f4044', color: '#686b78' }}
+          style={{ borderColor: '#3f4044', color: 'var(--mk-muted)' }}
         >
           {STATUS_LABEL[integration.status]}
         </span>

@@ -25,12 +25,12 @@ export default function IntegrationsPage() {
               <p className="text-lg font-semibold" style={{ color: '#cbcdd2' }}>
                 {i.name}
               </p>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: '#686b78' }}>
+              <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
                 {i.tagline}
               </p>
               <p
                 className="mt-auto flex items-center justify-between pt-4 font-mono text-xs"
-                style={{ color: '#686b78' }}
+                style={{ color: 'var(--mk-muted)' }}
               >
                 <span>{STATUS_LABEL[i.status]}</span>
                 <span aria-hidden className="transition-colors group-hover:text-[#4fb4d8]">

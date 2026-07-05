@@ -13,7 +13,7 @@ export function TerminalCard({ title, children }: TerminalCardProps) {
     >
       <div
         className="flex items-center gap-3 border-b px-4 py-2.5 font-mono text-xs"
-        style={{ borderColor: '#3f4044', color: '#686b78' }}
+        style={{ borderColor: '#3f4044', color: 'var(--mk-muted)' }}
       >
         <span aria-hidden className="flex select-none gap-1.5">
           <span className="h-2 w-2 rounded-full" style={{ background: '#3f4044' }} />

@@ -24,10 +24,10 @@ export function GateSequence() {
           className="mk-gate-line flex flex-wrap items-center gap-3 font-mono text-sm"
           style={{ animationDelay: `${0.5 + i * 0.7}s` }}
         >
-          <span style={{ color: '#686b78' }}>$</span>
+          <span style={{ color: 'var(--mk-muted)' }}>$</span>
           <span style={{ color: '#cbcdd2' }}>{line.cmd}</span>
           <GateBadge state={line.state} />
-          <span style={{ color: '#686b78' }}>{line.detail}</span>
+          <span style={{ color: 'var(--mk-muted)' }}>{line.detail}</span>
         </div>
       ))}
       <div
@@ -35,7 +35,7 @@ export function GateSequence() {
         className="mk-gate-line flex items-center gap-3 font-mono text-sm"
         style={{ animationDelay: `${0.5 + SEQUENCE.length * 0.7}s` }}
       >
-        <span style={{ color: '#686b78' }}>$</span>
+        <span style={{ color: 'var(--mk-muted)' }}>$</span>
         <span className="mk-pulse inline-block h-4 w-2" style={{ background: '#686b78' }} />
       </div>
     </div>

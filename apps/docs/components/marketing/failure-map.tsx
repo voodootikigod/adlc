@@ -43,7 +43,7 @@ export function FailureMap() {
               {id}
             </span>
             <p className="font-semibold" style={{ color: '#cbcdd2' }}>{fm.name}</p>
-            <p className="mt-1 text-sm leading-relaxed" style={{ color: '#686b78' }}>
+            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
               {fm.tagline}
             </p>
           </div>
@@ -56,7 +56,7 @@ export function FailureMap() {
             >
               {fm.defense.tool}
             </Link>
-            <p className="mt-1 font-mono text-xs uppercase tracking-wider" style={{ color: '#686b78' }}>
+            <p className="mt-1 font-mono text-xs uppercase tracking-wider" style={{ color: 'var(--mk-muted)' }}>
               gate at {fm.defense.phase}
             </p>
           </div>

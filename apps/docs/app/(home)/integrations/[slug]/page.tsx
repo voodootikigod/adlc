@@ -37,11 +37,11 @@ export default async function IntegrationPage({
   return (
     <main>
       <MarketingSection kicker="Integrations" title={`ADLC, native in ${integration.name}`}>
-        <p className="mb-8 max-w-2xl" style={{ color: '#686b78' }}>
+        <p className="mb-8 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           {integration.tagline}
         </p>
         <IntegrationCard integration={integration} />
-        <p className="mt-8 text-sm" style={{ color: '#686b78' }}>
+        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
           <Link href={`/docs/integrations/${integration.slug}`} style={{ color: '#4fb4d8' }}>
             Full {integration.name} guide in the docs →
           </Link>

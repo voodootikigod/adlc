@@ -38,6 +38,10 @@ html > body[data-scroll-locked] {
   --adlc-fail: #eb3d54;
   --adlc-wish: #e5cd52;
   --adlc-highlight: #ef7c2a;
+  /* Marketing text tokens — lightened for WCAG AA (≥4.5:1) on both #1c1d21
+     and #26272c; --adlc-fail stays for borders/backgrounds (non-text, 3:1). */
+  --mk-muted: #9093a0;
+  --mk-fail-text: #f2788a;
 }
 
 /* Marketing motion — every animation is opt-out via prefers-reduced-motion */
@@ -64,17 +68,6 @@ html > body[data-scroll-locked] {
 
 .mk-fade-up {
   animation: mk-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-/* Stagger helpers for orchestrated entrances (pair with .mk-fade-up) */
-.mk-delay-1 {
-  animation-delay: 90ms;
-}
-.mk-delay-2 {
-  animation-delay: 180ms;
-}
-.mk-delay-3 {
-  animation-delay: 270ms;
 }
 
 .mk-pulse {

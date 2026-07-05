@@ -9,12 +9,12 @@ export function Constellation() {
           <div className="mb-4 flex items-baseline gap-4">
             <h3
               className="whitespace-nowrap font-mono text-sm uppercase tracking-widest"
-              style={{ color: '#686b78' }}
+              style={{ color: 'var(--mk-muted)' }}
             >
               {g.group}
             </h3>
             <span aria-hidden className="h-px min-w-8 flex-1 self-center" style={{ background: '#3f4044' }} />
-            <span className="whitespace-nowrap font-mono text-xs" style={{ color: '#686b78' }}>
+            <span className="whitespace-nowrap font-mono text-xs" style={{ color: 'var(--mk-muted)' }}>
               {g.packages.length} {g.packages.length === 1 ? 'package' : 'packages'}
             </span>
           </div>

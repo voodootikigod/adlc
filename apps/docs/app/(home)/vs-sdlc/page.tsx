@@ -12,13 +12,13 @@ export default function VsSdlcPage() {
   return (
     <main>
       <MarketingSection kicker="The argument" title="60 years of process, built for the wrong failure modes">
-        <p className="mb-10 max-w-2xl" style={{ color: '#686b78' }}>
+        <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           Code review, standups, sprint ceremonies — each exists because humans forget, tire,
           and protect their egos. Models do none of that. They fail in their own ways, and a
           lifecycle that doesn&apos;t defend against <em>those</em> failures is theater.
         </p>
         <VsTable />
-        <p className="mt-8 text-sm" style={{ color: '#686b78' }}>
+        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
           <a href={theoryLink('vs-sdlc')} style={{ color: '#4fb4d8' }}>Read the original essay ↗</a>
         </p>
       </MarketingSection>
