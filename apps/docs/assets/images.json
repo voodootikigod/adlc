@@ -1,12 +1,82 @@
 {
   "styleGuide": "Abstract dark composition on a near-black #1c1d21 field. Terminal-glow aesthetic: thin luminous circuit-like traces and soft volumetric light in cyan-blue #4fb4d8, with sparse accent glints of green #78bd65, red #eb3d54, and yellow #e5cd52. Cinematic, slightly grainy, high contrast, generous negative space. No text, no letters, no logos, no people, no hands, no UI screenshots.",
   "images": [
-    { "slug": "hero-backdrop", "size": "1536x1024", "placement": "landing hero background", "prompt": "A wide horizon of ordered light: five glowing gate arches in a row receding into darkness, a single continuous blue trace passing through each gate, the middle arch flaring red where the trace is blocked and rerouted" },
-    { "slug": "lifecycle-backdrop", "size": "1536x1024", "placement": "/lifecycle header", "prompt": "Eight luminous nodes connected left to right by a pulsing blue line, small diamond-shaped gates between nodes glowing faint green, deep dark background with subtle grid" },
-    { "slug": "failure-modes-backdrop", "size": "1536x1024", "placement": "/failure-modes header", "prompt": "Eight erratic fractured light filaments in warm orange and red drifting from the left, each dissolving as it meets a calm vertical wall of blue light on the right" },
-    { "slug": "vs-sdlc-backdrop", "size": "1536x1024", "placement": "/vs-sdlc header", "prompt": "A split composition: left half faded sepia blueprint scaffolding, geometric and paper-like; right half the same structure reborn as luminous blue circuitry, the seam between them sharp and vertical" },
-    { "slug": "toolkit-backdrop", "size": "1536x1024", "placement": "/toolkit header", "prompt": "A constellation of small bright instrument-like points grouped into five loose clusters, connected by faint lines, one cluster glowing brighter, like a star map of tools" },
-    { "slug": "enterprise-backdrop", "size": "1536x1024", "placement": "/enterprise header", "prompt": "Chaotic scattered particles of light on the left funneling through three successive glowing gate frames, emerging on the right as a perfectly ordered lattice, blue dominant with a green terminal glint" },
-    { "slug": "og-base", "size": "1536x1024", "placement": "OG/social card background (crop to 1200x630 at use)", "prompt": "A minimal dark banner: one elegant blue light trace crossing a single glowing gate arch, heavy negative space on the left for typographic overlay" }
+    {
+      "slug": "hero-backdrop",
+      "size": "1536x1024",
+      "placement": "landing hero background",
+      "prompt": "A wide horizon of ordered light: five glowing gate arches in a row receding into darkness, a single continuous blue trace passing through each gate, the middle arch flaring red where the trace is blocked and rerouted",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    },
+    {
+      "slug": "lifecycle-backdrop",
+      "size": "1536x1024",
+      "placement": "/lifecycle header",
+      "prompt": "Eight luminous nodes connected left to right by a pulsing blue line, small diamond-shaped gates between nodes glowing faint green, deep dark background with subtle grid",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    },
+    {
+      "slug": "failure-modes-backdrop",
+      "size": "1536x1024",
+      "placement": "/failure-modes header",
+      "prompt": "Eight erratic fractured light filaments in warm orange and red drifting from the left, each dissolving as it meets a calm vertical wall of blue light on the right",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    },
+    {
+      "slug": "vs-sdlc-backdrop",
+      "size": "1536x1024",
+      "placement": "/vs-sdlc header",
+      "prompt": "A split composition: left half faded sepia blueprint scaffolding, geometric and paper-like; right half the same structure reborn as luminous blue circuitry, the seam between them sharp and vertical",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    },
+    {
+      "slug": "toolkit-backdrop",
+      "size": "1536x1024",
+      "placement": "/toolkit header",
+      "prompt": "A constellation of small bright instrument-like points grouped into five loose clusters, connected by faint lines, one cluster glowing brighter, like a star map of tools",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    },
+    {
+      "slug": "enterprise-backdrop",
+      "size": "1536x1024",
+      "placement": "/enterprise header",
+      "prompt": "Chaotic scattered particles of light on the left funneling through three successive glowing gate frames, emerging on the right as a perfectly ordered lattice, blue dominant with a green terminal glint",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    },
+    {
+      "slug": "og-base",
+      "size": "1536x1024",
+      "placement": "OG/social card background (crop to 1200x630 at use)",
+      "prompt": "A minimal dark banner: one elegant blue light trace crossing a single glowing gate arch, heavy negative space on the left for typographic overlay",
+      "provenance": {
+        "provider": "openai",
+        "model": "gpt-image-1",
+        "generatedAt": "2026-07-05"
+      }
+    }
   ]
 }
