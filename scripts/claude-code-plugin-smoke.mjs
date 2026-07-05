@@ -595,6 +595,7 @@ const EXCLUDED_DOC_PATHS = [
   ['docs/archive/', 'superseded/historical record, not live guidance — see docs/archive/README.md'],
   ['docs/specs/', 'P1 spec/acceptance-criteria docs describe issues (including this bug class) as illustrative examples, not live guidance'],
   ['docs/superpowers/', 'internal planning/spec scratch docs for in-flight work, not published guidance'],
+  ['docs/marketing/', "marketing-site spec/plan docs; quoted install snippets include other harnesses' bare command syntax (e.g. OpenCode's /adlc-init), not Claude Code guidance"],
   ['docs/tools/', 'harness-agnostic package reference docs (per docs/toolkit.md: "follow the linked README for command-specific detail"), not per-harness invocation guidance'],
   ['docs/integrations/antigravity.md', "Antigravity's own doc; that harness has no plugin-namespace convention (verified in #50)"],
   ['docs/integrations/codex.md', "Codex's own doc; skill-driven, not command-namespaced (verified in #50)"],

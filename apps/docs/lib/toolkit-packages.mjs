@@ -1,11 +1,11 @@
 export const TOOLKIT_GROUPS = [
   {
     group: 'Spec & ticket shaping',
-    packages: ['parallax', 'spec-lint', 'premortem', 'coldstart', 'ticket-sync'],
+    packages: ['parallax', 'spec-lint', 'premortem', 'coldstart', 'ticket-sync', 'ticket-prune'],
   },
   {
     group: 'Execution supervision & rails',
-    packages: ['preflight', 'model-router', 'merge-forecast', 'rails-guard', 'flail-detector', 'consensus-fix', 'runner'],
+    packages: ['preflight', 'model-router', 'merge-forecast', 'rails-guard', 'build-gate', 'flail-detector', 'consensus-fix', 'runner'],
   },
   {
     group: 'Review evidence & calibration',
