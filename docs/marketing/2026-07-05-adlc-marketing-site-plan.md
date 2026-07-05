@@ -100,7 +100,7 @@ The single source of truth for the six agent integrations: slug, display name, m
 // apps/docs/test/integration-facts.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { INTEGRATIONS, integrationFor } from '../lib/integration-facts.mjs';
@@ -108,23 +108,27 @@ import { INTEGRATIONS, integrationFor } from '../lib/integration-facts.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..', '..', '..');
 
-test('exactly the six shipped integrations, unique slugs', () => {
-  const slugs = INTEGRATIONS.map((i) => i.slug).sort();
-  assert.deepEqual(slugs, ['antigravity', 'claude-code', 'codex', 'cursor', 'opencode', 'pi']);
+test('slugs are unique', () => {
+  const slugs = INTEGRATIONS.map((i) => i.slug);
   assert.equal(new Set(slugs).size, INTEGRATIONS.length);
+});
+
+test('module covers every docs-site integration page (derived, not hardcoded)', () => {
+  // Bidirectional grounding: a new content/docs/integrations/<slug>.mdx page
+  // without a marketing entry fails here, pointing at exactly what to add.
+  const pagesDir = path.join(__dirname, '..', 'content', 'docs', 'integrations');
+  const pageSlugs = readdirSync(pagesDir)
+    .filter((f) => f.endsWith('.mdx') && f !== 'index.mdx')
+    .map((f) => f.replace(/\.mdx$/, ''))
+    .sort();
+  const moduleSlugs = INTEGRATIONS.map((i) => i.slug).sort();
+  assert.deepEqual(moduleSlugs, pageSlugs);
 });
 
 test('every integration is grounded in a docs/integrations ground-truth file', () => {
   for (const i of INTEGRATIONS) {
     const p = path.join(repoRoot, 'docs', 'integrations', `${i.slug}.md`);
     assert.ok(existsSync(p), `${i.slug}: missing ground truth ${p}`);
-  }
-});
-
-test('every integration has a docs-site page (no 404 from marketing links)', () => {
-  for (const i of INTEGRATIONS) {
-    const p = path.join(__dirname, '..', 'content', 'docs', 'integrations', `${i.slug}.mdx`);
-    assert.ok(existsSync(p), `${i.slug}: missing docs page ${p}`);
   }
 });
 
