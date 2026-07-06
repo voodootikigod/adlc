@@ -1,4 +1,4 @@
-# ADR 0006: Cursor native integration — rails-guard MVP
+# ADR 0006: Cursor native integration — rails-guard MVP → native parity
 
 **Status:** **Accepted — native parity shipped.** The rails-guard MVP (P3) is
 now surrounded by the full phase command suite (T16), the shared `@adlc/core`

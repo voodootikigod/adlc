@@ -70,8 +70,8 @@ test('index.mdx discloses that the stub harness pages (codex, cursor, opencode, 
   const p = path.join(integrationsDir, 'index.mdx');
   const content = readFileSync(p, 'utf8');
 
-  const STUB_HARNESSES = ['codex', 'cursor', 'opencode', 'pi'];
-  const WRITTEN_HARNESSES = ['claude-code', 'antigravity'];
+  const STUB_HARNESSES = ['codex', 'opencode', 'pi'];
+  const WRITTEN_HARNESSES = ['claude-code', 'antigravity', 'cursor'];
 
   for (const harness of STUB_HARNESSES) {
     const bulletMatch = content.match(
