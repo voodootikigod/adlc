@@ -63,6 +63,48 @@ test('mergeHooks preserves a user existing hook and does not duplicate ADLC entr
   assert.equal(shellCount, 1);
 });
 
+test('mergeHooks does NOT drop a user hook whose command merely CONTAINS an adlc script basename as a substring', () => {
+  // A forked/vendored or non-canonically-named user hook (basename PREFIX, not a
+  // path-boundary match) must be preserved — the isAdlcHook match is anchored to
+  // a path-segment boundary so only real adlc-<name>.mjs basenames are "ours".
+  const userHooks = {
+    version: 1,
+    hooks: {
+      afterFileEdit: [{ command: 'node ./scripts/run-adlc-audit.mjs' }],
+      preToolUse: [{ command: 'node ./vendor/my-adlc-pretool.mjs' }],
+    },
+  };
+  const merged = mergeHooks(userHooks);
+  assert.ok(
+    merged.hooks.afterFileEdit.some((e) => e.command === 'node ./scripts/run-adlc-audit.mjs'),
+    'a user hook named run-adlc-audit.mjs must be preserved, not misclassified as ours',
+  );
+  assert.ok(
+    merged.hooks.preToolUse.some((e) => e.command === 'node ./vendor/my-adlc-pretool.mjs'),
+    'a user hook named my-adlc-pretool.mjs must be preserved',
+  );
+  // ...and ours are still added alongside.
+  assert.ok(merged.hooks.afterFileEdit.some((e) => /[/\\]adlc-audit\.mjs/.test(e.command)));
+  assert.ok(merged.hooks.preToolUse.some((e) => /[/\\]adlc-pretool\.mjs/.test(e.command)));
+});
+
+test('mergeHooks tolerates a valid-JSON but NON-ARRAY event value without throwing (hand-malformed hooks.json)', () => {
+  // `?? []` only defaults null/undefined; a bare `.filter` on an object/string
+  // event value throws an uncaught TypeError. mergeHooks must coerce and replace
+  // the non-standard value with our canonical entry rather than crash.
+  for (const bad of [
+    { version: 1, hooks: { preToolUse: { command: './solo.sh' } } }, // object, not array
+    { version: 1, hooks: { afterFileEdit: 'node ./x.mjs' } },        // string
+    { version: 1, hooks: { beforeShellExecution: 42 } },             // number
+    { version: 1, hooks: { stop: { command: './s.sh' } } },          // unpinned event
+  ]) {
+    const merged = mergeHooks(bad); // must not throw
+    assert.ok(Array.isArray(merged.hooks.preToolUse) && merged.hooks.preToolUse.some((e) => /adlc-pretool/.test(e.command)));
+    assert.ok(Array.isArray(merged.hooks.afterFileEdit));
+    assert.ok(Array.isArray(merged.hooks.beforeShellExecution));
+  }
+});
+
 // T18 amendment 1: preToolUse is rewired to the SINGLE dispatcher; a
 // pre-existing direct adlc-rails-guard.mjs entry is MIGRATED (replaced), so
 // two ADLC preToolUse entries can never coexist (Cursor's multi-entry

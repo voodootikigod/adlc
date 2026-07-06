@@ -37,11 +37,24 @@ const PREFLIGHT_REL = 'hooks/adlc-preflight.mjs';
 
 /** A hook entry is "ours" if its command points at one of our hook scripts.
  * `adlc-rails-guard` stays in the pattern so a pre-T18 direct rails-guard entry
- * is MIGRATED to the dispatcher (filtered out, dispatcher re-added). */
+ * is MIGRATED to the dispatcher (filtered out, dispatcher re-added).
+ *
+ * The `adlc-<name>.mjs` basename must sit at a path-segment boundary (preceded
+ * by a separator, quote, whitespace, or start) so a USER hook whose command
+ * merely CONTAINS one of these as a suffix (e.g. `node run-adlc-audit.mjs`) is
+ * NOT misclassified as ours and silently dropped — the module's invariant is
+ * that user hooks are always preserved. */
 function isAdlcHook(entry) {
   return typeof entry?.command === 'string'
-    && /adlc-(rails-guard|pretool|audit|shell-advisory|stop|preflight)\.mjs/.test(entry.command);
+    && /(^|[/\\"'\s])adlc-(rails-guard|pretool|audit|shell-advisory|stop|preflight)\.mjs/.test(entry.command);
 }
+
+/** Coerce a hooks.json event value to an array. A hand-edited file can carry a
+ * valid-JSON but non-array value (an object or string) for an event; `?? []`
+ * only defaults null/undefined, so a bare `.filter` on it throws an uncaught
+ * TypeError and crashes the scaffolder with a raw stack trace. Coerce first —
+ * any non-array (non-standard) value is replaced by our canonical entry. */
+const asHookList = (v) => (Array.isArray(v) ? v : []);
 
 /** Build the hook command strings, resolved against the installed plugin. */
 export function buildHookCommands(pluginRoot = PLUGIN_ROOT) {
@@ -75,13 +88,13 @@ export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = 
   const base = existing && typeof existing === 'object' ? existing : {};
   const hooks = { ...(base.hooks ?? {}) };
 
-  const preToolUse = (hooks.preToolUse ?? []).filter((e) => !isAdlcHook(e));
+  const preToolUse = asHookList(hooks.preToolUse).filter((e) => !isAdlcHook(e));
   preToolUse.push({ command: cmds.pretool, matcher: PRETOOL_MATCHER, timeout: 10, failClosed: false });
 
-  const afterFileEdit = (hooks.afterFileEdit ?? []).filter((e) => !isAdlcHook(e));
+  const afterFileEdit = asHookList(hooks.afterFileEdit).filter((e) => !isAdlcHook(e));
   afterFileEdit.push({ command: cmds.audit, timeout: 10, failClosed: false });
 
-  const beforeShellExecution = (hooks.beforeShellExecution ?? []).filter((e) => !isAdlcHook(e));
+  const beforeShellExecution = asHookList(hooks.beforeShellExecution).filter((e) => !isAdlcHook(e));
   beforeShellExecution.push({ command: cmds.shellAdvisory, timeout: 10, failClosed: false });
 
   const merged = { ...hooks, preToolUse, afterFileEdit, beforeShellExecution };
@@ -90,7 +103,7 @@ export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = 
   // the default), then re-add only on explicit opt-in. A user's own entries on
   // these events are preserved either way.
   for (const [event, cmd] of [['stop', cmds.stop], ['beforeSubmitPrompt', cmds.preflight]]) {
-    const kept = (hooks[event] ?? []).filter((e) => !isAdlcHook(e));
+    const kept = asHookList(hooks[event]).filter((e) => !isAdlcHook(e));
     if (wireUnpinned) kept.push({ command: cmd, timeout: 10, failClosed: false });
     if (kept.length) merged[event] = kept;
     else delete merged[event];
