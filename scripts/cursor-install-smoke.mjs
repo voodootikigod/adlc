@@ -296,6 +296,23 @@ if (existsSync(docPath)) {
   else ok('cursor.md states the buildgate default-off flag');
   if (!/no unbypassable backstop/i.test(doc)) fail('cursor.md does not state the buildgate has NO unbypassable backstop (honesty requirement)');
   else ok('cursor.md states the buildgate has no unbypassable backstop');
+  // HARDENING (review loop): the honesty checks above pin that the required
+  // phrases EXIST, but a future edit could keep them AND add a contradictory
+  // overclaim. "unbypassable" is truthful ONLY for the commit-time CI
+  // rail-freeze gate or the "no unbypassable backstop" phrase — it must NEVER
+  // be applied to the in-session hook/buildgate, which are advisory/best-effort.
+  // Assert every occurrence is scoped to a legitimate context (not a presence
+  // check — a NEGATIVE guard against an added overclaim).
+  {
+    let overclaim = 0;
+    for (const m of doc.matchAll(/unbypassable/gi)) {
+      const ctx = doc.slice(Math.max(0, m.index - 70), m.index + 70);
+      const legit = /unbypassable backstop/i.test(ctx)
+        || /commit-time|rails-guard|CI rail-freeze|CI gate|required check/i.test(ctx);
+      if (!legit) { overclaim++; fail(`cursor.md applies "unbypassable" outside the no-backstop / CI-gate context — the in-session layer is advisory, never unbypassable: "…${ctx.replace(/\s+/g, ' ').trim()}…"`); }
+    }
+    if (!overclaim) ok('cursor.md never calls the in-session layer "unbypassable" (only the no-backstop phrase / CI gate)');
+  }
   // Sequential-lens independence caveat (spec decision 3).
   if (!/weaker independence/i.test(doc)) fail('cursor.md does not state the sequential-lens weaker-independence caveat');
   else ok('cursor.md states the sequential-lens weaker-independence caveat');
