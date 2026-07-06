@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decide, extractToolName, extractFilePaths, resolveOwning } from './adlc-rails-guard.mjs';
-import { classifyTool } from '../rails-checker.mjs';
+import { classifyTool, isShellTool } from '../rails-checker.mjs';
 import { SESSION_TTL_MS, DEPTH_COUNTER_FILE } from '../constants.mjs';
 
 // Conversation/session-id-shaped fields seen across agent-hook payloads. NOT
@@ -127,7 +127,16 @@ export async function consultBuildGate(payload, {
     return null;
   }
 
-  const mutating = classifyTool(extractToolName(payload)) === 'mutating';
+  // Buildgate must cover the SAME mutation surface the rails path treats as a
+  // mutation (adlc-rails-guard.mjs opaque-mutator branch): a known mutator OR an
+  // unrecognized non-shell structured tool. A narrow `=== 'mutating'` hint list
+  // would let a novel mutator name (`modify_file`, `save_file`) that the rails
+  // classifier fail-closed-CHECKS slip past the fitness-to-build gate entirely —
+  // the exact allowlist hole ADR-0006's fail-closed classifier rejects. Mutating
+  // classification wins over shell (so `terminal_edit` can't masquerade as shell),
+  // mirroring the guard's own precedence.
+  const cls = classifyTool(extractToolName(payload));
+  const mutating = cls === 'mutating' || (cls === 'other' && !isShellTool(extractToolName(payload)));
   try {
     const ticketsPath = join(root, '.adlc', 'tickets.json');
     if (!existsSync(ticketsPath)) return null; // not an ADLC repo → no-op
@@ -140,8 +149,10 @@ export async function consultBuildGate(payload, {
     if (!active.id) return null; // no active ticket → opt-in gate no-ops
 
     // Depth accrues on EVERY dispatched tool call while enforcement is on
-    // (reads included) — the gate itself only ever denies a structured
-    // MUTATING tool, mirroring the CC hook's Edit/Write/MultiEdit matcher.
+    // (reads included) — the gate itself only ever denies a structured mutation
+    // attempt (the `mutating` surface above: a known mutator OR an unrecognized
+    // non-shell structured tool), matching the rails path's fail-closed surface
+    // rather than a narrow known-name allowlist.
     let depth;
     let counterError;
     try {

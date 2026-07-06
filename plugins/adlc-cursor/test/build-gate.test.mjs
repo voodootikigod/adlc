@@ -77,6 +77,31 @@ test('ALLOW: read-only tools are never buildgate-denied (depth still accrues)', 
   } finally { cleanup(root); }
 });
 
+test('DENY: a NOVEL structured mutator name (classifier "other", not shell) is gated like the rails path treats it', async () => {
+  // Cross-model review finding (PR #108): buildgate used a narrow
+  // `classifyTool === "mutating"` check, so a novel mutator name the rails
+  // classifier fail-closed-CHECKS as "other" (e.g. modify_file/save_file) would
+  // slip past the fitness gate entirely — a coverage asymmetry with the rails
+  // dispatcher. Buildgate must gate the same surface (mutating OR non-shell other).
+  const root = fixture(HIGH_RISK);
+  try {
+    seedCounter(root, { count: DEFAULT_DEPTH_THRESHOLD + 5, updatedAt: Date.now() });
+    const novel = { tool_name: 'modify_file', tool_input: { file_path: 'src/free.js' } };
+    const v = await dispatch(novel, { root, env: env() });
+    assert.equal(v.permission, 'deny', 'a novel structured mutator must be gated in a degraded high-risk session');
+  } finally { cleanup(root); }
+});
+
+test('ALLOW: a shell/terminal tool is NOT buildgate-gated (shell is exempt in-session; writes go to CI)', async () => {
+  const root = fixture(HIGH_RISK);
+  try {
+    seedCounter(root, { count: DEFAULT_DEPTH_THRESHOLD + 5, updatedAt: Date.now() });
+    const shell = { tool_name: 'run_terminal_cmd', tool_input: { command: 'sed -i s/a/b/ src/free.js' } };
+    const v = await dispatch(shell, { root, env: env() });
+    assert.equal(v.permission, 'allow', 'shell tools are exempt from the in-session gate (mutation surface excludes shell)');
+  } finally { cleanup(root); }
+});
+
 test('BYPASS-AUDITED: ADLC_BUILD_GATE_BYPASS=1 allows AND durably records a build-gate-bypass manifest entry', async () => {
   const root = fixture(HIGH_RISK);
   try {
