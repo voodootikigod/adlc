@@ -299,19 +299,30 @@ if (existsSync(docPath)) {
   // HARDENING (review loop): the honesty checks above pin that the required
   // phrases EXIST, but a future edit could keep them AND add a contradictory
   // overclaim. "unbypassable" is truthful ONLY for the commit-time CI
-  // rail-freeze gate or the "no unbypassable backstop" phrase — it must NEVER
-  // be applied to the in-session hook/buildgate, which are advisory/best-effort.
-  // Assert every occurrence is scoped to a legitimate context (not a presence
-  // check — a NEGATIVE guard against an added overclaim).
+  // rail-freeze gate — it must NEVER be applied to the in-session
+  // hook/buildgate/advisory, which are advisory/best-effort. A NEGATIVE guard.
+  //
+  // Design (v2, cross-model review): DON'T allowlist CI-context phrases — that
+  // was both leaky (a generic "required check" nearby excused an overclaim) and
+  // brittle (exact hyphenation + a fixed char window false-failed honest text).
+  // Instead isolate the CLAUSE containing each occurrence and fail only a
+  // POSITIVE assertion about an IN-SESSION subject. Honest CI-gate uses ("the
+  // commit-time CI gate is unbypassable") and negated uses ("no unbypassable
+  // backstop", "not unbypassable") pass regardless of phrasing.
   {
+    const DELIMS = '.;\n—';
     let overclaim = 0;
     for (const m of doc.matchAll(/unbypassable/gi)) {
-      const ctx = doc.slice(Math.max(0, m.index - 70), m.index + 70);
-      const legit = /unbypassable backstop/i.test(ctx)
-        || /commit-time|rails-guard|CI rail-freeze|CI gate|required check/i.test(ctx);
-      if (!legit) { overclaim++; fail(`cursor.md applies "unbypassable" outside the no-backstop / CI-gate context — the in-session layer is advisory, never unbypassable: "…${ctx.replace(/\s+/g, ' ').trim()}…"`); }
+      let s = 0, e = doc.length;
+      for (let i = m.index - 1; i >= 0; i--) { if (DELIMS.includes(doc[i])) { s = i + 1; break; } }
+      for (let i = m.index + 'unbypassable'.length; i < doc.length; i++) { if (DELIMS.includes(doc[i])) { e = i; break; } }
+      const clause = doc.slice(s, e).replace(/\s+/g, ' ').trim();
+      const before = clause.slice(0, clause.toLowerCase().indexOf('unbypassable'));
+      const negated = /\b(no|not|never)\b/i.test(before) || /unbypassable\s+backstop/i.test(clause);
+      const inSession = /\b(in-session|buildgate|hook|advisory|pretooluse|shell)\b/i.test(clause);
+      if (!negated && inSession) { overclaim++; fail(`cursor.md calls the in-session layer "unbypassable" — it is advisory/best-effort; only the commit-time CI rail-freeze gate is unbypassable: "…${clause}…"`); }
     }
-    if (!overclaim) ok('cursor.md never calls the in-session layer "unbypassable" (only the no-backstop phrase / CI gate)');
+    if (!overclaim) ok('cursor.md never positively calls the in-session layer "unbypassable" (clause-scoped negative guard)');
   }
   // Sequential-lens independence caveat (spec decision 3).
   if (!/weaker independence/i.test(doc)) fail('cursor.md does not state the sequential-lens weaker-independence caveat');
