@@ -118,6 +118,32 @@ test('extractCommand reads the documented `command` field first, then defensive 
   assert.equal(extractCommand({}), '');
 });
 
+// T18 P5 hollow-test amendment: EVERY defensive command key must extract — a
+// shrink of the source COMMAND_KEYS list must fail at least one of these cases.
+// This list mirrors hooks/adlc-shell-advisory.mjs COMMAND_KEYS deliberately: if
+// the source list loses (or renames) a key, the matching case below goes red.
+const KNOWN_COMMAND_KEYS = ['command', 'cmd', 'command_line', 'commandLine', 'script', 'shell_command', 'shellCommand', 'text'];
+
+test('every COMMAND_KEYS field extracts the command — top-level AND nested in each input bag', () => {
+  for (const k of KNOWN_COMMAND_KEYS) {
+    assert.equal(extractCommand({ [k]: `echo top-${k}` }), `echo top-${k}`, `top-level key "${k}" must extract`);
+    for (const bag of ['tool_input', 'toolInput', 'input']) {
+      assert.equal(extractCommand({ [bag]: { [k]: `echo ${bag}-${k}` } }), `echo ${bag}-${k}`, `key "${k}" nested in "${bag}" must extract`);
+    }
+  }
+});
+
+test('every COMMAND_KEYS field drives the full advisory decision (rail write is advised under each key)', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    for (const k of KNOWN_COMMAND_KEYS) {
+      const v = adviseShell({ [k]: 'echo x > src/frozen.js' }, { root, env: env() });
+      assert.equal(v.permission, 'allow', `never deny (key ${k})`);
+      assert.match(v.agent_message ?? '', /src\/frozen\.js/, `advisory must fire for a rail write carried under "${k}"`);
+    }
+  } finally { cleanup(root); }
+});
+
 test('the source never emits a deny and documents the bypassability honestly', () => {
   const src = readFileSync(SCRIPT, 'utf8');
   assert.ok(!/permission['"]?\s*:\s*['"]deny/.test(src), 'the shell advisory must have no deny path at all');

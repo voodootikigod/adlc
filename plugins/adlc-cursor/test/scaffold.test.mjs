@@ -3,6 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -138,6 +139,51 @@ test('ensureCursorHooks BACKS UP an unparseable existing hooks.json instead of d
   // ...but the original content is preserved verbatim in a backup, not lost.
   assert.ok(res.backedUp, 'a backup path must be reported');
   assert.equal(readFileSync(res.backedUp, 'utf8'), original, 'backup must hold the original bytes');
+});
+
+// T18 P5 hollow-test amendment: the CLI wrapper's own arg/env parsing
+// (lib/scaffold-cli.mjs lines 16-17) was untested — spawn the real CLI.
+const SCAFFOLD_CLI = join(PLUGIN_ROOT, 'lib', 'scaffold-cli.mjs');
+
+function runScaffoldCli(cliArgs, { extraEnv = {} } = {}) {
+  const target = mkRepo();
+  // Spawn from a DIFFERENT cwd so a broken positional-arg parse (falling back
+  // to '.') scaffolds the wrong directory and the assertions below catch it.
+  const spawnCwd = mkdtempSync(join(tmpdir(), 'adlc-cursor-cli-cwd-'));
+  const env = { ...process.env };
+  delete env.ADLC_CURSOR_WIRE_UNPINNED; // isolate from the outer environment
+  Object.assign(env, extraEnv);
+  const stdout = execFileSync(process.execPath, [SCAFFOLD_CLI, target, ...cliArgs], {
+    cwd: spawnCwd, env, encoding: 'utf8',
+  });
+  return { target, spawnCwd, stdout };
+}
+
+test('scaffold CLI: scaffolds the POSITIONAL project root, not the cwd; stop/preflight stay unwired by default (T18)', () => {
+  const { target, spawnCwd } = runScaffoldCli([]);
+  const hooksPath = join(target, '.cursor', 'hooks.json');
+  assert.ok(existsSync(hooksPath), 'the positional <project-root> argument must be scaffolded');
+  assert.ok(!existsSync(join(spawnCwd, '.cursor')), 'the spawn cwd must NOT be scaffolded');
+  const hooks = readJson(hooksPath);
+  assert.equal(hooks.hooks.stop, undefined, 'stop must not be wired without --wire-unpinned');
+  assert.equal(hooks.hooks.beforeSubmitPrompt, undefined, 'beforeSubmitPrompt must not be wired without --wire-unpinned');
+  const raw = readFileSync(hooksPath, 'utf8');
+  assert.ok(!raw.includes('adlc-stop.mjs') && !raw.includes('adlc-preflight.mjs'),
+    'no adlc-stop/adlc-preflight entry may appear anywhere in the default hooks.json');
+});
+
+test('scaffold CLI: --wire-unpinned wires stop + beforeSubmitPrompt (T18)', () => {
+  const { target } = runScaffoldCli(['--wire-unpinned']);
+  const hooks = readJson(join(target, '.cursor', 'hooks.json'));
+  assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
+  assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
+});
+
+test('scaffold CLI: ADLC_CURSOR_WIRE_UNPINNED=1 wires stop + beforeSubmitPrompt without the flag (T18)', () => {
+  const { target } = runScaffoldCli([], { extraEnv: { ADLC_CURSOR_WIRE_UNPINNED: '1' } });
+  const hooks = readJson(join(target, '.cursor', 'hooks.json'));
+  assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
+  assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
 });
 
 // Issue #97: ensureGitignore/ensureFormatterIgnores used to be independently

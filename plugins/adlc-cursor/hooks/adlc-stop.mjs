@@ -24,7 +24,9 @@ import { classifyRiskTier, decideAdversarialReviewNotice } from '@adlc/core';
 import { resolveActiveTicketId } from '../rails-checker.mjs';
 import { candidateRoots } from './adlc-rails-guard.mjs';
 
-function run(spawnImpl, bin, args, cwd) {
+// Exported for test/stop-preflight.test.mjs (T18 P5 hollow-test amendment):
+// the status/stdout/stderr mapping below is otherwise unobservable.
+export function run(spawnImpl, bin, args, cwd) {
   try {
     const r = spawnImpl(bin, args, { cwd, encoding: 'utf8' });
     return { status: r.status ?? (r.error ? 1 : 0), stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error };

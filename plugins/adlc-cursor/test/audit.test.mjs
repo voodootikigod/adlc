@@ -100,6 +100,65 @@ test('the churn heuristic is IMPORTED from @adlc/flail-detector (no local copy)'
   assert.ok(!/function\s+detectEditChurn\s*\(/.test(src), 'must not hand-copy detectEditChurn');
 });
 
+// --- hollow-test survivors (T18 P5 amendment) --------------------------------
+
+test('pathless payload: flailCheck returns EXACTLY { flagged: false } and persists nothing', async () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    // No path under any known key — the check must bail out silently.
+    const res = await flailCheck({ tool_name: 'edit' }, { root });
+    assert.deepEqual(res, { flagged: false }, 'a pathless payload must report flagged:false (not true, not skipped)');
+    assert.ok(!existsSync(windowPath(root)), 'a pathless payload must not touch the recent-edits window');
+  } finally { cleanup(root); }
+});
+
+test('wire format: a pathless payload is SILENT (no stderr) and still emits the no-op {}', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    const r = spawnSync(process.execPath, [AUDIT_SCRIPT], {
+      cwd: root,
+      env: { ...process.env },
+      input: JSON.stringify({ tool_name: 'edit', workspace_roots: [root] }),
+      encoding: 'utf8',
+    });
+    assert.equal(r.status, 0);
+    assert.deepEqual(JSON.parse(r.stdout), {});
+    assert.equal(r.stderr, '', 'a pathless payload must produce no advisory noise');
+  } finally { cleanup(root); }
+});
+
+test('multi-root workspace, no explicit root: flailCheck resolves the OWNING root from paths[0]', async () => {
+  // repo-a (first root, NOT an ADLC repo) + repo-b (ADLC-initialized, owns the
+  // edited path). The check must attribute the edit to repo-b — picking the
+  // first root blindly (or looking past paths[0]) would silently skip.
+  const repoA = fixture();
+  const repoB = fixture({ tickets: RAILED });
+  try {
+    const now = Date.now();
+    const abs = join(repoB, 'src', 'churny.js');
+    seedWindow(repoB, [
+      { ts: now - 1000, path: abs },
+      { ts: now - 500, path: abs },
+    ]);
+    const res = await flailCheck({ file_path: abs, workspace_roots: [repoA, repoB] }, { now });
+    assert.equal(res.flagged, true, 'the churn window lives in repo-b: the owning root must be resolved from paths[0]');
+    assert.deepEqual(res.churn, [{ path: abs, count: 3 }]);
+  } finally { cleanup(repoA); cleanup(repoB); }
+});
+
+test('afterFileEdit-shaped payload (bare top-level file_path, no tool bag) is still audited', () => {
+  // Regression pin for the afterFileEdit wire shape: the path arrives as a bare
+  // top-level scalar. NOTE: extractFilePaths() already reads file_path/filePath/
+  // path at the top level, so this shape is served by the batch extractor itself;
+  // the firstAfterEditPath() fallback behind it is defensive redundancy that only
+  // becomes live if the shared extractor is ever narrowed.
+  const root = fixture({ tickets: RAILED });
+  try {
+    assert.equal(audit({ file_path: 'src/frozen.js' }, { root, env: env() }).rail, true);
+    assert.equal(audit({ file_path: 'src/free.js' }, { root, env: env() }).rail, false);
+  } finally { cleanup(root); }
+});
+
 // --- rail audit unchanged ----------------------------------------------------
 
 test('rail audit unchanged: rail touch observed, non-rail silent, never blocks', () => {
