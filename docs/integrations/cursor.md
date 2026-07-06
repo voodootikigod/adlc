@@ -11,20 +11,38 @@ your repo.
 
 ## Status
 
-**MVP shipped — the in-session rails-guard hook + the gate-router rule.** This is
-the smallest increment that makes rail enforcement real inside Cursor. The phase
-command suite, the prosecutor subagents, and a live deny-proof against the Cursor
-binary are follow-on (see [Gaps](#gaps)).
+**Native parity shipped.** The in-session rails-guard is now surrounded by the
+full phase command suite, the `/adlc-prosecute` sequential five-lens prosecution
+loop, and hook parity (a single `preToolUse` dispatcher, the `afterFileEdit`
+audit + flail notice, and an advisory `beforeShellExecution` reminder). A live
+deny-proof against a real Cursor binary remains the one GA gate (see
+[Gaps](#gaps)).
 
 ## What you get
 
-- **`preToolUse` rails-guard hook** — before Cursor's agent runs a `Write`/`Edit`,
-  the hook denies edits to paths frozen by the active ticket.
+- **`preToolUse` dispatcher hook** — runs the rails decision **first** (a frozen-rail
+  edit is denied) and, only when rails allow **and** `ADLC_BUILD_GATE_ENFORCEMENT=1`,
+  consults the advisory buildgate. One entry, so a second hook can never mask a rails
+  deny. A rails deny is returned verbatim.
 - **`afterFileEdit` audit hook** — surfaces a loud notice when a frozen rail was
-  edited. Cursor's `afterFileEdit` fires *after* the write and **cannot block**,
-  so this is observational only.
+  edited, plus a flail (edit-churn) reminder from `@adlc/flail-detector`. Cursor's
+  `afterFileEdit` fires *after* the write and **cannot block**, so this is
+  observational only.
+- **`beforeShellExecution` advisory** — string-matches obvious shell writes to the
+  active ticket's rails and reminds the agent that the CI gate catches rail edits.
+  It **never denies** and is **trivially bypassable** — an honesty nudge, not a control.
+- **Command palette** — the scaffolder deploys the bare `/adlc-*` phase suite into
+  `.cursor/commands/` (init, ticket, spec, approve-spec, decompose, verify-build,
+  prosecute, distill, maintain).
 - **`.cursor/rules/adlc.mdc`** — the ADLC phase-router rule, available to the agent
   in-session.
+
+The **buildgate is advisory, disabled by default** (opt in with
+`ADLC_BUILD_GATE_ENFORCEMENT=1`), and has **NO unbypassable backstop** — unlike
+the rails guard, nothing at commit time enforces its verdict (its depth signal is
+an agent-writable `.adlc/` file). It exists to slow a flailing session, not to gate
+merges. The `stop`-audit and `preflight` hooks ship **disabled** (unverified Cursor
+events); opt in with `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`.
 
 ## Install
 
@@ -54,10 +72,21 @@ package is **not yet published to npm**, so install from source for now.
    node /path/to/adlc/plugins/adlc-cursor/lib/scaffold-cli.mjs .
    ```
 
-   This writes `.adlc/config.json`, `.cursor/hooks.json` (wiring the rails-guard +
-   audit hooks), and `.cursor/rules/adlc.mdc`. Inside Cursor you can also run the
-   `/adlc-init` command. (Once the package is published, the same scaffolder will be
-   runnable from `node_modules/@adlc/cursor-package/`.)
+   This writes `.adlc/config.json`, `.cursor/hooks.json` (wiring the three pinned
+   hooks — the `preToolUse` dispatcher, the `afterFileEdit` audit, and the
+   `beforeShellExecution` advisory), `.cursor/rules/adlc.mdc`, and **deploys the
+   `/adlc-*` command palette into `.cursor/commands/`**. Once the commands are on
+   disk you can drive every phase from inside Cursor — including re-running this
+   bootstrap via the `/adlc-init` command (`/adlc-ticket`, `/adlc-prosecute`, …).
+   (Once the package is published, the same scaffolder will be runnable from
+   `node_modules/@adlc/cursor-package/`.)
+
+   **Upgrading a pre-command-suite scaffold.** `ensureRule()` never overwrites an
+   existing `.cursor/rules/adlc.mdc`, so a repo scaffolded before the command suite
+   landed keeps its old router rule with no command references (and re-running the
+   scaffolder will not refresh it). To upgrade: delete `.cursor/rules/adlc.mdc` and
+   re-run the scaffolder — it regenerates the current rule (the hooks and the
+   `.cursor/commands/` palette update on every run).
 
 4. Verify locally (no Cursor binary required):
 
@@ -115,26 +144,42 @@ not re-implemented here):
 
 | Phase | Surface in Cursor | Mechanism |
 | --- | --- | --- |
-| P0 Triage | `.adlc/tickets.json` | author a ticket (shared runtime) |
-| P1 Interrogate | `adlc spec-lint` / `premortem` | dispatcher (`--prompt-only` in-session) |
-| P2 Decompose | `adlc coldstart` / `merge-forecast` | dispatcher |
-| **P3 Rail** | **`preToolUse` rails-guard hook** | **this package + CI gate** |
-| P4 Build | `adlc flail-detector` | dispatcher |
-| P5 Prosecute | `adlc hollow-test` / `behavior-diff` | dispatcher |
+| P0 Triage | `/adlc-ticket` command | authors a ticket into `.adlc/tickets.json` (shared runtime) |
+| P1 Interrogate | `/adlc-spec` · `/adlc-approve-spec` commands | `adlc spec-lint` / `premortem` (`--prompt-only` in-session) + the human approval gate |
+| P2 Decompose | `/adlc-decompose` command | `adlc coldstart` / `merge-forecast` |
+| **P3 Rail** | **`preToolUse` dispatcher** | **rails-guard (this package + CI gate) + the advisory, default-off buildgate** |
+| P4 Build | `/adlc-verify-build` command | targeted tests + `adlc flail-detector` |
+| P5 Prosecute | `/adlc-prosecute` command — the sequential five-lens loop | five lenses → dedupe → verifier → loop-until-dry + `adlc hollow-test` / `behavior-diff` + cross-model `adversarial-review`. **Weaker independence** than the siblings' fresh-context subagent fan-out (one context runs all five lenses); run `npx adversarial-review --providers` for the cross-model gate. |
 | P6 Integrate | `adlc gate-manifest` | human gate |
-| P7 Distill | `adlc lesson-foundry` | dispatcher |
+| P7 Distill | `/adlc-distill` command | `adlc lesson-foundry` / `rejection-mining` |
 
 The gate-router rule (`.cursor/rules/adlc.mdc`) points the in-session agent at the
-right gate for whatever it's doing.
+right gate for whatever it's doing, and `/adlc-maintain` runs the decay-driven
+maintenance sweep (`skill-rot` / `model-ratchet` / `ticket-prune` / `gate-fuzzing`).
 
 ## Gaps
 
-- **Phase command suite** (`.cursor/commands/adlc-*`) beyond `/adlc-init` — follow-on.
-- **Prosecutor subagents** (the 5-lens P5 prosecution) — follow-on.
-- **Live deny-proof** against a real Cursor binary, and pinning the exact
+These are the real residual gaps after the native-parity build — no overstatement:
+
+- **Live deny-proof** against a real Cursor binary (does `permission: "deny"`
+  actually abort the Write on the target platform?), and pinning the exact
   `preToolUse` payload field names — tracked in [ADR 0006](../adr/0006-adlc-cursor-integration.md);
-  the adapter extracts the path defensively until then.
-- **Shell-write gating** in-session — out of scope by design; covered by the CI gate.
+  the adapter extracts the path defensively until then. This is the one GA gate.
+- **Prosecutor independence caveat.** `/adlc-prosecute` runs its five lenses
+  **sequentially in one context** — Cursor has no subagent fan-out — so it has
+  **weaker independence** than the Claude Code / OpenCode fresh-context reviews.
+  Run `npx adversarial-review --providers` for the cross-model risk gate.
+- **buildgate has no unbypassable backstop.** It is advisory and disabled by
+  default (`ADLC_BUILD_GATE_ENFORCEMENT=1`); nothing at commit time enforces its
+  verdict (its depth signal is an agent-writable file). Only the rails guard has
+  the CI backstop.
+- **`stop` / `preflight` hooks ship disabled.** Those Cursor events are not yet
+  verified against Cursor's docs, so the stop-audit and preflight scripts ship
+  but are **not wired** (opt in with `--wire-unpinned` /
+  `ADLC_CURSOR_WIRE_UNPINNED=1`).
+- **Shell writes are advisory-only.** `beforeShellExecution` **never denies** and
+  the match is trivially bypassable; a Turing-complete shell can't be reliably
+  parsed, so shell-driven rail writes are covered only by the CI gate.
 
 ## Boundary
 

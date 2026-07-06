@@ -1,9 +1,13 @@
 # ADR 0006: Cursor native integration — rails-guard MVP
 
-**Status:** **Accepted — MVP shipped (P3 rail guard); command suite + prosecutor
-lenses follow-on.** This ADR records the decisions for the first shippable
-increment (ticket T1) and the verified facts the build rests on. The working spec
-is `.adlc/cursor-spec.md`.
+**Status:** **Accepted — native parity shipped.** The rails-guard MVP (P3) is
+now surrounded by the full phase command suite (T16), the shared `@adlc/core`
+prosecutor loop wired as the `/adlc-prosecute` sequential five-lens gate (T17),
+and hook parity — the `preToolUse` dispatcher (rails-first + opt-in buildgate),
+the `afterFileEdit` audit + flail piggyback, and the advisory
+`beforeShellExecution` notice (T18). This ADR records the original MVP decisions
+plus the T18 hook-parity pins below. The working spec is
+`.adlc/specs/cursor-native-parity.md`.
 
 **Date:** 2026-06-27
 **Deciders:** Chris Williams.
@@ -215,8 +219,6 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
 - **Live deny proof** — a maintainer-only end-to-end test against a real Cursor
   binary (does `permission: "deny"` actually abort the Write on the target
   platform?) remains the GA gate.
-- **Command suite + prosecutor lenses** — `.cursor/commands/adlc-*` beyond
-  `/adlc-init`, and the 5-lens P5 prosecution, are follow-on.
 
 ## Consequences
 

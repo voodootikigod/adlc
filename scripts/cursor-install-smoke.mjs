@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // cursor-install-smoke.mjs — local verification for the ADLC Cursor integration
-// MVP. Mirrors scripts/opencode-install-smoke.mjs: validates the package shape,
-// the hooks.json wiring (preToolUse + afterFileEdit), the rule registration, the
-// @adlc/core delegation (no inlined rail engine), and runs the real enforcement
-// unit tests. Does NOT require the Cursor binary and does not mutate the user
-// environment. Exit 0 = all checks pass; exit 2 = a check failed.
+// integration. Mirrors scripts/opencode-install-smoke.mjs: validates the package
+// shape, the hooks.json wiring (preToolUse dispatcher + afterFileEdit audit +
+// beforeShellExecution advisory), the rule registration, the command palette, the
+// @adlc/core delegation (no inlined rail engine), the shipped documentation's
+// honesty strings (T19), and runs the real enforcement unit tests. Does NOT
+// require the Cursor binary and does not mutate the user environment. Exit 0 =
+// all checks pass; exit 2 = a check failed.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -278,6 +280,39 @@ else {
   for (const needle of ['preToolUse', 'afterFileEdit', '## Threat Model']) {
     if (!adr.includes(needle)) fail(`ADR 0006 does not pin "${needle}"`); else ok(`ADR pins ${needle}`);
   }
+}
+
+// ---- T19: the docs must tell the exact truth about T16-T18 — the honesty
+// ---- strings are ENFORCED here (mirrors how opencode-install-smoke asserts doc
+// ---- language). Strip any one of these from docs/integrations/cursor.md and
+// ---- this smoke fails (RED-probed).
+if (existsSync(docPath)) {
+  const doc = read(docPath);
+  // buildgate honesty string (spec decision 7): advisory, default-off behind the
+  // enforcement flag, and NO unbypassable backstop (unlike the rails guard).
+  if (!/buildgate is advisory/i.test(doc)) fail('cursor.md does not state the buildgate is advisory');
+  else ok('cursor.md states the buildgate is advisory');
+  if (!/ADLC_BUILD_GATE_ENFORCEMENT=1/.test(doc)) fail('cursor.md does not state the buildgate default-off flag (ADLC_BUILD_GATE_ENFORCEMENT=1)');
+  else ok('cursor.md states the buildgate default-off flag');
+  if (!/no unbypassable backstop/i.test(doc)) fail('cursor.md does not state the buildgate has NO unbypassable backstop (honesty requirement)');
+  else ok('cursor.md states the buildgate has no unbypassable backstop');
+  // Sequential-lens independence caveat (spec decision 3).
+  if (!/weaker independence/i.test(doc)) fail('cursor.md does not state the sequential-lens weaker-independence caveat');
+  else ok('cursor.md states the sequential-lens weaker-independence caveat');
+  if (!/adversarial-review --providers/.test(doc)) fail('cursor.md does not recommend `npx adversarial-review --providers` for the cross-model gate');
+  else ok('cursor.md recommends the cross-model adversarial review');
+  // Shell writes are advisory-only (spec decision 8): beforeShellExecution never
+  // denies and the match is trivially bypassable.
+  if (!/Shell writes are advisory-only/i.test(doc)) fail('cursor.md does not state that shell writes are advisory-only');
+  else ok('cursor.md states shell writes are advisory-only');
+  if (!/never denies/i.test(doc)) fail('cursor.md does not state the shell advisory never denies');
+  else ok('cursor.md states the shell advisory never denies');
+  // The command palette is deployed by the scaffolder (T16) — no more "run
+  // /adlc-init and the suite is follow-on" lie.
+  if (!/\.cursor\/commands\//.test(doc)) fail('cursor.md does not describe the .cursor/commands/ palette deployment');
+  else ok('cursor.md describes the command palette deployment');
+  if (/prosecutor subagents/i.test(doc)) fail('cursor.md still calls the P5 prosecution a follow-on "prosecutor subagents" gap (shipped in T17)');
+  else ok('cursor.md no longer lists the prosecutor as a follow-on gap');
 }
 
 if (failures) { console.error(`\ncursor-install-smoke: ${failures} failure(s)`); process.exit(2); }

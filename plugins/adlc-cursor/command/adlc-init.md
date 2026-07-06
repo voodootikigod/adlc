@@ -4,10 +4,11 @@ description: Bootstrap the ADLC runtime (.adlc/) and scaffold the Cursor hooks +
 
 # /adlc-init — bootstrap the ADLC workspace (Cursor)
 
-Set up the shared `.adlc/` runtime every gate reads, scaffold the Cursor
-`preToolUse`/`afterFileEdit` hooks and the gate-router rule into `.cursor/`, and
-confirm the toolkit is reachable. Run once per repository. Every step is
-idempotent — never clobber existing files.
+Set up the shared `.adlc/` runtime every gate reads, scaffold the Cursor hooks
+(the `preToolUse` dispatcher, the `afterFileEdit` audit, and the
+`beforeShellExecution` advisory) and the gate-router rule into `.cursor/`, deploy
+the `/adlc-*` command palette, and confirm the toolkit is reachable. Run once per
+repository. Every step is idempotent — never clobber existing files.
 
 ## 1. Verify the toolkit
 
@@ -31,9 +32,23 @@ npm install -g @adlc/cli
   node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/cursor-package/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .
   ```
 
-  The scaffolder MERGES the ADLC `preToolUse` (rails-guard) and `afterFileEdit`
-  (audit) entries into any existing `.cursor/hooks.json` without removing your
-  other hooks.
+  The scaffolder MERGES three ADLC hook entries into any existing
+  `.cursor/hooks.json` without removing your other hooks:
+
+  - `preToolUse` → the **dispatcher** (`adlc-pretool.mjs`): runs the rails
+    decision first (a frozen-rail edit is denied verbatim) and only consults the
+    advisory buildgate when rails allow **and** `ADLC_BUILD_GATE_ENFORCEMENT=1`
+    (default-off, no unbypassable backstop). Exactly one `preToolUse` entry, so a
+    second hook can never mask a rails deny.
+  - `afterFileEdit` → the **audit + flail** notice (`adlc-audit.mjs`):
+    observational only (Cursor's `afterFileEdit` cannot block).
+  - `beforeShellExecution` → the **shell advisory** (`adlc-shell-advisory.mjs`):
+    reminds the agent about rail writes; it never denies and is trivially
+    bypassable.
+
+  The `stop`-audit and `preflight` hooks are unverified Cursor events, so they
+  ship **disabled**; opt in with `--wire-unpinned` (or
+  `ADLC_CURSOR_WIRE_UNPINNED=1`).
 
 ## 3. Separate the contract from runtime evidence in git
 

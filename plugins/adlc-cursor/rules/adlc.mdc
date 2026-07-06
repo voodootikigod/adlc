@@ -51,15 +51,19 @@ bare `/adlc-<name>` form (Cursor has no plugin namespace):
 - `/adlc-spec` · `/adlc-approve-spec` — P1 interrogation + the human approval gate.
 - `/adlc-decompose` — P2 slicing + merge forecast.
 - `/adlc-verify-build` — P4 deterministic build gate (targeted tests + flail check).
-- `/adlc-prosecute` — P5 prosecution gates (`hollow-test` · `behavior-diff` · `adversarial-review`).
+- `/adlc-prosecute` — P5 prosecution: the five sequential lenses → dedupe → verifier → loop-until-dry, plus the deterministic gates (`hollow-test` · `behavior-diff`) and a cross-model `adversarial-review`. Sequential same-context lenses have **weaker independence** than the siblings' fresh-context fan-out.
 - `/adlc-distill` — P7 lesson-foundry + rejection-mining.
 - `/adlc-maintain` — decay-driven maintenance (`skill-rot` · `model-ratchet` · `ticket-prune` · `gate-fuzzing`).
 
 ## Rail enforcement in this harness
 
-The bundled hooks wire Cursor's `preToolUse` hook to deny structured `Write`/`Edit`
-to frozen rails declared by the active ticket, and `afterFileEdit` to surface a
-post-edit notice (it cannot block). Both are **best-effort / advisory** — Cursor's
-`permission: "deny"` is not guaranteed, and `afterFileEdit` is observational. The
-**unbypassable** layer is the commit-time CI gate (`docs/ci/rails-guard.yml`). See
+The bundled hooks wire ONE `preToolUse` dispatcher that runs the rails decision
+first — denying structured `Write`/`Edit` to frozen rails declared by the active
+ticket — and only on rails-allow **and** `ADLC_BUILD_GATE_ENFORCEMENT=1` consults
+the advisory buildgate; `afterFileEdit` surfaces a post-edit audit + flail notice
+(it cannot block); `beforeShellExecution` emits an advisory shell reminder that
+never denies. The rails path is **best-effort / advisory** in-session — Cursor's
+`permission: "deny"` is not guaranteed. The buildgate is **advisory, default-off,
+with NO unbypassable backstop**. The **unbypassable** layer (rails only) is the
+commit-time CI gate (`docs/ci/rails-guard.yml`). See
 [`docs/integrations/cursor.md`](../../../docs/integrations/cursor.md).

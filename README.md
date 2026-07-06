@@ -89,7 +89,7 @@ See **[docs/integrations/claude-code.md](./docs/integrations/claude-code.md)** f
 Each agent tool has its own native integration. See the guides:
 
 - **[Codex](./docs/integrations/codex.md)** — hooks-based integration.
-- **[Cursor](./docs/integrations/cursor.md)** — preToolUse hook + rules.
+- **[Cursor](./docs/integrations/cursor.md)** — preToolUse rails dispatcher, hook parity, command suite + prosecutor loop, rules.
 - **[Google Antigravity](./docs/integrations/antigravity.md)** — native plugin system.
 - **[OpenCode](./docs/integrations/opencode.md)** — full phase-router coverage.
 - **[Pi](./docs/integrations/pi.md)** — TypeScript Extension integration.
