@@ -59,6 +59,26 @@ test('flail advisory is SILENT on distinct paths (no churn)', async () => {
   } finally { cleanup(root); }
 });
 
+test('flail advisory counts a path WITH SPACES whole (not truncated at the first space) — T18 F4', async () => {
+  // extractPath's `Editing <path>` pattern captures `[^\s]+`, so a spaced path
+  // ("src/my dir/churny.js") would be truncated to "src/my" and mis-attributed.
+  // The hook must encode window entries in the `"file_path":"<path>"` shape,
+  // whose `[^"]+` capture keeps the whole path. RED under the old `Editing`
+  // format: churn would report { path: 'src/my', count: 3 }.
+  const root = fixture({ tickets: RAILED });
+  try {
+    const now = Date.now();
+    const spaced = 'src/my dir/churny.js';
+    seedWindow(root, [
+      { ts: now - 1000, path: spaced },
+      { ts: now - 500, path: spaced },
+    ]);
+    const res = await flailCheck(payload(spaced), { root, now });
+    assert.equal(res.flagged, true);
+    assert.deepEqual(res.churn, [{ path: spaced, count: 3 }], 'the spaced path must be counted whole, not truncated at the space');
+  } finally { cleanup(root); }
+});
+
 test('flail window is TTL-scoped: entries older than SESSION_TTL_MS are pruned, not counted', async () => {
   const root = fixture({ tickets: RAILED });
   try {

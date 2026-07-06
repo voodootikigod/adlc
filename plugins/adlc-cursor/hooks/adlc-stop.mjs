@@ -41,7 +41,10 @@ export function run(spawnImpl, bin, args, cwd) {
  * committed diff against the merge-base of the first reachable trunk
  * candidate. Best-effort: any git failure contributes nothing.
  */
-function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
+// Exported for test/stop-preflight.test.mjs (T18 F1): the porcelain slice(3)
+// parse and merge-base fallback are otherwise only reachable through stopAudit's
+// risk-tier branch. Directly testable seam — this hook is T18 scope, not a rail.
+export function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
   const paths = new Set();
 
   const status = run(spawnImpl, 'git', ['status', '--porcelain', '--no-renames', '-z'], root);

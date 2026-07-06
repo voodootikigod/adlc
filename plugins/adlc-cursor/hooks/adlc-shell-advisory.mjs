@@ -102,9 +102,11 @@ export function adviseShell(payload, { root, env = process.env } = {}) {
       user_message: `ADLC shell advisory: this command appears to write to a frozen rail / trust root (${list}).`,
       agent_message:
         `ADVISORY (not a block): this shell command looks like it writes to an ADLC frozen rail or ` +
-        `trust root (${list}). Shell writes are not rail-gated in-session, but the commit-time CI ` +
-        `rail-freeze gate rejects rail edits regardless of how they were made — an edit landed this way ` +
-        `will fail CI. If the rail must change, update the ticket spec and re-freeze instead.`,
+        `trust root (${list}). Shell writes are not rail-gated in-session. The commit-time CI ` +
+        `rail-freeze gate catches rail edits regardless of how they were made, but only for rails ` +
+        `ALREADY FROZEN ON THE BASE BRANCH — a rail first declared on this branch and edited in the ` +
+        `same PR is NOT caught until it lands on base (see ADR-0006 "Known scope limit"). If the rail ` +
+        `must change, update the ticket spec and re-freeze instead.`,
     };
   } catch {
     return { permission: 'allow' }; // advisory: never fail closed, never throw

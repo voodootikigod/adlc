@@ -42,7 +42,9 @@ export function audit(payload, { root, env = process.env } = {}) {
       if (verdict.decision === 'deny') {
         process.stderr.write(
           `adlc-audit: POST-EDIT rail touch — ${verdict.reason}. ` +
-          `afterFileEdit cannot block; the CI rail-freeze gate will reject this change.\n`,
+          `afterFileEdit cannot block; the CI rail-freeze gate catches edits to rails already frozen on ` +
+          `the base branch (a rail first declared on this branch is not caught until it lands on base — ` +
+          `see ADR-0006 "Known scope limit").\n`,
         );
         return { rail: true, reason: verdict.reason };
       }
@@ -115,8 +117,11 @@ export async function flailCheck(payload, {
     writeFileSync(windowFile, entries.map((e) => `${JSON.stringify(e)}\n`).join(''));
 
     // Feed the window to the REAL flail churn detector via the tool-log line
-    // shape its extractPath() already parses ("Editing <path>").
-    const churn = detectEditChurn(entries.map((e) => `Editing ${e.path}`));
+    // shape its extractPath() already parses. Use the `"file_path":"<path>"`
+    // form (extractPath's second pattern, `[^"]+`) rather than `Editing <path>`
+    // (first pattern, `[^\s]+`), so a path CONTAINING SPACES is captured whole
+    // instead of truncated at the first space (T18 F4).
+    const churn = detectEditChurn(entries.map((e) => `"file_path":"${e.path}"`));
     if (!churn.length) return { flagged: false };
 
     const summary = churn.map((c) => `${c.path} (${c.count}x)`).join(', ');
