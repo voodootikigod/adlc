@@ -102,6 +102,25 @@ test('ALLOW: a shell/terminal tool is NOT buildgate-gated (shell is exempt in-se
   } finally { cleanup(root); }
 });
 
+test('PATHLESS mutator, NO explicit root → the resolveOwning(payload, undefined) branch does not crash and still gates', async () => {
+  // Regression for a finding cross-model review re-raises every pass: dispatch()
+  // resolves the owning root via `root ?? resolveOwning(payload, extractFilePaths(payload)[0])`.
+  // Every OTHER buildgate test passes an explicit `root`, short-circuiting the `??`,
+  // so `resolveOwning(payload, undefined)` — the real hook path when a mutating tool
+  // carries no file path — was never exercised by a committed test. Drive it directly:
+  // a pathless mutator (extractFilePaths[0] === undefined), rails allowing (P4
+  // enforcement off), buildgate ON, and NO `root` option so resolveOwning runs. It
+  // must not throw and must still gate via the workspace_roots-resolved root.
+  const root = fixture(HIGH_RISK);
+  try {
+    seedCounter(root, { count: DEFAULT_DEPTH_THRESHOLD + 5, updatedAt: Date.now() });
+    const pathless = { tool_name: 'Write', tool_input: {}, workspace_roots: [root] };
+    const v = await dispatch(pathless, { env: env() }); // no `root` → forces resolveOwning(payload, undefined)
+    assert.equal(v.permission, 'deny', 'a pathless high-risk edit in a degraded session still gates (no crash)');
+    assert.match(v.user_message, /build-gate/, 'the deny came from the buildgate — i.e. resolveOwning resolved the root and consultBuildGate ran');
+  } finally { cleanup(root); }
+});
+
 test('BYPASS-AUDITED: ADLC_BUILD_GATE_BYPASS=1 allows AND durably records a build-gate-bypass manifest entry', async () => {
   const root = fixture(HIGH_RISK);
   try {
