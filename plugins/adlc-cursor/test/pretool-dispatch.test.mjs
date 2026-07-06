@@ -191,9 +191,26 @@ test('wire format: malformed stdin fails CLOSED under enforcement, OPEN otherwis
 
 // --- Delegation pinning: the dispatcher must not re-assemble extraction ------
 
-test('the dispatcher source delegates to decide() and does not re-assemble lower-level extraction', () => {
+test('the dispatcher obtains the RAILS verdict only from decide(), before any extraction (round-2 amendment 1)', () => {
   const src = readFileSync(DISPATCHER_SCRIPT, 'utf8');
   assert.match(src, /import \{ decide[^}]*\} from '\.\/adlc-rails-guard\.mjs'/, 'must import the frozen guard decide()');
   assert.ok(!/checkRail/.test(src), 'must not rebuild the rails verdict from checkRail');
-  assert.ok(!/extractFilePath\b/.test(src), 'must not re-assemble single-path extraction');
+  // The round-2 amendment bans re-ASSEMBLING the rails verdict from lower-level
+  // pieces (which would drop the hardened MultiEdit/apply_patch/symlink/multi-root
+  // handling). It does NOT ban using the guard's OWN exported extractFilePaths for
+  // buildgate owning-root resolution — that reuses the hardened extractor instead
+  // of re-implementing it, and it is reached only AFTER the rails-allow gate.
+  // Enforce that invariant structurally: (a) the rails verdict comes from a raw
+  // decide(payload,...) call, (b) any non-allow is returned before extraction runs,
+  // (c) extractFilePaths (if used) appears only after that early-return. The
+  // behavioral byte-identity tests above are the real guarantee; this pins the shape.
+  const railsCall = src.search(/decide\(payload\b/);
+  const denyReturn = src.search(/permission !== 'allow'\)\s*return/);
+  assert.ok(railsCall !== -1, 'rails verdict must come from decide(payload, ...)');
+  assert.ok(denyReturn !== -1 && denyReturn > railsCall, 'any non-allow rails verdict must be returned verbatim');
+  const extractUse = src.search(/extractFilePaths\(payload\)/);
+  if (extractUse !== -1) {
+    assert.ok(extractUse > denyReturn, 'extractFilePaths may only run AFTER the rails-allow early-return (buildgate root resolution), never to build the rails verdict');
+  }
+  assert.ok(!/\bextractFilePath\b(?!s)/.test(src), 'must not use a singular single-path extractor to build the rails verdict');
 });
