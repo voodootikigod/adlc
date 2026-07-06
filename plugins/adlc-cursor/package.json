@@ -14,6 +14,8 @@
     "adlc-cursor-scaffold": "./lib/scaffold-cli.mjs"
   },
   "dependencies": {
-    "@adlc/core": "^1.1.0"
+    "@adlc/build-gate": "^1.1.0",
+    "@adlc/core": "^1.1.0",
+    "@adlc/flail-detector": "^1.1.0"
   }
 }

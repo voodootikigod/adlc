@@ -9,13 +9,19 @@
 import { resolve } from 'node:path';
 import { scaffold } from './scaffold.mjs';
 
-const projectRoot = resolve(process.argv[2] ?? '.');
-const { config, hooks, rule, commands, gitignore, formatterIgnores } = scaffold(projectRoot);
+// --wire-unpinned (or ADLC_CURSOR_WIRE_UNPINNED=1): ALSO wire the UNPINNED
+// `stop` / `beforeSubmitPrompt` events to the disabled-by-default stop-audit /
+// preflight hooks. Off by default — those events are not verified against
+// Cursor documentation (ADR 0006).
+const args = process.argv.slice(2);
+const wireUnpinned = args.includes('--wire-unpinned') || process.env.ADLC_CURSOR_WIRE_UNPINNED === '1';
+const projectRoot = resolve(args.filter((a) => !a.startsWith('--'))[0] ?? '.');
+const { config, hooks, rule, commands, gitignore, formatterIgnores } = scaffold(projectRoot, { wireUnpinned });
 
 const tag = (r) => (r.created ? 'created' : 'present');
 console.log(`adlc-cursor scaffold (${projectRoot}):`);
 console.log(`  .adlc/config.json     — ${tag(config)}`);
-console.log(`  .cursor/hooks.json    — ${hooks.created ? 'created' : 'merged'} (rails-guard + audit wired)`);
+console.log(`  .cursor/hooks.json    — ${hooks.created ? 'created' : 'merged'} (preToolUse dispatcher + audit + shell advisory wired${wireUnpinned ? ' + UNPINNED stop/beforeSubmitPrompt (opt-in)' : ''})`);
 if (hooks.backedUp) {
   console.log(`  ⚠ existing .cursor/hooks.json was unparseable — preserved verbatim at ${hooks.backedUp} before writing a fresh file`);
 }

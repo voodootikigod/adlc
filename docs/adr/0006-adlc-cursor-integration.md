@@ -141,6 +141,66 @@ a new-rail-aware union gate ships. Same-PR protection requires freezing the rail
 a separate, already-merged commit first. The integration docs must not claim the
 gate catches *every* rail edit.
 
+## T18: hook parity — pinned decisions
+
+Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
+
+1. **Single `preToolUse` dispatcher; rails deny always wins.** Cursor's
+   multi-entry-per-event ordering and permission-combination semantics are
+   **unpinned**, so a second `preToolUse` entry could mask a rails deny. The
+   scaffolder wires exactly ONE `preToolUse` entry —
+   `hooks/adlc-pretool.mjs` — which obtains the rails verdict by calling the
+   frozen guard's exported `decide()` with the unmodified payload and returns
+   any deny **verbatim**; only on rails-allow AND
+   `ADLC_BUILD_GATE_ENFORCEMENT=1` does it lazily `import()` the
+   `@adlc/build-gate` lib subpaths (a buildgate load failure degrades the
+   buildgate only, never the rails path). A pre-T18 direct
+   `adlc-rails-guard.mjs` entry is migrated to the dispatcher on re-scaffold.
+2. **buildgate is advisory, DEFAULT-OFF, with NO unbypassable backstop.** The
+   CI rail-freeze gate enforces rail *immutability*, not fitness-to-build;
+   nothing backstops the buildgate — its depth signal is an agent-writable
+   `.adlc/` file. It ships disabled behind `ADLC_BUILD_GATE_ENFORCEMENT=1`
+   (bypass: `ADLC_BUILD_GATE_BYPASS=1`, honored only when durably recorded to
+   the gate-manifest; risk/decide/depth/override logic imported from
+   `@adlc/build-gate` deep lib subpaths — the package has no exports map, so
+   `lib/*.mjs` subpaths are the sanctioned import form).
+3. **Depth session-scoping: TTL staleness, not a session id.** Cursor hook
+   payloads are **not pinned** to carry a conversation/session id (this ADR
+   pins `{ tool_name, tool_input, workspace_roots, ... }` only), and no live
+   install is available to verify one. The depth counter
+   (`.adlc/cursor-buildgate-depth.json`) is therefore scoped by **write
+   recency**: 30 minutes (`SESSION_TTL_MS`) of inactivity resets it, plus an
+   opportunistic reset when a conversation-id-shaped field IS present and
+   changes. A fresh session provably starts un-degraded (tested).
+   **TODO:** pin whether the real payload carries `conversation_id` against a
+   live install and switch to id-scoping if so.
+4. **Unpinned events ship DISABLED.** `stop` and `beforeSubmitPrompt` are NOT
+   verified against Cursor documentation, so the stop-audit
+   (`hooks/adlc-stop.mjs`: gate-manifest verify + the issue-#59 risk-gated
+   adversarial-review notice) and preflight (`hooks/adlc-preflight.mjs`:
+   once-per-session `adlc preflight` + ADLC precedence assertion) ship as
+   scripts the scaffolder does **not** wire. Opt-in: scaffold option
+   `wireUnpinned` / `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`;
+   re-scaffolding without the flag removes them again. `hooks.json` contains
+   only pinned events (`preToolUse`, `afterFileEdit`,
+   `beforeShellExecution`) — smoke-asserted. **TODO:** pin both events (name +
+   payload + stdout contract) against current Cursor docs / a live install,
+   then wire by default.
+5. **`beforeShellExecution` advisory never denies.** Shell is Turing-complete
+   and intentionally not rail-gated in-session (threat model above);
+   `hooks/adlc-shell-advisory.mjs` string-matches the command (field
+   `command`, extracted defensively like the preToolUse adapter) for obvious
+   writes to the active ticket's rails / trust roots and emits an
+   `agent_message` reminder that the CI gate catches rail edits regardless.
+   The match is **trivially bypassable** (any indirection defeats it) and
+   exists only to keep an honest agent honest — it is not a control.
+6. **flail piggyback (afterFileEdit) is advisory stderr only.** The audit hook
+   persists a TTL-scoped recent-edits window
+   (`.adlc/cursor-recent-edits.jsonl`) — Cursor hooks receive no transcript —
+   and runs `@adlc/flail-detector`'s real `detectEditChurn` over it (lib
+   subpath import, no local heuristic copy). Agent-writable window, no
+   backstop, cannot block.
+
 ## Unverified / follow-on
 
 - **`preToolUse` payload field names** — Cursor's public docs pin the
@@ -148,6 +208,10 @@ gate catches *every* rail edit.
   `preToolUse` `tool_input` shape. The adapter extracts the tool name and edited
   path **defensively** across the documented and sibling field names; pinning the
   exact shape against a captured real payload is pending a live install.
+- **Session/conversation id in hook payloads** — unverified (see T18 decision 3);
+  TTL scoping stands in until pinned.
+- **`stop` / `beforeSubmitPrompt` events** — unverified (see T18 decision 4);
+  shipped disabled with opt-in wiring until pinned.
 - **Live deny proof** — a maintainer-only end-to-end test against a real Cursor
   binary (does `permission: "deny"` actually abort the Write on the target
   platform?) remains the GA gate.

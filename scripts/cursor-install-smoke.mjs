@@ -26,29 +26,57 @@ else {
   if (pkg.name !== '@adlc/cursor-package') fail(`package name is ${pkg.name}`); else ok('package name');
   if (pkg.type !== 'module') fail('package is not type:module'); else ok('type:module');
   if (!pkg.dependencies?.['@adlc/core']) fail('missing @adlc/core dependency'); else ok('dependency @adlc/core');
+  // T18 AC2 companion: the buildgate/flail deep-subpath imports resolve via the
+  // workspace root inside THIS repo even when undeclared, which would mask a
+  // broken standalone install — the declarations must be asserted here.
+  if (!pkg.dependencies?.['@adlc/build-gate']) fail('missing @adlc/build-gate dependency (deep-subpath imports would break on a standalone install)');
+  else ok('dependency @adlc/build-gate declared');
+  if (!pkg.dependencies?.['@adlc/flail-detector']) fail('missing @adlc/flail-detector dependency (deep-subpath imports would break on a standalone install)');
+  else ok('dependency @adlc/flail-detector declared');
   if (!pkg.cursor?.hooks) fail('package.json cursor.hooks entry missing'); else ok('cursor.hooks manifest entry');
   if (!pkg.cursor?.rules) fail('package.json cursor.rules entry missing'); else ok('cursor.rules manifest entry');
 }
 
-// ---- AC1: hooks.json wiring (preToolUse rails-guard + afterFileEdit audit) ----
+// ---- AC1 + T18: hooks.json wiring (preToolUse DISPATCHER + afterFileEdit audit
+// ---- + beforeShellExecution advisory; unpinned events absent) ----
 const hooksJsonPath = join(PLUGIN, 'hooks.json');
 if (!existsSync(hooksJsonPath)) fail('hooks.json missing');
 else {
   const hj = JSON.parse(read(hooksJsonPath));
   if (hj.version !== 1) fail('hooks.json version is not 1'); else ok('hooks.json version 1');
   const pre = hj.hooks?.preToolUse ?? [];
-  if (!pre.some((e) => /adlc-rails-guard\.mjs/.test(e.command ?? ''))) fail('preToolUse does not wire adlc-rails-guard.mjs');
-  else ok('preToolUse wires the rails-guard adapter');
+  // T18 amendment 1: ONE dispatcher entry, not a rails-guard + buildgate pair —
+  // Cursor's multi-entry permission-combination semantics are unpinned, so a
+  // second entry could mask a rails deny.
+  if (!pre.some((e) => /adlc-pretool\.mjs/.test(e.command ?? ''))) fail('preToolUse does not wire the adlc-pretool.mjs dispatcher');
+  else ok('preToolUse wires the single dispatcher (rails first, buildgate second)');
+  if (pre.some((e) => /adlc-rails-guard\.mjs/.test(e.command ?? ''))) fail('preToolUse still wires adlc-rails-guard.mjs directly (must be the single dispatcher — multi-entry semantics are unpinned)');
+  else ok('preToolUse has no direct rails-guard entry (migrated into the dispatcher)');
+  if (pre.filter((e) => /adlc-/.test(e.command ?? '')).length !== 1) fail('preToolUse must carry exactly ONE ADLC entry (the dispatcher)');
+  else ok('preToolUse carries exactly one ADLC entry');
   const after = hj.hooks?.afterFileEdit ?? [];
   if (!after.some((e) => /adlc-audit\.mjs/.test(e.command ?? ''))) fail('afterFileEdit does not wire adlc-audit.mjs');
   else ok('afterFileEdit wires the observational audit hook');
+  // T18: beforeShellExecution is a PINNED event — the advisory-only shell notice.
+  const shell = hj.hooks?.beforeShellExecution ?? [];
+  if (!shell.some((e) => /adlc-shell-advisory\.mjs/.test(e.command ?? ''))) fail('beforeShellExecution does not wire adlc-shell-advisory.mjs');
+  else ok('beforeShellExecution wires the advisory-only shell notice');
+  // T18 AC4: the UNPINNED events ship DISABLED — hooks.json must not reference
+  // the stop/preflight scripts, and must contain ONLY verified event names.
+  const raw = read(hooksJsonPath);
+  if (/adlc-stop\.mjs|adlc-preflight\.mjs/.test(raw)) fail('hooks.json wires a DISABLED-by-default mode (adlc-stop/adlc-preflight) — stop/beforeSubmitPrompt are not pinned events');
+  else ok('disabled modes (stop-audit, preflight) are absent from hooks.json');
+  const VERIFIED_EVENTS = new Set(['preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile']);
+  const unverified = Object.keys(hj.hooks ?? {}).filter((k) => !VERIFIED_EVENTS.has(k));
+  if (unverified.length) fail(`hooks.json references unverified event(s): ${unverified.join(', ')} (ADR 0006 pins only ${[...VERIFIED_EVENTS].join('/')})`);
+  else ok('hooks.json references only ADR-0006-pinned events');
   // advisory: failClosed must be false so a hook bug cannot brick the editor
   if (pre[0]?.failClosed !== false) fail('preToolUse failClosed is not false (advisory layer must not brick the editor)');
   else ok('preToolUse is advisory (failClosed:false)');
   // F1: the matcher must ROUTE every tool to the guard (catch-all) so a novel
   // mutator name can't bypass the fail-closed classifier. Anything narrower is an
   // allowlist with a hole.
-  const matcher = pre.find((e) => /adlc-rails-guard/.test(e.command ?? ''))?.matcher ?? '';
+  const matcher = pre.find((e) => /adlc-pretool/.test(e.command ?? ''))?.matcher ?? '';
   const re = new RegExp(matcher, 'i');
   const routed = ['Write', 'str_replace', 'modify_file', 'frobnicate', 'Read'].every((t) => re.test(t));
   if (!routed) fail(`preToolUse matcher is an allowlist, not catch-all (matcher="${matcher}") — novel mutators bypass the guard`);
@@ -69,6 +97,43 @@ else {
   const a = read(auditPath);
   if (/permission['"]?\s*:\s*['"]deny/.test(a)) fail('afterFileEdit audit must NOT emit a deny (it cannot block)');
   else ok('afterFileEdit audit never denies (observational only)');
+  // T18 AC3 companion: the flail heuristic must be IMPORTED from
+  // @adlc/flail-detector's lib subpath, never hand-copied.
+  if (!a.includes('@adlc/flail-detector/lib/')) fail('audit hook does not import the flail heuristics from @adlc/flail-detector lib subpaths');
+  else ok('audit hook imports flail heuristics from @adlc/flail-detector');
+  if (/function\s+detectEditChurn\s*\(/.test(a)) fail('audit hook hand-copies detectEditChurn (must delegate to @adlc/flail-detector)');
+  else ok('no inlined flail heuristic in the audit hook');
+}
+
+// ---- T18: the dispatcher + shell advisory hook scripts ----
+const pretoolPath = join(PLUGIN, 'hooks', 'adlc-pretool.mjs');
+if (!existsSync(pretoolPath)) fail('hooks/adlc-pretool.mjs missing');
+else {
+  const d = read(pretoolPath);
+  if (!/import \{ decide[^}]*\} from '\.\/adlc-rails-guard\.mjs'/.test(d)) fail('dispatcher does not delegate the rails verdict to the frozen guard decide()');
+  else ok('dispatcher delegates the rails verdict to the frozen guard decide()');
+  if (!/ADLC_BUILD_GATE_ENFORCEMENT/.test(d)) fail('dispatcher is missing the ADLC_BUILD_GATE_ENFORCEMENT default-off flag');
+  else ok('buildgate is default-off behind ADLC_BUILD_GATE_ENFORCEMENT=1');
+  if (!/@adlc\/build-gate\/lib\//.test(d)) fail('dispatcher does not import @adlc/build-gate lib subpaths');
+  else ok('dispatcher imports @adlc/build-gate deep subpaths');
+  if (/function\s+(deriveRiskSignals|computeRiskTier|isDegraded|decideBuildGate)\s*\(/.test(d)) fail('dispatcher hand-copies build-gate risk/decide logic (must delegate to @adlc/build-gate)');
+  else ok('no inlined risk/decide copy in the dispatcher');
+  if (!/NO unbypassable backstop/.test(d)) fail('dispatcher does not state the buildgate no-backstop fact (honesty requirement)');
+  else ok('dispatcher states the buildgate has no unbypassable backstop');
+}
+const shellAdvisoryPath = join(PLUGIN, 'hooks', 'adlc-shell-advisory.mjs');
+if (!existsSync(shellAdvisoryPath)) fail('hooks/adlc-shell-advisory.mjs missing');
+else {
+  const s = read(shellAdvisoryPath);
+  if (/permission['"]?\s*:\s*['"]deny/.test(s)) fail('shell advisory must NEVER emit a deny (advisory by design)');
+  else ok('shell advisory never denies');
+  if (!/TRIVIALLY BYPASSABLE/i.test(s)) fail('shell advisory does not document that the string match is trivially bypassable');
+  else ok('shell advisory documents its trivial bypassability');
+}
+// The disabled-by-default scripts must still SHIP (opt-in via wireUnpinned).
+for (const f of ['adlc-stop.mjs', 'adlc-preflight.mjs']) {
+  if (!existsSync(join(PLUGIN, 'hooks', f))) fail(`hooks/${f} missing (disabled-by-default mode must still ship)`);
+  else ok(`hooks/${f} ships (disabled by default, opt-in wiring)`);
 }
 
 // ---- AC1: rule registration ----
