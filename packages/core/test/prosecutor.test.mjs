@@ -85,6 +85,21 @@ test('survivesVerification: mixed valid/invalid votes only count the valid ones'
   assert.equal(survivesVerification([{ real: true }, null]), true);
 });
 
+test('survivesVerification: truthy-but-malformed votes FAIL CLOSED (not counted as refutations)', () => {
+  // The docstring promises fail-closed on absent/invalid verification, but a
+  // truthy-malformed vote survives a plain filter(Boolean) and would otherwise
+  // sit in the denominator as a non-real (refuting) vote — silently dropping a
+  // real blocker on a partial parse, a timeout, or a cannot-decide `{real:null}`.
+  // A vote is valid ONLY if `real` is a boolean; anything else is discarded, and
+  // zero valid votes SURVIVES.
+  assert.equal(survivesVerification([{}]), true, 'empty-object vote must not refute');
+  assert.equal(survivesVerification([{ real: null }]), true, '{real:null} cannot-decide must not refute');
+  assert.equal(survivesVerification([{ real: 'yes' }]), true, 'non-boolean real must not refute');
+  assert.equal(survivesVerification([{ real: true }, {}]), true, 'a lone real confirm + a malformed vote survives');
+  // A genuine refutation still works: one real:false, no valid confirms → dropped.
+  assert.equal(survivesVerification([{ real: false }, {}]), false, 'a real refutation among malformed still refutes');
+});
+
 // ---- shouldContinue (loop until dry) ----
 test('shouldContinue: resets dry streak on fresh findings, stops after maxDry empties', () => {
   let s = shouldContinue({ freshThisRound: 3, dryStreak: 1, maxDry: 2 });

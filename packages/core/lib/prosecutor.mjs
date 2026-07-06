@@ -54,9 +54,15 @@ export function dedupeFindings(findings) {
  * FAIL CLOSED on absent verification: a pre-merge gate must not let a verifier
  * crash, timeout, or parse failure silently DROP a finding. With zero valid votes
  * the finding SURVIVES as an unverified blocker — surface it, don't bury it.
+ *
+ * A vote is VALID only when `real` is a boolean. A truthy-but-malformed vote
+ * (`{}`, `{ real: null }` for cannot-decide, a partially-parsed object) is NOT a
+ * refutation — counting it in the denominator would let one malformed verifier
+ * verdict silently drop a real blocker, defeating the fail-closed contract. Such
+ * votes are discarded; if none remain valid, the finding survives.
  */
 export function survivesVerification(votes, { threshold = 0.5 } = {}) {
-  const list = (votes ?? []).filter(Boolean);
+  const list = (votes ?? []).filter((v) => v && typeof v.real === 'boolean');
   if (!list.length) return true; // unverified → keep as a blocker (fail closed)
   const real = list.filter((v) => v.real === true).length;
   return real / list.length > threshold;
