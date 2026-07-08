@@ -114,6 +114,25 @@ else ok('AC7 live deny proof script present (scripts/opencode-live-deny.mjs)');
   if (!/permission\.ask/.test(idx)) fail('index.mjs does not register the dormant permission.ask lever'); else ok('registers permission.ask (dormant until upstream #7006)');
 }
 
+// ---- Phase 3: context injection, tool annotation, flail, TUI module ----
+{
+  const idx = read(indexPath);
+  if (!/experimental\.chat\.system\.transform/.test(idx)) fail('index.mjs does not wire chat.system.transform (3.1)'); else ok('Phase 3.1: system-prompt ticket-context injection');
+  if (!/tool\.definition/.test(idx)) fail('index.mjs does not wire tool.definition (3.2)'); else ok('Phase 3.2: tool.definition rail annotation');
+  if (!/tool\.execute\.after/.test(idx)) fail('index.mjs does not wire tool.execute.after (3.3)'); else ok('Phase 3.3: flail/churn advisory');
+  for (const lib of ['context-inject.mjs', 'flail.mjs']) {
+    if (!existsSync(join(PLUGIN, 'lib', lib))) fail(`lib/${lib} missing`); else ok(`lib/${lib} present`);
+  }
+  // 3.4 (reduced/verifiable): the active-ticket statusline is surfaced via the
+  // confirmed client.tui.showToast at session.created. The persistent JSX
+  // statusline slot / DialogConfirm are DEFERRED (unverifiable API in this env);
+  // there must be NO tui.mjs shipping guessed-API code.
+  if (!/buildStatusLine/.test(idx)) fail('index.mjs does not surface the active-ticket statusline'); else ok('Phase 3.4: statusline toast via confirmed client.tui.showToast');
+  if (existsSync(join(PLUGIN, 'tui.mjs'))) fail('tui.mjs present — the guessed-API TUI module was meant to be deferred, not shipped'); else ok('no unverifiable tui.mjs shipped (JSX TUI deferred)');
+  // No prompt injection: ticket fields must be sanitized before prompt insertion.
+  if (!/sanitizeField|sanitizeList/.test(read(join(PLUGIN, 'lib', 'context-inject.mjs')))) fail('context-inject does not sanitize untrusted ticket fields'); else ok('sanitizes ticket fields before prompt injection');
+}
+
 // ---- Phase A (T2): command suite + gate-bin dependency mapping ----
 const pkg2 = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
 if (!pkg2.opencode?.command) fail('package.json opencode.command entry missing'); else ok('opencode.command manifest entry');

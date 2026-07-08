@@ -15,10 +15,12 @@
 // deny proof (scripts/opencode-live-deny.mjs) regression-tests it against a real
 // opencode binary.
 
-import { checkToolCall, resolveRailsInForce, railHit, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
+import { checkToolCall, resolveRailsInForce, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
+import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
+import { createFlailTracker, flailMessage } from './lib/flail.mjs';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
 
@@ -54,6 +56,8 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   const tracker = createDepthTracker();
   // Phase 2.4/2.5: restore-loop-guard state for the file.edited watcher.
   const watcherState = createWatcherState();
+  // Phase 3.3: per-session churn tracker for the flail advisory.
+  const flail = createFlailTracker();
 
   const deny = async (message) => {
     if (advisoryOnly) {
@@ -149,8 +153,57 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       } catch { /* dormant lever must never break the host */ }
     },
 
+    // Phase 3.3: churn/flail advisory. A file rewritten many times in one
+    // session often means the model is stuck; warn once per churning file.
+    // tool.execute.after carries args on the INPUT side (unlike before). Never
+    // throws — advisory only.
+    'tool.execute.after': async (input) => {
+      try {
+        // extractTargets covers filePath/path/files[]/edits[] AND apply_patch
+        // envelope bodies — so churn is counted for GPT-5-class models too,
+        // where apply_patch is the ONLY mutator (bare filePath would miss it).
+        // Dedupe per event: one tool call editing a file is one churn increment,
+        // even if its args name that file twice (repeated edits[]/filePath+patch).
+        const targets = [...new Set(extractTargets(input?.args))];
+        for (const filePath of targets) {
+          const { churning } = flail.record({ sessionID: input?.sessionID, tool: input?.tool, filePath });
+          for (const c of churning) await notify(flailMessage(c), 'warning');
+        }
+      } catch { /* advisory: swallow */ }
+    },
+
+    // Phase 3.1: re-state the active build's constraints (ticket, frozen rails,
+    // scope) in the system prompt every turn — a context-rot defense so the
+    // model is reminded BEFORE it acts, not only blocked after. Mutates
+    // output.system in place (the host reads that array); never throws.
+    'experimental.chat.system.transform': async (_input, output) => {
+      try {
+        const block = buildSystemContext(root, process.env);
+        if (block && Array.isArray(output?.system)) output.system.push(block);
+      } catch { /* advisory: swallow — never break prompt assembly */ }
+    },
+
+    // Phase 3.2: name the frozen rails in the edit/write/apply_patch tool
+    // descriptions so the model sees the constraint at the point of choosing to
+    // write. Mutates output.description in place; never throws.
+    'tool.definition': async (input, output) => {
+      try {
+        const tool = String(input?.toolID ?? '').toLowerCase();
+        if (!['edit', 'write', 'apply_patch'].includes(tool)) return;
+        const notice = buildToolRailNotice(root, process.env);
+        if (notice && typeof output?.description === 'string') output.description += notice;
+      } catch { /* advisory: swallow */ }
+    },
+
     // session.created (Phase C): advisory environment preflight. Never throws.
+    // Phase 3.4 (verifiable native touch): surface the active-ticket statusline
+    // as an info toast via the confirmed client.tui.showToast channel (the
+    // persistent JSX statusline slot is deferred — see docs).
     'session.created': async () => {
+      try {
+        const line = buildStatusLine(root, process.env);
+        if (line) await notify(line, 'info');
+      } catch { /* advisory: swallow */ }
       try {
         const { skipped, warnings } = checkPreflight(root, { env: process.env });
         if (!skipped) for (const w of warnings) await notify(`ADLC preflight: ${w}`, 'warning');
@@ -160,7 +213,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     // session.idle (Phase C): advisory gate-evidence audit (the plan's
     // "session.ended" — OpenCode has no such event; session.idle is the
     // end-of-work signal). Never throws.
-    'session.idle': async () => {
+    'session.idle': async (input) => {
       try {
         const { warning } = auditGateManifest(root);
         if (warning) await notify(`ADLC gate-manifest audit: ${warning}`, 'warning');
@@ -172,6 +225,15 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       try {
         const { warning } = auditAdversarialReview(root, { env: process.env });
         if (warning) await notify(`ADLC adversarial-review audit: ${warning}`, 'warning');
+      } catch { /* advisory: swallow */ }
+
+      // Phase 3.3: best-effort release of this session's churn state now that
+      // it's idle. The hard memory bound is the tracker's LRU session cap; this
+      // is an optimization, so it tolerates not knowing session.idle's exact
+      // payload shape (reads a couple of candidates).
+      try {
+        const sessionID = input?.sessionID ?? input?.event?.properties?.sessionID;
+        if (sessionID) flail.evict(sessionID);
       } catch { /* advisory: swallow */ }
     },
   };

@@ -181,7 +181,7 @@ glob/ticket logic to `@adlc/core`:
 | P1 Interrogate | **Yes** | `/adlc-spec` + `/adlc-approve-spec` (Phase A) + the `adlc` skill |
 | P2 Decompose | **Yes** | `/adlc-decompose` (Phase A) |
 | P3 Rail | **Yes** | the in-session rails-guard hook (enforcing by default, live-deny-proofed) + CI gate |
-| P4 Build | **Yes** | rails-guard hook (structured + shell) + build-gate context-rot backstop + `file.edited` watcher (suppression/scope/rails) + advisory preflight; flail-detection is follow-on |
+| P4 Build | **Yes** | rails-guard hook (structured + shell) + build-gate context-rot backstop + `file.edited` watcher (suppression/scope/rails) + per-turn context injection + tool.definition rail notice + flail advisory + advisory preflight |
 | P5 Prosecute | **Yes** | `/adlc-verify-build` (G4) + 5 prosecutor lenses + verifier + `/adlc-prosecute` |
 | P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
 | P7 Distill | **Yes** | `/adlc-distill` (Phase E) |
@@ -215,6 +215,29 @@ Resolved 2026-07-05 (Phase 1): in-session enforcement no longer depends on an
 unproven SDK capability — a thrown denial is documented host behavior and the
 live deny proof (`scripts/opencode-live-deny.mjs`, required CI) regression-tests
 it. See ADR 0004's amendment.
+
+Resolved 2026-07-08 (Phase 3): **native-feel surface added (server-side).** Per-turn
+the active ticket, frozen rails, and scope are re-stated to the model via
+`experimental.chat.system.transform` (context-rot defense), and the frozen rails
+are named in the `edit`/`write`/`apply_patch` tool descriptions via
+`tool.definition` — so the model is reminded *before* it acts. Ticket fields are
+sanitized (control chars stripped, length-capped) before injection so a ticket
+can't smuggle prompt directives. A `tool.execute.after` **flail advisory** warns
+once per file edited ≥3× in a session (reuses `@adlc/flail-detector`; per-session
+state is LRU-bounded and evicted on `session.idle`). The active-ticket
+**statusline** (`ADLC <ticket> · P4 enforcing · N rails frozen`) is surfaced at
+`session.created` via the confirmed `client.tui.showToast` channel.
+
+> **Deferred: the native TUI plugin module.** A full `tui`-export module
+> (persistent JSX statusline slot, `DialogConfirm` for the P1→G1 gate, native OS
+> notifications) is possible — the `tui` surface shipped in opencode **1.17.0** —
+> but it is **deliberately not in this integration yet.** It can only be authored
+> in Solid JSX with a build step and can only be verified inside a live opencode
+> ≥ 1.17 TUI; this repo's plugin is plain `.mjs` with no build, and the test
+> harness runs a headless 1.16.2 binary, so that module could only be shipped as
+> unverifiable, guessed-API code — which this integration does not do. It is
+> tracked as a follow-on for an environment that can build and live-verify it.
+> The verifiable native touch (the statusline toast) ships now.
 
 Resolved 2026-07-08 (Phase 2): **bash is now gated in-session** via the
 codex-parity shell classifier (`@adlc/core` `classifyShellCommand`: read-only
