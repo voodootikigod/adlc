@@ -45,6 +45,28 @@ describe('git helpers return authoritative (unquoted) paths', () => {
     }
   });
 
+  test('changedFiles handles a space in the path (the -z name-list path is fully raw)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adlc-git-space-'));
+    const g = (args) => git(args, { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      g(['init', '-q']);
+      g(['config', 'user.email', 't@t']);
+      g(['config', 'user.name', 't']);
+      g(['config', 'commit.gpgsign', 'false']);
+      writeFileSync(join(dir, 'README.md'), 'base\n');
+      g(['add', '-A']);
+      g(['commit', '-q', '-m', 'base']);
+      const base = g(['rev-parse', 'HEAD']).trim();
+      writeFileSync(join(dir, 'spaced name.js'), 'const x = 1;\n');
+      g(['add', '-A']);
+      g(['commit', '-q', '-m', 'add spaced']);
+      const files = changedFiles(base, dir);
+      assert.ok(files.includes('spaced name.js'), `expected raw spaced path, got ${JSON.stringify(files)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('gitDiff patch headers carry the real non-ASCII path (quotepath disabled)', () => {
     const { dir, base } = repoWithRenamedFile();
     try {

@@ -186,7 +186,7 @@ export function recordFinding(finding: RecordableFinding, dir?: string): LedgerF
 
 export function matchFenceOpen(line: string): { char: string; len: number } | null;
 export function isFenceClose(line: string, char: string, len: number): boolean;
-export function computeFencedLines(content: string): Set<number>;
+export function computeFencedLines(content: string, opts?: { unclosedToEof?: boolean }): Set<number>;
 
 export function ensureGitignore(root: string): { path: string; added: string[]; changed: boolean };
 export function ensureFormatterIgnores(root: string): {

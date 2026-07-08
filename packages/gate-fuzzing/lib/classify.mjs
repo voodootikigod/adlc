@@ -94,7 +94,9 @@ export function classifyCandidate(candidate, suite, baseline, opts) {
   // is still run. Only a diff we DID parse, that genuinely misses the surface, is
   // out-of-scope.
   const changedFiles = changedFilesFromDiff(candidate.diff);
-  const hasDiffBody = /^@@ /m.test(candidate.diff ?? '');
+  // A diff "has a body" if it carries a hunk OR a rename/mode-only extended header —
+  // a pure rename (no @@) whose paths we could not parse must still fail closed.
+  const hasDiffBody = /^(?:@@ |diff --git |rename (?:from|to) )/m.test(candidate.diff ?? '');
   const unparseableBody = hasDiffBody && changedFiles.length === 0;
   if (!intersectsSurface(changedFiles, targetGate.surface) && !unparseableBody) {
     return {

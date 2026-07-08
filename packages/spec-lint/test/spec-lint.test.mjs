@@ -287,6 +287,23 @@ describe('parseCriteria', () => {
       assert.deepEqual(criteria.map((c) => c.text), ['Real criterion one', 'Real criterion two']);
     });
 
+    it('an UNCLOSED fence does not silently drop the criteria after it (fail closed = scan)', () => {
+      // A stray/unterminated ``` must not swallow the rest of the spec into a phantom
+      // code block — that would drop real wishes and manufacture a false PASS.
+      const text = [
+        '## Acceptance Criteria',
+        '- AC1 MUST be implemented',
+        '```', // author forgot to close this fence
+        '- AC2 should probably work', // a WISH the gate must still see
+        '- AC3 might be nice',
+      ].join('\n');
+      const criteria = parseCriteria(text);
+      assert.deepEqual(
+        criteria.map((c) => c.text),
+        ['AC1 MUST be implemented', 'AC2 should probably work', 'AC3 might be nice'],
+      );
+    });
+
     it('a nested shorter fence does not prematurely re-open spec parsing', () => {
       const text = [
         '## Acceptance Criteria',

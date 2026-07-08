@@ -86,6 +86,16 @@ test('audit D: a diff body whose file paths are unparseable fails CLOSED (in-sco
   assert.notEqual(verdict.result, 'out-of-scope');
 });
 
+test('audit D residual: a pure rename with unparseable (spaced) paths fails closed to in-scope', () => {
+  const setup = makeSetup({
+    candidateOverrides: {
+      diff: 'diff --git a/test/old name.js b/test/new name.js\nrename from test/old name.js\nrename to test/new name.js',
+    },
+  });
+  const verdict = classifyCandidate(setup.candidate, setup.suite, setup.baseline, setup);
+  assert.notEqual(verdict.result, 'out-of-scope');
+});
+
 test('changedFilesFromDiff strips whatever single -p1 prefix the diff uses', () => {
   assert.deepEqual(changedFilesFromDiff('+++ w/test/frozen.js'), ['test/frozen.js']);
   assert.deepEqual(changedFilesFromDiff('diff --git i/a/b.mjs w/a/b.mjs'), ['a/b.mjs']);

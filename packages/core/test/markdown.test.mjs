@@ -31,4 +31,22 @@ describe('computeFencedLines', () => {
     assert.equal(computeFencedLines('').size, 0);
     assert.equal(computeFencedLines(null).size, 0);
   });
+
+  test('a backtick run whose info string contains a backtick is NOT a fence opener', () => {
+    // Guards inline code like ` ```code` ` from being read as a block-fence opener.
+    // Were this rule dropped, the following line would be treated as fenced interior.
+    const content = ['prose', '```not`valid', 'operative marker line', 'more'].join('\n');
+    assert.equal(computeFencedLines(content).size, 0, 'no valid fence opened → nothing fenced');
+  });
+
+  test('unclosedToEof controls the fail direction for an unclosed fence', () => {
+    const content = ['before', '```', 'a', 'b'].join('\n'); // opener, no closer
+    // Default (true): interior extends to EOF (MDX-inert semantics).
+    assert.deepEqual([...computeFencedLines(content)].sort((a, b) => a - b), [3, 4]);
+    // false: an unclosed fence marks nothing (caller will scan those lines).
+    assert.equal(computeFencedLines(content, { unclosedToEof: false }).size, 0);
+    // A CLOSED fence is unaffected by the flag.
+    const closed = ['before', '```', 'a', '```', 'after'].join('\n');
+    assert.deepEqual([...computeFencedLines(closed, { unclosedToEof: false })], [3]);
+  });
 });

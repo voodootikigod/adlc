@@ -93,7 +93,12 @@ export function parseCriteria(text) {
   // section (silently dropping real criteria after it) and turns example list/MUST
   // lines into phantom criteria — audit finding E, the rails-guard fence class
   // applied to spec-lint. See docs/review-lenses/text-scanning-gates.md.
-  const fenced = computeFencedLines(text);
+  //
+  // unclosedToEof:false — an UNCLOSED fence must NOT swallow the rest of the spec.
+  // Skipping is an exemption here, so a stray ``` extending to EOF would silently
+  // drop every real criterion after it (a false PASS). Fail closed = scan those
+  // lines: an unterminated fence marks nothing.
+  const fenced = computeFencedLines(text, { unclosedToEof: false });
   const criteria = [];
   let inCriteriaSection = false;
 
