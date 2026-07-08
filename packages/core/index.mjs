@@ -9,4 +9,5 @@ export * from './lib/risk-tier.mjs';
 export * from './lib/scaffold-hygiene.mjs';
 export * from './lib/prosecutor.mjs';
 export * from './lib/markdown.mjs';
+export * from './lib/shell.mjs';
 export * as mutate from './lib/mutate.mjs';
