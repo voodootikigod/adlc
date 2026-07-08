@@ -1,6 +1,8 @@
 // parse.mjs — extract acceptance criteria from a markdown spec file.
 // Pure functions; no I/O.
 
+import { computeFencedLines } from '@adlc/core';
+
 /**
  * Headings that introduce an acceptance criteria section.
  * @type {RegExp}
@@ -86,12 +88,21 @@ function isContinuationLine(line) {
  */
 export function parseCriteria(text) {
   const lines = text.split('\n');
+  // Lines inside a fenced code block are illustrative example markdown, not spec
+  // structure. Scanning them lets a heading-like line inside a fence desync the
+  // section (silently dropping real criteria after it) and turns example list/MUST
+  // lines into phantom criteria — audit finding E, the rails-guard fence class
+  // applied to spec-lint. See docs/review-lenses/text-scanning-gates.md.
+  const fenced = computeFencedLines(text);
   const criteria = [];
   let inCriteriaSection = false;
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const lineNo = i + 1; // 1-based
+
+    // Inside a fence: neither section-toggling nor capturable. Skip entirely.
+    if (fenced.has(lineNo)) continue;
 
     // Heading detection — switch section context.
     if (HEADING_RE.test(raw)) {
@@ -116,7 +127,7 @@ export function parseCriteria(text) {
         // matching how markdown renderers treat a single list item (#71).
         let combinedText = listMatch[1].trim();
         let j = i + 1;
-        while (j < lines.length && isContinuationLine(lines[j])) {
+        while (j < lines.length && !fenced.has(j + 1) && isContinuationLine(lines[j])) {
           combinedText += ' ' + lines[j].trim();
           j++;
         }

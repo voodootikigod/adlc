@@ -249,6 +249,60 @@ describe('parseCriteria', () => {
     const classified = classifyAll(criteria);
     assert.equal(classified[1].status, 'WISH');
   });
+
+  // Audit finding E (text-scanning-gate lens): a spec that SHOWS example markdown
+  // inside a fenced code block must not have that inert content read as spec
+  // structure — a heading-like line inside a fence must not desync the section,
+  // and list/MUST lines inside a fence are examples, not real criteria.
+  describe('fenced code blocks are inert (not spec structure)', () => {
+    it('a heading-like line inside a fence does not end the criteria section', () => {
+      const text = [
+        '## Acceptance Criteria',
+        '- First criterion MUST be implemented',
+        '```yaml',
+        '# vulnerable heading-like line inside a fence',
+        'key: value',
+        '```',
+        '- Second criterion MUST also be implemented',
+      ].join('\n');
+      const criteria = parseCriteria(text);
+      assert.equal(criteria.length, 2, 'both real criteria survive the fenced example');
+      assert.deepEqual(criteria.map((c) => c.text), [
+        'First criterion MUST be implemented',
+        'Second criterion MUST also be implemented',
+      ]);
+    });
+
+    it('list / MUST lines inside a fence are examples, not captured criteria', () => {
+      const text = [
+        '## Acceptance Criteria',
+        '- Real criterion one',
+        '```',
+        '- Not a real criterion, just example markdown',
+        'MUST NOT be captured from inside the fence',
+        '```',
+        '- Real criterion two',
+      ].join('\n');
+      const criteria = parseCriteria(text);
+      assert.deepEqual(criteria.map((c) => c.text), ['Real criterion one', 'Real criterion two']);
+    });
+
+    it('a nested shorter fence does not prematurely re-open spec parsing', () => {
+      const text = [
+        '## Acceptance Criteria',
+        '- Real criterion one',
+        '````markdown',
+        '```',
+        '## Not a heading — inside the outer 4-backtick fence',
+        '```',
+        '- also not a criterion',
+        '````',
+        '- Real criterion two',
+      ].join('\n');
+      const criteria = parseCriteria(text);
+      assert.deepEqual(criteria.map((c) => c.text), ['Real criterion one', 'Real criterion two']);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
