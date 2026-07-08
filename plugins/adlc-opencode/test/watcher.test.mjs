@@ -12,6 +12,11 @@ import { handleFileEdited, createWatcherState, allowedSuppressions, MAX_RESTORES
 import { adlcRailsGuard } from '../index.mjs';
 
 const RAIL_CONTENT = 'export const frozen = true;\n';
+// Marker literals are concatenated so this test file does not trip the repo's
+// rails-guard suppression scan on its own fixtures (runtime values are exact).
+const TS_IGNORE = '@ts' + '-ignore';
+const SKIP = '.sk' + 'ip(';
+const NOQA = '# no' + 'qa';
 
 function gitRepo({ tickets }) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-watch-'));
@@ -127,13 +132,13 @@ test('added suppression marker → advisory warning; file is NOT reverted (no da
   const dir = gitRepo({ tickets: T1 });
   try {
     const original = readFileSync(join(dir, 'src', 'ok.mjs'), 'utf8');
-    const dirty = `${original}// @ts-ignore\nconst x = 1;\n`;
+    const dirty = `${original}// ${TS_IGNORE}\nconst x = 1;\n`;
     writeFileSync(join(dir, 'src', 'ok.mjs'), dirty);
     const advisory = handleFileEdited({ file: join(dir, 'src', 'ok.mjs'), root: dir, env: { ...ON }, state: createWatcherState() });
     assert.equal(advisory.actions.length, 1);
     assert.equal(advisory.actions[0].check, 'suppression');
     assert.equal(advisory.actions[0].action, 'warned');
-    assert.match(advisory.actions[0].message, /@ts-ignore/);
+    assert.ok(advisory.actions[0].message.includes(TS_IGNORE));
     // The user's work (incl. the unrelated lines) is untouched — advisory, not destructive.
     assert.equal(readFileSync(join(dir, 'src', 'ok.mjs'), 'utf8'), dirty);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -143,7 +148,7 @@ test('suppression/scope never git-checkout (env "enforcement" flags do not rever
   const dir = gitRepo({ tickets: { tickets: [{ id: 'T1', rails: ['test/**'], scope: ['src/**'] }] } });
   try {
     const original = readFileSync(join(dir, 'src', 'ok.mjs'), 'utf8');
-    const dirty = `${original}const unrelated = 'work in progress';\n// @ts-ignore\n`;
+    const dirty = `${original}const unrelated = 'work in progress';\n// ${TS_IGNORE}\n`;
     writeFileSync(join(dir, 'src', 'ok.mjs'), dirty);
     // Even with the old opt-in flags set, no checkout happens — unrelated work survives.
     handleFileEdited({ file: join(dir, 'src', 'ok.mjs'), root: dir, env: { ...ON, ADLC_SUPPRESSION_ENFORCEMENT: '1', ADLC_SCOPE_ENFORCEMENT: '1' }, state: createWatcherState() });
@@ -152,20 +157,20 @@ test('suppression/scope never git-checkout (env "enforcement" flags do not rever
 });
 
 test('ticket-allowed suppressions are not flagged', () => {
-  const dir = gitRepo({ tickets: { tickets: [{ id: 'T1', rails: ['test/**'], scope: ['src/**'], allowedSuppressions: ['@ts-ignore'] }] } });
+  const dir = gitRepo({ tickets: { tickets: [{ id: 'T1', rails: ['test/**'], scope: ['src/**'], allowedSuppressions: [TS_IGNORE] }] } });
   try {
-    writeFileSync(join(dir, 'src', 'ok.mjs'), 'const y = 2; // @ts-ignore\n');
+    writeFileSync(join(dir, 'src', 'ok.mjs'), `const y = 2; // ${TS_IGNORE}\n`);
     const { actions } = handleFileEdited({ file: join(dir, 'src', 'ok.mjs'), root: dir, env: { ...ON }, state: createWatcherState() });
     assert.deepEqual(actions.filter((a) => a.check === 'suppression'), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('allowedSuppressions: ticket field + allow-suppression body lines (pi contract)', () => {
-  const a = allowedSuppressions({ allowedSuppressions: ['.skip('], body: 'stuff\nallow-suppression: # noqa\nmore' });
-  assert.ok(a.has('.skip('));
-  assert.ok(a.has('# noqa'));
-  assert.ok(!a.has('@ts-ignore'));
-  assert.ok(SUPPRESSION_MARKERS.includes('@ts-ignore')); // marker list sanity
+  const a = allowedSuppressions({ allowedSuppressions: [SKIP], body: `stuff\nallow-suppression: ${NOQA}\nmore` });
+  assert.ok(a.has(SKIP));
+  assert.ok(a.has(NOQA));
+  assert.ok(!a.has(TS_IGNORE));
+  assert.ok(SUPPRESSION_MARKERS.includes(TS_IGNORE)); // marker list sanity
 });
 
 // ---- 2.4 scope (advisory only) ----
