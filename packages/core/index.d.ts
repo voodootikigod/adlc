@@ -164,6 +164,26 @@ export function shouldContinue(state: {
   maxDry?: number;
 }): { continue: boolean; dryStreak: number };
 
+export type RecordableFinding = {
+  readonly file: string;
+  readonly desc: string;
+  readonly category?: string;
+  readonly severity?: string;
+  readonly line?: number;
+  readonly verdict?: string;
+};
+export type LedgerFinding = {
+  ts: string;
+  tool: string;
+  file: string;
+  line: number;
+  category: string;
+  severity: string;
+  desc: string;
+  verdict: string;
+};
+export function recordFinding(finding: RecordableFinding, dir?: string): LedgerFinding;
+
 export function ensureGitignore(root: string): { path: string; added: string[]; changed: boolean };
 export function ensureFormatterIgnores(root: string): {
   biome: { path: string | null; detected: boolean; changed: boolean; skipped?: string };

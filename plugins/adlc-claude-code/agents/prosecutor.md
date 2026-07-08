@@ -74,6 +74,28 @@ adlc review-calibration --review-cmd "<review command with {base} placeholder>"
 - A low recall score means the review process would miss planted mutants. That is
   a prosecution hit against the *review*, not the code — flag it.
 
+### 4. Text-scanning-gate lens (when the change touches a scanner, gate, or parser)
+
+If the change reads source text and decides something from it — a security gate
+scanning for markers (suppressions, secrets, banned/bare commands, rail paths), a
+linter, or any parser that exempts "inert" regions — apply the
+[text-scanning-gate lens](../../../docs/review-lenses/text-scanning-gates.md).
+This class ships past unit tests and is only caught by attacking the
+operative-vs-inert boundary. Try, concretely, to smuggle an operative marker past
+each check — every construction that works is a prosecution hit:
+
+- **Authoritative source** — does it judge from the full file the compiler sees,
+  or a diff window / single line that can't see enclosing context (desync)?
+- **Real grammar** — a naive delimiter toggle instead of the real closing/escaping
+  rule (e.g. a short fence "closing" a longer one; a chained `;`/`&&` command)?
+- **Line endings normalized before anchoring** — does a `\r`/CRLF/BOM defeat a
+  `^`/`$` regex anchor?
+- **Strip only provably-inert regions** — does it blanket-strip a delimiter pair
+  and eat operative code inside it (`${…}` interpolation, JSX expr, heredoc)?
+- **Fail closed on ambiguity** — on unreadable/unparseable/unknown input does it
+  SKIP (silent bypass) instead of SCAN/DENY?
+- **Evasions are regression tests** — is each demonstrated evasion pinned by a test?
+
 ## Verdict
 
 End with an explicit, evidence-backed verdict:

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { parseArgs, printJson, opError } from '@adlc/core';
+import { parseArgs, printJson, opError, recordFinding } from '@adlc/core';
 import { runProsecution } from '../lib/run.mjs';
 
 const { values } = parseArgs({
@@ -12,6 +12,15 @@ const { values } = parseArgs({
     dir: { type: 'string', default: '.adlc' },
     json: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
+    // --record-finding mode: land one CONFIRMED prosecution finding in the
+    // findings ledger so P7 lesson-foundry can cluster it (closes the P5→P7 loop).
+    'record-finding': { type: 'boolean', default: false },
+    file: { type: 'string' },
+    desc: { type: 'string' },
+    category: { type: 'string' },
+    severity: { type: 'string' },
+    line: { type: 'string' },
+    verdict: { type: 'string' },
   },
 });
 
@@ -20,11 +29,48 @@ if (values.help) {
 
 ADLC P5 review-evidence recorder.
 
+  --record-finding --file <path> --desc "<prose>" [--category <lens>] [--severity <s>] [--line <n>] [--verdict <v>] [--dir .adlc]
+      Record ONE confirmed prosecution finding to <dir>/findings.jsonl for P7
+      (lesson-foundry). Call once per surviving finding on a NOT-CLEAR verdict.
+      Use plain-prose --desc without quoted/backticked literals so it routes to a
+      spec-gap template rather than a lint rule.
+
 Exit codes:
-  0  two consecutive dry passes recorded
-  1  operational error
+  0  two consecutive dry passes recorded (or a finding recorded)
+  1  operational error (e.g. a finding missing --file/--desc — fails closed)
   2  verified findings remain or dry-pass convergence failed
 `);
+  process.exit(0);
+}
+
+// --- record-finding mode (P5 → P7 bridge) ---
+if (values['record-finding']) {
+  let line;
+  if (values.line !== undefined) {
+    line = Number(values.line);
+    if (!Number.isInteger(line) || line <= 0) opError(`--line must be a positive integer, got "${values.line}"`);
+  }
+  let entry;
+  try {
+    entry = recordFinding(
+      {
+        file: values.file,
+        desc: values.desc,
+        category: values.category,
+        severity: values.severity,
+        line,
+        verdict: values.verdict,
+      },
+      values.dir
+    );
+  } catch (err) {
+    opError(err.message); // fail closed: a malformed finding is exit 1, never a silent no-op
+  }
+  if (values.json) {
+    printJson(entry);
+  } else {
+    console.log(`recorded finding → ${values.dir}/findings.jsonl (${entry.category}, ${entry.file})`);
+  }
   process.exit(0);
 }
 

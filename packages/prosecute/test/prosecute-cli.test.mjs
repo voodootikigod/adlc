@@ -1,10 +1,12 @@
 // Concern: bin/adlc-prosecute.mjs CLI wiring (subprocess-level smoke tests).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FIXTURE_REVISION, killedFinding, repoRoot, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
+
+const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
 describe('adlc-prosecute cli', () => {
   it('exits 0 for two dry passes', () => {
@@ -65,5 +67,57 @@ describe('adlc-prosecute cli', () => {
     ], { cwd: repoRoot, encoding: 'utf8' });
     const parsed = JSON.parse(out);
     assert.equal(parsed.exitCode, 0);
+  });
+
+  describe('--record-finding (P5 → P7 bridge)', () => {
+    it('records one finding to <dir>/findings.jsonl in the foundry schema', () => {
+      const dir = tmpAdlc();
+      const out = execFileSync(process.execPath, [
+        BIN, '--record-finding',
+        '--file', 'packages/x/lib/y.mjs',
+        '--desc', 'gate skipped an operative marker sitting in an inert display context',
+        '--category', 'security',
+        '--severity', 'high',
+        '--line', '42',
+        '--dir', dir,
+        '--json',
+      ], { encoding: 'utf8' });
+      const entry = JSON.parse(out);
+      assert.equal(entry.tool, 'prosecutor');
+      assert.equal(entry.file, 'packages/x/lib/y.mjs');
+      assert.equal(entry.category, 'security');
+      assert.equal(entry.line, 42);
+      assert.equal(entry.verdict, 'open');
+
+      // Landed in the ledger lesson-foundry reads.
+      const ledger = join(dir, 'findings.jsonl');
+      assert.ok(existsSync(ledger));
+      const rows = readFileSync(ledger, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].desc, 'gate skipped an operative marker sitting in an inert display context');
+    });
+
+    it('fails closed (exit 1) when --desc is missing — never a silent no-op', () => {
+      const dir = tmpAdlc();
+      let status = 0;
+      try {
+        execFileSync(process.execPath, [BIN, '--record-finding', '--file', 'a.mjs', '--dir', dir], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        status = err.status;
+      }
+      assert.equal(status, 1);
+      assert.equal(existsSync(join(dir, 'findings.jsonl')), false, 'no ledger file should be written on a rejected finding');
+    });
+
+    it('fails closed (exit 1) on a non-positive --line', () => {
+      const dir = tmpAdlc();
+      let status = 0;
+      try {
+        execFileSync(process.execPath, [BIN, '--record-finding', '--file', 'a.mjs', '--desc', 'x', '--line', '0', '--dir', dir], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        status = err.status;
+      }
+      assert.equal(status, 1);
+    });
   });
 });

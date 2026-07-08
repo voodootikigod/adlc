@@ -1,5 +1,12 @@
 // prosecutor.mjs — P5 prosecution registry + pure orchestration helpers.
 //
+// Also home to recordFinding: the P5→P7 bridge. The in-harness prosecutor
+// subagents report findings in prose but historically left NO trail in the
+// findings ledger, so P7 lesson-foundry had nothing to cluster — the loop that
+// is supposed to compound quietly no-opped. recordFinding is the deterministic
+// writer the prosecutor surfaces call (once per confirmed finding) so recurring
+// finding CLASSES accrue automatically.
+//
 // Extracted to @adlc/core (T17, issue-#97 pattern) from the byte-duplicated
 // plugins/adlc-claude-code/lib/prosecutor.mjs and
 // plugins/adlc-opencode/lib/prosecutor.mjs, which are now thin re-export shims
@@ -11,6 +18,55 @@
 // whether a finding survives. The model calls live in the harness surfaces;
 // the decision logic here is pure and unit-tested — this is what makes the
 // convergence loop *correct*, not just structurally present in a prompt.
+
+import { appendEntry } from './ledger.mjs';
+
+/**
+ * Record a CONFIRMED prosecution finding to the findings ledger
+ * (`.adlc/findings.jsonl`) in the shape lesson-foundry (P7) clusters on. This is
+ * the bridge that keeps P7 fed: a finding surfaced by the prosecutor must leave a
+ * durable trail, or the compounding step has nothing to mine.
+ *
+ * FAIL CLOSED on malformed input. A finding with no `file` or no `desc` is an
+ * operator error — throw rather than append a junk entry or silently drop it (a
+ * silent drop reproduces the exact gap this bridge exists to close). `desc` is the
+ * clustering key, so it must be present and non-empty.
+ *
+ * @param {object} finding
+ * @param {string} finding.file      repo-relative file the finding is in (required)
+ * @param {string} finding.desc      plain-prose description; the clustering key (required).
+ *                                    Prefer prose without quoted/backticked literals so it
+ *                                    routes to a spec-gap template rather than a lint rule.
+ * @param {string} [finding.category='prosecution']
+ * @param {string} [finding.severity='medium']
+ * @param {number} [finding.line=1]
+ * @param {string} [finding.verdict='open']  'open'/'confirmed' cluster; only 'killed'
+ *                                            (a refuted finding) is filtered by the foundry.
+ * @param {string} [dir]  ledger dir; defaults to the ADLC_DIR appendEntry uses.
+ * @returns {object} the appended entry
+ */
+export function recordFinding(finding, dir) {
+  if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
+    throw new Error('recordFinding: finding must be an object');
+  }
+  const file = typeof finding.file === 'string' ? finding.file.trim() : '';
+  const desc = typeof finding.desc === 'string' ? finding.desc.trim() : '';
+  if (!file) throw new Error('recordFinding: finding.file is required');
+  if (!desc) throw new Error('recordFinding: finding.desc is required (it is the clustering key)');
+
+  const str = (v, fallback) => (typeof v === 'string' && v.trim() ? v.trim() : fallback);
+  const entry = {
+    ts: new Date().toISOString(),
+    tool: 'prosecutor',
+    file,
+    line: Number.isInteger(finding.line) && finding.line > 0 ? finding.line : 1,
+    category: str(finding.category, 'prosecution'),
+    severity: str(finding.severity, 'medium'),
+    desc,
+    verdict: str(finding.verdict, 'open'),
+  };
+  return appendEntry('findings', entry, dir);
+}
 
 /** The five independent prosecution lenses. */
 export const LENSES = [
