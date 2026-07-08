@@ -64,7 +64,10 @@ statement.
    blind spots (see [ADR-0007](./adr/0007-multimodel-adversarial-review.md)). Use
    [`adlc review-calibration`](./tools/review-calibration.md) to decide, on evidence, when one model's recall is too low to trust alone.
 7. After review, use [`adlc lesson-foundry`](./tools/lesson-foundry.md) and [`adlc rejection-mining`](./tools/rejection-mining.md) to convert repeated review
-   findings into deterministic lint checks, skills, or spec-gap templates.
+   findings into deterministic lint checks, skills, or spec-gap templates. Lenses
+   that generalize past one site graduate out of the local `.adlc/lessons/` staging
+   area into [`docs/review-lenses/`](./review-lenses/) — e.g.
+   [text-scanning gates](./review-lenses/text-scanning-gates.md).
 8. On a schedule or after model changes, use [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md),
    [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md), and [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) to re-check assumptions that can decay over time.
 
