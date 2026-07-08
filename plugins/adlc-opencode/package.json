@@ -15,6 +15,7 @@
     "@opencode-ai/plugin": ">=1.17.13"
   },
   "dependencies": {
+    "@adlc/build-gate": "^1.1.0",
     "@adlc/core": "^1.1.0"
   }
 }

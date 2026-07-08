@@ -186,3 +186,26 @@ export namespace mutate {
   export function applyMutant(...args: unknown[]): unknown;
   export function changedLinesFromDiff(...args: unknown[]): unknown;
 }
+
+// lib/shell.mjs — shell-command classification for in-session rail gating
+export function collectPatchPaths(text: string, out: Set<string>): void;
+export function shellTokens(text: string): string[];
+export function looksPathLike(value: string): boolean;
+export function looksBarePathLike(value: string): boolean;
+export function keyValuePath(value: string): string | null;
+export function shellHasMutation(text: string): boolean;
+export function shellHasOpaqueMutation(text: string): boolean;
+export function shellIsPositivelyReadOnly(text: string): boolean;
+export function shellHasWriteOption(text: string): boolean;
+export function shellChangesCwd(text: string): boolean;
+export function shellHasExpansion(text: string): boolean;
+export function collectShellPaths(text: string, out: Set<string>): void;
+export function classifyShellCommand(text: string): {
+  readOnly: boolean;
+  mutating: boolean;
+  opaque: boolean;
+  changesCwd: boolean;
+  expands: boolean;
+  writeOption: boolean;
+  paths: string[];
+};

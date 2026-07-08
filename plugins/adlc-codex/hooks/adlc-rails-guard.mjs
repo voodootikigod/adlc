@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// KEEP IN SYNC — the shell classifier functions in this file (shellTokens,
+// shellHasMutation, shellHasOpaqueMutation, shellIsPositivelyReadOnly,
+// shellHasWriteOption, shellChangesCwd, shellHasExpansion, collectShellPaths,
+// looksPathLike/looksBarePathLike/keyValuePath) are a verbatim inline copy of
+// the CANONICAL module packages/core/lib/shell.mjs (@adlc/core). This hook
+// script cannot resolve npm packages at runtime, hence the copy; a drift test
+// (packages/core/test/shell.test.mjs) pins the two together.
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
 
@@ -164,7 +171,9 @@ function keyValuePath(value) {
 function shellHasMutation(text) {
   return (
     /(^|[\s;&|])(?:>>?|[0-9]>>?|[0-9]>)\s*\S+/.test(text) ||
-    /\b(?:tee|touch|rm|mv|cp|install|dd|truncate|rsync)\b/.test(text) ||
+    /\b(?:tee|touch|rm|mv|cp|install|dd|truncate|rsync|chmod|chown|ln|mkdir|mktemp|shred)\b/.test(text) ||
+    /\bcurl\b[^;&|]*(?:\s-[oO]\b|\s--output\b|\s--remote-name\b)/.test(text) ||
+    /\bwget\b[^;&|]*(?:\s-O\b|\s--output-document\b)/.test(text) ||
     /\bgit\s+(?:apply|am|checkout|restore|reset|clean|merge|rebase|cherry-pick|stash|commit)\b/.test(text) ||
     /\b(?:patch|tar|unzip)\b/.test(text) ||
     /\bfind\b[^;&|]*(?:-delete|-exec(?:dir)?\b|-ok(?:dir)?\b)/.test(text) ||
@@ -185,11 +194,14 @@ function shellHasOpaqueMutation(text) {
 }
 
 function shellIsPositivelyReadOnly(text) {
-  const normalized = text.trim();
-  return (
-    normalized === '' ||
-    /^(?:git\s+(?:status|diff|show|log|rev-parse|branch|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/.test(normalized)
-  );
+  const normalized = String(text ?? '').trim();
+  if (normalized === '') return true;
+  const readOnlyPrefix = /^(?:git\s+(?:status|diff|show|log|rev-parse|branch|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/;
+  return normalized
+    .split(/(?:&&|\|\||[;&|\n])/)
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .every((segment) => readOnlyPrefix.test(segment));
 }
 
 function shellHasWriteOption(text) {

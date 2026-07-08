@@ -181,35 +181,58 @@ glob/ticket logic to `@adlc/core`:
 | P1 Interrogate | **Yes** | `/adlc-spec` + `/adlc-approve-spec` (Phase A) + the `adlc` skill |
 | P2 Decompose | **Yes** | `/adlc-decompose` (Phase A) |
 | P3 Rail | **Yes** | the in-session rails-guard hook (enforcing by default, live-deny-proofed) + CI gate |
-| P4 Build | Partial | rails-guard hook + `session.created` advisory preflight; flail-detection is follow-on |
+| P4 Build | **Yes** | rails-guard hook (structured + shell) + build-gate context-rot backstop + `file.edited` watcher (suppression/scope/rails) + advisory preflight; flail-detection is follow-on |
 | P5 Prosecute | **Yes** | `/adlc-verify-build` (G4) + 5 prosecutor lenses + verifier + `/adlc-prosecute` |
 | P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
 | P7 Distill | **Yes** | `/adlc-distill` (Phase E) |
 
 ## Gaps
 
-1. **Bash-driven writes are not gated in-session** (Turing-complete shell) — caught
-   by the CI diff gate, mirroring the Claude Code posture. In-session shell gating
-   is Phase 2 of the [`opencode-native-flush` plan](../specs/opencode-native-flush.md).
-2. **Phase-E orchestration is model-driven.** `/adlc-prosecute` describes the
+1. **Phase-E orchestration is model-driven.** `/adlc-prosecute` describes the
    fan-out → dedupe → verify → loop-until-dry protocol (the decision helpers in
    `lib/prosecutor.mjs` are unit-tested), but the loop itself is executed by the
    model invoking the subagents, not a deterministic first-party runner — the same
    gap the Codex path documents for P5. A native-tool deterministic runner is
    plan Phase 4.
-3. **The keyless bridge is unwired** (see the honesty note under Status) — plan
+2. **The keyless bridge is unwired** (see the honesty note under Status) — plan
    Phase 4.
-4. **Tool-name-independent backstop pending** — the guard keys off tool names and
-   arg shapes (unknown ones fail closed, and an *ungated* tool whose args carry a
-   frozen-rail target is denied rather than allowed by name); the residual class —
-   a co-installed plugin registering a writing tool under a *read-only* name — is
-   closed by the `file.edited`-event backstop in plan Phase 2.5, and at commit
-   time by the CI gate.
+3. **`permission.ask` is a DORMANT lever.** At opencode 1.17.13 the hook is
+   defined but never dispatched (upstream sst/opencode#7006); the plugin ships a
+   tolerant handler (denies rail-target permissions under both documented payload
+   shapes) that activates the moment upstream wires it. The enforcing control is
+   the `tool.execute.before` throw.
+4. **Floating leading-`**` rails and in-session directory deletion.** The
+   in-session shell guard denies deleting/moving a rail's *fixed-anchor* parent
+   (`rm -rf test` vs `test/**`, `rm -rf packages/foo/test` vs
+   `packages/*/test/**`, `rm -rf .`). A rail with a *leading* `**` (e.g.
+   `**/*.test.mjs`) has no fixed root, so it can't flag an arbitrary parent
+   directory in-session without denying every unrelated edit; a directory
+   deletion under such a rail is caught by the CI diff gate (authoritative) and,
+   for the per-file events it emits, the `file.edited` backstop. Direct writes to
+   a matching file are always denied in-session.
 
-Resolved 2026-07-05 (formerly Gaps 1/4): in-session enforcement no longer depends
-on an unproven SDK capability — a thrown denial is documented host behavior and
-the live deny proof (`scripts/opencode-live-deny.mjs`, required CI) regression-tests
+Resolved 2026-07-05 (Phase 1): in-session enforcement no longer depends on an
+unproven SDK capability — a thrown denial is documented host behavior and the
+live deny proof (`scripts/opencode-live-deny.mjs`, required CI) regression-tests
 it. See ADR 0004's amendment.
+
+Resolved 2026-07-08 (Phase 2): **bash is now gated in-session** via the
+codex-parity shell classifier (`@adlc/core` `classifyShellCommand`: read-only
+allow, opaque/expanding/cwd-changing/pathless mutations deny, literal targets
+checked against rails); a **build-gate context-rot backstop** (imports
+`@adlc/build-gate`) denies structured mutations on high-risk tickets once the
+session is degraded (tool-call depth > threshold, or a `session.compacted`
+event), with the audited `ADLC_BUILD_GATE_BYPASS=1` override; and the
+**tool-name-independent `file.edited` backstop** quarantines-then-restores any
+write that lands on a frozen rail regardless of which tool wrote it (path
+normalized against traversal, loop-guarded, arg-array git, nothing silently
+destroyed — a frozen rail must equal HEAD, so restoring it is correct by
+definition). Suppression-marker and scope checks ride the same watcher but are
+**advisory only** (they warn and never `git checkout`, so an auto-revert can't
+discard unrelated in-progress work). `apply_patch` envelopes are parsed for
+in-band targets so GPT-5-class models (where apply_patch is the ONLY mutator)
+stay path-transparent. The shell classifier segment-splits chained commands so a
+read-only prefix can't shadow a later mutator.
 
 ## Boundary
 

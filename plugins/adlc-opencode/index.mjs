@@ -15,8 +15,10 @@
 // deny proof (scripts/opencode-live-deny.mjs) regression-tests it against a real
 // opencode binary.
 
-import { checkToolCall } from './rails-checker.mjs';
+import { checkToolCall, resolveRailsInForce, railHit, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
+import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
+import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
 
@@ -48,27 +50,103 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   const root = worktree ?? directory ?? project?.worktree ?? process.cwd();
   const advisoryOnly = process.env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
   const notify = makeNotify(client);
+  // Phase 2.3: per-session context-fitness state for the build-gate backstop.
+  const tracker = createDepthTracker();
+  // Phase 2.4/2.5: restore-loop-guard state for the file.edited watcher.
+  const watcherState = createWatcherState();
+
+  const deny = async (message) => {
+    if (advisoryOnly) {
+      // Explicit operator downgrade: surface loudly without claiming to block.
+      await notify(`${message} [ADVISORY — ADLC_ALLOW_ADVISORY_HOOKS=1; the CI rail-freeze gate remains authoritative]`, 'warning');
+      return;
+    }
+    // Enforcing (default): notify fire-and-forget, then throw to abort the tool.
+    notify(message, 'error');
+    throw new Error(message);
+  };
+
+  const isStructuredMutator = (name) =>
+    !READONLY_TOOLS.includes(name) && !UNGATED_TOOLS.includes(name) && !SHELL_TOOLS.includes(name);
 
   return {
     'tool.execute.before': async (input, output) => {
       const tool = input?.tool;
       if (!tool) return;
+      tracker.recordToolCall(input?.sessionID);
       // Pinned contract (v1.17.13): args are on output.args. The input.args
       // fallback is tolerance for older hosts, not the primary read.
       const args = output?.args ?? input?.args ?? {};
 
       const verdict = checkToolCall({ tool, args, root, env: process.env });
-      if (verdict.decision !== 'deny') return;
-
-      const message = `ADLC rails-guard: blocked ${tool} — ${verdict.reason}`;
-      if (advisoryOnly) {
-        // Explicit operator downgrade: surface loudly without claiming to block.
-        await notify(`${message} [ADVISORY — ADLC_ALLOW_ADVISORY_HOOKS=1; the CI rail-freeze gate remains authoritative]`, 'warning');
-        return;
+      if (verdict.decision === 'deny') {
+        return deny(`ADLC rails-guard: blocked ${tool} — ${verdict.reason}`);
       }
-      // Enforcing (default): notify fire-and-forget, then throw to abort the tool.
-      notify(message, 'error');
-      throw new Error(message);
+
+      // Phase 2.3 build-gate backstop: a structured mutation on a HIGH-RISK
+      // ticket in a context-degraded session is denied even off-rails.
+      if (isStructuredMutator(String(tool).toLowerCase())) {
+        const gate = checkBuildGate({ sessionID: input?.sessionID, tracker, root, env: process.env });
+        if (gate.decision === 'deny') {
+          return deny(`ADLC build-gate: blocked ${tool} — ${gate.reason}`);
+        }
+        if (gate.overridden) {
+          await notify(`ADLC build-gate: audited override recorded for ${tool}`, 'warning');
+        }
+      }
+    },
+
+    // Phase 2.3: a compacted session IS the context-rot event — mark it degraded.
+    // Phase 2.4/2.5: file.edited drives the post-hoc watcher (suppression,
+    // scope, and the tool-name-independent rail backstop). The event hook is
+    // fire-and-forget in the host (cannot block), so these are all post-hoc.
+    event: async ({ event } = {}) => {
+      try {
+        if (event?.type === 'session.compacted') {
+          const sessionID = event?.properties?.sessionID ?? event?.properties?.info?.id;
+          tracker.markCompacted(sessionID);
+          return;
+        }
+        if (event?.type === 'file.edited') {
+          const { actions } = handleFileEdited({
+            file: event?.properties?.file,
+            root,
+            env: process.env,
+            state: watcherState,
+          });
+          for (const a of actions) {
+            await notify(a.message, a.action === 'restored' ? 'error' : 'warning');
+          }
+        }
+      } catch { /* advisory: swallow — the watcher must never break the host */ }
+    },
+
+    // Phase 2.1 — DORMANT deny lever. At opencode 1.17.13 `permission.ask` is
+    // defined in the Hooks interface but never dispatched (upstream #7006);
+    // the enforcing control is the tool.execute.before throw above. This
+    // handler exists so rail denial extends to permission prompts the moment
+    // upstream wires the hook. Tolerant of both documented Permission shapes
+    // (V1 {type, pattern} and V2 {action, resources[]}); never throws.
+    'permission.ask': async (input, output) => {
+      try {
+        const kind = String(input?.type ?? input?.action ?? '').toLowerCase();
+        if (READONLY_TOOLS.includes(kind)) return;
+        const force = resolveRailsInForce(root, process.env);
+        if (!force.active) return;
+        if (force.conflict) { output.status = 'deny'; return; }
+        const raw = [
+          ...(Array.isArray(input?.pattern) ? input.pattern : [input?.pattern]),
+          ...(Array.isArray(input?.resources) ? input.resources : []),
+        ].filter((p) => typeof p === 'string' && p.trim());
+        for (const target of raw) {
+          const hit = railHit(target, force.rails, root);
+          if (hit) {
+            output.status = 'deny';
+            await notify(`ADLC rails-guard: denied permission "${kind}" — frozen rail "${hit}" (active ticket ${force.ticketId})`, 'error');
+            return;
+          }
+        }
+      } catch { /* dormant lever must never break the host */ }
     },
 
     // session.created (Phase C): advisory environment preflight. Never throws.

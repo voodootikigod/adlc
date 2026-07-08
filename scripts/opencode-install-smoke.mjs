@@ -55,9 +55,10 @@ else {
   if (!/globMatch/.test(chk) || !/loadTickets/.test(chk)) fail('rails-checker does not use globMatch+loadTickets from core'); else ok('delegates globMatch+loadTickets to core');
   if (/function\s+globMatch\s*\(/.test(chk)) fail('rails-checker RE-IMPLEMENTS globMatch (must delegate to @adlc/core)'); else ok('no inlined globMatch (engine delegated)');
   // deny-path source must not pull a third-party runtime dependency
+  // (first-party @adlc/* packages — core, build-gate — are the shared engine)
   const imports = [...chk.matchAll(/from '([^']+)'/g), ...read(indexPath).matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-  const thirdParty = imports.filter((s) => !s.startsWith('node:') && !s.startsWith('.') && s !== '@adlc/core');
-  if (thirdParty.length) fail(`deny path imports third-party deps: ${thirdParty.join(', ')}`); else ok('deny path: only node: builtins + @adlc/core');
+  const thirdParty = imports.filter((s) => !s.startsWith('node:') && !s.startsWith('.') && !s.startsWith('@adlc/'));
+  if (thirdParty.length) fail(`deny path imports third-party deps: ${thirdParty.join(', ')}`); else ok('deny path: only node: builtins + first-party @adlc/*');
 }
 
 // ---- AC3: run the real enforcement unit test (always-on proof) ----
@@ -94,6 +95,24 @@ else {
 // ---- AC7: live deny proof script present (runs in CI with --require) ----
 if (!existsSync(join(ROOT, 'scripts', 'opencode-live-deny.mjs'))) fail('scripts/opencode-live-deny.mjs missing (AC7 live deny proof)');
 else ok('AC7 live deny proof script present (scripts/opencode-live-deny.mjs)');
+
+// ---- Phase 2: shell gating, build-gate backstop, file.edited watcher ----
+{
+  const chk = read(checkerPath);
+  const idx = read(indexPath);
+  if (!/checkShellCall/.test(chk) || !/classifyShellCommand/.test(chk)) fail('rails-checker does not gate shell via @adlc/core classifyShellCommand'); else ok('Phase 2.2: shell gating via @adlc/core classifier');
+  if (!existsSync(join(PLUGIN, 'lib', 'build-gate.mjs'))) fail('lib/build-gate.mjs missing'); else {
+    const bg = read(join(PLUGIN, 'lib', 'build-gate.mjs'));
+    if (!/@adlc\/build-gate\/lib/.test(bg)) fail('build-gate glue does not import the canonical @adlc/build-gate package'); else ok('Phase 2.3: imports canonical @adlc/build-gate (no fork)');
+  }
+  if (!existsSync(join(PLUGIN, 'lib', 'watcher.mjs'))) fail('lib/watcher.mjs missing'); else {
+    const w = read(join(PLUGIN, 'lib', 'watcher.mjs'));
+    if (!/quarantine/i.test(w) || !/MAX_RESTORES_PER_FILE/.test(w)) fail('watcher lacks quarantine/loop-guard safeguards'); else ok('Phase 2.4/2.5: file.edited watcher with quarantine + loop guard');
+  }
+  if (!/file\.edited/.test(idx)) fail('index.mjs does not wire the file.edited event'); else ok('wires file.edited (tool-name-independent backstop)');
+  if (!/session\.compacted/.test(idx)) fail('index.mjs does not wire session.compacted'); else ok('wires session.compacted (context-rot signal)');
+  if (!/permission\.ask/.test(idx)) fail('index.mjs does not register the dormant permission.ask lever'); else ok('registers permission.ask (dormant until upstream #7006)');
+}
 
 // ---- Phase A (T2): command suite + gate-bin dependency mapping ----
 const pkg2 = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
