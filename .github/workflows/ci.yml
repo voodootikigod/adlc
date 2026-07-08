@@ -33,6 +33,23 @@ jobs:
       - name: Test
         run: npm test
 
+      # AC7 — OpenCode live deny proof (ADR 0004 amendment 2026-07-05).
+      # Folded into the REQUIRED test job (not a separate optional job) on
+      # purpose: on a private free-plan repo new required checks can't be added
+      # (403), and an optional live-deny job would let a refactor silently kill
+      # the enforcement throw and still merge — the exact regression class the
+      # adversarial design review flagged. Runs on one matrix leg to keep CI
+      # time bounded; --require makes a missing opencode binary a hard failure.
+      # PINNED to the version the plugin contract is verified against (ADR 0004
+      # amendment) so upstream releases can't flake or mask regressions in a
+      # required job; bump deliberately alongside the peerDependency. A separate
+      # non-required job may track latest.
+      - name: OpenCode live deny proof (AC7)
+        if: matrix.node-version == 20
+        run: |
+          npm install -g opencode-ai@1.17.13
+          node scripts/opencode-live-deny.mjs --require
+
   pre-ga-gate:
     # Explicit CI gate that fails with a clear message while either of the two
     # unverified Pre-GA assumptions documented in docs/adr/0003-adlc-claude-code-plugin.md

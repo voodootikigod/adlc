@@ -92,8 +92,49 @@ test('scaffold deploys the real command files into .opencode/commands', () => {
     assert.ok(out.commands.includes('adlc-init.md'), 'adlc-init.md deployed');
     assert.ok(out.commands.includes('adlc-ticket.md'), 'adlc-ticket.md deployed');
     assert.ok(existsSync(join(root, '.opencode', 'commands', 'adlc-spec.md')));
-    assert.ok(existsSync(join(root, '.opencode', 'skill', 'adlc.md')));
+    // Native Agent Skill shape: .opencode/skills/<name>/SKILL.md (plural dir)
+    assert.ok(existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')));
+    assert.ok(out.skills.includes('adlc/SKILL.md'));
     assert.equal(out.config.created, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('scaffold migrates a PRISTINE legacy flat skill deployment (.opencode/skill/adlc.md)', () => {
+  const root = mkroot();
+  try {
+    // Simulate a pre-native deployment: pristine legacy file + an unrelated file.
+    const source = readFileSync(join(PKG, 'skill', 'adlc.md'), 'utf8');
+    mkdirSync(join(root, '.opencode', 'skill'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'skill', 'adlc.md'), source);
+    writeFileSync(join(root, '.opencode', 'skill', 'users-own.md'), 'keep me');
+    const out = scaffold(root, PKG);
+    assert.ok(existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')));
+    assert.ok(!existsSync(join(root, '.opencode', 'skill', 'adlc.md')), 'pristine legacy copy removed');
+    assert.ok(existsSync(join(root, '.opencode', 'skill', 'users-own.md')), 'unrelated file untouched');
+    assert.deepEqual(out.preservedLegacySkills, []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('scaffold PRESERVES a user-modified legacy skill file (no silent data loss)', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode', 'skill'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'skill', 'adlc.md'), 'team-customized content');
+    const out = scaffold(root, PKG);
+    assert.ok(existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')), 'native skill still deployed');
+    assert.equal(readFileSync(join(root, '.opencode', 'skill', 'adlc.md'), 'utf8'), 'team-customized content');
+    assert.deepEqual(out.preservedLegacySkills, ['.opencode/skill/adlc.md']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('scaffold removes the legacy skill dir when migration leaves it empty', () => {
+  const root = mkroot();
+  try {
+    const source = readFileSync(join(PKG, 'skill', 'adlc.md'), 'utf8');
+    mkdirSync(join(root, '.opencode', 'skill'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'skill', 'adlc.md'), source);
+    scaffold(root, PKG);
+    assert.ok(!existsSync(join(root, '.opencode', 'skill')), 'empty legacy dir removed');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -11,19 +11,27 @@ discovery skill.
 
 ## Status
 
-Shipping so far: the rails-guard plugin (`plugins/adlc-opencode/`, plan Phase D),
-the discovery skill, the **Phase A command surface** — `/adlc-init`,
+Shipping so far: the rails-guard plugin (`plugins/adlc-opencode/`, plan Phase D —
+**enforcing by default** since the 2026-07-05 amendment, see ADR 0004), the
+discovery skill (deployed as a native Agent Skill,
+`.opencode/skills/adlc/SKILL.md`), the **Phase A command surface** — `/adlc-init`,
 `/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`, `/adlc-decompose` plus the
-gate-bin dependency mapping and deterministic `/adlc-init` scaffolding — and the
-**Phase B keyless gate bridge** (`lib/keyless-bridge.mjs`): run any LLM-backed gate
-in `--prompt-only` mode, route the prompt(s) to the host model, no API key — and
-the **Phase C advisory session hooks** (`session.created` preflight,
-`session.idle` gate-manifest audit), and the **Phase E prosecution surface** — the
-G4 build gate (`/adlc-verify-build`), the five P5 prosecution subagents
-(`@prosecutor-correctness|security|contract|diff|tests`) plus the
+gate-bin dependency mapping and deterministic `/adlc-init` scaffolding — the
+**Phase C advisory session hooks** (`session.created` preflight, `session.idle`
+gate-manifest audit — both surfaced as TUI toasts), and the **Phase E prosecution
+surface** — the G4 build gate (`/adlc-verify-build`), the five P5 prosecution
+subagents (`@prosecutor-correctness|security|contract|diff|tests`) plus the
 `@prosecutor-verifier`, the `/adlc-prosecute` fan-out/verify/loop-until-dry
-command, and `/adlc-distill` (P7). With Phase F's CI backstop (merged earlier),
-all six plan phases (A–F) now ship.
+command, and `/adlc-distill` (P7). Phase F's CI backstop merged earlier.
+
+**Honesty note on Phase B and the P5 helpers:** `lib/keyless-bridge.mjs`
+(extract a gate's prompts, ask, thread answers) and the `lib/prosecutor.mjs`
+decision helpers are implemented and unit-tested but **not yet wired into a
+runtime path** — today the commands instruct the model to run gates via
+`adlc <gate> --prompt-only` and reason over the printed output itself. Wiring
+them to the now-available SDK (`client.session.create` + `session.prompt`) is
+the `opencode-native-flush` plan's Phase 4
+([spec](../specs/opencode-native-flush.md)).
 
 > **Session hooks — event-name note.** The plan specified `session.created` +
 > `session.ended`, but OpenCode has no `session.ended`; the end-of-work signal is
@@ -32,11 +40,12 @@ all six plan phases (A–F) now ship.
 > ADLC-initialized.
 
 > **Keyless bridge — SDK dependency (plan §6.4).** The bridge's protocol (extract
-> a gate's prompts, ask, thread answers) is implemented and tested, but the
-> isolated-sub-context model call depends on a proposed OpenCode SDK extension. The
-> `ask` function is capability-gated: it uses the SDK isolated-prompt API when
-> present, optionally degrades to the active session model, and otherwise returns
-> `null` so callers fail closed rather than silently skip a gate.
+> a gate's prompts, ask, thread answers) is implemented and tested, and the SDK
+> capability it was waiting for now exists (`client.session.create` +
+> `session.prompt` with structured output, verified on `@opencode-ai/plugin`
+> v1.17.13). Wiring `makeAsk` to it is Phase 4 of the
+> [`opencode-native-flush` plan](../specs/opencode-native-flush.md); until then
+> `makeAsk` returns `null` so callers fail closed rather than silently skip a gate.
 
 ## Commands
 
@@ -67,7 +76,8 @@ the enforcing hook only runs once the plugin package is registered.) Phase A com
 
 The plugin ships in this repo at `plugins/adlc-opencode/`. The
 `@adlc/opencode-package` package is **not yet published to npm**, so install from
-source for now (peer dependency: `@opencode-ai/plugin` >= 1.17.11).
+source for now (peer dependency: `@opencode-ai/plugin` >= 1.17.13 — the version
+whose documented hook contract the enforce-by-default posture is pinned against).
 
 **1. Install the gate toolkit** — the plugin shells out to the `adlc` binary:
 
@@ -117,18 +127,25 @@ verification — see [ADR 0004](../adr/0004-adlc-opencode-integration.md).
 
 ## Rail enforcement — two layers
 
-The integration enforces frozen rails at two layers, and **the in-session layer is
-deliberately advisory**:
+The integration enforces frozen rails at two layers:
 
-1. **In-session hook (advisory).** The plugin's `tool.execute.before` hook denies
-   structured `edit`/`write` to a frozen rail declared by the active ticket. It
-   only *actually blocks* when the host OpenCode SDK honors a thrown denial
-   (`onFailure: deny`); a runtime capability probe gates this. When the capability
-   is unproven the hook runs advisory (it surfaces the violation but cannot block)
-   unless `ADLC_ALLOW_ADVISORY_HOOKS=1` is set — otherwise it fails closed. The
-   hook also no-ops unless the repo is ADLC-initialized and `ADLC_P4_ENFORCEMENT=1`.
-   It is inherently bypassable (the agent controls its own environment and the
-   active-ticket selector), so it is **not** the real control.
+1. **In-session hook (enforcing by default).** The plugin's `tool.execute.before`
+   hook denies structured mutations to a frozen rail declared by the active
+   ticket: a thrown error in the hook **aborts the tool call** — documented host
+   behavior on `@opencode-ai/plugin` >= 1.17.13, regression-tested end-to-end by
+   `scripts/opencode-live-deny.mjs`. Every extractable target path is checked
+   (`filePath`, `files[]`, `edits[]`); a mutating or *unknown* tool whose target
+   cannot be extracted is denied while rails are in force (fail closed — a
+   deliberate tradeoff: an unrecognized third-party write tool must not slip
+   past on arg shape; a benign no-target tool a railed build needs can be
+   explicitly opted out via `ADLC_UNGATED_TOOLS="tool_a,tool_b"`, which still
+   gets the frozen-rail-target spoof guard). Denials and advisory warnings
+   surface as TUI toasts (`client.tui.showToast`) with stderr as fallback. The
+   only enforcement downgrade is the explicit escape hatch
+   `ADLC_ALLOW_ADVISORY_HOOKS=1` (surface, don't block). The hook no-ops unless
+   the repo is ADLC-initialized and `ADLC_P4_ENFORCEMENT=1`. It remains
+   inherently bypassable by a hostile agent (which controls its own environment
+   and the active-ticket selector), so it is still **not** the real control.
 2. **Commit-time CI gate (mandatory, unbypassable).** The real control is
    [`../ci/rails-guard.yml`](../ci/rails-guard.yml) driving `scripts/rails-guard-ci.mjs`
    — a harness-agnostic diff gate that reads the frozen rail set from the trusted
@@ -163,7 +180,7 @@ glob/ticket logic to `@adlc/core`:
 | P0 Triage | **Yes** | `/adlc-ticket` (Phase A) |
 | P1 Interrogate | **Yes** | `/adlc-spec` + `/adlc-approve-spec` (Phase A) + the `adlc` skill |
 | P2 Decompose | **Yes** | `/adlc-decompose` (Phase A) |
-| P3 Rail | **MVP** | the in-session rails-guard hook (this plugin) + CI gate |
+| P3 Rail | **Yes** | the in-session rails-guard hook (enforcing by default, live-deny-proofed) + CI gate |
 | P4 Build | Partial | rails-guard hook + `session.created` advisory preflight; flail-detection is follow-on |
 | P5 Prosecute | **Yes** | `/adlc-verify-build` (G4) + 5 prosecutor lenses + verifier + `/adlc-prosecute` |
 | P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
@@ -171,19 +188,28 @@ glob/ticket logic to `@adlc/core`:
 
 ## Gaps
 
-1. **In-session enforcement depends on host SDK capability.** Until OpenCode's
-   plugin SDK is confirmed to honor a thrown denial (`onFailure: deny`), the hook
-   is advisory; the CI gate is the real control.
-2. **Bash-driven writes are not gated in-session** (Turing-complete shell) — caught
-   by the CI diff gate, mirroring the Claude Code posture.
-3. **Phase-E orchestration is model-driven.** `/adlc-prosecute` describes the
+1. **Bash-driven writes are not gated in-session** (Turing-complete shell) — caught
+   by the CI diff gate, mirroring the Claude Code posture. In-session shell gating
+   is Phase 2 of the [`opencode-native-flush` plan](../specs/opencode-native-flush.md).
+2. **Phase-E orchestration is model-driven.** `/adlc-prosecute` describes the
    fan-out → dedupe → verify → loop-until-dry protocol (the decision helpers in
    `lib/prosecutor.mjs` are unit-tested), but the loop itself is executed by the
    model invoking the subagents, not a deterministic first-party runner — the same
-   gap the Codex path documents for P5.
-4. **Live deny proof pending.** A maintainer-only end-to-end check against a real
-   OpenCode binary (driving an actual edit-to-rail and asserting the block) is the
-   remaining GA gate — see ADR 0004.
+   gap the Codex path documents for P5. A native-tool deterministic runner is
+   plan Phase 4.
+3. **The keyless bridge is unwired** (see the honesty note under Status) — plan
+   Phase 4.
+4. **Tool-name-independent backstop pending** — the guard keys off tool names and
+   arg shapes (unknown ones fail closed, and an *ungated* tool whose args carry a
+   frozen-rail target is denied rather than allowed by name); the residual class —
+   a co-installed plugin registering a writing tool under a *read-only* name — is
+   closed by the `file.edited`-event backstop in plan Phase 2.5, and at commit
+   time by the CI gate.
+
+Resolved 2026-07-05 (formerly Gaps 1/4): in-session enforcement no longer depends
+on an unproven SDK capability — a thrown denial is documented host behavior and
+the live deny proof (`scripts/opencode-live-deny.mjs`, required CI) regression-tests
+it. See ADR 0004's amendment.
 
 ## Boundary
 

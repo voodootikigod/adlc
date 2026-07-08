@@ -1,6 +1,8 @@
 # ADR: OpenCode integration — rails-guard plugin MVP
 
-**Status:** **Accepted — MVP shipped (P3 rail guard); Phases A/B/C/E follow-on.**
+**Status:** **Accepted — MVP shipped (P3 rail guard); Phases A/B/C/E follow-on.
+Amended 2026-07-05: enforcement contract verified against `@opencode-ai/plugin`
+v1.17.13 — the hook now ENFORCES BY DEFAULT (see Amendment).**
 The detailed design is the [OpenCode integration plan](../integrations/../opencode-integration-plan.md);
 this ADR records the decisions for the first shippable increment (ticket T1) and
 the verified facts the build rests on.
@@ -81,18 +83,56 @@ added in #15) so the rail set and recovery key can't be quietly rewritten.
 
 ## Unverified / follow-on
 
-- **`input.args.filePath` vs `output.args.filePath`** — official docs and the
-  community gist disagree; the handler reads `input` first and falls back to
-  `output`. Pinning this against a captured real payload is pending a live install.
-- **Live deny proof (AC7)** — a maintainer-only end-to-end test against a real
-  OpenCode binary remains the GA gate.
+- ~~**`input.args.filePath` vs `output.args.filePath`**~~ — **RESOLVED (2026-07-05):**
+  verified against `@opencode-ai/plugin` v1.17.13 source: the mutable args live on
+  `output.args`; `input` carries only `{ tool, sessionID, callID }`. The handler
+  reads `output.args` first (with an `input.args` tolerance fallback for older hosts).
+- ~~**Live deny proof (AC7)**~~ — **RESOLVED (2026-07-05):**
+  `scripts/opencode-live-deny.mjs` drives a real `opencode` binary with a mock
+  OpenAI-compatible provider: a control run proves the write executes when
+  enforcement is off; the treatment run proves the write is aborted and the deny
+  reason reaches the model. Wired into the required CI `test` job (private-repo
+  fallback per `docs/ci/rails-guard.yml`).
 - **TS + bundled `dist/index.js`** — the MVP ships plain `.mjs` (no build step);
   the plan's bundled-distribution form is a follow-on.
 - **Phases A/B/C/E** — command suite, keyless bridge, advisory hooks, prosecutor
   lenses (follow-on tickets T2–T5).
 
+## Amendment — 2026-07-05: enforce by default (opencode-native-flush Phase 1)
+
+The July-2026 verification of OpenCode's extension surface
+(`@opencode-ai/plugin` v1.17.13, opencode.ai/docs `plugins.mdx`) answered the
+open questions this ADR had left gated:
+
+1. **A thrown error in `tool.execute.before` ABORTS the tool call** — documented
+   host behavior, no longer an assumption. The capability probe
+   (`probeEnforcementCapability`) and its `ADLC_OPENCODE_ENFORCES` flag are
+   therefore **retired**; the hook enforces by default. The only downgrade is the
+   explicit operator escape hatch `ADLC_ALLOW_ADVISORY_HOOKS=1` (surface, don't
+   block). The retired probe was also structurally unreachable — the plugin never
+   captured the SDK `client` object — which the amendment fixes: `client` is now
+   threaded into the hooks.
+2. **Deny visibility**: denials and advisory warnings now surface via
+   `client.tui.showToast` and `client.app.log` (stderr retained as fallback), so
+   the advisory layer is visible in the TUI, not only in a log nobody watches.
+3. **Fail closed on unextractable targets**: `patch`/`multiedit`/`apply_patch`
+   (and any unknown tool) whose target path cannot be extracted from its args are
+   DENIED while rails are in force, instead of silently allowed — closing the
+   arg-shape bypass. Multi-file shapes (`files[]`, `edits[]`) are extracted and
+   each target checked; tool names are normalized before classification.
+4. **Canonical plural layout**: the scaffolder deploys native Agent Skills
+   (`.opencode/skills/<name>/SKILL.md`) and migrates the legacy flat
+   `.opencode/skill/*.md` deployment.
+
+The pinned API block above is superseded accordingly: peerDependency
+`>=1.17.13`, edited path on `output.args`, deny mechanism `throw` (documented,
+regression-tested by the live deny proof).
+
 ## Consequences
 
 Rail enforcement is real in OpenCode for the common structured-edit path, with the
-rail engine delegated to a single source of truth. The advisory/CI two-layer model
-is honest about what the in-session hook can and cannot guarantee.
+rail engine delegated to a single source of truth. In-session enforcement is now
+default-on (documented host contract + live regression proof), with the CI gate
+remaining the unbypassable backstop for shell-driven writes and hostile
+environments. The advisory/CI two-layer framing survives for the explicitly
+downgraded mode only.

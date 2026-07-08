@@ -76,8 +76,24 @@ else {
   if (/no integration exists yet/.test(doc)) fail("opencode.md still has the 'no integration exists yet' stub banner");
   else ok('stub banner removed');
   if (!/ci\/rails-guard\.yml/.test(doc)) fail('opencode.md does not point at the mandatory CI gate (docs/ci/rails-guard.yml)'); else ok('links the unbypassable CI gate');
-  if (!/advisor/i.test(doc)) fail('opencode.md does not frame the in-session hook as advisory'); else ok('frames in-session hook as advisory');
+  if (!/enforcing by default/i.test(doc)) fail('opencode.md does not document the enforce-by-default posture'); else ok('documents enforce-by-default in-session hook');
+  if (!/ADLC_ALLOW_ADVISORY_HOOKS/.test(doc)) fail('opencode.md does not document the explicit advisory downgrade'); else ok('documents the advisory escape hatch');
 }
+
+// ---- Enforce-by-default wiring (2026-07-05 amendment): no capability probe,
+// client captured, args pinned to output.args, deny fails closed on unextractable ----
+{
+  const idx = read(indexPath);
+  const chk = read(checkerPath);
+  if (/probeEnforcementCapability|ADLC_OPENCODE_ENFORCES/.test(idx + chk)) fail('retired capability probe (ADLC_OPENCODE_ENFORCES) still referenced'); else ok('capability probe retired (enforce by default)');
+  if (!/client/.test(idx) || !/showToast/.test(idx)) fail('index.mjs does not surface denials via the SDK client (tui.showToast)'); else ok('denials surfaced via client.tui.showToast');
+  if (!/output\?\.args/.test(idx)) fail('index.mjs does not read the pinned output.args payload'); else ok('args pinned to output.args (v1.17.13 contract)');
+  if (!/checkToolCall/.test(idx)) fail('index.mjs does not use the whole-tool-call checker (multi-target + fail-closed extraction)'); else ok('uses checkToolCall (multi-target, fail-closed extraction)');
+}
+
+// ---- AC7: live deny proof script present (runs in CI with --require) ----
+if (!existsSync(join(ROOT, 'scripts', 'opencode-live-deny.mjs'))) fail('scripts/opencode-live-deny.mjs missing (AC7 live deny proof)');
+else ok('AC7 live deny proof script present (scripts/opencode-live-deny.mjs)');
 
 // ---- Phase A (T2): command suite + gate-bin dependency mapping ----
 const pkg2 = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
@@ -133,9 +149,9 @@ for (const c of ['adlc-verify-build.md', 'adlc-prosecute.md', 'adlc-distill.md']
 }
 if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs missing'); else ok('prosecutor registry/helpers present');
 
-// AC7 (live deny proof against the real opencode binary) is the remaining GA gate;
-// it requires a disposable OpenCode install and is tracked in ADR 0004.
-console.log('  note — AC7 live-binary deny proof is a maintainer/CI follow-up (no opencode binary here).');
+// AC7 (live deny proof) runs separately — scripts/opencode-live-deny.mjs drives a
+// real opencode binary; CI runs it with --require. This smoke stays binary-free.
+console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-deny.mjs` (CI: --require).');
 
 if (failures) { console.error(`\nopencode-install-smoke: ${failures} failure(s)`); process.exit(2); }
 console.log('\nopencode-install-smoke: PASS');

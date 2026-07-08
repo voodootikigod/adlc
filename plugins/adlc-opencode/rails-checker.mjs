@@ -23,9 +23,14 @@ export const MUTATING_TOOLS = ['edit', 'write', 'patch', 'multiedit', 'apply_pat
 
 // Known read-only tools that may carry a file path but never mutate it. The gate
 // fails CLOSED: only these are skipped; any other structured tool that reaches the
-// checker (i.e. carries a filePath) — including unrecognized mutation tools — is
-// checked against the rail set rather than silently allowed.
-export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch'];
+// checker — including unrecognized mutation tools — is checked against the rail
+// set rather than silently allowed.
+export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch', 'websearch', 'codebase_search', 'lsp', 'todoread'];
+
+// First-party tools with no single-file mutation semantics, deliberately not
+// gated in-session (bash falls to the CI diff gate; the rest don't write files).
+// Anything NOT in this list or READONLY_TOOLS is treated as potentially mutating.
+export const UNGATED_TOOLS = ['bash', 'task', 'skill', 'todowrite', 'question'];
 
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {
@@ -83,68 +88,142 @@ export function resolveActiveTicketId(root, env) {
 }
 
 /**
- * Decide whether a structured edit/write should be allowed or denied.
- * Pure and fail-safe: returns { decision: 'allow' | 'deny', reason }.
- *
- * Enforcement contract (identical to the sibling hooks):
- *  - only the structured mutating tools are gated;
- *  - enforcement is phase-scoped to ADLC_P4_ENFORCEMENT === '1';
- *  - no-op when the repo is not ADLC-initialized;
- *  - the active ticket is the SINGLE source of declared rails; a conflicting
- *    active-ticket signal fails closed;
- *  - rails in force = active ticket's declared rails PLUS the trust-root rails.
+ * Resolve whether rails are currently IN FORCE and, if so, the effective rail
+ * set. Shared by the single-path check and the whole-tool-call check so the
+ * gating ladder (phase flag → initialized → active ticket → rails) exists once.
+ * Returns one of:
+ *   { active: false, reason }                          — nothing to enforce
+ *   { active: true, conflict: true, reason }           — tamper signal, fail closed
+ *   { active: true, conflict: false, ticketId, rails } — rails in force
  */
-export function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) {
-  if (READONLY_TOOLS.includes(tool)) {
-    return { decision: 'allow', reason: `tool "${tool}" is read-only` };
-  }
-  // Everything else that reached here carries a file path: known mutators AND any
-  // unrecognized structured tool are checked (fail closed), so a new mutation tool
-  // name can't slip an edit past the guard.
+export function resolveRailsInForce(root, env) {
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
-    return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+    return { active: false, reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
   const ticketsPath = join(root, '.adlc', 'tickets.json');
   if (!existsSync(ticketsPath)) {
-    return { decision: 'allow', reason: 'repo not ADLC-initialized (no .adlc/tickets.json)' };
+    return { active: false, reason: 'repo not ADLC-initialized (no .adlc/tickets.json)' };
   }
-
   const active = resolveActiveTicketId(root, env);
   if (active.conflict) {
-    return { decision: 'deny', reason: 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
+    return { active: true, conflict: true, reason: 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
   }
   if (!active.id) {
-    return { decision: 'allow', reason: 'no active ticket resolved' };
+    return { active: false, reason: 'no active ticket resolved' };
   }
-
   const { tickets } = loadTickets(ticketsPath);
   const ticket = tickets.find((t) => t.id === active.id);
-  const declaredRails = ticket?.rails ?? [];
-  const rails = [...declaredRails, ...TRUST_ROOT_RAILS];
-
-  // Match BOTH the lexical path (normal case) and the symlink-resolved real path
-  // (so a symlink alias whose target is a frozen rail can't slip past a name check).
-  const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
-  for (const path of candidates) {
-    const hit = rails.find((rail) => rail === path || globMatch(rail, path));
-    if (hit) {
-      return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${active.id})` };
-    }
-  }
-  return { decision: 'allow', reason: 'path is not a frozen rail' };
+  return { active: true, conflict: false, ticketId: active.id, rails: [...(ticket?.rails ?? []), ...TRUST_ROOT_RAILS] };
 }
 
 /**
- * Probe whether the host OpenCode SDK can actually ENFORCE a denial (abort the
- * tool via a thrown error / onFailure:deny). Per integration-plan Phase D, the
- * in-session hook must not be treated as enforcing unless this is true; otherwise
- * it is advisory and preflight should fail closed unless advisory hooks are
- * explicitly allowed. We cannot introspect the SDK contract portably, so we treat
- * an explicit capability flag as the signal and default to "unknown".
+ * Extract every candidate target path from a tool call's args. Tolerant across
+ * the arg shapes the structured mutators use: a single `filePath`/`path`/`file`
+ * string, a `files` array (strings or objects), or an `edits` array of objects.
+ * Returns [] when nothing path-like is found — the caller decides whether that
+ * fails closed (mutating/unknown tool while rails are in force) or is benign.
  */
-export function probeEnforcementCapability(api, env = process.env) {
-  if (env.ADLC_OPENCODE_ENFORCES === '1') return true;
-  if (env.ADLC_OPENCODE_ENFORCES === '0') return false;
-  // The SDK may advertise the capability; absent that, enforcement is unproven.
-  return Boolean(api?.capabilities?.toolExecuteBeforeDeny);
+export function extractTargets(args) {
+  if (!args || typeof args !== 'object') return [];
+  const targets = [];
+  const push = (v) => { if (typeof v === 'string' && v.trim()) targets.push(v); };
+  push(args.filePath); push(args.path); push(args.file);
+  for (const list of [args.files, args.edits]) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry === 'string') push(entry);
+      else if (entry && typeof entry === 'object') { push(entry.filePath); push(entry.path); push(entry.file); }
+    }
+  }
+  return targets;
+}
+
+function railHit(target, rails, root) {
+  // Match BOTH the lexical path (normal case) and the symlink-resolved real path
+  // (so a symlink alias whose target is a frozen rail can't slip past a name check).
+  const candidates = new Set([canonicalizePath(target, root), resolveRailPath(target, root)]);
+  for (const path of candidates) {
+    const hit = rails.find((rail) => rail === path || globMatch(rail, path));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Decide whether a whole tool call should be allowed or denied. This is the
+ * hook-facing entry point. Pure and fail-safe: returns
+ * { decision: 'allow' | 'deny', reason }.
+ *
+ * Enforcement contract (identical to the sibling hooks):
+ *  - tool names are normalized (lowercased) before classification;
+ *  - known read-only tools and the deliberately-ungated first-party tools
+ *    (bash et al — CI diff gate covers them) are allowed;
+ *  - enforcement is phase-scoped to ADLC_P4_ENFORCEMENT === '1';
+ *  - no-op when the repo is not ADLC-initialized or no active ticket resolves;
+ *  - a conflicting active-ticket signal fails closed;
+ *  - rails in force = active ticket's declared rails PLUS the trust-root rails;
+ *  - EVERY extractable target path is checked; a mutating or UNKNOWN tool whose
+ *    target cannot be extracted is DENIED while rails are in force (fail closed —
+ *    an unrecognized third-party write tool must not slip past on arg shape).
+ */
+export function checkToolCall({ tool, args, root = process.cwd(), env = process.env }) {
+  const name = String(tool ?? '').toLowerCase();
+  if (READONLY_TOOLS.includes(name)) {
+    // Reading a rail is legitimate; allow by name. Residual risk: a hostile
+    // co-installed plugin could register a WRITING tool under a read-only name —
+    // that class is closed by the tool-name-independent file.edited backstop
+    // (opencode-native-flush plan Phase 2.5) and, at commit time, the CI gate.
+    return { decision: 'allow', reason: `tool "${name}" is read-only` };
+  }
+  // Operators can extend the ungated list for benign third-party tools that a
+  // railed build legitimately needs (e.g. ADLC_UNGATED_TOOLS="symbols_index").
+  // An explicit opt-out per tool keeps the DEFAULT fail-closed for unknown
+  // tools (an unrecognized write tool must not slip past on arg shape) without
+  // hard-blocking benign no-target tools forever. Extended entries get the same
+  // spoof guard as the built-in ungated list.
+  const ungated = UNGATED_TOOLS.concat(
+    String(env.ADLC_UNGATED_TOOLS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  );
+  if (ungated.includes(name)) {
+    // Not gated by design (bash et al fall to the CI diff gate) — BUT a benign
+    // ungated tool never carries a file-path arg, so if this call DOES carry an
+    // extractable target that resolves to a frozen rail, treat the name as
+    // spoofed/abused and deny rather than allow purely by name.
+    const force = resolveRailsInForce(root, env);
+    if (force.active && !force.conflict) {
+      for (const target of extractTargets(args)) {
+        const hit = railHit(target, force.rails, root);
+        if (hit) {
+          return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
+        }
+      }
+    }
+    return { decision: 'allow', reason: `tool "${name}" is not gated in-session (CI diff gate covers it)` };
+  }
+  const force = resolveRailsInForce(root, env);
+  if (!force.active) return { decision: 'allow', reason: force.reason };
+  if (force.conflict) return { decision: 'deny', reason: force.reason };
+
+  const targets = extractTargets(args);
+  if (targets.length === 0) {
+    return {
+      decision: 'deny',
+      reason: `mutating/unknown tool "${name}" carries no extractable target path — failing closed while rails are in force (active ticket ${force.ticketId})`,
+    };
+  }
+  for (const target of targets) {
+    const hit = railHit(target, force.rails, root);
+    if (hit) {
+      return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${force.ticketId})` };
+    }
+  }
+  return { decision: 'allow', reason: 'no target is a frozen rail' };
+}
+
+/**
+ * Single-path convenience used by tests and sibling callers: the same contract
+ * as checkToolCall for a tool call whose one target is `filePath`.
+ */
+export function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) {
+  return checkToolCall({ tool, args: { filePath }, root, env });
 }

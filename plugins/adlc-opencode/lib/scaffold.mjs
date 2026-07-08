@@ -9,7 +9,7 @@
 // Pure-ish: every function takes explicit roots, so it is unit-testable against
 // a temp dir without touching the real environment.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 // The .gitignore stanza + formatter-ignore hygiene logic (issue #97) is shared
 // with plugins/adlc-cursor via @adlc/core, which this package already
@@ -80,21 +80,56 @@ export function ensurePluginRegistered(root, pkgName = '@adlc/opencode-package')
 }
 
 /**
+ * Deploy the plugin's skill/*.md sources as NATIVE OpenCode Agent Skills:
+ * .opencode/skills/<name>/SKILL.md (the shape the `skill` tool discovers).
+ * Also migrates away the legacy flat deployment (.opencode/skill/<name>.md)
+ * that pre-dated native skill support — a legacy file is removed ONLY when its
+ * content is pristine (byte-identical to what this plugin deploys), so a
+ * user-customized copy is never silently destroyed; the legacy dir is dropped
+ * only when left empty. Idempotent; returns { deployed, preservedLegacy }.
+ */
+export function deploySkills(pkgRoot, destRoot) {
+  const srcDir = join(pkgRoot, 'skill');
+  if (!existsSync(srcDir)) return { deployed: [], preservedLegacy: [] };
+  const deployed = [];
+  const preservedLegacy = [];
+  const legacyDir = join(destRoot, '.opencode', 'skill');
+  for (const name of readdirSync(srcDir)) {
+    if (!name.endsWith('.md')) continue;
+    const source = readFileSync(join(srcDir, name), 'utf8');
+    const skillName = name.slice(0, -'.md'.length);
+    const outDir = join(destRoot, '.opencode', 'skills', skillName);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, 'SKILL.md'), source);
+    deployed.push(`${skillName}/SKILL.md`);
+    const legacy = join(legacyDir, name);
+    if (existsSync(legacy)) {
+      if (readFileSync(legacy, 'utf8') === source) rmSync(legacy);
+      else preservedLegacy.push(`.opencode/skill/${name}`); // user-modified — keep it
+    }
+  }
+  if (existsSync(legacyDir) && readdirSync(legacyDir).length === 0) {
+    rmSync(legacyDir, { recursive: true });
+  }
+  return { deployed, preservedLegacy };
+}
+
+/**
  * Full scaffold: ensure config, REGISTER the plugin (so the rails-guard hook
  * loads), deploy command/, agent/, and skill/ into .opencode/, ensure the
  * .gitignore contract stanza, and exclude .adlc/ from any detected repo
- * formatter/linter. OpenCode discovers project commands under
- * .opencode/commands/, subagents under .opencode/agents/, and skills under
- * .opencode/skill/; the plugin ships them under command/, agent/, and skill/
- * respectively. Returns a summary.
+ * formatter/linter. OpenCode's canonical project layout is PLURAL:
+ * commands under .opencode/commands/, subagents under .opencode/agents/, and
+ * native skills under .opencode/skills/<name>/SKILL.md; the plugin ships its
+ * sources under command/, agent/, and skill/ respectively. Returns a summary.
  */
 export function scaffold(root, pkgRoot) {
   const config = ensureConfig(root);
   const plugin = ensurePluginRegistered(root);
   const commands = deployDir(pkgRoot, root, 'command', 'commands');
   const agents = deployDir(pkgRoot, root, 'agent', 'agents');
-  const skills = deployDir(pkgRoot, root, 'skill', 'skill');
+  const { deployed: skills, preservedLegacy: preservedLegacySkills } = deploySkills(pkgRoot, root);
   const gitignore = ensureGitignore(root);
   const formatterIgnores = ensureFormatterIgnores(root);
-  return { config, plugin, commands, agents, skills, gitignore, formatterIgnores };
+  return { config, plugin, commands, agents, skills, preservedLegacySkills, gitignore, formatterIgnores };
 }

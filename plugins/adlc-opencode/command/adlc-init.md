@@ -21,16 +21,18 @@ npm install -g @adlc/cli
 - Create `.adlc/` if missing.
 - If `.adlc/tickets.json` is absent, create it as `{ "tickets": [] }`. If present, leave it.
 - Run the deterministic scaffolder to create `.adlc/config.json` (defaults, no
-  clobber), deploy this plugin's `command/` and `skill/` into `.opencode/`, ensure
-  `.gitignore` tracks the ticket + specs contracts, and exclude `.adlc/` from any
-  detected repo formatter/linter:
+  clobber), deploy this plugin's `command/`, `agent/`, and `skill/` into
+  `.opencode/` (commands/, agents/, skills/<name>/SKILL.md), ensure `.gitignore`
+  tracks the ticket + specs contracts, and exclude `.adlc/` from any detected
+  repo formatter/linter:
 
   !`node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/opencode-package/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .`
 
   (If the helper is unavailable, scaffold manually: create `.adlc/config.json`
   with `{"securityMode":"unsigned-fallback"}`, copy the plugin's `command/*.md`
-  into `.opencode/commands/` and `skill/*.md` into `.opencode/skill/`, then do
-  steps 3 and 4 below by hand.)
+  into `.opencode/commands/`, `agent/*.md` into `.opencode/agents/`, and each
+  `skill/<name>.md` to `.opencode/skills/<name>/SKILL.md`, then do steps 3 and 4
+  below by hand.)
 
 ## 3. Separate the contract from runtime evidence in git
 

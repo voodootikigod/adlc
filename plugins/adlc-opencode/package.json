@@ -12,7 +12,7 @@
     "skill": "./skill/"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.17.11"
+    "@opencode-ai/plugin": ">=1.17.13"
   },
   "dependencies": {
     "@adlc/core": "^1.1.0"

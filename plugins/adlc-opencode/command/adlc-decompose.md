@@ -27,4 +27,7 @@ close any gaps that would block a fresh agent.
 
 ## 4. Summarize
 Report the ticket DAG (waves + merge order), each ticket's coldstart verdict, and
-the routing hints. Point the user at `/adlc-rail-write` (P3) for the first ticket.
+the routing hints. For P3, remind the user: declare the first ticket's `rails` in
+`.adlc/tickets.json`, set it active (`.adlc/current-ticket.json` or `ADLC_TICKET`),
+and export `ADLC_P4_ENFORCEMENT=1` — the in-session rails-guard hook and the CI
+rail-freeze gate then enforce the frozen rails during the build.
