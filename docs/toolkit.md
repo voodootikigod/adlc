@@ -43,7 +43,9 @@ statement.
 2. Run [`adlc spec-lint`](./tools/spec-lint.md), [`adlc premortem`](./tools/premortem.md), and optionally [`adlc parallax`](./tools/parallax.md) while shaping the work so the
    accepted spec has verifiable criteria and known divergences.
 3. Use [`adlc coldstart`](./tools/coldstart.md) to check ticket executability, then [`adlc merge-forecast`](./tools/merge-forecast.md) and [`adlc model-router`](./tools/model-router.md)
-   to manage fan-out width and model assignment.
+   to manage fan-out width and model assignment. The router emits abstract tiers
+   (`cheap` / `mid` / `frontier`); [Recommended Models by Phase](./models-by-phase.md)
+   maps those tiers to concrete models per provider, including open-weight and local options.
 4. During implementation, use [`adlc rails-guard`](./tools/rails-guard.md) for frozen-test and suppression controls,
    [`adlc build-gate`](../packages/build-gate/README.md) to deny starting a high-risk ticket's build in a degraded
    session, and [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn,

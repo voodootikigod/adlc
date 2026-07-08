@@ -79,6 +79,10 @@ AUTH-2        frontier    direct    0.000        0       category 'spec' require
 
 ## Assignment rules (ADLC D1)
 
+> The tiers below are abstract. For the current recommended binding from
+> `cheap` / `mid` / `frontier` to concrete models per provider (paid, open-weight,
+> and local), see [Recommended Models by Phase](../models-by-phase.md).
+
 ### Rule 1: Frontier / Direct
 
 Applies when:
