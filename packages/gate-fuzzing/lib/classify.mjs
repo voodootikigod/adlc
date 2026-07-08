@@ -8,19 +8,35 @@ import { discriminateWitness } from './witness.mjs';
 import { checkOracle } from './oracle.mjs';
 
 /**
- * Extract changed file paths from a unified diff string.
+ * Extract changed file paths from a unified diff string, prefix-agnostically.
+ *
+ * `git apply` (default -p1) strips ONE leading path segment regardless of its
+ * NAME, so a candidate diff can use any prefix (i/…, w/…, x/…) and still apply.
+ * Matching only the literal a/…, b/… convention let an adversarial diff read as
+ * touching zero files → classified out-of-scope → the in-surface mutation was
+ * never evaluated (audit finding D). Strip whatever leading segment appears.
+ *
  * @param {string} diff
  * @returns {string[]}
  */
-function changedFilesFromDiff(diff) {
+export function changedFilesFromDiff(diff) {
   const paths = new Set();
-  for (const line of diff.split('\n')) {
-    // "diff --git a/foo b/foo" → foo
-    const m = line.match(/^diff --git a\/(.+) b\//);
-    if (m) paths.add(m[1]);
-    // +++ b/foo
-    const m2 = line.match(/^\+\+\+ b\/(.+)/);
-    if (m2 && m2[1] !== '/dev/null') paths.add(m2[1]);
+  // Drop the single -p1 prefix segment (a/, b/, i/, w/, …). `/dev/null` and
+  // prefix-less paths are handled: /dev/null is skipped, a slash-less token is kept.
+  const strip = (p) => {
+    if (!p || p === '/dev/null') return null;
+    const clean = p.replace(/\t.*$/, ''); // strip trailing "\t<timestamp>" metadata
+    const slash = clean.indexOf('/');
+    return slash >= 0 ? clean.slice(slash + 1) : clean;
+  };
+  for (const line of (diff ?? '').split('\n')) {
+    let m;
+    if ((m = line.match(/^\+\+\+ (.+)$/)) || (m = line.match(/^--- (.+)$/))) {
+      const p = strip(m[1]);
+      if (p) paths.add(p);
+    } else if ((m = line.match(/^diff --git (\S+) (\S+)$/))) {
+      for (const seg of [strip(m[1]), strip(m[2])]) if (seg) paths.add(seg);
+    }
   }
   return [...paths];
 }
@@ -71,9 +87,16 @@ export function classifyCandidate(candidate, suite, baseline, opts) {
     return { result: 'invalid:target', reason: `unknown gate: ${candidate.target}` };
   }
 
-  // Clause 3: surface intersection check
+  // Clause 3: surface intersection check.
+  // FAIL CLOSED: a diff that has hunk content but whose file paths we could not
+  // parse must NOT be dismissed as out-of-scope — an adversary controls the diff
+  // text, so an unparseable header is treated as possibly-in-surface and the gate
+  // is still run. Only a diff we DID parse, that genuinely misses the surface, is
+  // out-of-scope.
   const changedFiles = changedFilesFromDiff(candidate.diff);
-  if (!intersectsSurface(changedFiles, targetGate.surface)) {
+  const hasDiffBody = /^@@ /m.test(candidate.diff ?? '');
+  const unparseableBody = hasDiffBody && changedFiles.length === 0;
+  if (!intersectsSurface(changedFiles, targetGate.surface) && !unparseableBody) {
     return {
       result: 'out-of-scope',
       target: candidate.target,

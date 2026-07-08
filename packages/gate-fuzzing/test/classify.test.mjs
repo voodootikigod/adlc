@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyCandidate } from '../lib/classify.mjs';
+import { classifyCandidate, changedFilesFromDiff } from '../lib/classify.mjs';
 import { defeatableGateDescriptor, cannedCandidate } from '../lib/controls.mjs';
 
 // Helper to build a standard suite and baseline
@@ -62,6 +62,35 @@ test('truth table row: diff does not touch gate surface → out-of-scope', () =>
   });
   const verdict = classifyCandidate(setup.candidate, setup.suite, setup.baseline, setup);
   assert.equal(verdict.result, 'out-of-scope');
+});
+
+// Audit finding D: `git apply` (-p1) strips ANY leading path segment, so a
+// candidate diff can use non-a/b prefixes and still apply — but the surface check
+// only recognized a/…, b/…, reading the diff as touching zero files → out-of-scope
+// → the in-surface mutation was never evaluated.
+test('audit D: a non-a/b diff prefix still maps to the gate surface (not silently out-of-scope)', () => {
+  const setup = makeSetup({
+    candidateOverrides: {
+      diff: 'diff --git i/test/frozen.js w/test/frozen.js\n--- i/test/frozen.js\n+++ w/test/frozen.js\n@@ -1 +1 @@\n-safe\n+malicious',
+    },
+  });
+  const verdict = classifyCandidate(setup.candidate, setup.suite, setup.baseline, setup);
+  assert.notEqual(verdict.result, 'out-of-scope');
+});
+
+test('audit D: a diff body whose file paths are unparseable fails CLOSED (in-scope), not out-of-scope', () => {
+  const setup = makeSetup({
+    candidateOverrides: { diff: '@@ -1 +1 @@\n-safe\n+malicious' },
+  });
+  const verdict = classifyCandidate(setup.candidate, setup.suite, setup.baseline, setup);
+  assert.notEqual(verdict.result, 'out-of-scope');
+});
+
+test('changedFilesFromDiff strips whatever single -p1 prefix the diff uses', () => {
+  assert.deepEqual(changedFilesFromDiff('+++ w/test/frozen.js'), ['test/frozen.js']);
+  assert.deepEqual(changedFilesFromDiff('diff --git i/a/b.mjs w/a/b.mjs'), ['a/b.mjs']);
+  assert.deepEqual(changedFilesFromDiff('+++ b/packages/core/lib/x.mjs'), ['packages/core/lib/x.mjs']);
+  assert.deepEqual(changedFilesFromDiff('--- /dev/null\n+++ b/new.mjs'), ['new.mjs']);
 });
 
 test('truth table row: claimKind not in gate claims → wrong-claim', () => {
