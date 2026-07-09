@@ -487,3 +487,201 @@ test('l: unknown no-target tool is denied by default, allowed when operator-unga
     assert.equal(checkToolCall({ tool: 'symbols_index', args: { filePath: 'test/x.mjs' }, root: dir, env }).decision, 'deny');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- (p) P5 cross-model finding: adlc_gate nested argv must not bypass rails ----
+test('p: adlc_gate nested arg resolving to a frozen rail → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'gate-manifest', args: ['record', 'preflight', '--dir', 'test'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('p: adlc_gate --flag=value payload resolving to a rail → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'flail-detector', args: ['--scope=test/x.mjs'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('p: adlc_gate with benign nested args (flags, non-rail tokens) → allow', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'rails-guard', args: ['--ticket', 'T1', '--json', '--base', 'main'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- (q) P5 re-review: the derived-target CLASS is closed, not just the instance ----
+test('q: hollow-test via adlc_gate under rails → deny (derives write targets from its --rails file)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    // the attack: a NON-railed ticket file whose rails point AT the frozen path
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'hollow-test', args: ['--rails', 'tmp-ticket.json'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /derives or defaults its write targets/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('q: unknown/future gate via adlc_gate under rails → deny (fail closed)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'shiny-new-gate', args: [] }, root: dir, env });
+    assert.equal(r.decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('q: gate-manifest DEFAULT dir (.adlc) railed → deny even with no path token in argv', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/**'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'gate-manifest', args: ['record', 'preflight'] }, root: dir, env });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /manifest\.jsonl/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('q: gate-manifest default dir NOT railed → allow (mid-build evidence recording stays legal)', () => {
+  const dir = repo({ tickets: T1_RAILED }); // rails: test/**
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'gate-manifest', args: ['record', 'preflight'] }, root: dir, env });
+    assert.equal(r.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('q: mutation opt-in flag on an allowlisted gate → deny (--write derives its targets)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'lesson-foundry', args: ['--write'] }, root: dir, env });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /mutation flag/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('q: comma-separated list token hiding a rail path → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'parallax', args: ['--file', 'a.md,test/x.mjs'] }, root: dir, env });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('q: read-only gates still flow under rails; everything unrestricted with rails OFF', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    for (const gate of ['spec-lint', 'coldstart', 'preflight', 'merge-forecast']) {
+      assert.equal(checkToolCall({ tool: 'adlc_gate', args: { gate, args: ['--json'] }, root: dir, env }).decision, 'allow', gate);
+    }
+    // rails not in force (no active ticket) → even hollow-test is allowed through
+    const off = checkToolCall({ tool: 'adlc_gate', args: { gate: 'hollow-test', args: ['--test-cmd', 'x'] }, root: dir, env: { ...ON } });
+    assert.equal(off.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- (r) round-3 re-review: the allowlist itself must reflect true read-only behavior ----
+test('r: review-calibration via adlc_gate under rails → deny (mutate/restore writer, same class as hollow-test)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'review-calibration', args: ['--commit', 'HEAD'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /derives or defaults its write targets/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: --record-verdict writes the manifest ledger — denied when the ledger is railed, allowed otherwise', () => {
+  const railedLedger = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/**'] }] } });
+  const normalRails = repo({ tickets: T1_RAILED }); // rails: test/**
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    for (const gate of ['coldstart', 'premortem', 'parallax']) {
+      const denied = checkToolCall({ tool: 'adlc_gate', args: { gate, args: ['--prompt-only', '--record-verdict', '-'] }, root: railedLedger, env });
+      assert.equal(denied.decision, 'deny', `${gate} vs railed ledger`);
+      assert.match(denied.reason, /manifest\.jsonl/);
+      const allowed = checkToolCall({ tool: 'adlc_gate', args: { gate, args: ['--prompt-only', '--record-verdict', '-'] }, root: normalRails, env });
+      assert.equal(allowed.decision, 'allow', `${gate} with non-railed ledger`);
+    }
+  } finally {
+    rmSync(railedLedger, { recursive: true, force: true });
+    rmSync(normalRails, { recursive: true, force: true });
+  }
+});
+
+test('r: model-ratchet --review-cmd is an ARBITRARY PROGRAM — denied under rails; plain dry-run allowed', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    // round-4 HIGH: the command can write ANY path, including the tickets.json
+    // trust root — no ledger vet can catch it, so the flag class is denied.
+    for (const argv of [['--review-cmd=true'], ['--review-cmd', 'node -e "hostile"']]) {
+      const denied = checkToolCall({ tool: 'adlc_gate', args: { gate: 'model-ratchet', args: argv }, root: dir, env });
+      assert.equal(denied.decision, 'deny', argv.join(' '));
+      assert.match(denied.reason, /command-executor/);
+    }
+    const dryRun = checkToolCall({ tool: 'adlc_gate', args: { gate: 'model-ratchet', args: ['--dry-run'] }, root: dir, env });
+    assert.equal(dryRun.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: command-executor flags are denied for EVERY gate under rails (class, not instance)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'spec-lint', args: ['--test-cmd', 'true'] }, root: dir, env });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /command-executor/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: preflight scratch probes are vetted — denied only when a probe path is railed', () => {
+  const railedAdlc = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/**'] }] } });
+  const railedGit = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.git/**'] }] } }); // round-5: branch/worktree metadata churn
+  const normalRails = repo({ tickets: T1_RAILED }); // rails: test/**
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    for (const dir of [railedAdlc, railedGit]) {
+      const denied = checkToolCall({ tool: 'adlc_gate', args: { gate: 'preflight', args: [] }, root: dir, env });
+      assert.equal(denied.decision, 'deny');
+      assert.match(denied.reason, /preflight-test/);
+    }
+    const allowed = checkToolCall({ tool: 'adlc_gate', args: { gate: 'preflight', args: [] }, root: normalRails, env });
+    assert.equal(allowed.decision, 'allow');
+  } finally {
+    rmSync(railedAdlc, { recursive: true, force: true });
+    rmSync(railedGit, { recursive: true, force: true });
+    rmSync(normalRails, { recursive: true, force: true });
+  }
+});

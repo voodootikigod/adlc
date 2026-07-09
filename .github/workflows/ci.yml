@@ -50,6 +50,13 @@ jobs:
           npm install -g opencode-ai@1.17.13
           node scripts/opencode-live-deny.mjs --require
 
+      # Phase 4 live proof: the native adlc_gate tool registers + is model-callable,
+      # and the keyless bridge drives a child session end-to-end. Pinned to the
+      # opencode whose tool-hook + session SDK is source-verified (1.17.13).
+      - name: OpenCode live tool + keyless proof (Phase 4)
+        if: matrix.node-version == 20
+        run: node scripts/opencode-live-tool.mjs --require
+
       # pi live deny proof (ticket T21 AC5) — same folded-into-required-job
       # rationale as the OpenCode step above. Runs on the Node 22 leg only
       # (pi requires Node >= 22.19; the script hard-skips on older majors and

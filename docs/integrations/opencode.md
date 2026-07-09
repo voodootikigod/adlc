@@ -24,14 +24,19 @@ subagents (`@prosecutor-correctness|security|contract|diff|tests`) plus the
 `@prosecutor-verifier`, the `/adlc-prosecute` fan-out/verify/loop-until-dry
 command, and `/adlc-distill` (P7). Phase F's CI backstop merged earlier.
 
-**Honesty note on Phase B and the P5 helpers:** `lib/keyless-bridge.mjs`
-(extract a gate's prompts, ask, thread answers) and the `lib/prosecutor.mjs`
-decision helpers are implemented and unit-tested but **not yet wired into a
-runtime path** — today the commands instruct the model to run gates via
-`adlc <gate> --prompt-only` and reason over the printed output itself. Wiring
-them to the now-available SDK (`client.session.create` + `session.prompt`) is
-the `opencode-native-flush` plan's Phase 4
-([spec](../specs/opencode-native-flush.md)).
+**Native `adlc_gate` tool + live keyless bridge (Phase 4).** The model calls a
+first-class `adlc_gate({ gate, args })` tool (registered via the plugin `tool`
+hook) instead of being prose-instructed to shell out. `execute()` validates the
+gate and runs it: deterministic gates run the `adlc` CLI; **LLM-backed gates run
+KEYLESS through the host model** — `lib/keyless-bridge.mjs` `makeAsk` spins up an
+isolated child session (`client.session.create` + `session.prompt`, source-
+verified v1.17.13), answers each `--prompt-only` prompt, and threads the results
+back. The keyless bridge is therefore **live code with a real caller now**, not
+the tested-but-unwired library it used to be. Both are proven end-to-end against
+a real opencode 1.17.13 by `scripts/opencode-live-tool.mjs` (CI-required). The
+`lib/prosecutor.mjs` P5 decision helpers remain wired only to the model-driven
+`/adlc-prosecute` flow; the deterministic first-party P5 runner that consumes
+them is deferred to a Phase 4b follow-on.
 
 > **Session hooks — event-name note.** The plan specified `session.created` +
 > `session.ended`, but OpenCode has no `session.ended`; the end-of-work signal is
@@ -39,13 +44,13 @@ the `opencode-native-flush` plan's Phase 4
 > they only surface warnings, never throw, and no-op when the repo is not
 > ADLC-initialized.
 
-> **Keyless bridge — SDK dependency (plan §6.4).** The bridge's protocol (extract
-> a gate's prompts, ask, thread answers) is implemented and tested, and the SDK
-> capability it was waiting for now exists (`client.session.create` +
-> `session.prompt` with structured output, verified on `@opencode-ai/plugin`
-> v1.17.13). Wiring `makeAsk` to it is Phase 4 of the
-> [`opencode-native-flush` plan](../specs/opencode-native-flush.md); until then
-> `makeAsk` returns `null` so callers fail closed rather than silently skip a gate.
+> **Keyless bridge — LIVE (Phase 4).** `makeAsk` now spins up an isolated child
+> session via the real SDK (`client.session.create` + `session.prompt`) and
+> returns the reply text; there is **no server-side structured-output mode**, so
+> the answer is the concatenated text of the reply's text parts (the gate prompts
+> specify their own output shape). It returns `null` only when the client lacks
+> the session API, so the caller falls back to the CLI rather than silently
+> skipping a gate. Proven end-to-end by `scripts/opencode-live-tool.mjs`.
 
 ## Commands
 
@@ -188,20 +193,19 @@ glob/ticket logic to `@adlc/core`:
 
 ## Gaps
 
-1. **Phase-E orchestration is model-driven.** `/adlc-prosecute` describes the
+1. **P5 orchestration is still model-driven.** `/adlc-prosecute` describes the
    fan-out → dedupe → verify → loop-until-dry protocol (the decision helpers in
    `lib/prosecutor.mjs` are unit-tested), but the loop itself is executed by the
-   model invoking the subagents, not a deterministic first-party runner — the same
-   gap the Codex path documents for P5. A native-tool deterministic runner is
-   plan Phase 4.
-2. **The keyless bridge is unwired** (see the honesty note under Status) — plan
-   Phase 4.
-3. **`permission.ask` is a DORMANT lever.** At opencode 1.17.13 the hook is
+   model invoking the subagents, not a deterministic first-party runner. The
+   keyless bridge that would let a native `adlc_prosecute` tool spawn lens/verifier
+   child sessions is now proven (Phase 4); wiring the deterministic runner on top
+   is the **Phase 4b** follow-on.
+2. **`permission.ask` is a DORMANT lever.** At opencode 1.17.13 the hook is
    defined but never dispatched (upstream sst/opencode#7006); the plugin ships a
    tolerant handler (denies rail-target permissions under both documented payload
    shapes) that activates the moment upstream wires it. The enforcing control is
    the `tool.execute.before` throw.
-4. **Floating leading-`**` rails and in-session directory deletion.** The
+3. **Floating leading-`**` rails and in-session directory deletion.** The
    in-session shell guard denies deleting/moving a rail's *fixed-anchor* parent
    (`rm -rf test` vs `test/**`, `rm -rf packages/foo/test` vs
    `packages/*/test/**`, `rm -rf .`). A rail with a *leading* `**` (e.g.

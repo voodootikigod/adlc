@@ -21,6 +21,7 @@ import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
 import { createFlailTracker, flailMessage } from './lib/flail.mjs';
+import { buildGateTool } from './lib/gate-tool.mjs';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
 
@@ -73,7 +74,27 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   const isStructuredMutator = (name) =>
     !READONLY_TOOLS.includes(name) && !UNGATED_TOOLS.includes(name) && !SHELL_TOOLS.includes(name);
 
+  // Phase 4.2: register the native `adlc_gate` tool the model can call directly.
+  // Its args need the host's zod (`tool.schema` from @opencode-ai/plugin — a peer
+  // dep at runtime inside opencode, also a devDependency so unit tests exercise
+  // the real schema). Import lazily; if it is unavailable or shape-mismatched the
+  // tool is not registered, and that degradation must be VISIBLE — a silent drop
+  // would present as "the model never calls gates". Registration+execute is
+  // proven end-to-end by scripts/opencode-live-tool.mjs against a real binary.
+  let toolHook;
+  try {
+    const { tool } = await import('@opencode-ai/plugin');
+    if (tool?.schema) {
+      toolHook = buildGateTool(tool.schema, { root, client });
+    } else {
+      console.error('[adlc] @opencode-ai/plugin exposes no tool.schema — adlc_gate tool NOT registered');
+    }
+  } catch (err) {
+    console.error(`[adlc] adlc_gate tool NOT registered (@opencode-ai/plugin unavailable: ${err?.message ?? err})`);
+  }
+
   return {
+    ...(toolHook ? { tool: toolHook } : {}),
     'tool.execute.before': async (input, output) => {
       const tool = input?.tool;
       if (!tool) return;

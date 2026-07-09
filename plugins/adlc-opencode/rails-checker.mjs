@@ -37,7 +37,36 @@ export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch',
 // First-party tools with no single-file mutation semantics, deliberately not
 // gated in-session (they don't write files). Anything NOT in this list,
 // SHELL_TOOLS, or READONLY_TOOLS is treated as potentially mutating.
-export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question'];
+// `adlc_gate` is THIS plugin's own tool (Phase 4.2): it dispatches `adlc <gate>`
+// and never edits files through OpenCode's edit tools, so it must be recognized
+// here — otherwise the rail guard would treat it as an unknown mutator and deny
+// the plugin's own tool before execute() runs. It is NOT a blanket allow: while
+// rails are in force its nested gate argv gets its own policy (literal token
+// scan, read-only allowlist, effective-target and mutation-flag checks) below.
+export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_gate'];
+
+// Gates that may run through adlc_gate while rails are FROZEN: read-only by
+// default ("writers default to dry-run" is the repo-wide gate contract; the
+// mutation opt-in flags are denied separately). Deliberately absent — gates
+// that write with DERIVED or DEFAULTED targets an argv scan cannot vet:
+//   hollow-test (expands its --rails file's globs and mutates the matches),
+//   review-calibration (plants mutants into commit-derived files via
+//     writeFileSync, then restores — same mutate/restore class as hollow-test),
+//   consensus-fix (applies candidate repairs to --files),
+//   behavior-diff (capture writes its output),
+//   gate-fuzzing (executes adversary setup/witness code; CI-sandbox-only),
+// and any unknown/future gate (fail closed). Command-executor flags (--*cmd)
+// are denied for EVERY gate — they run an arbitrary program no argv scan can
+// vet. Known fixed write targets are vetted instead of denied, because
+// mid-build evidence recording is a legitimate railed-session write:
+// gate-manifest's ledger (--dir or .adlc default), any gate's --record-verdict
+// (writes the gate-manifest ledger), and preflight's self-cleaning scratch
+// probes (.adlc/tmp/preflight-test, .worktrees/preflight-test).
+export const RAILS_SAFE_GATES = new Set([
+  'preflight', 'spec-lint', 'premortem', 'parallax', 'coldstart',
+  'merge-forecast', 'model-router', 'rejection-mining',
+  'lesson-foundry', 'skill-rot', 'model-ratchet', 'flail-detector', 'rails-guard',
+]);
 
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {
@@ -261,6 +290,106 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         const hit = railHit(target, force.rails, root);
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
+        }
+      }
+      // adlc_gate (our own Phase 4.2 tool) forwards a NESTED CLI argv in
+      // args.args that extractTargets never sees, and several gates DERIVE or
+      // DEFAULT their write targets internally (hollow-test expands the rails
+      // globs of whatever --rails file it is handed and mutates the matches;
+      // gate-manifest with no --dir writes the default .adlc ledger) — so a
+      // literal argv scan alone cannot vet what a gate will write. Close the
+      // CLASS, not the instance:
+      //   (1) literal token scan (incl. --flag=value payloads and comma-lists)
+      //       against the rails;
+      //   (2) only read-only-by-default gates may run through adlc_gate while
+      //       rails are in force ("writers default to dry-run" is the repo-wide
+      //       gate contract); derived-write gates are denied here — the CLI
+      //       remains their path, where the CI diff gate is the backstop;
+      //   (3) gate-manifest (legit mid-build evidence writer) is vetted by its
+      //       EFFECTIVE target: the --dir value or the .adlc default;
+      //   (4) mutation opt-in flags (--write/--record/--append/--apply/--fix)
+      //       turn dry-run gates into writers with derived targets → deny.
+      if (name === 'adlc_gate') {
+        const gate = String(args?.gate ?? '').trim().toLowerCase();
+        const nested = (Array.isArray(args?.args) ? args.args : []).filter((t) => typeof t === 'string');
+        const deny = (why) => ({ decision: 'deny', reason: `adlc_gate(${gate || '?'}): ${why} (active ticket ${force.ticketId}) — run the gate via the adlc CLI instead, where the CI diff gate backstops it` });
+        // (1) literal tokens — flags' inline values and comma-separated lists included
+        for (const raw of nested) {
+          let token = raw.trim();
+          if (!token) continue;
+          if (token.startsWith('-')) {
+            const eq = token.indexOf('=');
+            if (eq === -1) continue; // bare flag; its value arrives as the next token
+            token = token.slice(eq + 1).trim();
+            if (!token) continue;
+          }
+          for (const part of token.split(',')) {
+            const p = part.trim();
+            if (!p) continue;
+            const hit = railHit(p, force.rails, root);
+            if (hit) return deny(`nested argument "${raw}" resolves to frozen rail "${hit}"`);
+          }
+        }
+        // (4) mutation opt-ins — a dry-run gate becomes a writer whose target we can't vet
+        const MUTATION_FLAGS = new Set(['--write', '--record', '--append', '--apply', '--fix']);
+        for (const raw of nested) {
+          const flag = raw.trim().split('=')[0];
+          if (MUTATION_FLAGS.has(flag)) return deny(`mutation flag "${flag}" requests a write with a gate-derived target`);
+          // (5) command-executor flags (--review-cmd, --test-cmd, and any future
+          // --*cmd) hand the gate an ARBITRARY PROGRAM to run — spawnSync with
+          // shell:false stops metachar injection but not the program itself,
+          // which can write any path including the tickets.json trust root.
+          // No argv scan can vet a command string, so fail closed for every
+          // gate; the read-only DEFAULT invocations stay legal.
+          if (/^--[a-z][a-z-]*cmd$/.test(flag)) return deny(`command-executor flag "${flag}" runs an arbitrary program, which an in-session guard cannot vet`);
+        }
+        // (3) ledger writes are vetted on the EFFECTIVE ledger FILE (not the
+        // directory — the directory always ancestor-hits the implicit
+        // tickets.json trust-root rail, which would outlaw legitimate mid-build
+        // evidence recording). Three surfaces write a ledger:
+        //   gate-manifest            → <--dir | .adlc>/manifest.jsonl
+        //   <any gate> --record-verdict → .adlc/manifest.jsonl (via gate-manifest)
+        //   model-ratchet --review-cmd  → .adlc/findings.jsonl (appendEntry)
+        const hasFlag = (flag) => nested.some((t) => { const s = t.trim(); return s === flag || s.startsWith(`${flag}=`); });
+        const vetLedger = (path) => {
+          const hit = railHit(path, force.rails, root);
+          return hit ? deny(`gate write target "${path}" resolves to frozen rail "${hit}"`) : null;
+        };
+        if (gate === 'gate-manifest') {
+          let effectiveDir = '.adlc';
+          for (let i = 0; i < nested.length; i++) {
+            const t = nested[i].trim();
+            if (t === '--dir' && typeof nested[i + 1] === 'string') effectiveDir = nested[i + 1].trim();
+            else if (t.startsWith('--dir=')) effectiveDir = t.slice('--dir='.length).trim();
+          }
+          const denied = vetLedger(`${effectiveDir.replace(/\/+$/, '')}/manifest.jsonl`);
+          if (denied) return denied;
+        } else if (!RAILS_SAFE_GATES.has(gate)) {
+          // (2) not proven read-only-by-default (hollow-test, review-calibration,
+          // consensus-fix, behavior-diff, gate-fuzzing, unknown/future gates)
+          // → fail closed
+          return deny('this gate derives or defaults its write targets, which an in-session argv scan cannot vet while rails are frozen');
+        } else {
+          if (hasFlag('--record-verdict')) {
+            const denied = vetLedger('.adlc/manifest.jsonl');
+            if (denied) return denied;
+          }
+          // preflight's DEFAULT run probes writability with fixed, self-cleaning
+          // scratch writes: .adlc/tmp/preflight-test, the .worktrees/preflight-test
+          // worktree, and the git metadata its branch/worktree probes churn
+          // (refs + .git/worktrees). Vet those known paths instead of denying
+          // the gate — they only conflict when explicitly railed.
+          if (gate === 'preflight') {
+            for (const scratch of [
+              '.adlc/tmp/preflight-test',
+              '.worktrees/preflight-test',
+              '.git/refs/heads/preflight-test-branch',
+              '.git/worktrees/preflight-test',
+            ]) {
+              const denied = vetLedger(scratch);
+              if (denied) return denied;
+            }
+          }
         }
       }
     }

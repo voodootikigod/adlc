@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.3",
+    "@opencode-ai/plugin": "^1.17.13",
     "typescript": "^5.4.5"
   },
   "license": "MIT"
