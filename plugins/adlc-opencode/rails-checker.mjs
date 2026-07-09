@@ -33,7 +33,13 @@ export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch',
 // First-party tools with no single-file mutation semantics, deliberately not
 // gated in-session (they don't write files). Anything NOT in this list,
 // SHELL_TOOLS, or READONLY_TOOLS is treated as potentially mutating.
-export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question'];
+// `adlc_gate` is THIS plugin's own tool (Phase 4.2): it dispatches `adlc <gate>`
+// and never edits files through OpenCode's edit tools, so it must be recognized
+// here — otherwise the rail guard would treat it as an unknown mutator and deny
+// the plugin's own tool before execute() runs. Its own args carry no file
+// target, so the ungated spoof guard is a no-op for it; any gate that writes
+// files does so via the CLI, which the CI diff gate covers.
+export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_gate'];
 
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {

@@ -50,6 +50,13 @@ jobs:
           npm install -g opencode-ai@1.17.13
           node scripts/opencode-live-deny.mjs --require
 
+      # Phase 4 live proof: the native adlc_gate tool registers + is model-callable,
+      # and the keyless bridge drives a child session end-to-end. Pinned to the
+      # opencode whose tool-hook + session SDK is source-verified (1.17.13).
+      - name: OpenCode live tool + keyless proof (Phase 4)
+        if: matrix.node-version == 20
+        run: node scripts/opencode-live-tool.mjs --require
+
   pre-ga-gate:
     # Explicit CI gate that fails with a clear message while either of the two
     # unverified Pre-GA assumptions documented in docs/adr/0003-adlc-claude-code-plugin.md

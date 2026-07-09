@@ -16,6 +16,7 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "@opencode-ai/plugin": "^1.17.13",
     "typescript": "^5.4.5"
   },
   "license": "MIT"

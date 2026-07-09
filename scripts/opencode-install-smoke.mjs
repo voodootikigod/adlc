@@ -160,7 +160,26 @@ else {
     if (!new RegExp(`export (async )?function ${fn}\\b`).test(br)) fail(`keyless-bridge missing export ${fn}`);
   }
   if (!/--prompt-only/.test(br)) fail('keyless-bridge does not run gates in --prompt-only mode');
-  ok('keyless bridge present (extractPrompts/runGateKeyless/makeAsk, prompt-only)');
+  // Phase 4.1: makeAsk must use the real SDK (session.create/prompt), not the
+  // old fictional isolated-prompt extension.
+  if (!/session\.create/.test(br) || !/session\.prompt/.test(br)) fail('keyless-bridge makeAsk is not wired to the real SDK (session.create/prompt)');
+  else ok('Phase 4.1: keyless bridge wired to real SDK (session.create + session.prompt)');
+}
+
+// ---- Phase 4.2: native adlc_gate custom tool (formerly-dead keyless bridge now LIVE) ----
+{
+  const idx = read(indexPath);
+  if (!existsSync(join(PLUGIN, 'lib', 'gate-tool.mjs'))) fail('lib/gate-tool.mjs missing');
+  else {
+    const gt = read(join(PLUGIN, 'lib', 'gate-tool.mjs'));
+    if (!/export function buildGateTool\b/.test(gt)) fail('gate-tool missing buildGateTool export'); else ok('gate-tool: buildGateTool present');
+    // The keyless bridge is no longer dead code — gate-tool calls it for LLM gates.
+    if (!/from '\.\/keyless-bridge\.mjs'/.test(gt)) fail('gate-tool does not call the keyless bridge (it would stay dead code)'); else ok('Phase 4.2: adlc_gate calls the keyless bridge for LLM gates (bridge is LIVE)');
+  }
+  if (!/import\('@opencode-ai\/plugin'\)/.test(idx)) fail('index.mjs does not lazily import the plugin tool helper'); else ok('index.mjs registers the tool hook (lazy peer-dep import)');
+  if (!/tool: toolHook|\.\.\.\(toolHook/.test(idx)) fail('index.mjs does not expose the tool hook on the returned hooks'); else ok('index.mjs exposes the adlc_gate tool hook');
+  // AC: the live tool proof exists (runs a real opencode binary in CI).
+  if (!existsSync(join(ROOT, 'scripts', 'opencode-live-tool.mjs'))) fail('scripts/opencode-live-tool.mjs missing (AC: live adlc_gate + keyless proof)'); else ok('live adlc_gate + keyless proof script present');
 }
 
 if (!existsSync(join(PLUGIN, 'gate-bins.mjs'))) fail('gate-bins.mjs missing');
