@@ -33,6 +33,7 @@ import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from './doctrine.mjs';
 import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
 import { createFlailTracker } from './flail.mjs';
+import { registerCommands } from './commands.mjs';
 
 // Bound the pending-snapshot map: a blocked call never gets a tool_result, so
 // stale entries are evicted oldest-first well past any realistic concurrency.
@@ -450,6 +451,16 @@ export function createExtension({ env = process.env } = {}) {
           'info'
         );
       },
+    });
+
+    // Interactive `/adlc-*` command surface (spec Phase 3.1). Handlers act on
+    // behalf of the human, so /adlc-ticket writes the trust-root pointer
+    // directly and calls reload() so the next tool_call gates the new ticket.
+    registerCommands(pi, {
+      env,
+      reload,
+      getActive: () => active,
+      getCwd: () => activeCwd,
     });
 
     // Exposed for tests only (not part of the pi extension contract).
