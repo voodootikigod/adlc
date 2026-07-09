@@ -49,7 +49,15 @@ export async function runGateKeyless({ bin, args = [], ask, spawnImpl = spawnSyn
   if (typeof ask !== 'function') throw new Error('runGateKeyless: an ask(prompt) function is required');
   const res = spawnImpl(bin, [...args, '--prompt-only'], { cwd, encoding: 'utf8' });
   if (res.status !== 0) {
-    throw new Error(`gate ${bin} --prompt-only exited ${res.status}: ${(res.stderr || '').trim()}`);
+    const stderr = (res.stderr || '').trim();
+    const err = new Error(`gate ${bin} --prompt-only exited ${res.status}: ${stderr}`);
+    // Distinguish "this gate does not IMPLEMENT --prompt-only" (caller may fall
+    // back to the plain CLI) from a genuine failure of a prompt-only-supporting
+    // gate (must surface, not be silently downgraded to a CLI run).
+    if (/ERR_PARSE_ARGS_UNKNOWN_OPTION|unknown option.{0,4}--prompt-only/i.test(stderr)) {
+      err.code = 'PROMPT_ONLY_UNSUPPORTED';
+    }
+    throw err;
   }
   const prompts = extractPrompts(res.stdout);
   if (prompts.length > maxPrompts) {

@@ -90,10 +90,12 @@ export async function runGateKeyless2({ gate, args = [], client, parentID, cwd =
       metadata: { gate, keyless: true, prompts: prompts.length, llmBacked: true },
     };
   } catch (err) {
-    // The gate itself rejected --prompt-only (set drift, or an upstream flag
+    // The gate does not IMPLEMENT --prompt-only (set drift, or an upstream flag
     // change): the gate is runnable, just not keyless — fall back to the plain
-    // CLI instead of reporting a failure for a working gate.
-    if (/--prompt-only exited/.test(String(err?.message ?? ''))) return null;
+    // CLI. Matched by the bridge's explicit error code, NOT by message shape: a
+    // genuine nonzero exit from a prompt-only-supporting gate (bad args, crash)
+    // must surface as keyless-failed, not be silently downgraded to a CLI run.
+    if (err?.code === 'PROMPT_ONLY_UNSUPPORTED') return null;
     return {
       title: `adlc_gate: ${gate} keyless run failed`,
       output: `Keyless dispatch of ${gate} failed: ${String(err?.message ?? err)}.`,
@@ -117,7 +119,10 @@ export function buildGateTool(schema, { root = process.cwd(), client, spawnImpl 
         'Run an ADLC lifecycle gate and return its result. Gates: ' +
         `${GATE_BINS.join(', ')}. Prefer this over shelling out to \`adlc\` directly ` +
         '— it validates the gate name, runs LLM-backed gates keyless through the ' +
-        'session model, and returns structured output.',
+        'session model, and returns structured output. While rails are frozen, ' +
+        'write-capable gates (hollow-test, consensus-fix, behavior-diff, ' +
+        'gate-fuzzing) and mutation flags (--write/--record/--append) are denied ' +
+        'here — run those via the `adlc` CLI instead.',
       args: {
         gate: schema.string().describe('The ADLC gate to run, e.g. "preflight", "spec-lint", "coldstart", "merge-forecast".'),
         args: schema.array(schema.string()).optional().describe('Extra CLI arguments for the gate, e.g. ["--json"].'),

@@ -216,13 +216,15 @@ test('non-timeout session.prompt rejection → structured keyless-failed (never 
 
 // ---- P5 cross-model finding: keyless set must equal the gates that IMPLEMENT --prompt-only ----
 
-test('every LLM_BACKED_GATES member actually implements --prompt-only (source-of-truth audit)', async () => {
+test('LLM_BACKED_GATES equals EXACTLY the gates implementing --prompt-only (two-way audit)', async () => {
   // skill-rot (and merge-forecast, model-router, hollow-test, behavior-diff)
   // reject --prompt-only with ERR_PARSE_ARGS_UNKNOWN_OPTION; routing them
-  // keyless made a working gate fail. Ground the set in each package's source.
+  // keyless made a working gate fail. Ground the set in each package's source,
+  // BOTH ways: a member must implement the flag, and a gate that grows the
+  // flag later must be added to the set (drift fails this test, not runtime).
   const { readdirSync, readFileSync: rf, existsSync } = await import('node:fs');
   const pkgRoot = new URL('../../../packages/', import.meta.url).pathname;
-  for (const gate of LLM_BACKED_GATES) {
+  for (const gate of GATE_BINS) {
     const dir = join(pkgRoot, gate);
     assert.ok(existsSync(dir), `packages/${gate} exists`);
     const sources = [];
@@ -231,8 +233,26 @@ test('every LLM_BACKED_GATES member actually implements --prompt-only (source-of
       if (!existsSync(d)) continue;
       for (const f of readdirSync(d)) if (f.endsWith('.mjs')) sources.push(rf(join(d, f), 'utf8'));
     }
-    assert.ok(sources.some((s) => s.includes('prompt-only')), `packages/${gate} implements --prompt-only`);
+    const implementsPromptOnly = sources.some((s) => s.includes('prompt-only'));
+    assert.equal(
+      LLM_BACKED_GATES.has(gate), implementsPromptOnly,
+      `packages/${gate}: prompt-only support (${implementsPromptOnly}) must match LLM_BACKED_GATES membership (${LLM_BACKED_GATES.has(gate)})`,
+    );
   }
+});
+
+test('a GENUINE prompt-only failure surfaces as keyless-failed, not a silent CLI downgrade', async () => {
+  const client = mockSessionClient('unused');
+  const calls = [];
+  const spawnImpl = (_bin, args) => {
+    calls.push(args);
+    // supports --prompt-only, but crashes for a real reason (bad args, bug)
+    return { status: 1, stderr: 'TypeError: cannot read spec — boom' };
+  };
+  const def = buildGateTool(fakeSchema, { root: '/p', client, spawnImpl });
+  const r = await def.adlc_gate.execute({ gate: 'spec-lint' }, { sessionID: 'parent' });
+  assert.equal(r.metadata.error, 'keyless-failed', 'genuine failure surfaced');
+  assert.equal(calls.length, 1, 'no silent CLI fallback for a genuine failure');
 });
 
 test('a gate rejecting --prompt-only falls back to the plain CLI, not keyless-failed', async () => {

@@ -36,10 +36,27 @@ export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch',
 // `adlc_gate` is THIS plugin's own tool (Phase 4.2): it dispatches `adlc <gate>`
 // and never edits files through OpenCode's edit tools, so it must be recognized
 // here — otherwise the rail guard would treat it as an unknown mutator and deny
-// the plugin's own tool before execute() runs. Its own args carry no file
-// target, so the ungated spoof guard is a no-op for it; any gate that writes
-// files does so via the CLI, which the CI diff gate covers.
+// the plugin's own tool before execute() runs. It is NOT a blanket allow: while
+// rails are in force its nested gate argv gets its own policy (literal token
+// scan, read-only allowlist, effective-target and mutation-flag checks) below.
 export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_gate'];
+
+// Gates that may run through adlc_gate while rails are FROZEN: read-only by
+// default ("writers default to dry-run" is the repo-wide gate contract; the
+// mutation opt-in flags are denied separately). Deliberately absent — gates
+// that write with DERIVED or DEFAULTED targets an argv scan cannot vet:
+//   hollow-test (expands its --rails file's globs and mutates the matches),
+//   consensus-fix (applies candidate repairs to --files),
+//   behavior-diff (capture writes its output),
+//   gate-fuzzing (executes adversary setup/witness code; CI-sandbox-only),
+// and any unknown/future gate (fail closed). gate-manifest is special-cased on
+// its effective --dir/.adlc target because mid-build evidence recording is a
+// legitimate railed-session write.
+export const RAILS_SAFE_GATES = new Set([
+  'preflight', 'spec-lint', 'premortem', 'parallax', 'coldstart',
+  'merge-forecast', 'model-router', 'review-calibration', 'rejection-mining',
+  'lesson-foundry', 'skill-rot', 'model-ratchet', 'flail-detector', 'rails-guard',
+]);
 
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {
@@ -290,16 +307,28 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         }
       }
       // adlc_gate (our own Phase 4.2 tool) forwards a NESTED CLI argv in
-      // args.args that extractTargets never sees — a gate invocation like
-      // gate-manifest record --dir <railed-path> would otherwise ride the
-      // ungated name straight past the rails. Scan every nested token (and
-      // --flag=value payloads) against the rails; deny on any hit, for every
-      // gate — a rare legit rail-reading invocation can use the CLI directly,
-      // where the CI diff gate still backstops it.
+      // args.args that extractTargets never sees, and several gates DERIVE or
+      // DEFAULT their write targets internally (hollow-test expands the rails
+      // globs of whatever --rails file it is handed and mutates the matches;
+      // gate-manifest with no --dir writes the default .adlc ledger) — so a
+      // literal argv scan alone cannot vet what a gate will write. Close the
+      // CLASS, not the instance:
+      //   (1) literal token scan (incl. --flag=value payloads and comma-lists)
+      //       against the rails;
+      //   (2) only read-only-by-default gates may run through adlc_gate while
+      //       rails are in force ("writers default to dry-run" is the repo-wide
+      //       gate contract); derived-write gates are denied here — the CLI
+      //       remains their path, where the CI diff gate is the backstop;
+      //   (3) gate-manifest (legit mid-build evidence writer) is vetted by its
+      //       EFFECTIVE target: the --dir value or the .adlc default;
+      //   (4) mutation opt-in flags (--write/--record/--append/--apply/--fix)
+      //       turn dry-run gates into writers with derived targets → deny.
       if (name === 'adlc_gate') {
-        const nested = Array.isArray(args?.args) ? args.args : [];
+        const gate = String(args?.gate ?? '').trim().toLowerCase();
+        const nested = (Array.isArray(args?.args) ? args.args : []).filter((t) => typeof t === 'string');
+        const deny = (why) => ({ decision: 'deny', reason: `adlc_gate(${gate || '?'}): ${why} (active ticket ${force.ticketId}) — run the gate via the adlc CLI instead, where the CI diff gate backstops it` });
+        // (1) literal tokens — flags' inline values and comma-separated lists included
         for (const raw of nested) {
-          if (typeof raw !== 'string') continue;
           let token = raw.trim();
           if (!token) continue;
           if (token.startsWith('-')) {
@@ -308,10 +337,37 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
             token = token.slice(eq + 1).trim();
             if (!token) continue;
           }
-          const hit = railHit(token, force.rails, root);
-          if (hit) {
-            return { decision: 'deny', reason: `adlc_gate nested argument "${raw}" resolves to frozen rail "${hit}" (active ticket ${force.ticketId}) — run the gate against non-rail paths, or use the CLI where the CI diff gate applies` };
+          for (const part of token.split(',')) {
+            const p = part.trim();
+            if (!p) continue;
+            const hit = railHit(p, force.rails, root);
+            if (hit) return deny(`nested argument "${raw}" resolves to frozen rail "${hit}"`);
           }
+        }
+        // (4) mutation opt-ins — a dry-run gate becomes a writer whose target we can't vet
+        const MUTATION_FLAGS = new Set(['--write', '--record', '--append', '--apply', '--fix']);
+        for (const raw of nested) {
+          const flag = raw.trim().split('=')[0];
+          if (MUTATION_FLAGS.has(flag)) return deny(`mutation flag "${flag}" requests a write with a gate-derived target`);
+        }
+        // (3) gate-manifest writes its ledger under --dir, defaulting to .adlc.
+        // Vet the LEDGER FILE it will write, not the directory: the directory
+        // always ancestor-hits the implicit tickets.json trust-root rail, which
+        // would outlaw legitimate mid-build evidence recording.
+        if (gate === 'gate-manifest') {
+          let effectiveDir = '.adlc';
+          for (let i = 0; i < nested.length; i++) {
+            const t = nested[i].trim();
+            if (t === '--dir' && typeof nested[i + 1] === 'string') effectiveDir = nested[i + 1].trim();
+            else if (t.startsWith('--dir=')) effectiveDir = t.slice('--dir='.length).trim();
+          }
+          const ledger = `${effectiveDir.replace(/\/+$/, '')}/manifest.jsonl`;
+          const hit = railHit(ledger, force.rails, root);
+          if (hit) return deny(`manifest ledger "${ledger}" resolves to frozen rail "${hit}"`);
+        } else if (!RAILS_SAFE_GATES.has(gate)) {
+          // (2) not proven read-only-by-default (hollow-test, consensus-fix,
+          // behavior-diff, gate-fuzzing, unknown/future gates) → fail closed
+          return deny('this gate derives or defaults its write targets, which an in-session argv scan cannot vet while rails are frozen');
         }
       }
     }
