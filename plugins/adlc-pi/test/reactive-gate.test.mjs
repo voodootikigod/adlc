@@ -242,6 +242,59 @@ test('bash rail EDIT is restored to pre-command content (not HEAD)', async () =>
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('degraded bash snapshot never DELETES a modified rail — reports unrestorable', async () => {
+  const root = makeRepo();
+  try {
+    const railPath = join(root, 'test', 'contracts', 'auth.test.ts');
+    const pi = fakePi({
+      // git introspection broken at tool_call time → degraded snapshot…
+      'git ls-files': () => { throw new Error('git broken'); },
+      // …but status recovers by result time and shows the rail modified.
+      'git status --porcelain': ' M test/contracts/auth.test.ts\n',
+    });
+    createExtension({ env: {} })(pi);
+    const ctx = fakeCtx(root);
+    await pi.handlers.session_start({ type: 'session_start', reason: 'startup' }, ctx);
+
+    await pi.handlers.tool_call(bashCall('cp src/a.ts src/b.ts'), ctx);
+    writeFileSync(railPath, 'modified during degraded call\n');
+
+    const result = await pi.handlers.tool_result(bashResult(), ctx);
+    assert.equal(result.isError, true);
+    assert.ok(existsSync(railPath), 'a modified rail must never be deleted on a degraded snapshot');
+    assert.match(result.content[0].text, /restore these manually|degraded/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('suppression-scan cap trip is surfaced as a warning, not silent', async () => {
+  const root = makeRepo();
+  try {
+    const count = 55; // > BASH_SCAN_FILE_CAP
+    const statusLines = [];
+    for (let i = 0; i < count; i++) {
+      writeFileSync(join(root, 'src', `f${i}.ts`), 'clean\n');
+      statusLines.push(`?? src/f${i}.ts`);
+    }
+    const { pi, ctx } = await boot(root, {
+      'git ls-files': '',
+      'git status --porcelain': () => statusLines.join('\n') + '\n',
+    });
+
+    await pi.handlers.tool_call(bashCall('cp src/a.ts src/b.ts'), ctx);
+    // Pre-call status already listed them, so make them "touched": the fake
+    // returns identical status both times, but preStamps captured their
+    // hashes — rewrite one byte so every file's stamp changes.
+    for (let i = 0; i < count; i++) writeFileSync(join(root, 'src', `f${i}.ts`), 'clean2\n');
+
+    const result = await pi.handlers.tool_result(bashResult(), ctx);
+    assert.equal(result, undefined, 'no violations — clean content');
+    assert.ok(
+      ctx.notices.some((n) => n.l === 'warning' && /truncated/.test(n.m)),
+      'cap trip must emit a truncation warning'
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('read-only bash commands are not snapshotted or scanned', async () => {
   const root = makeRepo();
   try {

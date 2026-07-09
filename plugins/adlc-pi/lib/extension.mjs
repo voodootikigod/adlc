@@ -216,14 +216,21 @@ export function createExtension({ env = process.env } = {}) {
       }
 
       // New files created by THIS call that land on a rail glob (not in the
-      // pre-call rail set) are removed — they did not exist before.
+      // pre-call rail set) are removed — they did not exist before. On a
+      // DEGRADED snapshot we cannot know whether the file pre-existed, so
+      // deleting would destroy a rail that was merely modified; report it as
+      // unrestorable instead (P5 finding: degraded-bash rail deletion).
       const postStatus = await git(['status', '--porcelain']);
       const touched = touchedSince(activeCwd, entry.preStamps, postStatus);
       for (const path of touched) {
         if (entry.railFiles.has(path)) continue;
         if (railHit(path, active.ticket, activeCwd)) {
           railViolations.push(path);
-          if (!restoreSnapshot(activeCwd, { path, existed: false })) unrestorable.push(path);
+          if (entry.degraded) {
+            unrestorable.push(path);
+          } else if (!restoreSnapshot(activeCwd, { path, existed: false })) {
+            unrestorable.push(path);
+          }
         }
       }
 
@@ -244,8 +251,17 @@ export function createExtension({ env = process.env } = {}) {
         };
       }
 
-      // Suppression scan over the files THIS call touched (bounded).
-      const scanFiles = touched.filter((p) => !railHit(p, active.ticket, activeCwd)).slice(0, BASH_SCAN_FILE_CAP);
+      // Suppression scan over the files THIS call touched (bounded). A cap
+      // trip is surfaced loudly — silent truncation would read as "scanned
+      // everything" (P5 finding: silent suppression truncation).
+      const nonRailTouched = touched.filter((p) => !railHit(p, active.ticket, activeCwd));
+      const scanFiles = nonRailTouched.slice(0, BASH_SCAN_FILE_CAP);
+      if (nonRailTouched.length > scanFiles.length) {
+        ctx.ui.notify(
+          `ADLC: suppression scan truncated to ${scanFiles.length} of ${nonRailTouched.length} touched files — the CI rails-guard gate remains the backstop`,
+          'warning'
+        );
+      }
       const allViolations = [];
       const contents = new Map();
       for (const path of scanFiles) {
