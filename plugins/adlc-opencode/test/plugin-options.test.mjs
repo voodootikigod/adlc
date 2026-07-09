@@ -130,3 +130,24 @@ test('option-sourced weakenings are announced ONCE at plugin load (incl. the oth
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- T30 review round-1: build-gate must honor the EFFECTIVE ungated set ----
+test('ungatedTools option survives the build-gate backstop (degraded high-risk session)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-opts-'));
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T1', risk: 'high', rails: ['frozen/**'] }] }));
+  await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_UNGATED_TOOLS: undefined }, async () => {
+    const call = (hooks, tool) =>
+      hooks['tool.execute.before']({ tool, sessionID: 'sess', callID: 'c' }, { args: { query: 'x' } });
+    // degrade the session hard: compaction IS the context-rot event
+    const relaxed = await adlcRailsGuard({ worktree: dir }, { ungatedTools: ['symbols_index'] });
+    await relaxed.event({ event: { type: 'session.compacted', properties: { sessionID: 'sess' } } });
+    // configured ungated tool passes BOTH the rails guard and the build gate
+    await call(relaxed, 'symbols_index');
+    // negative twin: without the option the same tool is denied (fail-closed default)
+    const strict = await adlcRailsGuard({ worktree: dir });
+    await strict.event({ event: { type: 'session.compacted', properties: { sessionID: 'sess' } } });
+    await assert.rejects(() => call(strict, 'symbols_index'));
+  }).finally(() => rmSync(dir, { recursive: true, force: true }));
+});

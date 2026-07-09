@@ -113,8 +113,15 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     throw new Error(message);
   };
 
+  // The EFFECTIVE ungated set includes operator additions (env or plugin
+  // option) — the build-gate backstop must honor the same set as the rails
+  // guard, or a configured ungated tool gets denied exactly in the degraded
+  // high-risk case the option exists for (T30 review round-1 finding).
+  const extraUngated = String(env.ADLC_UNGATED_TOOLS ?? '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   const isStructuredMutator = (name) =>
-    !READONLY_TOOLS.includes(name) && !UNGATED_TOOLS.includes(name) && !SHELL_TOOLS.includes(name);
+    !READONLY_TOOLS.includes(name) && !UNGATED_TOOLS.includes(name) &&
+    !SHELL_TOOLS.includes(name) && !extraUngated.includes(name);
 
   // Phase 4.2: register the native `adlc_gate` tool the model can call directly.
   // Its args need the host's zod (`tool.schema` from @opencode-ai/plugin — a peer
