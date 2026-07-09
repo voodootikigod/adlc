@@ -84,6 +84,34 @@ test('AC1: one finding in round 1, converges, records the confirmed finding, cou
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('F2: loop-until-dry converges BEFORE maxRounds — the shouldContinue break is load-bearing', async () => {
+  // maxRounds is deliberately ABOVE the natural convergence point (3) so that a
+  // regression disabling the dry-pass break would run all 5 rounds — spawning
+  // extra fresh-context lens children undetected (P5 finding F2). Correct code
+  // stops at round 3 (r1 confirmed, r2+r3 dry === maxDry).
+  const dir = mkdtempSync(join(tmpdir(), 'pi-pros-f2-'));
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
+  try {
+    const { runLens } = scriptRunner({
+      lensByRound: (round, prompt) =>
+        round === 1 && prompt.includes('auth/trust boundaries') ? [finding()] : [],
+      vote: { real: true },
+    });
+    const summary = await prosecute({
+      diff: DIFF,
+      ticket: TICKET,
+      runLens,
+      recordDir: adlc,
+      record: () => {},
+      options: { maxRounds: 5, maxDry: 2 },
+    });
+    assert.equal(summary.rounds, 3, 'must converge at maxDry, not run to maxRounds=5');
+    assert.equal(summary.dryPasses, 2);
+    assert.equal(summary.verdict, 'FINDINGS');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('AC1 (real recorder): the confirmed finding is appended to .adlc/findings.jsonl', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pi-pros-ledger-'));
   const adlc = join(dir, '.adlc');

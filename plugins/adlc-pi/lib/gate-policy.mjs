@@ -103,10 +103,16 @@ export function checkGateArgv({ gate, args = [], ticket, root }) {
   // (2) mutation opt-ins and (3) command-executor flags — denied for EVERY gate.
   for (const raw of nested) {
     const flag = raw.trim().split('=')[0];
-    if (MUTATION_FLAGS.has(flag)) return deny(`mutation flag "${flag}" requests a write with a gate-derived target`);
-    // --review-cmd, --test-cmd, and any future --*cmd hand the gate an arbitrary
-    // program to run — no argv scan can vet a command string. Fail closed.
-    if (/^--[a-z][a-z-]*cmd$/.test(flag)) return deny(`command-executor flag "${flag}" runs an arbitrary program, which an in-session guard cannot vet`);
+    const flagLc = flag.toLowerCase();
+    if (MUTATION_FLAGS.has(flag) || MUTATION_FLAGS.has(flagLc)) return deny(`mutation flag "${flag}" requests a write with a gate-derived target`);
+    // --review-cmd, --test-cmd, --allow-cmd, and any future *cmd/*command flag
+    // hand the gate an arbitrary program to run — no argv scan can vet a command
+    // string. Fail closed. Case-insensitive (P5 finding F3). Deliberately NOT
+    // broadened to run/exec/eval/shell: real read-only flags collide with those
+    // (`--dry-run`, `--eval`), so widening would false-deny legitimate gate use.
+    if (/^--[a-z][a-z-]*(?:cmd|command)$/.test(flagLc)) {
+      return deny(`command-executor flag "${flag}" runs an arbitrary program, which an in-session guard cannot vet`);
+    }
   }
 
   const hasFlag = (flag) => nested.some((t) => { const s = t.trim(); return s === flag || s.startsWith(`${flag}=`); });

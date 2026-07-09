@@ -178,10 +178,29 @@ test('execute: fail-closed deny when the enforcement context is broken', async (
   await assert.rejects(() => execute('tc', {}, undefined, undefined, {}), /ADLC Locked/);
 });
 
+// A fake git that resolves rev-parse to a sha and returns an empty diff. Records
+// every argv so a test can assert exactly what reached `git`.
+function fakeGit({ diff = '' } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async exec(cmd, args) {
+      calls.push([cmd, ...args]);
+      if (cmd === 'git' && args[0] === 'rev-parse') {
+        return { stdout: '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b\n', code: 0 };
+      }
+      if (cmd === 'git' && args[0] === 'merge-base') return { stdout: 'abc1234\n', code: 0 };
+      if (cmd === 'git' && args[0] === 'diff') return { stdout: diff, code: 0 };
+      return { stdout: '', code: 0 };
+    },
+  };
+}
+
 test('execute: empty diff (base=HEAD) returns CLEAN without spawning a runner', async () => {
   let spawned = false;
+  const pi = fakeGit({ diff: '' });
   const execute = makeProsecuteExecute({
-    pi: { async exec() { return { stdout: '' }; } }, // git diff → empty
+    pi,
     getActive: () => ({ ticketId: 'T1', ticket: { id: 'T1', title: 't' } }),
     getCwd: () => process.cwd(),
     runLensFactory: () => async () => { spawned = true; return '[]'; },
@@ -192,6 +211,62 @@ test('execute: empty diff (base=HEAD) returns CLEAN without spawning a runner', 
   assert.equal(result.details.rounds, 0);
   assert.equal(spawned, false, 'no lens child on an empty diff');
   assert.match(result.content[0].text, /CLEAN/);
+});
+
+test('F1: an option-shaped base ref is refused before it reaches git (no arbitrary --output write)', async () => {
+  const pi = fakeGit({ diff: '' });
+  const execute = makeProsecuteExecute({
+    pi,
+    getActive: () => ({ ticketId: 'T1', ticket: { id: 'T1', title: 't' } }),
+    getCwd: () => process.cwd(),
+    runLensFactory: () => async () => '[]',
+  });
+  // The attack: base='--output=<path>' would make `git diff` truncate a file.
+  await assert.rejects(
+    () => execute('tc', { base: '--output=test/contracts/frozen.test.ts' }, undefined, undefined, {}),
+    /refusing suspicious base ref/
+  );
+  // Crucially, `git diff` was NEVER invoked with the poisoned arg.
+  assert.ok(
+    !pi.calls.some((c) => c[0] === 'git' && c[1] === 'diff' && c.some((a) => String(a).startsWith('--output'))),
+    'no git diff carried the --output payload'
+  );
+});
+
+test('F1: a plausible-but-unresolvable base ref is rejected', async () => {
+  const pi = {
+    calls: [],
+    async exec(cmd, args) {
+      this.calls.push([cmd, ...args]);
+      if (args[0] === 'rev-parse') return { stdout: '', code: 1 }; // does not resolve
+      return { stdout: '', code: 0 };
+    },
+  };
+  const execute = makeProsecuteExecute({
+    pi,
+    getActive: () => ({ ticketId: 'T1', ticket: { id: 'T1', title: 't' } }),
+    getCwd: () => process.cwd(),
+    runLensFactory: () => async () => '[]',
+  });
+  await assert.rejects(
+    () => execute('tc', { base: 'no-such-ref' }, undefined, undefined, {}),
+    /does not resolve to a commit/
+  );
+});
+
+test('F1: a valid base ref resolves to a sha and diffs with a -- pathspec terminator', async () => {
+  const pi = fakeGit({ diff: '' });
+  const execute = makeProsecuteExecute({
+    pi,
+    getActive: () => ({ ticketId: 'T1', ticket: { id: 'T1', title: 't' } }),
+    getCwd: () => process.cwd(),
+    runLensFactory: () => async () => '[]',
+  });
+  await execute('tc', { base: 'main' }, undefined, undefined, {});
+  const diffCall = pi.calls.find((c) => c[0] === 'git' && c[1] === 'diff');
+  assert.ok(diffCall, 'git diff ran');
+  assert.equal(diffCall[diffCall.length - 1], '--', 'diff ends with the pathspec terminator');
+  assert.ok(/^[0-9a-f]{7,40}$/.test(diffCall[2]), 'base arg is the resolved sha, not raw model text');
 });
 
 // =========================================================================

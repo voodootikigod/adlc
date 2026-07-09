@@ -59,9 +59,39 @@ async function mergeBaseWithMain(pi, root) {
   }
 }
 
-/** The diff under prosecution: `git diff <base> HEAD`. Empty when base===HEAD. */
+/**
+ * `base` is MODEL-CONTROLLED (a tool param) and flows into `git diff <base>`.
+ * A value like `--output=<path>` would make git write/truncate an arbitrary
+ * file through the extension's own pi.exec — bypassing every rail gate (P5
+ * finding F1). Accept a base only when it (a) is not option-shaped and (b)
+ * resolves to a real commit via `git rev-parse --verify`. Anything else is
+ * rejected loudly; the caller falls back to the trusted merge-base default.
+ */
+export async function validateBaseRef(pi, root, base) {
+  if (typeof base !== 'string') return null;
+  const trimmed = base.trim();
+  if (trimmed === '') return null;
+  // Option-shaped or containing shell/path/whitespace metacharacters → reject.
+  // A git ref never legitimately starts with '-' or contains these.
+  if (trimmed.startsWith('-') || /[\s~^:?*[\]\\@{}]|\.\.|\/\//.test(trimmed)) {
+    throw new Error(`adlc_prosecute: refusing suspicious base ref "${base}"`);
+  }
+  try {
+    const res = await pi.exec('git', ['rev-parse', '--verify', '--quiet', `${trimmed}^{commit}`], { cwd: root });
+    const sha = (res?.stdout ?? '').trim();
+    if (res?.code === 0 && /^[0-9a-f]{7,40}$/.test(sha)) return sha;
+  } catch { /* fall through to reject */ }
+  throw new Error(`adlc_prosecute: base ref "${base}" does not resolve to a commit`);
+}
+
+/**
+ * The diff under prosecution: `git diff <base> HEAD --`. Empty when no base.
+ * `base` here is already validated by validateBaseRef (a bare sha), and the
+ * trailing `--` pathspec terminator is defense-in-depth so nothing downstream
+ * can be misread as an option.
+ */
 async function collectDiff(pi, root, base) {
-  const args = base ? ['diff', base, 'HEAD'] : ['diff', 'HEAD'];
+  const args = base ? ['diff', base, 'HEAD', '--'] : ['diff', 'HEAD', '--'];
   try {
     const res = await pi.exec('git', args, { cwd: root });
     return res?.stdout ?? '';
@@ -111,8 +141,11 @@ export function makeProsecuteExecute({ pi, getActive, getCwd, env = process.env,
       );
     }
     const root = getCwd?.() ?? process.cwd();
-    const base = typeof params.base === 'string' && params.base.trim()
-      ? params.base.trim()
+    // A model-supplied base is validated to a real commit sha (or rejected);
+    // absent/blank falls back to the trusted merge-base. Never let raw model
+    // text reach `git diff` as an argument (F1).
+    const base = (typeof params.base === 'string' && params.base.trim())
+      ? await validateBaseRef(pi, root, params.base)
       : await mergeBaseWithMain(pi, root);
     const ticket = resolveTicketContext({ requestedId: params.ticket, active, env, root });
     const diff = await collectDiff(pi, root, base);

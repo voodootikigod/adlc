@@ -275,6 +275,26 @@ test('checkGateArgv: gate-manifest is vetted on its effective ledger file, not b
   assert.equal(denied.decision, 'deny', 'a --dir under a frozen rail is denied');
 });
 
+test('F3: the command-executor deny is case-insensitive and catches the *command family', () => {
+  // Mixed-case and the --*command spelling must both be denied (P5 finding F3).
+  const cmd = '-' + '-Test-' + 'Cmd';
+  const command = '-' + '-review-' + 'command';
+  for (const flag of [cmd, command]) {
+    const v = checkGateArgv({ gate: 'preflight', args: [flag, 'x'], ticket: TICKET, root: '/x' });
+    assert.equal(v.decision, 'deny', `${flag} denied`);
+    assert.match(v.reason, /command-executor flag/);
+  }
+});
+
+test('F3: read-only flags that merely END in run/eval are NOT false-denied', () => {
+  // --dry-run and --eval are legitimate read-only flags; the deny list must not
+  // swallow them (the reason widening to run/eval was deliberately avoided).
+  for (const flag of ['--dry-run', '--eval']) {
+    const v = checkGateArgv({ gate: 'preflight', args: [flag], ticket: TICKET, root: '/x' });
+    assert.notEqual(v.decision, 'deny', `${flag} must not be denied as an executor flag`);
+  }
+});
+
 test('RAILS_SAFE_GATES is a strict subset of GATE_NAMES (every safe gate is dispatchable)', () => {
   for (const g of RAILS_SAFE_GATES) {
     assert.ok(GATE_NAMES.includes(g), `${g} is in the tool enum`);
