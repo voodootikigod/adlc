@@ -89,6 +89,23 @@ test('AC1: fan-out over all lenses, dedupe identical findings across lenses, con
   assert.equal(r.hitBound, null, 'converged, not bounded');
 });
 
+test('AC1: a finding surfaced by multiple lenses is VERIFIED ONCE (round dedupe saves the session budget)', async () => {
+  // Every lens surfaces the SAME finding. Round-level dedupe must collapse them
+  // BEFORE verification, so the verifier runs once — not once per lens. Without
+  // the round dedupe, the verifier would be called LENSES.length times, wasting
+  // the maxSessions budget on the same finding (the round-dedupe's real job).
+  const calls = [];
+  const ask = scriptedAsk({
+    byAgent: Object.fromEntries(LENSES.map((l) => [l.agent, [finding('one-shared-bug')]])),
+    verdict: { real: true },
+    calls,
+  });
+  const r = await runProsecution({ ask, diff: 'DIFF' });
+  const verifierCalls = calls.filter((c) => c.agent === VERIFIER.agent).length;
+  assert.equal(verifierCalls, 1, `verifier ran ${verifierCalls}x for one deduped finding (should be 1)`);
+  assert.equal(r.confirmed.length, 1);
+});
+
 test('AC1: a refuted finding (verifier real:false, majority) is DROPPED', async () => {
   const ask = scriptedAsk({
     byAgent: { [LENSES[0].agent]: [finding('doomed')] },
