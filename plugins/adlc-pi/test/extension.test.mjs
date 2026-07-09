@@ -197,11 +197,11 @@ test('tool_call: inert without a ticket', async () => {
 // /ticket command
 // =========================================================================
 
-test('/ticket command reports the active ticket', async () => {
+test('/ticket command reports the active ticket (real pi signature: args, ctx)', async () => {
   const root = makeRepo();
   try {
     const { pi, ctx } = await boot(root);
-    await pi.commands.ticket.handler(ctx);
+    await pi.commands.ticket.handler('', ctx);
     assert.ok(ctx.notices.some((n) => n.msg.includes('Active Ticket: T1')));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -432,7 +432,9 @@ export function createExtension({ env = process.env } = {}) {
 
     pi.registerCommand('ticket', {
       description: 'Display the active ADLC ticket and scope constraints',
-      async handler(ctx) {
+      // pi command handlers receive (args, ctx) — the ctx-first shape was a
+      // latent crash on live /ticket invocations (caught in T24 review).
+      async handler(_args, ctx) {
         reload(ctx.cwd);
 
         if (!active.ticketId) {
