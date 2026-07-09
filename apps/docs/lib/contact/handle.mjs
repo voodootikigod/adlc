@@ -13,11 +13,11 @@ import { parseLead } from './schema.mjs';
 // Hidden field a real user never fills; bots that auto-fill inputs will.
 export const HONEYPOT_FIELD = 'company_website';
 
-function firstHop(xff) {
+export function firstHop(xff) {
   return xff ? String(xff).split(',')[0].trim() : '';
 }
 
-function safeOrigin(value) {
+export function safeOrigin(value) {
   if (!value) return '';
   try {
     return new URL(value).origin;

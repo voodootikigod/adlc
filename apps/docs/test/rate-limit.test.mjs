@@ -31,6 +31,12 @@ test('tracks distinct keys independently', () => {
   assert.equal(rl.check('a').allowed, false);
 });
 
+test('the default limit allows 5 then blocks the 6th', () => {
+  const rl = createRateLimiter({ now: () => 0 }); // default max=5
+  for (let i = 0; i < 5; i++) assert.equal(rl.check('ip').allowed, true, `request ${i + 1}`);
+  assert.equal(rl.check('ip').allowed, false, '6th request blocked at the default limit');
+});
+
 test('evicts expired entries so the map does not grow unbounded', () => {
   let t = 0;
   const rl = createRateLimiter({ max: 5, windowMs: 1000, now: () => t });
