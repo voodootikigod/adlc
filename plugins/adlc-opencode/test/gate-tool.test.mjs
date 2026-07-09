@@ -183,3 +183,33 @@ test('adlc_gate is NOT denied by tool.execute.before under active enforcement', 
     await hooks['tool.execute.before']({ tool: 'adlc_gate', sessionID: 's', callID: 'c' }, { args: { gate: 'spec-lint' } });
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- P5 findings (prosecution of eeabca7): real-schema + rejection coverage ----
+
+test('buildGateTool accepts the REAL @opencode-ai/plugin tool.schema (upstream shape guard)', async () => {
+  // The fakeSchema tests prove our logic; this proves the actual peer contract.
+  // If upstream changes tool.schema's zod surface, this fails in `npm test`
+  // instead of only in the heavier live harness.
+  const { tool } = await import('@opencode-ai/plugin');
+  assert.ok(tool?.schema, 'tool.schema exported');
+  const def = buildGateTool(tool.schema, { root: '/p', spawnImpl: () => ({ status: 0, stdout: 'ok' }) });
+  assert.ok(def.adlc_gate, 'definition built against real schema');
+  assert.equal(def.adlc_gate.args.gate.parse('preflight'), 'preflight');
+  const r = await def.adlc_gate.execute({ gate: 'preflight' }, {});
+  assert.equal(r.metadata.exitCode, 0);
+});
+
+test('non-timeout session.prompt rejection → structured keyless-failed (never a throw)', async () => {
+  const client = {
+    session: {
+      create: async () => ({ data: { id: 'child' } }),
+      prompt: async () => { throw new Error('boom: provider 500'); },
+      delete: async () => ({ data: true }),
+    },
+  };
+  const spawnImpl = () => ({ status: 0, stdout: 'audit this spec' });
+  const def = buildGateTool(fakeSchema, { root: '/p', client, spawnImpl });
+  const r = await def.adlc_gate.execute({ gate: 'spec-lint' }, { sessionID: 'parent' });
+  assert.equal(r.metadata.error, 'keyless-failed');
+  assert.match(r.output, /boom: provider 500/);
+});
