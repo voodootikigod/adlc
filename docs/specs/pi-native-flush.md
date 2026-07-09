@@ -179,6 +179,14 @@ read-only `sed` false positives, `curl|sh` fail-open, prompt-wipe) turned into t
 
 ### Phase 5 — Distribution & install ease
 
+> Banked from the Phase-4 P5 prosecution (both PLAUSIBLE-low, advisory/detection
+> only — not defects): (F4) the TICKET-DONE listener re-nudges each turn if a
+> model repeatedly emits the token — bounded by turns, add per-run dedupe only if
+> it reads as noise; (F5) lens/verifier child sessions ingest the raw diff as
+> prompt, so a crafted diff could steer them to under-report — impact is weaker
+> detection, never a write (children are `--no-session`/keyless and record
+> nothing). Revisit if either surfaces in practice.
+
 5.1 **Publish `@adlc/pi-package` to npm:** drop `private`, add
     `"keywords": ["pi-package"]` (pi.dev gallery), a correct `pi` manifest
     (`extensions`, `skills`), pi core packages as `peerDependencies: "*"` (packaging
