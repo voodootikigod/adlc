@@ -354,3 +354,40 @@ test('R2: cliMain rejects flag-looking roots and extra positionals; init failure
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---- T30 round-3: the matcher must not claim strangers, must claim all our spellings ----
+test('R3: third-party entries colliding on the adlc-opencode suffix are NEVER touched', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    const strangers = [
+      'adlc-opencode',                                   // bare npm package of that name
+      '@other/adlc-opencode',                            // different org, same suffix
+      ['@evil/adlc-opencode', { thirdParty: true }],     // tuple — options must NOT graft onto ours
+    ];
+    writeFileSync(join(root, '.opencode', 'opencode.json'), JSON.stringify({ plugin: strangers }) + '\n');
+    const r = ensurePluginRegistered(root, '@adlc/opencode-package');
+    assert.equal(r.registered, true);
+    assert.deepEqual(r.replaced, [], 'no stranger was claimed as ours');
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.deepEqual(cfg.plugin, [...strangers, '@adlc/opencode-package'],
+      'strangers intact, ours appended WITHOUT grafted options');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R3: our own path spellings with either package-dir basename ARE claimed (no double-register)', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    // a source checkout whose dir basename is the npm package dir name
+    writeFileSync(join(root, '.opencode', 'opencode.json'),
+      JSON.stringify({ plugin: ['/work/opencode-package'] }) + '\n');
+    const r = ensurePluginRegistered(root, '@adlc/opencode-package');
+    assert.deepEqual(r.replaced, ['/work/opencode-package'], 'opencode-package basename claimed');
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.deepEqual(cfg.plugin, ['@adlc/opencode-package'], 'single entry');
+    // and an exact same-path re-scaffold stays idempotent
+    const again = ensurePluginRegistered(root, '@adlc/opencode-package');
+    assert.equal(again.alreadyPresent, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

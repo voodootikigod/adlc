@@ -73,16 +73,29 @@ export function pluginEntryFor(pkgRoot, pkgName = PLUGIN_PKG_NAME) {
 
 /**
  * Does a `plugin` array entry refer to THIS plugin, in any spelling? Matches
- * the npm name, a source-checkout path (…/adlc-opencode), a node_modules path,
- * and the `[name, options]` tuple wrapping of any of those.
+ * the exact npm name, a source-checkout / node_modules PATH to this package,
+ * and the `[name, options]` tuple wrapping of either.
+ *
+ * The rules are split BY ENTRY SHAPE (T30 review round-3): an npm-name entry
+ * (bare `name` or `@scope/name` — no path syntax) is ours ONLY on exact
+ * equality with pkgName, so `@other/adlc-opencode` or a bare `adlc-opencode`
+ * package is never claimed (removing a stranger's entry — or grafting their
+ * tuple options onto ours — is silent data loss). The directory-basename
+ * heuristic applies ONLY to filesystem paths, where a dir named like our
+ * package dirs (`adlc-opencode` source checkout, `opencode-package` under
+ * node_modules) is overwhelmingly this plugin or a stale spelling of it.
  */
 export function isOwnPluginEntry(entry, pkgName = PLUGIN_PKG_NAME) {
   const name = Array.isArray(entry) ? entry[0] : entry;
   if (typeof name !== 'string' || !name) return false;
   if (name === pkgName) return true;
   const norm = name.replace(/\\/g, '/').replace(/\/+$/, '');
+  // npm specifiers: bare names have no '/', scoped ones start with '@'.
+  // Neither is a filesystem path — exact-equality (above) was their only shot.
+  if (norm.startsWith('@') || !norm.includes('/')) return false;
   const base = norm.slice(norm.lastIndexOf('/') + 1);
-  return base === 'adlc-opencode' || norm.endsWith(`/node_modules/${pkgName}`);
+  return base === 'adlc-opencode' || base === 'opencode-package' ||
+    norm.endsWith(`/node_modules/${pkgName}`);
 }
 
 /**
