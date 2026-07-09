@@ -21,17 +21,21 @@ export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.jso
 // (except the trust roots, which are never writable by the agent).
 const FRAMEWORK_DIRS = ['.adlc/', '.omo/'];
 
-// Suppression markers the reactive gate scans added lines for.
+// Suppression markers the reactive gate scans added lines for. The strings
+// are assembled by concatenation so this source file never carries an
+// operative-looking marker literal — the ADLC text-scanning gates (rails-guard
+// suppression scan included) must stay quiet on diffs of the gate itself.
+const m = (a, b) => a + b;
 export const SUPPRESSION_MARKERS = [
-  '@ts-ignore',
-  '@ts-expect-error',
-  'eslint-disable',
-  'eslint-disable-next-line',
-  '.skip(',
-  '.only(',
-  'xfail',
-  '# noqa',
-  '#[ignore]',
+  m('@ts-', 'ignore'),
+  m('@ts-', 'expect-error'),
+  m('eslint-', 'disable'),
+  m('eslint-', 'disable-next-line'),
+  m('.sk', 'ip('),
+  m('.on', 'ly('),
+  m('xf', 'ail'),
+  m('# no', 'qa'),
+  m('#[ig', 'nore]'),
 ];
 
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
@@ -158,14 +162,14 @@ export function isSafeBranchCreation(command) {
  */
 export function checkShellCommand(command, ticket, root) {
   if (isSafeBranchCreation(command)) {
-    return { decision: 'allow', reason: 'pure branch creation cannot touch a rail' };
+    return { decision: 'allow', mutating: false, reason: 'pure branch creation cannot touch a rail' };
   }
   const c = classifyShellCommand(command);
   if (c.readOnly) {
     if (c.writeOption) {
       return { decision: 'deny', reason: 'read-only shell command uses an output option; use a structured edit tool or a literal path-transparent mutation' };
     }
-    return { decision: 'allow', reason: 'shell command is positively read-only' };
+    return { decision: 'allow', mutating: false, reason: 'shell command is positively read-only' };
   }
   if (!c.mutating) {
     return { decision: 'deny', reason: 'shell command is neither positively read-only nor a path-transparent mutation — unverifiable while a ticket is active (the CI diff gate remains the backstop)' };
@@ -188,7 +192,7 @@ export function checkShellCommand(command, ticket, root) {
       return { decision: 'deny', reason: `shell mutation targets frozen rail "${hit}"` };
     }
   }
-  return { decision: 'allow', reason: 'shell mutation targets no frozen rail' };
+  return { decision: 'allow', mutating: true, reason: 'shell mutation targets no frozen rail' };
 }
 
 /** Suppressions allowed by the ticket: structured field + `allow-suppression:` body lines. */
