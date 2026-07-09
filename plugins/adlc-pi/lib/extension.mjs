@@ -27,6 +27,8 @@ import {
 } from './reactive-gate.mjs';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from './doctrine.mjs';
+import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
+import { createFlailTracker } from './flail.mjs';
 
 // Bound the pending-snapshot map: a blocked call never gets a tool_result, so
 // stale entries are evicted oldest-first well past any realistic concurrency.
@@ -38,6 +40,30 @@ export function createExtension({ env = process.env } = {}) {
     let active = { ticketId: null, ticket: null, error: null };
     let ticketStamp = null;
     const snapshots = new Map();
+    const fitness = createFitnessTracker();
+    const flail = createFlailTracker();
+
+    // ctx.getContextUsage() is TUI/SDK-provided; degrade to null when absent
+    // (a missing signal must not crash the gate — compaction still covers it).
+    function safeUsage(ctx) {
+      try { return typeof ctx?.getContextUsage === 'function' ? ctx.getContextUsage() : null; }
+      catch { return null; }
+    }
+
+    function steerFlailAdvisories(filePath, ctx) {
+      for (const churn of flail.recordMutation(filePath)) {
+        const text = `ADLC flail advisory: ${churn.path} has been edited ${churn.count} times this session. Stop, re-read the failing evidence, and reconsider the approach before editing it again.`;
+        ctx.ui.notify(text, 'warning');
+        try {
+          pi.sendMessage(
+            { customType: 'adlc-flail-advisory', content: text, display: true },
+            { deliverAs: 'steer' }
+          );
+        } catch {
+          // Advisory only — a sendMessage failure must never affect the call.
+        }
+      }
+    }
 
     function stampTicketFiles(cwd) {
       const mtime = (p) => {
@@ -79,6 +105,8 @@ export function createExtension({ env = process.env } = {}) {
 
     pi.on('session_start', async (_event, ctx) => {
       reload(ctx.cwd);
+      fitness.reset();
+      flail.reset();
       if (!active.ticketId) return;
       if (active.error) {
         ctx.ui.setStatus('adlc-ticket', `🎟️ Ticket: \x1b[31m${active.ticketId} (ERROR)\x1b[0m`);
@@ -91,6 +119,12 @@ export function createExtension({ env = process.env } = {}) {
 
     pi.on('turn_start', async (_event, ctx) => {
       maybeReload(ctx?.cwd);
+    });
+
+    // A threshold/overflow compaction marks the session context-degraded for
+    // the build gate; a manual /compact does not.
+    pi.on('session_compact', async (event, _ctx) => {
+      fitness.markCompaction(event.reason);
     });
 
     // Append (never replace) the ADLC doctrine to the turn's system prompt.
@@ -133,6 +167,21 @@ export function createExtension({ env = process.env } = {}) {
           ctx.ui.notify(`Blocked ${event.toolName}: ${verdict.reason}`, 'error');
           return { block: true, reason: `Blocked ${event.toolName}: ${verdict.reason} (ticket ${active.ticketId})` };
         }
+        // Build-gate backstop (spec 2.1): a high-risk ticket in a degraded
+        // context may not take structured mutations without an audited override.
+        const gate = checkBuildGate({
+          ticket: active.ticket,
+          usage: safeUsage(ctx),
+          compacted: fitness.isCompacted(),
+          env,
+          root: activeCwd,
+        });
+        if (gate.decision === 'deny') {
+          ctx.ui.notify(`Build gate: ${gate.reason}`, 'error');
+          return { block: true, reason: `Blocked ${event.toolName} by the ADLC build gate: ${gate.reason} (ticket ${active.ticketId})` };
+        }
+        // Flail advisory (spec 2.2): never blocks.
+        steerFlailAdvisories(filePath, ctx);
         // Snapshot the target so a post-write violation restores exactly this
         // state — never HEAD, never any other file.
         rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(activeCwd, filePath) });
