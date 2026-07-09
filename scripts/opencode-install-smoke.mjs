@@ -222,18 +222,33 @@ for (const a of AGENTS) {
 for (const c of ['adlc-verify-build.md', 'adlc-prosecute.md', 'adlc-distill.md', 'adlc-maintain.md']) {
   if (!existsSync(join(cmdDir, c))) fail(`command/${c} missing`); else ok(`command/${c} present`);
 }
-// T34 AC1: /adlc-maintain runs the deterministic checks and keeps gate-fuzzing CI-only.
+// T34 AC1: /adlc-maintain runs the deterministic checks and keeps gate-fuzzing off the host.
+const maintainDoc = read(join(cmdDir, 'adlc-maintain.md'));
 {
-  const maintain = read(join(cmdDir, 'adlc-maintain.md'));
   for (const check of ['adlc skill-rot', 'adlc model-ratchet', 'adlc ticket-prune']) {
-    if (!maintain.includes(check)) fail(`adlc-maintain.md does not run \`${check}\``); else ok(`adlc-maintain runs ${check}`);
+    if (!maintainDoc.includes(check)) fail(`adlc-maintain.md does not run \`${check}\``); else ok(`adlc-maintain runs ${check}`);
   }
-  if (!/CI-ONLY|CI-only|does \*\*not\*\* invoke it/.test(maintain)) fail('adlc-maintain.md does not mark gate-fuzzing CI-only'); else ok('adlc-maintain keeps gate-fuzzing CI-only');
+  if (!/does \*\*not\*\* run it|NOT run automatically|nowhere automatically/.test(maintainDoc)) fail('adlc-maintain.md does not state gate-fuzzing is not run automatically'); else ok('adlc-maintain keeps gate-fuzzing off the developer host');
 }
 // T34 AC3: the maintenance workflow scans the opencode skill deployment.
+const maintainWf = read(join(ROOT, 'docs', 'ci', 'adlc-maintenance.yml'));
 {
-  const wf = read(join(ROOT, 'docs', 'ci', 'adlc-maintenance.yml'));
-  if (!wf.includes('.opencode/skills')) fail('docs/ci/adlc-maintenance.yml does not scan .opencode/skills'); else ok('maintenance workflow covers .opencode/skills');
+  if (!maintainWf.includes('.opencode/skills')) fail('docs/ci/adlc-maintenance.yml does not scan .opencode/skills'); else ok('maintenance workflow covers .opencode/skills');
+}
+// T34 codex round-1: no CIRCULAR gate-fuzzing coverage claim. The deterministic
+// cron does NOT run gate-fuzzing (LLM-backed + sandbox), so the docs must not
+// claim it does — assert the workflow has no runnable gate-fuzzing step AND the
+// command doesn't say the cron/CI runs it. Otherwise the "calibration is covered"
+// claim is false (runs nowhere) — a false-coverage regression this catches.
+{
+  const wfRunsGateFuzzing = /^\s*(-|run:|&&|\|).*adlc gate-fuzzing/m.test(maintainWf);
+  if (wfRunsGateFuzzing) ok('maintenance workflow actually runs gate-fuzzing (a real calibration job exists)');
+  else {
+    // no real job → the command must NOT claim the cron/CI covers calibration
+    if (/runs in .*that same CI pipeline|calibration runs in CI only|deferred to CI|runs in CI/i.test(maintainDoc)) {
+      fail('adlc-maintain.md claims gate-fuzzing runs in CI, but the maintenance workflow has no gate-fuzzing step (circular/false coverage)');
+    } else ok('no false CI-coverage claim for gate-fuzzing (docs say it needs a separate model+sandbox job)');
+  }
 }
 if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs missing'); else ok('prosecutor registry/helpers present');
 

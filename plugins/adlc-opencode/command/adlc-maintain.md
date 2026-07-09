@@ -58,26 +58,38 @@ adlc ticket-prune --json
   human-confirmed action — `.adlc/tickets.json` is a shared, hand-edited file
   and the rail trust root.
 
-## 4. Gate fuzzing — CI-ONLY (do NOT run here)
+## 4. Gate fuzzing — NOT run automatically (needs a model AND a sandbox)
 
-`adlc gate-fuzzing` executes untrusted adversary-generated setup and witness code
-that **requires an OS-level sandbox** (`bwrap` / `sandbox-exec`). The CLI refuses
-to run on a bare developer host, and this command does **not** invoke it — running
-it in an interactive OpenCode session on a developer machine is unsafe. Gate
-calibration runs in CI only, from the maintenance workflow
-(`docs/ci/adlc-maintenance.yml`) or a disposable sandboxed container. Note in the
-summary that calibration is deferred to CI.
+`adlc gate-fuzzing` is doubly constrained: it is **LLM-backed** (an adversary
+model generates the candidates) *and* it executes untrusted adversary code that
+**requires an OS-level sandbox** (`bwrap` / `sandbox-exec`; the CLI refuses to run
+on a bare developer host). Because of the first constraint the deterministic
+maintenance cron (`docs/ci/adlc-maintenance.yml`) does **not** run it, and because
+of the second this command does **not** run it either — an interactive OpenCode
+session on a developer machine is the wrong place.
+
+So calibration runs **nowhere automatically** in what this integration ships. To
+actually exercise gate defeats after model/repo drift you must set up a
+**separate scheduled job that provides BOTH a model and an OS sandbox** — e.g. a
+container job (`bwrap`/`sandbox-exec` available) invoking
+`adlc gate-fuzzing --suite .adlc/gate-suite.json` with a configured provider, or a
+scheduled Claude routine running inside such a sandbox. Note in the summary that
+gate calibration is a deliberate, separate setup and is NOT covered by
+`/adlc-maintain` or the deterministic cron.
 
 ## 5. Summarize
 
 Report: stale skills (if any), the top hot files to re-prosecute, any stale
-tickets found (and whether they were archived), and that gate calibration runs in
-CI. Repeated findings surfaced here flow into `/adlc-distill`.
+tickets found (and whether they were archived), and that gate calibration
+(`gate-fuzzing`) is NOT run here or by the deterministic cron and needs a
+separate model+sandbox job. Repeated findings surfaced here flow into
+`/adlc-distill`.
 
 ## Scheduling
 
 The deterministic checks here (`skill-rot`, `model-ratchet`, `ticket-prune`) are
 keyless and run well on a cron — deploy the ready-to-use workflow at
 `docs/ci/adlc-maintenance.yml` (it scans `.opencode/skills` among other skill
-roots). The sandboxed `gate-fuzzing` calibration runs in that same CI pipeline,
-never on the developer host.
+roots). That workflow does **not** run `gate-fuzzing` (it is LLM-backed and
+needs an OS sandbox); calibration requires the separate model+sandbox job
+described in §4.
