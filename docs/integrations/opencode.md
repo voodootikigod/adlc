@@ -259,7 +259,12 @@ Three more native hooks (signatures verified against `@opencode-ai/plugin`
   byte-for-byte from the packaged source. Both fail open.
 
 All three swallow errors and never throw (the host cannot be broken by an
-advisory). The compaction survival path is exercised end-to-end by the live proof.
+advisory). A required CI proof (`scripts/opencode-live-compaction.mjs`) loads the
+shipped plugin entry and asserts both compaction hooks are **registered under
+their exact host keys and behave** — a registration + behavior proof, not a
+host-dispatch proof (compaction is not deterministically forcible in a headless
+run; that upstream contract is source-verified against 1.17.17, and the advisory
+`opencode-live-latest` job canaries against `@latest`).
 
 Resolved 2026-07-08 (Phase 3): **native-feel surface added (server-side).** Per-turn
 the active ticket, frozen rails, and scope are re-stated to the model via

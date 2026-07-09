@@ -57,12 +57,15 @@ jobs:
         if: matrix.node-version == 20
         run: node scripts/opencode-live-tool.mjs --require
 
-      # T32 live compaction proof: the session.compacting + compaction.autocontinue
-      # hooks are registered on the real plugin entry and keep rail context alive /
-      # suppress auto-continue on a degraded high-risk session. Loads the plugin the
-      # way opencode does (no binary needed → runs on all matrix legs). REQUIRED so
-      # a refactor that drops or renames either hook cannot merge green.
-      - name: OpenCode live compaction proof (T32)
+      # T32 compaction REGISTRATION + BEHAVIOR proof (NOT a host-dispatch proof):
+      # asserts the session.compacting + compaction.autocontinue hooks are
+      # registered on the real plugin entry under their exact host keys and behave
+      # (rail context survives, auto-continue suppressed on a degraded high-risk
+      # session). Loads the plugin the way opencode does (no binary needed → all
+      # matrix legs). REQUIRED so a refactor dropping/renaming either hook cannot
+      # merge green. Upstream DISPATCH on the pinned version is source-verified,
+      # not asserted here (compaction is not forcible in a headless run).
+      - name: OpenCode compaction registration+behavior proof (T32)
         run: node scripts/opencode-live-compaction.mjs
 
       # pi live deny proof (ticket T21 AC5) — same folded-into-required-job

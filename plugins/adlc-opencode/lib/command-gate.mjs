@@ -20,8 +20,14 @@ export function normalizeCommandName(command) {
 // Lifecycle-order prerequisites: a command's phase expects an earlier phase's
 // gate to have LEFT EVIDENCE (a manifest entry) for the active ticket. Advisory
 // — a missing prerequisite warns, it does not block. Keyed by command name.
+//
+// Decompose (P2) requires the HUMAN spec APPROVAL (P1 G1), not merely a P1 lint:
+// spec-lint/premortem can be run while drafting and do NOT mean the spec was
+// approved. /adlc-approve-spec records approval as `spec_approval` (the unsigned
+// manifest fallback) or gate `p1` (the `adlc-runner accept --gate p1` path) —
+// see command/adlc-approve-spec.md. Match either.
 const PHASE_PREREQ = {
-  'adlc-decompose': { gates: ['spec-lint', 'premortem'], hint: 'no approved spec (P1) recorded for this ticket — run /adlc-spec then /adlc-approve-spec first' },
+  'adlc-decompose': { gates: ['spec_approval', 'p1'], hint: 'no human spec approval (P1 G1) recorded for this ticket — run /adlc-spec then /adlc-approve-spec first' },
   'adlc-prosecute': { gates: ['coldstart'], hint: 'this ticket has not been decomposed (P2) — run /adlc-decompose first' },
 };
 

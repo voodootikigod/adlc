@@ -32,31 +32,45 @@ test('normalizeCommandName: strips slash + args, rejects non-adlc commands', () 
 });
 
 // ---- AC3a: lifecycle-order advisory ----
-test('AC3: /adlc-decompose with NO approved-spec evidence → warns', () => {
+test('AC3: /adlc-decompose with NO spec-approval evidence → warns', () => {
   const dir = repo({ tickets: [{ id: 'T1', rails: [] }] });
   try {
     const r = checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' });
-    assert.match(r.warn, /lifecycle.*adlc-decompose.*approved spec/s);
+    assert.match(r.warn, /lifecycle.*adlc-decompose.*spec approval/s);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: /adlc-decompose WITH a spec-lint manifest entry for the ticket → no warning (happy path)', () => {
+test('AC3: /adlc-decompose WITH spec APPROVAL evidence → no warning (both spec_approval and p1 forms)', () => {
+  for (const gate of ['spec_approval', 'p1']) {
+    const dir = repo({
+      tickets: [{ id: 'T1', rails: [] }],
+      manifest: JSON.stringify({ seq: 1, gate, ticket: 'T1' }) + '\n',
+    });
+    try {
+      assert.equal(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null, gate);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('AC3: a spec-lint row is NOT approval — /adlc-decompose still warns (lint ≠ human G1 approval)', () => {
+  // codex T32 finding: keying on spec-lint/premortem is wrong — a drafting
+  // spec-lint run must NOT silence the "no approval" nudge.
   const dir = repo({
     tickets: [{ id: 'T1', rails: [] }],
     manifest: JSON.stringify({ seq: 1, gate: 'spec-lint', ticket: 'T1' }) + '\n',
   });
   try {
-    assert.equal(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
+    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /spec approval/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: prerequisite evidence for a DIFFERENT ticket does not satisfy this one', () => {
+test('AC3: approval evidence for a DIFFERENT ticket does not satisfy this one', () => {
   const dir = repo({
     tickets: [{ id: 'T1', rails: [] }, { id: 'T2', rails: [] }],
-    manifest: JSON.stringify({ seq: 1, gate: 'spec-lint', ticket: 'T2' }) + '\n',
+    manifest: JSON.stringify({ seq: 1, gate: 'spec_approval', ticket: 'T2' }) + '\n',
   });
   try {
-    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /approved spec/);
+    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /spec approval/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
