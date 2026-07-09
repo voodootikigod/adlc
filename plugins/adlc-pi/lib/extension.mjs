@@ -244,8 +244,13 @@ export function createExtension({ env = process.env } = {}) {
     pi.on('user_bash', async (event, ctx) => {
       if (!active.ticket) return undefined;
       const verdict = checkShellCommand(event.command, active.ticket, activeCwd);
-      if (verdict.decision === 'deny' && /frozen rail/.test(verdict.reason)) {
-        ctx.ui.notify(`ADLC: your command touches a frozen rail of ticket ${active.ticketId} (${verdict.reason}) — running anyway (human override), recorded to evidence`, 'warning');
+      // Advise on any MUTATING deny (rail hit, opaque git checkout/apply,
+      // expansion, output-option smuggle…) — keying on the mutation class,
+      // not the reason string, so `git checkout -- <rail>` is audited too
+      // (P5 finding F2). Non-mutating unverifiable commands (npm run build)
+      // stay silent: warning a human about every build command is noise.
+      if (verdict.decision === 'deny' && verdict.mutating) {
+        ctx.ui.notify(`ADLC: the agent would be denied this command under ticket ${active.ticketId} (${verdict.reason}) — running anyway (human override), recorded to evidence`, 'warning');
         recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'user-bash-rail-override', detail: { command: event.command, reason: verdict.reason } });
       }
       return undefined;

@@ -202,6 +202,34 @@ test('AC5: session_start resets degraded flag and churn window', async () => {
 // Unit: trackers
 // =========================================================================
 
+test('F4 regression: a rails-denied edit never counts toward churn', async () => {
+  const railTicket = { ...NORMAL_TICKET, id: 'T3', rails: ['test/contracts/**'] };
+  const root = makeRepo({ tickets: [HIGH_RISK_TICKET, NORMAL_TICKET, railTicket], current: 'T3' });
+  try {
+    const { pi, ctx } = await boot(root, 10);
+    for (let i = 0; i < 4; i++) {
+      const denied = await pi.handlers.tool_call(writeCall('test/contracts/auth.test.ts', `d${i}`), ctx);
+      assert.equal(denied.block, true);
+    }
+    assert.equal(pi.steers.length, 0, 'denied edits are not churn — flail runs after the deny returns');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('F4 regression: a throwing sendMessage never breaks the tool call', async () => {
+  const root = makeRepo({ current: 'T2' });
+  try {
+    const pi = fakePi();
+    pi.sendMessage = () => { throw new Error('steer channel down'); };
+    createExtension({ env: {} })(pi);
+    const ctx = fakeCtx(root, 10);
+    await pi.handlers.session_start({ type: 'session_start', reason: 'startup' }, ctx);
+    for (let i = 0; i < 3; i++) {
+      assert.equal(await pi.handlers.tool_call(writeCall('src/hot.ts', `s${i}`), ctx), undefined, 'advisory failure must not affect the call');
+    }
+    assert.ok(ctx.notices.some((n) => /flail/.test(n.m)), 'notify channel still warned');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('fitness tracker: only threshold/overflow compactions degrade', () => {
   const f = createFitnessTracker();
   f.markCompaction('manual');

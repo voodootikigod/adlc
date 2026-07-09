@@ -240,6 +240,53 @@ test('AC5 (wiring): relocation caught through the real write gate even though th
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('F1 regression: a PRE-EXISTING operative marker plus unrelated added lines is NOT flagged (no over-reversion)', () => {
+  const oldContent = `// ${TS_IGNORE}\nconst a = 1;\n`;
+  const newContent = `// ${TS_IGNORE}\nconst a = 1;\nconst b = 2;\n`;
+  const delta = scanOperativeDelta(oldContent, newContent, 'src/a.ts', [], '');
+  assert.equal(delta.length, 0, 'the before.has(marker) guard must suppress pre-existing operative markers');
+});
+
+test('F1 regression (wiring): appending clean lines to a file that already carries a marker passes the gate', async () => {
+  const root = makeRepo();
+  try {
+    const target = join(root, 'src', 'legacy.ts');
+    writeFileSync(target, `// ${TS_IGNORE}\nold();\n`);
+    const { pi, ctx } = await boot(root);
+    await pi.handlers.tool_call(call('edit', { path: 'src/legacy.ts', edits: [] }, 'e9'), ctx);
+    writeFileSync(target, `// ${TS_IGNORE}\nold();\nnewClean();\n`);
+    const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'edit', toolCallId: 'e9', input: {}, content: [], isError: false }, ctx);
+    assert.equal(result, undefined, 'legit append must not be reverted');
+    assert.equal(readFileSync(target, 'utf8'), `// ${TS_IGNORE}\nold();\nnewClean();\n`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('F2 regression: opaque and expansion rail-resets by the human are advised + recorded', async () => {
+  const root = makeRepo();
+  try {
+    const { pi, ctx } = await boot(root);
+    await pi.handlers.user_bash({ type: 'user_bash', command: 'git checkout -- test/contracts/auth.test.ts', excludeFromContext: false, cwd: root }, ctx);
+    await pi.handlers.user_bash({ type: 'user_bash', command: 'echo x > $RAIL_FILE', excludeFromContext: false, cwd: root }, ctx);
+    assert.equal(pi.entries.filter((e) => e.data.type === 'user-bash-rail-override').length, 2, 'opaque + expansion mutations both audited');
+    // non-mutating unverifiable command stays silent (no advisory spam)
+    const before = pi.entries.length;
+    await pi.handlers.user_bash({ type: 'user_bash', command: 'npm run build', excludeFromContext: false, cwd: root }, ctx);
+    assert.equal(pi.entries.length, before);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('F3 regression: one level of nested tool input is extracted and rail-checked', async () => {
+  const root = makeRepo();
+  try {
+    const { pi, ctx } = await boot(root);
+    const denied = await pi.handlers.tool_call(call('patcher', { opts: { path: 'test/contracts/auth.test.ts' } }, 'n1'), ctx);
+    assert.equal(denied.block, true, 'nested path must be rail-checked');
+    const paths = extractToolPaths({ opts: { file: 'a.ts' }, deep: { more: { path: 'b.ts' } } }, root);
+    assert.ok(paths.includes('a.ts'));
+    assert.ok(!paths.includes('b.ts'), 'recursion is bounded to one level (CI backstop beyond)');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('operativeMarkerSet: .md prose exempt; code files fully operative', () => {
   assert.equal(operativeMarkerSet(`uses ${TS_IGNORE} in prose\n`, 'docs/guide.md').size, 0);
   const set = operativeMarkerSet(`// ${TS_IGNORE}\n`, 'src/a.ts');
