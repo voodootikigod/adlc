@@ -128,7 +128,11 @@ export function makeAsk(client, { parentID, model, timeoutMs = PROMPT_TIMEOUT_MS
           path: { id: childId },
           body: {
             ...(model ? { model } : {}),
-            tools: {}, // no tools — a pure question/answer turn
+            // A pure Q/A turn needs NO tools. `tools: {}` is NOT "no tools" —
+            // opencode treats an empty map as "no overrides" → all tools inherit
+            // the base agent default (`"*": "allow"`) = ALL ENABLED. Deny
+            // everything with the wildcard rule so the gate child can't act.
+            tools: { '*': false },
             parts: [{ type: 'text', text }],
           },
         }),

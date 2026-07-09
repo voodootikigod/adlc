@@ -19,11 +19,18 @@ export function makeAgentPromptReader(pkgRoot) {
   };
 }
 
-/** The change under prosecution: `git diff <base>...HEAD`. '' if git/base unavailable. */
+/**
+ * The change under prosecution: `git diff <base>...HEAD`.
+ * Returns { diff, error }. A git FAILURE (bad base ref, non-git cwd, buffer
+ * overflow) sets error — the caller must NOT treat that as an empty diff (which
+ * would falsely SHIP); a genuine clean tree returns { diff: '', error: null }.
+ */
 export function captureDiff({ base = 'main', cwd = process.cwd(), spawnImpl = execFileSync } = {}) {
   try {
-    return String(spawnImpl('git', ['diff', `${base}...HEAD`], { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }) || '');
-  } catch { return ''; }
+    return { diff: String(spawnImpl('git', ['diff', `${base}...HEAD`], { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }) || ''), error: null };
+  } catch (err) {
+    return { diff: '', error: String(err?.message ?? err) };
+  }
 }
 
 /**
@@ -58,24 +65,40 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
             metadata: { error: 'no-session-api', deterministic: false },
           };
         }
-        const diff = (diffImpl ?? captureDiff)({ base, cwd });
+        const captured = (diffImpl ?? captureDiff)({ base, cwd });
+        // Normalize: diffImpl (tests) may return a bare string; captureDiff returns {diff,error}.
+        const { diff, error } = typeof captured === 'string' ? { diff: captured, error: null } : captured;
+        if (error) {
+          // A git FAILURE is NOT "nothing to prosecute" — fail closed.
+          return {
+            title: 'adlc_prosecute: NO-SHIP (diff capture failed)',
+            output: `Could not capture \`git diff ${base}...HEAD\`: ${error}. Not treating this as an empty change — resolve the base ref / repo state and re-run.`,
+            metadata: { base, deterministic: true, verdict: 'NO-SHIP (diff-capture-failed)', error: 'diff-capture-failed', confirmed: 0 },
+          };
+        }
         if (!diff.trim()) {
           return {
             title: 'adlc_prosecute: empty diff',
             output: `\`git diff ${base}...HEAD\` produced no changes to prosecute.`,
-            metadata: { base, deterministic: true, confirmed: 0 },
+            metadata: { base, deterministic: true, confirmed: 0, empty: true },
           };
         }
         const result = await runProsecution({ ask, agentPrompt: makeAgentPromptReader(pkgRoot), diff });
         const lines = result.confirmed.map((f) =>
           `- [${f.severity ?? '?'}] ${f.title}${f.file ? ` (${f.file})` : ''}${result.unverified.includes(f) ? ' — UNVERIFIED (kept fail-closed)' : ''}`);
-        const verdict = result.confirmed.length === 0 ? 'SHIP (no confirmed findings)' : `NO-SHIP (${result.confirmed.length} confirmed)`;
+        // A bounded/incomplete run is NOT a clean pass: only a converged run with
+        // zero confirmed findings SHIPs. hitBound → NO-SHIP (INCOMPLETE).
+        const verdict = result.hitBound
+          ? `NO-SHIP (INCOMPLETE — stopped at ${result.hitBound}${result.confirmed.length ? `, ${result.confirmed.length} confirmed` : ''})`
+          : result.confirmed.length === 0
+            ? 'SHIP (no confirmed findings)'
+            : `NO-SHIP (${result.confirmed.length} confirmed)`;
         return {
           title: `adlc_prosecute: ${verdict}`,
           output: [
             `Deterministic P5 loop over ${LENSES.length} lenses + verifier.`,
-            `Rounds: ${result.rounds}, child sessions: ${result.sessionsUsed}${result.hitBound ? `, stopped at bound: ${result.hitBound}` : ''}.`,
-            result.confirmed.length ? `\nConfirmed findings:\n${lines.join('\n')}` : '\nNo findings survived verification.',
+            `Rounds: ${result.rounds}, child sessions: ${result.sessionsUsed}${result.hitBound ? `, stopped at bound: ${result.hitBound} (INCOMPLETE — not a converged pass)` : ''}.`,
+            result.confirmed.length ? `\nConfirmed findings:\n${lines.join('\n')}` : (result.hitBound ? '\nNo confirmed findings yet, but the run did NOT converge.' : '\nNo findings survived verification.'),
           ].join('\n'),
           metadata: {
             base, deterministic: true, verdict,

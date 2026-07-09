@@ -104,9 +104,10 @@ test('makeAsk: spins up a child session, prompts it, returns reply text, cleans 
   assert.equal(answer, 'VERDICT: SHIP');
   // child parented to the active session
   assert.equal(client.calls.create[0].body.parentID, 'ses_parent');
-  // prompted the child with the gate text, tools disabled, chosen model
+  // prompted the child with the gate text, ALL tools denied (wildcard rule —
+  // an empty map would inherit the base agent default = all enabled), chosen model
   assert.equal(client.calls.prompt[0].path.id, 'ses_c1');
-  assert.deepEqual(client.calls.prompt[0].body.tools, {});
+  assert.deepEqual(client.calls.prompt[0].body.tools, { '*': false });
   assert.deepEqual(client.calls.prompt[0].body.model, { providerID: 'mock', modelID: 'm' });
   assert.equal(client.calls.prompt[0].body.parts[0].text, 'audit this spec');
   // child cleaned up

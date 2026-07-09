@@ -209,13 +209,25 @@ protocol in FIRST-PARTY code (`lib/prosecute-runner.mjs` `runProsecution`, over
 the tested `@adlc/core` helpers), not by prose-instructing the model to
 orchestrate. Each lens and the verifier run in an isolated child session
 (`client.session.create({parentID})` + `session.prompt`) carrying the agent's
-prompt as a per-call `system` override and a **write-disabled `tools` map** (a
-`false` map over every mutating + shell tool — a lens reads the diff, it cannot
-edit). Structured verdicts come back as fenced JSON (there is no server-side
+prompt as a per-call `system` override and a **fail-closed read-only `tools`
+allowlist**. That map is `{ "*": false, <read-only tools>: true }` — the
+wildcard-deny-first shape opencode's own `explore`/`compaction` agents use:
+opencode compiles the map to permission rules (`findLast` wins), so `"*": false`
+denies everything and only the read-only tools re-allow themselves. Any unlisted
+tool — `edit`/`write`/`apply_patch`, the `task` sub-agent spawner, MCP tools, or
+any future tool — matches only `"*"` and is **hard-denied**. (A denylist would
+fail OPEN here, since the SDK `tools` map is a sparse override where absent =
+the agent default = enabled.) So a lens reads the diff and *cannot* mutate the
+repo, even via a sub-agent or a prompt-injection in the untrusted diff.
+Structured verdicts come back as fenced JSON (there is no server-side
 `outputFormat` at 1.17.x); an unparseable verdict is **fail-closed** — the
-finding is kept as a blocker and flagged unverified, never silently dropped. The
-loop is hard-bounded (max rounds / max child sessions) and reports the bound it
-hit. `/adlc-prosecute` calls the tool first and keeps the prose protocol as the
+finding is kept as a blocker and flagged unverified, never silently dropped. A
+lens whose reply doesn't parse likewise surfaces a blocker (an all-garbage round
+can't masquerade as a clean pass), a bounded/incomplete run is reported
+`NO-SHIP (INCOMPLETE)` (only a *converged* zero-findings run SHIPs), and a
+`git diff` capture failure fails closed rather than reading as an empty change.
+The loop is hard-bounded (max rounds / max child sessions) and reports the bound
+it hit. `/adlc-prosecute` calls the tool first and keeps the prose protocol as the
 fallback when the tool is unavailable. Proven end-to-end by
 `scripts/opencode-live-prosecute.mjs` (seeded-defect convergence + write-disable,
 CI-required) and `scripts/opencode-live-tool.mjs` (real-binary registration).

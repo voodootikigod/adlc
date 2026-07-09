@@ -181,7 +181,7 @@ else {
   else {
     const pr = read(join(PLUGIN, 'lib', 'prosecute-runner.mjs'));
     if (!/export async function runProsecution\b/.test(pr)) fail('prosecute-runner missing runProsecution export'); else ok('T33: runProsecution (deterministic P5 loop) present');
-    if (!/lensToolsMap|WRITE_TOOLS/.test(pr)) fail('prosecute-runner has no write-disable map'); else ok('T33: lens child sessions are write-disabled');
+    if (!/lensToolsMap/.test(pr) || !/'\*': false/.test(pr)) fail('prosecute-runner lens sessions are not fail-closed (missing wildcard-deny allowlist)'); else ok('T33: lens child sessions are fail-closed (wildcard-deny-first allowlist)');
   }
   if (!existsSync(join(PLUGIN, 'lib', 'prosecute-tool.mjs')) || !/export function buildProsecuteTool\b/.test(read(join(PLUGIN, 'lib', 'prosecute-tool.mjs')))) fail('prosecute-tool missing buildProsecuteTool'); else ok('T33: adlc_prosecute tool present');
   if (!/buildProsecuteTool/.test(idx)) fail('index.mjs does not register the adlc_prosecute tool'); else ok('T33: index.mjs registers adlc_prosecute alongside adlc_gate');

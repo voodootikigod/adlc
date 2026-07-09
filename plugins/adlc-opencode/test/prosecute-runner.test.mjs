@@ -5,10 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  runProsecution, lensToolsMap, WRITE_TOOLS, makeLensAsk,
+  runProsecution, lensToolsMap, LENS_READ_TOOLS, makeLensAsk,
   parseFindings, parseVerdict, parseFenced,
 } from '../lib/prosecute-runner.mjs';
 import { LENSES, VERIFIER } from '../lib/prosecutor.mjs';
+import { READONLY_TOOLS } from '../rails-checker.mjs';
 
 const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
 const finding = (title, severity = 'high') => ({ title, severity, file: 'x.mjs', detail: 'd' });
@@ -28,24 +29,33 @@ function scriptedAsk({ byAgent = {}, verdict = { real: true }, calls = [] } = {}
 test('parseFenced/parseFindings/parseVerdict extract fenced JSON; fail closed on garbage', () => {
   assert.deepEqual(parseFenced('```json\n{"a":1}\n```'), { a: 1 });
   assert.equal(parseFenced('not json at all'), null);
-  assert.deepEqual(parseFindings(fenced([finding('a')])), [finding('a')]);
-  assert.deepEqual(parseFindings(fenced({ findings: [finding('a')] })), [finding('a')]);
-  assert.deepEqual(parseFindings('garble'), []);
+  assert.deepEqual(parseFindings(fenced([finding('a')])), { findings: [finding('a')], parsed: true });
+  assert.deepEqual(parseFindings(fenced({ findings: [finding('a')] })), { findings: [finding('a')], parsed: true });
+  assert.deepEqual(parseFindings(''), { findings: [], parsed: true });        // clean empty
+  assert.deepEqual(parseFindings('garble'), { findings: [], parsed: false }); // garbage → parse FAILURE
   assert.deepEqual(parseVerdict(fenced({ real: false, reason: 'refuted' })), { real: false, reason: 'refuted' });
   assert.equal(parseVerdict('no verdict here'), null);      // unparseable → null (fail-closed upstream)
   assert.equal(parseVerdict(fenced({ nope: 1 })), null);    // missing real → null
 });
 
-// ---- AC2: lens sessions provably cannot write ----
-test('AC2: lensToolsMap disables EVERY mutating + shell tool (false map, not allowlist)', () => {
+// ---- AC2: lens sessions provably cannot write (fail-CLOSED allowlist) ----
+test('AC2: lensToolsMap is a wildcard-deny-first ALLOWLIST — unlisted tools fail closed', () => {
   const map = lensToolsMap();
-  for (const t of WRITE_TOOLS) assert.equal(map[t], false, `${t} disabled`);
-  for (const t of ['edit', 'write', 'patch', 'multiedit', 'apply_patch', 'bash', 'shell']) {
-    assert.equal(map[t], false, `${t} explicitly disabled`);
+  // "*": false MUST be the FIRST key (opencode findLast: a later read:true wins,
+  // but "*" must exist as the deny floor for everything else).
+  const keys = Object.keys(map);
+  assert.equal(keys[0], '*', `"*" must be the first key, got ${keys[0]}`);
+  assert.equal(map['*'], false, 'wildcard denies everything by default');
+  // read-only tools re-allowed (from the rail guard's single source of truth)
+  for (const t of READONLY_TOOLS) assert.equal(map[t], true, `read-only ${t} allowed`);
+  assert.deepEqual(new Set(LENS_READ_TOOLS), new Set(READONLY_TOOLS), 'allowlist derives from rails-checker READONLY_TOOLS');
+  // write / sub-agent / unknown tools are NOT enabled → they inherit the "*" deny
+  for (const t of ['edit', 'write', 'patch', 'multiedit', 'apply_patch', 'bash', 'shell', 'task', 'some_mcp_write_tool', 'a-tool-that-does-not-exist-yet']) {
+    assert.notEqual(map[t], true, `${t} must NOT be allowed (fails closed via "*")`);
   }
 });
 
-test('AC2: makeLensAsk passes the disable-map AND the system override to session.prompt', async () => {
+test('AC2: makeLensAsk passes the allowlist AND the system override to session.prompt', async () => {
   const promptCalls = [];
   const client = {
     session: {
@@ -58,7 +68,9 @@ test('AC2: makeLensAsk passes the disable-map AND the system override to session
   await ask({ system: 'LENS SYSTEM PROMPT', prompt: 'find bugs' });
   const body = promptCalls[0].body;
   assert.equal(body.system, 'LENS SYSTEM PROMPT');
-  for (const t of WRITE_TOOLS) assert.equal(body.tools[t], false, `${t} disabled in the real call`);
+  assert.equal(Object.keys(body.tools)[0], '*');
+  assert.equal(body.tools['*'], false, 'deny-all floor set in the real call');
+  for (const t of ['edit', 'write', 'bash', 'task', 'apply_patch']) assert.notEqual(body.tools[t], true, `${t} not enabled`);
   assert.deepEqual(body.parts, [{ type: 'text', text: 'find bugs' }]);
 });
 
@@ -164,4 +176,22 @@ test('AC4: an unparseable verdict → finding KEPT (fail-closed) and marked unve
 
 test('runProsecution requires an ask function', async () => {
   await assert.rejects(() => runProsecution({ diff: 'x' }), /ask\(\) function is required/);
+});
+
+// ---- codex round-1 fail-open fixes ----
+test('FAIL-CLOSED: an ALL-GARBAGE round does NOT masquerade as dry/SHIP', async () => {
+  // every lens returns unparseable prose; verifier confirms nothing real exists
+  const ask = async ({ agent }) => (agent === VERIFIER.agent ? 'no json' : 'the model rambled, no JSON here');
+  const r = await runProsecution({ ask, diff: 'DIFF', bounds: { maxRounds: 2 } });
+  // each unparseable lens surfaces a synthetic blocker → confirmed is non-empty
+  assert.ok(r.confirmed.length > 0, 'unparseable lenses surfaced blockers, not a false clear');
+  assert.ok(r.confirmed.every((f) => f._unparsed) , 'the blockers are parse-failure markers');
+  assert.ok(r.unverified.length > 0, 'kept as unverified');
+});
+
+test('a clean empty lens reply is NOT a parse failure (real dry round SHIPs)', async () => {
+  const ask = async ({ agent }) => (agent === VERIFIER.agent ? fenced({ real: true }) : fenced([]));
+  const r = await runProsecution({ ask, diff: 'DIFF', bounds: { maxRounds: 3 } });
+  assert.deepEqual(r.confirmed, [], 'genuinely no findings → clean');
+  assert.equal(r.hitBound, null, 'converged');
 });

@@ -68,14 +68,47 @@ test('execute: a real diff drives the deterministic loop and returns a structure
   assert.equal(r.metadata.confirmed, 1);
   assert.match(r.metadata.verdict, /NO-SHIP/);
   assert.match(r.output, /planted-bug/);
-  // the child sessions were WRITE-DISABLED (AC2, end-to-end through the tool)
+  // the child sessions were fail-CLOSED (AC2, end-to-end through the tool):
+  // "*": false floor, and no write/sub-agent tool re-enabled.
   for (const p of client.calls.prompts) {
-    for (const t of ['edit', 'write', 'bash', 'apply_patch']) assert.equal(p.body.tools[t], false);
+    assert.equal(Object.keys(p.body.tools)[0], '*');
+    assert.equal(p.body.tools['*'], false);
+    for (const t of ['edit', 'write', 'bash', 'apply_patch', 'task']) assert.notEqual(p.body.tools[t], true);
   }
 });
 
-test('captureDiff returns "" when git fails (no throw)', () => {
-  assert.equal(captureDiff({ spawnImpl: () => { throw new Error('not a git repo'); } }), '');
+test('captureDiff distinguishes a git FAILURE from a clean empty tree', () => {
+  assert.deepEqual(captureDiff({ spawnImpl: () => { throw new Error('not a git repo'); } }), { diff: '', error: 'not a git repo' });
+  assert.deepEqual(captureDiff({ spawnImpl: () => '' }), { diff: '', error: null }); // clean tree
+  assert.deepEqual(captureDiff({ spawnImpl: () => 'diff...' }), { diff: 'diff...', error: null });
+});
+
+test('execute: a git-capture FAILURE fails CLOSED (NO-SHIP), not a false empty-diff SHIP', async () => {
+  const client = mockClient(() => fenced([]));
+  const def = buildProsecuteTool(fakeSchema, {
+    root: '/p', pkgRoot: PKG, client,
+    diffImpl: () => ({ diff: '', error: 'fatal: bad revision main...HEAD' }),
+  });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.equal(r.metadata.error, 'diff-capture-failed');
+  assert.match(r.metadata.verdict, /NO-SHIP/);
+  assert.equal(client.calls.prompts.length, 0, 'did not run lenses on a broken diff');
+});
+
+test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLETE), never a false SHIP', async () => {
+  // never converges → hits maxRounds; still zero confirmed → must NOT SHIP
+  let n = 0;
+  const client = mockClient((req) => {
+    const sys = req.body.system ?? '';
+    if (sys.includes('verifier')) return fenced({ real: false }); // everything refuted → zero confirmed
+    n += 1;
+    return fenced([{ title: `ephemeral-${n}`, severity: 'low', file: 'x' }]); // new finding every round → never dry
+  });
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.equal(r.metadata.confirmed, 0);
+  assert.ok(r.metadata.hitBound, 'the run hit a bound');
+  assert.match(r.metadata.verdict, /NO-SHIP.*INCOMPLETE/);
 });
 
 test('makeAgentPromptReader reads the packaged agent prompt; "" for an unknown agent', () => {

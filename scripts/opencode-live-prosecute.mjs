@@ -15,7 +15,7 @@
 // Exit codes: 0 = pass, 1 = fail.
 
 import { buildProsecuteTool } from '../plugins/adlc-opencode/lib/prosecute-tool.mjs';
-import { WRITE_TOOLS } from '../plugins/adlc-opencode/lib/prosecute-runner.mjs';
+import { LENS_READ_TOOLS } from '../plugins/adlc-opencode/lib/prosecute-runner.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -66,14 +66,27 @@ if (!/seeded-off-by-one/.test(result.output)) fail('the seeded finding is not in
 if (result.metadata.rounds < 1 || result.metadata.hitBound === 'maxSessions') fail(`loop did not terminate cleanly (rounds=${result.metadata.rounds}, bound=${result.metadata.hitBound})`);
 log(`seeded defect converged: ${result.metadata.verdict} in ${result.metadata.rounds} round(s), ${result.metadata.sessionsUsed} child session(s)`);
 
-// AC2: EVERY child session was WRITE-DISABLED — no lens/verifier could mutate.
+// AC2: EVERY child session was FAIL-CLOSED — a wildcard-deny-first allowlist so
+// unlisted tools (edit/write/task/MCP/unknown) inherit the "*" deny. Assert the
+// closed boundary, not just that "some map was passed" (the denylist hollow-test
+// codex caught): "*" is the first key and false; only read-only tools are
+// re-allowed; write/sub-agent/unknown tools are NOT enabled.
 if (prompts.length === 0) fail('no child sessions were spawned');
 for (const p of prompts) {
-  for (const t of WRITE_TOOLS) {
-    if (p?.body?.tools?.[t] !== false) fail(`child session did not disable write tool "${t}"`);
+  const tools = p?.body?.tools;
+  if (!tools || Object.keys(tools)[0] !== '*' || tools['*'] !== false) {
+    fail(`child session tools map is not wildcard-deny-first: ${JSON.stringify(tools)}`);
+  }
+  for (const t of LENS_READ_TOOLS) {
+    if (tools[t] !== true) fail(`read-only tool "${t}" should be allowed`);
+  }
+  // write, the task sub-agent spawner, and an UNKNOWN/future tool must all be
+  // denied — i.e. NOT re-enabled (they match only "*" → deny).
+  for (const t of ['edit', 'write', 'patch', 'apply_patch', 'bash', 'shell', 'task', 'a_future_write_tool_xyz']) {
+    if (tools[t] === true) fail(`tool "${t}" must NOT be enabled in a lens session (fails open)`);
   }
 }
-log(`all ${prompts.length} lens/verifier child sessions were write-disabled (AC2)`);
+log(`all ${prompts.length} lens/verifier child sessions were fail-closed (wildcard-deny-first allowlist; task/unknown tools denied) (AC2)`);
 
 // The loop ran in FIRST-PARTY code (the tool's execute drove it) — not the host
 // model orchestrating — which is the whole point of the deterministic runner.

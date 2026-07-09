@@ -13,18 +13,27 @@
 import {
   LENSES, VERIFIER, findingKey, dedupeFindings, survivesVerification, shouldContinue,
 } from './prosecutor.mjs';
-import { MUTATING_TOOLS, SHELL_TOOLS } from '../rails-checker.mjs';
+import { READONLY_TOOLS } from '../rails-checker.mjs';
 import { PROMPT_TIMEOUT_MS } from './keyless-bridge.mjs';
 
-// A lens/verifier session must be able to READ but never MUTATE. Disabling by
-// an explicit false map (not an allowlist) means a write tool the host adds
-// later still can't be enabled here without a code change.
-export const WRITE_TOOLS = [...MUTATING_TOOLS, ...SHELL_TOOLS];
+// A lens/verifier session must READ but never MUTATE. The session.prompt `tools`
+// map compiles to opencode PERMISSION RULES (session/prompt.ts): each key → one
+// rule, `findLast` match wins, unmatched → the agent default (base `build` =
+// `"*": "allow"`). So a DENYLIST fails OPEN — a write tool not in the list
+// (`task` sub-agent spawner, MCP tools, any future tool) stays enabled.
+//
+// The fix is a wildcard-deny-first ALLOWLIST — the exact shape opencode's own
+// read-only `explore`/`compaction` agents use: `{ "*": false, <read tools>: true }`.
+// `"*": false` denies everything; the read tools re-allow themselves via a LATER
+// rule (findLast). Anything unlisted — edit/write/patch, `task`, MCP, unknown —
+// matches only `*` → HARD DENY (an explicit deny rule, enforced even in a
+// headless child with no interactive approver). ORDER IS LOAD-BEARING: `"*"`
+// MUST be the first key, or the deny wins for everything.
+export const LENS_READ_TOOLS = READONLY_TOOLS; // single source: the rail guard's read-only set
 
-/** The tools disable-map handed to a lens/verifier child session.prompt. */
-export function lensToolsMap(extra = []) {
-  const map = {};
-  for (const t of [...WRITE_TOOLS, ...extra]) map[t] = false;
+export function lensToolsMap() {
+  const map = { '*': false };            // deny-all first (insertion order preserved)
+  for (const t of LENS_READ_TOOLS) map[t] = true; // re-allow only read-only tools
   return map;
 }
 
@@ -41,12 +50,22 @@ export function parseFenced(text) {
   try { return JSON.parse(body); } catch { return null; }
 }
 
-/** Normalize a lens reply into a findings array (fail-closed to []). */
+/**
+ * Normalize a lens reply into { findings, parsed }. A CLEAN empty result
+ * (`[]` / `{findings:[]}`) is parsed:true, findings:[]. An unparseable or
+ * schema-drifted NON-EMPTY reply is parsed:false — the caller must NOT treat it
+ * as "found nothing" (fail-open); a lens that produced garbage is not a lens
+ * that cleanly cleared the change.
+ */
 export function parseFindings(text) {
   const v = parseFenced(text);
-  if (Array.isArray(v)) return v.filter((f) => f && typeof f === 'object');
-  if (v && Array.isArray(v.findings)) return v.findings.filter((f) => f && typeof f === 'object');
-  return [];
+  if (Array.isArray(v)) return { findings: v.filter((f) => f && typeof f === 'object'), parsed: true };
+  if (v && Array.isArray(v.findings)) return { findings: v.findings.filter((f) => f && typeof f === 'object'), parsed: true };
+  // Nothing parseable. Distinguish a genuinely empty reply from garbage: an
+  // empty/whitespace reply is a clean "no findings"; any other unparseable
+  // content is a parse FAILURE that must surface.
+  const clean = typeof text !== 'string' || text.trim() === '';
+  return { findings: [], parsed: clean };
 }
 
 /** Normalize a verifier reply into a {real:boolean} vote, or null if unparseable. */
@@ -132,17 +151,31 @@ export async function runProsecution({ ask, agentPrompt, diff, bounds = {} } = {
     // Fan out every lens for this round (each in its own write-disabled session).
     const lensReplies = await Promise.all(LENSES.map(async (lens) => {
       const text = await askOne(lens.agent, `Prosecute this change through the ${lens.focus} lens. Return findings as a fenced \`\`\`json array of {title, severity, file, detail}.\n\n${diff}`);
-      return text == null ? [] : parseFindings(text);
+      if (text == null) return { lens, findings: [], parsed: false }; // bound hit / no reply → fail closed
+      const p = parseFindings(text);
+      return { lens, findings: p.findings, parsed: p.parsed };
     }));
     if (hitBound) break;
 
-    const roundFindings = dedupeFindings(lensReplies.flat());
+    // A lens whose reply couldn't be parsed did NOT clear the change — surface a
+    // synthetic blocker so an all-garbage round can never masquerade as dry/SHIP.
+    const unparsedLenses = lensReplies.filter((r) => !r.parsed);
+    const parseBlockers = unparsedLenses.map((r) => ({
+      title: `unparseable lens output: ${r.lens.agent}`,
+      severity: 'high', file: '(prosecution)', detail: 'lens reply was not valid findings JSON — treated as an unverified blocker (fail-closed)',
+      _unparsed: true,
+    }));
+
+    const roundFindings = dedupeFindings([...lensReplies.flatMap((r) => r.findings), ...parseBlockers]);
     const fresh = roundFindings.filter((f) => !seen.has(findingKey(f)));
     for (const f of fresh) seen.add(findingKey(f));
 
     // Verify each fresh finding (verifierVotes independent votes). An unparseable
     // verdict yields NO valid vote → survivesVerification keeps it (fail-closed).
     for (const f of fresh) {
+      // A parse-failure blocker has nothing to refute — keep it as an unverified
+      // blocker directly (no verifier session spent, no false convergence).
+      if (f._unparsed) { confirmed.push(f); unverified.push(f); continue; }
       const votes = [];
       let unparsedVote = false;
       for (let i = 0; i < verifierVotes; i += 1) {
