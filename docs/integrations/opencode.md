@@ -236,6 +236,31 @@ unproven SDK capability — a thrown denial is documented host behavior and the
 live deny proof (`scripts/opencode-live-deny.mjs`, required CI) regression-tests
 it. See ADR 0004's amendment.
 
+Resolved 2026-07-09 (T32): **compaction survival + slash-command advisories.**
+Three more native hooks (signatures verified against `@opencode-ai/plugin`
+1.17.17):
+
+- **`experimental.session.compacting`** appends the active ticket / frozen rails
+  / scope block (the same sanitized `buildSystemContext` used per-turn) to the
+  compaction prompt, so enforcement context isn't quietly summarized away —
+  ENFORCING context that must survive, not a new gate. No-op outside an active
+  ADLC build.
+- **`experimental.compaction.autocontinue`** DISABLES the post-compaction
+  synthetic "continue" turn when the build-gate degradation predicate fires
+  (high-risk ticket × compacted/degraded session — the same signal that denies
+  structured edits), forcing a human turn instead of letting the agent barrel on
+  with a lossy summary. Honors the audited `ADLC_BUILD_GATE_BYPASS=1` (autocontinue
+  stays on, override recorded to the manifest). Normal-risk tickets are unaffected.
+- **`command.execute.before`** adds two ADVISORY toasts (never blocks — commands
+  are human-invoked): a lifecycle-order warning when a phase command runs before
+  its prerequisite phase left manifest evidence (e.g. `/adlc-decompose` with no
+  recorded spec approval, `/adlc-prosecute` before `coldstart`), and a tamper
+  notice when a command's deployed `.opencode/commands/<name>.md` differs
+  byte-for-byte from the packaged source. Both fail open.
+
+All three swallow errors and never throw (the host cannot be broken by an
+advisory). The compaction survival path is exercised end-to-end by the live proof.
+
 Resolved 2026-07-08 (Phase 3): **native-feel surface added (server-side).** Per-turn
 the active ticket, frozen rails, and scope are re-stated to the model via
 `experimental.chat.system.transform` (context-rot defense), and the frozen rails

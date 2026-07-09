@@ -22,8 +22,16 @@ import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
 import { createFlailTracker, flailMessage } from './lib/flail.mjs';
 import { buildGateTool } from './lib/gate-tool.mjs';
+import { buildCompactionContext, decideAutocontinue } from './lib/compaction.mjs';
+import { checkCommandOrder, checkCommandTamper } from './lib/command-gate.mjs';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
+
+// The plugin package root (…/plugins/adlc-opencode), used to byte-compare a
+// deployed command against its packaged source for the tamper advisory.
+const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Surface a message to the operator. Best-effort on every channel, never
@@ -267,6 +275,49 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
         if (!['edit', 'write', 'apply_patch'].includes(tool)) return;
         const notice = buildToolRailNotice(root, env);
         if (notice && typeof output?.description === 'string') output.description += notice;
+      } catch { /* advisory: swallow */ }
+    },
+
+    // T32.1 — keep ADLC enforcement context alive across compaction. Append the
+    // active ticket/rails/scope block to the compaction prompt so summarization
+    // can't quietly drop it (context-rot defense). Never throws.
+    'experimental.session.compacting': async (_input, output) => {
+      try {
+        const extra = buildCompactionContext(root, env);
+        if (extra.length && Array.isArray(output?.context)) output.context.push(...extra);
+      } catch { /* advisory: swallow — never break compaction */ }
+    },
+
+    // T32.2 — a context-degraded high-risk session must not silently auto-continue
+    // past compaction. The autocontinue hook firing IS the compaction-completed
+    // signal, so mark the session compacted, then reuse the build-gate predicate:
+    // when it would deny structured edits, force a human turn (enabled=false).
+    // The audited ADLC_BUILD_GATE_BYPASS=1 keeps autocontinue on (override logged).
+    'experimental.compaction.autocontinue': async (input, output) => {
+      try {
+        const sessionID = input?.sessionID;
+        tracker.markCompacted(sessionID);
+        const d = decideAutocontinue({ sessionID, tracker, root, env });
+        if (typeof output?.enabled === 'boolean') output.enabled = d.enabled;
+        if (!d.enabled) {
+          await notify(`ADLC: auto-continue suppressed after compaction — ${d.reason}. Review the summarized context before proceeding.`, 'warning');
+        } else if (d.overridden) {
+          await notify('ADLC build-gate: auto-continue kept after compaction via audited override.', 'warning');
+        }
+      } catch { /* advisory: on any error leave the host default (enabled) */ }
+    },
+
+    // T32.3 — advisory checks when an ADLC slash-command runs. Never blocks
+    // (commands are human-invoked): (a) lifecycle-order — a phase invoked before
+    // its prerequisite phase left evidence; (b) tamper — the command's deployed
+    // markdown differs from the packaged source. Both surface as warning toasts.
+    'command.execute.before': async (input) => {
+      try {
+        const command = input?.command;
+        const order = checkCommandOrder(command, root, env);
+        if (order.warn) await notify(order.warn, 'warning');
+        const tamper = checkCommandTamper(command, PKG_ROOT, root);
+        if (tamper.warn) await notify(tamper.warn, 'warning');
       } catch { /* advisory: swallow */ }
     },
 
