@@ -19,7 +19,9 @@ export class SinkError extends Error {
  * @param {{ fetch?: typeof globalThis.fetch }} [deps]
  */
 export function selectSink(env = {}, { fetch = globalThis.fetch } = {}) {
-  const which = env.CONTACT_SINK;
+  // Attio is the contracted default (P1 gate): an operator who sets
+  // ATTIO_API_TOKEN but omits CONTACT_SINK still gets the Attio path, not a 503.
+  const which = env.CONTACT_SINK || 'attio';
 
   if (which === 'attio') {
     if (!env.ATTIO_API_TOKEN) {

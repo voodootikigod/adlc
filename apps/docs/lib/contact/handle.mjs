@@ -32,6 +32,16 @@ function originAllowed(reqOrigin, allowed) {
   return allowed.includes(reqOrigin);
 }
 
+// The request's own origin, reconstructed from the Host header. Used as the
+// same-origin default so enforcement never silently disables when no explicit
+// allowlist is configured (a genuine same-origin POST has Origin === this).
+function expectedOriginFromHost(getHeader) {
+  const host = getHeader('host');
+  if (!host) return '';
+  const proto = getHeader('x-forwarded-proto') || 'https';
+  return `${proto}://${host}`;
+}
+
 /**
  * @param {{
  *   body?: Record<string, unknown>,
@@ -51,9 +61,15 @@ export async function handleContact({ body = {}, getHeader = () => null, deps = 
     return { status: 200, body: { ok: true } };
   }
 
-  // 2. Same-origin allowlist.
+  // 2. Same-origin allowlist. Prefer an explicit list; otherwise fall back to
+  // the request's own Host-derived origin so enforcement never fails open just
+  // because CONTACT_ALLOWED_ORIGINS was not set (PM-C).
   const reqOrigin = safeOrigin(getHeader('origin')) || safeOrigin(getHeader('referer'));
-  if (!originAllowed(reqOrigin, deps.allowedOrigins)) {
+  const allowed =
+    deps.allowedOrigins && deps.allowedOrigins.length > 0
+      ? deps.allowedOrigins
+      : [expectedOriginFromHost(getHeader)].filter(Boolean);
+  if (!originAllowed(reqOrigin, allowed)) {
     return { status: 403, body: { ok: false, error: 'forbidden_origin' } };
   }
 
