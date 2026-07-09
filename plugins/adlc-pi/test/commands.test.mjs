@@ -323,6 +323,23 @@ test('AC5: /adlc-init on a bare repo creates .adlc/tickets.json + gitignore entr
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('P5 follow-up: /adlc-init never clobbers a POPULATED tickets.json (byte-identical after run)', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-init-pop-')));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    const ticketsPath = join(root, '.adlc', 'tickets.json');
+    const populated = JSON.stringify({ tickets: [{ id: 'T1', title: 'Real work', body: 'precious' }] }, null, 2) + '\n';
+    writeFileSync(ticketsPath, populated);
+
+    const pi = fakePi();
+    createExtension({ env: {} })(pi);
+    const ctx = fakeCtx(root);
+    await pi.commands['adlc-init'].handler('', ctx);
+
+    assert.equal(readFileSync(ticketsPath, 'utf8'), populated, 'existing tickets must be byte-identical after init');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('AC5: /adlc-init with the adlc CLI missing notifies the install command and does not scaffold', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-init-')));
   try {
