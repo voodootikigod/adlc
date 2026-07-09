@@ -19,6 +19,7 @@
     "@adlc/build-gate": "^1.1.0",
     "@adlc/core": "^1.1.0",
     "@adlc/flail-detector": "^1.1.0",
+    "@adlc/gate-manifest": "^1.1.0",
     "@adlc/rails-guard": "^1.1.0"
   },
   "devDependencies": {

@@ -195,6 +195,60 @@ export function checkShellCommand(command, ticket, root) {
   return { decision: 'allow', mutating: true, reason: 'shell mutation targets no frozen rail' };
 }
 
+// pi built-in tools that carry paths but never mutate them (they arrive as
+// their own typed events, not CustomToolCallEvent, but are listed for the
+// name-keyed check). Kept minimal: every entry is bypass surface.
+export const READONLY_TOOLS = ['read', 'grep', 'find', 'ls'];
+
+// Input keys that name a file target on third-party tools.
+const PATH_KEY = /^(?:path|file|file_?path|filepath|target)$/i;
+
+/**
+ * Extract path-like targets from a custom tool's input (spec 2.5): values of
+ * path-named keys (string or string[]), plus any other top-level string that
+ * looks path-like AND resolves to an existing file inside the repo.
+ */
+export function extractToolPaths(input, root) {
+  const out = new Set();
+  for (const [key, value] of Object.entries(input ?? {})) {
+    const candidates = typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((v) => typeof v === 'string') : [];
+    for (const candidate of candidates) {
+      if (candidate === '') continue;
+      if (PATH_KEY.test(key)) {
+        out.add(candidate);
+      } else if (/[/\\]|\.[A-Za-z0-9]+$/.test(candidate) && existsSync(join(root, candidate))) {
+        out.add(candidate);
+      }
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Gate decision for a third-party (custom) tool call. Layered posture
+ * (spec 2.5): extractable targets are rail-checked (symlink-aware, via
+ * railHit); a no-target unknown tool is allowed but marked unvetted so the
+ * evidence rail records it — the snapshot/diff reactive gate and the CI
+ * rails-guard remain the backstop.
+ */
+export function checkCustomTool(toolName, input, ticket, root) {
+  const name = String(toolName ?? '').toLowerCase();
+  if (READONLY_TOOLS.includes(name)) {
+    return { decision: 'allow', reason: 'known read-only tool' };
+  }
+  const paths = extractToolPaths(input, root);
+  for (const path of paths) {
+    const hit = railHit(path, ticket, root);
+    if (hit) {
+      return { decision: 'deny', reason: `custom tool "${toolName}" targets frozen rail "${hit}" via "${path}"` };
+    }
+  }
+  if (paths.length === 0) {
+    return { decision: 'allow', reason: 'no extractable file target', unvetted: true };
+  }
+  return { decision: 'allow', reason: 'targets hit no frozen rail' };
+}
+
 /** Suppressions allowed by the ticket: structured field + `allow-suppression:` body lines. */
 export function getAllowedSuppressions(ticket) {
   const allowed = new Set(ticket?.allowedSuppressions ?? []);
