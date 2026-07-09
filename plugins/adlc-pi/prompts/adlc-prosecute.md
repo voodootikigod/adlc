@@ -10,20 +10,41 @@ Prosecute the change for the active ticket. Requires a clean G4 build
 `.adlc/current-ticket.json`). See the `adlc-prosecute` skill for the evidence
 recording reference.
 
-**How this differs from the fan-out integrations — read before trusting the
-verdict.** In this Phase-3 command the five prosecution lenses below run
-SEQUENTIALLY in this one context, worked by the same model that reads this
-command. Sequential same-context lenses have **weaker independence** than a
-fresh-context subagent fan-out: conclusions from an earlier lens can anchor a
-later one, and a blind spot in this session repeats across all five passes. Do
-not treat this loop as equivalent to an independent review. For the cross-model
-risk gate, run `npx adversarial-review --providers <a,b>` (two distinct
-providers) — step 6 below — so at least one genuinely different model examines
-the change. (The pi extension's deterministic fresh-context prosecutor is a
-later phase; until it ships, this sequential loop plus the cross-model gate is
-the P5 flow.)
+## Preferred path: call the `adlc_prosecute` tool
 
-This command is self-contained: everything the loop needs (lens briefs, dedupe
+The pi extension ships a native `adlc_prosecute` agent tool (Phase 4). **Call it
+first** — do not prose-shell the lenses. It runs the deterministic P5 loop in
+first-party code: it fans out **one fresh-context child `pi` per lens** over the
+ticket diff (genuinely independent reviewers, unlike a single-context sequential
+pass), dedupes across lenses, verifies each survivor with fresh verifier
+children, loops until dry, and records every confirmed finding to the `.adlc`
+findings ledger. It returns a structured verdict (`CLEAN` or `FINDINGS`).
+
+```
+adlc_prosecute            # active ticket, diff vs merge-base with main
+adlc_prosecute { "base": "<ref>", "ticket": "<id>" }
+```
+
+Treat a `FINDINGS` verdict as no-ship until each confirmed finding is addressed;
+`CLEAN` means the fresh-context loop converged with nothing surviving
+verification. Degraded lenses are reported and are NOT counted as clean. After a
+`CLEAN` tool verdict, still run the cross-model risk gate (step 6 below) for
+risk-gated changes, then record the prosecution evidence (step 7).
+
+## Fallback: the manual sequential loop
+
+Use the sections below only when the native tool is unavailable (e.g. a
+non-pi runtime, or child sessions cannot spawn). **Read before trusting this
+fallback's verdict.** Here the five prosecution lenses run SEQUENTIALLY in this
+one context, worked by the same model that reads this command. Sequential
+same-context lenses have **weaker independence** than the tool's fresh-context
+fan-out: conclusions from an earlier lens can anchor a later one, and a blind
+spot in this session repeats across all five passes. Do not treat this loop as
+equivalent to an independent review. For the cross-model risk gate, run
+`npx adversarial-review --providers <a,b>` (two distinct providers) — step 6
+below — so at least one genuinely different model examines the change.
+
+This fallback is self-contained: everything the loop needs (lens briefs, dedupe
 rule, verification rule, stop rule) is defined below.
 
 ## 0. Collect the evidence

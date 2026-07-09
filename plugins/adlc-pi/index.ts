@@ -16,6 +16,8 @@ export interface Ticket {
 	allowedSuppressions?: string[];
 }
 
-export default function (pi: ExtensionAPI) {
-	createExtension()(pi);
+export default function (pi: ExtensionAPI): Promise<unknown> {
+	// Return the promise so pi awaits extension setup — the native adlc_prosecute
+	// tool registers (async TypeBox load) before the agent loop can call it.
+	return createExtension()(pi) as Promise<unknown>;
 }

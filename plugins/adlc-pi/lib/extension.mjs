@@ -36,13 +36,15 @@ import { createFlailTracker } from './flail.mjs';
 import { registerCommands } from './commands.mjs';
 import { renderWidgetLines } from './widget.mjs';
 import { createRenderers } from './renderers.mjs';
+import { registerProsecuteTool } from './prosecute-tool.mjs';
+import { makeCompletionListener } from './completion.mjs';
 
 // Bound the pending-snapshot map: a blocked call never gets a tool_result, so
 // stale entries are evicted oldest-first well past any realistic concurrency.
 const SNAPSHOT_MAP_CAP = 100;
 
 export function createExtension({ env = process.env } = {}) {
-  return function adlcPiExtension(pi) {
+  return async function adlcPiExtension(pi) {
     let activeCwd = process.cwd();
     let active = { ticketId: null, ticket: null, error: null };
     let ticketStamp = null;
@@ -188,6 +190,14 @@ export function createExtension({ env = process.env } = {}) {
       // Renderer registration is cosmetic — never fail extension load.
     }
 
+    // Completion-protocol listener (spec 4.2): watches message_end for the
+    // TICKET-DONE / TICKET-BLOCKED tokens the doctrine already demands.
+    const completion = makeCompletionListener({
+      pi,
+      getActive: () => active,
+      note: noteGate,
+    });
+
     // =====================================================================
     // Lifecycle
     // =====================================================================
@@ -211,10 +221,16 @@ export function createExtension({ env = process.env } = {}) {
 
     pi.on('turn_start', async (_event, ctx) => {
       maybeReload(ctx?.cwd);
+      // A new turn re-arms the once-per-turn completion listener (spec 4.2).
+      completion.resetTurn();
       // Picks up a mid-session ticket switch AND clears the widget with
       // undefined once a ticket deactivates (AC2).
       refreshWidget(ctx);
     });
+
+    // Completion-protocol interception: TICKET-DONE nudges prosecution,
+    // TICKET-BLOCKED records the reason. Never rewrites the message.
+    pi.on('message_end', completion.onMessageEnd);
 
     // A threshold/overflow compaction marks the session context-degraded for
     // the build gate; a manual /compact does not.
@@ -553,6 +569,24 @@ export function createExtension({ env = process.env } = {}) {
       reload,
       getActive: () => active,
       getCwd: () => activeCwd,
+    });
+
+    // Native deterministic P5 prosecutor tool (spec 4.1). Registered LAST and
+    // AWAITED so the tool exists before pi starts the agent loop (pi awaits the
+    // extension factory — a fire-and-forget registration races an instant first
+    // turn and loses). Loading TypeBox (a pi-runtime-only peer) throws under a
+    // plain `node --test`, so the failure is swallowed: there the tool simply
+    // never registers and the /adlc-prosecute command + CI remain the backstop.
+    // All pi.on/registerCommand wiring above ran synchronously already, so unit
+    // tests that read pi.handlers without awaiting this factory still see them.
+    await registerProsecuteTool(pi, {
+      pi,
+      getActive: () => active,
+      getCwd: () => activeCwd,
+      env,
+      note: (evt) => noteGate({ ctx: null, type: evt.type, detail: evt.detail }),
+    }).catch(() => {
+      // Best-effort at load — see above.
     });
 
     // Exposed for tests only (not part of the pi extension contract).

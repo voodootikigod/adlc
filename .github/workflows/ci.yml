@@ -68,6 +68,16 @@ jobs:
         if: matrix.node-version == 22
         run: node scripts/pi-live-deny.mjs
 
+      # pi Phase 4 live proof (ticket T26 AC5): the native adlc_prosecute tool
+      # registers (via the pi-runtime TypeBox peer) and is model-callable
+      # end-to-end in a real pi loop — a stub turn calls adlc_prosecute with
+      # base=HEAD (empty diff → CLEAN, no child spawns) and the result reaches
+      # the model. Same folded-into-required-job + Node-22-only rationale as the
+      # deny proof above; a regression that unregisters the tool fails here.
+      - name: pi live prosecute proof (T26 AC5)
+        if: matrix.node-version == 22
+        run: node scripts/pi-live-prosecute.mjs
+
   pre-ga-gate:
     # Explicit CI gate that fails with a clear message while either of the two
     # unverified Pre-GA assumptions documented in docs/adr/0003-adlc-claude-code-plugin.md
