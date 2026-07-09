@@ -91,10 +91,11 @@ test('AC3 drift-pin: PHASE_PREREQ evidence names match the runner authoritative 
   // is added to the published plugin — it keeps its minimal dep surface).
   const { requirementsForPhase } = await import('../../../packages/runner/lib/assertions.mjs');
   const { PHASE_PREREQ } = await import('../lib/command-gate.mjs');
+  // Exact set-equality both ways: if the runner ADDS or removes a P1/P2 gate,
+  // the prereq lists must move with it (a subset check would let a newly-added
+  // gate stale the advisory silently — codex round-3 note).
   assert.deepEqual(new Set(PHASE_PREREQ['adlc-decompose'].gates), new Set(requirementsForPhase('p1')));
-  for (const g of PHASE_PREREQ['adlc-prosecute'].gates) {
-    assert.ok(requirementsForPhase('p2').includes(g), `${g} is a real P2 gate`);
-  }
+  assert.deepEqual(new Set(PHASE_PREREQ['adlc-prosecute'].gates), new Set(requirementsForPhase('p2')));
 });
 
 test('AC3: unmapped command, no active ticket, or non-adlc command → never warns', () => {
