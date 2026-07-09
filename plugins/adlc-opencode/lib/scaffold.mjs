@@ -72,30 +72,67 @@ export function pluginEntryFor(pkgRoot, pkgName = PLUGIN_PKG_NAME) {
 }
 
 /**
+ * Does a `plugin` array entry refer to THIS plugin, in any spelling? Matches
+ * the npm name, a source-checkout path (…/adlc-opencode), a node_modules path,
+ * and the `[name, options]` tuple wrapping of any of those.
+ */
+export function isOwnPluginEntry(entry, pkgName = PLUGIN_PKG_NAME) {
+  const name = Array.isArray(entry) ? entry[0] : entry;
+  if (typeof name !== 'string' || !name) return false;
+  if (name === pkgName) return true;
+  const norm = name.replace(/\\/g, '/').replace(/\/+$/, '');
+  const base = norm.slice(norm.lastIndexOf('/') + 1);
+  return base === 'adlc-opencode' || norm.endsWith(`/node_modules/${pkgName}`);
+}
+
+/**
  * Register the plugin itself in .opencode/opencode.json's `plugin` array so
  * OpenCode actually LOADS the rails-guard hook. Commands/agents/skills are inert
  * markdown; the enforcing hook only runs if the plugin package is registered.
  * Idempotent and non-clobbering: preserves any other settings and plugin entries,
- * including `[name, options]` tuple entries. The plugin counts as already
- * registered if ANY known form is present (npm name, this entry, or a tuple
- * wrapping either) — never double-register under a second spelling.
- * Returns { registered, alreadyPresent, path }.
+ * including `[name, options]` tuple entries.
+ *
+ * FAIL-CLOSED on an unparseable existing config: a malformed opencode.json is
+ * exactly when the file must NOT be reset — hand-edits, other plugins, and
+ * themes would be destroyed. Throws with a clear message instead.
+ *
+ * REPLACES stale spellings instead of appending a second one: a checkout that
+ * moved (path A → path B) or a switch to the npm install must not leave two
+ * entries that both load the plugin. The npm name is always canonical — if it
+ * is already registered, any entry form counts as present. Options riding a
+ * replaced tuple are preserved on the new entry.
+ * Returns { registered, alreadyPresent, replaced, path }.
  */
-export function ensurePluginRegistered(root, entry = PLUGIN_PKG_NAME, aliases = [PLUGIN_PKG_NAME]) {
+export function ensurePluginRegistered(root, entry = PLUGIN_PKG_NAME, pkgName = PLUGIN_PKG_NAME) {
   const dir = join(root, '.opencode');
   const path = join(dir, 'opencode.json');
   let config = {};
   if (existsSync(path)) {
-    try { config = JSON.parse(readFileSync(path, 'utf8')); } catch { config = {}; }
+    const raw = readFileSync(path, 'utf8');
+    try {
+      config = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `${path} exists but is not valid JSON (${err?.message ?? err}). ` +
+        'Refusing to overwrite it — fix the file and re-run.',
+      );
+    }
   }
   const plugins = Array.isArray(config.plugin) ? config.plugin : [];
-  const known = new Set([entry, ...aliases]);
   const nameOf = (e) => (Array.isArray(e) ? e[0] : e);
-  if (plugins.some((e) => known.has(nameOf(e)))) return { registered: false, alreadyPresent: true, path };
-  config.plugin = [...plugins, entry];
+  const ours = plugins.filter((e) => isOwnPluginEntry(e, pkgName));
+  // Exact spelling already there, or the canonical npm name is registered →
+  // nothing to do (a source scaffold never displaces a working npm entry).
+  if (ours.some((e) => nameOf(e) === entry || nameOf(e) === pkgName)) {
+    return { registered: false, alreadyPresent: true, replaced: [], path };
+  }
+  // Preserve options from a tuple we are about to replace.
+  const tupleOptions = ours.map((e) => (Array.isArray(e) ? e[1] : undefined)).find((o) => o && typeof o === 'object');
+  const newEntry = tupleOptions ? [entry, tupleOptions] : entry;
+  config.plugin = [...plugins.filter((e) => !isOwnPluginEntry(e, pkgName)), newEntry];
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
-  return { registered: true, alreadyPresent: false, path };
+  return { registered: true, alreadyPresent: false, replaced: ours.map(nameOf), path };
 }
 
 /**
@@ -160,7 +197,7 @@ export function deploySkills(pkgRoot, destRoot) {
  */
 export function scaffold(root, pkgRoot) {
   const config = ensureConfig(root);
-  const plugin = ensurePluginRegistered(root, pluginEntryFor(pkgRoot), [PLUGIN_PKG_NAME, pkgRoot]);
+  const plugin = ensurePluginRegistered(root, pluginEntryFor(pkgRoot));
   const commands = deployDir(pkgRoot, root, 'command', 'commands');
   const agents = deployDir(pkgRoot, root, 'agent', 'agents');
   const {

@@ -25,7 +25,7 @@ After it completes:
   2. restart opencode — the rails-guard plugin loads from opencode.json`;
 
 export function cliMain(argv = process.argv.slice(2)) {
-  const [command = 'init', rootArg] = argv;
+  const [command = 'init', rootArg, ...extra] = argv;
   if (command === '--help' || command === '-h' || command === 'help') {
     console.log(USAGE);
     return 0;
@@ -34,9 +34,27 @@ export function cliMain(argv = process.argv.slice(2)) {
     console.error(`adlc-opencode: unknown command "${command}"\n\n${USAGE}`);
     return 1;
   }
+  // Reject flag-looking roots and extra positionals instead of silently
+  // scaffolding "./--dry-run" or ignoring arguments the user thought counted.
+  if (rootArg?.startsWith('-')) {
+    console.error(`adlc-opencode: unknown option "${rootArg}"\n\n${USAGE}`);
+    return 1;
+  }
+  if (extra.length) {
+    console.error(`adlc-opencode: unexpected argument(s): ${extra.join(' ')}\n\n${USAGE}`);
+    return 1;
+  }
   const projectRoot = resolve(process.cwd(), rootArg ?? '.');
   const pkgRoot = dirname(dirname(fileURLToPath(import.meta.url))); // package dir
-  const r = scaffold(projectRoot, pkgRoot);
+  let r;
+  try {
+    r = scaffold(projectRoot, pkgRoot);
+  } catch (err) {
+    // Scaffold writes are idempotent — a re-run after fixing the cause repairs
+    // any partial state. Surface a clean message, not a stack trace.
+    console.error(`adlc-opencode init failed: ${err?.message ?? err}`);
+    return 1;
+  }
   console.log(`adlc-opencode init: ${projectRoot}`);
   console.log(`  config.json ${r.config.created ? 'created' : 'present'}`);
   console.log(`  plugin ${r.plugin.alreadyPresent ? 'already registered' : 'registered'} in .opencode/opencode.json`);

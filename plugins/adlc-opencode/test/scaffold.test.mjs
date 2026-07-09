@@ -275,3 +275,82 @@ test('T30: a PRISTINE pre-existing .opencode copy is removed when .claude covers
     assert.ok(existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')), 'modified copy kept');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// ---- T30 round-2: registration must never clobber, never double-register ----
+test('R2: unparseable opencode.json → THROW and leave the file untouched (no clobber)', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    const broken = '{ "theme": "x", "plugin": ["other"], }'; // trailing comma
+    writeFileSync(join(root, '.opencode', 'opencode.json'), broken);
+    assert.throws(() => ensurePluginRegistered(root), /not valid JSON.*Refusing to overwrite/s);
+    assert.equal(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'), broken, 'file untouched');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R2: stale path entry is REPLACED (not appended) when re-scaffolding under a new spelling', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'opencode.json'),
+      JSON.stringify({ theme: 'x', plugin: ['other-plugin', '/old/checkout/plugins/adlc-opencode'] }) + '\n');
+    // moved checkout: path A → npm name
+    const r = ensurePluginRegistered(root, '@adlc/opencode-package');
+    assert.equal(r.registered, true);
+    assert.deepEqual(r.replaced, ['/old/checkout/plugins/adlc-opencode']);
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.deepEqual(cfg.plugin, ['other-plugin', '@adlc/opencode-package'], 'single entry, other plugin preserved');
+    assert.equal(cfg.theme, 'x');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R2: path A → path B re-scaffold replaces; tuple OPTIONS ride onto the new entry', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'opencode.json'),
+      JSON.stringify({ plugin: [['/old/checkout/plugins/adlc-opencode', { advisoryHooks: true }]] }) + '\n');
+    const r = ensurePluginRegistered(root, '/new/checkout/plugins/adlc-opencode');
+    assert.equal(r.registered, true);
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.deepEqual(cfg.plugin, [['/new/checkout/plugins/adlc-opencode', { advisoryHooks: true }]],
+      'replaced with options preserved');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R2: canonical npm name already registered → a source scaffold does NOT displace it', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'opencode.json'),
+      JSON.stringify({ plugin: ['@adlc/opencode-package'] }) + '\n');
+    const r = ensurePluginRegistered(root, '/some/checkout/plugins/adlc-opencode');
+    assert.equal(r.alreadyPresent, true);
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.deepEqual(cfg.plugin, ['@adlc/opencode-package']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- T30 round-2: bin argv guards ----
+test('R2: cliMain rejects flag-looking roots and extra positionals; init failure is a clean exit 1', async () => {
+  const { cliMain } = await import('../bin/cli.mjs');
+  const errors = [];
+  const logs = [];
+  const origErr = console.error; const origLog = console.log;
+  console.error = (m) => errors.push(String(m)); console.log = (m) => logs.push(String(m));
+  const root = mkroot();
+  try {
+    assert.equal(cliMain(['init', '--dry-run']), 1, 'flag-looking root rejected');
+    assert.match(errors.at(-1), /unknown option "--dry-run"/);
+    assert.equal(cliMain(['init', root, 'extra']), 1, 'extra positional rejected');
+    assert.match(errors.at(-1), /unexpected argument/);
+    // clean failure path: unparseable opencode.json → message, not a stack trace
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'opencode.json'), '{ broken');
+    assert.equal(cliMain(['init', root]), 1);
+    assert.match(errors.at(-1), /init failed: .*not valid JSON/);
+  } finally {
+    console.error = origErr; console.log = origLog;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
