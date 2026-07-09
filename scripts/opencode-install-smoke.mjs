@@ -203,15 +203,37 @@ else {
 // ---- Phase E (T5): prosecutor lenses + verifier, G4/prosecute/distill commands ----
 if (!pkg2.opencode?.agent) fail('package.json opencode.agent entry missing'); else ok('opencode.agent manifest entry');
 const agentDir = join(PLUGIN, 'agent');
-const AGENTS = ['prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff', 'prosecutor-tests', 'prosecutor-verifier'];
+// T34: the `prosecutor` meta-agent joins the 5 lens agents + verifier (7 total).
+const AGENTS = ['prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff', 'prosecutor-tests', 'prosecutor-verifier', 'prosecutor'];
 for (const a of AGENTS) {
   const p = join(agentDir, `${a}.md`);
   if (!existsSync(p)) { fail(`agent/${a}.md missing`); continue; }
   if (!/^---\n[\s\S]*?mode:\s*subagent[\s\S]*?\n---/.test(read(p))) fail(`agent/${a}.md lacks subagent frontmatter`);
   else ok(`agent/${a}.md valid`);
 }
-for (const c of ['adlc-verify-build.md', 'adlc-prosecute.md', 'adlc-distill.md']) {
+// T34: the prosecutor meta-agent must name the three deterministic gates with
+// their exact CLI invocations (AC2) — distinct from the lens agents.
+{
+  const prosecutor = read(join(agentDir, 'prosecutor.md'));
+  for (const gate of ['adlc hollow-test', 'adlc behavior-diff', 'adlc review-calibration']) {
+    if (!prosecutor.includes(gate)) fail(`agent/prosecutor.md does not invoke \`${gate}\``); else ok(`prosecutor meta-agent invokes ${gate}`);
+  }
+}
+for (const c of ['adlc-verify-build.md', 'adlc-prosecute.md', 'adlc-distill.md', 'adlc-maintain.md']) {
   if (!existsSync(join(cmdDir, c))) fail(`command/${c} missing`); else ok(`command/${c} present`);
+}
+// T34 AC1: /adlc-maintain runs the deterministic checks and keeps gate-fuzzing CI-only.
+{
+  const maintain = read(join(cmdDir, 'adlc-maintain.md'));
+  for (const check of ['adlc skill-rot', 'adlc model-ratchet', 'adlc ticket-prune']) {
+    if (!maintain.includes(check)) fail(`adlc-maintain.md does not run \`${check}\``); else ok(`adlc-maintain runs ${check}`);
+  }
+  if (!/CI-ONLY|CI-only|does \*\*not\*\* invoke it/.test(maintain)) fail('adlc-maintain.md does not mark gate-fuzzing CI-only'); else ok('adlc-maintain keeps gate-fuzzing CI-only');
+}
+// T34 AC3: the maintenance workflow scans the opencode skill deployment.
+{
+  const wf = read(join(ROOT, 'docs', 'ci', 'adlc-maintenance.yml'));
+  if (!wf.includes('.opencode/skills')) fail('docs/ci/adlc-maintenance.yml does not scan .opencode/skills'); else ok('maintenance workflow covers .opencode/skills');
 }
 if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs missing'); else ok('prosecutor registry/helpers present');
 
