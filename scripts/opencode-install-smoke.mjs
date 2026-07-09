@@ -250,10 +250,13 @@ console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-den
 // still scanned.
 {
   // Assemble each needle in halves so the guard file never self-matches.
+  // Dots are escaped for -E so `.` matches a literal dot, not any char (a bare
+  // `.` would over-flag contrived strings like `sstXdev/opencode`). Fail-safe
+  // either way — the regex can only over-flag, never hide a stale ref.
   const patterns = [
-    ['sst', 'opencode'].join('/'),        // github.com/sst/opencode, git@github.com:sst/opencode
-    ['sst', 'dev/opencode'].join('.'),    // sst.dev/opencode
-    ['opencode', 'sst', 'dev'].join('.'), // opencode.sst.dev
+    ['sst', 'opencode'].join('/'),           // github.com/sst/opencode, git@github.com:sst/opencode
+    ['sst', 'dev/opencode'].join('\\.'),     // sst.dev/opencode
+    ['opencode', 'sst', 'dev'].join('\\.'),  // opencode.sst.dev
   ];
   let hits = '';
   try {
