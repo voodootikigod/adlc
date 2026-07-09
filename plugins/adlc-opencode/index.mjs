@@ -22,6 +22,7 @@ import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
 import { createFlailTracker, flailMessage } from './lib/flail.mjs';
 import { buildGateTool } from './lib/gate-tool.mjs';
+import { buildProsecuteTool } from './lib/prosecute-tool.mjs';
 import { buildCompactionContext, decideAutocontinue } from './lib/compaction.mjs';
 import { checkCommandOrder, checkCommandTamper } from './lib/command-gate.mjs';
 import { fileURLToPath } from 'node:url';
@@ -142,12 +143,16 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   try {
     const { tool } = await import('@opencode-ai/plugin');
     if (tool?.schema) {
-      toolHook = buildGateTool(tool.schema, { root, client });
+      // adlc_gate (Phase 4.2) + adlc_prosecute (T33: deterministic P5 runner).
+      toolHook = {
+        ...buildGateTool(tool.schema, { root, client }),
+        ...buildProsecuteTool(tool.schema, { root, pkgRoot: PKG_ROOT, client }),
+      };
     } else {
-      console.error('[adlc] @opencode-ai/plugin exposes no tool.schema — adlc_gate tool NOT registered');
+      console.error('[adlc] @opencode-ai/plugin exposes no tool.schema — adlc_gate/adlc_prosecute tools NOT registered');
     }
   } catch (err) {
-    console.error(`[adlc] adlc_gate tool NOT registered (@opencode-ai/plugin unavailable: ${err?.message ?? err})`);
+    console.error(`[adlc] native tools NOT registered (@opencode-ai/plugin unavailable: ${err?.message ?? err})`);
   }
 
   return {

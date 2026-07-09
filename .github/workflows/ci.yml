@@ -68,6 +68,15 @@ jobs:
       - name: OpenCode compaction registration+behavior proof (T32)
         run: node scripts/opencode-live-compaction.mjs
 
+      # T33 deterministic P5 proof: the shipped adlc_prosecute tool drives the
+      # fan-out → verify → loop-until-dry loop in first-party code over
+      # WRITE-DISABLED child sessions, converging a seeded defect to NO-SHIP.
+      # Runs against a real-shaped mock SDK client (a full multi-lens loop isn't
+      # deterministically forcible through a real binary) — registration on the
+      # real binary is proven by the live-tool step above. REQUIRED.
+      - name: OpenCode deterministic prosecute proof (T33)
+        run: node scripts/opencode-live-prosecute.mjs
+
       # pi live deny proof (ticket T21 AC5) — same folded-into-required-job
       # rationale as the OpenCode step above. Runs on the Node 22 leg only
       # (pi requires Node >= 22.19; the script hard-skips on older majors and

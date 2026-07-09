@@ -203,16 +203,27 @@ glob/ticket logic to `@adlc/core`:
 | P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
 | P7 Distill | **Yes** | `/adlc-distill` (Phase E) |
 
+Resolved 2026-07-09 (T33 / Phase 4b): **deterministic P5 runner.** The native
+**`adlc_prosecute`** tool drives the fan-out → dedupe → verify → loop-until-dry
+protocol in FIRST-PARTY code (`lib/prosecute-runner.mjs` `runProsecution`, over
+the tested `@adlc/core` helpers), not by prose-instructing the model to
+orchestrate. Each lens and the verifier run in an isolated child session
+(`client.session.create({parentID})` + `session.prompt`) carrying the agent's
+prompt as a per-call `system` override and a **write-disabled `tools` map** (a
+`false` map over every mutating + shell tool — a lens reads the diff, it cannot
+edit). Structured verdicts come back as fenced JSON (there is no server-side
+`outputFormat` at 1.17.x); an unparseable verdict is **fail-closed** — the
+finding is kept as a blocker and flagged unverified, never silently dropped. The
+loop is hard-bounded (max rounds / max child sessions) and reports the bound it
+hit. `/adlc-prosecute` calls the tool first and keeps the prose protocol as the
+fallback when the tool is unavailable. Proven end-to-end by
+`scripts/opencode-live-prosecute.mjs` (seeded-defect convergence + write-disable,
+CI-required) and `scripts/opencode-live-tool.mjs` (real-binary registration).
+This makes OpenCode's P5 the most deterministic of the six integrations.
+
 ## Gaps
 
-1. **P5 orchestration is still model-driven.** `/adlc-prosecute` describes the
-   fan-out → dedupe → verify → loop-until-dry protocol (the decision helpers in
-   `lib/prosecutor.mjs` are unit-tested), but the loop itself is executed by the
-   model invoking the subagents, not a deterministic first-party runner. The
-   keyless bridge that would let a native `adlc_prosecute` tool spawn lens/verifier
-   child sessions is now proven (Phase 4); wiring the deterministic runner on top
-   is the **Phase 4b** follow-on.
-2. **`permission.ask` is a DORMANT lever.** The hook is defined but never
+1. **`permission.ask` is a DORMANT lever.** The hook is defined but never
    dispatched — re-verified from source at tags **v1.17.17 and v1.17.18**
    (2026-07-09): `permission.ask` appears only in the Hooks type, is never passed
    to `plugin.trigger()`, and the real permission path publishes the
@@ -221,7 +232,7 @@ glob/ticket logic to `@adlc/core`:
    (denies rail-target permissions under both documented payload shapes) that
    activates the moment upstream wires it. The enforcing control is the
    `tool.execute.before` throw.
-3. **Floating leading-`**` rails and in-session directory deletion.** The
+2. **Floating leading-`**` rails and in-session directory deletion.** The
    in-session shell guard denies deleting/moving a rail's *fixed-anchor* parent
    (`rm -rf test` vs `test/**`, `rm -rf packages/foo/test` vs
    `packages/*/test/**`, `rm -rf .`). A rail with a *leading* `**` (e.g.

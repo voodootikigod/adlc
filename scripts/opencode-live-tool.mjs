@@ -53,6 +53,7 @@ const KEYLESS_VERDICT = 'ADLC_KEYLESS_VERDICT_9C2E: spec is clear';
 const GATE_PROMPT_MARKER = 'AUDIT_SPEC_PROMPT_5B1D';
 
 let advertisedAdlcGate = false;
+let advertisedAdlcProsecute = false;
 let toolResults = [];
 let keylessAnswered = false;
 const server = createServer((req, res) => {
@@ -67,6 +68,7 @@ const server = createServer((req, res) => {
     const messages = payload.messages ?? [];
     const flat = JSON.stringify(messages);
     if (tools.some((t) => (t?.function?.name ?? t?.name) === 'adlc_gate')) advertisedAdlcGate = true;
+    if (tools.some((t) => (t?.function?.name ?? t?.name) === 'adlc_prosecute')) advertisedAdlcProsecute = true;
     const results = messages.filter((m) => m.role === 'tool');
     if (KEEP) console.error(`  [mock] tools=${hasTools} adlc_gate=${advertisedAdlcGate} toolResults=${results.length} keyless=${flat.includes(GATE_PROMPT_MARKER)}`);
 
@@ -161,6 +163,11 @@ try {
     skip(`adlc_gate was not advertised to the model — the plugin \`tool\` hook may be unsupported on this opencode (${String(which.stdout).trim()}). stdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   }
   log('✓ adlc_gate registered and advertised to the model (4.2)');
+  // T33: adlc_prosecute registers on the same tool hook and is advertised too.
+  if (!advertisedAdlcProsecute) {
+    fail(`adlc_prosecute (T33) was not advertised to the model — the second native tool did not register alongside adlc_gate.\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  }
+  log('✓ adlc_prosecute registered and advertised to the model (T33)');
   // 4.1: the keyless bridge spun up a child session with the gate's prompt.
   if (!keylessAnswered) {
     fail(`adlc_gate ran an LLM-backed gate but the keyless bridge never prompted a child session (session.create/prompt).\ntoolResults: ${JSON.stringify(toolResults, null, 2)}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);

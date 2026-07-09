@@ -43,7 +43,11 @@ export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch',
 // the plugin's own tool before execute() runs. It is NOT a blanket allow: while
 // rails are in force its nested gate argv gets its own policy (literal token
 // scan, read-only allowlist, effective-target and mutation-flag checks) below.
-export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_gate'];
+// `adlc_prosecute` (T33) is likewise this plugin's own tool: it only reads the
+// diff and spawns WRITE-DISABLED child sessions — it never mutates through
+// OpenCode's edit tools, and its only arg is a git base ref (no file target),
+// so the ungated spoof guard is a no-op for it.
+export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_gate', 'adlc_prosecute'];
 
 // Gates that may run through adlc_gate while rails are FROZEN: read-only by
 // default ("writers default to dry-run" is the repo-wide gate contract; the

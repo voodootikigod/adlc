@@ -176,6 +176,15 @@ else {
     // The keyless bridge is no longer dead code — gate-tool calls it for LLM gates.
     if (!/from '\.\/keyless-bridge\.mjs'/.test(gt)) fail('gate-tool does not call the keyless bridge (it would stay dead code)'); else ok('Phase 4.2: adlc_gate calls the keyless bridge for LLM gates (bridge is LIVE)');
   }
+  // T33: the deterministic P5 runner + adlc_prosecute tool.
+  if (!existsSync(join(PLUGIN, 'lib', 'prosecute-runner.mjs'))) fail('lib/prosecute-runner.mjs missing');
+  else {
+    const pr = read(join(PLUGIN, 'lib', 'prosecute-runner.mjs'));
+    if (!/export async function runProsecution\b/.test(pr)) fail('prosecute-runner missing runProsecution export'); else ok('T33: runProsecution (deterministic P5 loop) present');
+    if (!/lensToolsMap|WRITE_TOOLS/.test(pr)) fail('prosecute-runner has no write-disable map'); else ok('T33: lens child sessions are write-disabled');
+  }
+  if (!existsSync(join(PLUGIN, 'lib', 'prosecute-tool.mjs')) || !/export function buildProsecuteTool\b/.test(read(join(PLUGIN, 'lib', 'prosecute-tool.mjs')))) fail('prosecute-tool missing buildProsecuteTool'); else ok('T33: adlc_prosecute tool present');
+  if (!/buildProsecuteTool/.test(idx)) fail('index.mjs does not register the adlc_prosecute tool'); else ok('T33: index.mjs registers adlc_prosecute alongside adlc_gate');
   if (!/import\('@opencode-ai\/plugin'\)/.test(idx)) fail('index.mjs does not lazily import the plugin tool helper'); else ok('index.mjs registers the tool hook (lazy peer-dep import)');
   if (!/tool: toolHook|\.\.\.\(toolHook/.test(idx)) fail('index.mjs does not expose the tool hook on the returned hooks'); else ok('index.mjs exposes the adlc_gate tool hook');
   // AC: the live tool proof exists (runs a real opencode binary in CI).
