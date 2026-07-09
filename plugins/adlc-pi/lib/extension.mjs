@@ -34,6 +34,8 @@ import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from '.
 import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
 import { createFlailTracker } from './flail.mjs';
 import { registerCommands } from './commands.mjs';
+import { renderWidgetLines } from './widget.mjs';
+import { createRenderers } from './renderers.mjs';
 
 // Bound the pending-snapshot map: a blocked call never gets a tool_result, so
 // stale entries are evicted oldest-first well past any realistic concurrency.
@@ -48,12 +50,83 @@ export function createExtension({ env = process.env } = {}) {
     const fitness = createFitnessTracker();
     const flail = createFlailTracker();
     const unvettedSeen = new Set();
+    // Most recent gate event, summarized for the live widget (line 3).
+    let lastGateEvent = null;
+    // TUI-only message renderers, isolated so this module stays loadable under
+    // `node --test` (no top-level @earendil-works/pi-tui import).
+    const renderers = createRenderers();
 
     // ctx.getContextUsage() is TUI/SDK-provided; degrade to null when absent
     // (a missing signal must not crash the gate — compaction still covers it).
     function safeUsage(ctx) {
       try { return typeof ctx?.getContextUsage === 'function' ? ctx.getContextUsage() : null; }
       catch { return null; }
+    }
+
+    // =====================================================================
+    // Live widget + gate-notice choke point (spec 3.2 / 3.3)
+    // =====================================================================
+
+    // Refresh the above-editor widget from live state. Shown ONLY while a
+    // ticket resolves; cleared with undefined otherwise. All ui access is
+    // guarded (setWidget is absent on older/fake ctx) — the widget is cosmetic
+    // and must never break a gate (AC4).
+    function refreshWidget(ctx) {
+      const setWidget = ctx?.ui?.setWidget;
+      if (typeof setWidget !== 'function') return;
+      try {
+        if (!active.ticketId) {
+          setWidget.call(ctx.ui, 'adlc', undefined);
+          return;
+        }
+        const usage = safeUsage(ctx);
+        const lines = renderWidgetLines({
+          ticketId: active.ticketId,
+          ticketTitle: active.ticket?.title ?? null,
+          enforcement: active.ticket ? 'active' : 'error',
+          contextPercent: usage?.percent ?? null,
+          degraded: fitness.isCompacted(),
+          lastGateEvent,
+        });
+        setWidget.call(ctx.ui, 'adlc', lines.length ? lines : undefined);
+      } catch {
+        // A widget failure must never affect enforcement.
+      }
+    }
+
+    // A short path-ish token for the widget's "last gate" line and the notice.
+    function gateSummary(detail) {
+      return detail?.path || detail?.paths?.[0] || detail?.tool || '';
+    }
+
+    // Deny/revert events render as structured 'adlc-gate-notice' messages in
+    // addition to the per-site ctx.ui.notify (which stays the fallback).
+    function shouldNoticeGate(type) {
+      return /-deny$|-revert$/.test(type);
+    }
+
+    function emitGateNotice(type, detail) {
+      try {
+        const summary = gateSummary(detail);
+        pi.sendMessage({
+          customType: 'adlc-gate-notice',
+          content: `ADLC ${type}${summary ? `: ${summary}` : ''}${detail?.reason ? ` — ${detail.reason}` : ''}`,
+          display: true,
+          details: { type, ticketId: active.ticketId, ...detail },
+        });
+      } catch {
+        // Structured channel is best-effort; ctx.ui.notify already fired.
+      }
+    }
+
+    // ONE choke point for every gate event: persist evidence, update the live
+    // widget, and (for denies/reverts) emit the structured TUI notice. Call
+    // sites pass only { ctx, type, detail }; pi/root/ticketId are filled here.
+    function noteGate({ ctx, type, detail = {} }) {
+      lastGateEvent = { type, summary: gateSummary(detail) };
+      recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type, detail });
+      refreshWidget(ctx);
+      if (shouldNoticeGate(type)) emitGateNotice(type, detail);
     }
 
     function steerFlailAdvisories(filePath, ctx) {
@@ -105,6 +178,16 @@ export function createExtension({ env = process.env } = {}) {
       return stdout;
     }
 
+    // Structured renderers for our custom message types (spec 3.3). Registered
+    // at load; guarded because registerMessageRenderer is absent on fake/older
+    // pi (the notify fallback still covers those).
+    try {
+      pi.registerMessageRenderer?.('adlc-flail-advisory', renderers.flailAdvisory);
+      pi.registerMessageRenderer?.('adlc-gate-notice', renderers.gateNotice);
+    } catch {
+      // Renderer registration is cosmetic — never fail extension load.
+    }
+
     // =====================================================================
     // Lifecycle
     // =====================================================================
@@ -114,6 +197,8 @@ export function createExtension({ env = process.env } = {}) {
       fitness.reset();
       flail.reset();
       unvettedSeen.clear();
+      lastGateEvent = null;
+      refreshWidget(ctx);
       if (!active.ticketId) return;
       if (active.error) {
         ctx.ui.setStatus('adlc-ticket', `🎟️ Ticket: \x1b[31m${active.ticketId} (ERROR)\x1b[0m`);
@@ -126,12 +211,17 @@ export function createExtension({ env = process.env } = {}) {
 
     pi.on('turn_start', async (_event, ctx) => {
       maybeReload(ctx?.cwd);
+      // Picks up a mid-session ticket switch AND clears the widget with
+      // undefined once a ticket deactivates (AC2).
+      refreshWidget(ctx);
     });
 
     // A threshold/overflow compaction marks the session context-degraded for
     // the build gate; a manual /compact does not.
-    pi.on('session_compact', async (event, _ctx) => {
+    pi.on('session_compact', async (event, ctx) => {
       fitness.markCompaction(event.reason);
+      // Surface the degraded flag in the widget immediately.
+      refreshWidget(ctx);
     });
 
     // Append (never replace) the ADLC doctrine to the turn's system prompt.
@@ -172,7 +262,7 @@ export function createExtension({ env = process.env } = {}) {
         const verdict = checkStructuredWrite(filePath, active.ticket, activeCwd);
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked ${event.toolName}: ${verdict.reason}`, 'error');
-          recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'rail-deny', detail: { tool: event.toolName, path: filePath, reason: verdict.reason } });
+          noteGate({ ctx, type: 'rail-deny', detail: { tool: event.toolName, path: filePath, reason: verdict.reason } });
           return { block: true, reason: `Blocked ${event.toolName}: ${verdict.reason} (ticket ${active.ticketId})` };
         }
         // Build-gate backstop (spec 2.1): a high-risk ticket in a degraded
@@ -186,7 +276,7 @@ export function createExtension({ env = process.env } = {}) {
         });
         if (gate.decision === 'deny') {
           ctx.ui.notify(`Build gate: ${gate.reason}`, 'error');
-          recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'build-gate-deny', detail: { tool: event.toolName, path: filePath, reason: gate.reason } });
+          noteGate({ ctx, type: 'build-gate-deny', detail: { tool: event.toolName, path: filePath, reason: gate.reason } });
           return { block: true, reason: `Blocked ${event.toolName} by the ADLC build gate: ${gate.reason} (ticket ${active.ticketId})` };
         }
         // Flail advisory (spec 2.2): never blocks.
@@ -205,7 +295,7 @@ export function createExtension({ env = process.env } = {}) {
         const verdict = checkShellCommand(command, active.ticket, activeCwd);
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked shell command: ${verdict.reason}`, 'error');
-          recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'shell-deny', detail: { reason: verdict.reason } });
+          noteGate({ ctx, type: 'shell-deny', detail: { reason: verdict.reason } });
           return { block: true, reason: `Blocked command: ${verdict.reason} (ticket ${active.ticketId})` };
         }
         if (verdict.mutating) {
@@ -228,13 +318,13 @@ export function createExtension({ env = process.env } = {}) {
       const custom = checkCustomTool(event.toolName, event.input, active.ticket, activeCwd);
       if (custom.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${custom.reason}`, 'error');
-        recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'custom-tool-deny', detail: { tool: event.toolName, reason: custom.reason } });
+        noteGate({ ctx, type: 'custom-tool-deny', detail: { tool: event.toolName, reason: custom.reason } });
         return { block: true, reason: `Blocked ${event.toolName}: ${custom.reason} (ticket ${active.ticketId})` };
       }
       if (custom.unvetted && !unvettedSeen.has(event.toolName)) {
         // Once per tool name per session — evidence, not noise.
         unvettedSeen.add(event.toolName);
-        recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'unvetted-tool', detail: { tool: event.toolName } });
+        noteGate({ ctx, type: 'unvetted-tool', detail: { tool: event.toolName } });
       }
       return undefined;
     });
@@ -252,7 +342,7 @@ export function createExtension({ env = process.env } = {}) {
       // stay silent: warning a human about every build command is noise.
       if (verdict.decision === 'deny' && verdict.mutating) {
         ctx.ui.notify(`ADLC: the agent would be denied this command under ticket ${active.ticketId} (${verdict.reason}) — running anyway (human override), recorded to evidence`, 'warning');
-        recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'user-bash-rail-override', detail: { command: event.command, reason: verdict.reason } });
+        noteGate({ ctx, type: 'user-bash-rail-override', detail: { command: event.command, reason: verdict.reason } });
       }
       return undefined;
     });
@@ -279,7 +369,7 @@ export function createExtension({ env = process.env } = {}) {
 
       const restored = restoreSnapshot(activeCwd, snap);
       ctx.ui.notify(`Blocked unallowed suppression marker: ${violations[0].marker}`, 'error');
-      recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'suppression-revert', detail: { path, markers: violations.map((v) => v.marker), restored } });
+      noteGate({ ctx, type: 'suppression-revert', detail: { path, markers: violations.map((v) => v.marker), restored } });
       return {
         isError: true,
         content: [
@@ -329,7 +419,7 @@ export function createExtension({ env = process.env } = {}) {
 
       if (railViolations.length > 0) {
         ctx.ui.notify(`Blocked modifications to frozen rails: ${railViolations.join(', ')}`, 'error');
-        recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type: 'bash-rail-revert', detail: { paths: railViolations, unrestorable, degraded: entry.degraded === true } });
+        noteGate({ ctx, type: 'bash-rail-revert', detail: { paths: railViolations, unrestorable, degraded: entry.degraded === true } });
         return {
           isError: true,
           content: [
