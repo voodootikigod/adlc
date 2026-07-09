@@ -79,44 +79,50 @@ the enforcing hook only runs once the plugin package is registered.) Phase A com
 
 ## Install
 
-The plugin ships in this repo at `plugins/adlc-opencode/`. The
-`@adlc/opencode-package` package is **not yet published to npm**, so install from
-source for now (peer dependency: `@opencode-ai/plugin` >= 1.17.13 — the version
-whose documented hook contract the enforce-by-default posture is pinned against).
-
-**1. Install the gate toolkit** — the plugin shells out to the `adlc` binary:
+Two commands (peer dependency: `@opencode-ai/plugin` >= 1.17.13 — the version
+whose documented hook contract the enforce-by-default posture is pinned against):
 
 ```sh
+# 1. The gate toolkit — the plugin shells out to the `adlc` binary
 npm install -g @adlc/cli
+
+# 2. Bootstrap the project — scaffolds .adlc/ + .opencode/, registers the plugin
+npx @adlc/opencode-package init
 ```
 
-**2. Make the plugin available to OpenCode** — symlink the source into your
-project's plugin directory, or register its path in `opencode.json`:
-
-```sh
-ln -s /path/to/adlc/plugins/adlc-opencode .opencode/plugin/adlc-opencode
-# …or add "/path/to/adlc/plugins/adlc-opencode" to the "plugin" array in
-#    .opencode/opencode.json (project) or ~/.config/opencode/opencode.json (global)
-```
-
-**3. Bootstrap the workspace** — in the OpenCode TUI:
-
-```
-/adlc-init
-```
-
-`/adlc-init` creates `.adlc/` (the committable ticket contract + `config.json`),
-deploys the command/agent/skill surface into `.opencode/`, **registers the plugin
-in `opencode.json` so the rails-guard hook loads**, and runs preflight. First-time,
-before the `/adlc-init` command is available, run the scaffolder directly:
-
-```sh
-node /path/to/adlc/plugins/adlc-opencode/lib/scaffold-cli.mjs .
-```
-
-**4. Restart OpenCode** so it loads the plugin — the `tool.execute.before`
+Then **restart OpenCode** so it loads the plugin — the `tool.execute.before`
 rails-guard hook and the `session.created` / `session.idle` advisory hooks become
-active. `/adlc-ticket`, `/adlc-spec`, `/adlc-prosecute`, etc. are then available.
+active, and `/adlc-ticket`, `/adlc-spec`, `/adlc-prosecute`, etc. are available.
+Inside the TUI, `/adlc-init` re-runs the same idempotent scaffold (refreshes
+commands/agents/skills from the package and runs preflight).
+
+The bootstrap registers the package in `.opencode/opencode.json`'s `plugin`
+array — opencode auto-installs npm plugin entries via Bun on launch. Running the
+bootstrap from a **source checkout** instead registers the resolved local path
+(the npm name is only registered when the package actually runs out of
+`node_modules`, so the entry is always resolvable). If the Claude Code ADLC
+integration is already installed, skills that exist under `.claude/skills/` are
+not deployed a second time — opencode discovers Claude-compatible skills there
+natively.
+
+### Per-repo configuration (plugin-options tuple)
+
+Options ride the `[name, options]` tuple form of the `plugin` entry; explicitly
+set env vars override them (an env var is a per-invocation operator decision,
+the tuple is the repo default). The audited bypasses (`ADLC_RAILS_BYPASS`,
+`ADLC_BUILD_GATE_BYPASS`) are deliberately NOT available as options.
+
+```jsonc
+// .opencode/opencode.json
+{
+  "plugin": [["@adlc/opencode-package", {
+    "advisoryHooks": false,          // true = downgrade rails guard to advisory (env: ADLC_ALLOW_ADVISORY_HOOKS=1)
+    "ungatedTools": [],              // extra benign no-target tools, still spoof-guarded (env: ADLC_UNGATED_TOOLS)
+    "suppressionEnforcement": false, // enforce (not warn) suppression markers (env: ADLC_SUPPRESSION_ENFORCEMENT=1)
+    "scopeEnforcement": false        // enforce (not warn) out-of-scope edits (env: ADLC_SCOPE_ENFORCEMENT=1)
+  }]]
+}
+```
 
 Local verification (no `opencode` binary needed, does not mutate your environment):
 

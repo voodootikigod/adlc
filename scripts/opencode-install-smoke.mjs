@@ -210,6 +210,34 @@ if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs
 // real opencode binary; CI runs it with --require. This smoke stays binary-free.
 console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-deny.mjs` (CI: --require).');
 
+// ---- T30: publishability + the one-command bootstrap (npx @adlc/opencode-package init) ----
+{
+  const pkg = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
+  if (pkg.private === true) fail('package is private — cannot publish to npm (T30)'); else ok('package is publishable (not private)');
+  if (pkg.publishConfig?.access !== 'public') fail('publishConfig.access must be public'); else ok('publishConfig.access=public');
+  if (!pkg.bin || !Object.values(pkg.bin).some((b) => b.includes('bin/cli.mjs'))) fail('bin entry for the npx bootstrap missing'); else ok('bin entry present');
+  // drive the bootstrap end-to-end in a throwaway dir (the npx path minus the registry)
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const tmp = mkdtempSync(join(tmpdir(), 'oc-smoke-init-'));
+  try {
+    execFileSync(process.execPath, [join(PLUGIN, 'bin', 'cli.mjs'), 'init', tmp], { stdio: 'pipe' });
+    const oc = JSON.parse(read(join(tmp, '.opencode', 'opencode.json')));
+    const entries = (oc.plugin ?? []).map((e) => (Array.isArray(e) ? e[0] : e));
+    const resolvable = entries.some((e) => e === '@adlc/opencode-package' ? false : existsSync(e));
+    if (!entries.length) fail('bootstrap registered no plugin entry');
+    else if (!resolvable && !entries.includes('@adlc/opencode-package')) fail(`bootstrap registered an unresolvable entry: ${entries}`);
+    else if (entries.includes('@adlc/opencode-package') && !String(PLUGIN).includes('node_modules')) fail('bootstrap from source must register the local path, not the npm name');
+    else ok('bootstrap registers a RESOLVABLE plugin entry');
+    if (!existsSync(join(tmp, '.adlc', 'config.json'))) fail('bootstrap did not create .adlc/config.json'); else ok('bootstrap creates .adlc/config.json');
+    if (!existsSync(join(tmp, '.opencode', 'commands', 'adlc-init.md'))) fail('bootstrap did not deploy commands'); else ok('bootstrap deploys commands');
+  } catch (err) {
+    fail(`bootstrap cli failed: ${err.message}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 if (failures) { console.error(`\nopencode-install-smoke: ${failures} failure(s)`); process.exit(2); }
 console.log('\nopencode-install-smoke: PASS');
 

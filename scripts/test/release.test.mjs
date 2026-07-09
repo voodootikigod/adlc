@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { releaseMain, repinInternalDependencies, packagePublishOrder, findVersionDrift } from '../release.mjs';
+import { releaseMain, repinInternalDependencies, packagePublishOrder, findVersionDrift, publishTargets } from '../release.mjs';
 
 /** Build a throwaway repo: root + packages/{core,cli} + plugins/{adlc-pi, adlc-claude-code}. */
 function makeRepo() {
@@ -121,4 +121,43 @@ test('repinInternalDependencies leaves non-@adlc deps alone', () => {
   assert.equal(out.version, '2.0.0');
   assert.equal(out.dependencies['@adlc/core'], '2.0.0');
   assert.equal(out.dependencies.chalk, '^5.0.0'); // untouched
+});
+
+// ---- T30: the publish step must include publishable (non-private) plugin packages ----
+test('publishTargets: non-private plugin packages publish after packages/*; private plugins are skipped', () => {
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    // a publishable plugin (like @adlc/opencode-package after T30)
+    mkdirSync(join(pluginsDir, 'adlc-opencode'));
+    writeFileSync(join(pluginsDir, 'adlc-opencode', 'package.json'), JSON.stringify({
+      name: '@adlc/opencode-package', version: '1.0.0',
+      dependencies: { '@adlc/core': '1.0.0' },
+    }, null, 2) + '\n');
+    const targets = publishTargets({ packagesDir, pluginsDir });
+    const names = targets.map((t) => t.name);
+    assert.ok(names.includes('@adlc/opencode-package'), 'publishable plugin included');
+    // dependency order: every packages/* entry precedes the plugin consumers
+    assert.ok(names.indexOf('@adlc/core') < names.indexOf('@adlc/opencode-package'));
+    // private plugins (adlc-pi fixture is private in makeRepo? assert on the actual fixture)
+    for (const t of targets) assert.notEqual(t.private, true, `${t.name} must not be private`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('releaseMain --publish invokes publishImpl for plugin packages too', () => {
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    mkdirSync(join(pluginsDir, 'adlc-opencode'));
+    writeFileSync(join(pluginsDir, 'adlc-opencode', 'package.json'), JSON.stringify({
+      name: '@adlc/opencode-package', version: '1.0.0',
+    }, null, 2) + '\n');
+    const published = [];
+    const rc = releaseMain(['1.2.0', '--publish'], {
+      root, packagesDir, pluginsDir,
+      regenerateLockfile() {},
+      publishImpl: (dir, name) => published.push(name),
+    });
+    assert.equal(rc, 0);
+    assert.ok(published.includes('@adlc/opencode-package'), `published: ${published}`);
+    assert.ok(published.includes('@adlc/core'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

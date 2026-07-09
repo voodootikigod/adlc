@@ -47,11 +47,35 @@ function makeNotify(client) {
   };
 }
 
+/**
+ * Map the plugin-options tuple (opencode.json: `[["@adlc/opencode-package",
+ * {...}]]`, delivered as the plugin function's 2nd argument — @opencode-ai/
+ * plugin `Plugin = (input, options?) => Hooks`) onto the env knobs the hooks
+ * already read. Env vars WIN over options: an explicitly set variable is a
+ * per-invocation operator decision, the tuple is the per-repo default.
+ * Deliberately NOT mapped: the audited bypasses (ADLC_RAILS_BYPASS,
+ * ADLC_BUILD_GATE_BYPASS) — those must stay per-invocation, never repo config.
+ */
+export function optionsToEnv(options = {}) {
+  const env = {};
+  if (options.advisoryHooks === true) env.ADLC_ALLOW_ADVISORY_HOOKS = '1';
+  if (Array.isArray(options.ungatedTools) && options.ungatedTools.length) {
+    env.ADLC_UNGATED_TOOLS = options.ungatedTools.map(String).join(',');
+  } else if (typeof options.ungatedTools === 'string' && options.ungatedTools) {
+    env.ADLC_UNGATED_TOOLS = options.ungatedTools;
+  }
+  if (options.suppressionEnforcement === true) env.ADLC_SUPPRESSION_ENFORCEMENT = '1';
+  if (options.scopeEnforcement === true) env.ADLC_SCOPE_ENFORCEMENT = '1';
+  return env;
+}
+
 /** @type {Plugin} */
-export const adlcRailsGuard = async ({ directory, worktree, project, client } = {}) => {
+export const adlcRailsGuard = async ({ directory, worktree, project, client } = {}, options = {}) => {
   // The repo root used to locate .adlc/ and to canonicalize edited paths.
   const root = worktree ?? directory ?? project?.worktree ?? process.cwd();
-  const advisoryOnly = process.env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
+  // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
+  const env = { ...optionsToEnv(options), ...process.env };
+  const advisoryOnly = env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
   const notify = makeNotify(client);
   // Phase 2.3: per-session context-fitness state for the build-gate backstop.
   const tracker = createDepthTracker();
@@ -103,7 +127,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // fallback is tolerance for older hosts, not the primary read.
       const args = output?.args ?? input?.args ?? {};
 
-      const verdict = checkToolCall({ tool, args, root, env: process.env });
+      const verdict = checkToolCall({ tool, args, root, env });
       if (verdict.decision === 'deny') {
         return deny(`ADLC rails-guard: blocked ${tool} — ${verdict.reason}`);
       }
@@ -111,7 +135,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // Phase 2.3 build-gate backstop: a structured mutation on a HIGH-RISK
       // ticket in a context-degraded session is denied even off-rails.
       if (isStructuredMutator(String(tool).toLowerCase())) {
-        const gate = checkBuildGate({ sessionID: input?.sessionID, tracker, root, env: process.env });
+        const gate = checkBuildGate({ sessionID: input?.sessionID, tracker, root, env });
         if (gate.decision === 'deny') {
           return deny(`ADLC build-gate: blocked ${tool} — ${gate.reason}`);
         }
@@ -136,7 +160,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
           const { actions } = handleFileEdited({
             file: event?.properties?.file,
             root,
-            env: process.env,
+            env,
             state: watcherState,
           });
           for (const a of actions) {
@@ -156,7 +180,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       try {
         const kind = String(input?.type ?? input?.action ?? '').toLowerCase();
         if (READONLY_TOOLS.includes(kind)) return;
-        const force = resolveRailsInForce(root, process.env);
+        const force = resolveRailsInForce(root, env);
         if (!force.active) return;
         if (force.conflict) { output.status = 'deny'; return; }
         const raw = [
@@ -199,7 +223,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     // output.system in place (the host reads that array); never throws.
     'experimental.chat.system.transform': async (_input, output) => {
       try {
-        const block = buildSystemContext(root, process.env);
+        const block = buildSystemContext(root, env);
         if (block && Array.isArray(output?.system)) output.system.push(block);
       } catch { /* advisory: swallow — never break prompt assembly */ }
     },
@@ -211,7 +235,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       try {
         const tool = String(input?.toolID ?? '').toLowerCase();
         if (!['edit', 'write', 'apply_patch'].includes(tool)) return;
-        const notice = buildToolRailNotice(root, process.env);
+        const notice = buildToolRailNotice(root, env);
         if (notice && typeof output?.description === 'string') output.description += notice;
       } catch { /* advisory: swallow */ }
     },
@@ -222,11 +246,11 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     // persistent JSX statusline slot is deferred — see docs).
     'session.created': async () => {
       try {
-        const line = buildStatusLine(root, process.env);
+        const line = buildStatusLine(root, env);
         if (line) await notify(line, 'info');
       } catch { /* advisory: swallow */ }
       try {
-        const { skipped, warnings } = checkPreflight(root, { env: process.env });
+        const { skipped, warnings } = checkPreflight(root, { env });
         if (!skipped) for (const w of warnings) await notify(`ADLC preflight: ${w}`, 'warning');
       } catch { /* advisory: swallow */ }
     },
@@ -244,7 +268,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // no-LLM check that a risk-gated change has a recorded review. Advisory
       // only — session.idle has no blocking contract in OpenCode.
       try {
-        const { warning } = auditAdversarialReview(root, { env: process.env });
+        const { warning } = auditAdversarialReview(root, { env });
         if (warning) await notify(`ADLC adversarial-review audit: ${warning}`, 'warning');
       } catch { /* advisory: swallow */ }
 

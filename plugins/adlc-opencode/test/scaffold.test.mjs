@@ -80,7 +80,9 @@ test('scaffold registers the plugin (rails-guard hook will load)', () => {
     const out = scaffold(root, PKG);
     assert.equal(out.plugin.registered, true);
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.ok(cfg.plugin.includes('@adlc/opencode-package'));
+    // T30 contract: from a source checkout the RESOLVED PATH is registered
+    // (the npm name only when running out of node_modules — it must resolve).
+    assert.ok(cfg.plugin.includes(PKG));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -195,4 +197,81 @@ test('every command/*.md has a description frontmatter field', () => {
     const body = readFileSync(join(cmdDir, f), 'utf8');
     assert.match(body, /^---\n[\s\S]*?description:\s*\S+[\s\S]*?\n---/, `${f} has description frontmatter`);
   }
+});
+
+// ---- T30: registration entry must be RESOLVABLE — npm name only when loaded from npm ----
+test('T30: scaffold from a source checkout registers the resolved local path, not the unpublished npm name', () => {
+  const root = mkroot();
+  try {
+    scaffold(root, PKG); // PKG is a source path (not under node_modules)
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.ok(cfg.plugin.includes(PKG), `registered source path, got: ${JSON.stringify(cfg.plugin)}`);
+    assert.ok(!cfg.plugin.includes('@adlc/opencode-package'), 'npm name not registered from source');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('T30: scaffold from node_modules registers the npm package name', () => {
+  const root = mkroot();
+  const fakeNm = mkroot();
+  try {
+    // simulate the package living in node_modules by copying the minimal shape
+    const nmPkg = join(fakeNm, 'node_modules', '@adlc', 'opencode-package');
+    mkdirSync(nmPkg, { recursive: true });
+    for (const sub of ['command', 'agent', 'skill']) {
+      mkdirSync(join(nmPkg, sub), { recursive: true });
+      writeFileSync(join(nmPkg, sub, 'x.md'), 'stub');
+    }
+    scaffold(root, nmPkg);
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.ok(cfg.plugin.includes('@adlc/opencode-package'), `registered npm name, got: ${JSON.stringify(cfg.plugin)}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(fakeNm, { recursive: true, force: true });
+  }
+});
+
+test('T30: no duplicate registration when the OTHER form (or a tuple) is already present', () => {
+  const root = mkroot();
+  try {
+    // pre-register the npm name as a tuple with options
+    mkdirSync(join(root, '.opencode'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'opencode.json'),
+      JSON.stringify({ plugin: [['@adlc/opencode-package', { advisoryHooks: true }]] }) + '\n');
+    const r = scaffold(root, PKG); // source path — but npm-name tuple already covers the plugin
+    const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
+    assert.equal(cfg.plugin.length, 1, `no duplicate entry: ${JSON.stringify(cfg.plugin)}`);
+    assert.equal(r.plugin.alreadyPresent, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- T30: skills dedup — opencode also discovers .claude/skills/** ----
+test('T30: an existing .claude/skills/<name> defers deployment (no duplicate skill listing)', () => {
+  const root = mkroot();
+  try {
+    mkdirSync(join(root, '.claude', 'skills', 'adlc'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'skills', 'adlc', 'SKILL.md'), '# claude-code copy\n');
+    const r = scaffold(root, PKG);
+    assert.ok(!existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')),
+      'opencode copy not deployed when .claude copy exists');
+    assert.ok(r.deferredToClaudeSkills.includes('adlc'), `reported: ${JSON.stringify(r.deferredToClaudeSkills)}`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('T30: a PRISTINE pre-existing .opencode copy is removed when .claude covers the skill; a modified one is kept', () => {
+  const root = mkroot();
+  try {
+    const source = readFileSync(join(PKG, 'skill', 'adlc.md'), 'utf8');
+    mkdirSync(join(root, '.claude', 'skills', 'adlc'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'skills', 'adlc', 'SKILL.md'), '# claude-code copy\n');
+    // pristine .opencode copy from a previous scaffold
+    mkdirSync(join(root, '.opencode', 'skills', 'adlc'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md'), source);
+    scaffold(root, PKG);
+    assert.ok(!existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')), 'pristine duplicate removed');
+    // user-modified copy is preserved
+    mkdirSync(join(root, '.opencode', 'skills', 'adlc'), { recursive: true });
+    writeFileSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md'), source + '\nuser edit\n');
+    scaffold(root, PKG);
+    assert.ok(existsSync(join(root, '.opencode', 'skills', 'adlc', 'SKILL.md')), 'modified copy kept');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

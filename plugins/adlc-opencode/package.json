@@ -1,22 +1,52 @@
 {
   "name": "@adlc/opencode-package",
   "version": "1.1.0",
-  "private": true,
   "description": "ADLC integration for the OpenCode terminal coding agent",
   "type": "module",
   "main": "index.mjs",
+  "bin": {
+    "adlc-opencode": "bin/cli.mjs"
+  },
   "opencode": {
     "plugin": "./index.mjs",
     "command": "./command/",
     "agent": "./agent/",
     "skill": "./skill/"
   },
+  "files": [
+    "index.mjs",
+    "bin/",
+    "lib/",
+    "command/",
+    "agent/",
+    "skill/",
+    "gate-bins.mjs",
+    "rails-checker.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.17.13"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@adlc/build-gate": "^1.1.0",
     "@adlc/core": "^1.1.0",
     "@adlc/flail-detector": "^1.1.0"
-  }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "license": "MIT"
 }
