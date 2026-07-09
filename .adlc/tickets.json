@@ -460,14 +460,7 @@
         "package.json",
         "package-lock.json"
       ],
-      "rails": [
-        "plugins/adlc-opencode/test/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "docs/ci/**"
-      ],
+      "rails": [],
       "edges": [
         {
           "to": "T21",
@@ -491,14 +484,7 @@
         "package.json",
         "package-lock.json"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/core/**"
-      ],
+      "rails": [],
       "edges": [],
       "duration": 4,
       "category": "hardening",
@@ -511,16 +497,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "docs/ci/**"
-      ],
+      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
       "edges": [
         {
           "to": "T23",
@@ -538,16 +515,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "docs/ci/**"
-      ],
+      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
       "edges": [],
       "duration": 4,
       "category": "feature",
@@ -560,16 +528,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "docs/ci/**"
-      ],
+      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
       "edges": [
         {
           "to": "T25",
@@ -587,16 +546,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "docs/ci/**"
-      ],
+      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
       "edges": [],
       "duration": 3,
       "category": "feature",
