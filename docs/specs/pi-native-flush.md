@@ -117,6 +117,12 @@ read-only `sed` false positives, `curl|sh` fail-open, prompt-wipe) turned into t
 
 ### Phase 2 — Enforcement depth
 
+> Banked from the Phase-1 P5 prosecution (low severity): `diffAddedLines`'
+> multiset semantics don't re-flag a *pre-existing identical* marker line that
+> is relocated (e.g. moved from a fenced block into operative code) — the
+> occurrence count is unchanged. A position-aware diff in the suppression scan
+> closes it; fold into 2.4/2.5.
+
 2.1 **Build-gate context-rot backstop** using native `ctx.getContextUsage()` + core
     risk-tier classification: deny structured edits on high-risk tickets once context
     fitness degrades (CC issue #48 port — with a cleaner signal than any sibling has).
