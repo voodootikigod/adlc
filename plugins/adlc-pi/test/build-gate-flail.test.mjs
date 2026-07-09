@@ -211,7 +211,10 @@ test('F4 regression: a rails-denied edit never counts toward churn', async () =>
       const denied = await pi.handlers.tool_call(writeCall('test/contracts/auth.test.ts', `d${i}`), ctx);
       assert.equal(denied.block, true);
     }
-    assert.equal(pi.steers.length, 0, 'denied edits are not churn — flail runs after the deny returns');
+    // The sendMessage channel now also carries 'adlc-gate-notice' for denies
+    // (T25); the flail claim is specifically that NO churn advisory fires.
+    const flail = pi.steers.filter((s) => s.msg.customType === 'adlc-flail-advisory');
+    assert.equal(flail.length, 0, 'denied edits are not churn — flail runs after the deny returns');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
