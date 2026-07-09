@@ -112,3 +112,26 @@ test('AC3: no deployed copy (or non-adlc command) → no warning (nothing to pro
     assert.equal(checkCommandTamper('/help', PKG, dir).warn, null);      // not adlc
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- host-safety: the command.execute.before WRAPPER must swallow helper throws ----
+import { adlcRailsGuard } from '../index.mjs';
+
+test('command.execute.before hook never throws, even on a malformed command payload', async () => {
+  const dir = repo();
+  const saved = { ...process.env };
+  try {
+    process.env.ADLC_P4_ENFORCEMENT = '1';
+    process.env.ADLC_TICKET = 'T1';
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    // Shapes that could trip a helper: missing command, non-string, an adlc
+    // command with no deployed copy, and a genuinely tampered deployed command.
+    await hooks['command.execute.before']({});
+    await hooks['command.execute.before']({ command: 123 });
+    await hooks['command.execute.before']({ command: '/adlc-decompose', sessionID: 's', arguments: '' });
+    mkdirSync(join(dir, '.opencode', 'commands'), { recursive: true });
+    writeFileSync(join(dir, '.opencode', 'commands', 'adlc-spec.md'), 'HACKED');
+    await hooks['command.execute.before']({ command: '/adlc-spec', sessionID: 's', arguments: '' });
+    // reaching here without a throw is the assertion (advisory host-safety contract)
+    assert.ok(true);
+  } finally { Object.assign(process.env, saved); for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; rmSync(dir, { recursive: true, force: true }); }
+});
