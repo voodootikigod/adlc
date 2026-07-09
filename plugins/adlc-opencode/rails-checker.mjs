@@ -51,11 +51,13 @@ export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_ga
 //   consensus-fix (applies candidate repairs to --files),
 //   behavior-diff (capture writes its output),
 //   gate-fuzzing (executes adversary setup/witness code; CI-sandbox-only),
-// and any unknown/future gate (fail closed). Ledger writes are vetted on the
-// EFFECTIVE ledger file instead of denied, because mid-build evidence
-// recording is a legitimate railed-session write: gate-manifest (--dir or
-// .adlc default), any gate's --record-verdict (writes the gate-manifest
-// ledger), and model-ratchet with --review-cmd (appends .adlc/findings.jsonl).
+// and any unknown/future gate (fail closed). Command-executor flags (--*cmd)
+// are denied for EVERY gate — they run an arbitrary program no argv scan can
+// vet. Known fixed write targets are vetted instead of denied, because
+// mid-build evidence recording is a legitimate railed-session write:
+// gate-manifest's ledger (--dir or .adlc default), any gate's --record-verdict
+// (writes the gate-manifest ledger), and preflight's self-cleaning scratch
+// probes (.adlc/tmp/preflight-test, .worktrees/preflight-test).
 export const RAILS_SAFE_GATES = new Set([
   'preflight', 'spec-lint', 'premortem', 'parallax', 'coldstart',
   'merge-forecast', 'model-router', 'rejection-mining',
@@ -353,6 +355,13 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         for (const raw of nested) {
           const flag = raw.trim().split('=')[0];
           if (MUTATION_FLAGS.has(flag)) return deny(`mutation flag "${flag}" requests a write with a gate-derived target`);
+          // (5) command-executor flags (--review-cmd, --test-cmd, and any future
+          // --*cmd) hand the gate an ARBITRARY PROGRAM to run — spawnSync with
+          // shell:false stops metachar injection but not the program itself,
+          // which can write any path including the tickets.json trust root.
+          // No argv scan can vet a command string, so fail closed for every
+          // gate; the read-only DEFAULT invocations stay legal.
+          if (/^--[a-z][a-z-]*cmd$/.test(flag)) return deny(`command-executor flag "${flag}" runs an arbitrary program, which an in-session guard cannot vet`);
         }
         // (3) ledger writes are vetted on the EFFECTIVE ledger FILE (not the
         // directory — the directory always ancestor-hits the implicit
@@ -362,9 +371,9 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         //   <any gate> --record-verdict → .adlc/manifest.jsonl (via gate-manifest)
         //   model-ratchet --review-cmd  → .adlc/findings.jsonl (appendEntry)
         const hasFlag = (flag) => nested.some((t) => { const s = t.trim(); return s === flag || s.startsWith(`${flag}=`); });
-        const vetLedger = (ledger) => {
-          const hit = railHit(ledger, force.rails, root);
-          return hit ? deny(`ledger "${ledger}" resolves to frozen rail "${hit}"`) : null;
+        const vetLedger = (path) => {
+          const hit = railHit(path, force.rails, root);
+          return hit ? deny(`gate write target "${path}" resolves to frozen rail "${hit}"`) : null;
         };
         if (gate === 'gate-manifest') {
           let effectiveDir = '.adlc';
@@ -385,9 +394,15 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
             const denied = vetLedger('.adlc/manifest.jsonl');
             if (denied) return denied;
           }
-          if (gate === 'model-ratchet' && hasFlag('--review-cmd')) {
-            const denied = vetLedger('.adlc/findings.jsonl');
-            if (denied) return denied;
+          // preflight's DEFAULT run probes writability with two fixed,
+          // self-cleaning scratch writes (.adlc/tmp/preflight-test and the
+          // .worktrees/preflight-test worktree). Vet those known paths instead
+          // of denying the gate — they only conflict when explicitly railed.
+          if (gate === 'preflight') {
+            for (const scratch of ['.adlc/tmp/preflight-test', '.worktrees/preflight-test']) {
+              const denied = vetLedger(scratch);
+              if (denied) return denied;
+            }
           }
         }
       }
