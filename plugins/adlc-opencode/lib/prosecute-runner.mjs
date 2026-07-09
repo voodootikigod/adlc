@@ -61,11 +61,11 @@ export function parseFindings(text) {
   const v = parseFenced(text);
   if (Array.isArray(v)) return { findings: v.filter((f) => f && typeof f === 'object'), parsed: true };
   if (v && Array.isArray(v.findings)) return { findings: v.findings.filter((f) => f && typeof f === 'object'), parsed: true };
-  // Nothing parseable. Distinguish a genuinely empty reply from garbage: an
-  // empty/whitespace reply is a clean "no findings"; any other unparseable
-  // content is a parse FAILURE that must surface.
-  const clean = typeof text !== 'string' || text.trim() === '';
-  return { findings: [], parsed: clean };
+  // Nothing parseable → parse FAILURE. A well-behaved lens with nothing to say
+  // returns an explicit empty array (`[]`), which parses cleanly above. An
+  // EMPTY/whitespace or garbage reply is anomalous — fail closed (parsed:false),
+  // symmetric with a null/no-reply, so a silent lens can't read as "found nothing".
+  return { findings: [], parsed: false };
 }
 
 /** Normalize a verifier reply into a {real:boolean} vote, or null if unparseable. */

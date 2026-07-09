@@ -31,8 +31,9 @@ test('parseFenced/parseFindings/parseVerdict extract fenced JSON; fail closed on
   assert.equal(parseFenced('not json at all'), null);
   assert.deepEqual(parseFindings(fenced([finding('a')])), { findings: [finding('a')], parsed: true });
   assert.deepEqual(parseFindings(fenced({ findings: [finding('a')] })), { findings: [finding('a')], parsed: true });
-  assert.deepEqual(parseFindings(''), { findings: [], parsed: true });        // clean empty
-  assert.deepEqual(parseFindings('garble'), { findings: [], parsed: false }); // garbage → parse FAILURE
+  assert.deepEqual(parseFindings(fenced([])), { findings: [], parsed: true }); // explicit empty array → clean
+  assert.deepEqual(parseFindings(''), { findings: [], parsed: false });        // empty reply → fail closed (anomalous)
+  assert.deepEqual(parseFindings('garble'), { findings: [], parsed: false });  // garbage → parse FAILURE
   assert.deepEqual(parseVerdict(fenced({ real: false, reason: 'refuted' })), { real: false, reason: 'refuted' });
   assert.equal(parseVerdict('no verdict here'), null);      // unparseable → null (fail-closed upstream)
   assert.equal(parseVerdict(fenced({ nope: 1 })), null);    // missing real → null
