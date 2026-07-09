@@ -57,6 +57,17 @@ jobs:
         if: matrix.node-version == 20
         run: node scripts/opencode-live-tool.mjs --require
 
+      # pi live deny proof (ticket T21 AC5) — same folded-into-required-job
+      # rationale as the OpenCode step above. Runs on the Node 22 leg only
+      # (pi requires Node >= 22.19; the script hard-skips on older majors and
+      # hard-fails if the pinned pi binary is missing on a supported Node).
+      # The pi version is PINNED via the repo devDependency
+      # (@earendil-works/pi-coding-agent) so upstream releases can't flake a
+      # required job; bump deliberately alongside the plugin peerDependency.
+      - name: pi live deny proof (T21 AC5)
+        if: matrix.node-version == 22
+        run: node scripts/pi-live-deny.mjs
+
   pre-ga-gate:
     # Explicit CI gate that fails with a clear message while either of the two
     # unverified Pre-GA assumptions documented in docs/adr/0003-adlc-claude-code-plugin.md

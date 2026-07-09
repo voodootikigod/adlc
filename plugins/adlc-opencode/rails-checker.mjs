@@ -7,9 +7,13 @@
 // enforcement contract (active-ticket resolution, phase gating, trust-root
 // freeze) that adlc-codex and adlc-pi already implement.
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths } from '@adlc/core';
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
+import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath } from '@adlc/core';
+
+// Re-exported for API stability: sibling adapters and tests may import the
+// symlink-aware resolver from this module even though @adlc/core owns it now.
+export { resolveRailPath };
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
@@ -68,30 +72,6 @@ export const RAILS_SAFE_GATES = new Set([
 export function canonicalizePath(filePath, root) {
   const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
   return relative(root, abs).split('\\').join('/');
-}
-
-function realpathOr(p) {
-  try { return realpathSync(p); } catch { return p; }
-}
-
-/**
- * Symlink-aware canonicalization (security-relevant): resolve symlinks on the
- * target and on its existing parent segments before comparing to the frozen rail
- * set, so a symlink whose real target is a frozen rail (e.g. an alias pointing at
- * .adlc/tickets.json) cannot slip a write past a lexical name check. Falls back to
- * the lexical path for anything that can't be resolved.
- */
-export function resolveRailPath(filePath, root) {
-  const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
-  // The file may not exist yet (a `write` creating it): resolve the deepest
-  // existing ancestor (catches a symlinked parent dir), then re-append the tail.
-  let resolved;
-  if (existsSync(abs)) {
-    resolved = realpathOr(abs);
-  } else {
-    resolved = join(realpathOr(dirname(abs)), basename(abs));
-  }
-  return relative(realpathOr(root), resolved).split('\\').join('/');
 }
 
 /**

@@ -233,3 +233,6 @@ export function classifyShellCommand(text: string): {
   writeOption: boolean;
   paths: string[];
 };
+
+// lib/railpath.mjs
+export function resolveRailPath(filePath: string, root: string): string;

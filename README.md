@@ -139,7 +139,7 @@ Requires **Node.js 18 or newer**.
 - [ADLC.md](./ADLC.md) — the full lifecycle thesis and flaw inventory.
 - [docs/integrations/claude-code.md](./docs/integrations/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
 - [docs/integrations/codex.md](./docs/integrations/codex.md) — native Codex integration guide.
-- [docs/integrations/pi.md](./docs/integrations/pi.md) — Raspberry Pi harness integration guide.
+- [docs/integrations/pi.md](./docs/integrations/pi.md) — pi coding-agent harness integration guide.
 - [docs/](./docs/README.md) — toolkit guide, package reference, ADRs, and narrative essays.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the contract every package follows.
 
