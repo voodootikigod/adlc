@@ -666,18 +666,22 @@ test('r: command-executor flags are denied for EVERY gate under rails (class, no
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('r: preflight scratch probes are vetted — denied only when .adlc/** is railed', () => {
+test('r: preflight scratch probes are vetted — denied only when a probe path is railed', () => {
   const railedAdlc = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/**'] }] } });
+  const railedGit = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.git/**'] }] } }); // round-5: branch/worktree metadata churn
   const normalRails = repo({ tickets: T1_RAILED }); // rails: test/**
   const env = { ...ON, ADLC_TICKET: 'T1' };
   try {
-    const denied = checkToolCall({ tool: 'adlc_gate', args: { gate: 'preflight', args: [] }, root: railedAdlc, env });
-    assert.equal(denied.decision, 'deny');
-    assert.match(denied.reason, /preflight-test/);
+    for (const dir of [railedAdlc, railedGit]) {
+      const denied = checkToolCall({ tool: 'adlc_gate', args: { gate: 'preflight', args: [] }, root: dir, env });
+      assert.equal(denied.decision, 'deny');
+      assert.match(denied.reason, /preflight-test/);
+    }
     const allowed = checkToolCall({ tool: 'adlc_gate', args: { gate: 'preflight', args: [] }, root: normalRails, env });
     assert.equal(allowed.decision, 'allow');
   } finally {
     rmSync(railedAdlc, { recursive: true, force: true });
+    rmSync(railedGit, { recursive: true, force: true });
     rmSync(normalRails, { recursive: true, force: true });
   }
 });

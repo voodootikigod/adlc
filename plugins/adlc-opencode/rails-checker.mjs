@@ -394,12 +394,18 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
             const denied = vetLedger('.adlc/manifest.jsonl');
             if (denied) return denied;
           }
-          // preflight's DEFAULT run probes writability with two fixed,
-          // self-cleaning scratch writes (.adlc/tmp/preflight-test and the
-          // .worktrees/preflight-test worktree). Vet those known paths instead
-          // of denying the gate — they only conflict when explicitly railed.
+          // preflight's DEFAULT run probes writability with fixed, self-cleaning
+          // scratch writes: .adlc/tmp/preflight-test, the .worktrees/preflight-test
+          // worktree, and the git metadata its branch/worktree probes churn
+          // (refs + .git/worktrees). Vet those known paths instead of denying
+          // the gate — they only conflict when explicitly railed.
           if (gate === 'preflight') {
-            for (const scratch of ['.adlc/tmp/preflight-test', '.worktrees/preflight-test']) {
+            for (const scratch of [
+              '.adlc/tmp/preflight-test',
+              '.worktrees/preflight-test',
+              '.git/refs/heads/preflight-test-branch',
+              '.git/worktrees/preflight-test',
+            ]) {
               const denied = vetLedger(scratch);
               if (denied) return denied;
             }
