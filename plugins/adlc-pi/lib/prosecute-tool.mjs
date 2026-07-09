@@ -12,91 +12,30 @@
 // the live smoke (scripts/pi-live-prosecute.mjs) proves real registration +
 // callability end-to-end.
 
-import { createRequire } from 'node:module';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { prosecute, defaultRunLens, renderSummary } from './prosecutor.mjs';
+import { resolvePiPeer } from './pi-resolve.mjs';
 
 // TypeBox is a peer supplied by the pi runtime. It is NOT hoisted to the repo
 // root — it lives nested under @earendil-works/pi-coding-agent/node_modules, so
-// a bare `import('typebox')` from this plugin dir does not resolve (and the pi
-// package's exports map is ESM-only, blocking require.resolve on it). We resolve
-// TypeBox the way pi does — anchored on the pi package — via a small ladder of
-// strategies so it works under jiti (how pi loads extensions) and plain Node.
-// Under a raw `node --test` from the repo root TypeBox is genuinely absent; the
-// caller (extension.mjs) swallows the resulting throw and the tool stays
-// unregistered there, with the live smoke proving real registration.
+// a bare `import('typebox')` from this plugin dir does not resolve. The
+// pi-anchored resolution ladder lives in ./pi-resolve.mjs (shared with
+// renderers.mjs' pi-tui loader and gate-tool.mjs). Under a raw `node --test`
+// from the repo root TypeBox may be genuinely absent; the caller (extension.mjs)
+// swallows the resulting throw and the tool stays unregistered there, with the
+// live smoke proving real registration.
 
-/** Import a typebox module by path/URL and return its `Type` builder. */
-async function importType(pathOrUrl) {
-  const url = pathOrUrl.startsWith('file:') ? pathOrUrl : pathToFileURL(pathOrUrl).href;
-  const mod = await import(url);
+/**
+ * Resolve TypeBox's `Type` builder via the shared pi-peer ladder. Exported so
+ * gate-tool.mjs reuses the exact same resolver. Throws if TypeBox cannot be
+ * resolved (a non-pi runtime) — callers registering tools swallow that.
+ */
+export async function loadTypebox() {
+  const mod = await resolvePiPeer('typebox');
   const T = mod.Type ?? mod.default ?? mod;
-  return T && typeof T.Object === 'function' ? T : null;
-}
-
-/** Resolve typebox's ESM entry file from an installed typebox package dir. */
-function typeboxEntry(pkgDir) {
-  try {
-    const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
-    const exp = pkg.exports;
-    const dot = exp && typeof exp === 'object' ? exp['.'] ?? exp : undefined;
-    const rel =
-      (dot && typeof dot === 'object' ? dot.import ?? dot.default : typeof dot === 'string' ? dot : undefined) ??
-      pkg.module ?? pkg.main ?? 'index.js';
-    return join(pkgDir, rel);
-  } catch {
-    return null;
-  }
-}
-
-async function loadTypebox() {
-  const require = createRequire(import.meta.url);
-
-  // 1. Direct: works if typebox is hoisted / a direct dependency.
-  try {
-    const T = await importType(require.resolve('typebox'));
-    if (T) return T;
-  } catch { /* try next */ }
-
-  // 2. Anchor on the pi package via the ESM resolver, then resolve the nested
-  //    typebox from there (the layout pi ships).
-  if (typeof import.meta.resolve === 'function') {
-    try {
-      const piUrl = import.meta.resolve('@earendil-works/pi-coding-agent');
-      const piRequire = createRequire(fileURLToPath(piUrl));
-      const T = await importType(piRequire.resolve('typebox'));
-      if (T) return T;
-    } catch { /* try next */ }
-  }
-
-  // 3. Filesystem walk up from this module: look for a nested (then hoisted)
-  //    typebox install. Jiti-agnostic and deterministic.
-  let dir = dirname(fileURLToPath(import.meta.url));
-  while (true) {
-    for (const rel of [
-      ['node_modules', '@earendil-works', 'pi-coding-agent', 'node_modules', 'typebox'],
-      ['node_modules', 'typebox'],
-    ]) {
-      const pkgDir = join(dir, ...rel);
-      if (existsSync(join(pkgDir, 'package.json'))) {
-        const entry = typeboxEntry(pkgDir);
-        if (entry && existsSync(entry)) {
-          try {
-            const T = await importType(entry);
-            if (T) return T;
-          } catch { /* keep walking */ }
-        }
-      }
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-
-  throw new Error('typebox could not be resolved for adlc_prosecute registration');
+  if (T && typeof T.Object === 'function') return T;
+  throw new Error('typebox resolved but exposed no Type builder');
 }
 
 /**

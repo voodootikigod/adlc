@@ -24,4 +24,6 @@ adlc rails-guard --ticket "$ADLC_TICKET" --tickets .adlc/tickets.json --record -
 adlc flail-detector session.log --json
 ```
 
+Inside Pi, prefer the native `adlc_gate` tool (e.g. `adlc_gate({gate: "rails-guard", args: "--ticket $ADLC_TICKET --tickets .adlc/tickets.json"})`) over shelling these `adlc <gate>` commands — it enforces the rails-aware argv policy and records gate evidence automatically; the CLI shown above stays the fallback for gates it denies (write/derived-target gates and `--*cmd` invocations).
+
 Hooks are assistive. `adlc rails-guard` is the deterministic rail-freeze proof.

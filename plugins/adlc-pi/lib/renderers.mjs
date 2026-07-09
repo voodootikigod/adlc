@@ -9,16 +9,22 @@
 // until (or unless) that module resolves. extension.mjs never imports pi-tui
 // at module top level, staying loadable under a plain `node --test`.
 //
-// The specifier is assembled at runtime so the TypeScript nodenext resolver in
-// CI (`tsc --allowJs` over index.ts) does not try to resolve the nested,
-// runtime-only package.
+// pi-tui ships nested (unhoisted) under @earendil-works/pi-coding-agent/
+// node_modules, so a BARE `import('@earendil-works/pi-tui')` does NOT resolve at
+// pi runtime — it silently rejects and every renderer degrades EVERYWHERE,
+// including real pi (a latent Phase-3 bug). The pi-anchored resolution ladder
+// in ./pi-resolve.mjs (shared with the typebox loaders) resolves it for real;
+// the specifier is assembled at runtime so the TypeScript nodenext resolver in
+// CI never tries to resolve the nested, runtime-only package.
+import { resolvePiPeer } from './pi-resolve.mjs';
+
 const PI_TUI_SPECIFIER = ['@earendil-works', 'pi-tui'].join('/');
 
 let tuiPromise;
 async function loadTui() {
   if (tuiPromise === undefined) {
     // A rejection (module absent) resolves to null so callers degrade quietly.
-    tuiPromise = import(PI_TUI_SPECIFIER).catch(() => null);
+    tuiPromise = resolvePiPeer(PI_TUI_SPECIFIER).catch(() => null);
   }
   return tuiPromise;
 }

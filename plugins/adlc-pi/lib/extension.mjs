@@ -37,7 +37,9 @@ import { registerCommands } from './commands.mjs';
 import { renderWidgetLines } from './widget.mjs';
 import { createRenderers } from './renderers.mjs';
 import { registerProsecuteTool } from './prosecute-tool.mjs';
+import { registerGateTool } from './gate-tool.mjs';
 import { makeCompletionListener } from './completion.mjs';
+import { makeCompactionListener, readSessionEntries } from './compaction.mjs';
 
 // Bound the pending-snapshot map: a blocked call never gets a tool_result, so
 // stale entries are evicted oldest-first well past any realistic concurrency.
@@ -198,6 +200,17 @@ export function createExtension({ env = process.env } = {}) {
       note: noteGate,
     });
 
+    // Post-compaction ADLC-state re-assertion (spec 4.4): after any compaction,
+    // re-assert unresolved enforcement state (recent denies/reverts, degraded
+    // flag, active ticket) as a nextTurn digest so context-rot cannot silently
+    // drop enforcement history.
+    const compaction = makeCompactionListener({
+      pi,
+      getActive: () => active,
+      getEntries: readSessionEntries,
+      isDegraded: () => fitness.isCompacted(),
+    });
+
     // =====================================================================
     // Lifecycle
     // =====================================================================
@@ -233,11 +246,13 @@ export function createExtension({ env = process.env } = {}) {
     pi.on('message_end', completion.onMessageEnd);
 
     // A threshold/overflow compaction marks the session context-degraded for
-    // the build gate; a manual /compact does not.
+    // the build gate; a manual /compact does not. Regardless of reason, re-assert
+    // unresolved ADLC enforcement state (spec 4.4) — state loss is state loss.
     pi.on('session_compact', async (event, ctx) => {
       fitness.markCompaction(event.reason);
       // Surface the degraded flag in the widget immediately.
       refreshWidget(ctx);
+      await compaction(event, ctx);
     });
 
     // Append (never replace) the ADLC doctrine to the turn's system prompt.
@@ -579,12 +594,26 @@ export function createExtension({ env = process.env } = {}) {
     // never registers and the /adlc-prosecute command + CI remain the backstop.
     // All pi.on/registerCommand wiring above ran synchronously already, so unit
     // tests that read pi.handlers without awaiting this factory still see them.
+    const noteFromTool = (evt) => noteGate({ ctx: null, type: evt.type, detail: evt.detail });
     await registerProsecuteTool(pi, {
       pi,
       getActive: () => active,
       getCwd: () => activeCwd,
       env,
-      note: (evt) => noteGate({ ctx: null, type: evt.type, detail: evt.detail }),
+      note: noteFromTool,
+    }).catch(() => {
+      // Best-effort at load — see above.
+    });
+
+    // Native adlc_gate tool (spec 4.3): the model runs deterministic gates
+    // through the rails-aware argv policy instead of shelling `adlc <gate>`.
+    // Awaited (TypeBox load) and swallowed under a plain `node --test`, exactly
+    // like adlc_prosecute above.
+    await registerGateTool(pi, {
+      pi,
+      getActive: () => active,
+      getCwd: () => activeCwd,
+      note: noteFromTool,
     }).catch(() => {
       // Best-effort at load — see above.
     });

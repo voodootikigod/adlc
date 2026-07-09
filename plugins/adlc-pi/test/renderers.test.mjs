@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRenderers } from '../lib/renderers.mjs';
+import { resolvePiPeer } from '../lib/pi-resolve.mjs';
 
 // Minimal pi-tui stand-ins matching the constructor shapes renderers.mjs uses.
 class FakeBox {
@@ -57,6 +58,33 @@ test('renderers degrade to undefined before load and when the loader fails', asy
   release(fakeTui);
   await tick();
   assert.ok(gated.gateNotice({ content: 'x', details: {} }, {}, fakeTheme) instanceof FakeBox, 'constructs after load');
+});
+
+// Phase-3 latent-bug fix (T27): the DEFAULT loader must resolve the REAL pi-tui
+// via the pi-anchored resolution ladder — a bare `import('@earendil-works/
+// pi-tui')` silently failed everywhere (the package nests unhoisted under
+// pi-coding-agent/node_modules), so this proves the default loader now
+// constructs a real Component in this repo, not just the injected-fake path.
+const poll = async (fn, tries = 50) => {
+  for (let i = 0; i < tries; i++) {
+    const v = fn();
+    if (v !== undefined) return v;
+    await tick();
+  }
+  return fn();
+};
+
+test('the DEFAULT loader resolves the real pi-tui and constructs a real Component in this repo', async () => {
+  const { Box } = await resolvePiPeer(['@earendil-works', 'pi-tui'].join('/'));
+  assert.equal(typeof Box, 'function', 'sanity: pi-tui resolves in this repo');
+
+  // No loader override → exercises the real default loadTui (the ladder).
+  const r = createRenderers();
+  const gate = await poll(() =>
+    r.gateNotice({ content: 'ADLC rail-deny: src/x.ts', details: { type: 'rail-deny', ticketId: 'T9' } }, {}, fakeTheme)
+  );
+  assert.ok(gate instanceof Box, 'default loader built a real pi-tui Box (not a degraded undefined)');
+  assert.equal(gate.children.length, 1, 'the notice text was added as a child');
 });
 
 test('a constructor-time failure degrades instead of throwing into the render loop', async () => {
