@@ -238,26 +238,35 @@ console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-den
   }
 }
 
-// ---- T31: no STALE LIVE references to the old upstream repo path ----
+// ---- T31: no STALE LIVE references to the old upstream repo home ----
 // The repo moved to anomalyco/opencode; docs, source, comments, and workflows
-// must not still point at the old org path as if current. Scope: live-reference
-// locations only. EXCLUDED: this guard file (names the pattern), and .adlc/
-// ticket bodies — immutable historical contracts (editing one trips the CI
-// base-ticket-contract gate) that legitimately describe the move as past work.
+// must not still point at the old sst home as if current. Matches BOTH the
+// org-path form (sst/opencode, in HTTPS or git@ URLs — case-insensitive, since
+// GitHub org paths are) AND the old domain forms (sst.dev/opencode,
+// opencode.sst.dev). Scope: live-reference locations only. EXCLUDED: this guard
+// file (it names the patterns), and .adlc/tickets.json specifically — the T31
+// ticket body legitimately describes the move as past work and is an immutable
+// contract (editing it trips the CI base-ticket gate). Any OTHER .adlc/ file is
+// still scanned.
 {
-  // Assemble the needle in two halves so the guard file never self-matches.
-  const needle = ['sst', 'opencode'].join('/');
+  // Assemble each needle in halves so the guard file never self-matches.
+  const patterns = [
+    ['sst', 'opencode'].join('/'),        // github.com/sst/opencode, git@github.com:sst/opencode
+    ['sst', 'dev/opencode'].join('.'),    // sst.dev/opencode
+    ['opencode', 'sst', 'dev'].join('.'), // opencode.sst.dev
+  ];
   let hits = '';
   try {
-    hits = execFileSync('git', ['-C', ROOT, 'grep', '-l', needle, '--',
-      '.', ':!scripts/opencode-install-smoke.mjs', ':!.adlc/'], { encoding: 'utf8' }).trim();
+    hits = execFileSync('git', ['-C', ROOT, 'grep', '-il', '-E', patterns.join('|'), '--',
+      '.', ':!scripts/opencode-install-smoke.mjs', ':!.adlc/tickets.json'], { encoding: 'utf8' }).trim();
   } catch (e) {
     // git grep exits 1 with no output when there are NO matches — the pass case.
+    // Any other status (128 non-git dir, ENOENT git absent) is a real failure.
     if (e.status === 1 && !e.stdout?.trim()) hits = '';
-    else { fail(`upstream-path sweep could not run: ${e.message}`); hits = ''; }
+    else { fail(`upstream-home sweep could not run: ${e.message}`); hits = ''; }
   }
-  if (hits) fail(`stale upstream repo path present in: ${hits.split('\n').join(', ')}`);
-  else ok('no stale upstream repo-path references (upstream is anomalyco/opencode)');
+  if (hits) fail(`stale upstream repo-home reference present in: ${hits.split('\n').join(', ')}`);
+  else ok('no stale upstream repo-home references (upstream is anomalyco/opencode)');
 }
 
 if (failures) { console.error(`\nopencode-install-smoke: ${failures} failure(s)`); process.exit(2); }
