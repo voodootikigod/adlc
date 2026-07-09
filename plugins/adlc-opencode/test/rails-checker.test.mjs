@@ -561,7 +561,7 @@ test('q: gate-manifest DEFAULT dir (.adlc) railed → deny even with no path tok
   try {
     const r = checkToolCall({ tool: 'adlc_gate', args: { gate: 'gate-manifest', args: ['record', 'preflight'] }, root: dir, env });
     assert.equal(r.decision, 'deny');
-    assert.match(r.reason, /manifest ledger/);
+    assert.match(r.reason, /manifest\.jsonl/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -605,4 +605,49 @@ test('q: read-only gates still flow under rails; everything unrestricted with ra
     const off = checkToolCall({ tool: 'adlc_gate', args: { gate: 'hollow-test', args: ['--test-cmd', 'x'] }, root: dir, env: { ...ON } });
     assert.equal(off.decision, 'allow');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- (r) round-3 re-review: the allowlist itself must reflect true read-only behavior ----
+test('r: review-calibration via adlc_gate under rails → deny (mutate/restore writer, same class as hollow-test)', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'review-calibration', args: ['--review-cmd', 'true', '--commit', 'HEAD'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /derives or defaults its write targets/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: --record-verdict writes the manifest ledger — denied when the ledger is railed, allowed otherwise', () => {
+  const railedLedger = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/**'] }] } });
+  const normalRails = repo({ tickets: T1_RAILED }); // rails: test/**
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    for (const gate of ['coldstart', 'premortem', 'parallax']) {
+      const denied = checkToolCall({ tool: 'adlc_gate', args: { gate, args: ['--prompt-only', '--record-verdict', '-'] }, root: railedLedger, env });
+      assert.equal(denied.decision, 'deny', `${gate} vs railed ledger`);
+      assert.match(denied.reason, /ledger/);
+      const allowed = checkToolCall({ tool: 'adlc_gate', args: { gate, args: ['--prompt-only', '--record-verdict', '-'] }, root: normalRails, env });
+      assert.equal(allowed.decision, 'allow', `${gate} with non-railed ledger`);
+    }
+  } finally {
+    rmSync(railedLedger, { recursive: true, force: true });
+    rmSync(normalRails, { recursive: true, force: true });
+  }
+});
+
+test('r: model-ratchet --review-cmd appends the findings ledger — vetted; plain dry-run allowed', () => {
+  const railedLedger = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/findings.jsonl'] }] } });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const denied = checkToolCall({ tool: 'adlc_gate', args: { gate: 'model-ratchet', args: ['--review-cmd=true'] }, root: railedLedger, env });
+    assert.equal(denied.decision, 'deny');
+    assert.match(denied.reason, /findings\.jsonl/);
+    const dryRun = checkToolCall({ tool: 'adlc_gate', args: { gate: 'model-ratchet', args: ['--dry-run'] }, root: railedLedger, env });
+    assert.equal(dryRun.decision, 'allow');
+  } finally { rmSync(railedLedger, { recursive: true, force: true }); }
 });

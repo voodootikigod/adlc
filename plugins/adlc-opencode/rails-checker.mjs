@@ -46,15 +46,19 @@ export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_ga
 // mutation opt-in flags are denied separately). Deliberately absent — gates
 // that write with DERIVED or DEFAULTED targets an argv scan cannot vet:
 //   hollow-test (expands its --rails file's globs and mutates the matches),
+//   review-calibration (plants mutants into commit-derived files via
+//     writeFileSync, then restores — same mutate/restore class as hollow-test),
 //   consensus-fix (applies candidate repairs to --files),
 //   behavior-diff (capture writes its output),
 //   gate-fuzzing (executes adversary setup/witness code; CI-sandbox-only),
-// and any unknown/future gate (fail closed). gate-manifest is special-cased on
-// its effective --dir/.adlc target because mid-build evidence recording is a
-// legitimate railed-session write.
+// and any unknown/future gate (fail closed). Ledger writes are vetted on the
+// EFFECTIVE ledger file instead of denied, because mid-build evidence
+// recording is a legitimate railed-session write: gate-manifest (--dir or
+// .adlc default), any gate's --record-verdict (writes the gate-manifest
+// ledger), and model-ratchet with --review-cmd (appends .adlc/findings.jsonl).
 export const RAILS_SAFE_GATES = new Set([
   'preflight', 'spec-lint', 'premortem', 'parallax', 'coldstart',
-  'merge-forecast', 'model-router', 'review-calibration', 'rejection-mining',
+  'merge-forecast', 'model-router', 'rejection-mining',
   'lesson-foundry', 'skill-rot', 'model-ratchet', 'flail-detector', 'rails-guard',
 ]);
 
@@ -350,10 +354,18 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
           const flag = raw.trim().split('=')[0];
           if (MUTATION_FLAGS.has(flag)) return deny(`mutation flag "${flag}" requests a write with a gate-derived target`);
         }
-        // (3) gate-manifest writes its ledger under --dir, defaulting to .adlc.
-        // Vet the LEDGER FILE it will write, not the directory: the directory
-        // always ancestor-hits the implicit tickets.json trust-root rail, which
-        // would outlaw legitimate mid-build evidence recording.
+        // (3) ledger writes are vetted on the EFFECTIVE ledger FILE (not the
+        // directory — the directory always ancestor-hits the implicit
+        // tickets.json trust-root rail, which would outlaw legitimate mid-build
+        // evidence recording). Three surfaces write a ledger:
+        //   gate-manifest            → <--dir | .adlc>/manifest.jsonl
+        //   <any gate> --record-verdict → .adlc/manifest.jsonl (via gate-manifest)
+        //   model-ratchet --review-cmd  → .adlc/findings.jsonl (appendEntry)
+        const hasFlag = (flag) => nested.some((t) => { const s = t.trim(); return s === flag || s.startsWith(`${flag}=`); });
+        const vetLedger = (ledger) => {
+          const hit = railHit(ledger, force.rails, root);
+          return hit ? deny(`ledger "${ledger}" resolves to frozen rail "${hit}"`) : null;
+        };
         if (gate === 'gate-manifest') {
           let effectiveDir = '.adlc';
           for (let i = 0; i < nested.length; i++) {
@@ -361,13 +373,22 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
             if (t === '--dir' && typeof nested[i + 1] === 'string') effectiveDir = nested[i + 1].trim();
             else if (t.startsWith('--dir=')) effectiveDir = t.slice('--dir='.length).trim();
           }
-          const ledger = `${effectiveDir.replace(/\/+$/, '')}/manifest.jsonl`;
-          const hit = railHit(ledger, force.rails, root);
-          if (hit) return deny(`manifest ledger "${ledger}" resolves to frozen rail "${hit}"`);
+          const denied = vetLedger(`${effectiveDir.replace(/\/+$/, '')}/manifest.jsonl`);
+          if (denied) return denied;
         } else if (!RAILS_SAFE_GATES.has(gate)) {
-          // (2) not proven read-only-by-default (hollow-test, consensus-fix,
-          // behavior-diff, gate-fuzzing, unknown/future gates) → fail closed
+          // (2) not proven read-only-by-default (hollow-test, review-calibration,
+          // consensus-fix, behavior-diff, gate-fuzzing, unknown/future gates)
+          // → fail closed
           return deny('this gate derives or defaults its write targets, which an in-session argv scan cannot vet while rails are frozen');
+        } else {
+          if (hasFlag('--record-verdict')) {
+            const denied = vetLedger('.adlc/manifest.jsonl');
+            if (denied) return denied;
+          }
+          if (gate === 'model-ratchet' && hasFlag('--review-cmd')) {
+            const denied = vetLedger('.adlc/findings.jsonl');
+            if (denied) return denied;
+          }
         }
       }
     }

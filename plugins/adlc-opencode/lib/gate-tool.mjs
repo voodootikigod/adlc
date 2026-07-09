@@ -120,9 +120,9 @@ export function buildGateTool(schema, { root = process.cwd(), client, spawnImpl 
         `${GATE_BINS.join(', ')}. Prefer this over shelling out to \`adlc\` directly ` +
         '— it validates the gate name, runs LLM-backed gates keyless through the ' +
         'session model, and returns structured output. While rails are frozen, ' +
-        'write-capable gates (hollow-test, consensus-fix, behavior-diff, ' +
-        'gate-fuzzing) and mutation flags (--write/--record/--append) are denied ' +
-        'here — run those via the `adlc` CLI instead.',
+        'write-capable gates (hollow-test, review-calibration, consensus-fix, ' +
+        'behavior-diff, gate-fuzzing) and mutation flags (--write/--record/' +
+        '--append) are denied here — run those via the `adlc` CLI instead.',
       args: {
         gate: schema.string().describe('The ADLC gate to run, e.g. "preflight", "spec-lint", "coldstart", "merge-forecast".'),
         args: schema.array(schema.string()).optional().describe('Extra CLI arguments for the gate, e.g. ["--json"].'),
