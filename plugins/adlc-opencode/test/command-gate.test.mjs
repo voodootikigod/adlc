@@ -32,60 +32,68 @@ test('normalizeCommandName: strips slash + args, rejects non-adlc commands', () 
 });
 
 // ---- AC3a: lifecycle-order advisory ----
-test('AC3: /adlc-decompose with NO spec-approval evidence → warns', () => {
+// The evidence shape is grounded in the runner's real model (see the drift-pin
+// test below): P1 = spec-lint/premortem, P2 = coldstart/merge-forecast, carried
+// under `type` (canonical) or `gate` (legacy fallback).
+const evEntry = (evidence, ticket, key = 'type') => JSON.stringify({ seq: 1, [key]: evidence, ticket }) + '\n';
+
+test('AC3: /adlc-decompose with NO P1 evidence → warns', () => {
   const dir = repo({ tickets: [{ id: 'T1', rails: [] }] });
   try {
     const r = checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' });
-    assert.match(r.warn, /lifecycle.*adlc-decompose.*spec approval/s);
+    assert.match(r.warn, /lifecycle.*adlc-decompose.*P1 spec gate/s);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: /adlc-decompose WITH spec APPROVAL evidence → no warning (both spec_approval and p1 forms)', () => {
-  for (const gate of ['spec_approval', 'p1']) {
-    const dir = repo({
-      tickets: [{ id: 'T1', rails: [] }],
-      manifest: JSON.stringify({ seq: 1, gate, ticket: 'T1' }) + '\n',
-    });
-    try {
-      assert.equal(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null, gate);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+test('AC3: /adlc-decompose WITH P1 evidence → no warning (spec-lint & premortem, type & gate keys)', () => {
+  for (const evidence of ['spec-lint', 'premortem']) {
+    for (const key of ['type', 'gate']) {
+      const dir = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry(evidence, 'T1', key) });
+      try {
+        assert.equal(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null, `${evidence}/${key}`);
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
   }
 });
 
-test('AC3: a spec-lint row is NOT approval — /adlc-decompose still warns (lint ≠ human G1 approval)', () => {
-  // codex T32 finding: keying on spec-lint/premortem is wrong — a drafting
-  // spec-lint run must NOT silence the "no approval" nudge.
-  const dir = repo({
-    tickets: [{ id: 'T1', rails: [] }],
-    manifest: JSON.stringify({ seq: 1, gate: 'spec-lint', ticket: 'T1' }) + '\n',
-  });
+test('AC3: a P2 gate (coldstart) does NOT satisfy the P1 prerequisite for /adlc-decompose', () => {
+  const dir = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry('coldstart', 'T1') });
   try {
-    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /spec approval/);
+    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /P1 spec gate/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: approval evidence for a DIFFERENT ticket does not satisfy this one', () => {
-  const dir = repo({
-    tickets: [{ id: 'T1', rails: [] }, { id: 'T2', rails: [] }],
-    manifest: JSON.stringify({ seq: 1, gate: 'spec_approval', ticket: 'T2' }) + '\n',
-  });
+test('AC3: P1 evidence for a DIFFERENT ticket does not satisfy this one', () => {
+  const dir = repo({ tickets: [{ id: 'T1', rails: [] }, { id: 'T2', rails: [] }], manifest: evEntry('spec-lint', 'T2') });
   try {
-    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /spec approval/);
+    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /P1 spec gate/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: /adlc-prosecute with no coldstart evidence → warns; with it → silent', () => {
+test('AC3: /adlc-prosecute with no P2 evidence → warns; with coldstart (type or gate) → silent', () => {
   const noEvidence = repo({ tickets: [{ id: 'T1', rails: [] }] });
-  const withEvidence = repo({
-    tickets: [{ id: 'T1', rails: [] }],
-    manifest: JSON.stringify({ seq: 1, gate: 'coldstart', ticket: 'T1' }) + '\n',
-  });
+  const typeEv = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry('coldstart', 'T1', 'type') });
+  const gateEv = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry('coldstart', 'T1', 'gate') });
   try {
-    assert.match(checkCommandOrder('/adlc-prosecute', noEvidence, { ...ON, ADLC_TICKET: 'T1' }).warn, /decomposed/);
-    assert.equal(checkCommandOrder('/adlc-prosecute', withEvidence, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
+    assert.match(checkCommandOrder('/adlc-prosecute', noEvidence, { ...ON, ADLC_TICKET: 'T1' }).warn, /P2 evidence/);
+    assert.equal(checkCommandOrder('/adlc-prosecute', typeEv, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
+    assert.equal(checkCommandOrder('/adlc-prosecute', gateEv, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
   } finally {
-    rmSync(noEvidence, { recursive: true, force: true });
-    rmSync(withEvidence, { recursive: true, force: true });
+    for (const d of [noEvidence, typeEv, gateEv]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('AC3 drift-pin: PHASE_PREREQ evidence names match the runner authoritative phase model', async () => {
+  // Anti-hollow-test: ground the prerequisite gate lists in the runner's own
+  // requirementsForPhase, not hand-picked names. If the runner changes what
+  // counts as P1/P2 evidence, this fails instead of the advisory silently
+  // drifting. Imported via the monorepo path (dev-only: no runtime dependency
+  // is added to the published plugin — it keeps its minimal dep surface).
+  const { requirementsForPhase } = await import('../../../packages/runner/lib/assertions.mjs');
+  const { PHASE_PREREQ } = await import('../lib/command-gate.mjs');
+  assert.deepEqual(new Set(PHASE_PREREQ['adlc-decompose'].gates), new Set(requirementsForPhase('p1')));
+  for (const g of PHASE_PREREQ['adlc-prosecute'].gates) {
+    assert.ok(requirementsForPhase('p2').includes(g), `${g} is a real P2 gate`);
   }
 });
 

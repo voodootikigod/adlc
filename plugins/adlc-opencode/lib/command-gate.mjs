@@ -17,19 +17,27 @@ export function normalizeCommandName(command) {
   return /^adlc-[a-z-]+$/.test(first) ? first : '';
 }
 
-// Lifecycle-order prerequisites: a command's phase expects an earlier phase's
-// gate to have LEFT EVIDENCE (a manifest entry) for the active ticket. Advisory
-// — a missing prerequisite warns, it does not block. Keyed by command name.
+// Lifecycle-order prerequisites: a command's phase expects an EARLIER phase to
+// have left evidence (a manifest entry) for the active ticket. Advisory — a
+// missing prerequisite warns, it does not block. Keyed by command name.
 //
-// Decompose (P2) requires the HUMAN spec APPROVAL (P1 G1), not merely a P1 lint:
-// spec-lint/premortem can be run while drafting and do NOT mean the spec was
-// approved. /adlc-approve-spec records approval as `spec_approval` (the unsigned
-// manifest fallback) or gate `p1` (the `adlc-runner accept --gate p1` path) —
-// see command/adlc-approve-spec.md. Match either.
-const PHASE_PREREQ = {
-  'adlc-decompose': { gates: ['spec_approval', 'p1'], hint: 'no human spec approval (P1 G1) recorded for this ticket — run /adlc-spec then /adlc-approve-spec first' },
-  'adlc-prosecute': { gates: ['coldstart'], hint: 'this ticket has not been decomposed (P2) — run /adlc-decompose first' },
+// The evidence names are the AUTHORITATIVE phase-completion gates from the
+// runner's model (`@adlc/runner` requirementsForPhase — pinned by a drift test):
+//   P1 = spec-lint | premortem     P2 = coldstart | merge-forecast
+// So /adlc-decompose (P2) expects P1 evidence, /adlc-prosecute (P5) expects P2
+// evidence. There is NO distinct `spec_approval`/`p1` gate in the recorded model
+// (an earlier revision keyed on those, which are never written — this pins to
+// what the runner actually records). Manifest entries carry the gate under
+// `type` with `gate` as a fallback, so the check reads `type ?? gate`.
+export const PHASE_PREREQ = {
+  'adlc-decompose': { gates: ['spec-lint', 'premortem'], hint: 'no P1 spec gate (spec-lint/premortem) recorded for this ticket — complete P1 (/adlc-spec, /adlc-approve-spec) first' },
+  'adlc-prosecute': { gates: ['coldstart', 'merge-forecast'], hint: 'this ticket has no P2 evidence (coldstart) — run /adlc-decompose first' },
 };
+
+/** Phase-evidence key for a manifest entry: `type` is canonical, `gate` legacy. */
+function entryEvidence(entry) {
+  return entry?.type ?? entry?.gate;
+}
 
 /** Read (gate, ticket) pairs from .adlc/manifest.jsonl; [] when absent/unreadable. */
 function manifestEntries(root) {
@@ -56,7 +64,7 @@ export function checkCommandOrder(command, root, env = process.env) {
   const active = resolveActiveTicketId(root, env);
   if (active.conflict || !active.id) return { warn: null };
   const entries = manifestEntries(root);
-  const satisfied = entries.some((e) => e?.ticket === active.id && prereq.gates.includes(e?.gate));
+  const satisfied = entries.some((e) => e?.ticket === active.id && prereq.gates.includes(entryEvidence(e)));
   if (satisfied) return { warn: null };
   return { warn: `ADLC lifecycle: /${name} — ${prereq.hint}. (advisory; not blocked)` };
 }
