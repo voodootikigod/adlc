@@ -238,6 +238,28 @@ console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-den
   }
 }
 
+// ---- T31: no STALE LIVE references to the old upstream repo path ----
+// The repo moved to anomalyco/opencode; docs, source, comments, and workflows
+// must not still point at the old org path as if current. Scope: live-reference
+// locations only. EXCLUDED: this guard file (names the pattern), and .adlc/
+// ticket bodies — immutable historical contracts (editing one trips the CI
+// base-ticket-contract gate) that legitimately describe the move as past work.
+{
+  // Assemble the needle in two halves so the guard file never self-matches.
+  const needle = ['sst', 'opencode'].join('/');
+  let hits = '';
+  try {
+    hits = execFileSync('git', ['-C', ROOT, 'grep', '-l', needle, '--',
+      '.', ':!scripts/opencode-install-smoke.mjs', ':!.adlc/'], { encoding: 'utf8' }).trim();
+  } catch (e) {
+    // git grep exits 1 with no output when there are NO matches — the pass case.
+    if (e.status === 1 && !e.stdout?.trim()) hits = '';
+    else { fail(`upstream-path sweep could not run: ${e.message}`); hits = ''; }
+  }
+  if (hits) fail(`stale upstream repo path present in: ${hits.split('\n').join(', ')}`);
+  else ok('no stale upstream repo-path references (upstream is anomalyco/opencode)');
+}
+
 if (failures) { console.error(`\nopencode-install-smoke: ${failures} failure(s)`); process.exit(2); }
 console.log('\nopencode-install-smoke: PASS');
 

@@ -195,12 +195,17 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       } catch { /* advisory: swallow — the watcher must never break the host */ }
     },
 
-    // Phase 2.1 — DORMANT deny lever. At opencode 1.17.13 `permission.ask` is
-    // defined in the Hooks interface but never dispatched (upstream #7006);
-    // the enforcing control is the tool.execute.before throw above. This
-    // handler exists so rail denial extends to permission prompts the moment
-    // upstream wires the hook. Tolerant of both documented Permission shapes
-    // (V1 {type, pattern} and V2 {action, resources[]}); never throws.
+    // Phase 2.1 — DORMANT deny lever. `permission.ask` is defined in the Hooks
+    // interface but never dispatched — RE-VERIFIED FROM SOURCE at tags v1.17.17
+    // AND v1.17.18 (2026-07-09): the string appears only in the Hooks type at
+    // packages/plugin/src/index.ts; it is never passed to plugin.trigger(), and
+    // the real permission path (packages/opencode/src/permission/index.ts)
+    // publishes the `permission.asked` event without invoking any plugin hook.
+    // Upstream anomalyco/opencode#7006 remains OPEN. The enforcing control is the
+    // tool.execute.before throw above; this handler exists so rail denial extends
+    // to permission prompts the moment upstream wires it. Tolerant of both
+    // documented Permission shapes (V1 {type, pattern} and V2 {action,
+    // resources[]}); never throws.
     'permission.ask': async (input, output) => {
       try {
         const kind = String(input?.type ?? input?.action ?? '').toLowerCase();

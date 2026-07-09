@@ -144,7 +144,13 @@ The integration enforces frozen rails at two layers:
    hook denies structured mutations to a frozen rail declared by the active
    ticket: a thrown error in the hook **aborts the tool call** — documented host
    behavior on `@opencode-ai/plugin` >= 1.17.13, regression-tested end-to-end by
-   `scripts/opencode-live-deny.mjs`. Every extractable target path is checked
+   `scripts/opencode-live-deny.mjs`. That proof runs on a **version matrix** in
+   CI: the pinned floor (`opencode-ai@1.17.13`, the contract-verified version) as
+   a *required* check, plus an *advisory* `opencode-live-latest` job that runs the
+   same deny + tool proofs against `opencode-ai@latest` — so a breaking upstream
+   change is visible same-day without blocking unrelated merges (opencode releases
+   near-daily). The floor pin is bumped deliberately when the canary shows
+   sustained green on a newer line. Every extractable target path is checked
    (`filePath`, `files[]`, `edits[]`); a mutating or *unknown* tool whose target
    cannot be extracted is denied while rails are in force (fail closed — a
    deliberate tradeoff: an unrecognized third-party write tool must not slip
@@ -206,11 +212,15 @@ glob/ticket logic to `@adlc/core`:
    keyless bridge that would let a native `adlc_prosecute` tool spawn lens/verifier
    child sessions is now proven (Phase 4); wiring the deterministic runner on top
    is the **Phase 4b** follow-on.
-2. **`permission.ask` is a DORMANT lever.** At opencode 1.17.13 the hook is
-   defined but never dispatched (upstream sst/opencode#7006); the plugin ships a
-   tolerant handler (denies rail-target permissions under both documented payload
-   shapes) that activates the moment upstream wires it. The enforcing control is
-   the `tool.execute.before` throw.
+2. **`permission.ask` is a DORMANT lever.** The hook is defined but never
+   dispatched — re-verified from source at tags **v1.17.17 and v1.17.18**
+   (2026-07-09): `permission.ask` appears only in the Hooks type, is never passed
+   to `plugin.trigger()`, and the real permission path publishes the
+   `permission.asked` event without invoking any plugin hook. Upstream
+   anomalyco/opencode#7006 remains OPEN. The plugin ships a tolerant handler
+   (denies rail-target permissions under both documented payload shapes) that
+   activates the moment upstream wires it. The enforcing control is the
+   `tool.execute.before` throw.
 3. **Floating leading-`**` rails and in-session directory deletion.** The
    in-session shell guard denies deleting/moving a rail's *fixed-anchor* parent
    (`rm -rf test` vs `test/**`, `rm -rf packages/foo/test` vs
