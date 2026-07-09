@@ -40,6 +40,7 @@ import { registerProsecuteTool } from './prosecute-tool.mjs';
 import { registerGateTool } from './gate-tool.mjs';
 import { makeCompletionListener } from './completion.mjs';
 import { makeCompactionListener, readSessionEntries } from './compaction.mjs';
+import { makeShutdownListener } from './shutdown.mjs';
 
 // Bound the pending-snapshot map: a blocked call never gets a tool_result, so
 // stale entries are evicted oldest-first well past any realistic concurrency.
@@ -211,6 +212,17 @@ export function createExtension({ env = process.env } = {}) {
       isDegraded: () => fitness.isCompacted(),
     });
 
+    // Session-shutdown open-ticket capture (spec 4.5): on teardown, if a ticket
+    // is active and the session ended carrying unresolved denies/reverts, append
+    // one durable 'session-shutdown-open-ticket' manifest entry. Never blocks
+    // shutdown; the session-side write is best-effort as the file may be closing.
+    const shutdown = makeShutdownListener({
+      pi,
+      getActive: () => active,
+      getCwd: () => activeCwd,
+      getEntries: readSessionEntries,
+    });
+
     // =====================================================================
     // Lifecycle
     // =====================================================================
@@ -254,6 +266,10 @@ export function createExtension({ env = process.env } = {}) {
       refreshWidget(ctx);
       await compaction(event, ctx);
     });
+
+    // Extension teardown (quit/reload/replacement): capture an open ticket with
+    // unresolved enforcement state before the runtime goes away (spec 4.5).
+    pi.on('session_shutdown', shutdown);
 
     // Append (never replace) the ADLC doctrine to the turn's system prompt.
     pi.on('before_agent_start', async (event, _ctx) => {

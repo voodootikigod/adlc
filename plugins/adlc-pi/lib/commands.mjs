@@ -18,6 +18,20 @@ import { loadTickets, sha256 } from '@adlc/core';
 import { ensureGitignore, ensureFormatterIgnores } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { recordGateEvent } from './evidence.mjs';
+import { buildRollbackCandidates } from './rollback.mjs';
+
+// Parse a CLI's `--json` stdout into an object, or null when it is not JSON.
+// pi.exec results carry stdout as a string; a non-JSON body (an operational
+// error printed to stderr, an empty pass line) yields null so callers fall back
+// to the exit code rather than throwing.
+function parseJsonStdout(stdout) {
+  if (typeof stdout !== 'string' || stdout.trim() === '') return null;
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Register the interactive command trio on a pi ExtensionAPI.
@@ -249,6 +263,190 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         `ADLC: recorded spec approval for "${specArg}" (sha256 ${hash.slice(0, 12)}…)${ticketId ? ' on ticket ' + ticketId : ''}.`,
         'info'
       );
+    },
+  });
+
+  // =====================================================================
+  // /adlc-accept <packet.json> — the P6 human acceptance gate (spec 4.5).
+  // Wraps `adlc behavior-diff compare` (verdict shown to the human) and
+  // `adlc accept` (recorded only on approve). The model cannot self-accept.
+  // =====================================================================
+  pi.registerCommand('adlc-accept', {
+    description: 'Record human P6 acceptance (behavior-diff review + acceptance packet) as a confirm modal',
+    async handler(args, ctx) {
+      const root = ctx.cwd;
+      const packetArg = (args ?? '').trim();
+      if (!packetArg) {
+        ctx.ui.notify('ADLC: /adlc-accept needs a packet path (e.g. /adlc-accept .adlc/packet.json).', 'error');
+        return;
+      }
+      const packetPath = isAbsolute(packetArg) ? packetArg : join(root, packetArg);
+
+      // Missing/unreadable/invalid packet → error notify, NO dialog, NO exec.
+      let packet;
+      try {
+        packet = JSON.parse(readFileSync(packetPath, 'utf8'));
+      } catch (err) {
+        ctx.ui.notify(`ADLC: cannot read acceptance packet "${packetArg}": ${err.message}. Nothing recorded.`, 'error');
+        return;
+      }
+
+      // Ticket: the active session ticket is authoritative; a packet-named
+      // ticket is the fallback when no session ticket is set.
+      const active = typeof getActive === 'function' ? getActive() : null;
+      const ticketId =
+        (active && active.ticketId) || (packet && typeof packet.ticket === 'string' ? packet.ticket : undefined);
+      if (!ticketId) {
+        ctx.ui.notify('ADLC: no active ticket and the packet names none — cannot accept. Nothing recorded.', 'error');
+        return;
+      }
+
+      // Acceptance is a human decision — there is no confirm to prompt with in
+      // non-TUI modes. Abort before running any CLI (spec: notify + abort).
+      if (!ctx.hasUI) {
+        ctx.ui.notify('ADLC: acceptance requires interactive confirmation (P6 is a human gate) — nothing recorded.', 'warning');
+        return;
+      }
+
+      // behavior-diff compare when the packet references before/after captures
+      // that exist. The verdict feeds the confirm summary; it never blocks.
+      const before = typeof packet.before === 'string' ? packet.before : null;
+      const after = typeof packet.after === 'string' ? packet.after : null;
+      const haveDiff =
+        before &&
+        after &&
+        existsSync(isAbsolute(before) ? before : join(root, before)) &&
+        existsSync(isAbsolute(after) ? after : join(root, after));
+
+      let diffLine = 'behavior-diff: not run (no before/after captures referenced in the packet)';
+      if (haveDiff) {
+        try {
+          const res = await pi.exec('adlc', ['behavior-diff', 'compare', before, after, '--json']);
+          const parsed = parseJsonStdout(res?.stdout);
+          if (parsed && typeof parsed === 'object') {
+            diffLine = `behavior-diff: ${parsed.changed ?? '?'} changed, ${parsed.unreachable ?? '?'} unreachable, ${parsed.identical ?? '?'} identical`;
+          } else {
+            diffLine = `behavior-diff: ran (exit ${res?.code ?? '?'}) — no structured verdict; review "${before}" vs "${after}" manually`;
+          }
+        } catch (err) {
+          diffLine = `behavior-diff: FAILED to run (${err.message}) — review the captures manually`;
+        }
+      }
+
+      const approved = await ctx.ui.confirm(
+        'Accept ticket (P6 human gate)',
+        `Record P6 acceptance for ticket ${ticketId} using packet "${packetArg}"?\n${diffLine}\nThis is the human acceptance gate — the model cannot self-accept.`
+      );
+      if (!approved) {
+        // Declined or timed out (confirm resolves false/undefined) → record nothing.
+        ctx.ui.notify('ADLC: acceptance declined — nothing recorded.', 'info');
+        return;
+      }
+
+      const acceptArgs = ['accept', '--ticket', ticketId, '--packet', packetArg, '--json'];
+      if (haveDiff) acceptArgs.push('--before', before, '--after', after);
+
+      let res;
+      try {
+        res = await pi.exec('adlc', acceptArgs);
+      } catch (err) {
+        ctx.ui.notify(`ADLC: acceptance failed to run: ${err.message}. Nothing recorded.`, 'error');
+        return;
+      }
+      const parsed = parseJsonStdout(res?.stdout);
+      const ok = parsed ? parsed.ok === true : res?.code === 0;
+      if (!ok) {
+        const why = parsed && Array.isArray(parsed.errors) && parsed.errors.length
+          ? parsed.errors.join('; ')
+          : `exit ${res?.code ?? '?'}${res?.stderr ? `: ${res.stderr}` : ''}`;
+        ctx.ui.notify(`ADLC: acceptance gate FAILED for ${ticketId}: ${why}. Not recorded.`, 'error');
+        return;
+      }
+
+      // Mirror the human acceptance onto the pi evidence rail (the CLI already
+      // recorded the p6-acceptance-packet; this is the session-side note).
+      recordGateEvent({
+        pi,
+        ctx,
+        root,
+        ticketId,
+        type: 'adlc-accept',
+        detail: { packet: packetArg, revision: parsed?.revision ?? null, diff: diffLine, ok: true },
+      });
+      ctx.ui.notify(
+        `ADLC: recorded P6 acceptance for ticket ${ticketId}${parsed?.revision ? ` at ${String(parsed.revision).slice(0, 12)}` : ''}.`,
+        'info'
+      );
+    },
+  });
+
+  // =====================================================================
+  // /adlc-rollback — fork the session back to a labeled pre-failure entry
+  // (spec 4.6). ctx.fork exists ONLY on the command context; this is the
+  // session-tree-native "undo" no sibling integration has.
+  // =====================================================================
+  pi.registerCommand('adlc-rollback', {
+    description: 'Fork the session back to an earlier entry (session-tree-native rollback)',
+    async handler(_args, ctx) {
+      const root = ctx.cwd;
+
+      // Defensive: the session-tree API and fork() must both be present. When
+      // the shape differs from the types (fake/older ctx), notify — never throw.
+      const sm = ctx?.sessionManager;
+      if (!sm || typeof sm.getBranch !== 'function' || typeof ctx.fork !== 'function') {
+        ctx.ui.notify('ADLC: rollback unavailable — the session-tree/fork API is not accessible in this context.', 'warning');
+        return;
+      }
+
+      let branch;
+      try {
+        branch = sm.getBranch() ?? [];
+      } catch (err) {
+        ctx.ui.notify(`ADLC: rollback unavailable — could not read the session tree: ${err.message}`, 'warning');
+        return;
+      }
+
+      const candidates = buildRollbackCandidates(branch);
+      if (candidates.length === 0) {
+        ctx.ui.notify('ADLC: no fork-eligible session entries to roll back to.', 'info');
+        return;
+      }
+
+      // fork is a human decision; there is no select to drive in non-TUI modes.
+      if (!ctx.hasUI) {
+        ctx.ui.notify('ADLC: /adlc-rollback needs interactive selection — nothing done.', 'warning');
+        return;
+      }
+
+      const options = candidates.map((c) => c.label);
+      const picked = await ctx.ui.select('Roll back (fork) the session to which entry?', options);
+      if (picked === undefined) {
+        // Cancelled / timed out — fork nothing (spec AC3).
+        ctx.ui.notify('ADLC: rollback cancelled — session unchanged.', 'info');
+        return;
+      }
+      const idx = options.indexOf(picked);
+      if (idx < 0) {
+        ctx.ui.notify('ADLC: selection did not match a known entry — session unchanged.', 'warning');
+        return;
+      }
+      const target = candidates[idx];
+
+      try {
+        const res = await ctx.fork(target.id);
+        if (res && res.cancelled) {
+          ctx.ui.notify('ADLC: fork cancelled — session unchanged.', 'info');
+          return;
+        }
+      } catch (err) {
+        ctx.ui.notify(`ADLC: fork failed: ${err.message}. Session unchanged.`, 'error');
+        return;
+      }
+
+      const active = typeof getActive === 'function' ? getActive() : null;
+      const ticketId = active && active.ticketId ? active.ticketId : undefined;
+      recordGateEvent({ pi, ctx, root, ticketId, type: 'adlc-rollback', detail: { entryId: target.id, label: target.label } });
+      ctx.ui.notify(`ADLC: rolled back (forked) to ${target.digest}.`, 'info');
     },
   });
 }
