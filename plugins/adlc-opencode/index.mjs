@@ -74,9 +74,27 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   // The repo root used to locate .adlc/ and to canonicalize edited paths.
   const root = worktree ?? directory ?? project?.worktree ?? process.cwd();
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
-  const env = { ...optionsToEnv(options), ...process.env };
+  const optEnv = optionsToEnv(options);
+  const env = { ...optEnv, ...process.env };
   const advisoryOnly = env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
+  // Attribute the downgrade to its ACTUAL source: an operator grepping their
+  // environment for a cited env var they never set is a dead end.
+  const advisorySource = process.env.ADLC_ALLOW_ADVISORY_HOOKS === '1'
+    ? 'ADLC_ALLOW_ADVISORY_HOOKS=1'
+    : 'plugin option advisoryHooks:true in opencode.json';
   const notify = makeNotify(client);
+  // Repo config weakening enforcement must be visible ONCE at load, not only
+  // per-event (advisoryHooks toasts per deny; ungatedTools would otherwise be
+  // silent). Fire-and-forget — plugin load must not block on the TUI.
+  const optionWeakenings = [
+    ...(optEnv.ADLC_ALLOW_ADVISORY_HOOKS && process.env.ADLC_ALLOW_ADVISORY_HOOKS === undefined
+      ? ['advisoryHooks:true (rails guard downgraded to advisory)'] : []),
+    ...(optEnv.ADLC_UNGATED_TOOLS && process.env.ADLC_UNGATED_TOOLS === undefined
+      ? [`ungatedTools:[${optEnv.ADLC_UNGATED_TOOLS}] (exempted from gating; still spoof-guarded)`] : []),
+  ];
+  if (optionWeakenings.length) {
+    notify(`ADLC: opencode.json plugin options weaken enforcement — ${optionWeakenings.join('; ')}. The CI rail-freeze gate remains authoritative.`, 'warning');
+  }
   // Phase 2.3: per-session context-fitness state for the build-gate backstop.
   const tracker = createDepthTracker();
   // Phase 2.4/2.5: restore-loop-guard state for the file.edited watcher.
@@ -87,7 +105,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   const deny = async (message) => {
     if (advisoryOnly) {
       // Explicit operator downgrade: surface loudly without claiming to block.
-      await notify(`${message} [ADVISORY — ADLC_ALLOW_ADVISORY_HOOKS=1; the CI rail-freeze gate remains authoritative]`, 'warning');
+      await notify(`${message} [ADVISORY — ${advisorySource}; the CI rail-freeze gate remains authoritative]`, 'warning');
       return;
     }
     // Enforcing (default): notify fire-and-forget, then throw to abort the tool.

@@ -84,3 +84,49 @@ test('ungatedTools option exempts a benign no-target tool that would otherwise f
     await relaxed['tool.execute.before']({ tool: 'symbols_index', sessionID: 's', callID: 'c' }, { args: { query: 'x' } });
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });
+
+// ---- provenance + load-time visibility of option-sourced weakenings ----
+test('advisory toast cites the plugin option (not a phantom env var) when the tuple caused the downgrade', async () => {
+  const dir = railedRepo();
+  const errors = [];
+  const orig = console.error;
+  console.error = (m) => errors.push(String(m));
+  try {
+    await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_ALLOW_ADVISORY_HOOKS: undefined }, async () => {
+      const hooks = await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true });
+      await hooks['tool.execute.before']({ tool: 'edit', sessionID: 's', callID: 'c' }, { args: { filePath: 'test/x.mjs' } });
+    });
+    const advisory = errors.find((m) => m.includes('[ADVISORY'));
+    assert.ok(advisory, 'advisory notice emitted');
+    assert.match(advisory, /plugin option advisoryHooks:true/);
+    assert.ok(!advisory.includes('ADLC_ALLOW_ADVISORY_HOOKS=1'), 'does not cite an env var nobody set');
+  } finally {
+    console.error = orig;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('option-sourced weakenings are announced ONCE at plugin load (incl. the otherwise-silent ungatedTools)', async () => {
+  const dir = railedRepo();
+  const errors = [];
+  const orig = console.error;
+  console.error = (m) => errors.push(String(m));
+  try {
+    await withEnv({ ADLC_ALLOW_ADVISORY_HOOKS: undefined, ADLC_UNGATED_TOOLS: undefined }, async () => {
+      await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true, ungatedTools: ['symbols_index'] });
+    });
+    const loadNotice = errors.find((m) => m.includes('weaken enforcement'));
+    assert.ok(loadNotice, 'load-time weakening notice emitted');
+    assert.match(loadNotice, /advisoryHooks:true/);
+    assert.match(loadNotice, /symbols_index/);
+    // no notice when the same knobs come from REAL env vars (operator's own doing)
+    errors.length = 0;
+    await withEnv({ ADLC_ALLOW_ADVISORY_HOOKS: '1', ADLC_UNGATED_TOOLS: 'symbols_index' }, async () => {
+      await adlcRailsGuard({ worktree: dir }, {});
+    });
+    assert.ok(!errors.some((m) => m.includes('weaken enforcement')), 'env-sourced knobs are not re-announced');
+  } finally {
+    console.error = orig;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
