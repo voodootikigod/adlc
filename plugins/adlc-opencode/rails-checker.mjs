@@ -289,6 +289,31 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
         }
       }
+      // adlc_gate (our own Phase 4.2 tool) forwards a NESTED CLI argv in
+      // args.args that extractTargets never sees — a gate invocation like
+      // gate-manifest record --dir <railed-path> would otherwise ride the
+      // ungated name straight past the rails. Scan every nested token (and
+      // --flag=value payloads) against the rails; deny on any hit, for every
+      // gate — a rare legit rail-reading invocation can use the CLI directly,
+      // where the CI diff gate still backstops it.
+      if (name === 'adlc_gate') {
+        const nested = Array.isArray(args?.args) ? args.args : [];
+        for (const raw of nested) {
+          if (typeof raw !== 'string') continue;
+          let token = raw.trim();
+          if (!token) continue;
+          if (token.startsWith('-')) {
+            const eq = token.indexOf('=');
+            if (eq === -1) continue; // bare flag; its value arrives as the next token
+            token = token.slice(eq + 1).trim();
+            if (!token) continue;
+          }
+          const hit = railHit(token, force.rails, root);
+          if (hit) {
+            return { decision: 'deny', reason: `adlc_gate nested argument "${raw}" resolves to frozen rail "${hit}" (active ticket ${force.ticketId}) — run the gate against non-rail paths, or use the CLI where the CI diff gate applies` };
+          }
+        }
+      }
     }
     return { decision: 'allow', reason: `tool "${name}" is not gated in-session (CI diff gate covers it)` };
   }

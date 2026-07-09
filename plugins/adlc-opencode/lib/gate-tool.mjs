@@ -12,13 +12,15 @@ import { runGateKeyless, makeAsk } from './keyless-bridge.mjs';
 
 const GATE_SET = new Set(GATE_BINS);
 
-// Gates that call an LLM. In OpenCode these run keyless (--prompt-only routed to
-// the host model via the bridge); a plain CLI run of them here would need an API
+// Gates that IMPLEMENT --prompt-only (verified against each package's source —
+// see the membership test). In OpenCode these run keyless (--prompt-only routed
+// to the host model via the bridge); a plain CLI run of them would need an API
 // key, so the tool surfaces that distinction rather than failing opaquely.
+// Deliberately NOT here (no --prompt-only; they run as plain CLI gates):
+// merge-forecast, model-router, hollow-test, behavior-diff, skill-rot.
 export const LLM_BACKED_GATES = new Set([
-  'parallax', 'premortem', 'spec-lint', 'coldstart', 'merge-forecast',
-  'model-router', 'hollow-test', 'behavior-diff', 'review-calibration',
-  'consensus-fix', 'lesson-foundry', 'rejection-mining', 'gate-fuzzing', 'skill-rot',
+  'parallax', 'premortem', 'spec-lint', 'coldstart', 'consensus-fix',
+  'lesson-foundry', 'rejection-mining', 'gate-fuzzing', 'review-calibration',
 ]);
 
 /**
@@ -88,6 +90,10 @@ export async function runGateKeyless2({ gate, args = [], client, parentID, cwd =
       metadata: { gate, keyless: true, prompts: prompts.length, llmBacked: true },
     };
   } catch (err) {
+    // The gate itself rejected --prompt-only (set drift, or an upstream flag
+    // change): the gate is runnable, just not keyless — fall back to the plain
+    // CLI instead of reporting a failure for a working gate.
+    if (/--prompt-only exited/.test(String(err?.message ?? ''))) return null;
     return {
       title: `adlc_gate: ${gate} keyless run failed`,
       output: `Keyless dispatch of ${gate} failed: ${String(err?.message ?? err)}.`,

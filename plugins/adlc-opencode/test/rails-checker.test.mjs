@@ -487,3 +487,45 @@ test('l: unknown no-target tool is denied by default, allowed when operator-unga
     assert.equal(checkToolCall({ tool: 'symbols_index', args: { filePath: 'test/x.mjs' }, root: dir, env }).decision, 'deny');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- (p) P5 cross-model finding: adlc_gate nested argv must not bypass rails ----
+test('p: adlc_gate nested arg resolving to a frozen rail → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'gate-manifest', args: ['record', 'preflight', '--dir', 'test'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('p: adlc_gate --flag=value payload resolving to a rail → deny', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'flail-detector', args: ['--scope=test/x.mjs'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason, /frozen rail/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('p: adlc_gate with benign nested args (flags, non-rail tokens) → allow', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  const env = { ...ON, ADLC_TICKET: 'T1' };
+  try {
+    const r = checkToolCall({
+      tool: 'adlc_gate',
+      args: { gate: 'rails-guard', args: ['--ticket', 'T1', '--json', '--base', 'main'] },
+      root: dir, env,
+    });
+    assert.equal(r.decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

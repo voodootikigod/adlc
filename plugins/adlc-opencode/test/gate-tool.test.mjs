@@ -213,3 +213,53 @@ test('non-timeout session.prompt rejection → structured keyless-failed (never 
   assert.equal(r.metadata.error, 'keyless-failed');
   assert.match(r.output, /boom: provider 500/);
 });
+
+// ---- P5 cross-model finding: keyless set must equal the gates that IMPLEMENT --prompt-only ----
+
+test('every LLM_BACKED_GATES member actually implements --prompt-only (source-of-truth audit)', async () => {
+  // skill-rot (and merge-forecast, model-router, hollow-test, behavior-diff)
+  // reject --prompt-only with ERR_PARSE_ARGS_UNKNOWN_OPTION; routing them
+  // keyless made a working gate fail. Ground the set in each package's source.
+  const { readdirSync, readFileSync: rf, existsSync } = await import('node:fs');
+  const pkgRoot = new URL('../../../packages/', import.meta.url).pathname;
+  for (const gate of LLM_BACKED_GATES) {
+    const dir = join(pkgRoot, gate);
+    assert.ok(existsSync(dir), `packages/${gate} exists`);
+    const sources = [];
+    for (const sub of ['bin', 'lib']) {
+      const d = join(dir, sub);
+      if (!existsSync(d)) continue;
+      for (const f of readdirSync(d)) if (f.endsWith('.mjs')) sources.push(rf(join(d, f), 'utf8'));
+    }
+    assert.ok(sources.some((s) => s.includes('prompt-only')), `packages/${gate} implements --prompt-only`);
+  }
+});
+
+test('a gate rejecting --prompt-only falls back to the plain CLI, not keyless-failed', async () => {
+  const client = mockSessionClient('unused');
+  const calls = [];
+  const spawnImpl = (_bin, args) => {
+    calls.push(args);
+    if (args.includes('--prompt-only')) return { status: 1, stderr: 'ERR_PARSE_ARGS_UNKNOWN_OPTION: --prompt-only' };
+    return { status: 0, stdout: 'gate ran via CLI' };
+  };
+  // force the keyless path with a gate name in the set, whose CLI rejects the flag
+  const def = buildGateTool(fakeSchema, { root: '/p', client, spawnImpl });
+  const r = await def.adlc_gate.execute({ gate: 'spec-lint' }, { sessionID: 'parent' });
+  assert.notEqual(r.metadata.error, 'keyless-failed', 'fell back instead of failing');
+  assert.equal(r.metadata.exitCode, 0);
+  assert.match(r.output, /gate ran via CLI/);
+  assert.equal(calls.length, 2, 'prompt-only attempt then CLI fallback');
+});
+
+test('non-keyless gate (skill-rot) with a client runs the plain CLI, never --prompt-only', async () => {
+  const client = mockSessionClient('unused');
+  const spawnImpl = (_bin, args) => {
+    assert.ok(!args.includes('--prompt-only'), 'skill-rot must not be routed keyless');
+    return { status: 0, stdout: 'rot report' };
+  };
+  const def = buildGateTool(fakeSchema, { client, spawnImpl });
+  const r = await def.adlc_gate.execute({ gate: 'skill-rot' }, { sessionID: 'parent' });
+  assert.equal(client.calls.create, 0, 'no child session');
+  assert.equal(r.metadata.exitCode, 0);
+});
