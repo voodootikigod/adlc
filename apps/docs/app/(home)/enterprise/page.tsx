@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { MarketingSection } from '@/components/marketing/section';
 import { GateBadge } from '@/components/marketing/gate-badge';
 import { EvidenceTrail } from '@/components/marketing/evidence-trail';
+import { ContactForm } from './contact-form';
 
 export const metadata: Metadata = {
   title: 'ADLC for Enterprise',
@@ -58,15 +59,21 @@ export default function EnterprisePage() {
       <MarketingSection kicker="Talk to us" title="Doing agentic development right?">
         <p className="max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
           If you&apos;re rolling agentic development out across an organization and want it
-          gated, auditable, and defensible, get in touch.
+          gated, auditable, and defensible, get in touch. Tell us what you&apos;re rolling out
+          and we&apos;ll reply within a couple of business days. Prefer email? Reach us directly
+          at{' '}
+          <a
+            href="mailto:chris@voodootikigod.com?subject=ADLC%20enterprise"
+            className="underline"
+            style={{ color: '#4fb4d8' }}
+          >
+            chris@voodootikigod.com
+          </a>
+          .
         </p>
-        <a
-          href="mailto:chris@voodootikigod.com?subject=ADLC%20enterprise"
-          className="mt-6 inline-block rounded-md px-5 py-2.5 font-medium transition-opacity hover:opacity-90"
-          style={{ background: '#4fb4d8', color: '#1c1d21' }}
-        >
-          chris@voodootikigod.com
-        </a>
+        <div className="mt-8">
+          <ContactForm />
+        </div>
       </MarketingSection>
     </main>
   );

@@ -215,13 +215,16 @@ export default function HomePage() {
 
       {/* 8 — Theory footer band */}
       <div className="border-t" style={{ borderColor: '#3f4044' }}>
-        <div className="mx-auto max-w-5xl px-6 py-12">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-12">
           <p className="text-sm" style={{ color: 'var(--mk-muted)' }}>
             ADLC began as an essay series.{' '}
             <a href={`${SERIES_BASE}/series/adlc`} style={{ color: '#4fb4d8' }}>
               Read the original theory at voodootikigod.com ↗
             </a>
           </p>
+          <a href="/privacy" className="text-sm underline" style={{ color: 'var(--mk-muted)' }}>
+            Privacy
+          </a>
         </div>
       </div>
     </main>
