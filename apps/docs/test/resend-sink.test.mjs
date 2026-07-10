@@ -31,7 +31,7 @@ test('POSTs to the Resend emails endpoint with the API key and configured from/t
   const sink = createResendSink({
     apiKey: KEY,
     from: 'ADLC <noreply@agenticlifecycle.ai>',
-    to: 'chris@voodootikigod.com',
+    to: 'help@agenticlifecycle.ai',
     fetch: fakeFetch(cap),
   });
   const res = await sink.submit(LEAD);
@@ -41,7 +41,7 @@ test('POSTs to the Resend emails endpoint with the API key and configured from/t
   assert.equal(cap.opts.headers.Authorization, `Bearer ${KEY}`);
   const body = JSON.parse(cap.opts.body);
   assert.equal(body.from, 'ADLC <noreply@agenticlifecycle.ai>');
-  assert.deepEqual(body.to, ['chris@voodootikigod.com']);
+  assert.deepEqual(body.to, ['help@agenticlifecycle.ai']);
 });
 
 test('includes the lead name, email, and message in the email body', async () => {
@@ -49,7 +49,7 @@ test('includes the lead name, email, and message in the email body', async () =>
   const sink = createResendSink({
     apiKey: KEY,
     from: 'ADLC <noreply@agenticlifecycle.ai>',
-    to: 'chris@voodootikigod.com',
+    to: 'help@agenticlifecycle.ai',
     fetch: fakeFetch(cap),
   });
   await sink.submit(LEAD);
@@ -65,7 +65,7 @@ test('throws sink_failed on a non-2xx response, key never in the error', async (
   const sink = createResendSink({
     apiKey: KEY,
     from: 'ADLC <noreply@agenticlifecycle.ai>',
-    to: 'chris@voodootikigod.com',
+    to: 'help@agenticlifecycle.ai',
     fetch: fakeFetch(cap, { status: 403 }),
   });
   await assert.rejects(

@@ -96,11 +96,11 @@ export default function PrivacyPage() {
           <p className="mt-2">
             You can ask us to access, correct, or delete the information you sent at any time. Email{' '}
             <a
-              href="mailto:chris@voodootikigod.com?subject=Privacy%20request"
+              href="mailto:help@agenticlifecycle.ai?subject=Privacy%20request"
               className="underline"
               style={{ color: '#4fb4d8' }}
             >
-              chris@voodootikigod.com
+              help@agenticlifecycle.ai
             </a>{' '}
             and we will take care of it.
           </p>

@@ -63,11 +63,11 @@ export default function EnterprisePage() {
           and we&apos;ll reply within a couple of business days. Prefer email? Reach us directly
           at{' '}
           <a
-            href="mailto:chris@voodootikigod.com?subject=ADLC%20enterprise"
+            href="mailto:help@agenticlifecycle.ai?subject=ADLC%20enterprise"
             className="underline"
             style={{ color: '#4fb4d8' }}
           >
-            chris@voodootikigod.com
+            help@agenticlifecycle.ai
           </a>
           .
         </p>

@@ -10,7 +10,7 @@ const enterpriseSrc = readFileSync(
 );
 
 test('the enterprise page still contains the mailto fallback', () => {
-  assert.match(enterpriseSrc, /mailto:chris@voodootikigod\.com/);
+  assert.match(enterpriseSrc, /mailto:help@agenticlifecycle\.ai/);
 });
 
 test('the enterprise page renders the contact form', () => {

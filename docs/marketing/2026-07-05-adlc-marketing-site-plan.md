@@ -1773,11 +1773,11 @@ export default function EnterprisePage() {
           gated, auditable, and defensible — get in touch.
         </p>
         <a
-          href="mailto:chris@voodootikigod.com?subject=ADLC%20enterprise"
+          href="mailto:help@agenticlifecycle.ai?subject=ADLC%20enterprise"
           className="mt-6 inline-block rounded-md px-5 py-2.5 font-medium"
           style={{ background: '#4fb4d8', color: '#1c1d21' }}
         >
-          chris@voodootikigod.com
+          help@agenticlifecycle.ai
         </a>
       </MarketingSection>
     </main>

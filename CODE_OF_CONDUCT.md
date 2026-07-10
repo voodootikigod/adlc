@@ -33,7 +33,7 @@ as its full code of conduct, including its detailed standards and enforcement gu
 Please refer to that document for the complete text.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to
-the project maintainers at **chris@voodootikigod.com**. All complaints will be reviewed
+the project maintainers at **help@agenticlifecycle.ai**. All complaints will be reviewed
 and investigated promptly and fairly. Maintainers are obligated to respect the privacy
 and security of the reporter of any incident.
 

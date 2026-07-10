@@ -11,7 +11,7 @@ the supported version. Please upgrade to the latest release before reporting an 
 
 Report privately using GitHub's
 [private vulnerability reporting](https://github.com/voodootikigod/adlc/security/advisories/new),
-or email **chris@voodootikigod.com** with the details.
+or email **help@agenticlifecycle.ai** with the details.
 
 Please include:
 

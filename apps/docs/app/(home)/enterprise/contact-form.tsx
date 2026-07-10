@@ -5,7 +5,7 @@ import { HONEYPOT_FIELD } from '@/lib/contact/handle.mjs';
 
 type Status = 'idle' | 'submitting' | 'success' | 'error';
 
-const MAILTO = 'mailto:chris@voodootikigod.com?subject=ADLC%20enterprise';
+const MAILTO = 'mailto:help@agenticlifecycle.ai?subject=ADLC%20enterprise';
 
 export function ContactForm() {
   const [status, setStatus] = useState<Status>('idle');
@@ -180,7 +180,7 @@ export function ContactForm() {
         <span className="text-sm" style={{ color: 'var(--mk-muted)' }}>
           Prefer email?{' '}
           <a href={MAILTO} className="underline" style={{ color: '#4fb4d8' }}>
-            chris@voodootikigod.com
+            help@agenticlifecycle.ai
           </a>
         </span>
       </div>

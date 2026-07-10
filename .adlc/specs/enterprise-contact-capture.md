@@ -128,7 +128,7 @@ policy.
   component and the enterprise page + footer contain a `/privacy` link.
 - **AC10: `/enterprise` keeps a working `mailto:` fallback alongside the form.**
   VERIFY: `node --test test/enterprise-contact.test.mjs` — asserts the page
-  source still contains the `mailto:chris@voodootikigod.com` href.
+  source still contains the `mailto:help@agenticlifecycle.ai` href.
 - **AC11: `.env.example` documents every new env var with no real values.**
   VERIFY: `node --test test/env-example.test.mjs` — asserts each var name is
   present and no value looks like a real token (no `sk-`, no long hex/base64).
