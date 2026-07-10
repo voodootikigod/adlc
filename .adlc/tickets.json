@@ -561,16 +561,7 @@
         "scripts/pi-live-prosecute.mjs",
         ".github/workflows/ci.yml"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "docs/ci/**"
-      ],
+      "rails": [],
       "edges": [
         {
           "to": "T27",
@@ -588,17 +579,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "scripts/pi-live-prosecute.mjs",
-        "docs/ci/**"
-      ],
+      "rails": [],
       "edges": [
         {
           "to": "T28",
@@ -616,17 +597,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": [
-        "plugins/adlc-opencode/**",
-        "plugins/adlc-codex/**",
-        "plugins/adlc-claude-code/**",
-        "plugins/adlc-cursor/**",
-        "plugins/adlc-antigravity/**",
-        "packages/**",
-        "scripts/pi-live-deny.mjs",
-        "scripts/pi-live-prosecute.mjs",
-        "docs/ci/**"
-      ],
+      "rails": [],
       "edges": [],
       "duration": 4,
       "category": "feature",
