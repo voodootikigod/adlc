@@ -48,9 +48,20 @@ test('buildObjectPayload emits the data-wrapped object shape', () => {
   });
 });
 
-test('buildAttributePayload includes is_unique only when set', () => {
+test('buildAttributePayload emits the full Attio-required shape', () => {
+  // Attio requires title, description, api_slug, type, is_required, is_unique,
+  // is_multiselect, and config on every create — a partial body is a 400.
   assert.deepEqual(buildAttributePayload({ api_slug: 'name', title: 'Name', type: 'text', is_required: true }), {
-    data: { title: 'Name', api_slug: 'name', type: 'text', is_required: true },
+    data: {
+      title: 'Name',
+      description: null,
+      api_slug: 'name',
+      type: 'text',
+      is_required: true,
+      is_unique: false,
+      is_multiselect: false,
+      config: {},
+    },
   });
   const email = buildAttributePayload({ api_slug: 'email', title: 'Email', type: 'text', is_required: true, is_unique: true });
   assert.equal(email.data.is_unique, true);

@@ -11,7 +11,7 @@
 // Verified against the Attio v2 REST API:
 //   POST /v2/objects                      { data: { api_slug, singular_noun, plural_noun } }
 //   GET  /v2/objects
-//   POST /v2/objects/{object}/attributes  { data: { title, api_slug, type, is_required, is_unique } }
+//   POST /v2/objects/{object}/attributes  { data: { title, description, api_slug, type, is_required, is_unique, is_multiselect, config } }
 //   GET  /v2/objects/{object}/attributes
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -51,13 +51,20 @@ export function buildObjectPayload(obj = OBJECT) {
 }
 
 export function buildAttributePayload(attr) {
+  // Attio's create-attribute endpoint requires the FULL shape — title,
+  // description, api_slug, type, is_required, is_unique, is_multiselect, and
+  // config are all mandatory. Omitting is_multiselect/config yields a 400
+  // "Body payload validation error", so always send them.
   const data = {
     title: attr.title,
+    description: attr.description ?? null,
     api_slug: attr.api_slug,
     type: attr.type,
     is_required: !!attr.is_required,
+    is_unique: !!attr.is_unique,
+    is_multiselect: false,
+    config: {},
   };
-  if (attr.is_unique) data.is_unique = true;
   return { data };
 }
 
