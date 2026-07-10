@@ -267,8 +267,40 @@ try {
 }
 const baseTickets = validateTicketsEnvelope(data, 'base');
 
+// T36 — rails completion lifecycle. A completed ticket's build-time rails should
+// stop freezing sibling paths automatically. "Completed" is derived ONLY from
+// TRUSTED, forge-resistant evidence in the BASE manifest: an entry whose phase
+// kind (`type ?? gate`, matching the runner's own entryType) is `p5-complete`
+// (prosecuted) or `p6-acceptance-packet` (human-accepted), bound to the ticket
+// id. This is read from `git show <base>:.adlc/manifest.jsonl` — the base ref,
+// NEVER HEAD — so a PR cannot forge completion to unfreeze its own rails
+// mid-build (the manifest is also append-only and cannot be created-with-
+// evidence in a PR; see the checks below). FAIL CLOSED: any read/parse failure,
+// or an absent/ambiguous entry, leaves the ticket FROZEN (empty completed set =
+// the pre-T36 union). Only a well-formed completion entry lifts a ticket.
+const COMPLETION_KINDS = new Set(['p5-complete', 'p6-acceptance-packet']);
+const completedTicketIds = new Set();
+{
+  // Base-ref only. `git show` a missing/again-absent manifest returns non-zero →
+  // no completion evidence → nothing lifts (safe). Never read HEAD here.
+  const baseManifestForCompletion = git(['show', `${base}:.adlc/manifest.jsonl`], 'git show base manifest (completion)');
+  if (baseManifestForCompletion.status === 0) {
+    for (const line of baseManifestForCompletion.stdout.split('\n')) {
+      const s = line.trim();
+      if (!s) continue;
+      let entry;
+      try { entry = JSON.parse(s); } catch { continue; } // malformed line ≠ completion (fail closed)
+      const kind = entry?.type ?? entry?.gate;
+      if (entry && typeof entry.ticket === 'string' && COMPLETION_KINDS.has(kind)) {
+        completedTicketIds.add(entry.ticket);
+      }
+    }
+  }
+}
+
 const rails = [];
 for (const t of baseTickets) {
+  if (completedTicketIds.has(t.id)) continue; // done → its rails auto-expire (T36)
   for (const r of t.rails ?? []) {
     rails.push(r);
   }
