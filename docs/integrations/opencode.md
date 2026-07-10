@@ -330,6 +330,27 @@ in-band targets so GPT-5-class models (where apply_patch is the ONLY mutator)
 stay path-transparent. The shell classifier segment-splits chained commands so a
 read-only prefix can't shadow a later mutator.
 
+## Maintenance
+
+Assumptions decay after model or repo drift. Two parity pieces (T34) handle it:
+
+- **`/adlc-maintain`** runs the deterministic, keyless decay checks on demand:
+  `adlc skill-rot .opencode/skills` (C10 — stale skill validation metadata),
+  `adlc model-ratchet --dry-run` (C12 — the highest-churn files to re-prosecute),
+  and `adlc ticket-prune` (stale shipped tickets, dry-run).
+- **`prosecutor` meta-agent** (`@prosecutor`, the 7th agent alongside the five
+  lens agents + verifier) runs the three deterministic review-evidence gates over
+  a change — `adlc hollow-test`, `adlc behavior-diff`, `adlc review-calibration` —
+  and reports an evidence-backed verdict. It is complementary to the multi-lens
+  `adlc_prosecute` loop: mechanical gates vs. independent model judgment.
+- **Weekly cron**: deploy `docs/ci/adlc-maintenance.yml` — it scans `.opencode/skills`
+  among the skill roots and runs the deterministic checks.
+- **Gate-fuzzing calibration is NOT run automatically.** It is both LLM-backed
+  and requires an OS sandbox (`bwrap`/`sandbox-exec`), so neither `/adlc-maintain`
+  (developer host) nor the deterministic cron runs it. Exercising gate defeats
+  after drift needs a **separate scheduled job that supplies both a model and a
+  sandbox** — a deliberate, opt-in setup, not something these parity pieces cover.
+
 ## Boundary
 
 - `.adlc/` is the runtime state area for tickets, manifests, and gate evidence.
