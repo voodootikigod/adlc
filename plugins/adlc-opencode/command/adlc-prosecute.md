@@ -7,6 +7,15 @@ description: Prosecute a change before merge (P5) — fan out the 5 lenses, veri
 Prosecute the change for the active ticket. Requires a clean G4 build
 (`/adlc-verify-build`). Target: **$ARGUMENTS** (default to the active ticket).
 
+## 0. Prefer the deterministic runner
+If the native **`adlc_prosecute`** tool is available, call it first —
+`adlc_prosecute({ base: "<base ref>" })`. It drives the entire fan-out → dedupe →
+verify → loop-until-dry protocol below in **first-party code** over isolated,
+**write-disabled** child sessions (lenses can read the diff, never mutate), and
+returns the confirmed findings + a ship/no-ship verdict deterministically. Report
+its result and skip to step 5. Only fall back to the manual prose protocol
+(steps 1–4) when the tool is unavailable (no session API / older host).
+
 ## 1. Fan out the lenses
 Invoke the five prosecution subagents independently, each on the change diff:
 `@prosecutor-correctness`, `@prosecutor-security`, `@prosecutor-contract`,

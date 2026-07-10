@@ -21,8 +21,18 @@ import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
 import { createFlailTracker, flailMessage } from './lib/flail.mjs';
+import { buildGateTool } from './lib/gate-tool.mjs';
+import { buildProsecuteTool } from './lib/prosecute-tool.mjs';
+import { buildCompactionContext, decideAutocontinue } from './lib/compaction.mjs';
+import { checkCommandOrder, checkCommandTamper } from './lib/command-gate.mjs';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
+
+// The plugin package root (…/plugins/adlc-opencode), used to byte-compare a
+// deployed command against its packaged source for the tamper advisory.
+const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Surface a message to the operator. Best-effort on every channel, never
@@ -46,12 +56,54 @@ function makeNotify(client) {
   };
 }
 
+/**
+ * Map the plugin-options tuple (opencode.json: `[["@adlc/opencode-package",
+ * {...}]]`, delivered as the plugin function's 2nd argument — @opencode-ai/
+ * plugin `Plugin = (input, options?) => Hooks`) onto the env knobs the hooks
+ * already read. Env vars WIN over options: an explicitly set variable is a
+ * per-invocation operator decision, the tuple is the per-repo default.
+ * Deliberately NOT mapped: the audited bypasses (ADLC_RAILS_BYPASS,
+ * ADLC_BUILD_GATE_BYPASS) — those must stay per-invocation, never repo config.
+ */
+export function optionsToEnv(options = {}) {
+  const env = {};
+  if (options.advisoryHooks === true) env.ADLC_ALLOW_ADVISORY_HOOKS = '1';
+  if (Array.isArray(options.ungatedTools) && options.ungatedTools.length) {
+    env.ADLC_UNGATED_TOOLS = options.ungatedTools.map(String).join(',');
+  } else if (typeof options.ungatedTools === 'string' && options.ungatedTools) {
+    env.ADLC_UNGATED_TOOLS = options.ungatedTools;
+  }
+  if (options.suppressionEnforcement === true) env.ADLC_SUPPRESSION_ENFORCEMENT = '1';
+  if (options.scopeEnforcement === true) env.ADLC_SCOPE_ENFORCEMENT = '1';
+  return env;
+}
+
 /** @type {Plugin} */
-export const adlcRailsGuard = async ({ directory, worktree, project, client } = {}) => {
+export const adlcRailsGuard = async ({ directory, worktree, project, client } = {}, options = {}) => {
   // The repo root used to locate .adlc/ and to canonicalize edited paths.
   const root = worktree ?? directory ?? project?.worktree ?? process.cwd();
-  const advisoryOnly = process.env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
+  // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
+  const optEnv = optionsToEnv(options);
+  const env = { ...optEnv, ...process.env };
+  const advisoryOnly = env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
+  // Attribute the downgrade to its ACTUAL source: an operator grepping their
+  // environment for a cited env var they never set is a dead end.
+  const advisorySource = process.env.ADLC_ALLOW_ADVISORY_HOOKS === '1'
+    ? 'ADLC_ALLOW_ADVISORY_HOOKS=1'
+    : 'plugin option advisoryHooks:true in opencode.json';
   const notify = makeNotify(client);
+  // Repo config weakening enforcement must be visible ONCE at load, not only
+  // per-event (advisoryHooks toasts per deny; ungatedTools would otherwise be
+  // silent). Fire-and-forget — plugin load must not block on the TUI.
+  const optionWeakenings = [
+    ...(optEnv.ADLC_ALLOW_ADVISORY_HOOKS && process.env.ADLC_ALLOW_ADVISORY_HOOKS === undefined
+      ? ['advisoryHooks:true (rails guard downgraded to advisory)'] : []),
+    ...(optEnv.ADLC_UNGATED_TOOLS && process.env.ADLC_UNGATED_TOOLS === undefined
+      ? [`ungatedTools:[${optEnv.ADLC_UNGATED_TOOLS}] (exempted from gating; still spoof-guarded)`] : []),
+  ];
+  if (optionWeakenings.length) {
+    notify(`ADLC: opencode.json plugin options weaken enforcement — ${optionWeakenings.join('; ')}. The CI rail-freeze gate remains authoritative.`, 'warning');
+  }
   // Phase 2.3: per-session context-fitness state for the build-gate backstop.
   const tracker = createDepthTracker();
   // Phase 2.4/2.5: restore-loop-guard state for the file.edited watcher.
@@ -62,7 +114,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   const deny = async (message) => {
     if (advisoryOnly) {
       // Explicit operator downgrade: surface loudly without claiming to block.
-      await notify(`${message} [ADVISORY — ADLC_ALLOW_ADVISORY_HOOKS=1; the CI rail-freeze gate remains authoritative]`, 'warning');
+      await notify(`${message} [ADVISORY — ${advisorySource}; the CI rail-freeze gate remains authoritative]`, 'warning');
       return;
     }
     // Enforcing (default): notify fire-and-forget, then throw to abort the tool.
@@ -70,10 +122,41 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     throw new Error(message);
   };
 
+  // The EFFECTIVE ungated set includes operator additions (env or plugin
+  // option) — the build-gate backstop must honor the same set as the rails
+  // guard, or a configured ungated tool gets denied exactly in the degraded
+  // high-risk case the option exists for (T30 review round-1 finding).
+  const extraUngated = String(env.ADLC_UNGATED_TOOLS ?? '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   const isStructuredMutator = (name) =>
-    !READONLY_TOOLS.includes(name) && !UNGATED_TOOLS.includes(name) && !SHELL_TOOLS.includes(name);
+    !READONLY_TOOLS.includes(name) && !UNGATED_TOOLS.includes(name) &&
+    !SHELL_TOOLS.includes(name) && !extraUngated.includes(name);
+
+  // Phase 4.2: register the native `adlc_gate` tool the model can call directly.
+  // Its args need the host's zod (`tool.schema` from @opencode-ai/plugin — a peer
+  // dep at runtime inside opencode, also a devDependency so unit tests exercise
+  // the real schema). Import lazily; if it is unavailable or shape-mismatched the
+  // tool is not registered, and that degradation must be VISIBLE — a silent drop
+  // would present as "the model never calls gates". Registration+execute is
+  // proven end-to-end by scripts/opencode-live-tool.mjs against a real binary.
+  let toolHook;
+  try {
+    const { tool } = await import('@opencode-ai/plugin');
+    if (tool?.schema) {
+      // adlc_gate (Phase 4.2) + adlc_prosecute (T33: deterministic P5 runner).
+      toolHook = {
+        ...buildGateTool(tool.schema, { root, client }),
+        ...buildProsecuteTool(tool.schema, { root, pkgRoot: PKG_ROOT, client }),
+      };
+    } else {
+      console.error('[adlc] @opencode-ai/plugin exposes no tool.schema — adlc_gate/adlc_prosecute tools NOT registered');
+    }
+  } catch (err) {
+    console.error(`[adlc] native tools NOT registered (@opencode-ai/plugin unavailable: ${err?.message ?? err})`);
+  }
 
   return {
+    ...(toolHook ? { tool: toolHook } : {}),
     'tool.execute.before': async (input, output) => {
       const tool = input?.tool;
       if (!tool) return;
@@ -82,7 +165,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // fallback is tolerance for older hosts, not the primary read.
       const args = output?.args ?? input?.args ?? {};
 
-      const verdict = checkToolCall({ tool, args, root, env: process.env });
+      const verdict = checkToolCall({ tool, args, root, env });
       if (verdict.decision === 'deny') {
         return deny(`ADLC rails-guard: blocked ${tool} — ${verdict.reason}`);
       }
@@ -90,7 +173,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // Phase 2.3 build-gate backstop: a structured mutation on a HIGH-RISK
       // ticket in a context-degraded session is denied even off-rails.
       if (isStructuredMutator(String(tool).toLowerCase())) {
-        const gate = checkBuildGate({ sessionID: input?.sessionID, tracker, root, env: process.env });
+        const gate = checkBuildGate({ sessionID: input?.sessionID, tracker, root, env });
         if (gate.decision === 'deny') {
           return deny(`ADLC build-gate: blocked ${tool} — ${gate.reason}`);
         }
@@ -115,7 +198,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
           const { actions } = handleFileEdited({
             file: event?.properties?.file,
             root,
-            env: process.env,
+            env,
             state: watcherState,
           });
           for (const a of actions) {
@@ -125,17 +208,22 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       } catch { /* advisory: swallow — the watcher must never break the host */ }
     },
 
-    // Phase 2.1 — DORMANT deny lever. At opencode 1.17.13 `permission.ask` is
-    // defined in the Hooks interface but never dispatched (upstream #7006);
-    // the enforcing control is the tool.execute.before throw above. This
-    // handler exists so rail denial extends to permission prompts the moment
-    // upstream wires the hook. Tolerant of both documented Permission shapes
-    // (V1 {type, pattern} and V2 {action, resources[]}); never throws.
+    // Phase 2.1 — DORMANT deny lever. `permission.ask` is defined in the Hooks
+    // interface but never dispatched — RE-VERIFIED FROM SOURCE at tags v1.17.17
+    // AND v1.17.18 (2026-07-09): the string appears only in the Hooks type at
+    // packages/plugin/src/index.ts; it is never passed to plugin.trigger(), and
+    // the real permission path (packages/opencode/src/permission/index.ts)
+    // publishes the `permission.asked` event without invoking any plugin hook.
+    // Upstream anomalyco/opencode#7006 remains OPEN. The enforcing control is the
+    // tool.execute.before throw above; this handler exists so rail denial extends
+    // to permission prompts the moment upstream wires it. Tolerant of both
+    // documented Permission shapes (V1 {type, pattern} and V2 {action,
+    // resources[]}); never throws.
     'permission.ask': async (input, output) => {
       try {
         const kind = String(input?.type ?? input?.action ?? '').toLowerCase();
         if (READONLY_TOOLS.includes(kind)) return;
-        const force = resolveRailsInForce(root, process.env);
+        const force = resolveRailsInForce(root, env);
         if (!force.active) return;
         if (force.conflict) { output.status = 'deny'; return; }
         const raw = [
@@ -178,7 +266,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     // output.system in place (the host reads that array); never throws.
     'experimental.chat.system.transform': async (_input, output) => {
       try {
-        const block = buildSystemContext(root, process.env);
+        const block = buildSystemContext(root, env);
         if (block && Array.isArray(output?.system)) output.system.push(block);
       } catch { /* advisory: swallow — never break prompt assembly */ }
     },
@@ -190,8 +278,51 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       try {
         const tool = String(input?.toolID ?? '').toLowerCase();
         if (!['edit', 'write', 'apply_patch'].includes(tool)) return;
-        const notice = buildToolRailNotice(root, process.env);
+        const notice = buildToolRailNotice(root, env);
         if (notice && typeof output?.description === 'string') output.description += notice;
+      } catch { /* advisory: swallow */ }
+    },
+
+    // T32.1 — keep ADLC enforcement context alive across compaction. Append the
+    // active ticket/rails/scope block to the compaction prompt so summarization
+    // can't quietly drop it (context-rot defense). Never throws.
+    'experimental.session.compacting': async (_input, output) => {
+      try {
+        const extra = buildCompactionContext(root, env);
+        if (extra.length && Array.isArray(output?.context)) output.context.push(...extra);
+      } catch { /* advisory: swallow — never break compaction */ }
+    },
+
+    // T32.2 — a context-degraded high-risk session must not silently auto-continue
+    // past compaction. The autocontinue hook firing IS the compaction-completed
+    // signal, so mark the session compacted, then reuse the build-gate predicate:
+    // when it would deny structured edits, force a human turn (enabled=false).
+    // The audited ADLC_BUILD_GATE_BYPASS=1 keeps autocontinue on (override logged).
+    'experimental.compaction.autocontinue': async (input, output) => {
+      try {
+        const sessionID = input?.sessionID;
+        tracker.markCompacted(sessionID);
+        const d = decideAutocontinue({ sessionID, tracker, root, env });
+        if (typeof output?.enabled === 'boolean') output.enabled = d.enabled;
+        if (!d.enabled) {
+          await notify(`ADLC: auto-continue suppressed after compaction — ${d.reason}. Review the summarized context before proceeding.`, 'warning');
+        } else if (d.overridden) {
+          await notify('ADLC build-gate: auto-continue kept after compaction via audited override.', 'warning');
+        }
+      } catch { /* advisory: on any error leave the host default (enabled) */ }
+    },
+
+    // T32.3 — advisory checks when an ADLC slash-command runs. Never blocks
+    // (commands are human-invoked): (a) lifecycle-order — a phase invoked before
+    // its prerequisite phase left evidence; (b) tamper — the command's deployed
+    // markdown differs from the packaged source. Both surface as warning toasts.
+    'command.execute.before': async (input) => {
+      try {
+        const command = input?.command;
+        const order = checkCommandOrder(command, root, env);
+        if (order.warn) await notify(order.warn, 'warning');
+        const tamper = checkCommandTamper(command, PKG_ROOT, root);
+        if (tamper.warn) await notify(tamper.warn, 'warning');
       } catch { /* advisory: swallow */ }
     },
 
@@ -201,11 +332,11 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
     // persistent JSX statusline slot is deferred — see docs).
     'session.created': async () => {
       try {
-        const line = buildStatusLine(root, process.env);
+        const line = buildStatusLine(root, env);
         if (line) await notify(line, 'info');
       } catch { /* advisory: swallow */ }
       try {
-        const { skipped, warnings } = checkPreflight(root, { env: process.env });
+        const { skipped, warnings } = checkPreflight(root, { env });
         if (!skipped) for (const w of warnings) await notify(`ADLC preflight: ${w}`, 'warning');
       } catch { /* advisory: swallow */ }
     },
@@ -223,7 +354,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // no-LLM check that a risk-gated change has a recorded review. Advisory
       // only — session.idle has no blocking contract in OpenCode.
       try {
-        const { warning } = auditAdversarialReview(root, { env: process.env });
+        const { warning } = auditAdversarialReview(root, { env });
         if (warning) await notify(`ADLC adversarial-review audit: ${warning}`, 'warning');
       } catch { /* advisory: swallow */ }
 

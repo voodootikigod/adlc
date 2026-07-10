@@ -160,7 +160,35 @@ else {
     if (!new RegExp(`export (async )?function ${fn}\\b`).test(br)) fail(`keyless-bridge missing export ${fn}`);
   }
   if (!/--prompt-only/.test(br)) fail('keyless-bridge does not run gates in --prompt-only mode');
-  ok('keyless bridge present (extractPrompts/runGateKeyless/makeAsk, prompt-only)');
+  // Phase 4.1: makeAsk must use the real SDK (session.create/prompt), not the
+  // old fictional isolated-prompt extension.
+  if (!/session\.create/.test(br) || !/session\.prompt/.test(br)) fail('keyless-bridge makeAsk is not wired to the real SDK (session.create/prompt)');
+  else ok('Phase 4.1: keyless bridge wired to real SDK (session.create + session.prompt)');
+}
+
+// ---- Phase 4.2: native adlc_gate custom tool (formerly-dead keyless bridge now LIVE) ----
+{
+  const idx = read(indexPath);
+  if (!existsSync(join(PLUGIN, 'lib', 'gate-tool.mjs'))) fail('lib/gate-tool.mjs missing');
+  else {
+    const gt = read(join(PLUGIN, 'lib', 'gate-tool.mjs'));
+    if (!/export function buildGateTool\b/.test(gt)) fail('gate-tool missing buildGateTool export'); else ok('gate-tool: buildGateTool present');
+    // The keyless bridge is no longer dead code — gate-tool calls it for LLM gates.
+    if (!/from '\.\/keyless-bridge\.mjs'/.test(gt)) fail('gate-tool does not call the keyless bridge (it would stay dead code)'); else ok('Phase 4.2: adlc_gate calls the keyless bridge for LLM gates (bridge is LIVE)');
+  }
+  // T33: the deterministic P5 runner + adlc_prosecute tool.
+  if (!existsSync(join(PLUGIN, 'lib', 'prosecute-runner.mjs'))) fail('lib/prosecute-runner.mjs missing');
+  else {
+    const pr = read(join(PLUGIN, 'lib', 'prosecute-runner.mjs'));
+    if (!/export async function runProsecution\b/.test(pr)) fail('prosecute-runner missing runProsecution export'); else ok('T33: runProsecution (deterministic P5 loop) present');
+    if (!/lensToolsMap/.test(pr) || !/'\*': false/.test(pr)) fail('prosecute-runner lens sessions are not fail-closed (missing wildcard-deny allowlist)'); else ok('T33: lens child sessions are fail-closed (wildcard-deny-first allowlist)');
+  }
+  if (!existsSync(join(PLUGIN, 'lib', 'prosecute-tool.mjs')) || !/export function buildProsecuteTool\b/.test(read(join(PLUGIN, 'lib', 'prosecute-tool.mjs')))) fail('prosecute-tool missing buildProsecuteTool'); else ok('T33: adlc_prosecute tool present');
+  if (!/buildProsecuteTool/.test(idx)) fail('index.mjs does not register the adlc_prosecute tool'); else ok('T33: index.mjs registers adlc_prosecute alongside adlc_gate');
+  if (!/import\('@opencode-ai\/plugin'\)/.test(idx)) fail('index.mjs does not lazily import the plugin tool helper'); else ok('index.mjs registers the tool hook (lazy peer-dep import)');
+  if (!/tool: toolHook|\.\.\.\(toolHook/.test(idx)) fail('index.mjs does not expose the tool hook on the returned hooks'); else ok('index.mjs exposes the adlc_gate tool hook');
+  // AC: the live tool proof exists (runs a real opencode binary in CI).
+  if (!existsSync(join(ROOT, 'scripts', 'opencode-live-tool.mjs'))) fail('scripts/opencode-live-tool.mjs missing (AC: live adlc_gate + keyless proof)'); else ok('live adlc_gate + keyless proof script present');
 }
 
 if (!existsSync(join(PLUGIN, 'gate-bins.mjs'))) fail('gate-bins.mjs missing');
@@ -190,6 +218,68 @@ if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs
 // AC7 (live deny proof) runs separately — scripts/opencode-live-deny.mjs drives a
 // real opencode binary; CI runs it with --require. This smoke stays binary-free.
 console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-deny.mjs` (CI: --require).');
+
+// ---- T30: publishability + the one-command bootstrap (npx @adlc/opencode-package init) ----
+{
+  const pkg = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
+  if (pkg.private === true) fail('package is private — cannot publish to npm (T30)'); else ok('package is publishable (not private)');
+  if (pkg.publishConfig?.access !== 'public') fail('publishConfig.access must be public'); else ok('publishConfig.access=public');
+  if (!pkg.bin || !Object.values(pkg.bin).some((b) => b.includes('bin/cli.mjs'))) fail('bin entry for the npx bootstrap missing'); else ok('bin entry present');
+  // drive the bootstrap end-to-end in a throwaway dir (the npx path minus the registry)
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const tmp = mkdtempSync(join(tmpdir(), 'oc-smoke-init-'));
+  try {
+    execFileSync(process.execPath, [join(PLUGIN, 'bin', 'cli.mjs'), 'init', tmp], { stdio: 'pipe' });
+    const oc = JSON.parse(read(join(tmp, '.opencode', 'opencode.json')));
+    const entries = (oc.plugin ?? []).map((e) => (Array.isArray(e) ? e[0] : e));
+    const resolvable = entries.some((e) => e === '@adlc/opencode-package' ? false : existsSync(e));
+    if (!entries.length) fail('bootstrap registered no plugin entry');
+    else if (!resolvable && !entries.includes('@adlc/opencode-package')) fail(`bootstrap registered an unresolvable entry: ${entries}`);
+    else if (entries.includes('@adlc/opencode-package') && !String(PLUGIN).includes('node_modules')) fail('bootstrap from source must register the local path, not the npm name');
+    else ok('bootstrap registers a RESOLVABLE plugin entry');
+    if (!existsSync(join(tmp, '.adlc', 'config.json'))) fail('bootstrap did not create .adlc/config.json'); else ok('bootstrap creates .adlc/config.json');
+    if (!existsSync(join(tmp, '.opencode', 'commands', 'adlc-init.md'))) fail('bootstrap did not deploy commands'); else ok('bootstrap deploys commands');
+  } catch (err) {
+    fail(`bootstrap cli failed: ${err.message}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---- T31: no STALE LIVE references to the old upstream repo home ----
+// The repo moved to anomalyco/opencode; docs, source, comments, and workflows
+// must not still point at the old sst home as if current. Matches BOTH the
+// org-path form (sst/opencode, in HTTPS or git@ URLs — case-insensitive, since
+// GitHub org paths are) AND the old domain forms (sst.dev/opencode,
+// opencode.sst.dev). Scope: live-reference locations only. EXCLUDED: this guard
+// file (it names the patterns), and .adlc/tickets.json specifically — the T31
+// ticket body legitimately describes the move as past work and is an immutable
+// contract (editing it trips the CI base-ticket gate). Any OTHER .adlc/ file is
+// still scanned.
+{
+  // Assemble each needle in halves so the guard file never self-matches.
+  // Dots are escaped for -E so `.` matches a literal dot, not any char (a bare
+  // `.` would over-flag contrived strings like `sstXdev/opencode`). Fail-safe
+  // either way — the regex can only over-flag, never hide a stale ref.
+  const patterns = [
+    ['sst', 'opencode'].join('/'),           // github.com/sst/opencode, git@github.com:sst/opencode
+    ['sst', 'dev/opencode'].join('\\.'),     // sst.dev/opencode
+    ['opencode', 'sst', 'dev'].join('\\.'),  // opencode.sst.dev
+  ];
+  let hits = '';
+  try {
+    hits = execFileSync('git', ['-C', ROOT, 'grep', '-il', '-E', patterns.join('|'), '--',
+      '.', ':!scripts/opencode-install-smoke.mjs', ':!.adlc/tickets.json'], { encoding: 'utf8' }).trim();
+  } catch (e) {
+    // git grep exits 1 with no output when there are NO matches — the pass case.
+    // Any other status (128 non-git dir, ENOENT git absent) is a real failure.
+    if (e.status === 1 && !e.stdout?.trim()) hits = '';
+    else { fail(`upstream-home sweep could not run: ${e.message}`); hits = ''; }
+  }
+  if (hits) fail(`stale upstream repo-home reference present in: ${hits.split('\n').join(', ')}`);
+  else ok('no stale upstream repo-home references (upstream is anomalyco/opencode)');
+}
 
 if (failures) { console.error(`\nopencode-install-smoke: ${failures} failure(s)`); process.exit(2); }
 console.log('\nopencode-install-smoke: PASS');

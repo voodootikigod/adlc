@@ -57,26 +57,95 @@ export function deployDir(pkgRoot, destRoot, sub, destSub = sub) {
   return deployed;
 }
 
+export const PLUGIN_PKG_NAME = '@adlc/opencode-package';
+
+/**
+ * The `plugin` array entry to register for a given package root. Registering
+ * the npm name is only correct when the package is actually resolvable from
+ * npm — i.e. it is running out of node_modules. From a source checkout the
+ * npm name may not exist on the registry (the original T30 landmine), so the
+ * RESOLVED LOCAL PATH is registered instead; OpenCode accepts both forms.
+ */
+export function pluginEntryFor(pkgRoot, pkgName = PLUGIN_PKG_NAME) {
+  const normalized = String(pkgRoot ?? '').replace(/\\/g, '/');
+  return normalized.includes('/node_modules/') ? pkgName : pkgRoot;
+}
+
+/**
+ * Does a `plugin` array entry refer to THIS plugin, in any spelling? Matches
+ * the exact npm name, a source-checkout / node_modules PATH to this package,
+ * and the `[name, options]` tuple wrapping of either.
+ *
+ * The rules are split BY ENTRY SHAPE (T30 review round-3): an npm-name entry
+ * (bare `name` or `@scope/name` — no path syntax) is ours ONLY on exact
+ * equality with pkgName, so `@other/adlc-opencode` or a bare `adlc-opencode`
+ * package is never claimed (removing a stranger's entry — or grafting their
+ * tuple options onto ours — is silent data loss). The directory-basename
+ * heuristic applies ONLY to filesystem paths, where a dir named like our
+ * package dirs (`adlc-opencode` source checkout, `opencode-package` under
+ * node_modules) is overwhelmingly this plugin or a stale spelling of it.
+ */
+export function isOwnPluginEntry(entry, pkgName = PLUGIN_PKG_NAME) {
+  const name = Array.isArray(entry) ? entry[0] : entry;
+  if (typeof name !== 'string' || !name) return false;
+  if (name === pkgName) return true;
+  const norm = name.replace(/\\/g, '/').replace(/\/+$/, '');
+  // npm specifiers: bare names have no '/', scoped ones start with '@'.
+  // Neither is a filesystem path — exact-equality (above) was their only shot.
+  if (norm.startsWith('@') || !norm.includes('/')) return false;
+  const base = norm.slice(norm.lastIndexOf('/') + 1);
+  return base === 'adlc-opencode' || base === 'opencode-package' ||
+    norm.endsWith(`/node_modules/${pkgName}`);
+}
+
 /**
  * Register the plugin itself in .opencode/opencode.json's `plugin` array so
  * OpenCode actually LOADS the rails-guard hook. Commands/agents/skills are inert
  * markdown; the enforcing hook only runs if the plugin package is registered.
- * Idempotent and non-clobbering: preserves any other settings and plugin entries.
- * Returns { registered, alreadyPresent, path }.
+ * Idempotent and non-clobbering: preserves any other settings and plugin entries,
+ * including `[name, options]` tuple entries.
+ *
+ * FAIL-CLOSED on an unparseable existing config: a malformed opencode.json is
+ * exactly when the file must NOT be reset — hand-edits, other plugins, and
+ * themes would be destroyed. Throws with a clear message instead.
+ *
+ * REPLACES stale spellings instead of appending a second one: a checkout that
+ * moved (path A → path B) or a switch to the npm install must not leave two
+ * entries that both load the plugin. The npm name is always canonical — if it
+ * is already registered, any entry form counts as present. Options riding a
+ * replaced tuple are preserved on the new entry.
+ * Returns { registered, alreadyPresent, replaced, path }.
  */
-export function ensurePluginRegistered(root, pkgName = '@adlc/opencode-package') {
+export function ensurePluginRegistered(root, entry = PLUGIN_PKG_NAME, pkgName = PLUGIN_PKG_NAME) {
   const dir = join(root, '.opencode');
   const path = join(dir, 'opencode.json');
   let config = {};
   if (existsSync(path)) {
-    try { config = JSON.parse(readFileSync(path, 'utf8')); } catch { config = {}; }
+    const raw = readFileSync(path, 'utf8');
+    try {
+      config = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `${path} exists but is not valid JSON (${err?.message ?? err}). ` +
+        'Refusing to overwrite it — fix the file and re-run.',
+      );
+    }
   }
   const plugins = Array.isArray(config.plugin) ? config.plugin : [];
-  if (plugins.includes(pkgName)) return { registered: false, alreadyPresent: true, path };
-  config.plugin = [...plugins, pkgName];
+  const nameOf = (e) => (Array.isArray(e) ? e[0] : e);
+  const ours = plugins.filter((e) => isOwnPluginEntry(e, pkgName));
+  // Exact spelling already there, or the canonical npm name is registered →
+  // nothing to do (a source scaffold never displaces a working npm entry).
+  if (ours.some((e) => nameOf(e) === entry || nameOf(e) === pkgName)) {
+    return { registered: false, alreadyPresent: true, replaced: [], path };
+  }
+  // Preserve options from a tuple we are about to replace.
+  const tupleOptions = ours.map((e) => (Array.isArray(e) ? e[1] : undefined)).find((o) => o && typeof o === 'object');
+  const newEntry = tupleOptions ? [entry, tupleOptions] : entry;
+  config.plugin = [...plugins.filter((e) => !isOwnPluginEntry(e, pkgName)), newEntry];
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
-  return { registered: true, alreadyPresent: false, path };
+  return { registered: true, alreadyPresent: false, replaced: ours.map(nameOf), path };
 }
 
 /**
@@ -90,17 +159,33 @@ export function ensurePluginRegistered(root, pkgName = '@adlc/opencode-package')
  */
 export function deploySkills(pkgRoot, destRoot) {
   const srcDir = join(pkgRoot, 'skill');
-  if (!existsSync(srcDir)) return { deployed: [], preservedLegacy: [] };
+  if (!existsSync(srcDir)) return { deployed: [], preservedLegacy: [], deferredToClaude: [] };
   const deployed = [];
   const preservedLegacy = [];
+  const deferredToClaude = [];
   const legacyDir = join(destRoot, '.opencode', 'skill');
   for (const name of readdirSync(srcDir)) {
     if (!name.endsWith('.md')) continue;
     const source = readFileSync(join(srcDir, name), 'utf8');
     const skillName = name.slice(0, -'.md'.length);
     const outDir = join(destRoot, '.opencode', 'skills', skillName);
+    const outFile = join(outDir, 'SKILL.md');
+    // OpenCode also discovers Claude-compatible skills at .claude/skills/<name>/
+    // — if that copy exists (the Claude Code integration is installed), deploying
+    // ours too would list the skill TWICE. Defer to the .claude copy; remove a
+    // pristine .opencode duplicate from an earlier scaffold (never a user-
+    // modified one — same preservation rule as the legacy migration below).
+    const claudeCopy = join(destRoot, '.claude', 'skills', skillName, 'SKILL.md');
+    if (existsSync(claudeCopy)) {
+      deferredToClaude.push(skillName);
+      if (existsSync(outFile) && readFileSync(outFile, 'utf8') === source) {
+        rmSync(outFile);
+        if (readdirSync(outDir).length === 0) rmSync(outDir, { recursive: true });
+      }
+      continue;
+    }
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'SKILL.md'), source);
+    writeFileSync(outFile, source);
     deployed.push(`${skillName}/SKILL.md`);
     const legacy = join(legacyDir, name);
     if (existsSync(legacy)) {
@@ -111,7 +196,7 @@ export function deploySkills(pkgRoot, destRoot) {
   if (existsSync(legacyDir) && readdirSync(legacyDir).length === 0) {
     rmSync(legacyDir, { recursive: true });
   }
-  return { deployed, preservedLegacy };
+  return { deployed, preservedLegacy, deferredToClaude };
 }
 
 /**
@@ -125,11 +210,18 @@ export function deploySkills(pkgRoot, destRoot) {
  */
 export function scaffold(root, pkgRoot) {
   const config = ensureConfig(root);
-  const plugin = ensurePluginRegistered(root);
+  const plugin = ensurePluginRegistered(root, pluginEntryFor(pkgRoot));
   const commands = deployDir(pkgRoot, root, 'command', 'commands');
   const agents = deployDir(pkgRoot, root, 'agent', 'agents');
-  const { deployed: skills, preservedLegacy: preservedLegacySkills } = deploySkills(pkgRoot, root);
+  const {
+    deployed: skills,
+    preservedLegacy: preservedLegacySkills,
+    deferredToClaude: deferredToClaudeSkills,
+  } = deploySkills(pkgRoot, root);
   const gitignore = ensureGitignore(root);
   const formatterIgnores = ensureFormatterIgnores(root);
-  return { config, plugin, commands, agents, skills, preservedLegacySkills, gitignore, formatterIgnores };
+  return {
+    config, plugin, commands, agents, skills,
+    preservedLegacySkills, deferredToClaudeSkills, gitignore, formatterIgnores,
+  };
 }

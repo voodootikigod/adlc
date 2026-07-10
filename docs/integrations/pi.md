@@ -4,6 +4,26 @@ This document outlines the architectural plan for natively and deeply integratin
 
 ---
 
+## Shipped vs design intent
+
+Nothing below is claimed shipped unless it has a runtime caller in
+`plugins/adlc-pi/` today. The phased plan for closing the gaps is
+[docs/specs/pi-native-flush.md](../specs/pi-native-flush.md).
+
+| Capability | Status |
+| :--- | :--- |
+| Ticket doctrine appended to the system prompt each turn (§3.3) | **Shipped** — appends to pi's assembled prompt (`event.systemPrompt + block`; the result field *replaces*, so appending is load-bearing) |
+| Proactive `tool_call` gate: rails + scope on `write`/`edit`, codex-parity shell ladder on `bash` (§3.1) | **Shipped** — primitives delegated to `@adlc/core`; symlink-aware rail resolution |
+| Reactive `tool_result` gate: snapshot-scoped rail restore + operative-only suppression scan (§3.2) | **Shipped** — restores the pre-tool snapshot, never `HEAD`; no `git add -N` |
+| Live ticket lifecycle (`turn_start` reload) + `/ticket` + footer pill (§3.4) | **Shipped** |
+| Live deny proof in CI (`scripts/pi-live-deny.mjs`, scripted stub provider, real `pi --mode rpc`) | **Shipped** — required-job step on the Node 22 leg |
+| P5 subagent prosecution loop (§4) | **Design intent** — run P5 via the `adlc-prosecute` skill + `adlc` CLIs today |
+| P6 `session_shutdown` capture + `/integrate` (§2 table) | **Design intent** |
+| Scheduled P7 distillation (§2 table) | **Design intent** — pi has no `/schedule`; CI cron is the substrate |
+| npm publication / `pi install npm:@adlc/pi-package` (§5) | **Design intent** — install from a checkout today |
+
+---
+
 ## 1. Thesis: The Synergy of ADLC and Pi
 
 * **Pi's Philosophy:** A minimal, highly customizable terminal coding harness. It intentionally skips built-in complex orchestrators, subagents, and rigid planning modes, opting to let developers extend the harness via TypeScript Extensions, Skills, Prompt Templates, and Themes.
@@ -35,7 +55,9 @@ Here is how each ADLC lifecycle phase (P0–P7) maps to Pi's extensibility vecto
 
 ## 3. Core Implementation Design
 
-We have constructed a prototype package under `plugins/adlc-pi` to demonstrate the implementation. Key mechanisms include:
+The shipped package lives under `plugins/adlc-pi` (thin typed `index.ts` +
+`lib/*.mjs`, every rail/glob/ticket/shell primitive delegated to `@adlc/core`
+per ADR 0004). Key mechanisms:
 
 ### 3.1 Proactive Gating via `tool_call` (P4 Rail Freeze)
 To prevent the model from reward hacking **[F5]** and modifying frozen rails (like test suites or API contracts), the extension intercepts tool executions *before* they touch the disk:
@@ -43,14 +65,19 @@ To prevent the model from reward hacking **[F5]** and modifying frozen rails (li
 * Resolves targeted file paths and matches them against `ticket.rails` glob patterns.
 * Blocks execution with a descriptive reason if a violation is detected.
 
-### 3.2 Reactive Gating with Revert via `tool_result` (P3/P4 Suppression Gate)
+### 3.2 Reactive Gating with Snapshot Revert via `tool_result` (P3/P4 Suppression Gate)
 To catch undeclared suppression markers (e.g. `@ts-ignore`, `eslint-disable`, `.skip(`) added by the model to bypass compiling/testing:
-* When a file-editing tool returns, the extension reads the git diff of the workspace using `pi.exec("git", ["diff", "HEAD"])`.
-* Parses added lines for suppression markers.
-* If an unallowed suppression is found, it calls `git checkout -- <file>` to revert the file, and replaces the tool's result with a `GATE FAILED` error, forcing the model to fix the compilation/test issue without cheating.
+* At `tool_call` time the extension snapshots the target file (for `write`/`edit`) or the frozen-rail file set (for allowed mutating `bash`), so verification is scoped to what **this call** changed — pre-existing user edits are never attributed to the agent.
+* When the tool returns, added lines are computed against the snapshot and scanned for suppression markers, delegating operative-vs-inert classification (prose docs, fenced/inline code in `.mdx`) to the shared `@adlc/rails-guard` gate logic.
+* If an unallowed suppression or a rail change is found, the file is restored to its **pre-tool snapshot** — never `git checkout HEAD`, which would destroy the user's own uncommitted edits — and the tool's result is replaced with a `GATE FAILED` error, forcing the model to fix the compilation/test issue without cheating. Untracked files are observed via `git status --porcelain` (no `git add -N` index side effects).
 
 ### 3.3 Context Injection via `before_agent_start` (Defending F1/F3)
 Before each turn, the extension dynamically appends the active ticket’s constraints (allowed scopes, frozen rails, spec description) directly into the agent's system prompt. This ensures the agent never suffers from context rot **[F3]** regarding its operational boundaries.
+
+> Contract note (pinned against pi v0.80.3): the `before_agent_start` result's
+> `systemPrompt` field **replaces** the turn's system prompt (chained across
+> extensions). The extension therefore returns `event.systemPrompt + block` —
+> returning the block alone would wipe pi's entire built-in prompt.
 
 ### 3.4 TUI Visualization
 The active ticket is displayed directly in the Pi footer bar using:

@@ -128,6 +128,40 @@ The pinned API block above is superseded accordingly: peerDependency
 `>=1.17.13`, edited path on `output.args`, deny mechanism `throw` (documented,
 regression-tested by the live deny proof).
 
+## Amendment — 2026-07-09: upstream sync (T31)
+
+Dated re-verification against the current upstream, which had moved and advanced
+since the Phase-1 amendment:
+
+1. **Repo moved to `anomalyco/opencode`** (from the former sst org path). The
+   org rebranded; opencode.ai docs remain canonical and npm still publishes
+   `@opencode-ai/*` from the same tags. All in-repo references were swept to the
+   new path (issue links included); the install smoke gates that stale live
+   references stay at zero.
+2. **`permission.ask` is still DORMANT — DISPATCHED = NO.** Re-verified FROM
+   SOURCE at tags **v1.17.17 and v1.17.18** (newest at the time): the string
+   `permission.ask` occurs only in the Hooks type
+   (`packages/plugin/src/index.ts`); it is never passed to `plugin.trigger()`,
+   and the real permission path (`packages/opencode/src/permission/index.ts`)
+   publishes the `permission.asked` event without invoking any plugin hook.
+   Upstream **anomalyco/opencode#7006 remains OPEN**. Nothing between 1.17.13 and
+   1.17.18 wired it. Decision: keep the tolerant handler (it activates the instant
+   upstream dispatches the hook) but the **`tool.execute.before` throw remains the
+   only load-bearing in-session gate**; `permission.ask` must not be counted as an
+   enforcement lever.
+3. **Falsified `session.prompt` assumption (Phase 4 correction).** The
+   `opencode-native-flush` plan assumed `session.prompt({outputFormat})` for
+   JSON-schema structured output. **No such field exists** (verified through
+   1.17.17). The keyless bridge concatenates the reply's text parts; structured
+   output is obtained via a registered verdict *tool* schema, not a prompt option.
+4. **Version-matrix CI (drift armor).** The two live proofs
+   (`opencode-live-deny.mjs`, `opencode-live-tool.mjs`) run required against the
+   pinned floor `opencode-ai@1.17.13` AND advisory (`continue-on-error`) against
+   `opencode-ai@latest` in the `opencode-live-latest` job — a breaking upstream
+   change surfaces same-day without blocking unrelated merges. The peerDependency
+   floor stays `>=1.17.13` (the contract-verified, required-proof version); bump
+   it deliberately when the canary shows sustained green on a newer line.
+
 ## Consequences
 
 Rail enforcement is real in OpenCode for the common structured-edit path, with the

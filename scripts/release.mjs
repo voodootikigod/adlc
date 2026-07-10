@@ -44,6 +44,32 @@ export function packagePublishOrder(names) {
   ];
 }
 
+/**
+ * Every directory `--publish` must publish, in dependency order: packages/* in
+ * the core-first/cli-last order, THEN each non-private plugin package (plugins
+ * consume the packages, so they publish after them). Skipping publishable
+ * plugins is exactly how @adlc/opencode-package ended up registered in user
+ * opencode.json files while not existing on npm (T30).
+ * Returns [{ dir, name, private }].
+ */
+export function publishTargets({ packagesDir = PKGS, pluginsDir = PLUGINS } = {}) {
+  const targets = [];
+  for (const name of packagePublishOrder(workspacePackageNames(packagesDir))) {
+    const dir = join(packagesDir, name);
+    const pkg = readJson(join(dir, 'package.json'));
+    targets.push({ dir, name: pkg.name, private: pkg.private === true });
+  }
+  if (existsSync(pluginsDir)) {
+    for (const name of readdirSync(pluginsDir).sort()) {
+      const pj = join(pluginsDir, name, 'package.json');
+      if (!existsSync(pj)) continue;
+      const pkg = readJson(pj);
+      targets.push({ dir: join(pluginsDir, name), name: pkg.name, private: pkg.private === true });
+    }
+  }
+  return targets.filter((t) => !t.private);
+}
+
 export function repinInternalDependencies(pkg, version) {
   const next = structuredClone(pkg);
   for (const dependencyKind of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
@@ -106,9 +132,19 @@ export function findVersionDrift(version, { root = ROOT, packagesDir = PKGS, plu
   return problems;
 }
 
+function defaultPublishImpl(dir) {
+  execFileSync('npm', ['publish', '--provenance'], { cwd: dir, stdio: 'inherit' });
+}
+
 export function releaseMain(
   argv = process.argv.slice(2),
-  { root = ROOT, packagesDir = PKGS, pluginsDir = PLUGINS, regenerateLockfile = defaultRegenerateLockfile } = {}
+  {
+    root = ROOT,
+    packagesDir = PKGS,
+    pluginsDir = PLUGINS,
+    regenerateLockfile = defaultRegenerateLockfile,
+    publishImpl = defaultPublishImpl,
+  } = {}
 ) {
   const version = argv[0];
   const publish = argv.includes('--publish');
@@ -167,12 +203,11 @@ export function releaseMain(
     return 0;
   }
 
-  // 2. Publish in dependency order.
-  for (const name of order) {
-    const dir = join(packagesDir, name);
-    const { name: pkgName } = readJson(join(dir, 'package.json'));
-    console.log(`\npublishing ${pkgName}@${version} ...`);
-    execFileSync('npm', ['publish', '--provenance'], { cwd: dir, stdio: 'inherit' });
+  // 2. Publish in dependency order — packages/* first, then every non-private
+  // plugin package (they consume the packages).
+  for (const target of publishTargets({ packagesDir, pluginsDir })) {
+    console.log(`\npublishing ${target.name}@${version} ...`);
+    publishImpl(target.dir, target.name);
   }
   console.log(`\npublished @adlc suite @ ${version}`);
   return 0;

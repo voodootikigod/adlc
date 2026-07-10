@@ -50,6 +50,76 @@ jobs:
           npm install -g opencode-ai@1.17.13
           node scripts/opencode-live-deny.mjs --require
 
+      # Phase 4 live proof: the native adlc_gate tool registers + is model-callable,
+      # and the keyless bridge drives a child session end-to-end. Pinned to the
+      # opencode whose tool-hook + session SDK is source-verified (1.17.13).
+      - name: OpenCode live tool + keyless proof (Phase 4)
+        if: matrix.node-version == 20
+        run: node scripts/opencode-live-tool.mjs --require
+
+      # T32 compaction REGISTRATION + BEHAVIOR proof (NOT a host-dispatch proof):
+      # asserts the session.compacting + compaction.autocontinue hooks are
+      # registered on the real plugin entry under their exact host keys and behave
+      # (rail context survives, auto-continue suppressed on a degraded high-risk
+      # session). Loads the plugin the way opencode does (no binary needed → all
+      # matrix legs). REQUIRED so a refactor dropping/renaming either hook cannot
+      # merge green. Upstream DISPATCH on the pinned version is source-verified,
+      # not asserted here (compaction is not forcible in a headless run).
+      - name: OpenCode compaction registration+behavior proof (T32)
+        run: node scripts/opencode-live-compaction.mjs
+
+      # T33 deterministic P5 proof: the shipped adlc_prosecute tool drives the
+      # fan-out → verify → loop-until-dry loop in first-party code over
+      # WRITE-DISABLED child sessions, converging a seeded defect to NO-SHIP.
+      # Runs against a real-shaped mock SDK client (a full multi-lens loop isn't
+      # deterministically forcible through a real binary) — registration on the
+      # real binary is proven by the live-tool step above. REQUIRED.
+      - name: OpenCode deterministic prosecute proof (T33)
+        run: node scripts/opencode-live-prosecute.mjs
+
+      # pi live deny proof (ticket T21 AC5) — same folded-into-required-job
+      # rationale as the OpenCode step above. Runs on the Node 22 leg only
+      # (pi requires Node >= 22.19; the script hard-skips on older majors and
+      # hard-fails if the pinned pi binary is missing on a supported Node).
+      # The pi version is PINNED via the repo devDependency
+      # (@earendil-works/pi-coding-agent) so upstream releases can't flake a
+      # required job; bump deliberately alongside the plugin peerDependency.
+      # MUST stay in this REQUIRED matrix job (the Node 22 leg) — it depends on
+      # matrix.node-version and would silently never run in a non-matrix job.
+      - name: pi live deny proof (T21 AC5)
+        if: matrix.node-version == 22
+        run: node scripts/pi-live-deny.mjs
+
+  # T31 drift canary: the SAME two OpenCode live proofs against opencode-ai@latest.
+  # ADVISORY by design (continue-on-error): upstream releases near-daily, and a
+  # latest-version break must be VISIBLE same-day without blocking unrelated
+  # merges — the required, pinned proofs in the test job above stay authoritative.
+  # Bump the pin deliberately when this canary shows sustained green on a newer line.
+  # Single Node 20, NO matrix — so no step here may use a matrix.* condition.
+  opencode-live-latest:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm install
+
+      - name: OpenCode live proofs vs latest
+        run: |
+          npm install -g opencode-ai@latest
+          opencode --version
+          node scripts/opencode-live-deny.mjs --require
+          node scripts/opencode-live-tool.mjs --require
+
   pre-ga-gate:
     # Explicit CI gate that fails with a clear message while either of the two
     # unverified Pre-GA assumptions documented in docs/adr/0003-adlc-claude-code-plugin.md
