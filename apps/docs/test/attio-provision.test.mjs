@@ -93,12 +93,17 @@ test('creates only the missing attributes', async () => {
   assert.deepEqual(posted.sort(), ['company', 'message', 'source']);
 });
 
-test('falls back to non-unique when the API rejects a unique attribute', async () => {
+test('fails closed when the unique email attribute cannot be created', async () => {
+  // The sink asserts by email (matching_attribute), which needs a unique
+  // attribute. If Attio rejects uniqueness, provisioning must NOT silently
+  // downgrade to non-unique and report success — it must fail loudly.
   const { api, calls } = fakeApi({ fail: { email: true } });
-  await provision({ api, log: () => {} });
+  await assert.rejects(
+    () => provision({ api, log: () => {} }),
+    (err) => /email/.test(err.message) && /unique/i.test(err.message),
+  );
+  // Exactly one attempt for email — no silent non-unique retry.
   const emailPosts = calls.filter((c) => c.method === 'POST' && c.path.endsWith('/attributes') && c.body.data.api_slug === 'email');
-  // First attempt unique (rejected), second attempt without uniqueness.
-  assert.equal(emailPosts.length, 2);
+  assert.equal(emailPosts.length, 1);
   assert.equal(emailPosts[0].body.data.is_unique, true);
-  assert.equal(emailPosts[1].body.data.is_unique, undefined);
 });

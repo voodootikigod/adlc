@@ -155,34 +155,26 @@ export async function provision({ api, log = console.log }) {
       log(`  ✓ attribute "${attr.api_slug}" exists`);
       continue;
     }
-    let created = await api(
+    const created = await api(
       'POST',
       `/v2/objects/${OBJECT.api_slug}/attributes`,
       buildAttributePayload(attr),
     );
-    // If uniqueness was the objection, retry without it so provisioning still
-    // completes — but warn, because assert-by-email dedupe then needs a manual
-    // uniqueness toggle in the Attio UI.
-    if (!created.ok && created.status !== 409 && attr.is_unique) {
-      const retry = await api(
-        'POST',
-        `/v2/objects/${OBJECT.api_slug}/attributes`,
-        buildAttributePayload({ ...attr, is_unique: false }),
-      );
-      if (retry.ok) {
-        log(
-          `  + created attribute "${attr.api_slug}" WITHOUT uniqueness — ` +
-            `set it unique in the Attio UI so repeat submissions dedupe`,
-        );
-        continue;
-      }
-      created = retry;
-    }
     if (created.status === 409) {
       log(`  ✓ attribute "${attr.api_slug}" exists (slug conflict)`);
     } else if (!created.ok) {
+      // Fail closed. In particular, DO NOT silently downgrade a unique match
+      // attribute to non-unique: the sink asserts records by this attribute
+      // (matching_attribute), which Attio requires to be unique — a non-unique
+      // email would make every submit fail or duplicate. Better a loud setup
+      // failure now than silent data loss in production.
+      const hint = attr.is_unique
+        ? ` — the contact sink asserts records by "${attr.api_slug}", which REQUIRES a unique ` +
+          `attribute. Ensure your token can create unique attributes, or create "${attr.api_slug}" ` +
+          `as unique in the Attio UI, then re-run.`
+        : '';
       throw new Error(
-        `failed to create attribute "${attr.api_slug}" (status ${created.status}) ${short(created.json)}`,
+        `failed to create attribute "${attr.api_slug}" (status ${created.status}) ${short(created.json)}${hint}`,
       );
     } else {
       log(`  + created attribute "${attr.api_slug}"`);
