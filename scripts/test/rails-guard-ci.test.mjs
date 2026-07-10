@@ -558,115 +558,95 @@ test('unresolvable base ref → exit 1 (fail closed, not fail open)', () => {
 });
 
 // ---- T36: rails completion lifecycle — a completed ticket's rails auto-expire ----
-// A ticket is "done" iff the BASE manifest carries a trusted completion entry
-// (type/gate p5-complete or p6-acceptance-packet) bound to its id. Base-ref only:
-// a PR cannot forge it. Fail-closed: no/ambiguous evidence → rails stay frozen.
+// TRUST ANCHOR: `completed: true` on the ticket in the BASE tickets.json. It is
+// admin-ceremony-only because assertBaseTicketContractsPreserved DENIES a PR
+// that adds/changes a field on an existing base ticket, and it is read from
+// base (never HEAD). The manifest is NOT trusted (the gate can't verify it).
 
-const T1_RAILED = JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] });
 const editT1Rail = (d) => writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n');
 
-test('T36 AC1: completed ticket (base manifest p5-complete) → its rails auto-expire → exit 0', () => {
+test('T36 AC1: completed:true on a base ticket → its rails auto-expire → exit 0', () => {
   const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'p5-complete', ticket: 'T1' }) + '\n' },
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
     mutate: editT1Rail,
   });
   assert.equal(code, 0, 'a done ticket no longer freezes its rails');
 });
 
-test('T36 AC1: p6-acceptance-packet also counts as completion → exit 0', () => {
-  const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'p6-acceptance-packet', ticket: 'T1' }) + '\n' },
-    mutate: editT1Rail,
-  });
-  assert.equal(code, 0);
+test('T36 AC1: completed must be a STRICT boolean true — "true"/1/truthy do NOT lift → exit 2', () => {
+  for (const val of ['true', 1, 'yes', {}]) {
+    const code = runScenario({
+      baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: val, rails: ['src/critical/**'] }] }),
+      seedFiles: ['src/critical/auth.mjs'],
+      mutate: editT1Rail,
+    });
+    assert.equal(code, 2, `completed:${JSON.stringify(val)} must not lift (fail closed)`);
+  }
 });
 
-test('T36 AC1: completion evidence carried under `gate` (legacy) also counts → exit 0', () => {
+test('T36 AC2: an IN-FLIGHT ticket (no completed field) still freezes its rails → exit 2', () => {
   const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, gate: 'p5-complete', ticket: 'T1' }) + '\n' },
-    mutate: editT1Rail,
-  });
-  assert.equal(code, 0);
-});
-
-test('T36 AC2: IN-FLIGHT ticket (no completion evidence) still freezes its rails → exit 2', () => {
-  const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs'], // no manifest at all
-    mutate: editT1Rail,
-  });
-  assert.equal(code, 2, 'no evidence → rails remain enforced');
-});
-
-test('T36 AC3: forged completion — a status:done ticket field WITHOUT manifest evidence stays frozen → exit 2', () => {
-  const code = runScenario({
-    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', status: 'done', done: true, rails: ['src/critical/**'] }] }),
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
-    mutate: editT1Rail,
-  });
-  assert.equal(code, 2, 'a self-declared status field is not trusted completion');
-});
-
-test('T36 AC3: completion evidence for a DIFFERENT ticket does not lift THIS ticket → exit 2', () => {
-  const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'p5-complete', ticket: 'T2' }) + '\n' },
-    mutate: editT1Rail,
-  });
-  assert.equal(code, 2, 'evidence is keyed by exact ticket id');
-});
-
-test('T36 AC3: a NON-completion manifest entry (e.g. spec-lint) does not lift rails → exit 2', () => {
-  const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'spec-lint', ticket: 'T1' }) + '\n' },
-    mutate: editT1Rail,
-  });
-  assert.equal(code, 2, 'only p5-complete/p6-acceptance-packet count');
-});
-
-test('T36 AC4: NO self-unfreeze — completion evidence added only at HEAD (not base) does NOT lift → exit 2', () => {
-  const code = runScenario({
-    baseTickets: T1_RAILED,
-    // base has an EMPTY manifest; the PR appends its own p5-complete entry
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': '' },
-    mutate: (d) => {
-      writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n');
-      // append-only-valid, but only present at HEAD, not base
-      writeFileSync(join(d, '.adlc', 'manifest.jsonl'), JSON.stringify({ seq: 1, type: 'p5-complete', ticket: 'T1' }) + '\n');
-    },
-  });
-  assert.equal(code, 2, 'a builder cannot forge completion in their own PR to unfreeze their rails');
-});
-
-test('T36 fail-closed: a malformed base manifest line is NOT completion evidence → exit 2', () => {
-  const code = runScenario({
-    baseTickets: T1_RAILED,
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': 'not json at all\n' },
     mutate: editT1Rail,
   });
   assert.equal(code, 2);
 });
 
+test('T36 AC3 forge resistance: a PR that ADDS completed:true to an existing base ticket is DENIED → exit 2', () => {
+  // base has T1 WITHOUT completed; the PR tries to mark it complete to unfreeze it.
+  // assertBaseTicketContractsPreserved denies any change to an existing base ticket.
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => {
+      writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n');
+      writeFileSync(join(d, '.adlc', 'tickets.json'),
+        JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }));
+    },
+  });
+  assert.equal(code, 2, 'a non-admin cannot forge completion on an existing ticket');
+});
+
+test('T36 AC4 no self-unfreeze: even marking it complete AND removing its rail in the PR is DENIED → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => {
+      writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n');
+      writeFileSync(join(d, '.adlc', 'tickets.json'),
+        JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: [] }] }));
+    },
+  });
+  assert.equal(code, 2, 'contract preservation blocks the self-serve completion+unfreeze');
+});
+
+test('T36 AC4: a NEW ticket a PR authors with completed:true cannot unfreeze ANOTHER ticket’s rails → exit 2', () => {
+  // A PR may add new tickets. An attacker adds T99 completed:true — but that only
+  // skips T99's own (empty) rails; T1 (in-flight) still freezes src/critical.
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => {
+      writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n');
+      writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [
+        { id: 'T1', rails: ['src/critical/**'] },
+        { id: 'T99', completed: true, rails: ['src/critical/**'] }, // attacker's new "completed" ticket
+      ] }));
+    },
+  });
+  assert.equal(code, 2, 'a completed NEW ticket cannot lift a still-in-flight ticket’s rails');
+});
+
 test('T36 safety: a path frozen by BOTH a completed and an in-flight ticket STAYS frozen → exit 2', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [
-      { id: 'T1', rails: ['src/critical/**'] },              // completed below
+      { id: 'T1', completed: true, rails: ['src/critical/**'] },
       { id: 'T2', rails: ['src/critical/**', 'src/other/**'] }, // in-flight — still freezes the shared path
     ] }),
-    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'p5-complete', ticket: 'T1' }) + '\n' },
-    mutate: (d) => writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n'),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: editT1Rail,
   });
   assert.equal(code, 2, 'completing T1 must not unfreeze a path T2 still freezes');
 });
@@ -674,12 +654,11 @@ test('T36 safety: a path frozen by BOTH a completed and an in-flight ticket STAY
 test('T36 safety: completing T1 lifts ONLY T1-exclusive rails; T2 in-flight rails still enforce → exit 2 on T2 path', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [
-      { id: 'T1', rails: ['src/a/**'] }, // completed → src/a lifts
-      { id: 'T2', rails: ['src/b/**'] }, // in-flight → src/b frozen
+      { id: 'T1', completed: true, rails: ['src/a/**'] },
+      { id: 'T2', rails: ['src/b/**'] },
     ] }),
-    seedFiles: ['src/a/x.mjs', 'src/b/y.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'p5-complete', ticket: 'T1' }) + '\n' },
-    mutate: (d) => writeFileSync(join(d, 'src', 'b', 'y.mjs'), 'changed\n'), // edits T2's still-frozen rail
+    seedFiles: ['src/a/x.mjs', 'src/b/y.mjs'],
+    mutate: (d) => writeFileSync(join(d, 'src', 'b', 'y.mjs'), 'changed\n'),
   });
   assert.equal(code, 2);
 });
@@ -687,11 +666,10 @@ test('T36 safety: completing T1 lifts ONLY T1-exclusive rails; T2 in-flight rail
 test('T36 safety: after completing T1, editing its now-expired rail AND a non-rail file → exit 0', () => {
   const code = runScenario({
     baseTickets: JSON.stringify({ tickets: [
-      { id: 'T1', rails: ['src/a/**'] },
+      { id: 'T1', completed: true, rails: ['src/a/**'] },
       { id: 'T2', rails: ['src/b/**'] },
     ] }),
-    seedFiles: ['src/a/x.mjs', 'src/b/y.mjs', '.adlc/manifest.jsonl'],
-    seedFileContents: { '.adlc/manifest.jsonl': JSON.stringify({ seq: 1, type: 'p5-complete', ticket: 'T1' }) + '\n' },
+    seedFiles: ['src/a/x.mjs', 'src/b/y.mjs'],
     mutate: (d) => { writeFileSync(join(d, 'src', 'a', 'x.mjs'), 'changed\n'); writeFileSync(join(d, 'unrelated.mjs'), 'z\n'); },
   });
   assert.equal(code, 0, 'T1 expired rail is editable; nothing else frozen was touched');
