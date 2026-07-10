@@ -43,6 +43,27 @@ test('AC1: pi core peer is pinned to "*" (never bundled)', () => {
   assert.equal(pkg.dependencies?.['@earendil-works/pi-coding-agent'], undefined);
 });
 
+// ALL five pi-runtime core packages must resolve from the pi install (peers /
+// dynamic imports), never from this package's dependencies — installing them
+// would bundle a second, conflicting pi runtime. The peer declaration only
+// needs pi-coding-agent, but a dep-list regression adding ANY of the five must
+// fail here (P5 finding F1: only pi-coding-agent was guarded before).
+test('AC1: no pi-runtime core package leaks into dependencies (all five)', () => {
+  const PI_CORE = [
+    '@earendil-works/pi-coding-agent',
+    '@earendil-works/pi-ai',
+    '@earendil-works/pi-agent-core',
+    '@earendil-works/pi-tui',
+    'typebox',
+  ];
+  const deps = pkg.dependencies ?? {};
+  const bundled = pkg.bundledDependencies ?? pkg.bundleDependencies ?? [];
+  for (const name of PI_CORE) {
+    assert.equal(deps[name], undefined, `${name} must not be a runtime dependency (bundles a second pi runtime)`);
+    assert.ok(!bundled.includes(name), `${name} must not be bundled`);
+  }
+});
+
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {
   for (const name of ['@adlc/core', '@adlc/rails-guard', '@adlc/build-gate', '@adlc/flail-detector', '@adlc/gate-manifest']) {
     assert.ok(pkg.dependencies?.[name], `${name} must be a runtime dependency`);
