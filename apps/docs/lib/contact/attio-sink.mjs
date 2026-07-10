@@ -1,34 +1,61 @@
-// AttioSink — asserts a Person record in Attio via the v2 REST API.
-// PM-A: the payload is the documented Attio v2 records shape, matched by email
-// so re-submits are idempotent (assert, not blind-create). The bearer token is
+// AttioSink — asserts a record in Attio via the v2 REST API, matched by email so
+// re-submits are idempotent (assert, not blind-create). The bearer token is
 // never interpolated into any thrown error (PM-D / AC8).
+//
+// Two shapes, because Attio value formats differ by attribute type:
+//   - object 'people' (standard): structured `name`/`email_addresses` values,
+//     matched on `email_addresses`. This is the frozen-rail contract.
+//   - any other object (a custom object like `enterprise_inquiries`): flat text
+//     attributes (Attio accepts a plain string per text attribute), matched on
+//     the configured email attribute.
 
 const ATTIO_API_BASE = 'https://api.attio.com';
 
 /**
- * @param {{ token: string, companyAttr?: string, messageAttr?: string,
+ * @param {{ token: string, object?: string, matchAttr?: string,
+ *           nameAttr?: string, emailAttr?: string, companyAttr?: string,
+ *           messageAttr?: string, sourceAttr?: string, source?: string,
  *           fetch?: typeof globalThis.fetch, apiBase?: string }} opts
  */
 export function createAttioSink({
   token,
+  object = 'people',
+  matchAttr,
+  nameAttr = 'name',
+  emailAttr = 'email',
   companyAttr = 'company',
   messageAttr = 'message',
+  sourceAttr = 'source',
+  source = 'Enterprise contact form',
   fetch = globalThis.fetch,
   apiBase = ATTIO_API_BASE,
 }) {
+  const isPeople = object === 'people';
+  const matching = matchAttr || (isPeople ? 'email_addresses' : emailAttr);
+
   return {
     async submit(lead) {
-      const url = `${apiBase}/v2/objects/people/records?matching_attribute=email_addresses`;
-      const parts = lead.name.split(/\s+/).filter(Boolean);
-      const firstName = parts[0] || lead.name;
-      const lastName = parts.slice(1).join(' ');
+      const url = `${apiBase}/v2/objects/${object}/records?matching_attribute=${matching}`;
 
-      const values = {
-        name: [{ first_name: firstName, last_name: lastName, full_name: lead.name }],
-        email_addresses: [{ email_address: lead.email }],
-      };
-      if (lead.company) values[companyAttr] = lead.company;
-      if (lead.message) values[messageAttr] = lead.message;
+      let values;
+      if (isPeople) {
+        const parts = lead.name.split(/\s+/).filter(Boolean);
+        values = {
+          name: [{ first_name: parts[0] || lead.name, last_name: parts.slice(1).join(' '), full_name: lead.name }],
+          email_addresses: [{ email_address: lead.email }],
+        };
+        if (lead.company) values[companyAttr] = lead.company;
+        if (lead.message) values[messageAttr] = lead.message;
+      } else {
+        // Custom object: text attributes take a plain string value.
+        values = {
+          [nameAttr]: lead.name,
+          [emailAttr]: lead.email,
+          [messageAttr]: lead.message,
+        };
+        if (lead.company) values[companyAttr] = lead.company;
+        if (sourceAttr) values[sourceAttr] = source;
+      }
 
       let res;
       try {

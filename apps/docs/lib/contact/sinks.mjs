@@ -29,8 +29,16 @@ export function selectSink(env = {}, { fetch = globalThis.fetch } = {}) {
     }
     return createAttioSink({
       token: env.ATTIO_API_TOKEN,
+      // Deployed default: the custom object provisioned by
+      // scripts/attio-provision.mjs. Set ATTIO_OBJECT=people to use the
+      // standard People object instead.
+      object: env.ATTIO_OBJECT || 'enterprise_inquiries',
+      matchAttr: env.ATTIO_MATCH_ATTR || undefined,
+      nameAttr: env.ATTIO_NAME_ATTR || 'name',
+      emailAttr: env.ATTIO_EMAIL_ATTR || 'email',
       companyAttr: env.ATTIO_COMPANY_ATTR || 'company',
       messageAttr: env.ATTIO_MESSAGE_ATTR || 'message',
+      sourceAttr: env.ATTIO_SOURCE_ATTR || 'source',
       fetch,
     });
   }
