@@ -17,18 +17,26 @@ each phase to the deterministic `adlc` gates.
   the ADLC trust roots. **Bash writes are gated here** — redirects, `tee`,
   `rm`/`mv`/`cp`, in-place `sed`/`perl`, mutating `git` subcommands, and
   interpreter file-write APIs are recognized and rail-checked.
-- **Reactive revert gate** (`tool_result`) — after any write/edit/bash, reads
-  the actual `git diff`; a rail violation is reverted via
-  `git checkout HEAD -- <file>` and the tool result is replaced with a
-  `GATE FAILED` error. Added lines are scanned for undeclared suppression
-  markers (`@ts-ignore`, `eslint-disable`, `.skip(`, `# noqa`, …) and reverted
-  unless the ticket allows them.
+- **Reactive revert gate** (`tool_result`) — after any write/edit/bash, computes
+  added lines against a **pre-tool snapshot** (never `HEAD`, so your own
+  uncommitted edits are never destroyed); a rail violation restores the snapshot
+  and replaces the tool result with a `GATE FAILED` error. Added lines are
+  scanned for undeclared suppression markers (`@ts-ignore`, `eslint-disable`,
+  `.skip(`, `# noqa`, …) — operative-vs-inert classification is delegated to
+  `@adlc/rails-guard` — and reverted unless the ticket allows them.
+- **Build-gate + flail backstops** — a degraded (context-rot) session on a
+  high-risk ticket is denied its build until an audited override is recorded;
+  repeated errors, scope churn, and oversized session logs surface as advisories.
 - **Ticket doctrine injection** (`before_agent_start`) — the active ticket's
   scope, rails, and spec are appended to the system prompt every turn
   (sanitized; the ticket body is fenced as untrusted), defending premature
   satisfaction and context rot.
-- **`/ticket` command + footer status pill** — constant visibility into the
-  active enforcement context.
+- **Native agent tools** — `adlc_prosecute` runs the deterministic P5 review
+  loop in-session (fan-out → verify → loop-until-dry over write-disabled child
+  sessions); `adlc_gate` runs the LLM-backed gates keyless through your session
+  model. A `TICKET-DONE` listener nudges prosecution at ticket completion.
+- **Commands + footer status pill** — `/ticket`, `/adlc-init`, `/adlc-accept`,
+  and a live pill for constant visibility into the active enforcement context.
 - **Skills:** `adlc` (phase router), `adlc-spec` (P0–P2), `adlc-rail-build`
   (P3–P4), `adlc-prosecute` (P5–P6), `adlc-distill` (P7) — each wraps the
   deterministic `adlc` CLIs; hooks are assistive, `adlc rails-guard` is the
@@ -36,14 +44,25 @@ each phase to the deterministic `adlc` gates.
 
 ## Install
 
-`@adlc/pi-package` is **not yet published to npm**; load it from a checkout:
-
 ```sh
 npm install -g @adlc/cli                       # the gate toolkit the skills wrap
+
+# Per-project (lands in .pi/, auto-installs for every teammate on trusted startup):
+pi install -l npm:@adlc/pi-package
+# …or user-global (available in every repo you open):
+pi install npm:@adlc/pi-package
+```
+
+Then run `/adlc-init` inside pi to finish the repo scaffold. Until the first npm
+release ships, load the extension from a checkout instead:
+
+```sh
 pi --extension /path/to/adlc/plugins/adlc-pi/index.ts
 ```
 
-Peer dependency: `@earendil-works/pi-coding-agent` ≥ 0.79.0.
+Requires Node ≥ 22.19 (the pi floor). Peer dependency:
+`@earendil-works/pi-coding-agent` (manifest pins `"*"`; verified against 0.80.3,
+with a weekly version-matrix smoke tracking the latest published build).
 
 ## Enforcement model
 
@@ -69,14 +88,22 @@ made. **Make it a required check.**
 
 | Phase | pi surface |
 | --- | --- |
-| P0–P2 Triage → Decompose | `adlc-spec` skill (`parallax`, `spec-lint`, `premortem`, `coldstart`, `merge-forecast`, `model-router`); ticket resolution on `session_start` |
-| **P3–P4 Rail & Build** | **the extension** — proactive `tool_call` block + reactive `tool_result` revert + suppression gate |
-| P5–P6 Prosecute & Integrate | `adlc-prosecute` skill (`prosecute`, `behavior-diff`, `accept`, `adlc run p5/p6`) |
-| P7 Distill | `adlc-distill` skill (`lesson-foundry`, `rejection-mining`, `skill-rot`, `model-ratchet`) |
+| P0–P2 Triage → Decompose | `adlc-spec` skill (`parallax`, `spec-lint`, `premortem`, `coldstart`, `merge-forecast`, `model-router`); ticket resolution on `session_start`; prompt templates (`/adlc-spec`, `/adlc-decompose`) |
+| **P3–P4 Rail & Build** | **the extension** — proactive `tool_call` block + reactive `tool_result` snapshot-scoped revert + operative-only suppression gate + build-gate + flail advisory + evidence rail + custom-tool coverage |
+| **P5 Prosecute** | **native `adlc_prosecute` tool** — in-session fan-out → verify → loop-until-dry over write-disabled child sessions; `TICKET-DONE` completion nudge; plus the `adlc-prosecute` skill (`prosecute`, `behavior-diff`, `adlc run p5`) |
+| **P6 Integrate** | **native `adlc_gate` tool** + `/adlc-accept` command + rollback path; `adlc behavior-diff` / `adlc run p6` |
+| P7 Distill | `adlc-distill` skill (`lesson-foundry`, `rejection-mining`, `skill-rot`, `model-ratchet`); scheduled runs via CI cron |
 
-Automated P5 subagent prosecution, a `session_shutdown` P6 capture, and
-scheduled P7 runs are design intent (see the integration plan), not shipped
-features — P5–P7 run through the skills and the `adlc` CLIs today.
+Command surface: `/ticket`, `/adlc-init`, `/adlc-accept`, plus the `adlc-*`
+prompt templates. The footer widget renders the active ticket and last gate
+verdict.
+
+**Remaining gaps** (design intent, not yet shipped): a `session_shutdown`
+auto-capture for P6 (accept is command-driven today), and an in-harness P7
+scheduler (pi has no `/schedule`; CI cron is the substrate). npm publication is
+release-ready and folds into the lockstep `/release` flow — the one-command
+`pi install` story above goes live with the first published release; load from a
+checkout until then.
 
 ## Go deeper
 

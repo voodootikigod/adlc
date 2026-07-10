@@ -21,7 +21,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const piBin = join(repoRoot, 'node_modules', '.bin', 'pi');
+// Default: the pinned devDependency pi binary (the required CI leg uses this).
+// The optional version-matrix job (scripts/pi-version-matrix.mjs) overrides
+// ADLC_PI_BIN to run this same proof against a different pi build; the default
+// behavior is unchanged when the variable is unset.
+const piBin = process.env.ADLC_PI_BIN || join(repoRoot, 'node_modules', '.bin', 'pi');
 const adlcExtension = join(repoRoot, 'plugins', 'adlc-pi', 'index.ts');
 
 const [major, minor] = process.versions.node.split('.').map(Number);

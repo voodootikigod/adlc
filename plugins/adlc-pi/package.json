@@ -1,9 +1,26 @@
 {
   "name": "@adlc/pi-package",
   "version": "1.1.0",
-  "private": true,
-  "description": "ADLC integration for Pi terminal coding agent",
+  "description": "ADLC integration for the pi terminal coding agent: in-session rail/scope/suppression enforcement, native adlc_prosecute/adlc_gate tools, lifecycle skills.",
   "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "plugins/adlc-pi"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-pi#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "pi-package",
+    "adlc",
+    "agentic",
+    "ai",
+    "pi",
+    "rails",
+    "coding-agent"
+  ],
   "pi": {
     "extensions": [
       "./index.ts"
@@ -15,8 +32,22 @@
       "./prompts"
     ]
   },
+  "files": [
+    "index.ts",
+    "lib/",
+    "skills/",
+    "prompts/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.79.0"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
     "@adlc/build-gate": "^1.1.0",
@@ -27,5 +58,9 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

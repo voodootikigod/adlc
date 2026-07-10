@@ -1,0 +1,41 @@
+name: pi version-matrix smoke
+
+# NON-REQUIRED drift canary for the adlc-pi extension (spec 5.3). Runs the
+# scripts/pi-live-deny.mjs deny proof against BOTH the pinned devDependency pi
+# and the LATEST published @earendil-works/pi-coding-agent, so upstream
+# hook-contract drift is VISIBLE before it reaches the pinned bump.
+#
+# Triggered ONLY by the weekly cron and manual dispatch — deliberately NOT on
+# push/pull_request. The authoritative, PINNED deny proof lives in the required
+# CI job (.github/workflows/ci.yml, Node 22 leg); this job must never gate a
+# merge. It exits 0 when the latest build still passes (WARN on version drift)
+# and exits non-zero ONLY when the latest build FAILS the deny proof.
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 07:00 UTC — weekly is enough to surface upstream drift without noise.
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  pi-version-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history so origin/main resolves for the deny proof's diff base
+
+      - name: Setup Node.js 22
+        # pi requires Node >= 22.19; the deny proof hard-skips on older majors.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: pi deny proof — pinned vs latest
+        run: node scripts/pi-version-matrix.mjs

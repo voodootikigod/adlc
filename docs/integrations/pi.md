@@ -17,10 +17,16 @@ Nothing below is claimed shipped unless it has a runtime caller in
 | Reactive `tool_result` gate: snapshot-scoped rail restore + operative-only suppression scan (§3.2) | **Shipped** — restores the pre-tool snapshot, never `HEAD`; no `git add -N` |
 | Live ticket lifecycle (`turn_start` reload) + `/ticket` + footer pill (§3.4) | **Shipped** |
 | Live deny proof in CI (`scripts/pi-live-deny.mjs`, scripted stub provider, real `pi --mode rpc`) | **Shipped** — required-job step on the Node 22 leg |
-| P5 subagent prosecution loop (§4) | **Design intent** — run P5 via the `adlc-prosecute` skill + `adlc` CLIs today |
-| P6 `session_shutdown` capture + `/integrate` (§2 table) | **Design intent** |
-| Scheduled P7 distillation (§2 table) | **Design intent** — pi has no `/schedule`; CI cron is the substrate |
-| npm publication / `pi install npm:@adlc/pi-package` (§5) | **Design intent** — install from a checkout today |
+| Build-gate + flail backstops (§Phase 2) | **Shipped** — degraded high-risk builds denied w/o audited override; flail advisories |
+| Evidence rail + custom-tool coverage (§Phase 2) | **Shipped** — `.adlc/`/`.omo/` stay writable; non-core file-write tools are rail-checked |
+| Command suite + scaffolder + footer widget (§Phase 3) | **Shipped** — `/ticket`, `/adlc-init`, `/adlc-accept`, prompt templates, ticket/verdict widget |
+| Native `adlc_prosecute` tool: deterministic P5 loop (§4) | **Shipped** — in-session fan-out → verify → loop-until-dry over write-disabled children; live proof `scripts/pi-live-prosecute.mjs` (required, Node 22 leg) |
+| `TICKET-DONE` completion listener → prosecution nudge (§4) | **Shipped** |
+| Native `adlc_gate` tool + compaction defense (§Phase 4) | **Shipped** — LLM-backed gates keyless via the session model; rail context survives compaction |
+| P6 integrate + `/adlc-accept` + rollback (§Phase 4) | **Shipped** — accept is command-driven; rollback path lands the revert |
+| npm publication: `@adlc/pi-package` release-ready + folds into lockstep `/release` (§5) | **Shipped** — package is publishable (un-private, `files` allowlist, keywords, peer `"*"`); `pi install npm:@adlc/pi-package` one-liner goes live with the first published release. Version-matrix smoke (`scripts/pi-version-matrix.mjs`, weekly cron) tracks upstream pi drift |
+| P6 `session_shutdown` auto-capture (§2 table) | **Design intent** — acceptance is `/adlc-accept`-driven today |
+| In-harness scheduled P7 distillation (§2 table) | **Design intent** — pi has no `/schedule`; CI cron is the substrate |
 
 ---
 
