@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { selectSink, SinkError } from '../lib/contact/sinks.mjs';
 import { handleContact } from '../lib/contact/handle.mjs';
+import { createRateLimiter } from '../lib/contact/rate-limit.mjs';
 
 // Adversarial-review fixes:
 // HIGH  — unset CONTACT_SINK must still select Attio when a token is present.
@@ -78,5 +79,37 @@ test('MEDIUM: x-forwarded-proto is honored when deriving the expected origin', a
     deps: d,
   });
   assert.equal(res.status, 200);
+  assert.equal(sink.calls, 1);
+});
+
+test('a Host with an explicit default port still matches a port-less Origin', async () => {
+  const { sink, deps: d } = deps();
+  const res = await handleContact({
+    body: VALID,
+    getHeader: headers({ host: 'agenticlifecycle.ai:443', origin: 'https://agenticlifecycle.ai', 'x-forwarded-proto': 'https' }),
+    deps: d,
+  });
+  assert.equal(res.status, 200, 'host:443 must be treated same-origin as the port-less https origin');
+  assert.equal(sink.calls, 1);
+});
+
+test('malformed requests do not burn the rate-limit quota for a later valid lead', async () => {
+  // Real limiter, max 3. Six invalid POSTs from one IP must not exhaust it;
+  // a subsequent valid submission from the same IP still succeeds.
+  const rl = createRateLimiter({ max: 3, windowMs: 10_000, now: () => 0 });
+  const sink = { calls: 0, submit: async () => { sink.calls++; return { ok: true }; } };
+  const d = {
+    checkBot: async () => ({ isBot: false }),
+    selectSink: () => sink,
+    rateLimit: (key) => rl.check(key),
+    allowedOrigins: [],
+  };
+  const hdr = headers({ host: 'agenticlifecycle.ai', origin: 'https://agenticlifecycle.ai', 'x-forwarded-for': '10.0.0.5' });
+  for (let i = 0; i < 6; i++) {
+    const bad = await handleContact({ body: { name: '', email: 'x', message: '' }, getHeader: hdr, deps: d });
+    assert.equal(bad.status, 400);
+  }
+  const good = await handleContact({ body: VALID, getHeader: hdr, deps: d });
+  assert.equal(good.status, 200, 'valid lead still accepted after malformed spam');
   assert.equal(sink.calls, 1);
 });

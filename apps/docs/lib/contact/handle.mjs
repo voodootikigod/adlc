@@ -39,7 +39,9 @@ function expectedOriginFromHost(getHeader) {
   const host = getHeader('host');
   if (!host) return '';
   const proto = getHeader('x-forwarded-proto') || 'https';
-  return `${proto}://${host}`;
+  // Normalize through URL so a Host with an explicit default port
+  // (e.g. "host:443") compares equal to a browser Origin without one.
+  return safeOrigin(`${proto}://${host}`);
 }
 
 /**
@@ -73,19 +75,21 @@ export async function handleContact({ body = {}, getHeader = () => null, deps = 
     return { status: 403, body: { ok: false, error: 'forbidden_origin' } };
   }
 
-  // 3. Rate limit (per-instance, best-effort).
+  // 3. Validate BEFORE consuming rate-limit quota, so cheap malformed spam
+  // from one IP can't exhaust the quota and lock out a real lead behind the
+  // same NAT. Validation is local and free.
+  const parsed = parseLead(body);
+  if (!parsed.ok) {
+    return { status: 400, body: { ok: false, error: 'invalid', fields: parsed.errors } };
+  }
+
+  // 4. Rate limit (per-instance, best-effort) — counts only well-formed attempts.
   if (deps.rateLimit) {
     const key = firstHop(getHeader('x-forwarded-for')) || 'unknown';
     const { allowed } = deps.rateLimit(key);
     if (!allowed) {
       return { status: 429, body: { ok: false, error: 'rate_limited' } };
     }
-  }
-
-  // 4. Validate.
-  const parsed = parseLead(body);
-  if (!parsed.ok) {
-    return { status: 400, body: { ok: false, error: 'invalid', fields: parsed.errors } };
   }
 
   // 5. BotID — definitive bot => 403; infra error => fail open (see header note).
