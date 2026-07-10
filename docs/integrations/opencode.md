@@ -34,9 +34,10 @@ verified v1.17.13), answers each `--prompt-only` prompt, and threads the results
 back. The keyless bridge is therefore **live code with a real caller now**, not
 the tested-but-unwired library it used to be. Both are proven end-to-end against
 a real opencode 1.17.13 by `scripts/opencode-live-tool.mjs` (CI-required). The
-`lib/prosecutor.mjs` P5 decision helpers remain wired only to the model-driven
-`/adlc-prosecute` flow; the deterministic first-party P5 runner that consumes
-them is deferred to a Phase 4b follow-on.
+`lib/prosecutor.mjs` P5 decision helpers now drive the deterministic first-party
+P5 runner (`adlc_prosecute`, T33 / Phase 4b — see the "Resolved 2026-07-09"
+note below); `/adlc-prosecute` calls that tool first and keeps the model-driven
+prose protocol as the fallback.
 
 > **Session hooks — event-name note.** The plan specified `session.created` +
 > `session.ended`, but OpenCode has no `session.ended`; the end-of-work signal is
@@ -329,6 +330,27 @@ discard unrelated in-progress work). `apply_patch` envelopes are parsed for
 in-band targets so GPT-5-class models (where apply_patch is the ONLY mutator)
 stay path-transparent. The shell classifier segment-splits chained commands so a
 read-only prefix can't shadow a later mutator.
+
+## Maintenance
+
+Assumptions decay after model or repo drift. Two parity pieces (T34) handle it:
+
+- **`/adlc-maintain`** runs the deterministic, keyless decay checks on demand:
+  `adlc skill-rot .opencode/skills` (C10 — stale skill validation metadata),
+  `adlc model-ratchet --dry-run` (C12 — the highest-churn files to re-prosecute),
+  and `adlc ticket-prune` (stale shipped tickets, dry-run).
+- **`prosecutor` meta-agent** (`@prosecutor`, the 7th agent alongside the five
+  lens agents + verifier) runs the three deterministic review-evidence gates over
+  a change — `adlc hollow-test`, `adlc behavior-diff`, `adlc review-calibration` —
+  and reports an evidence-backed verdict. It is complementary to the multi-lens
+  `adlc_prosecute` loop: mechanical gates vs. independent model judgment.
+- **Weekly cron**: deploy `docs/ci/adlc-maintenance.yml` — it scans `.opencode/skills`
+  among the skill roots and runs the deterministic checks.
+- **Gate-fuzzing calibration is NOT run automatically.** It is both LLM-backed
+  and requires an OS sandbox (`bwrap`/`sandbox-exec`), so neither `/adlc-maintain`
+  (developer host) nor the deterministic cron runs it. Exercising gate defeats
+  after drift needs a **separate scheduled job that supplies both a model and a
+  sandbox** — a deliberate, opt-in setup, not something these parity pieces cover.
 
 ## Boundary
 

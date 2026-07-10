@@ -1,6 +1,17 @@
 # OpenCode Native Flush — making adlc-opencode robust, feature-complete, and native-feeling
 
-Status: PROPOSED (plan for review)
+> **STATUS UPDATE (2026-07-10): Phases 1–4b SHIPPED.** This is the original plan;
+> the "wire the dead code" / "tested-but-unwired" / "to-do" language below
+> describes the pre-implementation state, not the current one. Phases 1–3 merged
+> (PR #109/#116/#117); Phase 4 (keyless bridge + `adlc_gate`) and Phase 4b
+> (deterministic `adlc_prosecute` runner) shipped via PRs #119/#126; Phase 5
+> (install/publish, `/adlc-maintain`, prosecutor meta-agent, upstream sync)
+> shipped as the T30–T34 continuation (see
+> [opencode-integration-continuation.md](opencode-integration-continuation.md)).
+> For current state read [docs/integrations/opencode.md](../integrations/opencode.md)
+> and [ADR 0004](../adr/0004-adlc-opencode-integration.md).
+
+Status: PROPOSED (plan for review) — see the STATUS UPDATE banner above.
 Branch: `opencode-native-flush`
 Inputs: full plugin audit, six-integration capability benchmark, and a verified inventory of
 OpenCode's extension surface as of `@opencode-ai/plugin` v1.17.13 (July 2026).
@@ -14,7 +25,7 @@ questions). The July-2026 surface answers nearly all of them, in our favor:
 | --- | --- |
 | Throwing in `tool.execute.before` may not block ("capability unproven") | **Throwing blocks the tool call.** Documented, verbatim example in plugins.mdx. |
 | `input.args` vs `output.args` ambiguity | Args are on **`output.args`** only; `input` = `{tool, sessionID, callID}`. |
-| Keyless bridge needs a "proposed SDK extension" | `client.session.create({parentID})` + `session.prompt` (with `outputFormat` JSON-schema structured output and `noReply`) exists today. |
+| Keyless bridge needs a "proposed SDK extension" | `client.session.create({parentID})` + `session.prompt` exists today. (⚠️ CORRECTION 2026-07-09: this row originally claimed a `session.prompt({outputFormat})` JSON-schema mode — **no such field exists** through 1.17.17. Structured output is a registered verdict tool / fenced JSON. `noReply` does exist.) |
 | Warnings can only go to `console.error` | `client.tui.showToast`, `client.app.log`, plus a full **TUI plugin surface** (toasts, dialogs, persistent UI slots, OS notifications). |
 | Commands/agents markdown is the only extension shape | Plugins can register **native model-callable tools** (`tool` hook / `.opencode/tools/`), a **`permission.ask`** programmatic allow/deny hook, `tool.definition` rewriting, `experimental.chat.system.transform`, and more. |
 | `.opencode/command/`, `skill/adlc.md` layout | **Plural dirs are canonical** (`commands/ agents/ skills/ tools/ plugins/`); native skills are `skills/<name>/SKILL.md` discovered via a `skill` tool. |
@@ -134,9 +145,12 @@ OpenCode releases (current + latest) to catch upstream hook-contract drift.
 ### Phase 4 — Wire the dead code (keyless bridge + deterministic P5)
 
 4.1 **Keyless bridge goes live.** `makeAsk` gets a real implementation:
-    `client.session.create({parentID: current})` → `session.prompt` with
-    `outputFormat` (JSON-schema structured verdicts) → thread answers per the existing
-    tested protocol. Delete the "proposed SDK extension" caveat.
+    `client.session.create({parentID: current})` → `session.prompt` → thread
+    answers per the existing tested protocol. Delete the "proposed SDK extension"
+    caveat. (⚠️ CORRECTION 2026-07-09: this step originally specified
+    `session.prompt` with `outputFormat` JSON-schema verdicts — **that field does
+    not exist**; verdicts are a registered tool / fenced-JSON, fail-closed. See
+    ADR 0004's 2026-07-10 amendment.)
 4.2 **Native `adlc_gate` custom tool** (plugin `tool` hook): the model calls
     `adlc_gate({gate, args})` instead of being prose-instructed to shell out; execute()
     runs the CLI (or keyless bridge for LLM-backed gates) and returns structured

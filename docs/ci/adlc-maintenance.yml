@@ -59,7 +59,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           crash=0
-          for dir in skills .claude/skills; do
+          for dir in skills .claude/skills .opencode/skills; do
             [ -d "$dir" ] || continue
             # Capture in an `if` so an expected nonzero exit (stale=2, info=1) does
             # NOT abort the step under the Actions shell's `set -e`.
