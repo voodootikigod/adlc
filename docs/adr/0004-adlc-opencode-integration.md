@@ -162,6 +162,35 @@ since the Phase-1 amendment:
    floor stays `>=1.17.13` (the contract-verified, required-proof version); bump
    it deliberately when the canary shows sustained green on a newer line.
 
+## Amendment — 2026-07-10: native tools live (Phases 4 & 4b / T33)
+
+1. **Keyless bridge is LIVE (Phase 4).** `makeAsk` spins an isolated child
+   session (`client.session.create({parentID})` + `session.prompt`) and threads
+   the reply back — no longer a "proposed SDK extension" or a tested-but-unwired
+   library. The native **`adlc_gate`** tool (plugin `tool` hook) lets the model
+   call gates directly; LLM-backed gates run keyless through the host model.
+2. **`session.prompt` has NO `outputFormat`** (confirmed through 1.17.17). The
+   flush plan's assumption of server-side JSON-schema structured output was
+   FALSE. Structured output is obtained via a **registered verdict tool** (or
+   fenced-JSON parsing, fail-closed) — not a prompt option.
+3. **Deterministic P5 runner (Phase 4b / T33).** The native **`adlc_prosecute`**
+   tool drives fan-out → dedupe → verify → loop-until-dry in first-party code
+   (`lib/prosecute-runner.mjs`), not model-driven orchestration. Lens/verifier
+   work runs in child sessions locked down by a **wildcard-deny-first read-only
+   tools allowlist** (`{ "*": false, <read tools>: true }` — the shape opencode's
+   own `explore`/`compaction` agents use): unlisted tools (`edit`/`write`,
+   `task`, MCP, future) hard-deny, so a lens cannot mutate even via a sub-agent
+   or an injection in the untrusted diff. A denylist would fail OPEN here (the
+   SDK `tools` map is a sparse override; absent = base agent default = enabled) —
+   this is a security-load-bearing decision, verified against opencode source.
+4. **Install + parity (T30/T34).** `@adlc/opencode-package` is publishable
+   (folded into the lockstep release) with an `npx @adlc/opencode-package init`
+   bootstrap; the scaffolder registers a resolvable entry (npm name from
+   node_modules, resolved path from source). `/adlc-maintain` + the `prosecutor`
+   meta-agent (7th agent) port the CC maintenance surface; gate-fuzzing
+   calibration is neither host- nor deterministic-cron-run (needs a separate
+   model+sandbox job).
+
 ## Consequences
 
 Rail enforcement is real in OpenCode for the common structured-edit path, with the

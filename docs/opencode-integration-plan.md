@@ -1,5 +1,30 @@
 # Plan: Installing & Integrating ADLC into OpenCode
 
+> [!WARNING]
+> **SUPERSEDED (2026-07-10) — historical design record only.** This is the
+> original proposal. What actually shipped, and the authoritative current state,
+> live in:
+> - [ADR 0004](adr/0004-adlc-opencode-integration.md) — the pinned API decisions and dated amendments.
+> - [docs/specs/opencode-native-flush.md](specs/opencode-native-flush.md) — the Phases 1–5 flush plan.
+> - [docs/specs/opencode-integration-continuation.md](specs/opencode-integration-continuation.md) — the T30–T35 continuation.
+> - [docs/integrations/opencode.md](integrations/opencode.md) — the current integration guide (Status / Gaps).
+>
+> This document describes machinery that was **never built** (signed manifests,
+> admin keys, `adlc-runner` extensions, pre-commit-hook injection) and asserts
+> claims **contradicted by what shipped**. What actually happened:
+>
+> | This plan said | What actually shipped |
+> | --- | --- |
+> | In-session Bash gating was DROPPED (§6.2) | Bash IS gated in-session via the `@adlc/core` shell classifier (Phase 2, PR #116). |
+> | Keyless bridge needs a proposed SDK extension | Live on `client.session.create` + `session.prompt` (Phase 4); **no `outputFormat`** — verdicts are a registered tool / fenced JSON. |
+> | Signed manifests, admin keys, `adlc-runner` P0/P4 runners | Never built; the shipped enforcement is the `tool.execute.before` throw + the CI rails-guard diff gate. |
+> | `permission.ask` second lever | Defined but DORMANT upstream (anomalyco/opencode#7006, re-verified at 1.17.17/1.17.18). |
+> | Model-driven P5 orchestration | Deterministic first-party `adlc_prosecute` runner (T33). |
+> | `@adlc/opencode-package` install-from-source | Publishable package + `npx @adlc/opencode-package init` bootstrap (T30). |
+>
+> Read the four documents above for anything current; treat everything below as
+> the historical starting point, not a description of the integration.
+
 **Status:** Proposal · **Branch:** `opencode-integration` · **Date:** 2026-06-18
 
 ---
