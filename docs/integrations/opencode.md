@@ -34,9 +34,10 @@ verified v1.17.13), answers each `--prompt-only` prompt, and threads the results
 back. The keyless bridge is therefore **live code with a real caller now**, not
 the tested-but-unwired library it used to be. Both are proven end-to-end against
 a real opencode 1.17.13 by `scripts/opencode-live-tool.mjs` (CI-required). The
-`lib/prosecutor.mjs` P5 decision helpers remain wired only to the model-driven
-`/adlc-prosecute` flow; the deterministic first-party P5 runner that consumes
-them is deferred to a Phase 4b follow-on.
+`lib/prosecutor.mjs` P5 decision helpers now drive the deterministic first-party
+P5 runner (`adlc_prosecute`, T33 / Phase 4b — see the "Resolved 2026-07-09"
+note below); `/adlc-prosecute` calls that tool first and keeps the model-driven
+prose protocol as the fallback.
 
 > **Session hooks — event-name note.** The plan specified `session.created` +
 > `session.ended`, but OpenCode has no `session.ended`; the end-of-work signal is

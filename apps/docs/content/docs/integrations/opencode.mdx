@@ -1,6 +1,6 @@
 ---
 title: opencode
-description: Native ADLC integration for the opencode terminal agent — enforce-by-default rails-guard hook, nine lifecycle commands, native adlc_gate/adlc_prosecute tools, and a deterministic seven-agent P5 prosecution loop.
+description: Native ADLC integration for the opencode terminal agent — enforce-by-default rails-guard hook, nine lifecycle commands, native adlc_gate/adlc_prosecute tools, and a deterministic P5 prosecution loop (5 lenses + verifier) plus a prosecutor meta-agent.
 ---
 
 # ADLC in opencode
@@ -9,9 +9,11 @@ Brings the lifecycle into the [opencode](https://opencode.ai) terminal agent as
 a native plugin: an in-session rails-guard hook (`tool.execute.before`),
 advisory session hooks, nine lifecycle commands, the `adlc` phase-routing
 skill, two native model-callable tools (`adlc_gate`, `adlc_prosecute`), and a
-seven-agent P5 prosecution panel. The integration **enforces by default** —
-a thrown denial in `tool.execute.before` aborts the tool call (documented host
-behavior, regression-tested against a real binary).
+**deterministic P5 prosecution loop** — five lenses + a verifier fanned out over
+write-disabled child sessions — plus a separate `@prosecutor` meta-agent (seven
+prosecution agents in all). The integration **enforces by default** — a thrown
+denial in `tool.execute.before` aborts the tool call (documented host behavior,
+regression-tested against a real binary).
 
 ## What you get
 
