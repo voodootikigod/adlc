@@ -176,6 +176,19 @@ policy.
 - **AC14: a cross-origin POST is rejected.** VERIFY: `node --test test/contact-route.test.mjs` (origin case) — a request whose `Origin` is not in `CONTACT_ALLOWED_ORIGINS` returns `403` and the sink is called zero times.
 - **AC15: a sink send failure returns `502` and never a success envelope.** VERIFY: `node --test test/contact-route.test.mjs` (sink-failure case) — a mocked sink that rejects yields a `502` `sink_failed` body with `ok: false`; no `ok: true` is ever returned on failure.
 
+## Post-launch amendment (2026-07-10, Chris-directed)
+
+- **Attio target is a custom object, not People.** The deployed sink defaults to
+  the `enterprise_inquiries` custom object (flat text attributes, asserted by the
+  `email` attribute), provisioned by `scripts/attio-provision.mjs`. `people` mode
+  is preserved and selectable via `ATTIO_OBJECT=people`. This supersedes design
+  decision 3's "standard People object" default. **Deploy prerequisite:** run
+  `npm run attio:provision` before first traffic — provisioning fails closed if
+  the unique `email` match attribute can't be created (assert-by-email needs it).
+- **Bounded sink deadline.** Both sinks fetch with an `AbortSignal.timeout`
+  (default 8s); a hung upstream aborts and surfaces as `sink_failed` (502 +
+  mailto), so no serverless invocation hangs indefinitely.
+
 ## Rails (frozen for this build — authored from spec before implementation)
 
 - `apps/docs/test/contact-schema.test.mjs`

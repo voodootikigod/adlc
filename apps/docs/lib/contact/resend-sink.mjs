@@ -21,6 +21,7 @@ export function createResendSink({
   apiKey,
   from,
   to,
+  timeoutMs = 8000,
   fetch = globalThis.fetch,
   apiBase = RESEND_API_BASE,
 }) {
@@ -52,6 +53,8 @@ export function createResendSink({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ from, to: recipients, reply_to: lead.email, subject, text, html }),
+          // Bounded deadline (see attio-sink) — timeout surfaces as sink_failed.
+          signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
         });
       } catch {
         throw Object.assign(new Error('Resend request failed'), { code: 'sink_failed' });

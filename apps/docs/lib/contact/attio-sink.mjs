@@ -27,6 +27,7 @@ export function createAttioSink({
   messageAttr = 'message',
   sourceAttr = 'source',
   source = 'Enterprise contact form',
+  timeoutMs = 8000,
   fetch = globalThis.fetch,
   apiBase = ATTIO_API_BASE,
 }) {
@@ -66,6 +67,9 @@ export function createAttioSink({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ data: { values } }),
+          // Bounded deadline so a hung upstream can't tie up the invocation;
+          // a timeout aborts the fetch and surfaces as sink_failed (502).
+          signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
         });
       } catch {
         // Network failure — never echo the request (it carries the token).
