@@ -244,10 +244,16 @@ const maintainWf = read(join(ROOT, 'docs', 'ci', 'adlc-maintenance.yml'));
   const wfRunsGateFuzzing = /^\s*(-|run:|&&|\|).*adlc gate-fuzzing/m.test(maintainWf);
   if (wfRunsGateFuzzing) ok('maintenance workflow actually runs gate-fuzzing (a real calibration job exists)');
   else {
-    // no real job → the command must NOT claim the cron/CI covers calibration
+    // No real job. Guard BOTH directions (a denylist of false phrasings alone
+    // can be reworded around — the T33 lesson): (1) forbid the known false
+    // "runs in CI" claims, AND (2) REQUIRE the positive honest statement that
+    // gate-fuzzing is not run by the cron/host. A reworded false claim that
+    // drops the honest statement fails the positive check.
     if (/runs in .*that same CI pipeline|calibration runs in CI only|deferred to CI|runs in CI/i.test(maintainDoc)) {
       fail('adlc-maintain.md claims gate-fuzzing runs in CI, but the maintenance workflow has no gate-fuzzing step (circular/false coverage)');
-    } else ok('no false CI-coverage claim for gate-fuzzing (docs say it needs a separate model+sandbox job)');
+    } else if (!/(NOT run automatically|nowhere automatically|does \*\*not\*\* run it|not run by|separate .*(model|sandbox).* job)/i.test(maintainDoc)) {
+      fail('adlc-maintain.md must state gate-fuzzing is NOT run automatically and needs a separate model+sandbox job (no honest-coverage statement found)');
+    } else ok('gate-fuzzing coverage stated honestly (not automatic; needs a separate model+sandbox job)');
   }
 }
 if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs missing'); else ok('prosecutor registry/helpers present');
