@@ -155,10 +155,21 @@ export async function provision({ api, log = console.log }) {
   // 2. Attributes.
   const attrsRes = await api('GET', `/v2/objects/${OBJECT.api_slug}/attributes`);
   if (!attrsRes.ok) throw new Error(`could not list attributes (status ${attrsRes.status})`);
-  const present = new Set((attrsRes.json?.data || []).map((a) => a.api_slug));
+  const existingBySlug = new Map((attrsRes.json?.data || []).map((a) => [a.api_slug, a]));
 
   for (const attr of ATTRIBUTES) {
-    if (present.has(attr.api_slug)) {
+    const existing = existingBySlug.get(attr.api_slug);
+    if (existing) {
+      // Idempotent skip — but a match attribute that already exists as NON-unique
+      // is a trap: the sink asserts by it and Attio needs it unique. Fail closed
+      // (only on a definite `false`; an absent flag is left alone).
+      if (attr.is_unique && existing.is_unique === false) {
+        throw new Error(
+          `attribute "${attr.api_slug}" already exists but is NOT unique — the contact sink asserts ` +
+            `records by "${attr.api_slug}" (matching_attribute), which requires uniqueness. Make it ` +
+            `unique in the Attio UI, then re-run.`,
+        );
+      }
       log(`  ✓ attribute "${attr.api_slug}" exists`);
       continue;
     }
