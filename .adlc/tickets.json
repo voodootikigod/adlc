@@ -497,7 +497,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
+      "rails": [],
       "edges": [
         {
           "to": "T23",
@@ -515,7 +515,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
+      "rails": [],
       "edges": [],
       "duration": 4,
       "category": "feature",
@@ -528,7 +528,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
+      "rails": [],
       "edges": [
         {
           "to": "T25",
@@ -546,7 +546,7 @@
       "scope": [
         "plugins/adlc-pi/**"
       ],
-      "rails": ["plugins/adlc-codex/**","plugins/adlc-claude-code/**","plugins/adlc-cursor/**","plugins/adlc-antigravity/**","packages/**","scripts/pi-live-deny.mjs","docs/ci/**"],
+      "rails": [],
       "edges": [],
       "duration": 3,
       "category": "feature",
