@@ -1,4 +1,5 @@
 import { createMDX } from 'fumadocs-mdx/next';
+import { withBotId } from 'botid/next/config';
 
 const withMDX = createMDX();
 
@@ -7,4 +8,5 @@ const config = {
   reactStrictMode: true,
 };
 
-export default withMDX(config);
+// withBotId adds the BotID proxy rewrites; withMDX wraps the MDX pipeline.
+export default withBotId(withMDX(config));

@@ -9,9 +9,11 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
-    "types:check": "fumadocs-mdx && next typegen && tsc --noEmit"
+    "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
+    "attio:provision": "node scripts/attio-provision.mjs"
   },
   "dependencies": {
+    "botid": "^1.5.11",
     "fumadocs-core": "16.10.7",
     "fumadocs-mdx": "15.0.13",
     "fumadocs-ui": "16.10.7",

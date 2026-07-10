@@ -674,6 +674,83 @@
       "edges": [],
       "duration": 1,
       "category": "docs"
+    },
+    {
+      "id": "T-CC1",
+      "title": "Contact capture: Lead validator + pluggable sink core (Attio + Resend)",
+      "body": "Implement the dependency-free lead validator and the pluggable ContactSink core per .adlc/specs/enterprise-contact-capture.md. parseLead(input) returns {ok,value,errors}; ContactSink.submit(lead) with AttioSink (Attio v2 PUT /objects/people/records?matching_attribute=email_addresses, assert-by-email, grounded shape per PM-A) and ResendSink (email notification, from CONTACT_FROM_EMAIL, fails loud per PM-E); selectSink(env) chooses by CONTACT_SINK and throws typed sink_unconfigured when the secret is absent. No zod (hand-rolled validator, .mjs). All external HTTP mocked. Verification: cd apps/docs && node --test test/contact-schema.test.mjs test/attio-sink.test.mjs test/resend-sink.test.mjs test/sink-select.test.mjs. Satisfies AC1-AC4. allow-suppression: none",
+      "scope": [
+        "apps/docs/lib/contact/schema.mjs",
+        "apps/docs/lib/contact/attio-sink.mjs",
+        "apps/docs/lib/contact/resend-sink.mjs",
+        "apps/docs/lib/contact/sinks.mjs",
+        "apps/docs/test/contact-schema.test.mjs",
+        "apps/docs/test/attio-sink.test.mjs",
+        "apps/docs/test/resend-sink.test.mjs",
+        "apps/docs/test/sink-select.test.mjs"
+      ],
+      "rails": [
+        "apps/docs/test/contact-schema.test.mjs",
+        "apps/docs/test/attio-sink.test.mjs",
+        "apps/docs/test/resend-sink.test.mjs",
+        "apps/docs/test/sink-select.test.mjs"
+      ],
+      "edges": [],
+      "duration": 2,
+      "category": "feature",
+      "budget": "mid"
+    },
+    {
+      "id": "T-CC2",
+      "title": "Contact capture: POST /api/contact route (handleContact core + Vercel BotID wrapper)",
+      "body": "Implement handleContact({req,deps}) with the ordered gates honeypot -> same-origin allowlist -> rate limit -> BotID -> sink, returning the shared envelope {ok:true}|{ok:false,error,fields?} per PM-G. Rate limiter keys on x-forwarded-for first hop and evicts expired windows (PM-B). BotID isBot=true -> 403; checkBot throwing fails open through remaining gates (PM-C/AC13). No PII or secret in logs/response (PM-D/AC8). Thin app/api/contact/route.ts wires real checkBotId + selectSink. Verification: cd apps/docs && node --test test/contact-route.test.mjs. Satisfies AC5-AC8, AC13-AC15. allow-suppression: none",
+      "scope": [
+        "apps/docs/lib/contact/handle.mjs",
+        "apps/docs/lib/contact/rate-limit.mjs",
+        "apps/docs/app/api/contact/route.ts",
+        "apps/docs/test/contact-route.test.mjs"
+      ],
+      "rails": [
+        "apps/docs/test/contact-route.test.mjs"
+      ],
+      "edges": [
+        {
+          "to": "T-CC1",
+          "contract": "T-CC1 exports parseLead + selectSink + SinkError; T-CC2 consumes them in handleContact."
+        }
+      ],
+      "duration": 2,
+      "category": "feature",
+      "budget": "mid"
+    },
+    {
+      "id": "T-CC3",
+      "title": "Contact capture: /enterprise form + /privacy page + BotID wiring + .env.example",
+      "body": "Replace the mailto-only CTA on /enterprise with an on-brand contact form (client component) that POSTs to /api/contact, shows success/error states, and KEEPS the mailto link as a visible fallback (AC10). Wire Vercel BotID: withBotId() in next.config.mjs and initBotId({protect:[{path:/api/contact,method:POST}]}) in instrumentation-client.ts. Ship /privacy (draft disclosing both processors Attio+Resend, purpose, retention, contact-to-delete; PM-F) linked from /enterprise and the home footer (AC9). Add .env.example documenting every var with no real values (AC11). Verification: cd apps/docs && npm run build && node --test test/enterprise-contact.test.mjs test/privacy-page.test.mjs test/env-example.test.mjs && npm run types:check. Satisfies AC9-AC12. allow-suppression: none",
+      "scope": [
+        "apps/docs/app/(home)/enterprise/page.tsx",
+        "apps/docs/app/(home)/enterprise/contact-form.tsx",
+        "apps/docs/app/privacy/page.tsx",
+        "apps/docs/app/(home)/page.tsx",
+        "apps/docs/instrumentation-client.ts",
+        "apps/docs/next.config.mjs",
+        "apps/docs/.env.example",
+        "apps/docs/test/enterprise-contact.test.mjs",
+        "apps/docs/test/privacy-page.test.mjs",
+        "apps/docs/test/env-example.test.mjs"
+      ],
+      "rails": [
+        "apps/docs/test/enterprise-contact.test.mjs"
+      ],
+      "edges": [
+        {
+          "to": "T-CC2",
+          "contract": "T-CC2 exposes POST /api/contact with the shared envelope; T-CC3 form consumes it."
+        }
+      ],
+      "duration": 2,
+      "category": "feature",
+      "budget": "mid"
     }
   ]
 }
