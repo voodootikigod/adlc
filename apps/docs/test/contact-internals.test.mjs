@@ -1,11 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { firstHop, safeOrigin, handleContact, HONEYPOT_FIELD } from '../lib/contact/handle.mjs';
+import { firstHop, safeOrigin, handleContact, HONEYPOT_FIELD, bodyLengthAcceptable, MAX_BODY_BYTES } from '../lib/contact/handle.mjs';
 import { createRateLimiter } from '../lib/contact/rate-limit.mjs';
 
 // Kills hollow-test survivors: firstHop x-forwarded-for parsing (PM-B) and
 // safeOrigin normalization, which the frozen route rail exercises only through
 // an injected fake.
+
+test('bodyLengthAcceptable requires a present Content-Length within the cap', () => {
+  assert.equal(bodyLengthAcceptable(String(MAX_BODY_BYTES)), true);
+  assert.equal(bodyLengthAcceptable('500'), true);
+  assert.equal(bodyLengthAcceptable('0'), true);
+  assert.equal(bodyLengthAcceptable(String(MAX_BODY_BYTES + 1)), false, 'oversized rejected');
+  assert.equal(bodyLengthAcceptable(null), false, 'missing Content-Length rejected (blocks chunked)');
+  assert.equal(bodyLengthAcceptable(''), false);
+  assert.equal(bodyLengthAcceptable('not-a-number'), false);
+  assert.equal(bodyLengthAcceptable('-1'), false);
+});
 
 test('firstHop returns the first hop of x-forwarded-for', () => {
   assert.equal(firstHop('203.0.113.7, 70.41.3.18, 150.172.238.178'), '203.0.113.7');

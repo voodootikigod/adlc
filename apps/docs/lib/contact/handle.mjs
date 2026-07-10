@@ -13,6 +13,21 @@ import { parseLead } from './schema.mjs';
 // Hidden field a real user never fills; bots that auto-fill inputs will.
 export const HONEYPOT_FIELD = 'company_website';
 
+// Hard cap on the request body. A legitimate lead is a few KB (message maxes at
+// 5000 chars); 64KB is generous headroom. The route rejects anything larger
+// BEFORE parsing so a huge body can't burn CPU/memory ahead of the abuse gates.
+export const MAX_BODY_BYTES = 64 * 1024;
+
+// Accept only a present, non-negative Content-Length within the cap. Requiring
+// the header (present ⇒ not chunked) bounds the subsequent read to `max` bytes,
+// closing the undeclared/chunked-body buffering path. A browser form fetch with
+// a JSON string body always sets Content-Length.
+export function bodyLengthAcceptable(contentLength, max = MAX_BODY_BYTES) {
+  if (contentLength === null || contentLength === undefined || contentLength === '') return false;
+  const n = Number(contentLength);
+  return Number.isFinite(n) && n >= 0 && n <= max;
+}
+
 export function firstHop(xff) {
   return xff ? String(xff).split(',')[0].trim() : '';
 }
