@@ -4,7 +4,7 @@ Status: PROPOSED (P0/P1 — evaluation + execution plan)
 Branch: `opencode-integration`
 Supersedes nothing; continues `docs/specs/opencode-native-flush.md` (Phases 1–3 merged).
 Baseline verified 2026-07-09 against `@opencode-ai/plugin` / `@opencode-ai/sdk` **1.17.17**
-(published same day; upstream repo moved `sst/opencode` → `anomalyco/opencode`).
+(published same day; upstream repo moved from the sst org to `anomalyco/opencode`).
 
 ## Where we stand (evaluation, 2026-07-09)
 
@@ -30,7 +30,7 @@ Baseline verified 2026-07-09 against `@opencode-ai/plugin` / `@opencode-ai/sdk` 
    actually loaded from, not the npm name.
 2. **Version drift.** CI pins `opencode-ai@1.17.13`; upstream is at 1.17.17 (releases
    near-daily). The flush spec's planned version matrix (pinned + latest) was never wired.
-3. **Stale upstream references.** `sst/opencode` moved to `anomalyco/opencode`; issue links
+3. **Stale upstream references.** The upstream repo moved from the sst org to `anomalyco/opencode`; issue links
    (e.g. #7006 for dormant `permission.ask`) and docs need a sweep + re-verification.
 4. **Falsified spec assumption.** Flush spec 4.1 assumed `session.prompt({outputFormat})`
    JSON-schema structured output. **No such field exists at 1.17.17.** The in-flight code
@@ -90,10 +90,10 @@ covers the npx path; docs Install section rewritten.
 1. Bump baseline: peer dep `>=1.17.13` verified against 1.17.17; CI live proofs run a
    **version matrix** — pinned floor (1.17.13) + `latest` (advisory job so upstream churn
    can't block unrelated merges, but drift is visible same-day).
-2. `sst/opencode` → `anomalyco/opencode` reference sweep (docs, ADR, comments).
+2. sst → anomalyco repo-reference sweep (docs, ADR, comments).
 3. Re-verify `permission.ask` dormancy (#7006) at 1.17.17; if now dispatched, promote the
    dormant handler to a live-tested second lever.
-**AC:** matrix job green on both versions; zero `sst/opencode` references; permission.ask
+**AC:** matrix job green on both versions; zero references to the old sst repo path; permission.ask
 status re-recorded in ADR 0004 with a dated check.
 
 ### T-D — Native robustness: compaction survival + command gating

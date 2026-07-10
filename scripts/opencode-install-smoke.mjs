@@ -176,6 +176,15 @@ else {
     // The keyless bridge is no longer dead code — gate-tool calls it for LLM gates.
     if (!/from '\.\/keyless-bridge\.mjs'/.test(gt)) fail('gate-tool does not call the keyless bridge (it would stay dead code)'); else ok('Phase 4.2: adlc_gate calls the keyless bridge for LLM gates (bridge is LIVE)');
   }
+  // T33: the deterministic P5 runner + adlc_prosecute tool.
+  if (!existsSync(join(PLUGIN, 'lib', 'prosecute-runner.mjs'))) fail('lib/prosecute-runner.mjs missing');
+  else {
+    const pr = read(join(PLUGIN, 'lib', 'prosecute-runner.mjs'));
+    if (!/export async function runProsecution\b/.test(pr)) fail('prosecute-runner missing runProsecution export'); else ok('T33: runProsecution (deterministic P5 loop) present');
+    if (!/lensToolsMap/.test(pr) || !/'\*': false/.test(pr)) fail('prosecute-runner lens sessions are not fail-closed (missing wildcard-deny allowlist)'); else ok('T33: lens child sessions are fail-closed (wildcard-deny-first allowlist)');
+  }
+  if (!existsSync(join(PLUGIN, 'lib', 'prosecute-tool.mjs')) || !/export function buildProsecuteTool\b/.test(read(join(PLUGIN, 'lib', 'prosecute-tool.mjs')))) fail('prosecute-tool missing buildProsecuteTool'); else ok('T33: adlc_prosecute tool present');
+  if (!/buildProsecuteTool/.test(idx)) fail('index.mjs does not register the adlc_prosecute tool'); else ok('T33: index.mjs registers adlc_prosecute alongside adlc_gate');
   if (!/import\('@opencode-ai\/plugin'\)/.test(idx)) fail('index.mjs does not lazily import the plugin tool helper'); else ok('index.mjs registers the tool hook (lazy peer-dep import)');
   if (!/tool: toolHook|\.\.\.\(toolHook/.test(idx)) fail('index.mjs does not expose the tool hook on the returned hooks'); else ok('index.mjs exposes the adlc_gate tool hook');
   // AC: the live tool proof exists (runs a real opencode binary in CI).
@@ -236,6 +245,40 @@ console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-den
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ---- T31: no STALE LIVE references to the old upstream repo home ----
+// The repo moved to anomalyco/opencode; docs, source, comments, and workflows
+// must not still point at the old sst home as if current. Matches BOTH the
+// org-path form (sst/opencode, in HTTPS or git@ URLs — case-insensitive, since
+// GitHub org paths are) AND the old domain forms (sst.dev/opencode,
+// opencode.sst.dev). Scope: live-reference locations only. EXCLUDED: this guard
+// file (it names the patterns), and .adlc/tickets.json specifically — the T31
+// ticket body legitimately describes the move as past work and is an immutable
+// contract (editing it trips the CI base-ticket gate). Any OTHER .adlc/ file is
+// still scanned.
+{
+  // Assemble each needle in halves so the guard file never self-matches.
+  // Dots are escaped for -E so `.` matches a literal dot, not any char (a bare
+  // `.` would over-flag contrived strings like `sstXdev/opencode`). Fail-safe
+  // either way — the regex can only over-flag, never hide a stale ref.
+  const patterns = [
+    ['sst', 'opencode'].join('/'),           // github.com/sst/opencode, git@github.com:sst/opencode
+    ['sst', 'dev/opencode'].join('\\.'),     // sst.dev/opencode
+    ['opencode', 'sst', 'dev'].join('\\.'),  // opencode.sst.dev
+  ];
+  let hits = '';
+  try {
+    hits = execFileSync('git', ['-C', ROOT, 'grep', '-il', '-E', patterns.join('|'), '--',
+      '.', ':!scripts/opencode-install-smoke.mjs', ':!.adlc/tickets.json'], { encoding: 'utf8' }).trim();
+  } catch (e) {
+    // git grep exits 1 with no output when there are NO matches — the pass case.
+    // Any other status (128 non-git dir, ENOENT git absent) is a real failure.
+    if (e.status === 1 && !e.stdout?.trim()) hits = '';
+    else { fail(`upstream-home sweep could not run: ${e.message}`); hits = ''; }
+  }
+  if (hits) fail(`stale upstream repo-home reference present in: ${hits.split('\n').join(', ')}`);
+  else ok('no stale upstream repo-home references (upstream is anomalyco/opencode)');
 }
 
 if (failures) { console.error(`\nopencode-install-smoke: ${failures} failure(s)`); process.exit(2); }

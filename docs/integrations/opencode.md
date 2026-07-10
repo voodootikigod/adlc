@@ -144,7 +144,13 @@ The integration enforces frozen rails at two layers:
    hook denies structured mutations to a frozen rail declared by the active
    ticket: a thrown error in the hook **aborts the tool call** — documented host
    behavior on `@opencode-ai/plugin` >= 1.17.13, regression-tested end-to-end by
-   `scripts/opencode-live-deny.mjs`. Every extractable target path is checked
+   `scripts/opencode-live-deny.mjs`. That proof runs on a **version matrix** in
+   CI: the pinned floor (`opencode-ai@1.17.13`, the contract-verified version) as
+   a *required* check, plus an *advisory* `opencode-live-latest` job that runs the
+   same deny + tool proofs against `opencode-ai@latest` — so a breaking upstream
+   change is visible same-day without blocking unrelated merges (opencode releases
+   near-daily). The floor pin is bumped deliberately when the canary shows
+   sustained green on a newer line. Every extractable target path is checked
    (`filePath`, `files[]`, `edits[]`); a mutating or *unknown* tool whose target
    cannot be extracted is denied while rails are in force (fail closed — a
    deliberate tradeoff: an unrecognized third-party write tool must not slip
@@ -197,21 +203,48 @@ glob/ticket logic to `@adlc/core`:
 | P6 Integrate | Partial | `session.idle` advisory gate-manifest audit; the human gate is by design |
 | P7 Distill | **Yes** | `/adlc-distill` (Phase E) |
 
+Resolved 2026-07-09 (T33 / Phase 4b): **deterministic P5 runner.** The native
+**`adlc_prosecute`** tool drives the fan-out → dedupe → verify → loop-until-dry
+protocol in FIRST-PARTY code (`lib/prosecute-runner.mjs` `runProsecution`, over
+the tested `@adlc/core` helpers), not by prose-instructing the model to
+orchestrate. Each lens and the verifier run in an isolated child session
+(`client.session.create({parentID})` + `session.prompt`) carrying the agent's
+prompt as a per-call `system` override and a **fail-closed read-only `tools`
+allowlist**. That map is `{ "*": false, <read-only tools>: true }` — the
+wildcard-deny-first shape opencode's own `explore`/`compaction` agents use:
+opencode compiles the map to permission rules (`findLast` wins), so `"*": false`
+denies everything and only the read-only tools re-allow themselves. Any unlisted
+tool — `edit`/`write`/`apply_patch`, the `task` sub-agent spawner, MCP tools, or
+any future tool — matches only `"*"` and is **hard-denied**. (A denylist would
+fail OPEN here, since the SDK `tools` map is a sparse override where absent =
+the agent default = enabled.) So a lens reads the diff and *cannot* mutate the
+repo, even via a sub-agent or a prompt-injection in the untrusted diff.
+Structured verdicts come back as fenced JSON (there is no server-side
+`outputFormat` at 1.17.x); an unparseable verdict is **fail-closed** — the
+finding is kept as a blocker and flagged unverified, never silently dropped. A
+lens whose reply doesn't parse likewise surfaces a blocker (an all-garbage round
+can't masquerade as a clean pass), a bounded/incomplete run is reported
+`NO-SHIP (INCOMPLETE)` (only a *converged* zero-findings run SHIPs), and a
+`git diff` capture failure fails closed rather than reading as an empty change.
+The loop is hard-bounded (max rounds / max child sessions) and reports the bound
+it hit. `/adlc-prosecute` calls the tool first and keeps the prose protocol as the
+fallback when the tool is unavailable. Proven end-to-end by
+`scripts/opencode-live-prosecute.mjs` (seeded-defect convergence + write-disable,
+CI-required) and `scripts/opencode-live-tool.mjs` (real-binary registration).
+This makes OpenCode's P5 the most deterministic of the six integrations.
+
 ## Gaps
 
-1. **P5 orchestration is still model-driven.** `/adlc-prosecute` describes the
-   fan-out → dedupe → verify → loop-until-dry protocol (the decision helpers in
-   `lib/prosecutor.mjs` are unit-tested), but the loop itself is executed by the
-   model invoking the subagents, not a deterministic first-party runner. The
-   keyless bridge that would let a native `adlc_prosecute` tool spawn lens/verifier
-   child sessions is now proven (Phase 4); wiring the deterministic runner on top
-   is the **Phase 4b** follow-on.
-2. **`permission.ask` is a DORMANT lever.** At opencode 1.17.13 the hook is
-   defined but never dispatched (upstream sst/opencode#7006); the plugin ships a
-   tolerant handler (denies rail-target permissions under both documented payload
-   shapes) that activates the moment upstream wires it. The enforcing control is
-   the `tool.execute.before` throw.
-3. **Floating leading-`**` rails and in-session directory deletion.** The
+1. **`permission.ask` is a DORMANT lever.** The hook is defined but never
+   dispatched — re-verified from source at tags **v1.17.17 and v1.17.18**
+   (2026-07-09): `permission.ask` appears only in the Hooks type, is never passed
+   to `plugin.trigger()`, and the real permission path publishes the
+   `permission.asked` event without invoking any plugin hook. Upstream
+   anomalyco/opencode#7006 remains OPEN. The plugin ships a tolerant handler
+   (denies rail-target permissions under both documented payload shapes) that
+   activates the moment upstream wires it. The enforcing control is the
+   `tool.execute.before` throw.
+2. **Floating leading-`**` rails and in-session directory deletion.** The
    in-session shell guard denies deleting/moving a rail's *fixed-anchor* parent
    (`rm -rf test` vs `test/**`, `rm -rf packages/foo/test` vs
    `packages/*/test/**`, `rm -rf .`). A rail with a *leading* `**` (e.g.
@@ -225,6 +258,36 @@ Resolved 2026-07-05 (Phase 1): in-session enforcement no longer depends on an
 unproven SDK capability — a thrown denial is documented host behavior and the
 live deny proof (`scripts/opencode-live-deny.mjs`, required CI) regression-tests
 it. See ADR 0004's amendment.
+
+Resolved 2026-07-09 (T32): **compaction survival + slash-command advisories.**
+Three more native hooks (signatures verified against `@opencode-ai/plugin`
+1.17.17):
+
+- **`experimental.session.compacting`** appends the active ticket / frozen rails
+  / scope block (the same sanitized `buildSystemContext` used per-turn) to the
+  compaction prompt, so enforcement context isn't quietly summarized away —
+  ENFORCING context that must survive, not a new gate. No-op outside an active
+  ADLC build.
+- **`experimental.compaction.autocontinue`** DISABLES the post-compaction
+  synthetic "continue" turn when the build-gate degradation predicate fires
+  (high-risk ticket × compacted/degraded session — the same signal that denies
+  structured edits), forcing a human turn instead of letting the agent barrel on
+  with a lossy summary. Honors the audited `ADLC_BUILD_GATE_BYPASS=1` (autocontinue
+  stays on, override recorded to the manifest). Normal-risk tickets are unaffected.
+- **`command.execute.before`** adds two ADVISORY toasts (never blocks — commands
+  are human-invoked): a lifecycle-order warning when a phase command runs before
+  its prerequisite phase left manifest evidence (e.g. `/adlc-decompose` with no
+  recorded spec approval, `/adlc-prosecute` before `coldstart`), and a tamper
+  notice when a command's deployed `.opencode/commands/<name>.md` differs
+  byte-for-byte from the packaged source. Both fail open.
+
+All three swallow errors and never throw (the host cannot be broken by an
+advisory). A required CI proof (`scripts/opencode-live-compaction.mjs`) loads the
+shipped plugin entry and asserts both compaction hooks are **registered under
+their exact host keys and behave** — a registration + behavior proof, not a
+host-dispatch proof (compaction is not deterministically forcible in a headless
+run; that upstream contract is source-verified against 1.17.17, and the advisory
+`opencode-live-latest` job canaries against `@latest`).
 
 Resolved 2026-07-08 (Phase 3): **native-feel surface added (server-side).** Per-turn
 the active ticket, frozen rails, and scope are re-stated to the model via
