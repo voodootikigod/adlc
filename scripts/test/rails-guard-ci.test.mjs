@@ -674,3 +674,52 @@ test('T36 safety: after completing T1, editing its now-expired rail AND a non-ra
   });
   assert.equal(code, 0, 'T1 expired rail is editable; nothing else frozen was touched');
 });
+
+// ---- T36 guardrails (codex round-1 review) ----
+
+test('T36 guardrail #1: a completed ticket is STILL contract-preserved — a PR editing it is DENIED → exit 2', () => {
+  // Completing a ticket expires its RAILS only; its contract stays immutable, so
+  // a PR cannot mutate/delete a completed base ticket.
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'], injected: 'x' }] })),
+  });
+  assert.equal(code, 2, 'a completed ticket contract is still frozen');
+});
+
+test('T36 guardrail #1: a PR that REMOVES a completed base ticket is DENIED → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [
+      { id: 'T1', completed: true, rails: ['src/critical/**'] },
+      { id: 'T2', rails: ['src/other/**'] },
+    ] }),
+    seedFiles: ['src/critical/auth.mjs', 'src/other/x.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T2', rails: ['src/other/**'] }] })), // T1 dropped
+  });
+  assert.equal(code, 2, 'a completed base ticket cannot be removed');
+});
+
+test('T36 guardrail #5: an ALL-COMPLETED repo (rails empty) still protects trust roots via baseHasConfig → exit 2', () => {
+  // Every ticket completed → rails union is empty. Trust-root protection must
+  // still run (it keys on baseHasConfig, independent of the rail union).
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs', '.adlc/config.json'],
+    seedFileContents: { '.adlc/config.json': JSON.stringify({ securityMode: 'unsigned-fallback', acknowledgedNewRailBypass: true, trustedCodeownersAttested: true }) },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'config.json'),
+      JSON.stringify({ securityMode: 'unsigned-fallback', acknowledgedNewRailBypass: true, trustedCodeownersAttested: true, tampered: true })),
+  });
+  assert.equal(code, 2, 'trust roots stay protected even when all rails have expired');
+});
+
+test('T36 guardrail #5: all-completed repo, editing a now-expired rail path → exit 0 (rails genuinely lifted)', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n'),
+  });
+  assert.equal(code, 0);
+});

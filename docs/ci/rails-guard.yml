@@ -28,6 +28,11 @@
 # previously-routine manual rail lift (an ADLC_RAILS_BYPASS=1 byte-splice of
 # rails to [] after a ticket shipped) with a single admin-set `completed` flag
 # that preserves the rails as history; the manual byte-splice is no longer needed.
+# NOTE: `completed: true` expires ALL of that ticket's rails. If a path must stay
+# protected AFTER the ticket completes, re-declare it on a still-in-flight ticket
+# (or a permanent-guardian ticket) before completing — do not complete a ticket
+# that is the sole freezer of a still-sensitive path. A completed ticket's
+# CONTRACT stays immutable (only its rails expire from enforcement).
 #
 # SECURITY LIMITATION: this template does not protect rails introduced for the
 # first time in the same PR. New rails are enforced only after they land on the
