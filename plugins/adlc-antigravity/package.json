@@ -20,6 +20,10 @@
     "agy",
     "rails"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {},
   "agy": {
     "hooks": "./hooks.json",

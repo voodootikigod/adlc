@@ -32,6 +32,25 @@ test('AC1: package.json is publishable (not private, licensed, sourced)', () => 
   assert.ok(Array.isArray(pkg.keywords) && pkg.keywords.includes('antigravity'), 'keywords must include "antigravity"');
 });
 
+// P5 finding 1 (release-blocking): scripts/release.mjs:136 runs
+// `npm publish --provenance` with NO --access flag — it relies on every
+// package declaring publishConfig.access=public (release.mjs's own header
+// comment states this invariant). A scoped @adlc/* package with no
+// publishConfig defaults to RESTRICTED access, and --provenance on a
+// restricted-defaulting scoped package fails at actual publish time — landing
+// AFTER packages/* already published (a partial-release repeat of the T30
+// incident). Mirror pi-package/opencode-package exactly.
+test('AC1: publishConfig grants public access + provenance (release.mjs relies on this, not --access)', () => {
+  assert.deepEqual(pkg.publishConfig, { access: 'public', provenance: true });
+});
+
+test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never "default access"', () => {
+  const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8', timeout: 60_000 });
+  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+  assert.match(out, /with tag latest and public access/, `expected real npm to report public access:\n${out}`);
+  assert.ok(!/default access/.test(out), `npm reported "default access" (restricted) — publishConfig is missing or wrong:\n${out}`);
+});
+
 // --- AC3: self-contained by design — no @adlc/* runtime dependency --------
 
 test('AC3: no @adlc/* runtime dependency (agy copies without node_modules)', () => {
