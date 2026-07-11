@@ -1,6 +1,7 @@
 # ADR: Risk-tiered multi-model adversarial review
 
-**Status:** **Accepted — recommended practice (mechanical enforcement deferred).**
+**Status:** **Accepted — recommended practice generally; GATED (required) for the
+trust-root tier as of 2026-07-11 (T39).** See [Update 2026-07-11](#update-2026-07-11--gated-for-the-trust-root-tier-t39).
 (Superseded `Proposed` on 2026-06-27.) Adopt reviewer **diversity** as a risk-gated P5 practice: for
 high-blast-radius changes, require an independent verdict from **≥2 distinct providers**
 and treat a single provider's clean `approve` as **advisory, not a gate-pass**. Ship the
@@ -141,5 +142,52 @@ surfaced **only** when an independent provider with different priors was added.
    [ADR-0008](./0008-adversarial-review-coverage-map.md): `--input` artifact mode and a
    loop-convergence summary.
 3. ~~Document the risk-tier policy in `docs/toolkit.md`~~ — **done** (Typical flow, step 6).
-4. Revisit mechanical enforcement once trust-boundary features are built often enough
-   that operator invocation proves insufficient — the same trigger ADR-0005 set.
+4. ~~Revisit mechanical enforcement once trust-boundary features are built often enough
+   that operator invocation proves insufficient~~ — **done for the trust-root tier**
+   (2026-07-11, T39; see the Update below). The remaining tiers stay operator-invoked.
+
+## Update (2026-07-11) — gated for the trust-root tier (T39)
+
+The trigger in step 4 fired. Across the opencode T30–T35 arc and PR #104, every real
+correctness/security bug was caught by a cross-model (codex/GPT) pass **only after**
+same-model ADLC P5 returned a clean SHIP. Root cause: a same-model prosecutor validates
+the author's own tests, which encode the author's blind spot. For the highest-risk
+surface that is too load-bearing to leave optional, so cross-model review is now a
+**required, mechanically-enforced P5 gate** — no longer merely recommended — for a
+narrow **trust-root tier**.
+
+**What is trust-root tier.** A change is trust-root tier iff its diff (`git diff
+--name-only <base>...HEAD`) touches any of:
+
+- an **exact trust-root file**: `scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+  `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`;
+- an **enforcement package** (emits an exit-2 gate): `packages/rails-guard/`,
+  `packages/prosecute/`, `packages/gate-manifest/`, `packages/build-gate/`;
+- a **gated-artifact producer** (writes `.adlc/tickets.json`): `packages/ticket-prune/`,
+  `packages/ticket-sync/`;
+- a **declared rails deny-path** of any ticket in `.adlc/tickets.json`.
+
+The classifier is `packages/prosecute/lib/tier.mjs` — pure, offline, deterministic. It is
+the binary trust-root decision only, distinct from `@adlc/core`'s model frontier/direct/
+ladder `risk-tier.mjs`.
+
+**The attestation.** A cross-model verdict is recorded through the existing
+`@adlc/gate-manifest` chained ledger as a `cross-model-review` entry carrying
+`{ provider, authorProvider, verdict, revision }`. `packages/prosecute/lib/run.mjs` then
+requires — in addition to the two-consecutive-dry-pass / three-distinct-lens condition —
+a `cross-model-review` **`approve`** whose `provider` is **distinct** from the author's
+and whose `revision` equals the reviewed revision. Missing → `exit 2` naming exactly what
+is required. Recording is `adlc prosecute record-cross-model --ticket <id> --provider <p>
+--author-provider <a> --verdict approve [--input <passes.json>] [--revision <r>]`, which
+resolves the revision the same way the gate does so the record binds to the gate's revision.
+
+**Honest limitation.** Like rails-guard, this gate **cannot cryptographically prove a
+model actually ran.** A determined author can still hand-write a provider string. What it
+buys is an **auditable, revision-bound, append-only, distinct-provider record**: a stale
+attestation against an old diff does not satisfy a new revision (the revision binding),
+and a same-provider "review" is refused at record time and rejected at read time (the
+distinct-provider rule). We deliberately did **not** sign the provider assertion with a
+CI-held key — that was rejected in #104/T36 as exposing keys to CI for marginal gain; the
+revision binding, not a signature, is what stops the stale-attestation bypass. The gate
+raises the bar and makes the omission visible in an auditable ledger; it is defense in
+depth behind the unbypassable rails-guard CI diff gate, not a cryptographic proof of review.

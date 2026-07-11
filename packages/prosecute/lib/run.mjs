@@ -2,6 +2,7 @@ import { appendEntry, ADLC_DIR, canonicalJson, readEntries, resolveRevision, sha
 import { readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { validateInput } from './schema.mjs';
+import { hasCrossModelApprove } from './cross-model.mjs';
 
 function now() {
   return new Date().toISOString();
@@ -34,6 +35,20 @@ function revisionIgnorePaths(cwd, dir, input, inputPath) {
     input?.review_packet?.prompt ? resolve(cwd, input.review_packet.prompt) : null,
     input?.review_packet?.inputs ? resolve(cwd, input.review_packet.inputs) : null,
   ].filter(Boolean);
+}
+
+/**
+ * Resolve the reviewed revision exactly as runProsecution does, so a cross-model
+ * attestation recorded via the CLI binds to the SAME revision string the gate
+ * later checks. Pass the identical { cwd, dir, revision, input, inputPath } to
+ * both paths (see bin/adlc-prosecute.mjs record-cross-model).
+ */
+export function resolveProsecutionRevision({ cwd = process.cwd(), dir = ADLC_DIR, revision, input, inputPath } = {}) {
+  return resolveRevision({
+    cwd,
+    revision,
+    ignorePaths: revisionIgnorePaths(cwd, dir, input, inputPath),
+  });
 }
 
 function ticketDefinitionHash(cwd, ticket, dir) {
@@ -174,14 +189,11 @@ export function runProsecution(input, {
   revision,
   inputPath,
   cwd = process.cwd(),
+  requireCrossModel = false,
 } = {}) {
   const errors = validateInput(input);
   if (!ticket) errors.push('ticket is required for P5 evidence');
-  const resolvedRevision = resolveRevision({
-    cwd,
-    revision,
-    ignorePaths: revisionIgnorePaths(cwd, dir, input, inputPath),
-  });
+  const resolvedRevision = resolveProsecutionRevision({ cwd, dir, revision, input, inputPath });
   const ticketHash = ticket ? ticketDefinitionHash(cwd, ticket, dir) : null;
   if (ticket && !ticketHash) errors.push(`ticket definition not found for ${ticket}; define it in .adlc/tickets.json`);
   if (!resolvedRevision) errors.push('revision could not be resolved; pass --revision or run inside a git worktree');
@@ -293,6 +305,29 @@ export function runProsecution(input, {
 
   const dryLenses = finalDryLenses(passResults);
   if (consecutiveDry >= 2 && openFindings.size === 0 && dryLenses.size >= 3) {
+    // Trust-root tier: a clean same-model P5 is not sufficient. Require a
+    // cross-model adversarial approve from a DISTINCT provider, bound to this
+    // revision. Missing -> gate-fail (exit 2), never a silent pass.
+    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision })) {
+      writeEvidence('p5-cross-model-missing', {
+        ticket,
+        target,
+        revision: resolvedRevision,
+        pass: passResults.length,
+        consecutiveDry,
+        dryLenses: Array.from(dryLenses).sort(),
+      }, dir);
+      return {
+        status: 'gate-fail',
+        exitCode: 2,
+        target,
+        ticket,
+        revision: resolvedRevision,
+        passes: passResults,
+        openFindings: [],
+        message: `P5 incomplete: trust-root-tier change requires a cross-model adversarial approve from a distinct provider, recorded at revision ${resolvedRevision}`,
+      };
+    }
     writeEvidence('p5-complete', {
       ticket,
       target,

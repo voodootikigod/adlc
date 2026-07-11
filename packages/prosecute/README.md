@@ -99,11 +99,49 @@ backing the bundled example (`docs/examples/p5-passes.json`) are deliberately ca
 of that ignore rule and tracked -- see the comment in `.gitignore` before treating anything
 under `.omo/` as safe to delete.
 
+## Trust-root tier — required cross-model review (T39)
+
+For the **trust-root tier**, a clean same-model P5 is not sufficient. The CLI computes the
+changed-file set from `git diff --name-only <base>...HEAD` (default `--base main`) and
+classifies it with `lib/tier.mjs`. A change is trust-root tier iff it touches an
+enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`), a
+gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a declared rails deny-path
+of any ticket, or a trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+`scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`). For such a change,
+a passing P5 **additionally** requires a `cross-model-review` **`approve`** in the manifest
+whose `provider` is distinct from the author's and whose `revision` equals the reviewed
+revision. Missing → exit 2.
+
+Record the attestation (after an actual cross-model review approves) with:
+
+```
+adlc prosecute record-cross-model --ticket <id> \
+  --provider <p> --author-provider <a> --verdict approve [--input <passes.json>] [--revision <r>]
+```
+
+It resolves the revision the same way the gate does (`resolveProsecutionRevision`), so pass
+the same `--input`/`--revision` you use for the gate run. `--provider` must differ from
+`--author-provider` — a same-model attestation is refused at record time and rejected by the
+gate (`lib/cross-model.mjs`, fail-closed). Like rails-guard this cannot prove a model ran; it
+raises the bar to an auditable, revision-bound, append-only, distinct-provider record. See
+[ADR-0007](../../docs/adr/0007-multimodel-adversarial-review.md).
+
 ## Exit codes
 
-- `0`: two consecutive dry passes were recorded
+- `0`: two consecutive dry passes were recorded (or a finding/attestation was recorded)
 - `1`: operational error
-- `2`: verified/needs-human findings remain or the convergence budget ended before two dry passes
+- `2`: verified/needs-human findings remain, the convergence budget ended before two dry
+  passes, or a trust-root-tier change lacks a matching cross-model attestation
+
+## Core gaps
+
+This package records cross-model attestations through `@adlc/gate-manifest`'s chained
+`record()` (see `lib/cross-model.mjs`) and reads them back via `@adlc/core`'s `readEntries`.
+The trust-root-tier classifier (`lib/tier.mjs`) lives here rather than in `@adlc/core`
+(frozen) because it is prosecute-specific policy; if a second package ever needs the same
+binary trust-root decision, the enumerated surfaces (enforcement packages, producers,
+trust-root files) would ideally graduate into `@adlc/core` alongside the existing
+`railpath`/`risk-tier` helpers so the list has a single source of truth.
 
 ## ADLC phase
 

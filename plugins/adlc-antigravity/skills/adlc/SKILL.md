@@ -113,6 +113,16 @@ downstream reads this file; nothing else creates it. Author here first.
   by scoring whether review catches injected mutants ("who reviews the reviewer").
 - `adversarial-review --providers <a,b> [--verify]` — ≥2 distinct providers, cross-model
   and fresh-context, on the risk gate; loop review→fix→re-review until `exit 0 = SHIP`.
+- **Cross-model is GATED (not just advised) for the trust-root tier.** If the change
+  touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
+  a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, or a
+  trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+  `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`), a clean
+  **same-model** P5 is NOT enough: the P5 prosecute runner (given `--base <ref>`) exits 2
+  until the manifest holds a `cross-model-review` approve from a provider DISTINCT from the
+  author, bound to the reviewed revision. Record it with the runner's `record-cross-model`
+  subcommand (`--ticket <id> --provider <p> --author-provider <a> --verdict approve
+  [--input <passes.json>]`) (T39).
 
 ### P6 — Integrate (the human gate)
 This gate is a human decision, not something an agent passes. Surface the

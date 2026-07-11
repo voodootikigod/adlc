@@ -63,6 +63,16 @@ statement.
    provider's clean approve as advisory, not a gate-pass — different models have different
    blind spots (see [ADR-0007](./adr/0007-multimodel-adversarial-review.md)). Use
    [`adlc review-calibration`](./tools/review-calibration.md) to decide, on evidence, when one model's recall is too low to trust alone.
+   For the narrow **trust-root tier** — a change whose `git diff --name-only <base>...HEAD`
+   touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
+   a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, or a
+   trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+   `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`) — cross-model
+   review is no longer advisory but **GATED**: `adlc prosecute` (given `--base`) exits 2
+   unless the manifest holds a `cross-model-review` **`approve`** from a provider distinct
+   from the author, bound to the reviewed revision. Record it with
+   `adlc prosecute record-cross-model --ticket <id> --provider <p> --author-provider <a>
+   --verdict approve [--input <passes.json>]` (T39; classifier `packages/prosecute/lib/tier.mjs`).
 7. After review, use [`adlc lesson-foundry`](./tools/lesson-foundry.md) and [`adlc rejection-mining`](./tools/rejection-mining.md) to convert repeated review
    findings into deterministic lint checks, skills, or spec-gap templates. Lenses
    that generalize past one site graduate out of the local `.adlc/lessons/` staging

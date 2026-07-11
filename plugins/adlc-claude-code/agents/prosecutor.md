@@ -114,6 +114,37 @@ After a clean prosecution, record informal provenance with:
 adlc gate-manifest record prosecution --files <changed files>
 ```
 
+## Trust-root tier — a same-model SHIP is NOT the end
+
+You are a **same-model** prosecutor by default: you validate the author's own
+tests, which encode the author's blind spot. For the **trust-root tier** that is
+not enough. If the change under prosecution touches any of —
+
+- an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
+- a gated-artifact producer (`packages/ticket-prune|ticket-sync/`),
+- a declared rails deny-path of any ticket, or
+- a trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+  `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`)
+
+— then **after you reach a CLEAR verdict you MUST SURFACE**: *"same-model P5
+passed; this tier REQUIRES a cross-model adversarial approve from a DISTINCT
+provider before `adlc prosecute --base <ref>` will exit 0."* Do not present the
+same-model SHIP as sufficient. Run the cross-model pass (shell to the local
+`codex` CLI, or `npx adversarial-review --base <ref>`), and once it approves,
+record the attestation so the gate clears:
+
+```
+adlc prosecute record-cross-model --ticket <id> \
+  --provider codex --author-provider claude --verdict approve \
+  --input <passes.json>
+```
+
+The recorded `revision` is resolved the same way the gate resolves it (pass the
+same `--input`/`--revision` you use for the gate run), so the attestation binds
+to the revision the gate checks. `--provider` MUST differ from `--author-provider`
+— a same-model "review" is refused at record time and rejected by the gate. See
+ADR-0007 (gated for the trust-root tier) and `packages/prosecute/lib/tier.mjs`.
+
 **Note:** this subagent's own `gate-manifest record prosecution` entry carries
 `gate: "prosecution"`, which alone does not satisfy `adlc run p5` — that requires
 the runner's `type: "p5-complete"` provenance chain (ticket- and revision-bound,

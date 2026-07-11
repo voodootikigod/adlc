@@ -1,0 +1,130 @@
+// Concern: trust-root-tier cross-model gate in runProsecution (T39 AC3, AC4).
+//
+// When requireCrossModel is true, a P5 that would otherwise pass (two consecutive
+// dry passes, three distinct dry lenses, no open findings) ALSO requires a
+// distinct-provider cross-model `approve` bound to the CURRENT revision. Missing ->
+// exit 2 with a naming message + a p5-cross-model-missing evidence entry. When
+// requireCrossModel is false (default), behavior is byte-identical to today.
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { runProsecution } from '../lib/run.mjs';
+import { recordCrossModelReview } from '../lib/cross-model.mjs';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { FIXTURE_REVISION, input, tmpAdlc } from './helpers.mjs';
+
+const REV = FIXTURE_REVISION;
+
+// A pass set that converges cleanly (three distinct trailing dry lenses).
+function cleanPasses() {
+  return [
+    { lens: 'security', findings: [], dry_evidence: 'no security findings' },
+    { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
+    { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
+  ];
+}
+
+// The ordered sequence of evidence entry types written to the manifest. Two runs
+// of the same input must emit the same shape of evidence (AC4 regression proof);
+// we compare the type sequence rather than full entries because the fixtures embed
+// per-tempdir absolute paths in transcript/review-packet fields.
+function entryTypes(dir) {
+  return readFileSync(join(dir, 'manifest.jsonl'), 'utf8')
+    .trim().split('\n').map((l) => JSON.parse(l).type);
+}
+
+describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => {
+  it('AC3: exits 2 when no matching cross-model attestation exists', () => {
+    const dir = tmpAdlc();
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+    });
+    assert.equal(result.exitCode, 2);
+    assert.match(result.message, /cross-model adversarial approve from a distinct provider/);
+    assert.match(result.message, new RegExp(REV));
+    const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
+    assert.match(manifest, /"type":"p5-cross-model-missing"/);
+    assert.doesNotMatch(manifest, /"type":"p5-complete"/);
+  });
+
+  it('AC3: exits 0 once a distinct-provider approve bound to the current revision exists', () => {
+    const dir = tmpAdlc();
+    recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+    });
+    assert.equal(result.exitCode, 0);
+    const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
+    assert.match(manifest, /"type":"p5-complete"/);
+  });
+
+  it('AC3: a stale-revision approve does NOT clear the gate', () => {
+    const dir = tmpAdlc();
+    recordCrossModelReview({ ticket: 'T1', revision: 'stale-rev', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+    });
+    assert.equal(result.exitCode, 2);
+  });
+
+  it('AC3: a same-provider (non-distinct) attestation does NOT satisfy the gate', () => {
+    const dir = tmpAdlc();
+    // recordCrossModelReview refuses to create this, so inject it directly to
+    // prove the READ side (hasCrossModelApprove) also rejects a forged same-model entry.
+    record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'anthropic', authorProvider: 'anthropic', verdict: 'approve', revision: REV }), dir });
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+    });
+    assert.equal(result.exitCode, 2);
+  });
+
+  it('does not require cross-model when the underlying P5 already fails', () => {
+    // Only two distinct dry lenses: P5 fails for the ordinary reason, not the
+    // cross-model reason — the tier gate must not mask the real failure message.
+    const dir = tmpAdlc();
+    const result = runProsecution(input(dir, {
+      passes: [
+        { lens: 'security', findings: [], dry_evidence: 'no security findings' },
+        { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
+      ],
+    }), { dir, ticket: 'T1', revision: REV, requireCrossModel: true });
+    assert.equal(result.exitCode, 2);
+    assert.match(result.message, /fewer than three distinct dry lenses/);
+    const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
+    assert.doesNotMatch(manifest, /"type":"p5-cross-model-missing"/);
+  });
+});
+
+describe('cross-model gate — non-trust-root tier is unaffected (AC4)', () => {
+  it('requireCrossModel=false passes exactly as today (no cross-model entry needed)', () => {
+    const dir = tmpAdlc();
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: false,
+    });
+    assert.equal(result.exitCode, 0);
+    const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
+    assert.match(manifest, /"type":"p5-complete"/);
+    assert.doesNotMatch(manifest, /cross-model/);
+  });
+
+  it('the default (option omitted) is byte-identical to explicit requireCrossModel=false', () => {
+    const dirA = tmpAdlc();
+    const dirB = tmpAdlc();
+    const resA = runProsecution(input(dirA, { passes: cleanPasses() }), { dir: dirA, ticket: 'T1', revision: REV });
+    const resB = runProsecution(input(dirB, { passes: cleanPasses() }), { dir: dirB, ticket: 'T1', revision: REV, requireCrossModel: false });
+    assert.deepEqual({ ...resA }, { ...resB });
+    // Same ordered evidence shape, and neither run touches the cross-model path.
+    assert.deepEqual(entryTypes(dirA), entryTypes(dirB));
+    assert.ok(!entryTypes(dirA).some((t) => t.includes('cross-model')));
+  });
+
+  it('an ordinary failing change is unchanged with the option omitted', () => {
+    const dir = tmpAdlc();
+    const result = runProsecution(input(dir, {
+      passes: [{ lens: 'security', findings: [], dry_evidence: 'no findings' }],
+    }), { dir, ticket: 'T1', revision: REV });
+    assert.equal(result.exitCode, 2);
+    assert.match(result.message, /convergence budget ended before two consecutive dry passes/);
+  });
+});
