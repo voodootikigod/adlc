@@ -146,27 +146,30 @@ try {
 
 // Classify the change under prosecution: if it is trust-root tier, a clean P5
 // additionally requires a distinct-provider cross-model approve at this revision.
-let requireCrossModel = false;
+// FAIL CLOSED: if we cannot compute the changed-file set (base ref unresolvable),
+// we cannot decide whether the tier gate applies, so we REFUSE the run (exit 1)
+// rather than fall back to an ungated P5 — a silent skip of the cross-model
+// requirement is exactly the fail-open class ADLC rejects. CI must provide the
+// base (fetch it or pass --base <ref>); see docs/ci/rails-guard.yml.
+let changed;
 try {
-  const changed = git(['diff', '--name-only', '-z', `${values.base}...HEAD`, '--'])
+  changed = git(['diff', '--name-only', '-z', `${values.base}...HEAD`, '--'])
     .split('\0').filter(Boolean);
-  let tickets = [];
-  try {
-    tickets = JSON.parse(readFileSync('.adlc/tickets.json', 'utf8'))?.tickets ?? [];
-  } catch {
-    // No ticket table reachable — rails deny-path tiering is simply unavailable.
-  }
-  const tier = classifyTrustRootTier({ changedFiles: changed, tickets });
-  requireCrossModel = tier.isTrustRootTier;
-  if (tier.isTrustRootTier) {
-    console.error(`trust-root tier: cross-model adversarial approve REQUIRED (base ${values.base}). Reasons:`);
-    for (const reason of tier.reasons) console.error(`  - ${reason}`);
-  }
 } catch (err) {
-  // Base ref unresolvable (e.g. no 'main' in a shallow CI checkout): cannot tier,
-  // so fall back to the ungated P5. The rails-guard CI diff gate remains the
-  // unbypassable backstop. Warn so the operator can pass an explicit --base.
-  console.error(`warning: could not compute changed-file set for tiering against '${values.base}': ${err.message}`);
+  opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
+}
+let tickets = [];
+try {
+  tickets = JSON.parse(readFileSync('.adlc/tickets.json', 'utf8'))?.tickets ?? [];
+} catch {
+  // No ticket table reachable — rails deny-path tiering is simply unavailable
+  // (the file-prefix and trust-root-file surfaces still classify).
+}
+const tier = classifyTrustRootTier({ changedFiles: changed, tickets });
+const requireCrossModel = tier.isTrustRootTier;
+if (tier.isTrustRootTier) {
+  console.error(`trust-root tier: cross-model adversarial approve REQUIRED (base ${values.base}). Reasons:`);
+  for (const reason of tier.reasons) console.error(`  - ${reason}`);
 }
 
 const result = runProsecution(input, {

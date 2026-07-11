@@ -151,4 +151,21 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
       rmSync(repo.dir, { recursive: true, force: true });
     }
   });
+
+  it('FAILS CLOSED (exit 1) when the base ref is unresolvable — never a silent ungated pass', () => {
+    // Even with a P5 that would otherwise converge, an unresolvable base ref means
+    // the tier cannot be decided, so the gate must REFUSE (op-error) rather than
+    // run ungated. This pins the fail-closed direction the ADLC review requires.
+    const repo = scratchRepo('apps/docs/x.mdx'); // an ordinary diff — would pass P5 if it ran
+    try {
+      writePasses({ ...repo, revision: 'placeholder' });
+      const revision = resolveRev(repo);
+      writePasses({ ...repo, revision });
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'no-such-ref', '--dir', '.adlc', '--json'], repo.dir);
+      assert.equal(res.status, 1, 'unresolvable base ref must be exit 1, not a silent ungated exit 0');
+      assert.match(res.stderr, /cannot determine trust-root tier: base ref 'no-such-ref' unresolvable/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
 });

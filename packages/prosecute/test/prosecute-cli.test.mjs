@@ -34,6 +34,9 @@ describe('adlc-prosecute cli', () => {
       ],
     }));
     const bin = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    // --base HEAD makes `git diff HEAD...HEAD` empty -> non-trust-root -> the tier
+    // gate stays off, so this test asserts P5 CONVERGENCE hermetically, independent
+    // of whatever the ambient worktree branch happens to touch (T39).
     const out = execFileSync(process.execPath, [
       bin,
       '--input',
@@ -42,6 +45,8 @@ describe('adlc-prosecute cli', () => {
       'T1',
       '--revision',
       FIXTURE_REVISION,
+      '--base',
+      'HEAD',
       '--dir',
       dir,
       '--json',
@@ -53,6 +58,7 @@ describe('adlc-prosecute cli', () => {
   it('accepts the bundled docs fixture from the repository root', () => {
     const dir = tmpAdlc();
     const bin = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    // --base HEAD isolates this convergence assertion from ambient-branch tiering (T39).
     const out = execFileSync(process.execPath, [
       bin,
       '--input',
@@ -61,6 +67,8 @@ describe('adlc-prosecute cli', () => {
       'T1',
       '--revision',
       'docs-example-revision',
+      '--base',
+      'HEAD',
       '--dir',
       dir,
       '--json',

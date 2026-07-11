@@ -112,6 +112,14 @@ a passing P5 **additionally** requires a `cross-model-review` **`approve`** in t
 whose `provider` is distinct from the author's and whose `revision` equals the reviewed
 revision. Missing → exit 2.
 
+**Fail-closed on an unresolvable base.** Tiering needs the base ref to compute the diff. If
+`<base>` cannot be resolved (e.g. a shallow CI checkout with no `main`), the CLI **refuses
+the run with exit 1** rather than silently skipping the cross-model requirement — a silent
+ungated pass is the fail-open class this gate exists to prevent. **CI must provide the
+base** (fetch it, e.g. `git fetch --no-tags origin main`, or pass an explicit `--base
+<ref>`). Hermetic unit runs that assert convergence only (not tiering) pass `--base HEAD`
+so `git diff HEAD...HEAD` is empty and the tier gate stays off.
+
 Record the attestation (after an actual cross-model review approves) with:
 
 ```
