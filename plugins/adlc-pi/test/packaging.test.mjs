@@ -22,6 +22,13 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
 
 // --- AC1: package.json field contract -------------------------------------
 
+// T38 P5 finding F1: cursor/opencode's install-smoke scripts guard their
+// package.json 'name' field; pi/antigravity had no such guard, so a stale
+// -package suffix regressing back in would ship silently. pi publishes next.
+test('T38: package.json name is the renamed short form', () => {
+  assert.equal(pkg.name, '@adlc/pi');
+});
+
 test('AC1: package.json is publishable (not private, licensed, sourced)', () => {
   assert.notEqual(pkg.private, true, 'package must not be private');
   assert.equal(pkg.license, 'MIT');
