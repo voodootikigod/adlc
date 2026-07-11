@@ -78,6 +78,14 @@ describe('codex integration docs flow', () => {
       };
       writeFileSync(join(dir, '.adlc/p5-passes.json'), JSON.stringify(passes));
 
+      // Commit the .adlc bundle so tickets.json is TRACKED and unchanged vs base —
+      // matching real usage. Otherwise the working-tree-inclusive trust-root tier
+      // (T39) would (correctly) treat the untracked .adlc/tickets.json as a
+      // trust-root change and demand a cross-model attestation; this test exercises
+      // the documented P5→P6 recorder flow, not tiering.
+      g('add', '-A');
+      g('commit', '-qm', 'adlc bundle');
+
       const prosecute = join(repoRoot, 'packages/prosecute/bin/adlc-prosecute.mjs');
       const runner = join(repoRoot, 'packages/runner/bin/adlc.mjs');
       const common = { cwd: dir, encoding: 'utf8' };
