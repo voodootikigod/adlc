@@ -143,6 +143,11 @@ and C5 (`rails-guard`).
 
 ## Core gaps
 
-None. All required functionality is available in `@adlc/core`:
+`@adlc/core` (frozen) has no completion-aware ticket loader: `loadTickets`
+returns every ticket including ones tombstoned with `completed: true`. `--all`
+audits open backlog, so `lib/active-tickets.mjs` filters completed tickets
+locally (an identical copy lives in `merge-forecast` and `model-router`). A
+by-id coldstart still uses the full set, so you can always audit a completed
+ticket you name explicitly. Everything else is available in `@adlc/core`:
 `loadTickets`, `complete`, `extractJson`, `parseArgs`, `pass`, `gateFail`,
 `opError`, `printJson`, `promptOnly`, `detectProvider`.

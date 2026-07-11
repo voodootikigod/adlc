@@ -41,6 +41,13 @@ untouched and surfaced under `needsCeremony`: completing it also expires its
 rails, a privileged unfreeze reserved for the protected-base admin ceremony
 (`ADLC_RAILS_BYPASS=1`).
 
+Because the tombstone leaves the ticket in `tickets.json`, the backlog
+enumerators (`merge-forecast`, `model-router`, `coldstart --all`) skip
+`completed: true` tickets so finished work is no longer scheduled, routed, or
+audited as open backlog — the completion is honored, not just recorded. A
+by-id lookup (e.g. `coldstart <id>`) still sees completed tickets, so you can
+always act on one you name explicitly.
+
 ## How "stale" is decided
 
 1. **Explicit `status` field wins when present.** `done` / `closed` /

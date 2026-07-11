@@ -14,6 +14,7 @@ import {
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll } from '../lib/gate.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
+import { activeTickets } from '../lib/active-tickets.mjs';
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
 // so plain --prompt-only runs never pay for or depend on it.
@@ -63,7 +64,12 @@ if (runAll) {
   if (tickets.length === 0) {
     opError('no tickets found in ticket file');
   }
-  targets = tickets;
+  // --all audits open backlog only: skip completed (tombstoned) tickets. A
+  // completed ticket can still be coldstarted explicitly by id (below).
+  targets = activeTickets(tickets);
+  if (targets.length === 0) {
+    opError('no active tickets found (all tickets are completed)');
+  }
 } else {
   const ticketId = positionals[0];
   if (!ticketId) {

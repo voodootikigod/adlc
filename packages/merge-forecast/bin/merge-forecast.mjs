@@ -16,6 +16,7 @@
 import { parseArgs, loadTickets, pass, opError, printJson } from '@adlc/core';
 import { runForecast } from '../lib/forecast.mjs';
 import { formatForecast } from '../lib/output.mjs';
+import { activeTickets } from '../lib/active-tickets.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -69,13 +70,15 @@ const mergeMin = values['merge-min'] !== undefined ? parseNum(values['merge-min'
 const coChangeLimit = parseNum(values['co-change-limit'], 'co-change-limit', 500, true);
 const conflictThreshold = parseNum(values['conflict-threshold'], 'conflict-threshold', 0.5);
 
-// Load tickets
-const { tickets, errors: ticketErrors } = loadTickets(ticketsPath);
+// Load tickets, then drop completed (tombstoned) tickets: finished work must
+// not be scheduled or conflict-forecast as open backlog.
+const { tickets: allTickets, errors: ticketErrors } = loadTickets(ticketsPath);
 if (ticketErrors.length > 0) {
   opError(`ticket errors:\n  ${ticketErrors.join('\n  ')}`);
 }
+const tickets = activeTickets(allTickets);
 if (tickets.length === 0) {
-  opError('no tickets found');
+  opError(allTickets.length > 0 ? 'no active tickets found (all tickets are completed)' : 'no tickets found');
 }
 
 // Run forecast

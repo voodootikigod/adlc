@@ -10,6 +10,7 @@ import { readEntries, ADLC_DIR } from '@adlc/core';
 import { buildPriors } from './priors.mjs';
 import { assignAll } from './assign.mjs';
 import { FRONTIER_CATEGORIES } from './assign.mjs';
+import { activeTickets } from './active-tickets.mjs';
 
 /**
  * Run the model routing pipeline.
@@ -28,11 +29,13 @@ export async function runRouter(opts = {}) {
     adlcDir = ADLC_DIR,
   } = opts;
 
-  // Load tickets
-  const { tickets, errors: ticketErrors } = loadTickets(ticketsPath);
+  // Load tickets, then drop completed (tombstoned) tickets: a finished ticket
+  // must not be assigned a model or gated as open backlog.
+  const { tickets: allTickets, errors: ticketErrors } = loadTickets(ticketsPath);
   if (ticketErrors.length > 0) {
     throw Object.assign(new Error(ticketErrors.join('\n')), { isOpError: true });
   }
+  const tickets = activeTickets(allTickets);
 
   if (tickets.length === 0) {
     return { assignments: [], p3Findings: [], ticketErrors, skippedLedger: [] };
