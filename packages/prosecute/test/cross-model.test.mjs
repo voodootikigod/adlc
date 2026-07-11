@@ -54,7 +54,7 @@ describe('hasCrossModelApprove — round-trip and binding', () => {
     const dir = tmp();
     try {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1' }), true);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -62,7 +62,7 @@ describe('hasCrossModelApprove — round-trip and binding', () => {
     const dir = tmp();
     try {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-OLD', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-NEW' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-NEW', authorProvider: 'anthropic' }), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -70,7 +70,7 @@ describe('hasCrossModelApprove — round-trip and binding', () => {
     const dir = tmp();
     try {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
-      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -78,14 +78,45 @@ describe('hasCrossModelApprove — round-trip and binding', () => {
     const dir = tmp();
     try {
       recordCrossModelReview({ ticket: 'T2', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('author anchoring: a prosecution author EQUAL to the reviewer provider does NOT pass', () => {
+    // Entry self-reports a distinct pair (openai reviewer, anthropic author), but the
+    // PROSECUTION run declares its author is openai — the same as the reviewer. The
+    // reviewer is therefore NOT distinct from the real author: fail closed.
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'openai' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('author anchoring: an attestation recorded for a DIFFERENT author context does NOT pass', () => {
+    // Reviewer openai is distinct from the prosecution author gemini, but the record
+    // was made for author anthropic, not gemini — it is not an attestation for THIS
+    // author context, so it must not clear the gate.
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'gemini' }), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('empty manifest → false (fail-closed)', () => {
     const dir = tmp();
     try {
-      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('missing-arg guard: no ticket/revision/authorProvider → false (fail-closed public API)', () => {
+    const dir = tmp();
+    try {
+      assert.equal(hasCrossModelApprove({ dir }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: '', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1' }), false); // authorProvider omitted
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

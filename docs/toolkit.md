@@ -63,7 +63,8 @@ statement.
    provider's clean approve as advisory, not a gate-pass — different models have different
    blind spots (see [ADR-0007](./adr/0007-multimodel-adversarial-review.md)). Use
    [`adlc review-calibration`](./tools/review-calibration.md) to decide, on evidence, when one model's recall is too low to trust alone.
-   For the narrow **trust-root tier** — a change whose `git diff --name-only <base>...HEAD`
+   For the narrow **trust-root tier** — a change whose working tree vs `<base>` (tracked
+   changes incl. uncommitted, unioned with untracked files)
    touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
    a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, or a
    trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,

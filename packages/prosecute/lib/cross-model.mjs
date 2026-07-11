@@ -53,14 +53,23 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
 }
 
 /**
- * True iff the manifest holds a cross-model `approve` that satisfies the gate:
- * verdict === 'approve', bound to `revision`, for `ticket`, with a non-empty
- * provider distinct from a non-empty authorProvider. Anything else → false
- * (fail-closed). gate-manifest writes entries under `gate`; prosecute's own
- * evidence writer uses `type` — normalize both so either shape is honored.
+ * True iff the manifest holds a cross-model `approve` that satisfies the gate.
+ *
+ * CRITICAL author-anchoring: the caller passes `authorProvider` from the
+ * PROSECUTION run (CLI `--author-provider` / `ADLC_AUTHOR_PROVIDER`), NOT from the
+ * attestation. An attestation defines both `provider` and `authorProvider`, so if
+ * we only compared the entry's two self-reported fields a same-provider author
+ * could just record `provider:"claude", authorProvider:"openai"` and pass. Instead
+ * the reviewer's `provider` must differ from the PROSECUTION-declared author, and
+ * the attestation must have been recorded FOR that author context
+ * (`entry.data.authorProvider === authorProvider`). We keep the entry's own
+ * `provider !== authorProvider` check too (belt and suspenders on the write side).
+ *
+ * Everything else fails closed. gate-manifest writes entries under `gate`;
+ * prosecute's own evidence writer uses `type` — normalize both.
  */
-export function hasCrossModelApprove({ dir, ticket, revision } = {}) {
-  if (!ticket || !revision) return false;
+export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } = {}) {
+  if (!ticket || !revision || !authorProvider) return false;
   const { entries } = readEntries('manifest', dir);
   return entries.some((entry) => {
     if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) return false;
@@ -69,10 +78,16 @@ export function hasCrossModelApprove({ dir, ticket, revision } = {}) {
     if (!data || typeof data !== 'object') return false;
     if (data.verdict !== 'approve') return false;
     if (data.revision !== revision) return false;
-    const { provider, authorProvider } = data;
+    const provider = data.provider;
+    const entryAuthor = data.authorProvider;
     if (typeof provider !== 'string' || provider.trim() === '') return false;
-    if (typeof authorProvider !== 'string' || authorProvider.trim() === '') return false;
+    if (typeof entryAuthor !== 'string' || entryAuthor.trim() === '') return false;
+    // Write-side belt-and-suspenders: the attestation must not be same-provider.
+    if (provider === entryAuthor) return false;
+    // Author anchored to the prosecution run: the reviewer must differ from the
+    // real (prosecution-declared) author, and the record must be for THIS author.
     if (provider === authorProvider) return false;
+    if (entryAuthor !== authorProvider) return false;
     return true;
   });
 }

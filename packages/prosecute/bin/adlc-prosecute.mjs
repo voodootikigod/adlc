@@ -1,9 +1,25 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { parseArgs, printJson, opError, recordFinding, git } from '@adlc/core';
+import { join } from 'node:path';
+import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles } from '@adlc/core';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview } from '../lib/cross-model.mjs';
+
+// Load the ticket table for rails-deny-path tiering from the SAME --dir the
+// prosecution uses, falling back to .adlc/tickets.json. Reading from a hard-coded
+// path would make rails declared under a custom --dir invisible to the tier
+// (under-trigger). Mirrors ticketDefinitionHash's lookup order in lib/run.mjs.
+function loadTicketsForTier(dir) {
+  for (const path of [join(dir, 'tickets.json'), '.adlc/tickets.json']) {
+    try {
+      return JSON.parse(readFileSync(path, 'utf8'))?.tickets ?? [];
+    } catch {
+      // Try the next supported ticket location.
+    }
+  }
+  return [];
+}
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -39,9 +55,14 @@ ADLC P5 review-evidence recorder.
 
   When the change under prosecution is TRUST-ROOT TIER (touches an enforcement
   package, a gated-artifact producer, a rails deny-path, or a trust-root file —
-  computed from 'git diff --name-only <base>...HEAD'), a clean P5 ALSO requires a
-  recorded cross-model adversarial approve from a DISTINCT provider, bound to the
-  reviewed revision. The tier reasons are printed to stderr on a tiered run.
+  computed from the WORKING TREE vs <base>: two-dot 'git diff --name-only <base>'
+  unioned with untracked files, so an UNCOMMITTED trust-root edit still tiers), a
+  clean P5 ALSO requires a recorded cross-model adversarial approve from a provider
+  DISTINCT from the author, bound to the reviewed revision. A tiered run MUST declare
+  the author via --author-provider <p> (or ADLC_AUTHOR_PROVIDER) — without it the run
+  FAILS CLOSED (exit 1), since distinctness cannot be proven without the author. The
+  tier reasons are printed to stderr on a tiered run. If <base> is unresolvable the
+  run FAILS CLOSED (exit 1): CI must fetch/provide the base.
 
   record-cross-model --ticket id --provider <p> --author-provider <a> --verdict approve
                      [--revision rev] [--input <passes.json>] [--base main] [--dir .adlc]
@@ -146,31 +167,38 @@ try {
 
 // Classify the change under prosecution: if it is trust-root tier, a clean P5
 // additionally requires a distinct-provider cross-model approve at this revision.
-// FAIL CLOSED: if we cannot compute the changed-file set (base ref unresolvable),
-// we cannot decide whether the tier gate applies, so we REFUSE the run (exit 1)
-// rather than fall back to an ungated P5 — a silent skip of the cross-model
-// requirement is exactly the fail-open class ADLC rejects. CI must provide the
-// base (fetch it or pass --base <ref>); see docs/ci/rails-guard.yml.
+//
+// WORKING-TREE-INCLUSIVE: prosecution binds to the working-tree revision
+// (resolveRevision hashes the worktree), so the tier's changed-file set MUST match
+// what is actually prosecuted — not just committed history. A three-dot
+// `base...HEAD` diff misses an UNCOMMITTED edit to a trust-root file, which would
+// let a converged P5 exit 0 with no attestation (fail-open). We therefore union:
+//   • tracked changes of the working tree vs base (two-dot `git diff --name-only <base>`)
+//   • untracked, non-ignored files (`git ls-files --others --exclude-standard`)
+//
+// FAIL CLOSED: if the changed-file set cannot be computed (base ref unresolvable,
+// or not a git repo), we cannot decide whether the tier gate applies, so we REFUSE
+// the run (exit 1) rather than fall back to an ungated P5. CI must provide the base
+// (fetch it or pass --base <ref>); see docs/ci/rails-guard.yml.
 let changed;
 try {
-  changed = git(['diff', '--name-only', '-z', `${values.base}...HEAD`, '--'])
+  const root = repoRoot();
+  const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
     .split('\0').filter(Boolean);
+  changed = [...new Set([...tracked, ...untracked])];
 } catch (err) {
   opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
 }
-let tickets = [];
-try {
-  tickets = JSON.parse(readFileSync('.adlc/tickets.json', 'utf8'))?.tickets ?? [];
-} catch {
-  // No ticket table reachable — rails deny-path tiering is simply unavailable
-  // (the file-prefix and trust-root-file surfaces still classify).
-}
-const tier = classifyTrustRootTier({ changedFiles: changed, tickets });
+const tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir) });
 const requireCrossModel = tier.isTrustRootTier;
 if (tier.isTrustRootTier) {
   console.error(`trust-root tier: cross-model adversarial approve REQUIRED (base ${values.base}). Reasons:`);
   for (const reason of tier.reasons) console.error(`  - ${reason}`);
 }
+
+// Author identity anchored to THIS invocation (never the attestation's self-report).
+const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROVIDER;
 
 const result = runProsecution(input, {
   ticket: values.ticket,
@@ -179,6 +207,7 @@ const result = runProsecution(input, {
   inputPath: values.input,
   dir: values.dir,
   requireCrossModel,
+  authorProvider,
 });
 
 if (values.json) {

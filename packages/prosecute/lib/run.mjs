@@ -190,9 +190,17 @@ export function runProsecution(input, {
   inputPath,
   cwd = process.cwd(),
   requireCrossModel = false,
+  authorProvider,
 } = {}) {
   const errors = validateInput(input);
   if (!ticket) errors.push('ticket is required for P5 evidence');
+  // FAIL CLOSED: a trust-root-tier prosecution cannot prove the reviewer was a
+  // DISTINCT provider without knowing who the author is. The author identity must
+  // come from the prosecution invocation (--author-provider / ADLC_AUTHOR_PROVIDER),
+  // never from the attestation (which the author fully controls).
+  if (requireCrossModel && (typeof authorProvider !== 'string' || authorProvider.trim() === '')) {
+    errors.push('trust-root-tier prosecution requires --author-provider (or ADLC_AUTHOR_PROVIDER) to anchor author identity for the cross-model gate');
+  }
   const resolvedRevision = resolveProsecutionRevision({ cwd, dir, revision, input, inputPath });
   const ticketHash = ticket ? ticketDefinitionHash(cwd, ticket, dir) : null;
   if (ticket && !ticketHash) errors.push(`ticket definition not found for ${ticket}; define it in .adlc/tickets.json`);
@@ -308,7 +316,7 @@ export function runProsecution(input, {
     // Trust-root tier: a clean same-model P5 is not sufficient. Require a
     // cross-model adversarial approve from a DISTINCT provider, bound to this
     // revision. Missing -> gate-fail (exit 2), never a silent pass.
-    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision })) {
+    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision, authorProvider })) {
       writeEvidence('p5-cross-model-missing', {
         ticket,
         target,

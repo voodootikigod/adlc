@@ -102,15 +102,30 @@ under `.omo/` as safe to delete.
 ## Trust-root tier — required cross-model review (T39)
 
 For the **trust-root tier**, a clean same-model P5 is not sufficient. The CLI computes the
-changed-file set from `git diff --name-only <base>...HEAD` (default `--base main`) and
-classifies it with `lib/tier.mjs`. A change is trust-root tier iff it touches an
-enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`), a
-gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a declared rails deny-path
-of any ticket, or a trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
-`scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`). For such a change,
-a passing P5 **additionally** requires a `cross-model-review` **`approve`** in the manifest
-whose `provider` is distinct from the author's and whose `revision` equals the reviewed
-revision. Missing → exit 2.
+changed-file set from the **WORKING TREE vs `<base>`** (default `--base main`) — the two-dot
+`git diff --name-only <base>` (tracked changes incl. uncommitted) unioned with untracked,
+non-ignored files (`git ls-files --others --exclude-standard`) — and classifies it with
+`lib/tier.mjs`. Working-tree-inclusive is load-bearing: prosecution binds to the working-tree
+revision, so a three-dot `<base>...HEAD` diff (committed only) would miss an **uncommitted**
+edit to a trust-root file and let a converged P5 exit 0 with no attestation. A change is
+trust-root tier iff it touches an enforcement package
+(`packages/rails-guard|prosecute|gate-manifest|build-gate/`), a gated-artifact producer
+(`packages/ticket-prune|ticket-sync/`), a declared rails deny-path of any ticket, or a
+trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+`scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`). The ticket table for
+rails-deny-path tiering is read from the **same `--dir`** the prosecution uses (falling back
+to `.adlc/tickets.json`), so rails declared under a custom `--dir` are not invisible to the
+tier. For such a change, a passing P5 **additionally** requires a `cross-model-review`
+**`approve`** in the manifest whose `provider` is distinct from the author and whose
+`revision` equals the reviewed revision. Missing → exit 2.
+
+**Author identity is anchored to the prosecution run.** A tiered run MUST declare the author
+via `--author-provider <p>` (or `ADLC_AUTHOR_PROVIDER`); distinctness is measured against
+*that* prosecution-declared author, not the entry's self-reported `authorProvider` (an
+attestation defines both sides, so comparing only its own fields is forgeable). The gate also
+requires the record to have been made for that author context. A tiered run with **no**
+author-provider **fails closed** (exit 1) — distinctness cannot be proven without knowing the
+author.
 
 **Fail-closed on an unresolvable base.** Tiering needs the base ref to compute the diff. If
 `<base>` cannot be resolved (e.g. a shallow CI checkout with no `main`), the CLI **refuses
@@ -118,7 +133,8 @@ the run with exit 1** rather than silently skipping the cross-model requirement 
 ungated pass is the fail-open class this gate exists to prevent. **CI must provide the
 base** (fetch it, e.g. `git fetch --no-tags origin main`, or pass an explicit `--base
 <ref>`). Hermetic unit runs that assert convergence only (not tiering) pass `--base HEAD`
-so `git diff HEAD...HEAD` is empty and the tier gate stays off.
+so, from a **clean committed** worktree, the working-tree diff is empty and the tier gate
+stays off (run such checks post-commit; uncommitted trust-root edits deliberately tier).
 
 Record the attestation (after an actual cross-model review approves) with:
 
@@ -130,8 +146,9 @@ adlc prosecute record-cross-model --ticket <id> \
 It resolves the revision the same way the gate does (`resolveProsecutionRevision`), so pass
 the same `--input`/`--revision` you use for the gate run. `--provider` must differ from
 `--author-provider` — a same-model attestation is refused at record time and rejected by the
-gate (`lib/cross-model.mjs`, fail-closed). Like rails-guard this cannot prove a model ran; it
-raises the bar to an auditable, revision-bound, append-only, distinct-provider record. See
+gate (`lib/cross-model.mjs`, fail-closed). Like rails-guard this cannot prove a model ran; the
+author identity now comes from the prosecution invocation (not a self-report), and the record
+is an auditable, revision-bound, append-only, distinct-provider, author-anchored entry. See
 [ADR-0007](../../docs/adr/0007-multimodel-adversarial-review.md).
 
 ## Exit codes

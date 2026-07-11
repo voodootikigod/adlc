@@ -175,19 +175,35 @@ ladder `risk-tier.mjs`.
 `@adlc/gate-manifest` chained ledger as a `cross-model-review` entry carrying
 `{ provider, authorProvider, verdict, revision }`. `packages/prosecute/lib/run.mjs` then
 requires — in addition to the two-consecutive-dry-pass / three-distinct-lens condition —
-a `cross-model-review` **`approve`** whose `provider` is **distinct** from the author's
-and whose `revision` equals the reviewed revision. Missing → `exit 2` naming exactly what
-is required. Recording is `adlc prosecute record-cross-model --ticket <id> --provider <p>
+a `cross-model-review` **`approve`** whose `provider` is **distinct** from the author and
+whose `revision` equals the reviewed revision. Missing → `exit 2` naming exactly what is
+required. Recording is `adlc prosecute record-cross-model --ticket <id> --provider <p>
 --author-provider <a> --verdict approve [--input <passes.json>] [--revision <r>]`, which
 resolves the revision the same way the gate does so the record binds to the gate's revision.
 
+**Author identity is anchored to the prosecution run, not the attestation.** The distinctness
+check does not compare the entry's own two self-reported fields against each other — an
+attestation defines *both* sides, so a same-provider author could otherwise record
+`provider:"claude", authorProvider:"openai"` and pass. Instead the prosecution declares the
+author via `--author-provider` (or `ADLC_AUTHOR_PROVIDER`), and the gate requires the
+reviewer's `provider` to differ from *that* prosecution-declared author and the record to
+have been made for that author context (`entry.data.authorProvider === author`). A tiered
+run with no author-provider **fails closed** (exit 1) — distinctness cannot be proven without
+knowing the author. Also fail-closed: the tier is computed from the **working tree** vs base
+(so an uncommitted trust-root edit still tiers), and an unresolvable base ref refuses the run
+(CI must fetch/provide the base) rather than run ungated.
+
 **Honest limitation.** Like rails-guard, this gate **cannot cryptographically prove a
-model actually ran.** A determined author can still hand-write a provider string. What it
-buys is an **auditable, revision-bound, append-only, distinct-provider record**: a stale
-attestation against an old diff does not satisfy a new revision (the revision binding),
-and a same-provider "review" is refused at record time and rejected at read time (the
-distinct-provider rule). We deliberately did **not** sign the provider assertion with a
-CI-held key — that was rejected in #104/T36 as exposing keys to CI for marginal gain; the
-revision binding, not a signature, is what stops the stale-attestation bypass. The gate
-raises the bar and makes the omission visible in an auditable ledger; it is defense in
-depth behind the unbypassable rails-guard CI diff gate, not a cryptographic proof of review.
+model actually ran.** The residual is now narrower: the author identity comes from the
+**prosecution invocation** (a CI-set env var / explicit flag), not from a field the author
+buries in an attestation — so the self-reported-both-sides forgery is closed. A determined
+author who also lies about `--author-provider` at invocation can still evade, but in CI that
+value is set by the pipeline, not the author. What the gate buys is an **auditable,
+revision-bound, append-only, distinct-provider, author-anchored record**: a stale attestation
+against an old diff does not satisfy a new revision (the revision binding), and a same-provider
+"review" is refused at record time and rejected at read time (the distinct-provider rule). We
+deliberately did **not** sign the provider assertion with a CI-held key — that was rejected in
+#104/T36 as exposing keys to CI for marginal gain; the revision binding, not a signature, is
+what stops the stale-attestation bypass. The gate raises the bar and makes the omission visible
+in an auditable ledger; it is defense in depth behind the unbypassable rails-guard CI diff gate,
+not a cryptographic proof of review.

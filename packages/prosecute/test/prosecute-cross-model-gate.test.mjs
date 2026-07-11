@@ -38,7 +38,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
   it('AC3: exits 2 when no matching cross-model attestation exists', () => {
     const dir = tmpAdlc();
     const result = runProsecution(input(dir, { passes: cleanPasses() }), {
-      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 2);
     assert.match(result.message, /cross-model adversarial approve from a distinct provider/);
@@ -52,7 +52,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
     const dir = tmpAdlc();
     recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
     const result = runProsecution(input(dir, { passes: cleanPasses() }), {
-      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 0);
     const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
@@ -63,7 +63,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
     const dir = tmpAdlc();
     recordCrossModelReview({ ticket: 'T1', revision: 'stale-rev', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
     const result = runProsecution(input(dir, { passes: cleanPasses() }), {
-      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 2);
   });
@@ -74,7 +74,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
     // prove the READ side (hasCrossModelApprove) also rejects a forged same-model entry.
     record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'anthropic', authorProvider: 'anthropic', verdict: 'approve', revision: REV }), dir });
     const result = runProsecution(input(dir, { passes: cleanPasses() }), {
-      dir, ticket: 'T1', revision: REV, requireCrossModel: true,
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 2);
   });
@@ -88,11 +88,36 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
         { lens: 'security', findings: [], dry_evidence: 'no security findings' },
         { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
       ],
-    }), { dir, ticket: 'T1', revision: REV, requireCrossModel: true });
+    }), { dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic' });
     assert.equal(result.exitCode, 2);
     assert.match(result.message, /fewer than three distinct dry lenses/);
     const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
     assert.doesNotMatch(manifest, /"type":"p5-cross-model-missing"/);
+  });
+
+  it('author anchoring: a run whose author EQUALS the attestation reviewer does NOT pass', () => {
+    // A valid distinct entry (reviewer openai, author anthropic) exists, but THIS
+    // prosecution declares its author is openai — same as the reviewer. Distinctness
+    // is measured against the prosecution-declared author, so the gate must fail.
+    const dir = tmpAdlc();
+    recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'openai',
+    });
+    assert.equal(result.exitCode, 2);
+    assert.match(result.message, /cross-model adversarial approve from a distinct provider/);
+  });
+
+  it('FAILS CLOSED (exit 1) when a tiered run supplies no author-provider', () => {
+    // Cannot prove the reviewer is distinct from the author without knowing the
+    // author, so a trust-root-tier run without --author-provider is an op-error.
+    const dir = tmpAdlc();
+    recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+      dir, ticket: 'T1', revision: REV, requireCrossModel: true, // authorProvider omitted
+    });
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.errors.some((e) => /author-provider|ADLC_AUTHOR_PROVIDER/.test(e)));
   });
 });
 
