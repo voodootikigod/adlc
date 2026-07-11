@@ -23,10 +23,14 @@ export function renderReport(result) {
   if (needsCeremony.length > 0) {
     lines.push('');
     lines.push(
-      `Stale but rails-freezing — needs the protected-base admin ceremony (${needsCeremony.length}):`,
+      `Stale but not auto-tombstonable — needs the protected-base admin ceremony (${needsCeremony.length}):`,
     );
     for (const t of needsCeremony) {
-      lines.push(`  - ${t.id}: ${t.reason} [freezes: ${t.rails.join(', ')}]`);
+      const detail =
+        t.blocker === 'rails-freeze'
+          ? `freezes: ${t.rails.join(', ')}`
+          : 'already has a completed field';
+      lines.push(`  - ${t.id}: ${t.reason} [${detail}]`);
     }
   }
 

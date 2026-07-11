@@ -81,6 +81,18 @@ function spawnMutateAfterDelay(dir, ticketsObj, delayMs) {
   });
 }
 
+/** Like spawnMutateAfterDelay, but DELETES .adlc/tickets.json (via the fixture's
+ * "__DELETE__" sentinel) instead of overwriting it — to drive the
+ * "ticket file disappeared under the lock" branch. */
+function spawnDeleteAfterDelay(dir, delayMs) {
+  const script = join(HERE, 'fixtures', 'mutate-tickets-after-delay.mjs');
+  const child = spawn(process.execPath, [script, dir, '__DELETE__', String(delayMs)], { stdio: 'inherit' });
+  return new Promise((resolvePromise, reject) => {
+    child.on('exit', (code) => (code === 0 ? resolvePromise() : reject(new Error(`writer helper exited ${code}`))));
+    child.on('error', reject);
+  });
+}
+
 // ── dry-run reports without mutating ────────────────────────────────────────
 
 test('dry-run reports a stale ticket (mocked done signal: shipped scope) without mutating tickets.json', () => {
@@ -214,7 +226,29 @@ test('--write does NOT auto-tombstone a stale ticket that still freezes rails �
     assert.deepEqual(result.tombstoned, []);
     assert.deepEqual(result.needsCeremony.map((t) => t.id), ['T1']);
     assert.deepEqual(result.needsCeremony[0].rails, ['test/adlc-widget/**']);
+    assert.equal(result.needsCeremony[0].blocker, 'rails-freeze');
     // tickets.json is byte-identical — no partial mutation of a railed ticket.
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+  });
+});
+
+test('#104 (codex): a rails-less stale ticket that ALREADY carries completed:false is NOT rewritten to true — that would be a base-ticket MUTATION the add-only gate denies; it is reported for the ceremony and tickets.json is left byte-untouched', () => {
+  withScratchRepo((dir) => {
+    // completed:false is a pre-existing field, not the pristine "no completed
+    // field" the gate's add-only exemption accepts. The writer must mirror that
+    // predicate exactly — rewriting false→true produces an unmergeable PR.
+    writeTickets(dir, [
+      { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], completed: false },
+    ]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.tombstoned, []);
+    assert.deepEqual(result.needsCeremony.map((t) => t.id), ['T1']);
+    assert.equal(result.needsCeremony[0].blocker, 'preexisting-completed-field');
+    // Not rewritten: false stays false, byte-identical.
     assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
   });
 });
@@ -365,6 +399,25 @@ test('--write: if a stale ticket is already gone by the time the lock is acquire
     // written.
     assert.deepEqual(result.tombstoned, []);
     assert.deepEqual(readTickets(dir).tickets, []);
+  });
+});
+
+test('--write: if tickets.json is DELETED (not just mutated) between classification and the under-lock re-read, the run reports {ok:false, /disappeared/} instead of a false success or a crash', () => {
+  return withScratchRepoAsync(async (dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
+
+    assert.equal(acquireLock(dir), true);
+
+    // While ticket-prune is blocked on the lock, another actor removes the
+    // ticket file entirely and releases the lock. The under-lock re-read then
+    // sees no file (readJson → null), which must surface as a clean error.
+    const writerDone = spawnDeleteAfterDelay(dir, 150);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+    await writerDone;
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /disappeared/);
   });
 });
 

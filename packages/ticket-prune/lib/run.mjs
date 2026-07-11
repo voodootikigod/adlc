@@ -13,7 +13,7 @@ import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs
  * @param {string} [options.ticketsPath] relative to cwd
  * @param {string} [options.baseRef] git ref to check scope/rails existence against
  * @param {boolean} [options.write] tombstone stale tickets in place instead of dry-run reporting
- * @returns {{ok: true, baseRef: string, write: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], needsCeremony: {id: string, reason: string, rails: string[]}[]} | {ok: false, error: string}}
+ * @returns {{ok: true, baseRef: string, write: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
   const {
@@ -106,11 +106,31 @@ export function runTicketPrune(options = {}) {
       const reclassified = classifyTicket(ticket, trackedFiles);
       if (!reclassified.stale) continue;                 // un-staled under the lock — leave it
       if (ticket.completed === true) continue;           // already tombstoned — nothing to do
+
+      // The gate's isCompletionAnnotationOnly exemption is BOTH rails-less AND
+      // strictly add-only: it rejects a base ticket that freezes rails, and it
+      // rejects one that already carries a `completed` field (only a pristine
+      // ticket may GAIN `completed: true`). Mirror BOTH predicates exactly, so
+      // the writer can only ever emit a diff the gate accepts — otherwise prune
+      // produces an unmergeable PR (a rails-less ticket already holding
+      // `completed: false`/`null` would be rewritten to `true`, a MUTATION the
+      // gate denies). Anything ineligible is reported for the admin ceremony
+      // (ADLC_RAILS_BYPASS), never silently rewritten.
       const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
       if (rails.length > 0) {
-        // has frozen rails → completing it would unfreeze them; the gate requires
-        // the admin ceremony for that. Report it, do not auto-tombstone.
-        needsCeremony.push({ id: ticket.id, reason: reclassified.reason, rails });
+        // Frozen rails → completing it would unfreeze them; admin-ceremony only.
+        needsCeremony.push({ id: ticket.id, reason: reclassified.reason, rails, blocker: 'rails-freeze' });
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(ticket, 'completed')) {
+        // `completed` present but not true (false/null/other): completing it
+        // MUTATES an existing field, which the add-only gate exemption denies.
+        needsCeremony.push({
+          id: ticket.id,
+          reason: reclassified.reason,
+          rails,
+          blocker: 'preexisting-completed-field',
+        });
         continue;
       }
       tombstoneIds.add(ticket.id);
