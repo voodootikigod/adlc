@@ -24,13 +24,13 @@ agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 Then run `/adlc-init` inside your agent session (or execute the steps manually to bootstrap `.adlc/` in your repository).
 
 **npm-assisted install.** `agy` has no native `agy install npm:X` command — `agy
-plugin install` always takes a filesystem path — but `@adlc/antigravity-package`
+plugin install` always takes a filesystem path — but `@adlc/antigravity`
 is publishable and will resolve as a normal npm dependency once the suite next
 publishes:
 
 ```sh
-npm install @adlc/antigravity-package
-agy plugin install ./node_modules/@adlc/antigravity-package
+npm install @adlc/antigravity
+agy plugin install ./node_modules/@adlc/antigravity
 ```
 
 **Universal installer (planned — not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:

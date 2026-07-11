@@ -1,6 +1,6 @@
 // packaging.test.mjs — release-readiness (T37 AC1/AC2/AC3).
 //
-// AC1/AC2 prove @adlc/antigravity-package publishes only its runtime surface
+// AC1/AC2 prove @adlc/antigravity publishes only its runtime surface
 // (never test/, and plugin.json — agy's own manifest — MUST ship, since agy
 // identifies an installed plugin by its presence) and carries the fields the
 // lockstep release requires. AC3 proves the package stays self-contained: no
@@ -21,6 +21,13 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
 
 // --- AC1: package.json field contract -------------------------------------
 
+// T38 P5 finding F1: cursor/opencode's install-smoke scripts guard their
+// package.json 'name' field; pi/antigravity had no such guard, so a stale
+// -package suffix regressing back in would ship silently.
+test('T38: package.json name is the renamed short form', () => {
+  assert.equal(pkg.name, '@adlc/antigravity');
+});
+
 test('AC1: package.json is publishable (not private, licensed, sourced)', () => {
   assert.notEqual(pkg.private, true, 'package must not be private');
   assert.equal(pkg.license, 'MIT');
@@ -39,7 +46,7 @@ test('AC1: package.json is publishable (not private, licensed, sourced)', () => 
 // publishConfig defaults to RESTRICTED access, and --provenance on a
 // restricted-defaulting scoped package fails at actual publish time — landing
 // AFTER packages/* already published (a partial-release repeat of the T30
-// incident). Mirror pi-package/opencode-package exactly.
+// incident). Mirror @adlc/pi / @adlc/opencode exactly.
 test('AC1: publishConfig grants public access + provenance (release.mjs relies on this, not --access)', () => {
   assert.deepEqual(pkg.publishConfig, { access: 'public', provenance: true });
 });

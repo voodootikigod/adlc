@@ -1,6 +1,6 @@
 // packaging.test.mjs — release-readiness (T37 AC1/AC2/AC4).
 //
-// AC1/AC2 prove @adlc/cursor-package publishes only its runtime surface (never
+// AC1/AC2 prove @adlc/cursor publishes only its runtime surface (never
 // test/) and carries the fields the lockstep release requires. AC4 proves the
 // packed tarball is self-sufficient and its bin entry runs standalone — pack a
 // REAL tarball, extract it OUTSIDE the repo tree, resolve its one external
@@ -50,7 +50,7 @@ test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev
 // restricted-defaulting scoped package fails at actual publish time — exactly
 // the failure this package's private:true removal would otherwise walk into,
 // landing AFTER packages/* already published (a partial-release repeat of the
-// T30 incident). Mirror pi-package/opencode-package exactly.
+// T30 incident). Mirror @adlc/pi / @adlc/opencode exactly.
 test('AC1: publishConfig grants public access + provenance (release.mjs relies on this, not --access)', () => {
   assert.deepEqual(pkg.publishConfig, { access: 'public', provenance: true });
 });

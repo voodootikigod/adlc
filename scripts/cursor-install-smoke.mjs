@@ -25,7 +25,7 @@ const pkgPath = join(PLUGIN, 'package.json');
 if (!existsSync(pkgPath)) fail('plugins/adlc-cursor/package.json missing');
 else {
   const pkg = JSON.parse(read(pkgPath));
-  if (pkg.name !== '@adlc/cursor-package') fail(`package name is ${pkg.name}`); else ok('package name');
+  if (pkg.name !== '@adlc/cursor') fail(`package name is ${pkg.name}`); else ok('package name');
   if (pkg.type !== 'module') fail('package is not type:module'); else ok('type:module');
   if (!pkg.dependencies?.['@adlc/core']) fail('missing @adlc/core dependency'); else ok('dependency @adlc/core');
   // T18 AC2 companion: the buildgate/flail deep-subpath imports resolve via the

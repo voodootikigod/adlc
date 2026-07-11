@@ -1,6 +1,6 @@
 // packaging.test.mjs — release-readiness (T29 AC1) + version-matrix wiring (AC3).
 //
-// AC1 proves @adlc/pi-package publishes only its runtime surface (never test/)
+// AC1 proves @adlc/pi publishes only its runtime surface (never test/)
 // and carries the fields the lockstep release + pi.dev gallery require.
 // AC3 proves scripts/pi-live-deny.mjs honors the ADLC_PI_BIN override and that
 // the version-matrix verdict table gates exactly as specified.
@@ -21,6 +21,13 @@ const repoRoot = resolve(here, '..', '..', '..');
 const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
 
 // --- AC1: package.json field contract -------------------------------------
+
+// T38 P5 finding F1: cursor/opencode's install-smoke scripts guard their
+// package.json 'name' field; pi/antigravity had no such guard, so a stale
+// -package suffix regressing back in would ship silently. pi publishes next.
+test('T38: package.json name is the renamed short form', () => {
+  assert.equal(pkg.name, '@adlc/pi');
+});
 
 test('AC1: package.json is publishable (not private, licensed, sourced)', () => {
   assert.notEqual(pkg.private, true, 'package must not be private');

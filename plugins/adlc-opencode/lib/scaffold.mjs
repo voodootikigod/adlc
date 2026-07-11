@@ -57,7 +57,7 @@ export function deployDir(pkgRoot, destRoot, sub, destSub = sub) {
   return deployed;
 }
 
-export const PLUGIN_PKG_NAME = '@adlc/opencode-package';
+export const PLUGIN_PKG_NAME = '@adlc/opencode';
 
 /**
  * The `plugin` array entry to register for a given package root. Registering

@@ -14,6 +14,7 @@ import {
   ensurePluginRegistered,
   ensureGitignore,
   ensureFormatterIgnores,
+  PLUGIN_PKG_NAME,
 } from '../lib/scaffold.mjs';
 import {
   ensureGitignore as coreEnsureGitignore,
@@ -48,6 +49,13 @@ test('ensureConfig never clobbers an existing config (idempotent)', () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// T38: pin the constant itself so a stale-name regression fails here, not just
+// in a call-site assertion (every other test below exercises the constant's
+// downstream effects; this one names the value directly).
+test('T38: PLUGIN_PKG_NAME is the renamed short form', () => {
+  assert.equal(PLUGIN_PKG_NAME, '@adlc/opencode');
+});
+
 // ---- ensurePluginRegistered (so the rails-guard hook actually loads) ----
 test('ensurePluginRegistered: adds the plugin to .opencode/opencode.json', () => {
   const root = mkroot();
@@ -55,7 +63,7 @@ test('ensurePluginRegistered: adds the plugin to .opencode/opencode.json', () =>
     const r = ensurePluginRegistered(root);
     assert.equal(r.registered, true);
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.ok(cfg.plugin.includes('@adlc/opencode-package'));
+    assert.ok(cfg.plugin.includes('@adlc/opencode'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -70,7 +78,7 @@ test('ensurePluginRegistered: idempotent + preserves existing settings/plugins',
     assert.equal(r2.alreadyPresent, true); // idempotent
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
     assert.equal(cfg.theme, 'x'); // preserved
-    assert.deepEqual(cfg.plugin, ['other-plugin', '@adlc/opencode-package']);
+    assert.deepEqual(cfg.plugin, ['other-plugin', '@adlc/opencode']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -206,7 +214,7 @@ test('T30: scaffold from a source checkout registers the resolved local path, no
     scaffold(root, PKG); // PKG is a source path (not under node_modules)
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
     assert.ok(cfg.plugin.includes(PKG), `registered source path, got: ${JSON.stringify(cfg.plugin)}`);
-    assert.ok(!cfg.plugin.includes('@adlc/opencode-package'), 'npm name not registered from source');
+    assert.ok(!cfg.plugin.includes('@adlc/opencode'), 'npm name not registered from source');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -215,7 +223,7 @@ test('T30: scaffold from node_modules registers the npm package name', () => {
   const fakeNm = mkroot();
   try {
     // simulate the package living in node_modules by copying the minimal shape
-    const nmPkg = join(fakeNm, 'node_modules', '@adlc', 'opencode-package');
+    const nmPkg = join(fakeNm, 'node_modules', '@adlc', 'opencode');
     mkdirSync(nmPkg, { recursive: true });
     for (const sub of ['command', 'agent', 'skill']) {
       mkdirSync(join(nmPkg, sub), { recursive: true });
@@ -223,7 +231,7 @@ test('T30: scaffold from node_modules registers the npm package name', () => {
     }
     scaffold(root, nmPkg);
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.ok(cfg.plugin.includes('@adlc/opencode-package'), `registered npm name, got: ${JSON.stringify(cfg.plugin)}`);
+    assert.ok(cfg.plugin.includes('@adlc/opencode'), `registered npm name, got: ${JSON.stringify(cfg.plugin)}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(fakeNm, { recursive: true, force: true });
@@ -236,7 +244,7 @@ test('T30: no duplicate registration when the OTHER form (or a tuple) is already
     // pre-register the npm name as a tuple with options
     mkdirSync(join(root, '.opencode'), { recursive: true });
     writeFileSync(join(root, '.opencode', 'opencode.json'),
-      JSON.stringify({ plugin: [['@adlc/opencode-package', { advisoryHooks: true }]] }) + '\n');
+      JSON.stringify({ plugin: [['@adlc/opencode', { advisoryHooks: true }]] }) + '\n');
     const r = scaffold(root, PKG); // source path — but npm-name tuple already covers the plugin
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
     assert.equal(cfg.plugin.length, 1, `no duplicate entry: ${JSON.stringify(cfg.plugin)}`);
@@ -295,11 +303,11 @@ test('R2: stale path entry is REPLACED (not appended) when re-scaffolding under 
     writeFileSync(join(root, '.opencode', 'opencode.json'),
       JSON.stringify({ theme: 'x', plugin: ['other-plugin', '/old/checkout/plugins/adlc-opencode'] }) + '\n');
     // moved checkout: path A → npm name
-    const r = ensurePluginRegistered(root, '@adlc/opencode-package');
+    const r = ensurePluginRegistered(root, '@adlc/opencode');
     assert.equal(r.registered, true);
     assert.deepEqual(r.replaced, ['/old/checkout/plugins/adlc-opencode']);
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.deepEqual(cfg.plugin, ['other-plugin', '@adlc/opencode-package'], 'single entry, other plugin preserved');
+    assert.deepEqual(cfg.plugin, ['other-plugin', '@adlc/opencode'], 'single entry, other plugin preserved');
     assert.equal(cfg.theme, 'x');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -323,11 +331,11 @@ test('R2: canonical npm name already registered → a source scaffold does NOT d
   try {
     mkdirSync(join(root, '.opencode'), { recursive: true });
     writeFileSync(join(root, '.opencode', 'opencode.json'),
-      JSON.stringify({ plugin: ['@adlc/opencode-package'] }) + '\n');
+      JSON.stringify({ plugin: ['@adlc/opencode'] }) + '\n');
     const r = ensurePluginRegistered(root, '/some/checkout/plugins/adlc-opencode');
     assert.equal(r.alreadyPresent, true);
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.deepEqual(cfg.plugin, ['@adlc/opencode-package']);
+    assert.deepEqual(cfg.plugin, ['@adlc/opencode']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -366,11 +374,11 @@ test('R3: third-party entries colliding on the adlc-opencode suffix are NEVER to
       ['@evil/adlc-opencode', { thirdParty: true }],     // tuple — options must NOT graft onto ours
     ];
     writeFileSync(join(root, '.opencode', 'opencode.json'), JSON.stringify({ plugin: strangers }) + '\n');
-    const r = ensurePluginRegistered(root, '@adlc/opencode-package');
+    const r = ensurePluginRegistered(root, '@adlc/opencode');
     assert.equal(r.registered, true);
     assert.deepEqual(r.replaced, [], 'no stranger was claimed as ours');
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.deepEqual(cfg.plugin, [...strangers, '@adlc/opencode-package'],
+    assert.deepEqual(cfg.plugin, [...strangers, '@adlc/opencode'],
       'strangers intact, ours appended WITHOUT grafted options');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -382,12 +390,12 @@ test('R3: our own path spellings with either package-dir basename ARE claimed (n
     // a source checkout whose dir basename is the npm package dir name
     writeFileSync(join(root, '.opencode', 'opencode.json'),
       JSON.stringify({ plugin: ['/work/opencode-package'] }) + '\n');
-    const r = ensurePluginRegistered(root, '@adlc/opencode-package');
+    const r = ensurePluginRegistered(root, '@adlc/opencode');
     assert.deepEqual(r.replaced, ['/work/opencode-package'], 'opencode-package basename claimed');
     const cfg = JSON.parse(readFileSync(join(root, '.opencode', 'opencode.json'), 'utf8'));
-    assert.deepEqual(cfg.plugin, ['@adlc/opencode-package'], 'single entry');
+    assert.deepEqual(cfg.plugin, ['@adlc/opencode'], 'single entry');
     // and an exact same-path re-scaffold stays idempotent
-    const again = ensurePluginRegistered(root, '@adlc/opencode-package');
+    const again = ensurePluginRegistered(root, '@adlc/opencode');
     assert.equal(again.alreadyPresent, true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -88,7 +88,7 @@ whose documented hook contract the enforce-by-default posture is pinned against)
 npm install -g @adlc/cli
 
 # 2. Bootstrap the project — scaffolds .adlc/ + .opencode/, registers the plugin
-npx @adlc/opencode-package init
+npx @adlc/opencode init
 ```
 
 Then **restart OpenCode** so it loads the plugin — the `tool.execute.before`
@@ -116,7 +116,7 @@ the tuple is the repo default). The audited bypasses (`ADLC_RAILS_BYPASS`,
 ```jsonc
 // .opencode/opencode.json
 {
-  "plugin": [["@adlc/opencode-package", {
+  "plugin": [["@adlc/opencode", {
     "advisoryHooks": false,          // true = downgrade rails guard to advisory (env: ADLC_ALLOW_ADVISORY_HOOKS=1)
     "ungatedTools": [],              // extra benign no-target tools, still spoof-guarded (env: ADLC_UNGATED_TOOLS)
     "suppressionEnforcement": false, // enforce (not warn) suppression markers (env: ADLC_SUPPRESSION_ENFORCEMENT=1)

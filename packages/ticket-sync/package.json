@@ -1,6 +1,6 @@
 {
   "name": "@adlc/ticket-sync",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Two-way sync between ADLC tickets and external trackers (GitHub Issues first).",
   "type": "module",
   "license": "MIT",
@@ -32,7 +32,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.2.1"
+    "@adlc/core": "1.3.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",

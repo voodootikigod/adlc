@@ -34,7 +34,7 @@ function makeRepo() {
   });
   mkdirSync(join(pluginsDir, 'adlc-pi'));
   write(join(pluginsDir, 'adlc-pi', 'package.json'), {
-    name: '@adlc/pi-package',
+    name: '@adlc/pi',
     version: '1.0.0',
     private: true,
     dependencies: { '@adlc/core': '^1.0.0' }, // plugin uses a caret range
@@ -127,17 +127,17 @@ test('repinInternalDependencies leaves non-@adlc deps alone', () => {
 test('publishTargets: non-private plugin packages publish after packages/*; private plugins are skipped', () => {
   const { root, packagesDir, pluginsDir } = makeRepo();
   try {
-    // a publishable plugin (like @adlc/opencode-package after T30)
+    // a publishable plugin (like @adlc/opencode after T30)
     mkdirSync(join(pluginsDir, 'adlc-opencode'));
     writeFileSync(join(pluginsDir, 'adlc-opencode', 'package.json'), JSON.stringify({
-      name: '@adlc/opencode-package', version: '1.0.0',
+      name: '@adlc/opencode', version: '1.0.0',
       dependencies: { '@adlc/core': '1.0.0' },
     }, null, 2) + '\n');
     const targets = publishTargets({ packagesDir, pluginsDir });
     const names = targets.map((t) => t.name);
-    assert.ok(names.includes('@adlc/opencode-package'), 'publishable plugin included');
+    assert.ok(names.includes('@adlc/opencode'), 'publishable plugin included');
     // dependency order: every packages/* entry precedes the plugin consumers
-    assert.ok(names.indexOf('@adlc/core') < names.indexOf('@adlc/opencode-package'));
+    assert.ok(names.indexOf('@adlc/core') < names.indexOf('@adlc/opencode'));
     // private plugins (adlc-pi fixture is private in makeRepo? assert on the actual fixture)
     for (const t of targets) assert.notEqual(t.private, true, `${t.name} must not be private`);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -148,7 +148,7 @@ test('releaseMain --publish invokes publishImpl for plugin packages too', () => 
   try {
     mkdirSync(join(pluginsDir, 'adlc-opencode'));
     writeFileSync(join(pluginsDir, 'adlc-opencode', 'package.json'), JSON.stringify({
-      name: '@adlc/opencode-package', version: '1.0.0',
+      name: '@adlc/opencode', version: '1.0.0',
     }, null, 2) + '\n');
     const published = [];
     const rc = releaseMain(['1.2.0', '--publish'], {
@@ -157,7 +157,7 @@ test('releaseMain --publish invokes publishImpl for plugin packages too', () => 
       publishImpl: (dir, name) => published.push(name),
     });
     assert.equal(rc, 0);
-    assert.ok(published.includes('@adlc/opencode-package'), `published: ${published}`);
+    assert.ok(published.includes('@adlc/opencode'), `published: ${published}`);
     assert.ok(published.includes('@adlc/core'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

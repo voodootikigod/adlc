@@ -1,5 +1,5 @@
 // plugin-options.test.mjs — T30: per-repo config via the opencode.json plugin
-// tuple (["@adlc/opencode-package", {...}] → the plugin function's 2nd arg,
+// tuple (["@adlc/opencode", {...}] → the plugin function's 2nd arg,
 // per @opencode-ai/plugin `Plugin = (input, options?) => Hooks`). Env vars win
 // over options. Offline, temp-dir only.
 

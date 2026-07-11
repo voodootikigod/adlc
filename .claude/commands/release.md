@@ -14,7 +14,7 @@ Release a new lockstep version of the `@adlc` suite (all 21 packages publish tog
    - Up to date with remote (`git pull --dry-run` shows no changes)
    - Tests pass (`npm test`)
 
-3. **Bump versions:** run `node scripts/release.mjs <NEW_VERSION>` (no `--publish`). This sets the new version across `@adlc/core` + all 19 phase CLIs + the `@adlc/cli` umbrella, **every versioned `plugins/*` package** (e.g. `@adlc/pi-package`), and the root; repins **every** `"@adlc/*"` dependency to match (preserving each one's existing `^`/`~`/exact range style); and **regenerates `package-lock.json`** so the lockfile tracks the new versions. Do NOT hand-edit package.json or package-lock.json.
+3. **Bump versions:** run `node scripts/release.mjs <NEW_VERSION>` (no `--publish`). This sets the new version across `@adlc/core` + all 19 phase CLIs + the `@adlc/cli` umbrella, **every versioned `plugins/*` package** (e.g. `@adlc/pi`), and the root; repins **every** `"@adlc/*"` dependency to match (preserving each one's existing `^`/`~`/exact range style); and **regenerates `package-lock.json`** so the lockfile tracks the new versions. Do NOT hand-edit package.json or package-lock.json.
    - The script then runs a **drift gate**: if any versioned `package.json`, the root, or `package-lock.json` is not at `<NEW_VERSION>`, it prints the offenders and exits non-zero. A non-zero exit means the release is incomplete — fix it before continuing, do not commit a partial bump. (This gate exists because v1.1.0 once shipped with `package-lock.json` stranded at 1.0.2 and `plugins/adlc-pi` missed entirely.)
 
 4. **Commit the version bump** — stage everything the script touched, including `package-lock.json` and every `package.json` (packages *and* plugins):

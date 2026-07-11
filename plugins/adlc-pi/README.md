@@ -1,4 +1,4 @@
-# @adlc/pi-package
+# @adlc/pi
 
 ADLC ([Agentic Development Lifecycle](https://www.agenticlifecycle.ai)) integration for the
 [pi](https://pi.dev) terminal coding agent: a native TypeScript extension that enforces
@@ -13,10 +13,10 @@ npm install -g @adlc/cli
 
 # 2a. Register for one project — lands in .pi/, auto-installs for every teammate
 #     on trusted startup (the best team-install story of the six integrations):
-pi install -l npm:@adlc/pi-package
+pi install -l npm:@adlc/pi
 
 # 2b. …or user-global (~/.pi/agent/npm/…), available in every repo you open:
-pi install npm:@adlc/pi-package
+pi install npm:@adlc/pi
 ```
 
 Then run `/adlc-init` inside pi to finish the repo scaffold (`.adlc/`), or scaffold from a

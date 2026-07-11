@@ -3,7 +3,7 @@
   "hooks": {
     "preToolUse": [
       {
-        "command": "node ./node_modules/@adlc/cursor-package/hooks/adlc-pretool.mjs",
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-pretool.mjs",
         "matcher": ".*",
         "timeout": 10,
         "failClosed": false
@@ -11,14 +11,14 @@
     ],
     "afterFileEdit": [
       {
-        "command": "node ./node_modules/@adlc/cursor-package/hooks/adlc-audit.mjs",
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-audit.mjs",
         "timeout": 10,
         "failClosed": false
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "node ./node_modules/@adlc/cursor-package/hooks/adlc-shell-advisory.mjs",
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-shell-advisory.mjs",
         "timeout": 10,
         "failClosed": false
       }

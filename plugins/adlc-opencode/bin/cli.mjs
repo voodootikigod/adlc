@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// cli.mjs — the one-command bootstrap: `npx @adlc/opencode-package init` (T30).
+// cli.mjs — the one-command bootstrap: `npx @adlc/opencode init` (T30).
 //
 // Wraps the same idempotent scaffold() the in-TUI /adlc-init command uses:
 // creates .adlc/config.json, registers the plugin in .opencode/opencode.json
@@ -8,8 +8,8 @@
 // formatter-ignore hygiene. Safe to re-run.
 //
 // Usage:
-//   npx @adlc/opencode-package init [projectRoot]
-//   npx @adlc/opencode-package --help
+//   npx @adlc/opencode init [projectRoot]
+//   npx @adlc/opencode --help
 
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
