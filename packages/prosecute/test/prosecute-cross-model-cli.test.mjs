@@ -198,6 +198,22 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
     }
   });
 
+  it('residual: a PRESENT-but-corrupt canonical .adlc/tickets.json fails closed (exit 1), never a silent ungated pass', () => {
+    // A present-but-malformed canonical ticket table must NOT be silently read as
+    // "no rails" (which would drop the rails dimension and let a rails-only
+    // trust-root change evade). It must op-error.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
+    try {
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      writeFileSync(join(repo.dir, '.adlc', 'tickets.json'), 'not valid json {');
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+      assert.equal(res.status, 1, 'a corrupt canonical ticket table must op-error, not proceed ungated');
+      assert.match(`${res.stderr ?? ''}${res.stdout ?? ''}`, /valid JSON|determine trust-root tier/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
   it('FIX B: a tiered run with NO --author-provider fails closed (exit 1)', () => {
     const repo = scratchRepo('packages/prosecute/lib/feature.mjs');
     try {

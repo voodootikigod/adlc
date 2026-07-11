@@ -25,14 +25,24 @@ function requireNonEmptyString(value, field) {
   return value;
 }
 
-// Provider identity is compared normalized (trimmed + case-folded) everywhere,
-// so a same actual provider cannot fake distinctness with a whitespace or case
-// variant ("openai " / "OpenAI" vs "openai"). Raw strings are still STORED for
-// audit fidelity; only the distinctness DECISION uses the normalized form.
-// (Semantic aliases like "openai" vs "gpt" remain the documented honest limit —
-// this gate cannot prove two differently-named strings are truly one provider.)
+// Provider identity is compared normalized everywhere, so a same actual provider
+// cannot fake distinctness with a low-effort variant: NFKC-fold, strip ALL
+// whitespace, and case-fold ("openai " / "OpenAI" / "open ai" / fullwidth forms
+// all collapse to "openai"). Raw strings are still STORED for audit fidelity;
+// only the distinctness DECISION uses the normalized form.
+//
+// DOCUMENTED HONEST LIMIT (see the file header + ADR-0007): this is an
+// honest-party attestation, not cryptographic proof. Normalization defeats
+// accidental and low-effort variants, but it CANNOT defeat a determined forger
+// who deliberately spells their own provider as a cross-script homoglyph
+// ("οpenai") or a semantic alias ("gpt" vs "openai") — that is the same threat
+// class as lying about --author-provider outright, which the gate concedes it
+// cannot stop. The gate's value is the auditable, revision-bound record, not
+// unforgeable identity.
 function normalizeProvider(value) {
-  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return typeof value === 'string'
+    ? value.normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+    : '';
 }
 
 /**

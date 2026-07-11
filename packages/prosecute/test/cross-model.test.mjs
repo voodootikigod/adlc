@@ -52,9 +52,10 @@ describe('recordCrossModelReview — fail-closed validation', () => {
   it('refuses a same-provider record disguised by a WHITESPACE or CASE variant (normalized distinctness)', () => {
     const dir = tmp();
     try {
-      // "openai " and "OpenAI" are the SAME actual provider as "openai": a trimmed,
-      // case-folded compare must reject them so distinctness cannot be faked.
-      for (const spoof of ['openai ', ' openai', 'OpenAI', 'OPENAI']) {
+      // "openai " / "OpenAI" / "open ai" / fullwidth are the SAME actual provider
+      // as "openai": an NFKC-fold + whitespace-strip + case-fold compare must
+      // reject them all so distinctness cannot be faked with a low-effort variant.
+      for (const spoof of ['openai ', ' openai', 'OpenAI', 'OPENAI', 'open ai', 'ｏｐｅｎａｉ']) {
         assert.throws(
           () => recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: spoof, authorProvider: 'openai', verdict: 'approve', dir }),
           /distinct from the author/,

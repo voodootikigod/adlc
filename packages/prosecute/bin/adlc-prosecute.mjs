@@ -6,11 +6,23 @@ import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview } from '../lib/cross-model.mjs';
 
+// FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
+// (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
+// must NOT be silently treated as "no rails" — that would drop the rails
+// dimension and let a change that is trust-root ONLY via a ticket rail evade the
+// gate. So we throw on a present-but-corrupt table and let the caller op-error.
 function readTicketArray(path) {
+  let raw;
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))?.tickets ?? [];
-  } catch {
-    return [];
+    raw = readFileSync(path, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw new Error(`ticket table ${path} exists but cannot be read for tiering: ${err.message}`);
+  }
+  try {
+    return JSON.parse(raw)?.tickets ?? [];
+  } catch (err) {
+    throw new Error(`ticket table ${path} is not valid JSON — tiering cannot proceed: ${err.message}`);
   }
 }
 
@@ -209,7 +221,12 @@ try {
 } catch (err) {
   opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
 }
-const tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root) });
+let tier;
+try {
+  tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root) });
+} catch (err) {
+  opError(`cannot determine trust-root tier: ${err.message}`);
+}
 const requireCrossModel = tier.isTrustRootTier;
 if (tier.isTrustRootTier) {
   console.error(`trust-root tier: cross-model adversarial approve REQUIRED (base ${values.base}). Reasons:`);
