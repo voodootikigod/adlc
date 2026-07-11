@@ -13,7 +13,9 @@ recur. Target scope: **$ARGUMENTS** (default to recent history).
    `adlc lesson-foundry --prompt-only` (answer the printed prompts yourself).
 2. For each recurring class, propose the cheapest deterministic defense: a lint
    rule, a new prosecution lens, a skill update, or a test.
-3. Check skill decay: `adlc skill-rot --prompt-only`.
+3. Check skill decay: `adlc skill-rot .opencode/skills --json` (deterministic —
+   it has no `--prompt-only`; exit 2 = stale validation metadata, exit 1
+   `nothing to verify` = no metadata, informational).
 4. Optional `--simplify`: once all tests are green, run a local Simplify pass under
    the completed ticket's still-frozen rails (advisory deviation from strict
    post-merge P7 — warn the user; never edit frozen rails).
