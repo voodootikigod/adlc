@@ -175,6 +175,29 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
     }
   });
 
+  it('residual: an OUT-OF-REPO --dir cannot declassify a change that is trust-root via the repo canonical rails', () => {
+    // The rail lives in the repo's CANONICAL .adlc/tickets.json; src/secure/* is
+    // trust-root ONLY via that rail. Point --dir at an OUTSIDE table that OMITS the
+    // rail — pre-fix, loadTicketsForTier read the --dir table and declassified the
+    // change (gate bypass). The canonical rails must still tier it. Explicit
+    // --revision keeps the transcript binding stable regardless of --dir.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
+    const outside = mkdtempSync(join(tmpdir(), 'adlc-escape-'));
+    try {
+      writeFileSync(join(outside, 'tickets.json'), JSON.stringify({
+        tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] }],
+      }));
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', outside, '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+      assert.equal(res.status, 2, 'canonical rails must tier even when --dir points OUTSIDE the repo (no escape)');
+      assert.match(JSON.parse(res.stdout).message, /cross-model adversarial approve from a distinct provider/);
+      assert.match(res.stderr, /rails deny-path of ticket T1/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('FIX B: a tiered run with NO --author-provider fails closed (exit 1)', () => {
     const repo = scratchRepo('packages/prosecute/lib/feature.mjs');
     try {

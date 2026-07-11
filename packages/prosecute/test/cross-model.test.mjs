@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recordCrossModelReview, hasCrossModelApprove } from '../lib/cross-model.mjs';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
 
 function tmp() {
   return mkdtempSync(join(tmpdir(), 'adlc-cross-model-'));
@@ -45,6 +46,21 @@ describe('recordCrossModelReview — fail-closed validation', () => {
         () => recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'ship-it', dir }),
         /verdict/
       );
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('refuses a same-provider record disguised by a WHITESPACE or CASE variant (normalized distinctness)', () => {
+    const dir = tmp();
+    try {
+      // "openai " and "OpenAI" are the SAME actual provider as "openai": a trimmed,
+      // case-folded compare must reject them so distinctness cannot be faked.
+      for (const spoof of ['openai ', ' openai', 'OpenAI', 'OPENAI']) {
+        assert.throws(
+          () => recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: spoof, authorProvider: 'openai', verdict: 'approve', dir }),
+          /distinct from the author/,
+          `provider="${spoof}" vs author "openai" must be rejected as non-distinct`,
+        );
+      }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
@@ -117,6 +133,38 @@ describe('hasCrossModelApprove — round-trip and binding', () => {
       assert.equal(hasCrossModelApprove({ dir }), false);
       assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: '', authorProvider: 'anthropic' }), false);
       assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1' }), false); // authorProvider omitted
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('read side rejects a FORGED whitespace-variant reviewer that equals the prosecution author (injected, bypassing the writer)', () => {
+    // The writer refuses these, so inject a raw entry to prove hasCrossModelApprove
+    // ALSO normalizes: reviewer "openai " is the SAME actual provider as the
+    // PROSECUTION author "openai", so it must NOT clear the gate.
+    const dir = tmp();
+    try {
+      record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'openai ', authorProvider: 'anthropic', verdict: 'approve', revision: 'rev-1' }), dir });
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'openai' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('read side rejects a FORGED case-variant same-provider entry (both sides one provider, injected)', () => {
+    // Entry claims reviewer "OpenAI" / author "openai" — same actual provider on
+    // both sides. The write-side belt-and-suspenders (provider !== entryAuthor)
+    // must reject it even normalized, independent of the prosecution author.
+    const dir = tmp();
+    try {
+      record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'OpenAI', authorProvider: 'openai', verdict: 'approve', revision: 'rev-1' }), dir });
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('normalized author-anchoring: a case/whitespace variant of a genuine distinct provider STILL passes', () => {
+    // The normalization must not break the honest path: "OpenAI" reviewer for an
+    // "anthropic" author is genuinely distinct and must clear the gate.
+    const dir = tmp();
+    try {
+      record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'OpenAI', authorProvider: 'Anthropic', verdict: 'approve', revision: 'rev-1' }), dir });
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

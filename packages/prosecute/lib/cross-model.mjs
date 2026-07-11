@@ -25,6 +25,16 @@ function requireNonEmptyString(value, field) {
   return value;
 }
 
+// Provider identity is compared normalized (trimmed + case-folded) everywhere,
+// so a same actual provider cannot fake distinctness with a whitespace or case
+// variant ("openai " / "OpenAI" vs "openai"). Raw strings are still STORED for
+// audit fidelity; only the distinctness DECISION uses the normalized form.
+// (Semantic aliases like "openai" vs "gpt" remain the documented honest limit —
+// this gate cannot prove two differently-named strings are truly one provider.)
+function normalizeProvider(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 /**
  * Record a cross-model attestation. FAIL-CLOSED: throws if any field is missing,
  * the verdict is unknown, or provider === authorProvider (a same-model review is
@@ -41,7 +51,7 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
   if (!VALID_VERDICTS.has(verdict)) {
     throw new Error(`cross-model review verdict must be one of ${[...VALID_VERDICTS].join(', ')}, got "${verdict}"`);
   }
-  if (provider === authorProvider) {
+  if (normalizeProvider(provider) === normalizeProvider(authorProvider)) {
     throw new Error('cross-model review requires a provider distinct from the author');
   }
   return record({
@@ -78,16 +88,17 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } =
     if (!data || typeof data !== 'object') return false;
     if (data.verdict !== 'approve') return false;
     if (data.revision !== revision) return false;
-    const provider = data.provider;
-    const entryAuthor = data.authorProvider;
-    if (typeof provider !== 'string' || provider.trim() === '') return false;
-    if (typeof entryAuthor !== 'string' || entryAuthor.trim() === '') return false;
+    const provider = normalizeProvider(data.provider);
+    const entryAuthor = normalizeProvider(data.authorProvider);
+    const runAuthor = normalizeProvider(authorProvider);
+    if (provider === '' || entryAuthor === '' || runAuthor === '') return false;
     // Write-side belt-and-suspenders: the attestation must not be same-provider.
     if (provider === entryAuthor) return false;
     // Author anchored to the prosecution run: the reviewer must differ from the
     // real (prosecution-declared) author, and the record must be for THIS author.
-    if (provider === authorProvider) return false;
-    if (entryAuthor !== authorProvider) return false;
+    // All compared normalized so a whitespace/case variant cannot fake distinctness.
+    if (provider === runAuthor) return false;
+    if (entryAuthor !== runAuthor) return false;
     return true;
   });
 }

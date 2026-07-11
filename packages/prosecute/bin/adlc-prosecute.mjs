@@ -1,24 +1,42 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles } from '@adlc/core';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview } from '../lib/cross-model.mjs';
 
-// Load the ticket table for rails-deny-path tiering from the SAME --dir the
-// prosecution uses, falling back to .adlc/tickets.json. Reading from a hard-coded
-// path would make rails declared under a custom --dir invisible to the tier
-// (under-trigger). Mirrors ticketDefinitionHash's lookup order in lib/run.mjs.
-function loadTicketsForTier(dir) {
-  for (const path of [join(dir, 'tickets.json'), '.adlc/tickets.json']) {
-    try {
-      return JSON.parse(readFileSync(path, 'utf8'))?.tickets ?? [];
-    } catch {
-      // Try the next supported ticket location.
-    }
+function readTicketArray(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))?.tickets ?? [];
+  } catch {
+    return [];
   }
-  return [];
+}
+
+// resolve(dir) is inside (or equal to) the repo root.
+function isInsideRepo(root, resolvedDir) {
+  const rel = relative(root, resolvedDir);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+// Load the ticket table(s) whose `rails` define trust-root DENY paths for
+// tiering. SECURITY: tiering is a GATE decision, so the rails source must be the
+// repo's CANONICAL <repoRoot>/.adlc/tickets.json — never REPLACEABLE by a
+// caller-supplied --dir. Otherwise `--dir ../elsewhere` pointing at a table that
+// OMITS the rails would declassify a change that is trust-root via the repo's
+// real rails (a gate bypass). We therefore ALWAYS include the canonical table,
+// and only UNION an additional --dir table when that dir is CONTAINED within the
+// repo (so a custom in-repo ADLC workspace still tiers). The classifier unions
+// rails across all tickets, so extra sources can only ADD deny-paths (fail-safe),
+// never remove them; an out-of-repo --dir contributes nothing to tiering.
+function loadTicketsForTier(dir, root) {
+  const tickets = [...readTicketArray(join(root, '.adlc', 'tickets.json'))];
+  const resolvedDir = resolve(dir);
+  if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
+    tickets.push(...readTicketArray(join(resolvedDir, 'tickets.json')));
+  }
+  return tickets;
 }
 
 const { values, positionals } = parseArgs({
@@ -181,8 +199,9 @@ try {
 // the run (exit 1) rather than fall back to an ungated P5. CI must provide the base
 // (fetch it or pass --base <ref>); see docs/ci/rails-guard.yml.
 let changed;
+let root;
 try {
-  const root = repoRoot();
+  root = repoRoot();
   const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
   const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
     .split('\0').filter(Boolean);
@@ -190,7 +209,7 @@ try {
 } catch (err) {
   opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
 }
-const tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir) });
+const tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root) });
 const requireCrossModel = tier.isTrustRootTier;
 if (tier.isTrustRootTier) {
   console.error(`trust-root tier: cross-model adversarial approve REQUIRED (base ${values.base}). Reasons:`);
