@@ -1,4 +1,4 @@
-# @adlc/opencode-package
+# @adlc/opencode
 
 ADLC ([Agentic Development Lifecycle](https://www.agenticlifecycle.ai)) integration for the
 [OpenCode](https://opencode.ai) terminal coding agent: enforce-by-default rails guard,
@@ -12,7 +12,7 @@ lifecycle slash commands, prosecutor subagents, native skills, and a model-calla
 npm install -g @adlc/cli
 
 # 2. Bootstrap your project (registers the plugin, scaffolds .adlc/ + .opencode/)
-npx @adlc/opencode-package init
+npx @adlc/opencode init
 ```
 
 Restart opencode. `/adlc-init` inside the TUI re-runs the same idempotent scaffold.
@@ -28,7 +28,7 @@ override options):
 
 ```json
 {
-  "plugin": [["@adlc/opencode-package", { "advisoryHooks": false, "ungatedTools": [] }]]
+  "plugin": [["@adlc/opencode", { "advisoryHooks": false, "ungatedTools": [] }]]
 }
 ```
 

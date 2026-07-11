@@ -48,7 +48,7 @@ export function packagePublishOrder(names) {
  * Every directory `--publish` must publish, in dependency order: packages/* in
  * the core-first/cli-last order, THEN each non-private plugin package (plugins
  * consume the packages, so they publish after them). Skipping publishable
- * plugins is exactly how @adlc/opencode-package ended up registered in user
+ * plugins is exactly how @adlc/opencode ended up registered in user
  * opencode.json files while not existing on npm (T30).
  * Returns [{ dir, name, private }].
  */
@@ -165,7 +165,7 @@ export function releaseMain(
     console.log(`set ${pkg.name}@${version}`);
   }
 
-  // Versioned plugin packages (e.g. @adlc/pi-package) are part of the suite and
+  // Versioned plugin packages (e.g. @adlc/pi) are part of the suite and
   // must move in lockstep — skipping them is exactly how plugins/adlc-pi got
   // stranded at 1.0.2 while everything else went to 1.1.0.
   if (existsSync(pluginsDir)) {

@@ -57,7 +57,7 @@ function makeNotify(client) {
 }
 
 /**
- * Map the plugin-options tuple (opencode.json: `[["@adlc/opencode-package",
+ * Map the plugin-options tuple (opencode.json: `[["@adlc/opencode",
  * {...}]]`, delivered as the plugin function's 2nd argument — @opencode-ai/
  * plugin `Plugin = (input, options?) => Hooks`) onto the env knobs the hooks
  * already read. Env vars WIN over options: an explicitly set variable is a

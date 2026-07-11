@@ -24,7 +24,7 @@ Nothing below is claimed shipped unless it has a runtime caller in
 | `TICKET-DONE` completion listener → prosecution nudge (§4) | **Shipped** |
 | Native `adlc_gate` tool + compaction defense (§Phase 4) | **Shipped** — LLM-backed gates keyless via the session model; rail context survives compaction |
 | P6 integrate + `/adlc-accept` + rollback (§Phase 4) | **Shipped** — accept is command-driven; rollback path lands the revert |
-| npm publication: `@adlc/pi-package` release-ready + folds into lockstep `/release` (§5) | **Shipped** — package is publishable (un-private, `files` allowlist, keywords, peer `"*"`); `pi install npm:@adlc/pi-package` one-liner goes live with the first published release. Version-matrix smoke (`scripts/pi-version-matrix.mjs`, weekly cron) tracks upstream pi drift |
+| npm publication: `@adlc/pi` release-ready + folds into lockstep `/release` (§5) | **Shipped** — package is publishable (un-private, `files` allowlist, keywords, peer `"*"`); `pi install npm:@adlc/pi` one-liner goes live with the first published release. Version-matrix smoke (`scripts/pi-version-matrix.mjs`, weekly cron) tracks upstream pi drift |
 | P6 `session_shutdown` auto-capture (§2 table) | **Design intent** — acceptance is `/adlc-accept`-driven today |
 | In-harness scheduled P7 distillation (§2 table) | **Design intent** — pi has no `/schedule`; CI cron is the substrate |
 

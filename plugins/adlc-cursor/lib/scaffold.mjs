@@ -19,7 +19,7 @@ import { PRETOOL_MATCHER } from '../constants.mjs';
 import { ensureGitignore, ensureFormatterIgnores } from '@adlc/core';
 export { ensureGitignore, ensureFormatterIgnores };
 
-// The installed @adlc/cursor-package root (this file lives at <root>/lib/scaffold.mjs).
+// The installed @adlc/cursor root (this file lives at <root>/lib/scaffold.mjs).
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const PRETOOL_REL = 'hooks/adlc-pretool.mjs';

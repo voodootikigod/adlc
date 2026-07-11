@@ -1,4 +1,4 @@
-# @adlc/cursor-package
+# @adlc/cursor
 
 ADLC ([Agentic Development Lifecycle](https://www.agenticlifecycle.ai)) native integration for
 [Cursor](https://cursor.com): a `preToolUse` rails-guard dispatcher, an `afterFileEdit` audit
@@ -13,7 +13,7 @@ npm install -g @adlc/cli
 
 # 2. Bootstrap your project (writes .adlc/config.json + .cursor/hooks.json,
 #    rules, and the /adlc-* command palette)
-npx @adlc/cursor-package .
+npx @adlc/cursor .
 ```
 
 The scaffold is idempotent — re-running (or the in-Cursor `/adlc-init` command)

@@ -29,7 +29,7 @@ npm install -g @adlc/cli
   repo formatter/linter:
 
   ```sh
-  node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/cursor-package/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .
+  node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/cursor/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .
   ```
 
   The scaffolder MERGES three ADLC hook entries into any existing

@@ -23,7 +23,7 @@ const pkgPath = join(PLUGIN, 'package.json');
 if (!existsSync(pkgPath)) fail('plugins/adlc-opencode/package.json missing');
 else {
   const pkg = JSON.parse(read(pkgPath));
-  if (pkg.name !== '@adlc/opencode-package') fail(`package name is ${pkg.name}`); else ok('package name');
+  if (pkg.name !== '@adlc/opencode') fail(`package name is ${pkg.name}`); else ok('package name');
   if (pkg.type !== 'module') fail('package is not type:module'); else ok('type:module');
   if (!pkg.peerDependencies?.['@opencode-ai/plugin']) fail('missing @opencode-ai/plugin peerDependency'); else ok('peerDependency @opencode-ai/plugin');
   if (!pkg.dependencies?.['@adlc/core']) fail('missing @adlc/core dependency'); else ok('dependency @adlc/core');
@@ -262,7 +262,7 @@ if (!existsSync(join(PLUGIN, 'lib', 'prosecutor.mjs'))) fail('lib/prosecutor.mjs
 // real opencode binary; CI runs it with --require. This smoke stays binary-free.
 console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-deny.mjs` (CI: --require).');
 
-// ---- T30: publishability + the one-command bootstrap (npx @adlc/opencode-package init) ----
+// ---- T30: publishability + the one-command bootstrap (npx @adlc/opencode init) ----
 {
   const pkg = existsSync(pkgPath) ? JSON.parse(read(pkgPath)) : {};
   if (pkg.private === true) fail('package is private — cannot publish to npm (T30)'); else ok('package is publishable (not private)');
@@ -276,10 +276,10 @@ console.log('  note — AC7 live deny proof: run `node scripts/opencode-live-den
     execFileSync(process.execPath, [join(PLUGIN, 'bin', 'cli.mjs'), 'init', tmp], { stdio: 'pipe' });
     const oc = JSON.parse(read(join(tmp, '.opencode', 'opencode.json')));
     const entries = (oc.plugin ?? []).map((e) => (Array.isArray(e) ? e[0] : e));
-    const resolvable = entries.some((e) => e === '@adlc/opencode-package' ? false : existsSync(e));
+    const resolvable = entries.some((e) => e === '@adlc/opencode' ? false : existsSync(e));
     if (!entries.length) fail('bootstrap registered no plugin entry');
-    else if (!resolvable && !entries.includes('@adlc/opencode-package')) fail(`bootstrap registered an unresolvable entry: ${entries}`);
-    else if (entries.includes('@adlc/opencode-package') && !String(PLUGIN).includes('node_modules')) fail('bootstrap from source must register the local path, not the npm name');
+    else if (!resolvable && !entries.includes('@adlc/opencode')) fail(`bootstrap registered an unresolvable entry: ${entries}`);
+    else if (entries.includes('@adlc/opencode') && !String(PLUGIN).includes('node_modules')) fail('bootstrap from source must register the local path, not the npm name');
     else ok('bootstrap registers a RESOLVABLE plugin entry');
     if (!existsSync(join(tmp, '.adlc', 'config.json'))) fail('bootstrap did not create .adlc/config.json'); else ok('bootstrap creates .adlc/config.json');
     if (!existsSync(join(tmp, '.opencode', 'commands', 'adlc-init.md'))) fail('bootstrap did not deploy commands'); else ok('bootstrap deploys commands');

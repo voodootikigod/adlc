@@ -1,4 +1,4 @@
-# @adlc/antigravity-package
+# @adlc/antigravity
 
 ADLC ([Agentic Development Lifecycle](https://www.agenticlifecycle.ai)) native integration for
 [Google Antigravity](https://antigravity.google) (`agy`): a `PreToolUse` rails-guard hook, the
@@ -15,8 +15,8 @@ ticket's scope and frozen rails in front of the model every turn.
 agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 
 # npm-assisted, once this package is published
-npm install @adlc/antigravity-package
-agy plugin install ./node_modules/@adlc/antigravity-package
+npm install @adlc/antigravity
+agy plugin install ./node_modules/@adlc/antigravity
 ```
 
 Then run `/adlc-init` inside your agent session to bootstrap `.adlc/` in your

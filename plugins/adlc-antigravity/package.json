@@ -1,5 +1,5 @@
 {
-  "name": "@adlc/antigravity-package",
+  "name": "@adlc/antigravity",
   "type": "module",
   "version": "1.2.1",
   "description": "ADLC native integration for Google Antigravity (agy)",

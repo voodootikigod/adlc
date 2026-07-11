@@ -46,16 +46,16 @@ events); opt in with `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`.
 
 ## Install
 
-`@adlc/cursor-package` is publishable (`files` allowlist, license, repository
+`@adlc/cursor` is publishable (`files` allowlist, license, repository
 metadata all in place) and joins the lockstep `/release` the next time the
 suite publishes:
 
 ```sh
 npm install -g @adlc/cli          # the gate toolkit the hooks/commands shell out to
-npx @adlc/cursor-package .        # bootstrap the scaffold into the current repo
+npx @adlc/cursor .        # bootstrap the scaffold into the current repo
 ```
 
-`npx @adlc/cursor-package` works because the package's single `bin` entry
+`npx @adlc/cursor` works because the package's single `bin` entry
 (`adlc-cursor-scaffold`) resolves for the bare package name — passing a path
 argument (`.` for the current repo) is forwarded straight to the scaffolder.
 

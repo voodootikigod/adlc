@@ -1,5 +1,5 @@
 {
-  "name": "@adlc/pi-package",
+  "name": "@adlc/pi",
   "version": "1.2.1",
   "description": "ADLC integration for the pi terminal coding agent: in-session rail/scope/suppression enforcement, native adlc_prosecute/adlc_gate tools, lifecycle skills.",
   "type": "module",

@@ -911,7 +911,6 @@
         "packages/**",
         ".github/workflows/**",
         "docs/ci/**",
-        ".adlc/tickets.json",
         ".adlc/specs/**",
         "docs/adr/**",
         "docs/marketing/**",

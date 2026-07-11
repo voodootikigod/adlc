@@ -26,7 +26,7 @@ npm install -g @adlc/cli
   tracks the ticket + specs contracts, and exclude `.adlc/` from any detected
   repo formatter/linter:
 
-  !`node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/opencode-package/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .`
+  !`node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/opencode/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .`
 
   (If the helper is unavailable, scaffold manually: create `.adlc/config.json`
   with `{"securityMode":"unsigned-fallback"}`, copy the plugin's `command/*.md`

@@ -1,5 +1,5 @@
 {
-  "name": "@adlc/cursor-package",
+  "name": "@adlc/cursor",
   "version": "1.2.1",
   "description": "ADLC native integration for the Cursor agent (rails-guard hooks + discovery rule)",
   "type": "module",

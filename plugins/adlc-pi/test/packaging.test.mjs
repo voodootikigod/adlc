@@ -1,6 +1,6 @@
 // packaging.test.mjs — release-readiness (T29 AC1) + version-matrix wiring (AC3).
 //
-// AC1 proves @adlc/pi-package publishes only its runtime surface (never test/)
+// AC1 proves @adlc/pi publishes only its runtime surface (never test/)
 // and carries the fields the lockstep release + pi.dev gallery require.
 // AC3 proves scripts/pi-live-deny.mjs honors the ADLC_PI_BIN override and that
 // the version-matrix verdict table gates exactly as specified.
