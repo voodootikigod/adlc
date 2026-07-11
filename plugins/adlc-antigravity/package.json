@@ -1,13 +1,42 @@
 {
   "name": "@adlc/antigravity-package",
-  "private": true,
   "type": "module",
   "version": "1.2.1",
   "description": "ADLC native integration for Google Antigravity (agy)",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "plugins/adlc-antigravity"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-antigravity#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "antigravity",
+    "agy",
+    "rails"
+  ],
   "dependencies": {},
   "agy": {
     "hooks": "./hooks.json",
     "skills": "./skills/",
     "command": "./commands/adlc-init.md"
-  }
+  },
+  "files": [
+    "agents/",
+    "commands/",
+    "constants.mjs",
+    "core-inline.mjs",
+    "hooks/",
+    "hooks.json",
+    "rails-checker.mjs",
+    "skills/",
+    "plugin.json",
+    "README.md",
+    "LICENSE"
+  ]
 }

@@ -46,8 +46,20 @@ events); opt in with `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`.
 
 ## Install
 
-The plugin ships in this repo at `plugins/adlc-cursor/`. The `@adlc/cursor-package`
-package is **not yet published to npm**, so install from source for now.
+`@adlc/cursor-package` is publishable (`files` allowlist, license, repository
+metadata all in place) and joins the lockstep `/release` the next time the
+suite publishes:
+
+```sh
+npm install -g @adlc/cli          # the gate toolkit the hooks/commands shell out to
+npx @adlc/cursor-package .        # bootstrap the scaffold into the current repo
+```
+
+`npx @adlc/cursor-package` works because the package's single `bin` entry
+(`adlc-cursor-scaffold`) resolves for the bare package name — passing a path
+argument (`.` for the current repo) is forwarded straight to the scaffolder.
+
+Until the first npm release ships, install from source instead:
 
 1. Install the gate toolkit (the hooks/commands shell out to the `adlc` binary):
 
@@ -78,8 +90,6 @@ package is **not yet published to npm**, so install from source for now.
    `/adlc-*` command palette into `.cursor/commands/`**. Once the commands are on
    disk you can drive every phase from inside Cursor — including re-running this
    bootstrap via the `/adlc-init` command (`/adlc-ticket`, `/adlc-prosecute`, …).
-   (Once the package is published, the same scaffolder will be runnable from
-   `node_modules/@adlc/cursor-package/`.)
 
    **Upgrading a pre-command-suite scaffold.** `ensureRule()` never overwrites an
    existing `.cursor/rules/adlc.mdc`, so a repo scaffolded before the command suite

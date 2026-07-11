@@ -1,10 +1,26 @@
 {
   "name": "@adlc/cursor-package",
   "version": "1.2.1",
-  "private": true,
   "description": "ADLC native integration for the Cursor agent (rails-guard hooks + discovery rule)",
   "type": "module",
   "main": "hooks/adlc-rails-guard.mjs",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "plugins/adlc-cursor"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-cursor#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "cursor",
+    "rails",
+    "coding-agent"
+  ],
   "cursor": {
     "hooks": "./hooks.json",
     "rules": "./rules/",
@@ -13,6 +29,17 @@
   "bin": {
     "adlc-cursor-scaffold": "./lib/scaffold-cli.mjs"
   },
+  "files": [
+    "command/",
+    "constants.mjs",
+    "hooks/",
+    "hooks.json",
+    "lib/",
+    "rails-checker.mjs",
+    "rules/",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@adlc/build-gate": "^1.2.1",
     "@adlc/core": "^1.2.1",

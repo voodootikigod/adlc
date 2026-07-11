@@ -45,8 +45,16 @@ rails guard, nothing at commit time enforces its verdict. The `stop`-audit and
 
 ## Install
 
-The plugin ships in this repo at `plugins/adlc-cursor/`. The
-`@adlc/cursor-package` is **not yet published to npm**, so install from source.
+`@adlc/cursor-package` is publishable (`files` allowlist, license, repository
+metadata all in place) and joins the lockstep `/release` the next time the
+suite publishes:
+
+```sh
+npm install -g @adlc/cli          # the gate toolkit the hooks/commands shell out to
+npx @adlc/cursor-package .        # bootstrap the scaffold into the current repo
+```
+
+Until the first npm release ships, install from source instead:
 
 ```sh
 npm install -g @adlc/cli                                  # the gate toolkit
