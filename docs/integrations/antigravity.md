@@ -110,6 +110,43 @@ not re-implemented here):
   ticket resolves.
 - Symlink aliases whose real target is a frozen rail are resolved and denied.
 
+## Single-ticket projection
+
+The [antigravity-booster](https://github.com/voodootikigod/antigravity-booster)
+projects a **single-ticket** `.adlc/tickets.json` into each build worktree: the
+worktree sees exactly one ticket — the one it is building — not the whole ticket
+graph. This section pins the contract between that projection and the plugin's
+fail-closed loader so the two repos cannot drift.
+
+**The contract: the booster must project *edge-free* single-ticket files.** A
+ticket in the full graph normally carries `edges[].to` references to sibling
+tickets. When a single ticket is projected in isolation, any such edge becomes
+**dangling** — it points at a ticket that is no longer present in the file.
+`core-inline.mjs` `loadTickets` reports that as `edge to unknown ticket <id>`,
+`rails-checker.mjs` `railPreconditions` treats **any** validation error as a
+tamper signal and returns `{ state: 'deny' }`, and `checkRail`/`decide` then deny
+**every mutating tool call for the whole session** — not just writes to rail
+paths. A build worktree in that state cannot edit anything.
+
+**The plugin stays fail-closed by design; it does not repair the trust root.**
+Refusing to load a malformed `.adlc/tickets.json` is the correct security posture
+(a partially-parseable trust root is exactly where a silent rail-narrowing attack
+would hide). So the fix lives on the **booster** side: it must strip `edges` from
+the single-ticket projection before writing it into the worktree, producing a
+clean file that validates. The plugin does **not** add a special-case that
+tolerates dangling edges.
+
+This split is asserted from both sides so it can't regress:
+
+- **Plugin (this repo):** `test/projection.test.mjs` pins both shapes — a clean
+  single-ticket projection enforces its rail while allowing in-scope non-rail
+  writes, and a dangling-edge projection produces the fail-closed deny-all
+  (denying even a non-rail, in-scope write). See
+  [antigravity-booster#11](https://github.com/voodootikigod/antigravity-booster/issues/11)
+  and [adlc#142](https://github.com/voodootikigod/adlc/issues/142).
+- **Booster (antigravity-booster#11):** strips edges from the projection so the
+  dangling-edge state never reaches a real build worktree.
+
 ## Platform notes / limitations
 
 - **POSIX only in-session** (`$HOME` command path); Windows in-session is unsupported —
