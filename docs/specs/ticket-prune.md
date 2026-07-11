@@ -2,6 +2,18 @@
 
 **Phase:** lightweight P1 record for a shipped P2/maintenance tool, not a full design spec.
 
+> **Superseded (#104):** The original `--write` semantics below (move stale
+> tickets into a gitignored `.adlc/tickets.archive.json` and remove them from
+> `.adlc/tickets.json`) produced a diff the rails-guard CI gate hard-denies (it
+> forbids removing/mutating a base ticket). `--write` now **tombstones in
+> place**: it adds `completed: true` to a rails-less stale ticket and changes
+> nothing else — the exact annotation the gate accepts (`--archive` flag and
+> the archive file are gone). Rails-freezing stale tickets are reported under
+> `needsCeremony` for the protected-base admin ceremony instead of being
+> auto-completed. AC4 and the archive references in the Decision are historical;
+> see `docs/tools/ticket-prune.md` and `packages/ticket-prune/README.md` for the
+> current behavior.
+
 ## Issue
 
 [#39](https://github.com/voodootikigod/adlc/issues/39): `.adlc/tickets.json` is a

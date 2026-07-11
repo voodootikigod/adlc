@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// ticket-prune — reports (and, with --write, archives) stale tickets out of
+// ticket-prune — reports (and, with --write, tombstones) stale tickets in
 // .adlc/tickets.json. Dry-run by default, consistent with every other ADLC
-// writer (skill-rot, rejection-mining, model-ratchet). Archives to a
-// gitignored .adlc/tickets.archive.json rather than deleting outright.
+// writer (skill-rot, rejection-mining, model-ratchet). A stale ticket is
+// tombstoned by adding `completed: true` in place (never removed) — the exact
+// annotation the rails-guard CI gate accepts for a rails-less ticket, so the
+// pruned tickets.json merges through an ordinary PR. Stale tickets that still
+// freeze rails are reported as needing the protected-base admin ceremony (a
+// completion there also expires the rails, which the gate reserves for admins).
 //
-// Usage: ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]
+// Usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 //
 // This is advisory (like model-ratchet), not a pass/fail gate: stale tickets
 // are clutter, not a merge blocker. Exit codes: 0 = report/write succeeded
@@ -14,14 +18,12 @@ import { parseArgs, opError, printJson } from '@adlc/core';
 import { runTicketPrune } from '../lib/run.mjs';
 import { renderReport, toJson } from '../lib/format.mjs';
 
-const USAGE =
-  'usage: ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]';
+const USAGE = 'usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]';
 
 const { values } = parseArgs({
   usage: USAGE,
   options: {
     tickets: { type: 'string', default: '.adlc/tickets.json' },
-    archive: { type: 'string', default: '.adlc/tickets.archive.json' },
     'base-ref': { type: 'string', default: 'HEAD' },
     write: { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
@@ -31,7 +33,6 @@ const { values } = parseArgs({
 const result = runTicketPrune({
   cwd: process.cwd(),
   ticketsPath: values.tickets,
-  archivePath: values.archive,
   baseRef: values['base-ref'],
   write: values.write,
 });

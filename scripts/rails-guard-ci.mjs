@@ -90,12 +90,31 @@ function validateTicketsEnvelope(value, label) {
   return value.tickets;
 }
 
+// #104/T36: the ONE change to an existing base ticket a PR may make is adding
+// `completed: true` to a ticket that froze NO rails at base. Rationale: the only
+// effect of `completed` is to expire that ticket's rails (T36), so annotating a
+// RAILS-LESS ticket grants ZERO privilege (nothing to unfreeze) — which lets
+// `ticket-prune` tombstone a shipped ticket in an ordinary PR instead of a
+// destructive removal. Strictly bounded: base must have declared no rails and no
+// `completed` field; head must be EXACTLY base plus `completed: true` (any other
+// field/rails change, a non-`true` value, or a railed ticket → not exempt, still
+// denied, so T36's forge resistance is fully intact for anything that could
+// unfreeze a path).
+function isCompletionAnnotationOnly(baseTicket, headTicket) {
+  const baseRails = Array.isArray(baseTicket.rails) ? baseTicket.rails : [];
+  if (baseRails.length > 0) return false;                                   // railed → could unfreeze → not exempt
+  if (Object.prototype.hasOwnProperty.call(baseTicket, 'completed')) return false; // add-only, on a pristine field
+  if (headTicket.completed !== true) return false;                          // strict boolean true only
+  const { completed, ...headWithoutCompleted } = headTicket;
+  return stable(headWithoutCompleted) === stable(baseTicket);               // nothing else changed
+}
+
 function assertBaseTicketContractsPreserved(baseTickets, headTickets) {
   const headById = new Map(headTickets.map((ticket) => [ticket.id, ticket]));
   for (const baseTicket of baseTickets) {
     const headTicket = headById.get(baseTicket.id);
     if (!headTicket) deny(`base ticket ${baseTicket.id} cannot be removed from .adlc/tickets.json in a PR`);
-    if (stable(headTicket) !== stable(baseTicket)) {
+    if (stable(headTicket) !== stable(baseTicket) && !isCompletionAnnotationOnly(baseTicket, headTicket)) {
       deny(`base ticket ${baseTicket.id} contract cannot change in .adlc/tickets.json in a PR`);
     }
   }

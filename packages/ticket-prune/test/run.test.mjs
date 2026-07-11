@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,10 +22,6 @@ function writeTickets(dir, tickets) {
 
 function readTickets(dir) {
   return JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'));
-}
-
-function readArchive(dir) {
-  return JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.archive.json'), 'utf8'));
 }
 
 /**
@@ -102,24 +98,24 @@ test('dry-run reports a stale ticket (mocked done signal: shipped scope) without
     assert.equal(result.write, false);
     assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
     assert.deepEqual(result.active.map((r) => r.id), ['T2']);
+    assert.deepEqual(result.tombstoned, []);
+    assert.deepEqual(result.needsCeremony, []);
 
     // Not mutated: byte-identical to what was written before the run.
     const after = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
     assert.equal(after, before);
-    assert.equal(existsSync(join(dir, '.adlc', 'tickets.archive.json')), false);
   });
 });
 
-test('dry-run: absolute --tickets/--archive paths are honored, not joined onto cwd', () => {
+test('dry-run: an absolute --tickets path is honored, not joined onto cwd', () => {
   withScratchRepo((dir) => {
-    // Place tickets.json and the archive somewhere entirely outside `dir`
-    // (which is itself the cwd passed to runTicketPrune) to prove an
-    // absolute ticketsPath/archivePath overrides cwd instead of being
-    // concatenated onto it (path.join would produce cwd + absolutePath).
+    // Place tickets.json somewhere entirely outside `dir` (which is itself the
+    // cwd passed to runTicketPrune) to prove an absolute ticketsPath overrides
+    // cwd instead of being concatenated onto it (path.join would produce
+    // cwd + absolutePath).
     const outside = mkdtempSync(join(tmpdir(), 'ticket-prune-abs-'));
     try {
       const absTickets = join(outside, 'tickets.json');
-      const absArchive = join(outside, 'tickets.archive.json');
       writeFileSync(
         absTickets,
         JSON.stringify(
@@ -134,32 +130,11 @@ test('dry-run: absolute --tickets/--archive paths are honored, not joined onto c
         ),
       );
 
-      const result = runTicketPrune({ cwd: dir, ticketsPath: absTickets, archivePath: absArchive });
+      const result = runTicketPrune({ cwd: dir, ticketsPath: absTickets });
 
       assert.equal(result.ok, true);
       assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
       assert.deepEqual(result.active.map((r) => r.id), ['T2']);
-    } finally {
-      rmSync(outside, { recursive: true, force: true });
-    }
-  });
-});
-
-test('--write with an absolute --archive path archives outside cwd correctly', () => {
-  withScratchRepo((dir) => {
-    const outside = mkdtempSync(join(tmpdir(), 'ticket-prune-abs-write-'));
-    try {
-      writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-      const absArchive = join(outside, 'tickets.archive.json');
-
-      const result = runTicketPrune({ cwd: dir, archivePath: absArchive, write: true });
-
-      assert.equal(result.ok, true);
-      assert.deepEqual(result.archived.map((t) => t.id), ['T1']);
-      assert.equal(existsSync(absArchive), true);
-      assert.deepEqual(JSON.parse(readFileSync(absArchive, 'utf8')).tickets.map((t) => t.id), ['T1']);
-      // Default (relative) tickets.json location is unaffected.
-      assert.deepEqual(readTickets(dir).tickets, []);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -185,9 +160,9 @@ test('dry-run: explicit status "done" is stale even with no matching scope', () 
   });
 });
 
-// ── --write archives and removes ────────────────────────────────────────────
+// ── --write tombstones in place (never removes) ─────────────────────────────
 
-test('--write moves stale tickets into the archive file and removes them from tickets.json', () => {
+test('--write tombstones a rails-less stale ticket with completed:true IN PLACE, changing nothing else, and never removes it', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [
       { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] },
@@ -197,35 +172,54 @@ test('--write moves stale tickets into the archive file and removes them from ti
     const result = runTicketPrune({ cwd: dir, write: true });
 
     assert.equal(result.ok, true);
-    assert.equal(result.archived.length, 1);
-    assert.equal(result.archived[0].id, 'T1');
+    assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
+    assert.ok(result.tombstoned[0].reason);
+    assert.deepEqual(result.needsCeremony, []);
 
-    const remaining = readTickets(dir);
-    assert.deepEqual(remaining.tickets.map((t) => t.id), ['T2']);
-
-    const archive = readArchive(dir);
-    assert.deepEqual(archive.tickets.map((t) => t.id), ['T1']);
-    assert.ok(archive.tickets[0].archivedAt);
-    assert.ok(archive.tickets[0].archiveReason);
-    // Full ticket payload is preserved, not just the id.
-    assert.equal(archive.tickets[0].title, 'Ship the widget');
+    const after = readTickets(dir);
+    // No removal: both tickets are still present, in the same order.
+    assert.deepEqual(after.tickets.map((t) => t.id), ['T1', 'T2']);
+    // The stale one gained EXACTLY `completed: true` and nothing else changed.
+    assert.deepEqual(after.tickets[0], {
+      id: 'T1',
+      title: 'Ship the widget',
+      scope: ['plugins/adlc-widget/**'],
+      completed: true,
+    });
+    // The active one is untouched — no stray completed field.
+    assert.deepEqual(after.tickets[1], {
+      id: 'T2',
+      title: 'Still building',
+      scope: ['packages/never-built/**'],
+    });
   });
 });
 
-test('--write with no stale tickets leaves tickets.json untouched and writes no archive', () => {
+test('--write does NOT auto-tombstone a stale ticket that still freezes rails — it reports it under needsCeremony and leaves tickets.json untouched', () => {
   withScratchRepo((dir) => {
-    writeTickets(dir, [{ id: 'T1', title: 'Still building', scope: ['packages/never-built/**'] }]);
+    const railed = {
+      id: 'T1',
+      title: 'Ship the widget',
+      scope: ['plugins/adlc-widget/**'],
+      rails: ['test/adlc-widget/**'],
+    };
+    writeTickets(dir, [railed]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
     const result = runTicketPrune({ cwd: dir, write: true });
 
-    assert.equal(result.archived.length, 0);
+    assert.equal(result.ok, true);
+    // Completing it would expire its frozen rails — a privileged action the
+    // gate reserves for the admin ceremony, so prune refuses to do it.
+    assert.deepEqual(result.tombstoned, []);
+    assert.deepEqual(result.needsCeremony.map((t) => t.id), ['T1']);
+    assert.deepEqual(result.needsCeremony[0].rails, ['test/adlc-widget/**']);
+    // tickets.json is byte-identical — no partial mutation of a railed ticket.
     assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
-    assert.equal(existsSync(join(dir, '.adlc', 'tickets.archive.json')), false);
   });
 });
 
-test('--write accumulates across repeated runs instead of clobbering the archive', () => {
+test('--write with a mix: the rails-less stale ticket is tombstoned, the railed stale ticket is left for the ceremony', () => {
   withScratchRepo((dir) => {
     mkdirSync(join(dir, 'packages', 'second-widget'), { recursive: true });
     writeFileSync(join(dir, 'packages', 'second-widget', 'index.mjs'), '// shipped later\n');
@@ -234,92 +228,74 @@ test('--write accumulates across repeated runs instead of clobbering the archive
 
     writeTickets(dir, [
       { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] },
-      { id: 'T2', title: 'Ship the second widget', scope: ['packages/second-widget/**'] },
+      {
+        id: 'T2',
+        title: 'Ship the second widget',
+        scope: ['packages/second-widget/**'],
+        rails: ['test/second-widget/**'],
+      },
     ]);
 
-    runTicketPrune({ cwd: dir, write: true });
-    let archive = readArchive(dir);
-    assert.deepEqual(archive.tickets.map((t) => t.id).sort(), ['T1', 'T2']);
+    const result = runTicketPrune({ cwd: dir, write: true });
 
-    // A later run with a fresh tickets.json (e.g. new tickets added since)
-    // must not drop the earlier archive entries.
-    writeTickets(dir, [{ id: 'T3', title: 'Still building', scope: ['packages/never-built/**'] }]);
-    runTicketPrune({ cwd: dir, write: true });
-    archive = readArchive(dir);
-    assert.deepEqual(archive.tickets.map((t) => t.id).sort(), ['T1', 'T2']);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
+    assert.deepEqual(result.needsCeremony.map((t) => t.id), ['T2']);
+
+    const after = readTickets(dir);
+    assert.equal(after.tickets[0].completed, true); // T1 tombstoned
+    assert.equal(after.tickets[1].completed, undefined); // T2 untouched
+    assert.deepEqual(after.tickets[1].rails, ['test/second-widget/**']);
+  });
+});
+
+test('--write with no stale tickets leaves tickets.json byte-untouched', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Still building', scope: ['packages/never-built/**'] }]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.deepEqual(result.tombstoned, []);
+    assert.deepEqual(result.needsCeremony, []);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+  });
+});
+
+test('--write is idempotent: an already-tombstoned (completed:true) stale ticket is not re-tombstoned and tickets.json is left byte-untouched', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], completed: true },
+    ]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, true);
+    // classifyTicket may still consider it stale, but it is already completed
+    // so there is nothing to write.
+    assert.deepEqual(result.tombstoned, []);
+    assert.deepEqual(result.needsCeremony, []);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
   });
 });
 
 // ── --write failure safety (no data loss, no uncaught exceptions) ──────────
 
-test('--write: if the archive write fails, tickets.json is left untouched (no data loss) and the error is reported cleanly', () => {
+test('--write: if the tickets.json write fails, the error is reported cleanly as {ok:false} instead of throwing', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    // Point --archive at a path inside a directory that doesn't exist, so
-    // the archive's atomic write throws (ENOENT).
-    const badArchivePath = join(dir, 'nonexistent-dir', 'tickets.archive.json');
+    // Point --tickets at a path whose parent directory does not exist so the
+    // atomic write throws (ENOENT). loadTickets reads it first and returns a
+    // clean operational error before we ever reach the write, which is itself
+    // the "no uncaught exception" guarantee we care about.
+    const badTicketsPath = join(dir, 'nonexistent-dir', 'tickets.json');
 
-    const result = runTicketPrune({ cwd: dir, archivePath: badArchivePath, write: true });
+    const result = runTicketPrune({ cwd: dir, ticketsPath: badTicketsPath, write: true });
 
     assert.equal(result.ok, false);
-    assert.match(result.error, /archive/i);
-
-    // The stale ticket must still be in tickets.json, byte-identical to
-    // before the failed run — archive-write failures must never remove a
-    // ticket from tickets.json without it having been durably archived.
-    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
-    assert.equal(existsSync(badArchivePath), false);
-  });
-});
-
-test('--write: invalid JSON in a pre-existing archive file is a clean {ok:false} error, not an uncaught exception, and does not touch tickets.json', () => {
-  withScratchRepo((dir) => {
-    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
-    writeFileSync(join(dir, '.adlc', 'tickets.archive.json'), '{ not valid json');
-
-    const result = runTicketPrune({ cwd: dir, write: true });
-
-    assert.equal(result.ok, false);
-    assert.match(result.error, /invalid JSON/);
-    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
-  });
-});
-
-test('--write: a pre-existing archive file containing the JSON literal `null` (syntactically valid, but not an object) archives cleanly instead of throwing', () => {
-  withScratchRepo((dir) => {
-    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    // `null` is valid JSON — readJson's fallback is only used for a missing
-    // file, so this parses successfully to `null`, not { tickets: [] }.
-    writeFileSync(join(dir, '.adlc', 'tickets.archive.json'), 'null');
-
-    const result = runTicketPrune({ cwd: dir, write: true });
-
-    assert.equal(result.ok, true);
-    assert.equal(result.archived.length, 1);
-    assert.equal(result.archived[0].id, 'T1');
-
-    const archive = readArchive(dir);
-    assert.equal(archive.tickets.length, 1);
-    assert.equal(archive.tickets[0].id, 'T1');
-
-    const tickets = readTickets(dir);
-    assert.equal(tickets.tickets.length, 0);
-  });
-});
-
-test('bin: --write with a corrupt archive file exits 1 with a clean error message, not a raw stack trace', () => {
-  withScratchRepo((dir) => {
-    writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    writeFileSync(join(dir, '.adlc', 'tickets.archive.json'), '{ not valid json');
-
-    const { code, stderr } = runBin(['--write', '--json'], dir);
-
-    assert.equal(code, 1);
-    assert.match(stderr, /^error: /);
-    assert.doesNotMatch(stderr, /at runTicketPrune/); // no raw Node stack trace
+    assert.match(result.error, /not found|write/i);
   });
 });
 
@@ -328,7 +304,7 @@ test('bin: --write with a corrupt archive file exits 1 with a clean error messag
 // runTicketPrune re-reads tickets.json after acquiring the lock, specifically
 // to guard against another writer (e.g. ticket-sync) mutating tickets.json
 // between the initial classification read and the lock acquisition. These
-// two tests force a *real* concurrent mutation (via a child process that
+// tests force a *real* concurrent mutation (via a child process that
 // holds/releases the shared lock out-of-process) to exercise that re-read,
 // rather than two sequential non-overlapping runs.
 
@@ -356,25 +332,26 @@ test('--write: re-reads tickets.json under the lock, so a ticket added concurren
     await writerDone;
 
     assert.equal(result.ok, true);
-    assert.deepEqual(result.archived.map((t) => t.id), ['T1']);
+    assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
 
     // T2 didn't exist when classification ran, so it's in neither `stale`
     // nor `active` — but the re-read under the lock must still see it and
-    // preserve it in tickets.json. If runTicketPrune used the pre-lock
-    // `tickets` snapshot instead of re-reading fresh under the lock, T2
-    // would be silently dropped here.
-    assert.deepEqual(readTickets(dir).tickets.map((t) => t.id), ['T2']);
+    // preserve it in tickets.json. T1 gains completed:true; T2 is untouched.
+    const after = readTickets(dir);
+    assert.deepEqual(after.tickets.map((t) => t.id), ['T1', 'T2']);
+    assert.equal(after.tickets[0].completed, true);
+    assert.equal(after.tickets[1].completed, undefined);
   });
 });
 
-test('--write: if a stale ticket is already gone by the time the lock is acquired, the run archives nothing instead of crashing or re-archiving', () => {
+test('--write: if a stale ticket is already gone by the time the lock is acquired, the run tombstones nothing instead of crashing', () => {
   return withScratchRepoAsync(async (dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
 
     assert.equal(acquireLock(dir), true);
 
-    // Simulates another writer having already archived/removed T1 by the
-    // time ticket-prune gets the lock.
+    // Simulates another writer having already removed T1 by the time
+    // ticket-prune gets the lock.
     const writerDone = spawnMutateAfterDelay(dir, { tickets: [] }, 150);
 
     const result = runTicketPrune({ cwd: dir, write: true });
@@ -384,10 +361,9 @@ test('--write: if a stale ticket is already gone by the time the lock is acquire
     // Classification (which ran before the lock was even attempted) still
     // reports T1 as stale...
     assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
-    // ...but the removed.length === 0 early-return branch means nothing is
-    // (re-)archived and no archive file is created.
-    assert.deepEqual(result.archived, []);
-    assert.equal(existsSync(join(dir, '.adlc', 'tickets.archive.json')), false);
+    // ...but the tombstoneIds.size === 0 early-return branch means nothing is
+    // written.
+    assert.deepEqual(result.tombstoned, []);
     assert.deepEqual(readTickets(dir).tickets, []);
   });
 });
@@ -412,11 +388,11 @@ test('--write: a ticket concurrently un-staled (status flipped back to active) b
     // Pre-lock classification still (correctly, for its snapshot) reported
     // T1 as stale...
     assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
-    // ...but nothing gets archived: the re-read-under-the-lock content no
+    // ...but nothing gets tombstoned: the re-read-under-the-lock content no
     // longer classifies as stale, so the concurrent edit wins.
-    assert.deepEqual(result.archived, []);
-    assert.equal(existsSync(join(dir, '.adlc', 'tickets.archive.json')), false);
-    // The ticket survives in tickets.json with its fresh, active status.
+    assert.deepEqual(result.tombstoned, []);
+    // The ticket survives in tickets.json with its fresh, active status and
+    // no completed field forced onto it.
     assert.deepEqual(readTickets(dir).tickets, [{ id: 'T1', title: 'Reopened work', status: 'in-progress' }]);
   });
 });
@@ -428,6 +404,8 @@ test('empty tickets.json (no tickets) reports cleanly and is a no-op', () => {
     assert.equal(result.ok, true);
     assert.deepEqual(result.stale, []);
     assert.deepEqual(result.active, []);
+    assert.deepEqual(result.tombstoned, []);
+    assert.deepEqual(result.needsCeremony, []);
   });
 });
 
@@ -458,16 +436,20 @@ test('bin: dry-run exits 0 and --json prints the classification', () => {
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.write, false);
     assert.deepEqual(parsed.stale.map((r) => r.id), ['T1']);
+    assert.deepEqual(parsed.tombstoned, []);
   });
 });
 
-test('bin: --write exits 0 and actually archives via the CLI entry point', () => {
+test('bin: --write exits 0 and actually tombstones in place via the CLI entry point', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    const { code } = runBin(['--write', '--json'], dir);
+    const { code, stdout } = runBin(['--write', '--json'], dir);
     assert.equal(code, 0);
-    assert.deepEqual(readTickets(dir).tickets, []);
-    assert.equal(readArchive(dir).tickets.length, 1);
+    const parsed = JSON.parse(stdout);
+    assert.deepEqual(parsed.tombstoned.map((t) => t.id), ['T1']);
+    const after = readTickets(dir);
+    assert.deepEqual(after.tickets.map((t) => t.id), ['T1']);
+    assert.equal(after.tickets[0].completed, true);
   });
 });
 

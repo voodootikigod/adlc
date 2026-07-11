@@ -1,4 +1,4 @@
-// detect.mjs — decide whether a ticket is stale (shipped, safe to archive).
+// detect.mjs — decide whether a ticket is stale (shipped, safe to tombstone).
 //
 // Source-of-truth decision (documented per issue #39's open question):
 //

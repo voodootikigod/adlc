@@ -377,12 +377,24 @@ jobs:
               }
               return value.tickets;
             };
+            // #104/T36: a PR may add ONLY `completed: true` to a base ticket that
+            // froze NO rails (zero unfreeze privilege → ticket-prune can tombstone
+            // a shipped rails-less ticket in an ordinary PR). Railed tickets,
+            // non-true values, other field changes, and removals stay denied.
+            const isCompletionAnnotationOnly = (baseTicket, headTicket) => {
+              const baseRails = Array.isArray(baseTicket.rails) ? baseTicket.rails : [];
+              if (baseRails.length > 0) return false;
+              if (Object.prototype.hasOwnProperty.call(baseTicket, "completed")) return false;
+              if (headTicket.completed !== true) return false;
+              const { completed, ...headWithoutCompleted } = headTicket;
+              return stable(headWithoutCompleted) === stable(baseTicket);
+            };
             const assertBaseTicketsPreserved = (baseTickets, headTickets) => {
               const headById = new Map(headTickets.map(t => [t.id, t]));
               for (const baseTicket of baseTickets) {
                 const headTicket = headById.get(baseTicket.id);
                 if (!headTicket) deny("base ticket " + baseTicket.id + " cannot be removed from .adlc/tickets.json in a PR");
-                if (stable(headTicket) !== stable(baseTicket)) deny("base ticket " + baseTicket.id + " contract cannot change in .adlc/tickets.json in a PR");
+                if (stable(headTicket) !== stable(baseTicket) && !isCompletionAnnotationOnly(baseTicket, headTicket)) deny("base ticket " + baseTicket.id + " contract cannot change in .adlc/tickets.json in a PR");
               }
             };
             // Confirm the base REF resolves first — git show returns non-zero for

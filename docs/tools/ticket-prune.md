@@ -18,14 +18,28 @@ flowchart TD
 
 `.adlc/tickets.json` is a mutable working scratchpad. Nothing else prunes it
 after a ticket's work ships, so completed tickets accumulate and masquerade as
-an open backlog. `ticket-prune` reports (and, with `--write`, archives) tickets
-it can determine are stale, dry-run by default like every other ADLC writer.
+an open backlog. `ticket-prune` reports (and, with `--write`, tombstones)
+tickets it can determine are stale, dry-run by default like every other ADLC
+writer.
 
 ## Usage
 
 ```
-ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]
+ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 ```
+
+## Tombstoning, not removal (#104)
+
+`--write` adds `completed: true` to a stale ticket **in place** and changes
+nothing else — it never removes the ticket or moves it to a side file.
+`.adlc/tickets.json` is the rails-guard trust root, and its CI gate
+(`scripts/rails-guard-ci.mjs`) hard-denies any PR that removes or mutates a base
+ticket. Adding exactly `completed: true` to a **rails-less** ticket is the one
+change that gate accepts (it grants no unfreeze privilege), so a routine prune
+merges through an ordinary PR. A stale ticket that still freezes rails is left
+untouched and surfaced under `needsCeremony`: completing it also expires its
+rails, a privileged unfreeze reserved for the protected-base admin ceremony
+(`ADLC_RAILS_BYPASS=1`).
 
 ## How "stale" is decided
 
@@ -46,10 +60,9 @@ See `packages/ticket-prune/README.md` for the full reasoning, including why
 | Flag | Description |
 |------|-------------|
 | `--tickets <path>` | Ticket file to read (default `.adlc/tickets.json`). |
-| `--archive <path>` | Archive file `--write` moves stale tickets into (default `.adlc/tickets.archive.json`, gitignored). |
 | `--base-ref <ref>` | Git ref to check declared scope globs against (default `HEAD`). |
-| `--write` | Archive stale tickets: remove them from `--tickets`, upsert into `--archive`. Never deletes outright. |
-| `--json` | Machine-readable `{ baseRef, write, stale[], active[], archived[] }`. |
+| `--write` | Tombstone rails-less stale tickets: add `completed: true` in place. Never removes; leaves rails-freezing stale tickets for the admin ceremony. |
+| `--json` | Machine-readable `{ baseRef, write, stale[], active[], tombstoned[], needsCeremony[] }`. |
 
 ## Exit codes
 
@@ -67,7 +80,7 @@ adlc ticket-prune
 # Audit tickets against main from a feature branch
 adlc ticket-prune --base-ref origin/main --json
 
-# Archive the stale tickets found above
+# Tombstone the rails-less stale tickets found above (completed:true in place)
 adlc ticket-prune --write
 ```
 

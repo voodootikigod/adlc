@@ -6,19 +6,37 @@
 after a ticket's work ships, so completed tickets accumulate and masquerade as
 an open backlog — you can't tell live work from leftovers without
 cross-checking deliverables and merged PRs by hand. `ticket-prune` reports
-(and, with `--write`, archives) tickets it can determine are stale.
+(and, with `--write`, tombstones) tickets it can determine are stale.
 
 Addresses [issue #39](https://github.com/voodootikigod/adlc/issues/39).
 
 ## Usage
 
 ```
-ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]
+ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 ```
 
 Dry-run by default, consistent with every other ADLC writer (`skill-rot`,
-`rejection-mining`, `model-ratchet`): it reports what it would archive without
-touching `.adlc/tickets.json` until you pass `--write`.
+`rejection-mining`, `model-ratchet`): it reports what it would tombstone
+without touching `.adlc/tickets.json` until you pass `--write`.
+
+## Tombstoning, not removal (#104)
+
+`--write` does **not** delete a stale ticket or move it to a side file. It adds
+`completed: true` to the ticket **in place** and changes nothing else. This is
+deliberate: `.adlc/tickets.json` is the rails-guard trust root, and its CI gate
+(`scripts/rails-guard-ci.mjs`) hard-denies any PR that *removes* or otherwise
+mutates a base ticket. The one exception the gate carves out is adding exactly
+`completed: true` to a ticket that declares **no rails** — that annotation
+grants zero unfreeze privilege, so it is safe in an ordinary PR. Tombstoning is
+built to produce precisely that diff, so a routine prune merges without an admin
+override.
+
+A stale ticket that **still freezes rails** is *not* auto-tombstoned: completing
+it would expire its rails from the union (a privileged unfreeze), which the gate
+reserves for the protected-base admin ceremony. Those tickets are reported
+separately under `needsCeremony` — surface them to an operator to complete with
+`ADLC_RAILS_BYPASS=1` rather than silently doing it here.
 
 ## How "stale" is decided
 
@@ -57,16 +75,15 @@ matching, and is exactly the check the issue's worked example did by hand.
 | Flag | Description |
 |------|-------------|
 | `--tickets <path>` | Ticket file to read (default `.adlc/tickets.json`). |
-| `--archive <path>` | Archive file to write to under `--write` (default `.adlc/tickets.archive.json`, gitignored — see `.gitignore`'s `.adlc/*` rule). |
 | `--base-ref <ref>` | Git ref to check declared `scope` globs against (default `HEAD`). Point at `origin/main` to audit a feature branch's tickets against what's already shipped on trunk. |
-| `--write` | Archive stale tickets: move them out of `--tickets` into `--archive` (append/upsert by id — repeated runs accumulate, never clobber). Tickets are archived, never deleted outright. |
-| `--json` | Machine-readable `{ baseRef, write, stale[], active[], archived[] }`. |
+| `--write` | Tombstone rails-less stale tickets: add `completed: true` in place (never remove, never mutate any other field). Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
+| `--json` | Machine-readable `{ baseRef, write, stale[], active[], tombstoned[], needsCeremony[] }`. |
 
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Report or archive succeeded — regardless of how many stale tickets were found. This is advisory (like `model-ratchet`), not a pass/fail gate: stale tickets are clutter, not a merge blocker. |
+| `0` | Report or tombstone succeeded — regardless of how many stale tickets were found. This is advisory (like `model-ratchet`), not a pass/fail gate: stale tickets are clutter, not a merge blocker. |
 | `1` | Operational error — bad/missing ticket file, invalid JSON, unresolvable `--base-ref`, or the write lock could not be acquired. |
 
 ## Examples
@@ -78,7 +95,7 @@ ticket-prune
 # Audit tickets against main from a feature branch
 ticket-prune --base-ref origin/main --json
 
-# Archive the stale tickets found above
+# Tombstone the rails-less stale tickets found above (completed:true in place)
 ticket-prune --write
 ```
 
@@ -86,9 +103,10 @@ ticket-prune --write
 
 `--write` takes the shared `.adlc/tickets.lock` mkdir-lock before mutating
 `tickets.json`, the same lock path `@adlc/ticket-sync`'s writer uses, so the
-two writers interoperate instead of racing. Both `tickets.json` and the
-archive file are replaced with a tmp-file-then-rename (atomic on POSIX
-filesystems).
+two writers interoperate instead of racing. `tickets.json` is replaced with a
+tmp-file-then-rename (atomic on POSIX filesystems). Under the lock the tool
+re-reads and re-classifies before writing, so a ticket another writer un-staled
+in the race window is never tombstoned.
 
 ## Relationship to sibling tools
 

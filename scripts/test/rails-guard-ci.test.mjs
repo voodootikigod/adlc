@@ -723,3 +723,87 @@ test('T36 guardrail #5: all-completed repo, editing a now-expired rail path → 
   });
   assert.equal(code, 0);
 });
+
+// ---- #104: ticket-prune tombstone — the gate accepts a `completed:true` annotation
+// on a RAILS-LESS base ticket (zero unfreeze privilege), but nothing more. ----
+
+test('#104: a PR adding ONLY completed:true to a rails-LESS base ticket is ALLOWED → exit 0', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], title: 'done work' }] }),
+    seedFiles: ['app.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', rails: [], title: 'done work', completed: true }] })),
+  });
+  assert.equal(code, 0, 'tombstoning a shipped rails-less ticket merges via a normal PR');
+});
+
+test('#104 forge resistance: adding completed:true to a RAILED base ticket is STILL DENIED → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'], completed: true }] })),
+  });
+  assert.equal(code, 2, 'completing a still-railed ticket needs the admin ceremony (would unfreeze)');
+});
+
+test('#104: completed:true + ANY other field change on a rails-less ticket → DENIED → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], title: 'orig' }] }),
+    seedFiles: ['app.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', rails: [], title: 'TAMPERED', completed: true }] })),
+  });
+  assert.equal(code, 2, 'only the completed annotation may be added, nothing else');
+});
+
+test('#104: adding completed:true AND rails in the same PR → DENIED → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+    seedFiles: ['app.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/x/**'], completed: true }] })),
+  });
+  assert.equal(code, 2, 'cannot smuggle a rails change under the completion annotation');
+});
+
+test('#104: completed must be STRICT true — "true"/1/false do NOT get the annotation exemption → exit 2', () => {
+  for (const val of ['true', 1, false]) {
+    const code = runScenario({
+      baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
+      seedFiles: ['app.mjs'],
+      mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+        JSON.stringify({ tickets: [{ id: 'T1', rails: [], completed: val }] })),
+    });
+    assert.equal(code, 2, `completed:${JSON.stringify(val)} is not the exempt annotation`);
+  }
+});
+
+test('#104: base ticket that ALREADY has a completed field cannot be re-annotated (only pristine → completed) → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], completed: false }] }),
+    seedFiles: ['app.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', rails: [], completed: true }] })),
+  });
+  assert.equal(code, 2, 'the exemption is add-only on a ticket with no completed field');
+});
+
+test('#104: REMOVING a rails-less base ticket is still DENIED (tombstone, never delete) → exit 2', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }, { id: 'T2', rails: [] }] }),
+    seedFiles: ['app.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T2', rails: [] }] })),
+  });
+  assert.equal(code, 2, 'removal still needs the ceremony');
+});
+
+test('#104: idempotent — a PR that leaves an already-completed base ticket unchanged → exit 0', () => {
+  const code = runScenario({
+    baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], completed: true }] }),
+    seedFiles: ['app.mjs'],
+    mutate: (d) => writeFileSync(join(d, 'app.mjs'), 'changed\n'),
+  });
+  assert.equal(code, 0);
+});

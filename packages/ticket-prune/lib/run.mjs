@@ -11,25 +11,22 @@ import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs
  * @param {object} [options]
  * @param {string} [options.cwd]
  * @param {string} [options.ticketsPath] relative to cwd
- * @param {string} [options.archivePath] relative to cwd
  * @param {string} [options.baseRef] git ref to check scope/rails existence against
- * @param {boolean} [options.write] archive stale tickets instead of dry-run reporting
- * @returns {{ok: true, baseRef: string, write: boolean, stale: object[], active: object[], archived: object[]} | {ok: false, error: string}}
+ * @param {boolean} [options.write] tombstone stale tickets in place instead of dry-run reporting
+ * @returns {{ok: true, baseRef: string, write: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], needsCeremony: {id: string, reason: string, rails: string[]}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
   const {
     cwd = process.cwd(),
     ticketsPath = '.adlc/tickets.json',
-    archivePath = '.adlc/tickets.archive.json',
     baseRef = 'HEAD',
     write = false,
   } = options;
 
-  // path.resolve (unlike path.join) treats an absolute ticketsPath/archivePath
-  // as an override of cwd rather than concatenating onto it, so `--tickets
+  // path.resolve (unlike path.join) treats an absolute ticketsPath as an
+  // override of cwd rather than concatenating onto it, so `--tickets
   // /abs/path.json` behaves the way users naturally expect.
   const absTicketsPath = resolve(cwd, ticketsPath);
-  const absArchivePath = resolve(cwd, archivePath);
 
   const { tickets, errors } = loadTickets(absTicketsPath);
   if (errors.length) {
@@ -37,7 +34,7 @@ export function runTicketPrune(options = {}) {
   }
 
   if (tickets.length === 0) {
-    return { ok: true, baseRef, write, stale: [], active: [], archived: [] };
+    return { ok: true, baseRef, write, stale: [], active: [], tombstoned: [], needsCeremony: [] };
   }
 
   let trackedFiles;
@@ -52,7 +49,7 @@ export function runTicketPrune(options = {}) {
   const active = results.filter((r) => !r.stale);
 
   if (!write || stale.length === 0) {
-    return { ok: true, baseRef, write, stale, active, archived: [] };
+    return { ok: true, baseRef, write, stale, active, tombstoned: [], needsCeremony: [] };
   }
 
   const locked = acquireLock(cwd);
@@ -78,7 +75,7 @@ export function runTicketPrune(options = {}) {
       return { ok: false, error: `could not re-read tickets file under lock: ${err.message}` };
     }
     if (rawUnderLock === null) {
-      return { ok: false, error: `ticket file disappeared during archive: ${absTicketsPath}` };
+      return { ok: false, error: `ticket file disappeared during prune: ${absTicketsPath}` };
     }
     const freshTickets = Array.isArray(rawUnderLock.tickets) ? rawUnderLock.tickets : [];
 
@@ -90,81 +87,55 @@ export function runTicketPrune(options = {}) {
     // writer (e.g. ticket-sync, or a human editor) may have mutated a
     // ticket's content between the initial classification and now in a way
     // that un-stales it (e.g. flipped `status` from "done" back to
-    // "in-progress", or edited `scope`). Archiving on the stale
-    // classification anyway would silently delete a currently-active ticket
-    // and write an archive entry whose reason no longer matches its content.
-    const freshReasonById = new Map();
-    const removed = [];
+    // "in-progress", or edited `scope`). Tombstoning on the stale
+    // classification anyway would silently complete a currently-active ticket.
+    // #104: TOMBSTONE stale tickets with `completed: true` IN PLACE instead of
+    // physically removing them. Removal produced a diff the rails-guard CI gate
+    // hard-denies ("base ticket cannot be removed"); an in-place `completed: true`
+    // annotation is accepted by that gate for a RAILS-LESS ticket (it grants no
+    // unfreeze privilege — see rails-guard-ci.mjs isCompletionAnnotationOnly), so
+    // the prune output now merges through an ordinary PR. A stale ticket that
+    // STILL freezes rails is NOT auto-tombstoned here: completing it also expires
+    // its rails (privileged), which the gate reserves for the protected-base
+    // admin ceremony — those are reported under `needsCeremony`. Re-classify
+    // under the lock so a concurrently un-staled ticket is never tombstoned.
+    const tombstoneIds = new Set();
+    const tombstoned = [];
+    const needsCeremony = [];
     for (const ticket of staleCandidates) {
       const reclassified = classifyTicket(ticket, trackedFiles);
-      if (reclassified.stale) {
-        freshReasonById.set(ticket.id, reclassified.reason);
-        removed.push(ticket);
+      if (!reclassified.stale) continue;                 // un-staled under the lock — leave it
+      if (ticket.completed === true) continue;           // already tombstoned — nothing to do
+      const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
+      if (rails.length > 0) {
+        // has frozen rails → completing it would unfreeze them; the gate requires
+        // the admin ceremony for that. Report it, do not auto-tombstone.
+        needsCeremony.push({ id: ticket.id, reason: reclassified.reason, rails });
+        continue;
       }
+      tombstoneIds.add(ticket.id);
+      tombstoned.push({ id: ticket.id, reason: reclassified.reason });
     }
 
-    const removedIds = new Set(removed.map((t) => t.id));
-    const kept = freshTickets.filter((t) => !removedIds.has(t.id));
-
-    if (removed.length === 0) {
-      // Every stale id was either already gone, or no longer classifies as
-      // stale (a concurrent writer mutated it out from under us), by the
-      // time we took the lock.
-      return { ok: true, baseRef, write, stale, active, archived: [] };
+    if (tombstoneIds.size === 0) {
+      // Nothing PR-mergeable to tombstone (all stale ids were un-staled, already
+      // tombstoned, or need the ceremony). tickets.json is left untouched.
+      return { ok: true, baseRef, write, stale, active, tombstoned: [], needsCeremony };
     }
 
-    const archivedAt = new Date().toISOString();
-    let existingArchive;
-    try {
-      existingArchive = readJson(absArchivePath, { tickets: [] });
-    } catch (err) {
-      return { ok: false, error: `could not read archive file: ${err.message}` };
-    }
-    // readJson's fallback only applies to a genuinely absent file — a file
-    // that exists and contains a syntactically-valid-but-unusable JSON
-    // document (e.g. the literal `null`, a bare array, or `{}` without a
-    // `tickets` array) parses successfully and is returned as-is. Guard
-    // against that here (rather than trusting existingArchive.tickets to be
-    // an array) so a pre-existing archive file with unexpected-but-valid
-    // JSON content degrades to "treat as empty archive" instead of throwing
-    // when we dereference .tickets below.
-    const existingArchiveTickets =
-      existingArchive && Array.isArray(existingArchive.tickets) ? existingArchive.tickets : [];
-    const archiveById = new Map(existingArchiveTickets.map((t) => [t.id, t]));
-
-    const archivedEntries = [];
-    for (const ticket of removed) {
-      const entry = { ...ticket, archivedAt, archiveReason: freshReasonById.get(ticket.id) };
-      archiveById.set(ticket.id, entry);
-      archivedEntries.push(entry);
-    }
-
-    // Write the archive BEFORE removing anything from tickets.json. If this
-    // write throws (bad --archive directory, permissions, disk full), we
-    // return an error with tickets.json completely untouched — the stale
-    // tickets are still there to retry, never lost. The alternative
-    // ordering (tickets.json first) can lose a ticket permanently if the
-    // archive write is what fails, since it would already be gone from
-    // tickets.json with nowhere else it was ever persisted.
-    try {
-      writeJsonAtomic(absArchivePath, { tickets: [...archiveById.values()] });
-    } catch (err) {
-      return { ok: false, error: `could not write archive file: ${err.message}` };
-    }
+    // Add ONLY `completed: true` to each tombstoned ticket — the exact single-
+    // field annotation the gate accepts; touching any other field would make the
+    // diff un-mergeable again.
+    const updatedTickets = freshTickets.map((t) =>
+      tombstoneIds.has(t.id) ? { ...t, completed: true } : t);
 
     try {
-      writeJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: kept });
+      writeJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: updatedTickets });
     } catch (err) {
-      // Worst case here: the archive now holds entries that are also still
-      // present in tickets.json (a harmless duplicate, recoverable by
-      // re-running), never a ticket that exists in neither file.
-      return {
-        ok: false,
-        error: `archived ${archivedEntries.length} ticket(s) but failed to remove them from tickets.json: ${err.message}`,
-      };
+      return { ok: false, error: `failed to write tombstones to tickets.json: ${err.message}` };
     }
 
-    return { ok: true, baseRef, write, stale, active, archived: archivedEntries };
+    return { ok: true, baseRef, write, stale, active, tombstoned, needsCeremony };
   } finally {
     releaseLock(cwd);
   }
