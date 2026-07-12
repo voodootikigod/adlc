@@ -27,15 +27,13 @@ export const INTEGRATIONS = [
   {
     slug: 'cursor',
     name: 'Cursor',
-    status: 'source',
+    status: 'installer',
     tagline: 'Hooks, rules, and commands scaffolded straight into .cursor/, no plugin runtime needed.',
     install: [
       'npm install -g @adlc/cli',
-      'cd /path/to/adlc && npm install',
-      'node /path/to/adlc/plugins/adlc-cursor/lib/scaffold-cli.mjs .',
-      'node scripts/cursor-install-smoke.mjs .',
+      'npx @adlc/cursor .',
     ],
-    note: '@adlc/cursor is not on npm yet, so scaffold from a repo checkout.',
+    note: '@adlc/cursor is published on npm. The scaffold is idempotent — re-run it (or `/adlc-init` inside Cursor) to refresh .adlc/config.json, .cursor/hooks.json, rules, and the /adlc-* command palette.',
   },
   {
     slug: 'opencode',
@@ -55,9 +53,9 @@ export const INTEGRATIONS = [
     tagline: 'Proactive and reactive gating via Pi tool_call/tool_result hooks, with TUI gate display.',
     install: [
       'npm install -g @adlc/cli',
-      'pi install npm:@adlc/pi',
+      'pi install -l npm:@adlc/pi',
     ],
-    note: 'Then run `/adlc-init` inside pi to finish the repo scaffold. Requires Node >= 22.19 (the pi floor).',
+    note: 'The `-l` project install auto-installs for teammates on trusted startup (the best team-install story of the six); `pi install npm:@adlc/pi` (no -l) installs user-global instead. Then `/adlc-init` inside pi finishes the repo scaffold. Requires Node >= 22.19 (the pi floor).',
   },
   {
     slug: 'antigravity',
@@ -67,7 +65,7 @@ export const INTEGRATIONS = [
     install: [
       'agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity',
     ],
-    note: 'Local-checkout install is the verified path; marketplace + universal installer are planned.',
+    note: '`agy plugin install` only takes a filesystem path, so a local checkout is the install even though `@adlc/antigravity` is now published on npm (install it and point agy at node_modules for the npm-assisted path). Marketplace + universal-installer support are still planned.',
   },
 ];
 

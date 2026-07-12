@@ -30,11 +30,9 @@ agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 Then run `/adlc-init` inside your agent session (or execute the steps manually to bootstrap `.adlc/` in your repository).
 
 **npm-assisted install.** `agy` has no native `agy install npm:X` command — `agy
-plugin install` always takes a filesystem path — but `@adlc/antigravity`
-is publishable (`files` allowlist, license, repository metadata all in place)
-and will resolve as a normal npm dependency once the suite next publishes. Until
-then this only works from a source checkout's own `node_modules`, but the shape
-is:
+plugin install` always takes a filesystem path — but `@adlc/antigravity` is now
+published on npm, so you can install it as a normal dependency and point `agy` at
+`node_modules`:
 
 ```sh
 npm install @adlc/antigravity

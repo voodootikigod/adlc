@@ -24,5 +24,15 @@ harness below.
 - **[Antigravity](/docs/integrations/antigravity)** — native `agy` plugin with an
   in-session rails-guard hook, backed by the unbypassable CI rail-freeze gate.
 
+## Orchestrating harnesses in parallel
+
+These integrations wire the gates *into* each harness. The
+[`@adlc/fleet`](/docs/toolkit/fleet) orchestrator runs the other direction: it
+dispatches ready tickets to sandboxed **headless workers** in isolated worktrees
+and merges them through the gates. Its scheduler is harness-blind via a
+`WorkerAdapter` seam — Claude Code is the default worker, and adapters for Codex,
+Antigravity, opencode, pi, and Cursor let a single fleet run build tickets on any
+of them (the harness is an operator-local `--adapter` choice).
+
 See the [toolkit overview](/docs/lifecycle) and the [ADLC theory](/docs/theory) for
 the gates these integrations wire up.

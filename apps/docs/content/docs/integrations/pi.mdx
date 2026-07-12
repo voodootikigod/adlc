@@ -53,8 +53,9 @@ pi install -l npm:@adlc/pi
 pi install npm:@adlc/pi
 ```
 
-Then run `/adlc-init` inside pi to finish the repo scaffold. Until the first npm
-release ships, load the extension from a checkout instead:
+Then run `/adlc-init` inside pi to finish the repo scaffold. `@adlc/pi` is
+published on npm, so the `pi install npm:@adlc/pi` one-liner above works today.
+Developing against a checkout? Load the extension directly instead:
 
 ```sh
 pi --extension /path/to/adlc/plugins/adlc-pi/index.ts

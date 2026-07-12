@@ -45,16 +45,14 @@ rails guard, nothing at commit time enforces its verdict. The `stop`-audit and
 
 ## Install
 
-`@adlc/cursor` is publishable (`files` allowlist, license, repository
-metadata all in place) and joins the lockstep `/release` the next time the
-suite publishes:
+`@adlc/cursor` is published on npm and folds into the lockstep `/release`:
 
 ```sh
-npm install -g @adlc/cli          # the gate toolkit the hooks/commands shell out to
-npx @adlc/cursor .        # bootstrap the scaffold into the current repo
+npm install -g @adlc/cli   # the gate toolkit the hooks/commands shell out to
+npx @adlc/cursor .          # bootstrap the scaffold into the current repo
 ```
 
-Until the first npm release ships, install from source instead:
+Developing against a checkout instead? Run the bundled scaffolder directly:
 
 ```sh
 npm install -g @adlc/cli                                  # the gate toolkit

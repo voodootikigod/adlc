@@ -46,9 +46,7 @@ events); opt in with `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`.
 
 ## Install
 
-`@adlc/cursor` is publishable (`files` allowlist, license, repository
-metadata all in place) and joins the lockstep `/release` the next time the
-suite publishes:
+`@adlc/cursor` is published on npm and folds into the lockstep `/release`:
 
 ```sh
 npm install -g @adlc/cli          # the gate toolkit the hooks/commands shell out to
@@ -59,7 +57,7 @@ npx @adlc/cursor .        # bootstrap the scaffold into the current repo
 (`adlc-cursor-scaffold`) resolves for the bare package name — passing a path
 argument (`.` for the current repo) is forwarded straight to the scaffolder.
 
-Until the first npm release ships, install from source instead:
+Developing against a checkout instead? Run the scaffolder from source:
 
 1. Install the gate toolkit (the hooks/commands shell out to the `adlc` binary):
 
