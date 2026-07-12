@@ -12,12 +12,19 @@ import { spawn as cpSpawn } from 'node:child_process';
 
 export function spawnAsync(cmd, args = [], opts = {}) {
   return new Promise((resolve) => {
+    // Some harness workers take their prompt on STDIN (e.g. agy --print); pass it
+    // via `opts.input`. Long prompts on stdin also avoid ARG_MAX limits.
+    const stdin = opts.input !== undefined ? 'pipe' : 'ignore';
     let child;
     try {
-      child = cpSpawn(cmd, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = cpSpawn(cmd, args, { ...opts, stdio: [stdin, 'pipe', 'pipe'] });
     } catch (error) {
       resolve({ error, status: null, stdout: '', stderr: '' });
       return;
+    }
+    if (opts.input !== undefined && child.stdin) {
+      child.stdin.on('error', () => { /* child may exit before we finish writing */ });
+      child.stdin.end(opts.input);
     }
     let stdout = '';
     let stderr = '';

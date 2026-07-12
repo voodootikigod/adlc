@@ -50,6 +50,11 @@ export function resolveRunConfig(config = {}, flags = {}) {
     reviewBin: config.reviewBin ?? null,
     reviewProvider: config.reviewProvider ?? null,
     modelAuthKey: config.modelAuthKey ?? null,
+    // Worker harness selection (T44). Default 'claude-code' for backward compat.
+    adapter: flags.adapter ?? config.adapter ?? 'claude-code',
+    model: config.model ?? null,
+    adapterCommand: config.adapterCommand ?? null,
+    adapterArgs: config.adapterArgs ?? null,
     // operator-local ONLY:
     operatorOverride: flags.disposableContainer === true,
     repoConfigOverride: repoWantedOverride,

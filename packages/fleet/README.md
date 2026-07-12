@@ -74,6 +74,24 @@ A live `fleet run` (no `--dry-run`) requires:
 The fleet refuses to dispatch when the sandbox precondition is unmet (fail
 closed).
 
+## Worker harnesses (adapters)
+
+The scheduler is harness-blind: it talks to workers through a `WorkerAdapter`
+seam (`lib/adapters/`), so which coding agent builds a ticket is a config choice,
+not a code change. Registered adapters: `claude-code` (default), `codex`, `agy`
+(Google Antigravity), `opencode`, `pi`, `cursor`. Each is a pure I/O shim that
+spawns its harness in headless mode on the **model plane** (provider egress + its
+own auth, never sandboxed — K2). Select one with `fleet.adapter`.
+
+Each adapter ships a grounded **default invocation** (`agy --print` is verified
+against antigravity-booster; `codex exec`, `opencode run`, `cursor-agent -p`, and
+the pi headless form are documented defaults with the confidence noted in each
+adapter's header). Because harness CLIs evolve, the command and args are
+**overridable** via `fleet.adapterCommand` / `fleet.adapterArgs` (and `fleet.model`
+for agy) — so a CLI change is a one-line config fix, and an unknown `fleet.adapter`
+fails closed at run start. Live end-to-end behavior per harness should be verified
+against the installed CLI.
+
 ## Configuration (`.adlc/config.json`)
 
 ```json
@@ -81,6 +99,8 @@ closed).
   "fleet": {
     "gate": { "build": "npm run build --workspaces --if-present", "test": "npm test" },
     "init": "npm install",
+    "adapter": "claude-code",
+    "model": null,
     "concurrency": 2,
     "base": "main",
     "timeoutMinutes": 30,
