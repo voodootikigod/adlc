@@ -38,6 +38,19 @@ test('planRound serializes scope-overlapping tickets (AC3d)', () => {
   assert.equal(r.admit.length, 1, 'overlapping tickets cannot both dispatch');
 });
 
+test('planRound admits nothing when already at/over the cap (freeSlots floor)', () => {
+  const all = [T('A'), T('B'), T('C')];
+  // Two in flight, cap 2 → zero free slots, so no admission even though C is ready.
+  const r = planRound(all, { statusById: { A: 'building', B: 'building' }, inFlightIds: ['A', 'B'], cap: 2 });
+  assert.equal(r.admit.length, 0, 'freeSlots must clamp to 0, never admit past the cap');
+});
+
+test('planRound default cap is 2 when unspecified', () => {
+  const all = [T('A'), T('B'), T('C')];
+  const r = planRound(all, { statusById: {} }); // no cap arg → default
+  assert.equal(r.admit.length, 2, 'the default concurrency cap is 2');
+});
+
 test('planRound reports subset-blocked tickets rather than silently skipping', () => {
   const all = [T('T1', { edges: [{ to: 'T2' }] }), T('T2')];
   const r = planRound(all, { statusById: {}, cap: 5, onlyIds: ['T2'] });

@@ -1,12 +1,32 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveRunConfig, DEFAULTS } from '../lib/config.mjs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resolveRunConfig, loadConfig, DEFAULTS } from '../lib/config.mjs';
+
+test('the concrete default constants are the documented values', () => {
+  // Pin the literal values (not just "=== DEFAULTS.x", which a mutation of the
+  // constant would slip past).
+  assert.equal(DEFAULTS.concurrency, 2);
+  assert.equal(DEFAULTS.timeoutMinutes, 30);
+  assert.equal(DEFAULTS.base, 'main');
+});
 
 test('flags override config which overrides defaults', () => {
   const c = resolveRunConfig({ concurrency: 4 }, { concurrency: 8 });
   assert.equal(c.concurrency, 8);
   assert.equal(resolveRunConfig({}, {}).concurrency, DEFAULTS.concurrency);
   assert.equal(resolveRunConfig({ base: 'develop' }, {}).base, 'develop');
+});
+
+test('loadConfig returns the fleet block, or {} (never null) when absent/broken', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-config-'));
+  assert.deepEqual(loadConfig(dir), {}, 'no config.json → empty object, not null');
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ fleet: { concurrency: 5 } }));
+  assert.deepEqual(loadConfig(dir), { concurrency: 5 });
+  writeFileSync(join(dir, 'config.json'), 'not json{');
+  assert.deepEqual(loadConfig(dir), {}, 'malformed config → {} (never throws or returns null)');
 });
 
 test('operator-local flag sets operatorOverride; repo config sets it via a warning-only path (N1)', () => {
