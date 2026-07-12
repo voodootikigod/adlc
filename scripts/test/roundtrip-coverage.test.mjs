@@ -82,8 +82,13 @@ export function isTicketsWriterSource(src) {
   const callsDedicatedWriter = /writeTicketsAtomic\s*\(/.test(src);
   if (callsDedicatedWriter) return true;
   const bareTicketsPath = /['"`]\.adlc\/tickets\.json/.test(src);
-  const segmentedTicketsPath =
-    /['"`]tickets\.json['"`]/.test(src) && /['"`]\.adlc['"`]/.test(src);
+  // Segmented construction must be ADJACENT (`'.adlc', 'tickets.json'` as
+  // consecutive join args), NOT mere file-wide co-occurrence — otherwise a
+  // package writing an UNRELATED `build/tickets.json` that merely mentions
+  // `'.adlc'` elsewhere in the file would be falsely flagged (a drift-gate that
+  // cries wolf gets disabled). Proximity is what makes it a `.adlc/tickets.json`
+  // path, not two coincidental strings.
+  const segmentedTicketsPath = /['"`]\.adlc['"`]\s*,\s*['"`]tickets\.json['"`]/.test(src);
   const referencesTicketsPath = bareTicketsPath || segmentedTicketsPath;
   // A `tickets` envelope key: `tickets:` (property) or `{ tickets }` / `{ tickets,`
   // (shorthand). The trailing [:,}] excludes a READER's `data.tickets.map(...)`
@@ -106,11 +111,21 @@ export function findTicketsWriterPackages(packagesDir) {
   return writers.sort();
 }
 
+// Strip `//` line comments and `/* */` block comments so a COMMENTED mention of
+// rails-guard-ci (e.g. `// rails-guard-ci`) can't be counted as real coverage.
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
 /**
  * True iff the package owns a test that REALLY invokes scripts/rails-guard-ci.mjs.
- * A mere textual mention (e.g. a `// rails-guard-ci` comment) does NOT count — the
- * file must also spawn a subprocess (`execFileSync` / `spawnSync`), so "coverage"
- * cannot be faked without actually running the gate.
+ * The reference must be in CODE (comments are stripped first, so a bare
+ * `// rails-guard-ci` no longer counts) AND the file must spawn a subprocess
+ * (`execFileSync` / `spawnSync`) — the real round-trip tests bind a
+ * `RAILS_GUARD_CI` path constant (which carries the `rails-guard-ci` string) and
+ * spawn it. NOTE (heuristic tripwire, see CONVENTIONS.md): a contrived file with
+ * a non-comment rails-guard-ci string AND an unrelated spawn is the residual
+ * lexical limit; the round-trip PATTERN, enforced by review, is the requirement.
  */
 export function packageHasRailsGuardRoundTrip(pkgDir) {
   const testDir = join(pkgDir, 'test');
@@ -118,7 +133,7 @@ export function packageHasRailsGuardRoundTrip(pkgDir) {
   return readdirSync(testDir)
     .filter((f) => f.endsWith('.mjs'))
     .some((f) => {
-      const src = readFileSync(join(testDir, f), 'utf8');
+      const src = stripComments(readFileSync(join(testDir, f), 'utf8'));
       return /rails-guard-ci/.test(src) && /(?:execFileSync|spawnSync)\s*\(/.test(src);
     });
 }
@@ -196,6 +211,29 @@ const COMMENT_ONLY_TEST = `// this file name-drops rails-guard-ci but does NOT r
 export const notReallyATest = 1;
 `;
 
+// A FALSE-POSITIVE probe for the segmented broadening: writes an UNRELATED
+// build/tickets.json envelope AND has a QUOTED '.adlc' elsewhere (non-adjacent).
+// A file-wide co-occurrence check (quoted 'tickets.json' + quoted '.adlc' anywhere)
+// would WRONGLY flag it; the adjacency requirement must not.
+const UNRELATED_BUILD_WRITER_LIB = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const IGNORED_DIRS = ['.adlc', 'node_modules'];
+export function writeBuildManifest(tickets) {
+  writeFileSync(join('build', 'tickets.json'), JSON.stringify({ tickets }));
+}
+`;
+
+// A HOLLOW "covered" probe that's sneakier than COMMENT_ONLY: rails-guard-ci is
+// mentioned ONLY in a comment, but the file ALSO has an UNRELATED subprocess spawn.
+// A naive "rails-guard-ci AND spawn co-occur" check counts it as covered; stripping
+// comments first must not (the rails-guard-ci mention vanishes with the comment).
+const COMMENT_PLUS_UNRELATED_SPAWN_TEST = `import { execFileSync } from 'node:child_process';
+// this comment name-drops rails-guard-ci but the spawn below is unrelated
+execFileSync('git', ['status']);
+export const notReallyATest = 1;
+`;
+
 function withScratchPackages(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'rt-coverage-'));
   try {
@@ -240,6 +278,13 @@ test('FIX 1: a segmented "tickets.json" with NO .adlc segment is NOT a writer (a
   assert.equal(isTicketsWriterSource(unrelated), false);
 });
 
+test('FIX 1 (no over-flag): a build/tickets.json writer that also has a QUOTED ".adlc" elsewhere (non-adjacent) is NOT a writer — proximity, not co-occurrence', () => {
+  // Under the old file-wide co-occurrence check this read as a writer (quoted
+  // 'tickets.json' + quoted '.adlc' both present); adjacency must reject it so the
+  // drift-gate doesn't cry wolf on an unrelated build artifact.
+  assert.equal(isTicketsWriterSource(UNRELATED_BUILD_WRITER_LIB), false);
+});
+
 // ── direction 1: the check CATCHES a planted uncovered writer ─────────────────
 
 test('findUncoveredWriters FLAGS a planted writer package that has no rails-guard round-trip test', () => {
@@ -265,6 +310,17 @@ test('FIX 2 (hollow coverage closed): a writer whose only test MENTIONS rails-gu
       findUncoveredWriters(packagesDir),
       ['fake-covered'],
       'a comment-only mention of rails-guard-ci must NOT count as coverage',
+    );
+  });
+});
+
+test('FIX 2 (residual closed): rails-guard-ci in a COMMENT plus an UNRELATED spawn is still UNCOVERED — comments are stripped before the check', () => {
+  withScratchPackages((packagesDir) => {
+    mkPackage(packagesDir, 'sneaky-covered', { libSrc: WRITER_LIB, testSrc: COMMENT_PLUS_UNRELATED_SPAWN_TEST });
+    assert.deepEqual(
+      findUncoveredWriters(packagesDir),
+      ['sneaky-covered'],
+      'a commented rails-guard-ci mention next to an unrelated spawn must NOT count as coverage',
     );
   });
 });
