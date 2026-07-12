@@ -39,6 +39,19 @@ test('spawn error (ENOENT) → fail closed', () => {
   assert.equal(prosecute(ctx, { runReview }).verdict, 'unavailable');
 });
 
+test('a THROWING spawn (not an error result) → fail closed', () => {
+  const runReview = makeReviewRunner({ spawn: () => { throw new Error('spawn threw'); } });
+  const r = prosecute(ctx, { runReview });
+  assert.equal(r.verdict, 'unavailable', 'a review that cannot even be launched must never pass');
+});
+
+test('exit 1 WITH valid JSON still fails closed (exit code is authoritative, not stdout)', () => {
+  // Even if the CLI printed parseable JSON, a status-1 means the review could not
+  // complete — the exit-code guard, not the parse guard, must reject it.
+  const runReview = makeReviewRunner({ spawn: () => ({ status: 1, stdout: '{"findings":[]}' }) });
+  assert.equal(prosecute(ctx, { runReview }).verdict, 'unavailable');
+});
+
 test('exit 0 but non-JSON output → fail closed (cannot trust verdict)', () => {
   const runReview = makeReviewRunner({ spawn: () => ({ status: 0, stdout: 'not json' }) });
   assert.equal(prosecute(ctx, { runReview }).verdict, 'unavailable');
