@@ -47,9 +47,11 @@ export function planRound(all, { statusById = {}, inFlightIds = [], cap = 2, onl
 export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () => {} } = {}) {
   const deadEnds = [];
   let strikes = 0;
+  let gatePassed = false;      // did any strike clear the deterministic gate?
+  let prosecution = null;      // last prosecution verdict, for evidence/status
   const canRetry = () => strikes < maxStrikes;
 
-  const fail = (reason) => ({ state: 'failed', strikes, reason, deadEnds });
+  const fail = (reason) => ({ state: 'failed', strikes, reason, deadEnds, gatePassed, prosecution });
 
   while (strikes < maxStrikes) {
     strikes += 1;
@@ -78,17 +80,24 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
       continue;
     }
 
+    gatePassed = true;
+    effects.record?.('p4', true);
+
     log(`${ticket.id} strike ${strikes}: prosecuting`);
     const pros = await effects.prosecute({ ticket });
+    prosecution = pros.verdict;
     if (pros.verdict === 'unavailable') {
       // Cannot prove safety → must not merge, retrying build won't help.
+      effects.record?.('p5', false);
       return fail(`prosecution unavailable (fail closed): ${pros.reason}`);
     }
     if (pros.verdict === 'block') {
       deadEnds.push(fence('PROSECUTION', pros.reason));
       if (canRetry()) continue; // fix strike
+      effects.record?.('p5', false);
       return fail('prosecution blocking after strikes exhausted');
     }
+    effects.record?.('p5', true);
 
     log(`${ticket.id} strike ${strikes}: merging`);
     const merge = await effects.merge({ ticket });
@@ -97,8 +106,9 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
       if (canRetry()) continue;
       return fail('post-merge gate failed after strikes exhausted');
     }
-    return { state: 'merged', strikes, deadEnds };
+    return { state: 'merged', strikes, deadEnds, gatePassed, prosecution };
   }
+  if (!gatePassed) effects.record?.('p4', false);
   return fail('two-strike cap reached');
 }
 

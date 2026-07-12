@@ -4,12 +4,21 @@
 
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
-import { loadPlan } from '../lib/plan.mjs';
+import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { loadPlan, activeTickets } from '../lib/plan.mjs';
 import { planRound } from '../lib/scheduler.mjs';
-import { activeTickets } from '../lib/plan.mjs';
 import { loadConfig, resolveRunConfig } from '../lib/config.mjs';
 import { loadStatus } from '../lib/status.mjs';
-import { readLockOwner, forceUnlock } from '../lib/lock.mjs';
+import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
+import { runPreflight } from '../lib/preflight.mjs';
+import { reconcileRun } from '../lib/resume.mjs';
+import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
+import { runFleet } from '../lib/run.mjs';
+import { selfIdentity, lockProbes } from '../lib/proc.mjs';
+import { Sandbox } from '../lib/sandbox.mjs';
+import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
 const USAGE = `fleet — parallel ADLC ticket orchestration
 
@@ -55,7 +64,8 @@ if (sub === 'status') {
   else {
     console.log(`run ${status.runId}  base=${status.base}  integration=${status.integrationBranch}  sandbox=${status.sandboxMode}`);
     for (const [id, r] of Object.entries(status.tickets)) {
-      console.log(`  ${id.padEnd(8)} ${String(r.state).padEnd(10)} strikes=${r.strikes ?? 0}${r.reason ? `  (${r.reason})` : ''}`);
+      const pros = r.prosecution ? `  prosecution=${r.prosecution}` : '';
+      console.log(`  ${id.padEnd(8)} ${String(r.state).padEnd(10)} strikes=${r.strikes ?? 0}${pros}${r.reason ? `  (${r.reason})` : ''}`);
     }
   }
   process.exit(0);
@@ -115,16 +125,74 @@ if (sub === 'run') {
     process.exit(0);
   }
 
-  // A live run needs the sandbox, the git worktree machinery, and a worker
-  // provider — none of which this environment guarantees. Rather than pretend,
-  // the CLI requires the sandbox precondition and points at the documented smoke
-  // path. The live orchestrator (lib/run.mjs runFleet) is wired and unit-tested;
-  // wiring the real deps end-to-end is exercised by the README live-run steps.
-  opError(
-    'live `fleet run` requires a sandbox backend, the ADLC plugin rail hook, and a Claude Code ' +
-    'worker on PATH. Run `fleet run --dry-run` to preview the plan; see the README "Live run" ' +
-    'section for the end-to-end prerequisites and smoke steps.'
-  );
+  // ---- LIVE RUN: preflight → resume reconcile → runFleet ----
+  runLive({ repo: process.cwd(), dir, all, config, onlyIds }).then((code) => process.exit(code));
 }
 
-gateFail(`unknown subcommand: ${sub}\n\n${USAGE}`);
+if (!['run', 'status', 'unlock'].includes(sub)) {
+  gateFail(`unknown subcommand: ${sub}\n\n${USAGE}`);
+}
+
+async function runLive({ repo, dir, all, config, onlyIds }) {
+  const io = defaultIo();
+  const repoGit = io.git(repo);
+
+  // Preflight (spec §8.0): resolve+require sandbox, lock, clean tree, rail-hook
+  // probe, canary, merge-forecast. A failed canary aborts before real dispatch.
+  const railHookInstalled = () => {
+    try { execFileSync('bash', ['-lc', 'test -f "$HOME/.claude/plugins/cache/adlc/adlc"/*/hooks/adlc-hook.mjs 2>/dev/null || command -v adlc >/dev/null'], { stdio: 'ignore' }); return true; }
+    catch { return false; }
+  };
+  // Canary (spec §8.0(b) / premortem F1): prove the sandbox execution plumbing on
+  // a trivial command in a throwaway dir BEFORE dispatching real tickets, so a
+  // broken sandbox aborts cheaply instead of failing every ticket.
+  const dispatchCanary = ({ sandboxSpec }) => {
+    let tmp;
+    try {
+      tmp = mkdtempSync(join(tmpdir(), 'fleet-canary-'));
+      const sb = new Sandbox({
+        mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
+        exec: (argv, opts) => { const r = io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
+      });
+      const out = sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }) });
+      return { ok: String(out).includes('__fleet_canary_ok__'), output: String(out) };
+    } catch (e) { return { ok: false, output: e.message }; }
+    finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
+  };
+
+  const pre = runPreflight({
+    repo, config, statusDir: dir, io,
+    self: selfIdentity(), probes: lockProbes(),
+    railHookInstalled,
+    dispatchCanary: config.canary === false ? undefined : dispatchCanary,
+  });
+  for (const w of pre.warnings) console.error(`warning: ${w}`);
+  if (!pre.ok) { console.error(`preflight failed: ${pre.reason}`); return pre.exitCode ?? 1; }
+
+  try {
+    // Resume reconcile (spec §6.4): if a prior status exists, classify merged
+    // work by integration-branch ancestry; refuse on missing/moved anchors.
+    const prior = loadStatus(dir);
+    if (prior) {
+      const rec = reconcileRun({ all, status: prior, repo, io });
+      if (rec.refused) { console.error(`cannot resume: ${rec.reason}`); return 1; }
+    }
+
+    const runId = `${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
+    const baseSha = repoGit('rev-parse', config.base);
+    const deps = buildLiveDeps({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io });
+    const summary = await runFleet({
+      all, runId,
+      config: { ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date().toISOString() },
+      deps,
+    });
+
+    const states = Object.values(summary.results);
+    const failed = states.filter((s) => s === 'failed' || s === 'blocked').length;
+    console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
+      `${summary.prCount ? ' (PR opened)' : ''}`);
+    return failed > 0 ? 2 : 0;
+  } finally {
+    releaseLock(dir); // always release the preflight-held lock
+  }
+}

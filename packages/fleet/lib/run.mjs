@@ -24,6 +24,8 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
     gate: () => deps.gate({ ticket, worktree: wt.path, startSha: wt.startSha }),
     prosecute: () => deps.prosecute({ ticket, worktree: wt.path, startSha: wt.startSha }),
     flail: () => deps.flail({ ticket, worktree: wt.path }),
+    // Best-effort evidence (spec §8.5): a recorder error must never abort the run.
+    record: (phase, ok) => { try { deps.recordGate?.({ ticket, phase, ok }); } catch { /* evidence is best-effort */ } },
     merge: () => mergeMutex.runExclusive(async () => {
       const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch });
       const post = await deps.postMergeGate({ ticket, integrationBranch });
@@ -85,7 +87,7 @@ export async function runFleet({ all, runId, config, deps }) {
     persist();
     await deps.provision?.({ ticket, worktree: wt.path });
     const outcome = await advanceTicket(ticket, buildEffects(ticket, wt, deps, integrationBranch, mergeMutex), { log });
-    status = withTicket(status, ticket.id, { state: outcome.state, strikes: outcome.strikes, reason: outcome.reason });
+    status = withTicket(status, ticket.id, { state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, prosecution: outcome.prosecution ?? null });
     persist();
     await deps.cleanup?.({ ticket, worktree: wt.path, state: outcome.state });
     log(`${ticket.id} → ${outcome.state}${outcome.reason ? ` (${outcome.reason})` : ''}`);

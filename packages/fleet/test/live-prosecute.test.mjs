@@ -1,0 +1,53 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { makeReviewRunner } from '../lib/review-runner.mjs';
+import { prosecute } from '../lib/prosecute.mjs';
+
+const ctx = { worktree: '/wt', startSha: 'TIP', ticket: { id: 'T1' } };
+
+test('review runner invokes adversarial-review with --base <startSha> --json', () => {
+  let captured;
+  const run = makeReviewRunner({ spawn: (cmd, args, opts) => { captured = { cmd, args, opts }; return { status: 0, stdout: '{"findings":[]}' }; } });
+  run(ctx);
+  assert.equal(captured.cmd, 'npx');
+  assert.ok(captured.args.includes('adversarial-review'));
+  const i = captured.args.indexOf('--base');
+  assert.equal(captured.args[i + 1], 'TIP', 'diffs against the ticket startSha (N3)');
+  assert.ok(captured.args.includes('--json'));
+  assert.equal(captured.opts.cwd, '/wt');
+});
+
+test('a clean review (exit 0) → prosecute passes', () => {
+  const runReview = makeReviewRunner({ spawn: () => ({ status: 0, stdout: '{"findings":[]}' }) });
+  assert.equal(prosecute(ctx, { runReview }).verdict, 'pass');
+});
+
+test('needs-attention (exit 2) with a >=medium finding → prosecute BLOCKS (AC4)', () => {
+  const runReview = makeReviewRunner({ spawn: () => ({ status: 2, stdout: '{"findings":[{"severity":"high","title":"x"}]}' }) });
+  const r = prosecute(ctx, { runReview });
+  assert.equal(r.verdict, 'block');
+});
+
+test('unreachable provider (exit 1) → prosecute fails CLOSED (AC4)', () => {
+  const runReview = makeReviewRunner({ spawn: () => ({ status: 1, stderr: 'no provider configured' }) });
+  const r = prosecute(ctx, { runReview });
+  assert.equal(r.verdict, 'unavailable');
+});
+
+test('spawn error (ENOENT) → fail closed', () => {
+  const runReview = makeReviewRunner({ spawn: () => ({ error: new Error('spawn npx ENOENT') }) });
+  assert.equal(prosecute(ctx, { runReview }).verdict, 'unavailable');
+});
+
+test('exit 0 but non-JSON output → fail closed (cannot trust verdict)', () => {
+  const runReview = makeReviewRunner({ spawn: () => ({ status: 0, stdout: 'not json' }) });
+  assert.equal(prosecute(ctx, { runReview }).verdict, 'unavailable');
+});
+
+test('provider flag is passed through when configured', () => {
+  let captured;
+  const run = makeReviewRunner({ provider: 'codex', spawn: (_cmd, a) => { captured = a; return { status: 0, stdout: '{"findings":[]}' }; } });
+  run(ctx);
+  const i = captured.indexOf('--provider');
+  assert.equal(captured[i + 1], 'codex');
+});
