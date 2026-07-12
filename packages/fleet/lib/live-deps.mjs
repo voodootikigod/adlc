@@ -20,8 +20,23 @@ import { builderPrompt, fixPrompt } from './charters.mjs';
 import { PROTECTED_PREFIXES, isUnderProtectedPrefix } from './protected-paths.mjs';
 import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+
+// Ignore fleet working state WITHOUT committing to the base checkout
+// (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
+// ignore file — the fleet never writes base history.
+function ensureLocalExclude(repoDir) {
+  const p = join(repoDir, '.git', 'info', 'exclude');
+  const want = ['.worktrees/', '.adlc/fleet-status.json', '.adlc/fleet-logs/', '.adlc/fleet.lock/'];
+  let cur = '';
+  try { cur = existsSync(p) ? readFileSync(p, 'utf8') : ''; } catch { return; }
+  const lines = cur.split('\n');
+  const missing = want.filter((l) => !lines.includes(l));
+  if (missing.length) {
+    try { appendFileSync(p, (cur.endsWith('\n') || cur === '' ? '' : '\n') + missing.join('\n') + '\n'); } catch { /* best effort */ }
+  }
+}
 
 export function defaultIo() {
   return {
@@ -30,8 +45,9 @@ export function defaultIo() {
     spawnWorker: (cmd, args, opts) => spawnSync(cmd, args, { encoding: 'utf8', ...opts }),
     readFile: (p) => readFileSync(p, 'utf8'),
     exists: (p) => existsSync(p),
+    mkdirp: (p) => mkdirSync(p, { recursive: true }),
     writeJson: (p, obj) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(obj, null, 2) + '\n'); },
-    ensureGitignore: (repoDir, git) => worktrees.ensureGitignore(repoDir, git),
+    ensureGitignore: (repoDir) => ensureLocalExclude(repoDir),
     env: process.env,
     hasGh: () => { try { execFileSync('gh', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } },
   };
@@ -67,6 +83,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     worktree,
     syntheticHome: join(worktree, '.fleet-home'),
     exec: (argv, opts) => {
+      // The synthetic HOME is a bind SOURCE for bwrap — it must exist before the
+      // wrapped command runs, or bwrap aborts (adversarial-review L4).
+      io.mkdirp(join(worktree, '.fleet-home'));
       const res = io.spawnWorker(argv[0], argv.slice(1), { cwd: worktree, ...opts });
       if (res.error) throw res.error;
       if (typeof res.status === 'number' && res.status !== 0) {

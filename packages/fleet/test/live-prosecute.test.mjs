@@ -5,16 +5,24 @@ import { prosecute } from '../lib/prosecute.mjs';
 
 const ctx = { worktree: '/wt', startSha: 'TIP', ticket: { id: 'T1' } };
 
-test('review runner invokes adversarial-review with --base <startSha> --json', () => {
+test('review runner runs a TRUSTED binary (not npx) with --base <startSha> --json (L1)', () => {
   let captured;
   const run = makeReviewRunner({ spawn: (cmd, args, opts) => { captured = { cmd, args, opts }; return { status: 0, stdout: '{"findings":[]}' }; } });
   run(ctx);
-  assert.equal(captured.cmd, 'npx');
-  assert.ok(captured.args.includes('adversarial-review'));
+  assert.equal(captured.cmd, 'adversarial-review', 'invoked by trusted name, NOT via npx-from-worktree (L1)');
+  assert.notEqual(captured.cmd, 'npx');
   const i = captured.args.indexOf('--base');
   assert.equal(captured.args[i + 1], 'TIP', 'diffs against the ticket startSha (N3)');
   assert.ok(captured.args.includes('--json'));
   assert.equal(captured.opts.cwd, '/wt');
+  assert.ok(captured.opts.env && typeof captured.opts.env.PATH === 'string', 'resolved against a trusted PATH, not the worktree');
+});
+
+test('a configured absolute reviewBin is honored (pinned trusted path)', () => {
+  let captured;
+  const run = makeReviewRunner({ reviewBin: '/opt/trusted/adversarial-review', spawn: (cmd) => { captured = cmd; return { status: 0, stdout: '{"findings":[]}' }; } });
+  run(ctx);
+  assert.equal(captured, '/opt/trusted/adversarial-review');
 });
 
 test('a clean review (exit 0) → prosecute passes', () => {

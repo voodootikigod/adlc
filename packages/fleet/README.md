@@ -64,7 +64,12 @@ A live `fleet run` (no `--dry-run`) requires:
 2. the **ADLC Claude Code plugin** installed so the in-session rail hook arms
    inside worker worktrees (`ADLC_P4_ENFORCEMENT=1` + `ADLC_TICKET`);
 3. a **Claude Code** binary (`claude`) on `PATH`;
-4. `fleet.gate` configured under the `fleet` key of `.adlc/config.json`.
+4. a **trusted `adversarial-review`** binary resolvable on the orchestrator's
+   `PATH` (or a pinned `fleet.reviewBin`) — the blocking prosecution runs it by
+   name against a trusted PATH, never `npx` from the worker worktree, so a worker
+   cannot shadow the prosecutor. If it is not resolvable, prosecution fails closed
+   and no ticket merges;
+5. `fleet.gate` configured under the `fleet` key of `.adlc/config.json`.
 
 The fleet refuses to dispatch when the sandbox precondition is unmet (fail
 closed).

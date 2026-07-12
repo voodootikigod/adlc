@@ -50,12 +50,18 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
  *                flail, mergeToIntegration, postMergeGate, revertMerge, cleanup,
  *                openPR?, log?, statusDir?)
  */
-export async function runFleet({ all, runId, config, deps }) {
-  const integrationBranch = integrationBranchName(runId);
+export async function runFleet({ all, runId, config, deps, resume }) {
   const log = deps.log ?? (() => {});
-  await deps.createIntegrationBranch?.({ integrationBranch, baseSha: config.baseSha });
+  // Resume (adversarial-review L3): reuse the recorded run — its integration
+  // branch, runId, and reconciled status — instead of starting fresh, so merged
+  // tickets are not re-dispatched and the prior integration branch is continued.
+  const resuming = !!(resume && resume.status && resume.integrationBranch);
+  const integrationBranch = resuming ? resume.integrationBranch : integrationBranchName(runId);
+  if (!resuming) {
+    await deps.createIntegrationBranch?.({ integrationBranch, baseSha: config.baseSha });
+  }
 
-  let status = newStatus({
+  let status = resuming ? resume.status : newStatus({
     runId,
     base: config.base,
     baseSha: config.baseSha,

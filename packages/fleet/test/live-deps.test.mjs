@@ -27,6 +27,7 @@ function fakeIo(rec, env) {
     },
     readFile: () => undefined,
     exists: () => false,
+    mkdirp: () => {},
     writeJson: () => {},
     ensureGitignore: () => {},
     env,

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { reconcileRun } from '../lib/resume.mjs';
 import { planRound } from '../lib/scheduler.mjs';
+import { runFleet } from '../lib/run.mjs';
 
 const T = (id) => ({ id, title: id, scope: [`src/${id}/**`], edges: [] });
 const all = [T('T1'), T('T2')];
@@ -70,4 +71,30 @@ test('resume refuses a status with no integration branch', () => {
   const io = { git: () => () => '' };
   const r = reconcileRun({ all, status: statusWith({ integrationBranch: undefined }), repo: '/r', io });
   assert.equal(r.refused, true);
+});
+
+test('runFleet CONTINUES a resumed run: reuses branch, does not re-create it or re-dispatch merged (L3)', async () => {
+  let createdIntegration = 0;
+  const dispatched = [];
+  const resumeStatus = {
+    runId: 'old', base: 'main', baseSha: 'BASE', integrationBranch: 'fleet/run-old',
+    tickets: { T1: { state: 'merged', branch: 'fleet/t1' }, T2: { state: 'pending', branch: 'fleet/t2' } },
+  };
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => { createdIntegration++; },
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id}`, startSha: 'tip' }),
+    dispatch: ({ ticket }) => { dispatched.push(ticket.id); return { exitCode: 0, output: 'TICKET-DONE' }; },
+    gate: () => ({ ok: true }), prosecute: () => ({ verdict: 'pass' }), flail: () => ({ flail: false }),
+    mergeToIntegration: () => ({ mergeSha: 'm', preMergeSha: 'p' }), postMergeGate: () => ({ ok: true }), revertMerge: () => ({ method: 'reset', ok: true }),
+  };
+  const summary = await runFleet({
+    all, runId: 'IGNORED', config: { concurrency: 2, base: 'main', baseSha: 'BASE' }, deps,
+    resume: { status: resumeStatus, integrationBranch: 'fleet/run-old' },
+  });
+  assert.equal(summary.integrationBranch, 'fleet/run-old', 'continues the recorded integration branch');
+  assert.equal(createdIntegration, 0, 'does NOT re-create the integration branch on resume');
+  assert.ok(!dispatched.includes('T1'), 'the already-merged ticket is NOT re-dispatched');
+  assert.ok(dispatched.includes('T2'), 'the still-pending ticket is picked up');
+  assert.equal(summary.results.T1, 'merged');
 });

@@ -5,7 +5,7 @@
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
 import { planRound } from '../lib/scheduler.mjs';
@@ -150,6 +150,7 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
     let tmp;
     try {
       tmp = mkdtempSync(join(tmpdir(), 'fleet-canary-'));
+      mkdirSync(join(tmp, '.home'), { recursive: true }); // bwrap bind source must exist (L4)
       const sb = new Sandbox({
         mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
         exec: (argv, opts) => { const r = io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
@@ -171,18 +172,22 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
 
   try {
     // Resume reconcile (spec §6.4): if a prior status exists, classify merged
-    // work by integration-branch ancestry; refuse on missing/moved anchors.
+    // work by integration-branch ancestry; refuse on missing/moved anchors; and
+    // CONTINUE that run (reuse its runId/integration branch/reconciled status)
+    // rather than starting fresh (adversarial-review L3).
     const prior = loadStatus(dir);
+    let resume;
     if (prior) {
       const rec = reconcileRun({ all, status: prior, repo, io });
       if (rec.refused) { console.error(`cannot resume: ${rec.reason}`); return 1; }
+      if (rec.resume) { resume = { status: rec.status, integrationBranch: rec.status.integrationBranch }; console.error(`resuming run ${rec.status.runId} on ${rec.status.integrationBranch}`); }
     }
 
-    const runId = `${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
-    const baseSha = repoGit('rev-parse', config.base);
+    const runId = resume ? resume.status.runId : `${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
+    const baseSha = resume ? resume.status.baseSha : repoGit('rev-parse', config.base);
     const deps = buildLiveDeps({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io });
     const summary = await runFleet({
-      all, runId,
+      all, runId, resume,
       config: { ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date().toISOString() },
       deps,
     });
