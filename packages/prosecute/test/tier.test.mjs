@@ -106,3 +106,46 @@ describe('classifyTrustRootTier — hygiene', () => {
     assert.equal(r.reasons.length, 3);
   });
 });
+
+describe('classifyTrustRootTier — test-only exemption (#154/T41)', () => {
+  it('AC1: a diff touching ONLY test files in a producer/enforcement package is NOT trust-root tier', () => {
+    for (const f of [
+      'packages/ticket-prune/test/roundtrip.test.mjs',      // producer, under test/
+      'packages/ticket-sync/test/pull.test.mjs',            // producer, under test/
+      'packages/prosecute/test/run.test.mjs',               // enforcement, under test/
+      'packages/rails-guard/test/guard.test.mjs',           // enforcement, under test/
+      'packages/build-gate/lib/foo.test.mjs',               // enforcement, *.test.mjs basename (not under test/)
+    ]) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, false, `${f} (test-only) must NOT tier`);
+      assert.deepEqual(r.reasons, []);
+    }
+  });
+
+  it('AC2: the same test-only diff PLUS one non-test file in the package DOES tier', () => {
+    const r = classifyTrustRootTier({
+      changedFiles: ['packages/ticket-prune/test/roundtrip.test.mjs', 'packages/ticket-prune/lib/run.mjs'],
+      tickets: TICKETS,
+    });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('packages/ticket-prune/')));
+  });
+
+  it('AC3: a trust-root EXACT file that is itself a TEST path still tiers (rails-guard-workflow-hashes.json)', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['scripts/test/rails-guard-workflow-hashes.json'], tickets: TICKETS });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('rails-guard-workflow-hashes.json')));
+  });
+
+  it('AC4: a TEST path matching a ticket rails deny-path still tiers (rails surface is not exempted)', () => {
+    // T7 rails = test/auth/**; a test file under it is a frozen rail.
+    const r = classifyTrustRootTier({ changedFiles: ['test/auth/login.test.mjs'], tickets: TICKETS });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('rails deny-path of ticket T7')));
+  });
+
+  it('precision: a non-test path that merely CONTAINS "test" (test-utils/) is NOT exempted', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['packages/prosecute/test-utils/helper.mjs'], tickets: TICKETS });
+    assert.equal(r.isTrustRootTier, true, 'test-utils is not a test dir; a real helper edit must still tier');
+  });
+});

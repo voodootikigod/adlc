@@ -39,6 +39,19 @@ function toPosix(file) {
   return String(file).replaceAll('\\', '/');
 }
 
+// A TEST file: under a `test/` directory segment, or a `*.test.{mjs,js,cjs}`
+// basename (the repo's test conventions). Test-only changes to a producer/
+// enforcement package cannot alter the produced artifact or the gate LOGIC, so
+// they do not create the producer↔consumer CONTRACT mismatch the cross-model
+// tier exists to gate (a hollow test is caught by P5 prosecution/mutation
+// instead). This exemption applies ONLY to the package-PREFIX surfaces below —
+// NOT to the exact trust-root files (a test-path file like
+// scripts/test/rails-guard-workflow-hashes.json still tiers) nor to the rails
+// deny-path surface (a test path that IS a declared rail still tiers). #154/T41.
+function isTestFile(path) {
+  return /(^|\/)test\//.test(path) || /\.test\.(mjs|js|cjs)$/.test(path);
+}
+
 /**
  * Classify a change as trust-root tier.
  *
@@ -58,11 +71,15 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) 
     if (TRUST_ROOT_FILES.includes(path)) {
       push(`touches trust-root file ${path}`);
     }
+    // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
+    // touches neither, so it is exempt here (#154/T41). The exact-file check
+    // above and the rails-deny-path check below stay unconditional.
+    const contractRelevant = !isTestFile(path);
     for (const prefix of ENFORCEMENT_PREFIXES) {
-      if (path.startsWith(prefix)) push(`touches enforcement package ${prefix}`);
+      if (contractRelevant && path.startsWith(prefix)) push(`touches enforcement package ${prefix}`);
     }
     for (const prefix of PRODUCER_PREFIXES) {
-      if (path.startsWith(prefix)) push(`touches gated-artifact producer package ${prefix}`);
+      if (contractRelevant && path.startsWith(prefix)) push(`touches gated-artifact producer package ${prefix}`);
     }
     for (const ticket of Array.isArray(tickets) ? tickets : []) {
       const rails = Array.isArray(ticket?.rails) ? ticket.rails : [];
