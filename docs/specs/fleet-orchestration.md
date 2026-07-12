@@ -615,10 +615,15 @@ Mirrors ticket T42; each criterion is independently verifiable.
   before any `packages/fleet` code is committed. VERIFY: run spec-lint; `git log
   --oneline -- docs/specs/fleet-orchestration.md packages/fleet` shows the spec
   commit first.
-- AC2 (conventions): `packages/fleet/package.json` declares zero runtime
-  dependencies, `type: module`, `engines.node >= 18`, and a `fleet` bin.
-  VERIFY: inspect `packages/fleet/package.json`; `grep -r "from '@adlc/core'"
-  packages/fleet/lib` returns nothing (relative import only).
+- AC2 (conventions): `packages/fleet/package.json` declares **no third-party
+  runtime dependencies** — its only `dependencies` entry is the in-repo workspace
+  sibling `@adlc/core` (the repo's actual "zero runtime dependencies" meaning:
+  nothing outside `@adlc/core`, which all 22 packages import via the `@adlc/core`
+  specifier under the npm workspace, NOT a relative path — CONVENTIONS.md's
+  literal "relative path" text is stale and followed by 0 of 22 packages) —
+  plus `type: module`, `engines.node >= 18`, and a `fleet` bin. VERIFY: inspect
+  `packages/fleet/package.json`; assert `dependencies` contains only `@adlc/core`
+  and no third-party package.
 - AC3 (scheduler correctness, offline): `npm test` in `packages/fleet` passes
   offline with a stubbed WorkerAdapter and stubbed git/gates, covering: (a)
   dispatch only after all edge predecessors merge; (b) `completed:true` never
