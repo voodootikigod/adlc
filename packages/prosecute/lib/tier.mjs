@@ -48,7 +48,22 @@ function toPosix(file) {
 // NOT to the exact trust-root files (a test-path file like
 // scripts/test/rails-guard-workflow-hashes.json still tiers) nor to the rails
 // deny-path surface (a test path that IS a declared rail still tiers). #154/T41.
+//
+// STATED ASSUMPTION (safety of this exemption rests on it): a `test/` path or a
+// `*.test.*` basename holds TEST code that is NEVER imported by production
+// `lib/`/`bin/`. A test-named module can only affect the produced artifact if a
+// NON-test file imports it — and that importer edit is itself non-test, so it
+// tiers. The invariant "no production code imports a test-classified module in a
+// producer/enforcement package" is ENFORCED by a guard test (see
+// tier.test.mjs), so a future convention violation can't silently open a bypass.
+//
+// FAIL-SAFE on non-canonical paths: a path containing a `..` segment is not a
+// clean test path (e.g. `test/../lib/run.mjs` resolves into production); refuse
+// to exempt it (tier it) rather than risk exempting production. The live caller
+// feeds two-dot `git diff --name-only` output (already canonical), so this is
+// defense-in-depth for out-of-contract input.
 function isTestFile(path) {
+  if (/(^|\/)\.\.(\/|$)/.test(path)) return false;
   return /(^|\/)test\//.test(path) || /\.test\.(mjs|js|cjs)$/.test(path);
 }
 
