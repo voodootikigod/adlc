@@ -81,7 +81,16 @@ seam (`lib/adapters/`), so which coding agent builds a ticket is a config choice
 not a code change. Registered adapters: `claude-code` (default), `codex`, `agy`
 (Google Antigravity), `opencode`, `pi`, `cursor`. Each is a pure I/O shim that
 spawns its harness in headless mode on the **model plane** (provider egress + its
-own auth, never sandboxed — K2). Select one with `fleet.adapter`.
+own auth, never sandboxed — K2). Select one with the **operator-local** `--adapter`
+flag (default `claude-code`).
+
+**The harness is operator-local, not repo config (adversarial-review K1/A2):** only
+`claude-code` installs a per-worktree permission allowlist, so a repo-committed
+`fleet.adapter`/`fleet.adapterCommand` could silently move unattended workers onto a
+less-contained harness. Choosing the harness (and any binary override) is therefore an
+operator trust decision — set via `--adapter` / `--adapter-command` / `--adapter-args`;
+a value in `.adlc/config.json` is ignored with a warning. Only `model` and `adapterStdin`
+(non-executable data) are read from repo config.
 
 Each adapter ships a grounded **default invocation** (`agy --print` is verified
 against antigravity-booster; `codex exec`, `opencode run`, `cursor-agent -p`, and
@@ -99,8 +108,8 @@ against the installed CLI.
   "fleet": {
     "gate": { "build": "npm run build --workspaces --if-present", "test": "npm test" },
     "init": "npm install",
-    "adapter": "claude-code",
     "model": null,
+    "adapterStdin": false,
     "concurrency": 2,
     "base": "main",
     "timeoutMinutes": 30,

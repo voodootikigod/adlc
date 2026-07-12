@@ -43,10 +43,16 @@ test('operator-local flag sets operatorOverride; repo config sets it via a warni
   assert.ok(viaRepo.warnings.some((w) => /N1|cannot disable/i.test(w)));
 });
 
-test('adapter name + model come from config; the worker BINARY override does NOT (A2)', () => {
-  // adapter name (registry fails closed) and model (data) are repo-config-safe.
-  const c = resolveRunConfig({ adapter: 'codex', model: 'gpt-x', adapterStdin: true }, {});
-  assert.equal(c.adapter, 'codex');
+test('worker HARNESS + binary are operator-local; repo config is ignored+warned (A2/K1)', () => {
+  // The harness is operator-local (--adapter). A repo-committed fleet.adapter is
+  // IGNORED (defaults to the fully-contained claude-code) with a warning (K1).
+  const repoAdapter = resolveRunConfig({ adapter: 'codex' }, {});
+  assert.equal(repoAdapter.adapter, 'claude-code', 'repo config cannot switch the worker harness');
+  assert.ok(repoAdapter.warnings.some((w) => /K1|harness is operator-local|adapter/i.test(w)));
+  // The operator CLI flag IS honored.
+  assert.equal(resolveRunConfig({}, { adapter: 'codex' }).adapter, 'codex');
+  // model + adapterStdin (non-executable data) stay repo-config-safe.
+  const c = resolveRunConfig({ model: 'gpt-x', adapterStdin: true }, {});
   assert.equal(c.model, 'gpt-x');
   assert.equal(c.adapterStdin, true);
   // A repo-committed adapterCommand/adapterArgs is IGNORED + warned (security A2).
