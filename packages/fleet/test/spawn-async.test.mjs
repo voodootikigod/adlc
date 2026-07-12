@@ -27,6 +27,20 @@ test('a command exceeding the timeout is killed and flagged timedOut', async () 
   assert.notEqual(r.status, 0);
 });
 
+test('opts.input is piped to the child stdin (agy-style prompt)', async () => {
+  // `cat` echoes stdin to stdout — proves the input actually reached the child.
+  const r = await spawnAsync('cat', [], { input: 'prompt-on-stdin-123' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /prompt-on-stdin-123/);
+});
+
+test('without opts.input the child gets no stdin (reads EOF immediately)', async () => {
+  // `cat` with stdin ignored closes immediately with empty output.
+  const r = await spawnAsync('cat', [], {});
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+});
+
 test('does not block the event loop — a timer fires while the child runs', async () => {
   let tickedDuringChild = false;
   const t = setTimeout(() => { tickedDuringChild = true; }, 20);

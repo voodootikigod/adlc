@@ -32,6 +32,7 @@ for (const [adapterName, exp] of Object.entries(EXPECTED)) {
     assert.equal(rec[0].opts.env, ENV, `${adapterName}: env passed through (model plane)`);
     assert.equal(rec[0].opts.timeout, 60000);
     if (exp.stdin) assert.equal(rec[0].opts.input, PROMPT, `${adapterName}: prompt piped on stdin`);
+    else assert.equal(rec[0].opts.input, undefined, `${adapterName}: does NOT pipe stdin by default`);
     assert.equal(r.exitCode, 0);
   });
 
