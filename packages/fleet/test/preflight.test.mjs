@@ -15,8 +15,15 @@ const io = (over = {}) => ({ git: () => cleanGit(), adlc: () => ({ status: 0, st
 const bwrapHost = { platform: 'linux', hasCmd: (c) => c === 'bwrap' };
 
 const base = (over = {}) => ({
-  repo: '/repo', config: { operatorOverride: false }, statusDir: tmp(), io: io(),
+  repo: '/repo', config: { operatorOverride: false, gate: { test: 'npm test' } }, statusDir: tmp(), io: io(),
   self, probes: deadProbes, railHookInstalled: () => true, ...bwrapHost, ...over,
+});
+
+test('preflight fails closed when no gate is configured (AC / M1)', () => {
+  const r = runPreflight(base({ config: { operatorOverride: false } })); // no gate
+  assert.equal(r.ok, false);
+  assert.equal(r.exitCode, 1);
+  assert.match(r.reason, /gate/i);
 });
 
 test('resolveSandboxForRun requires a real backend (fails closed on unshare-only)', () => {

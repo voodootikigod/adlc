@@ -72,7 +72,11 @@ function parseStatusPaths(out) {
  */
 export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunner, io = defaultIo() }) {
   const repoGit = io.git(repo);
-  const review = reviewRunner ?? makeReviewRunner({ provider: config.reviewProvider, failOn: config.prosecuteFailOn });
+  const review = reviewRunner ?? makeReviewRunner({
+    reviewBin: config.reviewBin ?? 'adversarial-review',
+    provider: config.reviewProvider,
+    failOn: config.prosecuteFailOn,
+  });
   const adlcBin = config.adlcBin ?? 'adlc';
 
   // A per-worktree Sandbox on the repo-command plane (§7.3). exec runs the

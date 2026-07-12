@@ -47,6 +47,8 @@ export function resolveRunConfig(config = {}, flags = {}) {
     base: flags.base ?? config.base ?? DEFAULTS.base,
     timeoutMinutes: config.timeoutMinutes ?? DEFAULTS.timeoutMinutes,
     prosecuteFailOn: config.prosecuteFailOn ?? DEFAULTS.prosecuteFailOn,
+    reviewBin: config.reviewBin ?? null,
+    reviewProvider: config.reviewProvider ?? null,
     modelAuthKey: config.modelAuthKey ?? null,
     // operator-local ONLY:
     operatorOverride: flags.disposableContainer === true,

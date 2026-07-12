@@ -58,6 +58,12 @@ export function runPreflight({
 }) {
   const warnings = [];
 
+  // 0. Gate required (spec §7.1; adversarial-review M1). An ungated fleet would
+  // merge scope-compliant but UNBUILT/UNTESTED code — fail closed before dispatch.
+  if (!config.gate || (!config.gate.build && !config.gate.test)) {
+    return { ok: false, exitCode: 1, reason: 'fleet.gate must define a build and/or test command in .adlc/config.json; an ungated fleet must not run', warnings, lockHeld: false };
+  }
+
   // 1. Sandbox — resolve and require it (fail closed).
   const sb = resolveSandboxForRun(config, { platform, hasCmd });
   warnings.push(...(sb.warnings ?? []));

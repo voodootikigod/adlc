@@ -14,6 +14,27 @@
 // executable is trusted. `reviewBin` is configurable for a pinned absolute path.
 
 import { spawnSync } from 'node:child_process';
+import { isAbsolute, join, delimiter } from 'node:path';
+import { existsSync } from 'node:fs';
+
+/**
+ * Resolve a review binary to an ABSOLUTE trusted path (adversarial-review L1/M2).
+ * An absolute reviewBin is used as-is. A bare name is resolved ONLY against
+ * absolute PATH directories that are not the worktree — relative entries
+ * (`''`, `.`, or any non-absolute/worktree dir) are rejected so exec can never
+ * resolve a worker-planted binary relative to cwd=worktree. Returns null if no
+ * trusted absolute path is found (→ prosecution fails closed).
+ */
+export function resolveTrustedBin(bin, pathStr, worktree) {
+  if (isAbsolute(bin)) return existsSync(bin) ? bin : null;
+  const dirs = String(pathStr ?? '').split(delimiter)
+    .filter((d) => d && d !== '.' && isAbsolute(d) && !(worktree && (d === worktree || d.startsWith(worktree + '/'))));
+  for (const d of dirs) {
+    const p = join(d, bin);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
 
 /**
  * @param opts.spawn     (cmd, args, options) => { status, stdout, stderr, error }
@@ -25,17 +46,24 @@ import { spawnSync } from 'node:child_process';
  * @param opts.timeoutMs per-review timeout
  * @returns a runReview({ worktree, startSha, ticket }) => { ok, findings?, reason? }
  */
-export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, provider, failOn = 'medium', timeoutMs = 600000 } = {}) {
+export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000 } = {}) {
   return ({ worktree, startSha }) => {
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);
-    // Resolve reviewBin against the orchestrator PATH so a worktree-local binary
-    // can never be selected; drop the worktree from PATH defensively.
-    const env = { ...process.env, PATH: trustedPath ?? process.env.PATH };
+    const path = trustedPath ?? process.env.PATH;
+    // Pre-resolve to an ABSOLUTE trusted path so exec never resolves relative to
+    // cwd=worktree (M2). Fail closed if no trusted binary is found.
+    const bin = resolveBin(reviewBin, path, worktree);
+    if (!bin) {
+      return { ok: false, reason: `no trusted adversarial-review binary on a safe PATH (set config.reviewBin to an absolute path) — failing closed` };
+    }
+    // Sanitize PATH to absolute, non-worktree dirs for the child too.
+    const safePath = String(path ?? '').split(delimiter).filter((d) => d && d !== '.' && isAbsolute(d) && !(d === worktree || d.startsWith(worktree + '/'))).join(delimiter);
+    const env = { ...process.env, PATH: safePath };
 
     let res;
     try {
-      res = spawn(reviewBin, args, { cwd: worktree, env, encoding: 'utf8', timeout: timeoutMs });
+      res = spawn(bin, args, { cwd: worktree, env, encoding: 'utf8', timeout: timeoutMs });
     } catch (e) {
       return { ok: false, reason: `adversarial-review spawn failed: ${e.message}` };
     }
