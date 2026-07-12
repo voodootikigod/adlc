@@ -42,13 +42,14 @@ function withTempSpec(contents, fn) {
 test('registry exposes the suite tools and omits internal packages', () => {
   // 24 as of build-gate's registration (issue #48) — bump deliberately when a
   // tool is intentionally added/removed from the registry.
-  assert.equal(TOOLS.length, 24);
+  assert.equal(TOOLS.length, 25);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
   assert.equal(isTool('review'), true);
   assert.equal(isTool('ticket-prune'), true);
   assert.equal(isTool('build-gate'), true);
+  assert.equal(isTool('fleet'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });

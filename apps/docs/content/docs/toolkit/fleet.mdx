@@ -1,0 +1,75 @@
+---
+title: fleet
+description: Parallel ticket orchestration — dispatches ready tickets to sandboxed Claude Code workers in isolated worktrees, gates and prosecutes each, and merges to a per-run integration branch with deterministic control flow.
+---
+
+# fleet
+
+**ADLC phase: P4 Build + P5 Prosecute** · **Gate:** a ticket merges only after its build/test, rails, scope, protected-path, and blocking cross-model prosecution gates all pass — and nothing is decided by a model.
+
+## What it defends against
+
+ADLC P4 parallelism was doctrine without an executor: the ticket DAG says which
+work can fan out, but running it meant one interactive session per ticket. `fleet`
+makes the fan-out real. It reads the ready tickets from `.adlc/tickets.json` (the
+existing contract — completed tickets filtered, scope-overlapping tickets
+serialized, single writer per partition), dispatches each to a **sandboxed
+headless Claude Code worker** in an isolated git worktree, and walks it through the
+deterministic gates before a **blocking cross-model `adversarial-review`** pass
+must clear it. Control flow is code, judgment is models: no LLM call decides
+ordering, retries, or merges.
+
+Containment is two-plane: the repo-command surface (init/build/test) runs inside an
+OS sandbox (network-denied, reads/writes bounded to the worktree, synthetic HOME),
+while the `claude -p` worker runs on a separate model plane so it can still reach
+its provider. Finished tickets merge sequentially into a per-run
+`fleet/run-<runId>` integration branch — never `base`, and the fleet never pushes.
+
+## Usage
+
+```sh
+adlc fleet run [--concurrency <N>] [--dry-run] [--tickets <T1,T2>] [--base <branch>] [--json]
+               [--i-am-in-a-disposable-container]
+adlc fleet status [--json]
+adlc fleet unlock
+```
+
+| Flag | Description |
+| --- | --- |
+| `--dry-run` | Compute and print the ready set + dispatch plan; create no worktrees, dispatch no workers. |
+| `--concurrency <N>` | Max workers in flight (default from config, else 2). |
+| `--tickets <ids>` | Restrict the run to a comma-separated ticket subset. |
+| `--base <branch>` | Base branch the integration branch is cut from (default `main`). |
+| `--i-am-in-a-disposable-container` | Operator-local override: run env-scrub-only when no OS sandbox backend is present (repo config can never set this). |
+| `--json` | Machine-readable output. |
+
+Configuration lives under the `fleet` key of `.adlc/config.json` (`gate`, `init`,
+`concurrency`, `base`, `prosecuteFailOn`, `reviewBin`, `allowedCommands`). A live
+run requires an OS sandbox backend, the ADLC rail hook, a `claude` worker, and a
+trusted `adversarial-review` binary; it fails closed otherwise.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0** — every dispatched ticket merged (or a clean dry-run).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad config, dirty tree, lock held, missing gate, no sandbox).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2** — at least one ticket failed or was blocked.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc fleet run --dry-run
+fleet dry-run — integration branch fleet/run-<runId>, concurrency 2, base main
+  ready now (3): T1, T6, T12
+  first batch (cap 2): T1, T6
+  waiting on deps (4): T2, T3, T7, T9
+  completed (excluded): 8
+no worktrees created, no workers dispatched (dry-run).
+exit 0
+```
+
+## Go deeper
+
+[packages/fleet](https://github.com/voodootikigod/adlc/tree/main/packages/fleet) ·
+[design spec](https://github.com/voodootikigod/adlc/blob/main/docs/specs/fleet-orchestration.md)

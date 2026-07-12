@@ -30,6 +30,7 @@ export const GROUPS = [
       { name: 'build-gate', packageName: '@adlc/build-gate', summary: 'Deny starting a high-risk ticket build in a degraded (context-rot) session unless audited.' },
       { name: 'flail-detector', packageName: '@adlc/flail-detector', summary: 'Detect repeated errors, scope violations, edit churn, and oversized logs.' },
       { name: 'consensus-fix', packageName: '@adlc/consensus-fix', summary: 'Fan out candidate fixes and select the gated consensus winner.' },
+      { name: 'fleet', packageName: '@adlc/fleet', summary: 'Orchestrate parallel ticket execution — dispatch ready tickets to sandboxed workers, gate, prosecute, and merge to an integration branch.' },
     ],
   },
   {

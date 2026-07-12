@@ -5,7 +5,7 @@ export const TOOLKIT_GROUPS = [
   },
   {
     group: 'Execution supervision & rails',
-    packages: ['preflight', 'model-router', 'merge-forecast', 'rails-guard', 'build-gate', 'flail-detector', 'consensus-fix', 'runner'],
+    packages: ['preflight', 'model-router', 'merge-forecast', 'rails-guard', 'build-gate', 'flail-detector', 'consensus-fix', 'runner', 'fleet'],
   },
   {
     group: 'Review evidence & calibration',
