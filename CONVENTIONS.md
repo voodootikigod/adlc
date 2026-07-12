@@ -61,6 +61,37 @@ package.json template:
     semantics, which ADLC phase (P0–P7 / D1–D3) it serves, and its
     relationship to sibling tools.
 
+## Producer→consumer round-trip tests (gated artifacts)
+
+**Rule: any tool that WRITES an artifact a gate VALIDATES must own a test that runs
+the tool's REAL output through the REAL gate** — not a re-encoding of the gate's
+rule, the actual gate binary/script on the actual committed diff.
+
+Worked example (#104): `ticket-prune` (the PRODUCER) tombstones a shipped ticket
+by adding `completed: true` to `.adlc/tickets.json`, and `scripts/rails-guard-ci.mjs`
+(the CONSUMER gate) exempts *exactly* an add-only `completed: true` on a rails-less
+base ticket. The two predicates were encoded INDEPENDENTLY, in different packages,
+with no shared test — so `ticket-prune --write` could emit a PR the very gate it
+exists to satisfy would DENY (it rewrote a pre-existing `completed: false` → `true`,
+a mutation the add-only gate rejects). Only cross-model review, reasoning across both
+files, caught it. A deterministic round-trip test would have caught it for free.
+
+How to write one (see `packages/ticket-prune/test/roundtrip.test.mjs` and
+`packages/ticket-sync/test/roundtrip.test.mjs`):
+
+1. In a `mkdtempSync` scratch git repo, commit a base, branch, and run the REAL
+   producer (`ticket-prune --write` / ticket-sync `pull --write`) so it writes its
+   ACTUAL output.
+2. Commit that diff, then run the REAL consumer (`node scripts/rails-guard-ci.mjs
+   main`) as a subprocess and assert its exit code (0 = accepted, 2 = denied).
+3. Cover BOTH directions: the accepted case (real output merges) AND that anything
+   the producer REFUSES corresponds to a case the gate DENIES.
+
+This rule is itself enforced: `scripts/test/roundtrip-coverage.test.mjs` scans
+`packages/*/` for genuine `.adlc/tickets.json` writers and FAILS if any lacks a test
+invoking `scripts/rails-guard-ci.mjs`. A new gated-artifact producer must add its
+round-trip test (and, if it writes a *different* gated artifact, extend that scan).
+
 ## Shared data (read via core, never reinvent)
 
 - Tickets: `.adlc/tickets.json` — `loadTickets()` from core. Schema in
