@@ -959,6 +959,36 @@
       "duration": 2,
       "category": "feature",
       "budget": "direct"
+    },
+    {
+      "id": "A142",
+      "title": "Lock single-ticket projection contract in adlc-antigravity (dangling-edge deny-all)",
+      "body": "GitHub issue: https://github.com/voodootikigod/adlc/issues/142\n\n=== CONTEXT (P0 regression guard, pairs with antigravity-booster#11) ===\nThe antigravity-booster projects a SINGLE-ticket .adlc/tickets.json into each build worktree. When that ticket has an outgoing edge, plugins/adlc-antigravity/core-inline.mjs loadTickets (~lines 51-55) reports 'edge to unknown ticket <id>'; rails-checker.mjs railPreconditions (~lines 222-224) treats any validation error as tamper and fails closed ({state:deny}); checkRail/decide (~line 249, hooks/adlc-rails-guard.mjs ~line 117) then deny EVERY mutating tool call for the whole session — not just rail paths. The plugin's decide.test.mjs always writes a full ticket set, so the single-ticket projection shape was never tested. The booster-side fix (issue #11) strips edges from the projection; this ticket locks the contract from the plugin side.\n\n=== TASK ===\n1. Add tests in plugins/adlc-antigravity/test/ over the projection shapes: (a) single-ticket tickets.json, NO edges, with rails -> hook enforces the rail (denies a rail write) AND allows an in-scope non-rail write; (b) single-ticket tickets.json WITH a dangling edge -> assert the CURRENT fail-closed deny-all behavior explicitly, with a comment linking booster#11 and adlc#142 so the failure mode is visible and intentional in the suite.\n2. Document the contract decision (plugin stays fail-closed on dangling edges; booster must project edge-free single-ticket files) in docs/integrations/antigravity.md.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: Both projection-shape tests exist and pass under node --test in plugins/adlc-antigravity/. VERIFY: run the plugin test suite, exit 0, and the two new test names appear in output.\n- AC2: The dangling-edge deny-all behavior is asserted (not implicit) with the cross-repo comment. VERIFY: grep the test file for issues/142 and issues/11 references.\n- AC3: The contract decision is documented in docs/integrations/antigravity.md. VERIFY: grep for a 'single-ticket projection' section.\n- AC4: No production code changes in this ticket — tests + docs only. VERIFY: git diff touches only test/ and docs/.",
+      "scope": [
+        "plugins/adlc-antigravity/test/**",
+        "docs/integrations/antigravity.md"
+      ],
+      "rails": [],
+      "edges": [],
+      "duration": 1,
+      "category": "test",
+      "budget": "direct"
+    },
+    {
+      "id": "A143",
+      "title": "Single version + adlcContract field in adlc-antigravity plugin manifest",
+      "body": "GitHub issue: https://github.com/voodootikigod/adlc/issues/143\n\n=== CONTEXT (P0, enables booster handshake; pairs with antigravity-booster#12) ===\nThe plugin carries two conflicting versions: plugins/adlc-antigravity/plugin.json says 0.2.0, plugins/adlc-antigravity/package.json says 1.2.0. Consumers (antigravity-booster) have no way to detect schema/payload drift: today the booster only substring-matches agy plugin list output. Booster issue #12 adds a manifest-based handshake that reads an adlcContract field from the installed plugin.json (installed location: ~/.gemini/config/plugins/adlc-antigravity/plugin.json — agy copies the whole plugin dir).\n\n=== TASK ===\n1. Reconcile to ONE version with plugin.json authoritative; make package.json mirror it. Pick the reconciled number deliberately (recommend 1.2.0 since package.json history is the real release lineage) and state the choice in the commit message.\n2. Add \"adlcContract\": 1 to plugin.json, versioning the interfaces: (a) the tickets.json schema accepted by core-inline.mjs, (b) the hook stdin payload shape, (c) the hook decision output shape. Document bump rules (any breaking change to those three interfaces bumps the integer) in a comment-adjacent doc — plugins/adlc-antigravity/README.md (create it — do NOT touch docs/integrations/antigravity.md, which is in ticket A142's scope).\n3. Add a test asserting plugin.json and package.json versions agree and adlcContract is a positive integer, so CI fails on future divergence.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: plugin.json and package.json carry the same version; test enforces it. VERIFY: plugin test suite exit 0; intentionally desync locally -> test fails.\n- AC2: adlcContract present in plugin.json with documented bump rules. VERIFY: grep plugin.json for adlcContract; grep docs for the bump rules.\n- AC3: agy plugin validate plugins/adlc-antigravity still passes (manifest remains agy-loadable). VERIFY: run it, exit 0.\n- AC4: Booster issue #12 unblocked: the field is readable from the plugin source dir (no build step required).",
+      "scope": [
+        "plugins/adlc-antigravity/plugin.json",
+        "plugins/adlc-antigravity/package.json",
+        "plugins/adlc-antigravity/test/**",
+        "plugins/adlc-antigravity/README.md"
+      ],
+      "rails": [],
+      "edges": [],
+      "duration": 1,
+      "category": "chore",
+      "budget": "direct"
     }
   ]
 }
