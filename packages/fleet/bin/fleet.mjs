@@ -50,6 +50,9 @@ function parseFlags(args) {
       base: { type: 'string' },
       json: { type: 'boolean' },
       'i-am-in-a-disposable-container': { type: 'boolean' },
+      adapter: { type: 'string' },
+      'adapter-command': { type: 'string' },
+      'adapter-args': { type: 'string' },
     },
     allowPositionals: true,
   });
@@ -85,6 +88,10 @@ if (sub === 'run') {
     concurrency: flags.concurrency ? Number(flags.concurrency) : undefined,
     base: flags.base,
     disposableContainer: flags['i-am-in-a-disposable-container'] === true,
+    adapter: flags.adapter,
+    // Operator-local worker binary override (A2) — CLI only, never repo config.
+    adapterCommand: flags['adapter-command'] ?? undefined,
+    adapterArgs: flags['adapter-args'] ? flags['adapter-args'].split(',') : undefined,
   });
   for (const w of config.warnings) console.error(`warning: ${w}`);
 

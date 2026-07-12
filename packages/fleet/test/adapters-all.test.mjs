@@ -67,6 +67,13 @@ for (const [adapterName, exp] of Object.entries(EXPECTED)) {
   });
 }
 
+test('pi: useStdin pipes the prompt on stdin (A3 RPC transport)', async () => {
+  const rec = [];
+  await getAdapter('pi').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), args: ['--mode', 'rpc'], useStdin: true });
+  assert.deepEqual(rec[0].args, ['--mode', 'rpc']);
+  assert.equal(rec[0].opts.input, PROMPT, 'prompt routed to stdin when useStdin');
+});
+
 test('agy: --model is added from the model option', async () => {
   const rec = [];
   await getAdapter('agy').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'Claude Opus 4.6' });

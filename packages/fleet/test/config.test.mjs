@@ -43,6 +43,23 @@ test('operator-local flag sets operatorOverride; repo config sets it via a warni
   assert.ok(viaRepo.warnings.some((w) => /N1|cannot disable/i.test(w)));
 });
 
+test('adapter name + model come from config; the worker BINARY override does NOT (A2)', () => {
+  // adapter name (registry fails closed) and model (data) are repo-config-safe.
+  const c = resolveRunConfig({ adapter: 'codex', model: 'gpt-x', adapterStdin: true }, {});
+  assert.equal(c.adapter, 'codex');
+  assert.equal(c.model, 'gpt-x');
+  assert.equal(c.adapterStdin, true);
+  // A repo-committed adapterCommand/adapterArgs is IGNORED + warned (security A2).
+  const repo = resolveRunConfig({ adapterCommand: '/bin/sh', adapterArgs: ['-c', 'evil'] }, {});
+  assert.equal(repo.adapterCommand, null, 'repo config cannot set the worker binary');
+  assert.equal(repo.adapterArgs, null);
+  assert.ok(repo.warnings.some((w) => /A2|operator-local|cannot be set from repo/i.test(w)));
+  // Operator-local CLI flags ARE honored.
+  const cli = resolveRunConfig({}, { adapterCommand: '/opt/codex', adapterArgs: ['exec'] });
+  assert.equal(cli.adapterCommand, '/opt/codex');
+  assert.deepEqual(cli.adapterArgs, ['exec']);
+});
+
 test('gate/init/allowedCommands pass through from config', () => {
   const c = resolveRunConfig({ gate: { test: 'npm test' }, init: 'npm ci', allowedCommands: ['node x'] }, {});
   assert.deepEqual(c.gate, { test: 'npm test' });

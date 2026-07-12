@@ -15,7 +15,7 @@ function fakeIo(rec, env) {
     git: fakeGit(),
     adlc: () => ({ status: 0, stdout: '{}' }),
     adlcAsync: async () => ({ status: 0, stdout: '' }),
-    spawnWorker: async (cmd, args, opts) => { rec.push({ cmd, args, env: opts?.env }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
+    spawnWorker: async (cmd, args, opts) => { rec.push({ cmd, args, env: opts?.env, input: opts?.input }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
     readFile: () => undefined, exists: () => false, mkdirp: () => {}, writeJson: () => {}, ensureGitignore: () => {},
     env, hasGh: () => false,
   };
@@ -54,6 +54,34 @@ test('live-deps default adapter is claude-code (backward compatible) (AC5)', asy
   });
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
   assert.ok(rec.some((s) => s.cmd === 'claude'), 'defaults to claude-code');
+});
+
+test('deps.provision does not throw for ANY registered adapter (A1)', async () => {
+  const { ADAPTERS } = await import('../lib/adapters/index.mjs');
+  for (const adapterName of ADAPTERS) {
+    const deps = buildLiveDeps({
+      repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+      reviewRunner: () => ({ ok: true, findings: [] }),
+      config: { adapter: adapterName, gate: { test: 'true' }, prosecuteFailOn: 'medium', modelAuthKey: 'ANTHROPIC_API_KEY' },
+      io: fakeIo([], env),
+    });
+    await deps.provision({ ticket, worktree: '/wt/T1' }); // must not throw (adapters without provision no-op)
+  }
+});
+
+test('config.adapterStdin threads to the pi adapter (useStdin → prompt on stdin) (A3)', async () => {
+  const rec = [];
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'pi', adapterStdin: true, adapterArgs: ['--mode', 'rpc'], gate: { test: 'true' }, prosecuteFailOn: 'medium', modelAuthKey: 'ANTHROPIC_API_KEY' },
+    io: fakeIo(rec, env),
+  });
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  const piCall = rec.find((s) => s.cmd === 'pi');
+  assert.ok(piCall, 'dispatched via pi');
+  assert.deepEqual(piCall.args, ['--mode', 'rpc'], 'operator-local adapterArgs used');
+  assert.ok(piCall.input && piCall.input.length > 0, 'adapterStdin routed the prompt to the pi stdin (A3)');
 });
 
 test('an unknown fleet.adapter fails closed at buildLiveDeps (AC4)', () => {

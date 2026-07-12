@@ -39,6 +39,12 @@ export function resolveRunConfig(config = {}, flags = {}) {
       'SECURITY: .adlc/config.json set fleet.disposableContainer; repo config cannot disable the sandbox (N1) — ignored.'
     );
   }
+  if (config.adapterCommand != null || config.adapterArgs != null) {
+    warnings.push(
+      'SECURITY: .adlc/config.json set fleet.adapterCommand/adapterArgs; the worker binary override is operator-local ' +
+        '(CLI flag) only and CANNOT be set from repo config (A2) — ignored.'
+    );
+  }
   return {
     gate: config.gate ?? null,
     init: config.init ?? null,
@@ -51,10 +57,16 @@ export function resolveRunConfig(config = {}, flags = {}) {
     reviewProvider: config.reviewProvider ?? null,
     modelAuthKey: config.modelAuthKey ?? null,
     // Worker harness selection (T44). Default 'claude-code' for backward compat.
+    // `adapter` (a registered NAME — registry fails closed) and `model`/`adapterStdin`
+    // (non-executable data) are safe from repo config. The worker BINARY override
+    // (adapterCommand/adapterArgs) is OPERATOR-LOCAL ONLY (adversarial-review A2):
+    // a repo-committed config must NOT be able to select the executable that runs
+    // on the unsandboxed model plane with provider auth. Honored from CLI flags only.
     adapter: flags.adapter ?? config.adapter ?? 'claude-code',
     model: config.model ?? null,
-    adapterCommand: config.adapterCommand ?? null,
-    adapterArgs: config.adapterArgs ?? null,
+    adapterStdin: config.adapterStdin === true,
+    adapterCommand: flags.adapterCommand ?? null,
+    adapterArgs: flags.adapterArgs ?? null,
     // operator-local ONLY:
     operatorOverride: flags.disposableContainer === true,
     repoConfigOverride: repoWantedOverride,
