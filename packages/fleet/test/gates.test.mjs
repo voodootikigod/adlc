@@ -5,17 +5,17 @@ import { Sandbox, SANDBOX_MODES } from '../lib/sandbox.mjs';
 
 const T = (scope) => ({ id: 'T1', scope });
 
-test('scopeViolations flags paths outside the ticket scope (§8.3c)', () => {
+test('scopeViolations flags paths outside the ticket scope (§8.3c)', async () => {
   const t = T(['packages/fleet/**']);
   assert.deepEqual(scopeViolations(['packages/fleet/lib/x.mjs'], t), []);
   assert.deepEqual(scopeViolations(['packages/fleet/lib/x.mjs', 'packages/core/index.mjs'], t), ['packages/core/index.mjs']);
 });
 
-test('scopeViolations fails closed when no scope is declared', () => {
+test('scopeViolations fails closed when no scope is declared', async () => {
   assert.deepEqual(scopeViolations(['any/file.js'], T([])), ['any/file.js']);
 });
 
-test('runGates runs build then test through the sandbox and stops at first failure', () => {
+test('runGates runs build then test through the sandbox and stops at first failure', async () => {
   const ran = [];
   const sandbox = new Sandbox({
     mode: SANDBOX_MODES.SANDBOX, backend: { name: 'bubblewrap' }, worktree: '/wt', syntheticHome: '/wt/.home',
@@ -26,23 +26,23 @@ test('runGates runs build then test through the sandbox and stops at first failu
       return 'ok';
     },
   });
-  const good = runGates(sandbox, { build: 'npm run build', test: 'npm test' }, { PATH: '/usr/bin' });
+  const good = await runGates(sandbox, { build: 'npm run build', test: 'npm test' }, { PATH: '/usr/bin' });
   assert.equal(good.ok, true);
   assert.deepEqual(ran, ['npm run build', 'npm test']);
 
   ran.length = 0;
-  const bad = runGates(sandbox, { build: 'npm run build fail', test: 'npm test' }, {});
+  const bad = await runGates(sandbox, { build: 'npm run build fail', test: 'npm test' }, {});
   assert.equal(bad.ok, false);
   assert.deepEqual(ran, ['npm run build fail'], 'must stop at the first failing gate');
 });
 
-test('checkFlail returns the detector verdict', () => {
+test('checkFlail returns the detector verdict', async () => {
   const r = checkFlail('/log', ['src/**'], { exec: () => JSON.stringify({ detected: true, signals: ['repeated-error'] }) });
   assert.equal(r.flail, true);
   assert.deepEqual(r.signals, ['repeated-error']);
 });
 
-test('checkFlail FAILS OPEN on any error (§12 backstop)', () => {
+test('checkFlail FAILS OPEN on any error (§12 backstop)', async () => {
   const r = checkFlail('/log', [], { exec: () => { throw new Error('adlc not found'); } });
   assert.equal(r.flail, false);
   assert.equal(r.failedOpen, true);

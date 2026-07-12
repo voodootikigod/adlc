@@ -146,22 +146,22 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
   // Canary (spec §8.0(b) / premortem F1): prove the sandbox execution plumbing on
   // a trivial command in a throwaway dir BEFORE dispatching real tickets, so a
   // broken sandbox aborts cheaply instead of failing every ticket.
-  const dispatchCanary = ({ sandboxSpec }) => {
+  const dispatchCanary = async ({ sandboxSpec }) => {
     let tmp;
     try {
       tmp = mkdtempSync(join(tmpdir(), 'fleet-canary-'));
       mkdirSync(join(tmp, '.home'), { recursive: true }); // bwrap bind source must exist (L4)
       const sb = new Sandbox({
         mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
-        exec: (argv, opts) => { const r = io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
+        exec: async (argv, opts) => { const r = await io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
       });
-      const out = sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }) });
+      const out = await sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }) });
       return { ok: String(out).includes('__fleet_canary_ok__'), output: String(out) };
     } catch (e) { return { ok: false, output: e.message }; }
     finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
   };
 
-  const pre = runPreflight({
+  const pre = await runPreflight({
     repo, config, statusDir: dir, io,
     self: selfIdentity(), probes: lockProbes(),
     railHookInstalled,

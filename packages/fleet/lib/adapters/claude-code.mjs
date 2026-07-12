@@ -12,7 +12,7 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnAsync } from '../spawn-async.mjs';
 
 export const name = 'claude-code';
 export const pool = 'default';
@@ -70,9 +70,9 @@ function defaultWriteJson(path, obj) {
  *
  * @param exec injectable spawn: (cmd, args, opts) => { status, stdout, stderr, signal }
  */
-export function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec }) {
+export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec }) {
   const args = ['-p', prompt, '--permission-mode', 'acceptEdits', '--output-format', 'text'];
-  const res = exec('claude', args, { cwd: worktree, env, timeout: timeoutMs });
+  const res = await exec('claude', args, { cwd: worktree, env, timeout: timeoutMs });
   const timedOut = res.signal === 'SIGTERM' || res.killed === true || res.timedOut === true;
   return {
     exitCode: typeof res.status === 'number' ? res.status : (timedOut ? 124 : 1),
@@ -82,5 +82,5 @@ export function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec 
 }
 
 function defaultExec(cmd, args, opts) {
-  return spawnSync(cmd, args, { ...opts, encoding: 'utf8' });
+  return spawnAsync(cmd, args, { ...opts, encoding: 'utf8' });
 }

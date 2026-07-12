@@ -8,7 +8,7 @@ import {
   Sandbox,
 } from '../lib/sandbox.mjs';
 
-test('detectBackend accepts only FS-isolating backends (bwrap/seatbelt), NOT unshare (C2)', () => {
+test('detectBackend accepts only FS-isolating backends (bwrap/seatbelt), NOT unshare (C2)', async () => {
   const bwrap = detectBackend('linux', (c) => c === 'bwrap');
   assert.equal(bwrap.name, 'bubblewrap');
   const seatbelt = detectBackend('darwin', (c) => c === 'sandbox-exec');
@@ -19,33 +19,33 @@ test('detectBackend accepts only FS-isolating backends (bwrap/seatbelt), NOT uns
   assert.equal(detectBackend('linux', () => false), null);
 });
 
-test('fail closed: no backend + no override → refused (AC14 i)', () => {
+test('fail closed: no backend + no override → refused (AC14 i)', async () => {
   const r = resolveSandboxMode({ backend: null, operatorOverride: false });
   assert.equal(r.refused, true);
   assert.equal(r.mode, null);
 });
 
-test('operator-local override downgrades to env-scrub-only with a loud warning (AC14 ii)', () => {
+test('operator-local override downgrades to env-scrub-only with a loud warning (AC14 ii)', async () => {
   const r = resolveSandboxMode({ backend: null, operatorOverride: true });
   assert.equal(r.refused, false);
   assert.equal(r.mode, SANDBOX_MODES.ENV_SCRUB_ONLY);
   assert.ok(r.warnings.some((w) => /ENV-SCRUB-ONLY/i.test(w)), 'must warn which mode is active');
 });
 
-test('repo-committed config CANNOT enable the override — still fails closed (AC14 iii / N1)', () => {
+test('repo-committed config CANNOT enable the override — still fails closed (AC14 iii / N1)', async () => {
   const r = resolveSandboxMode({ backend: null, operatorOverride: false, repoConfigOverride: true });
   assert.equal(r.refused, true, 'repo config must not be able to disable the sandbox');
   assert.equal(r.mode, null);
   assert.ok(r.warnings.some((w) => /N1|CANNOT disable/i.test(w)), 'must warn that repo config is ignored');
 });
 
-test('detected backend → full sandbox mode', () => {
+test('detected backend → full sandbox mode', async () => {
   const r = resolveSandboxMode({ backend: { name: 'bubblewrap', platform: 'linux' } });
   assert.equal(r.mode, SANDBOX_MODES.SANDBOX);
   assert.equal(r.refused, false);
 });
 
-test('buildSandboxArgv (bubblewrap) denies network and binds worktree, NOT the real home (K1)', () => {
+test('buildSandboxArgv (bubblewrap) denies network and binds worktree, NOT the real home (K1)', async () => {
   const argv = buildSandboxArgv(
     { name: 'bubblewrap' },
     ['npm', 'test'],
@@ -59,7 +59,7 @@ test('buildSandboxArgv (bubblewrap) denies network and binds worktree, NOT the r
   assert.ok(s.endsWith('-- npm test'), 'inner command is appended after --');
 });
 
-test('Sandbox.canRead/canWrite enforce the worktree boundary in sandbox mode (K1)', () => {
+test('Sandbox.canRead/canWrite enforce the worktree boundary in sandbox mode (K1)', async () => {
   const sb = new Sandbox({
     mode: SANDBOX_MODES.SANDBOX,
     backend: { name: 'bubblewrap' },
@@ -76,13 +76,13 @@ test('Sandbox.canRead/canWrite enforce the worktree boundary in sandbox mode (K1
   assert.equal(sb.networkAllowed, false);
 });
 
-test('env-scrub-only mode performs no OS read/write enforcement (operator-contained)', () => {
+test('env-scrub-only mode performs no OS read/write enforcement (operator-contained)', async () => {
   const sb = new Sandbox({ mode: SANDBOX_MODES.ENV_SCRUB_ONLY, worktree: '/wt' });
   assert.equal(sb.canRead('/home/real/.aws/credentials'), true);
   assert.equal(sb.canWrite('/anywhere'), true);
 });
 
-test('Sandbox.run wraps the command through the backend and records via injected exec (M1 seam)', () => {
+test('Sandbox.run wraps the command through the backend and records via injected exec (M1 seam)', async () => {
   const calls = [];
   const sb = new Sandbox({
     mode: SANDBOX_MODES.SANDBOX,
@@ -91,7 +91,7 @@ test('Sandbox.run wraps the command through the backend and records via injected
     syntheticHome: '/wt/.home',
     exec: (argv, opts) => { calls.push({ argv, opts }); return 'ok'; },
   });
-  const out = sb.run(['npm', 'install'], { env: { PATH: '/usr/bin' } });
+  const out = await sb.run(['npm', 'install'], { env: { PATH: '/usr/bin' } });
   assert.equal(out, 'ok');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].argv[0], 'bwrap', 'command routed through the sandbox wrapper');

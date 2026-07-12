@@ -13,9 +13,9 @@
 // worktree is still the cwd, so the git diff sees the ticket branch, but the
 // executable is trusted. `reviewBin` is configurable for a pinned absolute path.
 
-import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
+import { spawnAsync } from './spawn-async.mjs';
 
 /**
  * Resolve a review binary to an ABSOLUTE trusted path (adversarial-review L1/M2).
@@ -47,7 +47,7 @@ export function resolveTrustedBin(bin, pathStr, worktree) {
  * @returns a runReview({ worktree, startSha, ticket }) => { ok, findings?, reason? }
  */
 export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000 } = {}) {
-  return ({ worktree, startSha }) => {
+  return async ({ worktree, startSha }) => {
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);
     const path = trustedPath ?? process.env.PATH;
@@ -63,7 +63,7 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
 
     let res;
     try {
-      res = spawn(bin, args, { cwd: worktree, env, encoding: 'utf8', timeout: timeoutMs });
+      res = await spawn(bin, args, { cwd: worktree, env, encoding: 'utf8', timeout: timeoutMs });
     } catch (e) {
       return { ok: false, reason: `adversarial-review spawn failed: ${e.message}` };
     }
@@ -90,5 +90,5 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
 }
 
 function defaultSpawn(cmd, args, options) {
-  return spawnSync(cmd, args, options);
+  return spawnAsync(cmd, args, options);
 }

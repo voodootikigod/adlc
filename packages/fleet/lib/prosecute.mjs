@@ -18,7 +18,7 @@ const SEVERITY_ORDER = { low: 0, medium: 1, high: 2, critical: 3 };
  * @param opts.failOn minimum blocking severity (default 'medium')
  * @returns { verdict:'pass'|'block'|'unavailable', blocking:[...], reason }
  */
-export function prosecute({ worktree, startSha, ticket }, { runReview, failOn = 'medium' } = {}) {
+export async function prosecute({ worktree, startSha, ticket }, { runReview, failOn = 'medium' } = {}) {
   if (typeof runReview !== 'function') {
     // No prosecutor wired at all → fail closed (must not silently pass).
     return { verdict: 'unavailable', blocking: [], reason: 'no review runner configured; failing closed' };
@@ -26,7 +26,7 @@ export function prosecute({ worktree, startSha, ticket }, { runReview, failOn = 
   const threshold = SEVERITY_ORDER[failOn] ?? SEVERITY_ORDER.medium;
   let result;
   try {
-    result = runReview({ worktree, startSha, ticket });
+    result = await runReview({ worktree, startSha, ticket });
   } catch (e) {
     return { verdict: 'unavailable', blocking: [], reason: `review runner threw: ${e.message}; failing closed` };
   }

@@ -4,17 +4,17 @@ import {
   name, pool, toPermissionRule, buildSettings, provision, dispatch,
 } from '../lib/adapters/claude-code.mjs';
 
-test('adapter identity', () => {
+test('adapter identity', async () => {
   assert.equal(name, 'claude-code');
   assert.equal(pool, 'default');
 });
 
-test('toPermissionRule wraps commands in Bash() rule form (premortem F1)', () => {
+test('toPermissionRule wraps commands in Bash() rule form (premortem F1)', async () => {
   assert.equal(toPermissionRule('npm test'), 'Bash(npm test)');
   assert.equal(toPermissionRule('npm run build:*'), 'Bash(npm run build:*)');
 });
 
-test('buildSettings allowlists gate/init/allowed commands + read-only git, never git commit', () => {
+test('buildSettings allowlists gate/init/allowed commands + read-only git, never git commit', async () => {
   const s = buildSettings({ init: 'npm install', gate: { build: 'npm run build', test: 'npm test' }, allowedCommands: ['node --test'] });
   const allow = s.permissions.allow;
   assert.ok(allow.includes('Bash(npm install)'));
@@ -25,7 +25,7 @@ test('buildSettings allowlists gate/init/allowed commands + read-only git, never
   assert.ok(!allow.some((r) => /git commit/.test(r)), 'the worker must NOT be allowed to commit');
 });
 
-test('provision writes only the allowlist settings file to the worktree .claude dir (AC4)', () => {
+test('provision writes only the allowlist settings file to the worktree .claude dir (AC4)', async () => {
   const written = [];
   const r = provision({
     worktree: '/wt',
@@ -37,9 +37,9 @@ test('provision writes only the allowlist settings file to the worktree .claude 
   assert.deepEqual(r.settings, written[0].obj);
 });
 
-test('dispatch spawns claude -p acceptEdits in the worktree with model-plane env (AC4 / K2)', () => {
+test('dispatch spawns claude -p acceptEdits in the worktree with model-plane env (AC4 / K2)', async () => {
   let captured;
-  const res = dispatch({
+  const res = await dispatch({
     worktree: '/wt',
     prompt: 'build ticket T42',
     timeoutMs: 60000,
@@ -57,8 +57,8 @@ test('dispatch spawns claude -p acceptEdits in the worktree with model-plane env
   assert.match(res.output, /TICKET-DONE/);
 });
 
-test('dispatch maps a timeout to a failed-strike outcome (AC4)', () => {
-  const res = dispatch({
+test('dispatch maps a timeout to a failed-strike outcome (AC4)', async () => {
+  const res = await dispatch({
     worktree: '/wt', prompt: 'x', timeoutMs: 10, env: {},
     exec: () => ({ status: null, signal: 'SIGTERM', stdout: '', stderr: 'timed out' }),
   });

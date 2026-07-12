@@ -12,8 +12,8 @@ const okSandbox = () => new Sandbox({
 const ticket = { id: 'T1', scope: ['packages/fleet/**'] };
 const templates = () => new Map([['.adlc/tickets.json', '{"tickets":[{"id":"T1"}]}']]);
 
-test('gate pipeline passes when build/scope/protected-paths are clean', () => {
-  const r = runGatePipeline(ticket, {
+test('gate pipeline passes when build/scope/protected-paths are clean', async () => {
+  const r = await runGatePipeline(ticket, {
     sandbox: okSandbox(),
     gate: { build: 'true', test: 'true' },
     env: {},
@@ -25,8 +25,8 @@ test('gate pipeline passes when build/scope/protected-paths are clean', () => {
   assert.equal(r.ok, true, r.output);
 });
 
-test('gate pipeline FAILS at protected-paths on a tampered tickets.json (C1 wired)', () => {
-  const r = runGatePipeline(ticket, {
+test('gate pipeline FAILS at protected-paths on a tampered tickets.json (C1 wired)', async () => {
+  const r = await runGatePipeline(ticket, {
     sandbox: okSandbox(),
     gate: { build: 'true' },
     env: {},
@@ -40,8 +40,8 @@ test('gate pipeline FAILS at protected-paths on a tampered tickets.json (C1 wire
   assert.match(r.output, /tickets\.json/);
 });
 
-test('gate pipeline FAILS at scope on an out-of-scope change', () => {
-  const r = runGatePipeline(ticket, {
+test('gate pipeline FAILS at scope on an out-of-scope change', async () => {
+  const r = await runGatePipeline(ticket, {
     sandbox: okSandbox(), gate: {}, env: {},
     changedPaths: ['packages/core/index.mjs'], // outside T1 scope
     templates: templates(), listProtected: () => [], readBytes: () => undefined,
@@ -50,7 +50,7 @@ test('gate pipeline FAILS at scope on an out-of-scope change', () => {
   assert.equal(r.stage, 'scope');
 });
 
-test('collectProtectedCandidates checks git-surfaced protected files, skips inert logs', () => {
+test('collectProtectedCandidates checks git-surfaced protected files, skips inert logs', async () => {
   const cands = collectProtectedCandidates({
     listProtected: () => ['.adlc/tickets.json', '.adlc/fleet-logs/T1.log', 'src/app.js'],
     readBytes: (p) => `bytes-of-${p}`,
@@ -70,7 +70,7 @@ test('integration: a worker tampering .adlc/tickets.json cannot merge (C1 end-to
     createIntegrationBranch: () => {},
     createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
     dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
-    gate: ({ ticket }) => runGatePipeline(ticket, {
+    gate: async ({ ticket }) => runGatePipeline(ticket, {
       sandbox: okSandbox(), gate: {}, env: {},
       changedPaths: ['packages/fleet/lib/x.mjs'],
       templates: templates(),

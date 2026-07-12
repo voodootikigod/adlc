@@ -17,10 +17,10 @@ import { inScope } from '@adlc/core';
  * exit or a thrown sandbox error is a gate failure (ok:false), never a throw —
  * the scheduler decides what a failure means (a strike).
  */
-export function runGateCommand(sandbox, command, env) {
+export async function runGateCommand(sandbox, command, env) {
   const argv = ['/bin/sh', '-c', command];
   try {
-    const output = sandbox.run(argv, { env });
+    const output = await sandbox.run(argv, { env });
     return { ok: true, output: String(output ?? '') };
   } catch (e) {
     return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.message ?? ''}` };
@@ -28,12 +28,12 @@ export function runGateCommand(sandbox, command, env) {
 }
 
 /** Run the configured build + test gate commands in order; stop at first failure. */
-export function runGates(sandbox, gate, env) {
+export async function runGates(sandbox, gate, env) {
   const results = [];
   for (const key of ['build', 'test']) {
     const cmd = gate?.[key];
     if (!cmd) continue;
-    const r = runGateCommand(sandbox, cmd, env);
+    const r = await runGateCommand(sandbox, cmd, env);
     results.push({ key, ...r });
     if (!r.ok) return { ok: false, results };
   }

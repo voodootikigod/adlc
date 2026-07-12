@@ -20,6 +20,7 @@ function fakeIo(rec, env) {
   return {
     git: fakeGit(rec),
     adlc: (args) => { rec.adlc.push(args); return { status: 0, stdout: '{"detected":false}' }; },
+    adlcAsync: async (args) => { rec.adlc.push(args); return { status: 0, stdout: '' }; },
     spawnWorker: (cmd, args, opts) => {
       rec.spawn.push({ cmd, args, env: opts?.env });
       if (cmd === 'claude') return { status: 0, stdout: 'TICKET-DONE', stderr: '' };
@@ -49,10 +50,10 @@ function makeDeps(rec, over = {}) {
 }
 const newRec = () => ({ git: [], adlc: [], spawn: [] });
 
-test('dispatch spawns claude -p on the MODEL plane: unsandboxed, provider auth retained (AC1/K2)', () => {
+test('dispatch spawns claude -p on the MODEL plane: unsandboxed, provider auth retained (AC1/K2)', async () => {
   const rec = newRec();
   const deps = makeDeps(rec);
-  const r = deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
   const claudeCall = rec.spawn.find((s) => s.cmd === 'claude');
   assert.ok(claudeCall, 'claude was spawned directly (not wrapped in bwrap)');
   assert.ok(claudeCall.args.includes('-p') && claudeCall.args.includes('acceptEdits'));
@@ -63,10 +64,10 @@ test('dispatch spawns claude -p on the MODEL plane: unsandboxed, provider auth r
   assert.equal(r.exitCode, 0);
 });
 
-test('gate runs build+test THROUGH the sandbox with a scrubbed repo-command env (AC1)', () => {
+test('gate runs build+test THROUGH the sandbox with a scrubbed repo-command env (AC1)', async () => {
   const rec = newRec();
   const deps = makeDeps(rec);
-  const r = deps.gate({ ticket, worktree: '/wt/T1', startSha: 'SHA' });
+  const r = await deps.gate({ ticket, worktree: '/wt/T1', startSha: 'SHA' });
   assert.equal(r.ok, true, r.output);
   // build+test were wrapped in the sandbox (bwrap) — repo-command plane.
   const wrapped = rec.spawn.filter((s) => s.cmd === 'bwrap');
@@ -79,20 +80,20 @@ test('gate runs build+test THROUGH the sandbox with a scrubbed repo-command env 
   assert.equal(anyCmd.env.PATH, '/usr/bin');
 });
 
-test('gate invokes rails-guard with --base <startSha> --ticket <id>', () => {
+test('gate invokes rails-guard with --base <startSha> --ticket <id>', async () => {
   const rec = newRec();
-  makeDeps(rec).gate({ ticket, worktree: '/wt/T1', startSha: 'TIP' });
+  await makeDeps(rec).gate({ ticket, worktree: '/wt/T1', startSha: 'TIP' });
   const rg = rec.adlc.find((a) => a[0] === 'rails-guard');
   assert.ok(rg, 'rails-guard was invoked');
   assert.equal(rg[rg.indexOf('--base') + 1], 'TIP');
   assert.equal(rg[rg.indexOf('--ticket') + 1], 'T1');
 });
 
-test('prosecute drives the review runner over the ticket startSha (AC1)', () => {
+test('prosecute drives the review runner over the ticket startSha (AC1)', async () => {
   const rec = newRec();
   let seen;
   const deps = makeDeps(rec, { reviewRunner: (ctx) => { seen = ctx; return { ok: true, findings: [] }; } });
-  const r = deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP' });
+  const r = await deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP' });
   assert.equal(seen.startSha, 'TIP');
   assert.equal(r.verdict, 'pass');
 });

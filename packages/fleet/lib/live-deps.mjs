@@ -22,6 +22,7 @@ import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { spawnAsync } from './spawn-async.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -41,8 +42,14 @@ function ensureLocalExclude(repoDir) {
 export function defaultIo() {
   return {
     git: (dir) => defaultGit(dir),
+    // Sync adlc for the quick, off-hot-path calls (flail between strikes;
+    // best-effort gate-manifest recording). The per-ticket rails-guard on the
+    // gate path uses adlcAsync so it does not block the event loop (#164).
     adlc: (args, opts = {}) => spawnSync('adlc', args, { encoding: 'utf8', ...opts }),
-    spawnWorker: (cmd, args, opts) => spawnSync(cmd, args, { encoding: 'utf8', ...opts }),
+    adlcAsync: (args, opts = {}) => spawnAsync('adlc', args, { encoding: 'utf8', ...opts }),
+    // Async (non-blocking) worker/gate/review execution so the concurrent
+    // scheduler is not serialized by a blocking spawn (#164).
+    spawnWorker: (cmd, args, opts) => spawnAsync(cmd, args, { encoding: 'utf8', ...opts }),
     readFile: (p) => readFileSync(p, 'utf8'),
     exists: (p) => existsSync(p),
     mkdirp: (p) => mkdirSync(p, { recursive: true }),
@@ -86,11 +93,11 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     backend: sandboxSpec.backend,
     worktree,
     syntheticHome: join(worktree, '.fleet-home'),
-    exec: (argv, opts) => {
+    exec: async (argv, opts) => {
       // The synthetic HOME is a bind SOURCE for bwrap — it must exist before the
       // wrapped command runs, or bwrap aborts (adversarial-review L4).
       io.mkdirp(join(worktree, '.fleet-home'));
-      const res = io.spawnWorker(argv[0], argv.slice(1), { cwd: worktree, ...opts });
+      const res = await io.spawnWorker(argv[0], argv.slice(1), { cwd: worktree, ...opts });
       if (res.error) throw res.error;
       if (typeof res.status === 'number' && res.status !== 0) {
         const e = new Error(`command failed (exit ${res.status})`);
@@ -113,12 +120,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       worktrees.createIntegrationBranch(repo, integrationBranch, baseSha, repoGit);
     },
 
-    createWorktree: ({ ticket, integrationBranch }) => {
+    createWorktree: async ({ ticket, integrationBranch }) => {
       const wt = worktrees.createWorktree(repo, ticket.id, { integrationBranch, git: repoGit });
       // Initialize the worktree THROUGH the sandbox (§6.3, M1) — repo-config init
       // (npm install) runs arbitrary lifecycle code and must be contained.
       if (config.init) {
-        try { sandboxFor(wt.path).run(['/bin/sh', '-c', config.init], { env: repoCmdEnv(wt.path) }); }
+        try { await sandboxFor(wt.path).run(['/bin/sh', '-c', config.init], { env: repoCmdEnv(wt.path) }); }
         catch (e) { throw new Error(`worktree init failed for ${ticket.id}: ${e.message}`); }
       }
       return wt;
@@ -126,13 +133,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     provision: ({ worktree }) => adapter.provision({ worktree, config, writeJson: io.writeJson }),
 
-    dispatch: ({ ticket, worktree, strike, deadEnds = [] }) => {
+    dispatch: async ({ ticket, worktree, strike, deadEnds = [] }) => {
       const prompt = strike > 1 ? fixPrompt(ticket, config.gate, deadEnds) : builderPrompt(ticket, config.gate);
       const env = modelPlaneEnv(io.env, {
         modelAuthKey: config.modelAuthKey,
         extra: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: ticket.id },
       });
-      const res = adapter.dispatch({
+      const res = await adapter.dispatch({
         worktree, prompt, timeoutMs: (config.timeoutMinutes ?? 30) * 60000, env,
         exec: (cmd, args, opts) => io.spawnWorker(cmd, args, opts),
       });
@@ -157,8 +164,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         return paths.filter((p) => isUnderProtectedPrefix(p));
       };
       const readBytes = (p) => (io.exists(join(worktree, p)) ? io.readFile(join(worktree, p)) : undefined);
-      const railsGuard = () => {
-        const res = io.adlc(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree });
+      const railsGuard = async () => {
+        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree });
         return { ok: res.status === 0, output: `${res.stdout ?? ''}${res.stderr ?? ''}` };
       };
       return runGatePipeline(ticket, {

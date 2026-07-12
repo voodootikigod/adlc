@@ -103,18 +103,6 @@ P4 (parallel build) + P5 (per-ticket prosecution). The fleet is the orchestrator
 that makes ADLC P4 parallelism executable; it consumes the ticket DAG certified
 by `merge-forecast` (D2) and routes each ticket through the gates.
 
-## Known limitations (v1.1)
-
-- **Live execution is currently serial** (tracked as a fast-follow). The scheduler
-  is concurrency-correct — `planRound`/`runFleet` admit non-overlapping tickets up
-  to the cap and serialize only merges, proven by the offline concurrency tests —
-  but the *live* dependency layer runs workers/gates through a synchronous
-  child-process primitive (`spawnSync`), which blocks the event loop, so real
-  `fleet run` currently processes tickets effectively one at a time. The fix is a
-  mechanical conversion of the live exec chain (Sandbox → gates → adapter →
-  review) to non-blocking async spawn; it does not touch the scheduler. Until then,
-  the fleet is correct but not yet parallel in live operation.
-
 ## Core gaps
 
 None required core changes. The fleet delegates all ticket primitives

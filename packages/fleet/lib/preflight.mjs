@@ -51,7 +51,7 @@ export function railHookProbe(railHookInstalled) {
  * @param railHookInstalled () => boolean
  * @param self / probes   lock identity + liveness probes (lib/proc.mjs)
  */
-export function runPreflight({
+export async function runPreflight({
   repo, config, statusDir, io, self, probes,
   dispatchCanary, railHookInstalled = () => false,
   platform, hasCmd,
@@ -85,7 +85,7 @@ export function runPreflight({
 
   // 5. Canary — prove the permission plumbing before real tickets.
   if (dispatchCanary) {
-    const canary = dispatchCanary({ sandboxSpec: sb });
+    const canary = await dispatchCanary({ sandboxSpec: sb });
     if (!canary.ok) {
       releaseLock(statusDir);
       return { ok: false, exitCode: 1, reason: `preflight canary failed (permission plumbing not working): ${canary.output ?? ''}`, warnings, lockHeld: false };

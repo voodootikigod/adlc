@@ -176,10 +176,14 @@ export class Sandbox {
     });
   }
 
-  /** Execute `innerArgv` inside the sandbox with the given scrubbed env. */
-  run(innerArgv, { env, cwd } = {}) {
+  /**
+   * Execute `innerArgv` inside the sandbox with the given scrubbed env. Async so
+   * a live (promise-returning) exec does not block the event loop (#164); a
+   * synchronous injected exec still works (await of a plain value is a no-op).
+   */
+  async run(innerArgv, { env, cwd } = {}) {
     const exec = this._exec ?? realExec;
-    return exec(this.wrap(innerArgv), { cwd: cwd ?? this.worktree, env });
+    return await exec(this.wrap(innerArgv), { cwd: cwd ?? this.worktree, env });
   }
 }
 
