@@ -96,10 +96,10 @@ Each adapter ships a grounded **default invocation** (`agy --print` is verified
 against antigravity-booster; `codex exec`, `opencode run`, `cursor-agent -p`, and
 the pi headless form are documented defaults with the confidence noted in each
 adapter's header). Because harness CLIs evolve, the command and args are
-**overridable** via `fleet.adapterCommand` / `fleet.adapterArgs` (and `fleet.model`
-for agy) — so a CLI change is a one-line config fix, and an unknown `fleet.adapter`
-fails closed at run start. Live end-to-end behavior per harness should be verified
-against the installed CLI.
+**overridable** via the operator-local `--adapter-command` / `--adapter-args` CLI
+flags (and `fleet.model` for agy, which is non-executable data) — so a CLI change
+is a one-line fix, and an unknown `--adapter` fails closed at run start. Live
+end-to-end behavior per harness should be verified against the installed CLI.
 
 ## Configuration (`.adlc/config.json`)
 
