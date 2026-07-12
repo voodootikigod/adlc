@@ -87,10 +87,18 @@ How to write one (see `packages/ticket-prune/test/roundtrip.test.mjs` and
 3. Cover BOTH directions: the accepted case (real output merges) AND that anything
    the producer REFUSES corresponds to a case the gate DENIES.
 
-This rule is itself enforced: `scripts/test/roundtrip-coverage.test.mjs` scans
-`packages/*/` for genuine `.adlc/tickets.json` writers and FAILS if any lacks a test
-invoking `scripts/rails-guard-ci.mjs`. A new gated-artifact producer must add its
-round-trip test (and, if it writes a *different* gated artifact, extend that scan).
+The **requirement** is the round-trip pattern itself, and it is enforced by **review**.
+As a backstop, `scripts/test/roundtrip-coverage.test.mjs` is a **best-effort heuristic
+tripwire**, NOT a formal proof: it lexically scans `packages/*/` for genuine
+`.adlc/tickets.json` writers (bare `'.adlc/tickets.json'` and segmented
+`join(x,'.adlc','tickets.json')` spellings, gated on a `{ tickets }` envelope write)
+and FAILS if any lacks a test that BOTH names `rails-guard-ci` AND spawns a subprocess.
+It catches the common in-repo spellings; a fully-indirected writer (path assembled by a
+helper in another file, exotic serialization, a wrapper that hides the primitive) can
+still evade a text scan — so do not treat a green tripwire as proof the pattern was
+followed. A new gated-artifact producer must add its round-trip test (and, if it writes
+a *different* gated artifact, extend that scan); reviewers must still verify the pattern
+is present rather than relying on the tripwire alone.
 
 ## Shared data (read via core, never reinvent)
 

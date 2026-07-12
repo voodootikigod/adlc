@@ -32,7 +32,9 @@ const REAL_PACKAGES = join(REPO_ROOT, 'packages');
 
 // ── the detector (pure; exercised on both the real tree and temp fixtures) ────
 
-/** List every *.mjs under `dir`, skipping test/ and node_modules/ subtrees. */
+const SOURCE_EXTS = ['.mjs', '.js', '.cjs'];
+
+/** List every source file under `dir`, skipping test/ and node_modules/ subtrees. */
 function sourceFiles(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -40,7 +42,7 @@ function sourceFiles(dir) {
     if (entry.isDirectory()) {
       if (entry.name === 'test' || entry.name === 'node_modules') continue;
       out.push(...sourceFiles(p));
-    } else if (entry.name.endsWith('.mjs')) {
+    } else if (SOURCE_EXTS.some((ext) => entry.name.endsWith(ext))) {
       out.push(p);
     }
   }
@@ -54,22 +56,42 @@ function sourceFiles(dir) {
  *   2. it references the tickets.json path as a real file location AND serializes
  *      a `{ tickets: ... }` envelope through a write/rename primitive.
  *
- * Robustness to false positives: the path is matched only in its BARE quoted form
- * (`'.adlc/tickets.json'`), so a gitignore negation (`'!.adlc/tickets.json'`) —
- * the quote is followed by `!`, not `.` — never counts. A package that only names
- * the path in an ignore stanza (e.g. core/scaffold-hygiene.mjs) is NOT a writer.
+ * The path reference is matched two ways, so an idiomatic writer cannot evade:
+ *   - BARE quoted form: `'.adlc/tickets.json'` (a gitignore negation
+ *     `'!.adlc/tickets.json'` is NOT matched — the quote is followed by `!`), and
+ *   - SEGMENTED construction: quoted `'tickets.json'` together with a quoted
+ *     `'.adlc'` segment nearby, i.e. `join(x, '.adlc', 'tickets.json')` — the EXACT
+ *     spelling the round-trip helpers themselves use.
+ *
+ * The write primitive set covers sync, promise, and callback forms:
+ * writeJsonAtomic / writeTicketsAtomic / writeFileSync / renameSync / writeFile
+ * (the bare `writeFile(` alt also catches `fs.promises.writeFile(`).
+ *
+ * Robustness to false positives: still gated on a `{ tickets }`-shaped envelope,
+ * so a READER (`data.tickets.map(...)` — a `.` follows `tickets`) and a package
+ * that only names the path in an ignore stanza (core/scaffold-hygiene.mjs) are
+ * NOT writers.
+ *
+ * NOTE (see CONVENTIONS.md): this is a heuristic lexical tripwire for the common
+ * in-repo spellings, NOT a proof of absence. A fully-indirected writer (path
+ * assembled in a helper in another file, exotic serialization) can still slip
+ * past a text scan; the round-trip PATTERN itself is the requirement, enforced by
+ * review, with this gate catching the idiomatic cases.
  */
 export function isTicketsWriterSource(src) {
   const callsDedicatedWriter = /writeTicketsAtomic\s*\(/.test(src);
   if (callsDedicatedWriter) return true;
-  const referencesBareTicketsPath = /['"`]\.adlc\/tickets\.json/.test(src);
+  const bareTicketsPath = /['"`]\.adlc\/tickets\.json/.test(src);
+  const segmentedTicketsPath =
+    /['"`]tickets\.json['"`]/.test(src) && /['"`]\.adlc['"`]/.test(src);
+  const referencesTicketsPath = bareTicketsPath || segmentedTicketsPath;
   // A `tickets` envelope key: `tickets:` (property) or `{ tickets }` / `{ tickets,`
   // (shorthand). The trailing [:,}] excludes a READER's `data.tickets.map(...)`
   // (a `.` follows `tickets`), so reads never masquerade as writes.
   const writesEnvelope =
     /\btickets\s*[:,}]/.test(src) &&
-    /(?:writeJsonAtomic|writeFileSync|renameSync|writeTicketsAtomic)\s*\(/.test(src);
-  return referencesBareTicketsPath && writesEnvelope;
+    /(?:writeJsonAtomic|writeTicketsAtomic|writeFileSync|renameSync|writeFile)\s*\(/.test(src);
+  return referencesTicketsPath && writesEnvelope;
 }
 
 /** Names of packages under `packagesDir` that write `.adlc/tickets.json`. */
@@ -84,13 +106,21 @@ export function findTicketsWriterPackages(packagesDir) {
   return writers.sort();
 }
 
-/** True iff the package owns a test that invokes scripts/rails-guard-ci.mjs. */
+/**
+ * True iff the package owns a test that REALLY invokes scripts/rails-guard-ci.mjs.
+ * A mere textual mention (e.g. a `// rails-guard-ci` comment) does NOT count — the
+ * file must also spawn a subprocess (`execFileSync` / `spawnSync`), so "coverage"
+ * cannot be faked without actually running the gate.
+ */
 export function packageHasRailsGuardRoundTrip(pkgDir) {
   const testDir = join(pkgDir, 'test');
   if (!existsSync(testDir) || !statSync(testDir).isDirectory()) return false;
   return readdirSync(testDir)
     .filter((f) => f.endsWith('.mjs'))
-    .some((f) => /rails-guard-ci/.test(readFileSync(join(testDir, f), 'utf8')));
+    .some((f) => {
+      const src = readFileSync(join(testDir, f), 'utf8');
+      return /rails-guard-ci/.test(src) && /(?:execFileSync|spawnSync)\s*\(/.test(src);
+    });
 }
 
 /** Writer packages that lack a rails-guard-ci round-trip test (the drift). */
@@ -134,9 +164,36 @@ export function ensureGitignore(path) {
 }
 `;
 
+// A SNEAKY writer that evades a bare-path scan: it assembles the tickets.json
+// path from SEGMENTS via join(dir, '.adlc', 'tickets.json') — the exact idiom the
+// round-trip helpers use — and writes the envelope with writeFileSync. If the
+// detector only matched the bare '.adlc/tickets.json' string this would read GREEN.
+const SNEAKY_SEGMENTED_WRITER_LIB = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+export function writeIt(dir, tickets) {
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2) + '\\n');
+}
+`;
+
+// A writer using the promise form (fs.promises.writeFile) + segmented path.
+const PROMISE_WRITER_LIB = `
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+export async function writeIt(dir, tickets) {
+  await writeFile(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }) + '\\n');
+}
+`;
+
 const ROUND_TRIP_TEST = `import { execFileSync } from 'node:child_process';
 // drives scripts/rails-guard-ci.mjs on real writer output
 execFileSync('node', ['scripts/rails-guard-ci.mjs', 'main']);
+`;
+
+// A HOLLOW "test": it mentions rails-guard-ci in a comment but never spawns it.
+// A string-only "covered" check would be fooled; a real-invocation check is not.
+const COMMENT_ONLY_TEST = `// this file name-drops rails-guard-ci but does NOT run it
+export const notReallyATest = 1;
 `;
 
 function withScratchPackages(fn) {
@@ -166,6 +223,23 @@ test('isTicketsWriterSource: does NOT flag a tickets.json READER (reads, never w
   assert.equal(isTicketsWriterSource(reader), false);
 });
 
+test('FIX 1 (evasion closed): flags a SEGMENTED-path writer — join(dir, ".adlc", "tickets.json") + writeFileSync', () => {
+  // The #104-class hole the prosecutor found: a real writer using the exact
+  // join-idiom the round-trip helpers use read GREEN under the old bare-string scan.
+  assert.equal(isTicketsWriterSource(SNEAKY_SEGMENTED_WRITER_LIB), true);
+});
+
+test('FIX 1 (evasion closed): flags a PROMISE-form writer — fs.promises.writeFile + segmented path', () => {
+  assert.equal(isTicketsWriterSource(PROMISE_WRITER_LIB), true);
+});
+
+test('FIX 1: a segmented "tickets.json" with NO .adlc segment is NOT a writer (avoids matching unrelated tickets.json files)', () => {
+  const unrelated = `import { writeFileSync } from 'node:fs';
+    // writes a DIFFERENT tickets.json (not under .adlc)
+    writeFileSync('build/tickets.json', JSON.stringify({ tickets: [] }));`;
+  assert.equal(isTicketsWriterSource(unrelated), false);
+});
+
 // ── direction 1: the check CATCHES a planted uncovered writer ─────────────────
 
 test('findUncoveredWriters FLAGS a planted writer package that has no rails-guard round-trip test', () => {
@@ -173,6 +247,25 @@ test('findUncoveredWriters FLAGS a planted writer package that has no rails-guar
     mkPackage(packagesDir, 'rogue-writer', { libSrc: WRITER_LIB }); // writer, NO test
     const uncovered = findUncoveredWriters(packagesDir);
     assert.deepEqual(uncovered, ['rogue-writer'], 'a new tickets.json writer without a round-trip test must be flagged');
+  });
+});
+
+test('FIX 1 end-to-end: findUncoveredWriters FLAGS a planted SEGMENTED-path writer with no round-trip test', () => {
+  withScratchPackages((packagesDir) => {
+    mkPackage(packagesDir, 'sneaky-writer', { libSrc: SNEAKY_SEGMENTED_WRITER_LIB }); // writer, NO test
+    assert.deepEqual(findTicketsWriterPackages(packagesDir), ['sneaky-writer'], 'segmented-path writer must be detected');
+    assert.deepEqual(findUncoveredWriters(packagesDir), ['sneaky-writer']);
+  });
+});
+
+test('FIX 2 (hollow coverage closed): a writer whose only test MENTIONS rails-guard-ci in a comment (never spawns it) is still UNCOVERED', () => {
+  withScratchPackages((packagesDir) => {
+    mkPackage(packagesDir, 'fake-covered', { libSrc: WRITER_LIB, testSrc: COMMENT_ONLY_TEST });
+    assert.deepEqual(
+      findUncoveredWriters(packagesDir),
+      ['fake-covered'],
+      'a comment-only mention of rails-guard-ci must NOT count as coverage',
+    );
   });
 });
 
