@@ -1,0 +1,8 @@
+{
+  "runId": "r1",
+  "base": "main",
+  "baseSha": "abc",
+  "integrationBranch": "fleet/run-r1",
+  "concurrency": 2,
+  "tickets": {}
+}

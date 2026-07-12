@@ -379,9 +379,12 @@ executes arbitrary code, **the repo-command plane runs inside an OS sandbox**
   tries to exfiltrate, to read host credentials, or to write outside the worktree
   is contained, not merely detected after the fact.
 - **Mechanism (pinned in ADR 0010, zero-dep)**: a `Sandbox` abstraction with a
-  detected backend — the concrete v1 backend is chosen from what the host offers
-  (e.g. macOS `sandbox-exec`/Seatbelt profile; Linux `unshare`/`bwrap` network
-  namespace with a worktree bind-mount) and recorded in the run status. The
+  detected backend that provides BOTH network and filesystem isolation — Linux
+  `bwrap` (bubblewrap: network namespace + fine-grained worktree binds), macOS
+  `sandbox-exec` (Seatbelt profile). Plain `unshare --net` is **deliberately not
+  accepted** (adversarial-review C2): it isolates the network but leaves the host
+  filesystem visible, which would violate the read/write boundary this module
+  promises — an `unshare`-only host reports no backend and fails closed. The
   abstraction is what the scheduler calls; the backend is swappable.
 - **Fail closed**: if no sandbox backend is available, `fleet run` refuses to
   dispatch (exit 1). The single escape hatch is the `--i-am-in-a-disposable-container`

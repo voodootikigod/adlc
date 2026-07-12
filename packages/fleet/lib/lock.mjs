@@ -8,7 +8,7 @@
 // start-time matches the recorded one — PIDs are reused, so pid-liveness alone
 // would misclassify a stale lock as live (N5).
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const LOCK_DIR = 'fleet.lock';
@@ -67,8 +67,22 @@ export function acquireLock(dir, self, probes) {
     if (isLockLive(existing, probes)) {
       return { acquired: false, refused: true, owner: existing };
     }
-    // Stale (dead pid, pid reuse, other host's dead run, or corrupt) → reclaim.
-    rmSync(lockDirPath(dir), { recursive: true, force: true });
+    // Stale (dead pid, pid reuse, other host's dead run, or corrupt) → reclaim
+    // ATOMICALLY (adversarial-review C3). A blind rmSync-then-mkdir has a window
+    // where a second reclaimer can delete the first's freshly-created lock. So
+    // instead we rename the stale dir aside to a per-actor quarantine name:
+    // `rename` is atomic and fails with ENOENT for every racer but the one that
+    // wins, so exactly one process removes the stale lock. The loser then sees
+    // either no lock (and races for mkdir) or a new live lock (and refuses).
+    const quarantine = `${lockDirPath(dir)}.stale-${self.pid}-${self.procStartTime ?? 'x'}`;
+    try {
+      renameSync(lockDirPath(dir), quarantine);
+      rmSync(quarantine, { recursive: true, force: true });
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+      // Someone else won the reclaim rename. Fall through to the mkdir attempt;
+      // if they already re-created the lock, our mkdir EEXISTs and we refuse.
+    }
   }
   // Atomic create: mkdir fails if another writer won the race in between.
   try {

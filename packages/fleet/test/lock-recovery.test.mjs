@@ -59,6 +59,23 @@ test('a lock from a different host is not treated as live-here', () => {
   assert.equal(isLockLive(owner, { host: HOST, pidAlive: () => true, procStartTimeOf: () => 'x' }), false);
 });
 
+test('after one reclaims a stale lock, a second attempt refuses (C3 single-holder invariant)', () => {
+  const dir = tmp();
+  mkdirSync(join(dir, LOCK_DIR));
+  writeFileSync(join(dir, LOCK_DIR, 'owner.json'), JSON.stringify({ pid: 777, host: HOST, procStartTime: 'dead' }));
+  // Realistic liveness: a pid is alive iff it's in `alive`; the stale owner 777
+  // is not, but the successful reclaimer's own pid becomes alive.
+  const alive = new Map();
+  const probes = { host: HOST, pidAlive: (p) => alive.has(p), procStartTimeOf: (p) => alive.get(p) ?? null };
+  const a = acquireLock(dir, self({ pid: 1001, procStartTime: 'a' }), probes);
+  assert.equal(a.acquired, true, 'first reclaimer wins the stale lock');
+  alive.set(1001, 'a'); // reclaimer A is now the running holder
+  const b = acquireLock(dir, self({ pid: 1002, procStartTime: 'b' }), probes);
+  assert.equal(b.acquired, false, 'a second attempt must not co-own A\'s live lock');
+  assert.equal(b.refused, true);
+  assert.equal(readLockOwner(dir).pid, 1001, 'A remains the sole holder');
+});
+
 test('releaseLock removes the lock', () => {
   const dir = tmp();
   acquireLock(dir, self(), { host: HOST, pidAlive: () => false, procStartTimeOf: () => null });

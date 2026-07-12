@@ -33,11 +33,11 @@ function harness({ prosecuteVerdict = () => ({ verdict: 'pass' }), postMerge = (
   return { deps, rec };
 }
 
-test('merges land on fleet/run-<runId>, base is never written (AC13 i)', () => {
+test('merges land on fleet/run-<runId>, base is never written (AC13 i)', async () => {
   const all = [T('T1'), T('T2')];
   const { deps, rec } = harness();
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
-  const summary = runFleet({ all, runId: 'abc', config, deps });
+  const summary = await runFleet({ all, runId: 'abc', config, deps });
 
   assert.equal(summary.integrationBranch, integrationBranchName('abc'));
   assert.equal(summary.integrationBranch, 'fleet/run-abc');
@@ -46,29 +46,29 @@ test('merges land on fleet/run-<runId>, base is never written (AC13 i)', () => {
   assert.deepEqual(Object.values(summary.results).sort(), ['merged', 'merged']);
 });
 
-test('run end opens at most ONE PR to base (AC13 i)', () => {
+test('run end opens at most ONE PR to base (AC13 i)', async () => {
   const all = [T('T1'), T('T2'), T('T3')];
   const { deps, rec } = harness();
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
-  runFleet({ all, runId: 'abc', config, deps });
+  await runFleet({ all, runId: 'abc', config, deps });
   assert.equal(rec.prs.length, 1, 'exactly one PR at run end');
   assert.equal(rec.prs[0].base, 'main');
 });
 
-test('no PR is opened when nothing merged', () => {
+test('no PR is opened when nothing merged', async () => {
   const all = [T('T1')];
   const { deps, rec } = harness({ prosecuteVerdict: () => ({ verdict: 'unavailable', reason: 'no provider' }) });
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
-  const summary = runFleet({ all, runId: 'abc', config, deps });
+  const summary = await runFleet({ all, runId: 'abc', config, deps });
   assert.equal(summary.results.T1, 'failed');
   assert.equal(rec.prs.length, 0);
 });
 
-test('scope and prosecution diff against the ticket startSha, not base (AC13 iii / N3)', () => {
+test('scope and prosecution diff against the ticket startSha, not base (AC13 iii / N3)', async () => {
   const all = [T('T1'), T('T2')];
   const { deps, rec } = harness();
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
-  runFleet({ all, runId: 'abc', config, deps });
+  await runFleet({ all, runId: 'abc', config, deps });
   // Each ticket's gate + prosecution used the integration tip it was cut from,
   // never the literal 'BASE'.
   assert.ok(rec.gatedStartShas.every((s) => s.startsWith('tip-after-')));
@@ -76,11 +76,11 @@ test('scope and prosecution diff against the ticket startSha, not base (AC13 iii
   assert.ok(!rec.gatedStartShas.includes('BASE'));
 });
 
-test('a blocking prosecution keeps a ticket out of the merge set', () => {
+test('a blocking prosecution keeps a ticket out of the merge set', async () => {
   const all = [T('T1')];
   const { deps, rec } = harness({ prosecuteVerdict: () => ({ verdict: 'block', reason: 'auth bypass' }) });
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
-  const summary = runFleet({ all, runId: 'abc', config, deps });
+  const summary = await runFleet({ all, runId: 'abc', config, deps });
   assert.equal(summary.results.T1, 'failed');
   assert.equal(rec.merges.length, 0, 'a ticket that fails prosecution must not merge');
 });

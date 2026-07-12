@@ -44,7 +44,7 @@ export function planRound(all, { statusById = {}, inFlightIds = [], cap = 2, onl
  *     never to merge (AC3 i); an UNAVAILABLE prosecution fails closed (F3);
  *   - a failed post-merge gate consumes a strike (the merge effect reverts).
  */
-export function advanceTicket(ticket, effects, { maxStrikes = 2, log = () => {} } = {}) {
+export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () => {} } = {}) {
   const deadEnds = [];
   let strikes = 0;
   const canRetry = () => strikes < maxStrikes;
@@ -55,31 +55,31 @@ export function advanceTicket(ticket, effects, { maxStrikes = 2, log = () => {} 
     strikes += 1;
     log(`${ticket.id} strike ${strikes}: building`);
 
-    const build = effects.dispatch({ ticket, strike: strikes, deadEnds });
+    const build = await effects.dispatch({ ticket, strike: strikes, deadEnds });
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the second strike.
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', deadEnds };
     }
     if (build.exitCode !== 0 || build.timedOut) {
       deadEnds.push(fence('BUILD', build.output));
-      if (canRetry() && effects.flail({ ticket }).flail) {
+      if (canRetry() && (await effects.flail({ ticket })).flail) {
         return fail('flail-detector diagnosed a genuine flail — skipping the second strike');
       }
       continue;
     }
 
     log(`${ticket.id} strike ${strikes}: gating`);
-    const gate = effects.gate({ ticket });
+    const gate = await effects.gate({ ticket });
     if (!gate.ok) {
       deadEnds.push(fence('GATE', gate.output));
-      if (canRetry() && effects.flail({ ticket }).flail) {
+      if (canRetry() && (await effects.flail({ ticket })).flail) {
         return fail('flail-detector diagnosed a genuine flail — skipping the second strike');
       }
       continue;
     }
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
-    const pros = effects.prosecute({ ticket });
+    const pros = await effects.prosecute({ ticket });
     if (pros.verdict === 'unavailable') {
       // Cannot prove safety → must not merge, retrying build won't help.
       return fail(`prosecution unavailable (fail closed): ${pros.reason}`);
@@ -91,7 +91,7 @@ export function advanceTicket(ticket, effects, { maxStrikes = 2, log = () => {} 
     }
 
     log(`${ticket.id} strike ${strikes}: merging`);
-    const merge = effects.merge({ ticket });
+    const merge = await effects.merge({ ticket });
     if (!merge.ok) {
       deadEnds.push(fence('POST_MERGE', merge.output ?? 'post-merge gate failed'));
       if (canRetry()) continue;

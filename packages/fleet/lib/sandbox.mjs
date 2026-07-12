@@ -27,18 +27,20 @@ function defaultHasCmd(cmd) {
 }
 
 /**
- * Probe the host for an available sandbox backend. Linux prefers bubblewrap
- * (`bwrap`, user-namespace, fine-grained binds) then `unshare`; macOS uses
- * Seatbelt (`sandbox-exec`). Returns a backend descriptor or null.
+ * Probe the host for a sandbox backend that provides BOTH network AND filesystem
+ * isolation (adversarial-review C2). Linux uses bubblewrap (`bwrap`,
+ * user-namespace with fine-grained binds); macOS uses Seatbelt (`sandbox-exec`).
+ *
+ * Plain `unshare --net` is deliberately NOT accepted: it creates a network
+ * namespace but leaves the host filesystem fully visible, which would violate
+ * the canRead/canWrite boundary this module promises. A host with `unshare` but
+ * no `bwrap` therefore reports NO backend and the fleet fails closed (or requires
+ * the operator's disposable-container override) rather than claiming a
+ * containment it cannot deliver.
  */
 export function detectBackend(platform = process.platform, hasCmd = defaultHasCmd) {
-  if (platform === 'linux') {
-    if (hasCmd('bwrap')) return { name: 'bubblewrap', platform };
-    if (hasCmd('unshare')) return { name: 'unshare', platform };
-  }
-  if (platform === 'darwin' && hasCmd('sandbox-exec')) {
-    return { name: 'seatbelt', platform };
-  }
+  if (platform === 'linux' && hasCmd('bwrap')) return { name: 'bubblewrap', platform };
+  if (platform === 'darwin' && hasCmd('sandbox-exec')) return { name: 'seatbelt', platform };
   return null;
 }
 
@@ -104,11 +106,6 @@ export function buildSandboxArgv(backend, innerArgv, { worktree, syntheticHome, 
     for (const ro of readOnlyPaths) args.push('--ro-bind', ro, ro);
     args.push('--setenv', 'HOME', syntheticHome ?? worktree);
     return ['bwrap', ...args, '--', ...innerArgv];
-  }
-  if (backend.name === 'unshare') {
-    // Coarser: network namespace only (no per-path FS binds); the env-scrub and
-    // worktree cwd carry more of the weight here. Documented as the weaker tier.
-    return ['unshare', '--net', '--', ...innerArgv];
   }
   if (backend.name === 'seatbelt') {
     const profile = seatbeltProfile({ worktree, syntheticHome, readOnlyPaths });

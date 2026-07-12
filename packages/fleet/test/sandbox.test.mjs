@@ -8,13 +8,14 @@ import {
   Sandbox,
 } from '../lib/sandbox.mjs';
 
-test('detectBackend prefers bwrap on linux, seatbelt on darwin, null when absent', () => {
+test('detectBackend accepts only FS-isolating backends (bwrap/seatbelt), NOT unshare (C2)', () => {
   const bwrap = detectBackend('linux', (c) => c === 'bwrap');
   assert.equal(bwrap.name, 'bubblewrap');
-  const unshare = detectBackend('linux', (c) => c === 'unshare');
-  assert.equal(unshare.name, 'unshare');
   const seatbelt = detectBackend('darwin', (c) => c === 'sandbox-exec');
   assert.equal(seatbelt.name, 'seatbelt');
+  // unshare-only host: NOT a full backend (unshare gives no filesystem isolation),
+  // so the fleet fails closed rather than claiming containment it cannot deliver.
+  assert.equal(detectBackend('linux', (c) => c === 'unshare'), null);
   assert.equal(detectBackend('linux', () => false), null);
 });
 

@@ -109,6 +109,27 @@ isolation a container does not provide (loud logging mitigates), and a
 cross-model reviewer missing a subtle in-scope defect (the single-PR human review
 remains the final backstop; the fleet never pushes to base autonomously).
 
+## P5 code-review hardening
+
+A cross-model (codex/GPT) adversarial review of the *built* code — distinct from
+the six-pass design review — found four implementation defects the design review
+could not see; all were fixed before merge:
+
+- **C1**: the protected-control-file scan was defined and unit-tested but never
+  invoked in the run path. Fixed by composing `lib/gate-pipeline.mjs`
+  (build/test → scope check → protected-path scan → rails-guard) and wiring it as
+  the gate effect, with an end-to-end test proving a worker's worktree mutation of
+  `.adlc/tickets.json` fails the ticket before merge.
+- **C2**: plain `unshare --net` was accepted as a full sandbox backend but gives
+  no filesystem isolation. Fixed by accepting only `bwrap`/`sandbox-exec`; an
+  `unshare`-only host now fails closed.
+- **C3**: stale-lock reclaim had a rm-then-mkdir TOCTOU race. Fixed with an atomic
+  rename-aside so exactly one racer reclaims.
+- **C4**: `runFleet` executed tickets serially. Fixed with an async worker pool —
+  builds/gates/prosecution run concurrently up to the cap while merges serialize
+  through a mutex — with a test proving two non-overlapping tickets build at once
+  and scope-overlapping tickets still serialize.
+
 ## Consequences
 
 - The ADLC gains an executable P4/P5 orchestrator that dogfoods its own gates.
