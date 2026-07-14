@@ -35,10 +35,11 @@
 
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { decide, extractToolName, extractFilePaths, resolveOwning } from './adlc-rails-guard.mjs';
 import { classifyTool, isShellTool } from '../rails-checker.mjs';
 import { SESSION_TTL_MS, DEPTH_COUNTER_FILE } from '../constants.mjs';
+import { loadTickets, ticketStoreExists } from '@adlc/core';
 
 // Conversation/session-id-shaped fields seen across agent-hook payloads. NOT
 // pinned for Cursor (ADR 0006) — read opportunistically and defensively, the
@@ -138,8 +139,9 @@ export async function consultBuildGate(payload, {
   const cls = classifyTool(extractToolName(payload));
   const mutating = cls === 'mutating' || (cls === 'other' && !isShellTool(extractToolName(payload)));
   try {
-    const ticketsPath = join(root, '.adlc', 'tickets.json');
-    if (!existsSync(ticketsPath)) return null; // not an ADLC repo → no-op
+    const storeOverride = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
+    const ticketsPath = storeOverride ? (isAbsolute(storeOverride) ? storeOverride : join(root, storeOverride)) : join(root, '.adlc', 'tickets.json');
+    if (!ticketStoreExists(root, storeOverride)) return null; // not an ADLC repo → no-op
 
     const active = activeTicket.resolveActiveTicketId({ dir: root, env });
     if (active.conflict) {
@@ -165,17 +167,9 @@ export async function consultBuildGate(payload, {
 
     if (!mutating) return null;
 
-    let parsed;
-    try {
-      parsed = JSON.parse(readFileSync(ticketsPath, 'utf8'));
-    } catch (err) {
-      return buildGateDeny(`cannot read .adlc/tickets.json (${err.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed.`);
-    }
-    const okShape = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.tickets);
-    if (!okShape) {
-      return buildGateDeny('.adlc/tickets.json is not in the expected { "tickets": [...] } shape — failing closed.');
-    }
-    const ticket = parsed.tickets.find((t) => t && typeof t === 'object' && t.id === active.id);
+    const loaded = loadTickets(ticketsPath);
+    if (loaded.errors.length) return buildGateDeny(`cannot read ticket store (${loaded.errors[0]}) — active ticket ${active.id}'s risk cannot be verified, failing closed.`);
+    const ticket = loaded.tickets.find((t) => t && typeof t === 'object' && t.id === active.id);
     if (!ticket) {
       return buildGateDeny(`active ticket ${active.id} not found in .adlc/tickets.json — failing closed.`);
     }

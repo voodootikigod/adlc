@@ -32,7 +32,8 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.3.0"
+    "@adlc/core": "1.3.0",
+    "@adlc/tickets": "1.3.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",

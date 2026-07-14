@@ -7,8 +7,8 @@
 // contract: write/edit carry input.path, bash carries input.command) onto
 // those pieces. index.ts is a typed shim around createExtension().
 
-import { statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import {
   resolveActiveTicket,
   checkStructuredWrite,
@@ -151,9 +151,21 @@ export function createExtension({ env = process.env } = {}) {
 
     function stampTicketFiles(cwd) {
       const mtime = (p) => {
-        try { return statSync(join(cwd, p)).mtimeMs; } catch { return 'absent'; }
+        try { return statSync(isAbsolute(p) ? p : join(cwd, p)).mtimeMs; } catch { return 'absent'; }
       };
-      return `${env.ADLC_TICKET ?? ''}|${mtime('.adlc/current-ticket.json')}|${mtime(env.ADLC_TICKETS ?? '.adlc/tickets.json')}`;
+      const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? '.adlc/tickets.json';
+      let storeStamp = mtime(configured);
+      if (storeStamp === 'absent' && configured === '.adlc/tickets.json') {
+        try {
+          storeStamp = readdirSync(join(cwd, '.adlc/tickets')).sort().map((name) => `${name}:${mtime(`.adlc/tickets/${name}`)}`).join(',');
+        } catch { storeStamp = 'absent'; }
+      } else {
+        try {
+          const storePath = isAbsolute(configured) ? configured : join(cwd, configured);
+          if (statSync(storePath).isDirectory()) storeStamp = readdirSync(storePath).sort().map((name) => `${name}:${mtime(join(storePath, name))}`).join(',');
+        } catch {}
+      }
+      return `${env.ADLC_TICKET ?? ''}|${mtime('.adlc/current-ticket.json')}|${storeStamp}`;
     }
 
     function reload(cwd) {

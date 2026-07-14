@@ -6,7 +6,6 @@
 // atomic write (tickets.json + sidecar). Fails closed (exit 2) on any invalid
 // block, unresolved conflict, rail-narrowing, or Validity-Gate violation.
 
-import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { topoSort } from '@adlc/core';
 import { loadConfig, resolveRepo } from './config.mjs';
@@ -16,6 +15,7 @@ import { railScopeGuard, describeViolations } from './rails-guard-sync.mjs';
 import { validateTicket } from './validate.mjs';
 import { canonicalHash } from './canonical.mjs';
 import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar } from './store.mjs';
+import { loadTicketSnapshot } from '@adlc/tickets';
 
 const BLOCK_KEYS = ['scope', 'rails', 'edges', 'duration', 'category', 'budget'];
 
@@ -28,14 +28,13 @@ export function pickBlock(obj) {
   return any ? out : null;
 }
 
-function loadLocalTickets(dir) {
-  const p = join(dir, '.adlc', 'tickets.json');
-  if (!existsSync(p)) return [];
+function loadLocalState(dir) {
   try {
-    const d = JSON.parse(readFileSync(p, 'utf8'));
-    return Array.isArray(d.tickets) ? d.tickets : [];
-  } catch {
-    return [];
+    const snapshot = loadTicketSnapshot({ root: dir });
+    return { tickets: snapshot.mutableTickets(), hash: snapshot.hash, absent: false };
+  } catch (error) {
+    if (error.code === 'STORE_NOT_FOUND') return { tickets: [], hash: null, absent: true };
+    throw error;
   }
 }
 
@@ -94,9 +93,10 @@ export async function pull({
   const res = await provider.listIssues({ runner, repo, ticketSync: ts, ...(limit ? { limit } : {}) });
   if (!res.ok) return { exitCode: 1, errors: [res.error] };
 
-  const localTickets = loadLocalTickets(dir);
+  const localState = loadLocalState(dir);
+  const localTickets = localState.tickets;
   const localById = new Map(localTickets.map((t) => [t.id, t]));
-  const sidecar = readSidecar(dir);
+  const sidecar = readSidecar(dir, { strict: write });
 
   const errors = [];
   const plan = [];
@@ -153,7 +153,10 @@ export async function pull({
 
   if (!acquireLock(dir)) return { exitCode: 1, errors: ['could not acquire .adlc/tickets.lock — another ticket op is in progress'] };
   try {
-    writeTicketsAtomic(dir, { tickets: gate.tickets });
+    writeTicketsAtomic(dir, { tickets: gate.tickets }, {
+      expectedSnapshotHash: localState.hash,
+      expectedStoreAbsent: localState.absent,
+    });
     const newSidecar = { ...sidecar, tickets: { ...sidecar.tickets } };
     for (const [id, u] of Object.entries(sidecarUpdates)) newSidecar.tickets[id] = { ...u, syncedAt: now };
     writeSidecar(dir, newSidecar);

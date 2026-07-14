@@ -366,6 +366,26 @@ test('create adoption: an UNLABELED orphan is adopted via the pendingCreates han
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('push resumes evidence re-attestation after the gh: ID commit and then clears the durable handle', async () => {
+  const KEY = 'resume-after-store-commit';
+  const body = serializeBlock({ prefix: 'Build it\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });
+  const dir = repo({
+    tickets: [{ id: 'gh:acme/app#5', title: 'Build it', scope: ['a/**'], duration: 1 }],
+    sidecar: { version: 1, tickets: {}, pendingCreates: { [KEY]: { localId: 'T7', title: 'Build it', nodeId: 'I_5', number: 5 } } },
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh = fakeGitHub({ issues: [{ number: 5, id: 'I_5', url: 'https://github.com/acme/app/issues/5', title: 'Build it', body, labels: ['adlc'] }] });
+    const result = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T' });
+    assert.equal(result.exitCode, 0, JSON.stringify(result.errors));
+    assert.ok(result.plan.some((item) => item.kind === 'resume-reassignment' && item.id === 'T7'));
+    assert.deepEqual(readSidecar(dir).pendingCreates, {});
+    const manifest = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(manifest.filter((entry) => entry.ticket === 'gh:acme/app#5' && entry.data?.migratedFrom === 'T7').length, 1);
+    assert.ok(gh.state.issues[0].labels.includes('adlc:passed'), 'recovered evidence is visible to status rendering in the same run');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('handle adoption: a TRANSIENT getIssue failure FAILS CLOSED — never recreates a duplicate (Finding C)', async () => {
   const KEY = 'k-transient';
   const body = serializeBlock({ prefix: 'x\n\n', suffix: '' }, { scope: ['a/**'], duration: 1 }, { key: KEY });

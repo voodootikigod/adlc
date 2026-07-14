@@ -1,15 +1,17 @@
-import { appendEntry, ADLC_DIR, canonicalJson, readEntries, resolveRevision, sha256 } from '@adlc/core';
-import { readFileSync, statSync } from 'node:fs';
+import { ADLC_DIR, canonicalJson, readEntries, resolveRevision, sha256 } from '@adlc/core';
+import { appendManifestEntry } from '@adlc/gate-manifest';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { validateInput } from './schema.mjs';
 import { hasCrossModelApprove } from './cross-model.mjs';
+import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
 
 function now() {
   return new Date().toISOString();
 }
 
 function writeEvidence(type, data, dir) {
-  return appendEntry('manifest', { ts: now(), type, ...data }, dir);
+  return appendManifestEntry({ ts: now(), type, ...data }, dir);
 }
 
 function manifestArtifactPaths(cwd, dir) {
@@ -52,19 +54,13 @@ export function resolveProsecutionRevision({ cwd = process.cwd(), dir = ADLC_DIR
 }
 
 function ticketDefinitionHash(cwd, ticket, dir) {
-  const paths = [resolve(cwd, dir, 'tickets.json'), resolve(cwd, '.adlc/tickets.json')];
-  for (const path of paths) {
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw);
-      const tickets = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
-      const definition = tickets.find((candidate) => candidate?.id === ticket);
-      if (definition) return sha256(canonicalJson(definition));
-    } catch {
-      // Try the next supported ticket location.
-    }
-  }
-  return null;
+  try {
+    const customPath = resolve(cwd, dir, 'tickets.json');
+    const snapshot = customPath !== resolve(cwd, '.adlc/tickets.json') && existsSync(customPath)
+      ? new LegacyTicketStore(customPath).load()
+      : loadTicketSnapshot({ root: cwd });
+    return snapshot.get(ticket) ? { ticketHash: snapshot.ticketHashes[ticket], storeHash: snapshot.hash } : null;
+  } catch { return null; }
 }
 
 function transcriptReferencesTicket(text, ticket) {
@@ -202,8 +198,11 @@ export function runProsecution(input, {
     errors.push('trust-root-tier prosecution requires --author-provider (or ADLC_AUTHOR_PROVIDER) to anchor author identity for the cross-model gate');
   }
   const resolvedRevision = resolveProsecutionRevision({ cwd, dir, revision, input, inputPath });
-  const ticketHash = ticket ? ticketDefinitionHash(cwd, ticket, dir) : null;
-  if (ticket && !ticketHash) errors.push(`ticket definition not found for ${ticket}; define it in .adlc/tickets.json`);
+  const ticketBinding = ticket ? ticketDefinitionHash(cwd, ticket, dir) : null;
+  const ticketHash = ticketBinding?.ticketHash ?? null;
+  const storeHash = ticketBinding?.storeHash ?? null;
+  const binding = { ticketHash, storeHash, bindingScope: 'ticket' };
+  if (ticket && !ticketBinding) errors.push(`ticket definition not found for ${ticket}; define it in the active ADLC ticket store`);
   if (!resolvedRevision) errors.push('revision could not be resolved; pass --revision or run inside a git worktree');
   let transcript;
   let reviewPacket;
@@ -240,6 +239,8 @@ export function runProsecution(input, {
       reviewPacket,
       inputPath: inputEvidencePath,
       ticketHash,
+      storeHash,
+      bindingScope: 'ticket',
     }, dir);
 
     for (const finding of pass.findings) {
@@ -250,6 +251,7 @@ export function runProsecution(input, {
         pass: passNo,
         lens: pass.lens,
         finding,
+        ...binding,
       }, dir);
       writeEvidence(`p5-finding-${finding.verified_status}`, {
         ticket,
@@ -258,6 +260,7 @@ export function runProsecution(input, {
         pass: passNo,
         lens: pass.lens,
         finding,
+        ...binding,
       }, dir);
     }
 
@@ -272,6 +275,7 @@ export function runProsecution(input, {
         lens: pass.lens,
         consecutiveDry,
         dryEvidence: pass.dry_evidence ?? null,
+        ...binding,
       }, dir);
     } else {
       consecutiveDry = 0;
@@ -297,6 +301,7 @@ export function runProsecution(input, {
       killed: result.killed.length,
       needsHuman: result.needsHuman.length,
       consecutiveDry,
+      ...binding,
     }, dir);
 
     passResults.push({
@@ -348,6 +353,8 @@ export function runProsecution(input, {
       inputPath: inputEvidencePath,
       dryLenses: Array.from(dryLenses).sort(),
       ticketHash,
+      storeHash,
+      bindingScope: 'ticket',
     }, dir);
     return {
       status: 'pass',

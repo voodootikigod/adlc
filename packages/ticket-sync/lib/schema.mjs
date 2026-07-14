@@ -104,7 +104,7 @@ export const CONFIG_DEF = {
 export const SYNC_STATE_DEF = {
   id: 'adlc-sync-state',
   title: 'ADLC ticket-sync sidecar state',
-  description: '.adlc/ticket-sync.state.json — gitignored rebuildable sync cache (NOT a rail).',
+  description: '.adlc/ticket-sync.state.json — gitignored sync state; pending creates are recovery handles (NOT a rail).',
   additionalProperties: true,
   fields: {
     version: { type: 'number', required: true, description: 'Sidecar format version.' },

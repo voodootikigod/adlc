@@ -16,6 +16,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createExtension } from '../lib/extension.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
+import { migrateLegacyStore, migrationPlan } from '@adlc/tickets';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(HERE, '..');
@@ -298,7 +299,7 @@ test('AC4: /adlc-approve-spec with no path errors without a dialog', async () =>
 // scaffold when the adlc CLI is missing
 // =========================================================================
 
-test('AC5: /adlc-init on a bare repo creates .adlc/tickets.json + gitignore entries and is idempotent', async () => {
+test('AC5: /adlc-init on a bare repo creates sharded stores + gitignore entries and is idempotent', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-init-')));
   try {
     const pi = fakePi();
@@ -307,9 +308,10 @@ test('AC5: /adlc-init on a bare repo creates .adlc/tickets.json + gitignore entr
 
     await pi.commands['adlc-init'].handler('', ctx);
 
-    const ticketsPath = join(root, '.adlc', 'tickets.json');
-    assert.ok(existsSync(ticketsPath), 'tickets.json created');
-    assert.deepEqual(JSON.parse(readFileSync(ticketsPath, 'utf8')), { tickets: [] });
+    const ticketsPath = join(root, '.adlc', 'tickets', '.store.json');
+    const archivePath = join(root, '.adlc', 'ticket-archive', '.store.json');
+    assert.ok(existsSync(ticketsPath), 'active sharded store created');
+    assert.ok(existsSync(archivePath), 'archive sharded store created');
     const gitignore = readFileSync(join(root, '.gitignore'), 'utf8');
     assert.match(gitignore, /^\.adlc\/\*$/m, '.adlc/* ignore added');
     assert.match(gitignore, /^!\.adlc\/tickets\.json$/m, 'tickets.json negation added');
@@ -318,7 +320,7 @@ test('AC5: /adlc-init on a bare repo creates .adlc/tickets.json + gitignore entr
     const beforeTickets = readFileSync(ticketsPath, 'utf8');
     const beforeGitignore = readFileSync(join(root, '.gitignore'), 'utf8');
     await pi.commands['adlc-init'].handler('', ctx);
-    assert.equal(readFileSync(ticketsPath, 'utf8'), beforeTickets, 'tickets.json unchanged on second run');
+    assert.equal(readFileSync(ticketsPath, 'utf8'), beforeTickets, 'store manifest unchanged on second run');
     assert.equal(readFileSync(join(root, '.gitignore'), 'utf8'), beforeGitignore, '.gitignore unchanged on second run');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -337,6 +339,44 @@ test('P5 follow-up: /adlc-init never clobbers a POPULATED tickets.json (byte-ide
     await pi.commands['adlc-init'].handler('', ctx);
 
     assert.equal(readFileSync(ticketsPath, 'utf8'), populated, 'existing tickets must be byte-identical after init');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('/adlc-init previews legacy migration and decline preserves the writable flat file', async () => {
+  const root = makeRepo({ current: null });
+  try {
+    const pi = fakePi({ exec: async (_cmd, args) => {
+      if (args[0] === '--version') return { code: 0, stdout: '1.3.0' };
+      return { code: 0, stdout: JSON.stringify(migrationPlan(root)) };
+    } });
+    createExtension({ env: {} })(pi);
+    const before = readFileSync(join(root, '.adlc/tickets.json'), 'utf8');
+    const ctx = fakeCtx(root, { confirm: () => false });
+    await pi.commands['adlc-init'].handler('', ctx);
+    assert.equal(ctx.calls.confirm, 1);
+    assert.equal(readFileSync(join(root, '.adlc/tickets.json'), 'utf8'), before);
+    assert.equal(existsSync(join(root, '.adlc/tickets')), false);
+    assert.ok(ctx.notices.some((notice) => /Continuing on the legacy flat file/.test(notice.msg)));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('/adlc-init migrates legacy storage only after explicit approval', async () => {
+  const root = makeRepo({ current: null });
+  try {
+    const pi = fakePi({ exec: async (_cmd, args) => {
+      if (args[0] === '--version') return { code: 0, stdout: '1.3.0' };
+      if (args.includes('--write')) {
+        const result = migrateLegacyStore(root, { write: true, yes: true, requireClean: false });
+        return { code: 0, stdout: JSON.stringify(result) };
+      }
+      return { code: 0, stdout: JSON.stringify(migrationPlan(root)) };
+    } });
+    createExtension({ env: {} })(pi);
+    const ctx = fakeCtx(root, { confirm: () => true });
+    await pi.commands['adlc-init'].handler('', ctx);
+    assert.equal(ctx.calls.confirm, 1);
+    assert.equal(existsSync(join(root, '.adlc/tickets.json')), false);
+    assert.equal(existsSync(join(root, '.adlc/tickets/.store.json')), true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -10,13 +10,13 @@ import {
   gitDiff,
   changedFiles as coreChangedFiles,
   loadTickets,
-  appendEntry,
   hashFiles,
   git,
   globMatch,
   resolveBase,
   ADLC_DIR,
 } from '@adlc/core';
+import { appendManifestEntry } from '@adlc/gate-manifest';
 
 import { readFileSync } from 'node:fs';
 
@@ -175,7 +175,7 @@ if (values.record && violations.length === 0) {
     }
   }
 
-  appendEntry('manifest', {
+  appendManifestEntry({
     ts: new Date().toISOString(),
     type: 'rails-check',
     ticket: ticket?.id ?? null,

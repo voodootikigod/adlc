@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { classifyTicket, classifyTickets, listTrackedFiles } from './detect.mjs';
 import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs';
+import { DirectoryTicketStore, archiveTicket, detectTicketStore } from '@adlc/tickets';
 
 /**
  * @param {object} [options]
@@ -50,6 +51,32 @@ export function runTicketPrune(options = {}) {
 
   if (!write || stale.length === 0) {
     return { ok: true, baseRef, write, stale, active, tombstoned: [], needsCeremony: [] };
+  }
+
+  let canonicalStore;
+  try {
+    canonicalStore = ticketsPath === '.adlc/tickets.json'
+      ? detectTicketStore({ root: cwd })
+      : detectTicketStore({ root: cwd, ticketStore: ticketsPath });
+  }
+  catch (error) { return { ok: false, error: error.message }; }
+  if (canonicalStore instanceof DirectoryTicketStore) {
+    const archivedEntries = [];
+    try {
+      for (const item of stale) {
+        const current = canonicalStore.load();
+        const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), item.id, {
+          root: cwd,
+          expectedSnapshotHash: current.hash,
+          reason: item.reason,
+          authorized: true,
+        });
+        archivedEntries.push(result.archived);
+      }
+      return { ok: true, baseRef, write, stale, active, archived: archivedEntries };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
   }
 
   const locked = acquireLock(cwd);

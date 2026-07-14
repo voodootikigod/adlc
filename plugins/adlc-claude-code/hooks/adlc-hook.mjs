@@ -57,6 +57,7 @@ import {
 import { join, relative, resolve, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 
 const MODE = process.argv[2];
 
@@ -947,8 +948,10 @@ function recordBypass(relPath, why) {
 // apply; the CI gate remains the commit-time backstop.
 function rails(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo
-  const ticketsPath = join('.adlc', 'tickets.json');
-  if (!existsSync(ticketsPath)) return; // no tickets → no rails declared
+  if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → no rails declared
+  let ticketSnapshot;
+  const defaultDirectory = existsSync(join('.adlc', 'tickets', '.store.json'));
+  const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (defaultDirectory ? join('.adlc', 'tickets') : join('.adlc', 'tickets.json'));
 
   // TRUST THE MATCHER: hooks.json routes only mutating edit tools to this hook,
   // so any tool that arrives is one we chose to gate — no in-code tool allowlist
@@ -985,9 +988,10 @@ function rails(input) {
 
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(ticketsPath, 'utf8'));
+    ticketSnapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env });
+    parsed = { tickets: ticketSnapshot.tickets };
   } catch (e) {
-    return failClosed(`cannot read .adlc/tickets.json (${e.message});`, 'unparseable-tickets-bypass');
+    return failClosed(`cannot read ticket store (${e.message});`, 'unparseable-tickets-bypass');
   }
 
   // Valid JSON but wrong shape (e.g. a bare array, or no `tickets` envelope) must
@@ -1039,9 +1043,9 @@ function rails(input) {
   // BOTH the literal path AND its resolved path — because edit targets are
   // symlink-resolved, a tickets.json that is itself a symlink (or its real
   // target) would otherwise dodge the literal glob.
-  railDecls.push({ glob: '.adlc/tickets.json', ticket: '(rail trust root)' });
+  railDecls.push({ glob: ticketSnapshot.backend === 'directory' ? '.adlc/tickets/**' : '.adlc/tickets.json', ticket: '(rail trust root)' });
   const ticketsResolved = toRepoRelative(ticketsPath);
-  if (ticketsResolved && ticketsResolved !== '.adlc/tickets.json') {
+  if (ticketsResolved && !['.adlc/tickets.json', '.adlc/tickets'].includes(ticketsResolved)) {
     railDecls.push({ glob: ticketsResolved, ticket: '(rail trust root, resolved)' });
   }
 
@@ -1162,7 +1166,7 @@ function resolveActiveTicketIdForBuildGate() {
 }
 
 /** Trust-root paths — KEEP IN SYNC with packages/build-gate/lib/risk.mjs's TRUST_ROOT_PATHS. */
-const BUILD_GATE_TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
+const BUILD_GATE_TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json'];
 /** KEEP IN SYNC with packages/build-gate/lib/risk.mjs's MANIFEST_PATH. */
 const BUILD_GATE_MANIFEST_PATH = '.adlc/manifest.jsonl';
 /** KEEP IN SYNC with packages/build-gate/lib/risk.mjs's HIGH_RISK_CATEGORIES. */
@@ -1252,8 +1256,7 @@ function recordBuildGateBypass(ticketId, signals, depth, sessionBytes) {
 
 function buildgate(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo → allow
-  const ticketsPath = join('.adlc', 'tickets.json');
-  if (!existsSync(ticketsPath)) return; // no tickets → nothing to gate → allow
+  if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → nothing to gate → allow
 
   const active = resolveActiveTicketIdForBuildGate();
   if (active.conflict) {
@@ -1265,7 +1268,7 @@ function buildgate(input) {
 
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(ticketsPath, 'utf8'));
+    parsed = { tickets: loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }).tickets };
   } catch (e) {
     return denyBuildGate(
       `cannot read .adlc/tickets.json (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`

@@ -7,6 +7,7 @@ import { record, parseData } from '../lib/record.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
+import { repairChain } from '../lib/repair.mjs';
 import { ADLC_DIR } from '@adlc/core';
 
 const USAGE =
@@ -14,7 +15,8 @@ const USAGE =
   'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c]\n' +
   '       verify [--json]\n' +
   '       show   [--ticket id] [--json]\n' +
-  '       attest [--ticket id]';
+  '       attest [--ticket id]\n' +
+  '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -24,6 +26,9 @@ const { values: flags, positionals } = parseArgs({
     files:  { type: 'string' },
     json:   { type: 'boolean', default: false },
     dir:    { type: 'string', default: ADLC_DIR },
+    reason: { type: 'string' },
+    write:  { type: 'boolean', default: false },
+    'attest-unsigned': { type: 'boolean', default: false },
   },
 });
 
@@ -111,5 +116,30 @@ if (verb === 'attest') {
   pass();
 }
 
+// ── repair-chain ─────────────────────────────────────────────────────────────
+if (verb === 'repair-chain') {
+  let result;
+  try {
+    result = repairChain({
+      dir: flags.dir,
+      reason: flags.reason,
+      write: flags.write,
+      attestUnsigned: flags['attest-unsigned'],
+    });
+  } catch (err) {
+    opError(err.message);
+  }
+  if (flags.json) printJson(result);
+  else {
+    const attestation = result.newlySignedEntries > 0
+      ? `; cryptographically attested ${result.newlySignedEntries} previously unsigned entr${result.newlySignedEntries === 1 ? 'y' : 'ies'}`
+      : '';
+    console.log(flags.write
+      ? `repaired ${result.path}; original preserved at ${result.backup}${attestation}`
+      : `repair plan: ${result.originalEntries} entries → ${result.repairedEntries}${attestation}; rerun with --write`);
+  }
+  pass();
+}
+
 // Unknown verb
-opError(`unknown verb: ${verb}. Expected: record | verify | show | attest`);
+opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain`);

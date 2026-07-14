@@ -26,6 +26,8 @@ package READMEs.
   primary README source.
 - [Ticket authoring](./ticket-authoring.md) defines the canonical ticket schema that
   all gates and both integrations read.
+- [ADLC 1.3 ticket-store release notes](./releases/1.3-sharded-ticket-store.md) explain
+  the sharded default, legacy compatibility bridge, migration approval, and 2.0 removal.
 
 ## Architecture decision records
 

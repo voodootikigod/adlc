@@ -47,7 +47,7 @@ The scaffolder (`/adlc-init`) deploys these commands into `.cursor/commands/` �
 bare `/adlc-<name>` form (Cursor has no plugin namespace):
 
 - `/adlc-init` — bootstrap the `.adlc/` workspace + Cursor wiring.
-- `/adlc-ticket` — P0 triage: author a ticket into `.adlc/tickets.json`.
+- `/adlc-ticket` — P0 triage through the canonical ticket store.
 - `/adlc-spec` · `/adlc-approve-spec` — P1 interrogation + the human approval gate.
 - `/adlc-decompose` — P2 slicing + merge forecast.
 - `/adlc-verify-build` — P4 deterministic build gate (targeted tests + flail check).

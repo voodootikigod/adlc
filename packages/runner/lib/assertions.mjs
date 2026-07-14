@@ -1,6 +1,7 @@
 import { readEntries, ADLC_DIR, canonicalJson, hashFiles, resolveRevision, sha256 } from '@adlc/core';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
 
 const PHASE_REQUIREMENTS = {
   p1: ['spec-lint', 'premortem'],
@@ -97,20 +98,14 @@ function isEvidencePath(cwd, path) {
   return rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/');
 }
 
-function ticketDefinitionHash(cwd, ticket, dir) {
-  const paths = [resolve(cwd, dir, 'tickets.json'), resolve(cwd, '.adlc/tickets.json')];
-  for (const path of paths) {
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw);
-      const tickets = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
-      const definition = tickets.find((candidate) => candidate?.id === ticket);
-      if (definition) return sha256(canonicalJson(definition));
-    } catch {
-      // Try the next supported ticket location.
-    }
-  }
-  return null;
+function ticketDefinitionBinding(cwd, ticket, dir) {
+  try {
+    const customPath = resolve(cwd, dir, 'tickets.json');
+    const snapshot = customPath !== resolve(cwd, '.adlc/tickets.json') && existsSync(customPath)
+      ? new LegacyTicketStore(customPath).load()
+      : loadTicketSnapshot({ root: cwd });
+    return snapshot.get(ticket) ? { ticketHash: snapshot.ticketHashes[ticket], storeHash: snapshot.hash } : null;
+  } catch { return null; }
 }
 
 function staleTicketDefinitionError(recordedHash, currentHash) {
@@ -286,9 +281,14 @@ function hashIntegrityError(label, path, expectedHash) {
   }
 }
 
-function p6IntegrityErrors(entry) {
+function p6IntegrityErrors(entry, currentBinding) {
   if (!entry) return [];
   const errors = [];
+  if (entry.bindingScope !== 'ticket' || typeof entry.ticketHash !== 'string' || typeof entry.storeHash !== 'string') {
+    errors.push('P6 evidence is incomplete: acceptance packet requires ticketHash, storeHash, and ticket bindingScope');
+  } else if (!currentBinding || entry.ticketHash !== currentBinding.ticketHash) {
+    errors.push('P6 evidence is stale: accepted ticket definition changed or is absent');
+  }
   if (!entry.packet || typeof entry.packet !== 'string') {
     errors.push('P6 evidence is incomplete: acceptance packet missing packet path');
   }
@@ -391,7 +391,8 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     ? explicitRevision ?? liveWorktreeRevision
     : revision;
   const p5TicketHash = assertedP5Entry?.ticketHash ?? null;
-  const currentTicketHash = assertedP5Entry ? ticketDefinitionHash(cwd, ticket, dir) : null;
+  const currentBinding = assertedP5Entry ? ticketDefinitionBinding(cwd, ticket, dir) : null;
+  const currentTicketHash = currentBinding?.ticketHash ?? null;
   const ticketStaleError = assertedP5Entry
     ? staleTicketDefinitionError(p5TicketHash, currentTicketHash)
     : null;
@@ -464,7 +465,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ? currentRevision
       : revision;
   const p6Errors = phase === 'p6' && assertedP5Entry
-    ? p6IntegrityErrors(latestP6Entry(entries, ticket, resolvedRevision))
+    ? p6IntegrityErrors(latestP6Entry(entries, ticket, resolvedRevision), currentBinding)
     : [];
   const p4Errors = phase === 'p4'
     ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd)

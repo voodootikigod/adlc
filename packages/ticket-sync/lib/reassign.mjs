@@ -14,8 +14,7 @@
 // touching history. (Display-only evidence; the ledger stays tamper-evident.)
 
 import { createHmac } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { readEntries, appendEntry, sha256 } from '@adlc/core';
+import { appendEntries, sha256 } from '@adlc/core';
 
 /**
  * Reassign one ticket id store-wide (pure, immutable). Returns a NEW ticket array
@@ -40,7 +39,7 @@ export function reassignId(tickets, oldId, newId) {
  * gate so a re-attestation never resurrects a superseded verdict.
  * @returns {Array<object>} source entries (one per gate) to re-attest under newId
  */
-export function planManifestMigration(entries, oldId) {
+export function planManifestMigration(entries, oldId, newId = null) {
   const latestByGate = new Map();
   for (const e of entries ?? []) {
     if (!e || e.ticket !== oldId || typeof e.gate !== 'string') continue;
@@ -49,7 +48,23 @@ export function planManifestMigration(entries, oldId) {
       latestByGate.set(e.gate, e);
     }
   }
-  return [...latestByGate.values()];
+  const sources = [...latestByGate.values()];
+  if (!newId) return sources;
+  return sources.filter((source) => {
+    const sourceHash = sha256(JSON.stringify(source));
+    return !(entries ?? []).some((entry) => entry?.ticket === newId
+      && entry?.gate === source.gate
+      && entry?.data?.migratedFrom === oldId
+      && (entry.data.migratedEvidenceHash === sourceHash || legacyReattestationMatches(entry, source)));
+  });
+}
+
+function legacyReattestationMatches(entry, source) {
+  if (entry.data?.migratedEvidenceHash !== undefined) return false;
+  const data = { ...(entry.data ?? {}) };
+  delete data.migratedFrom;
+  return JSON.stringify(data) === JSON.stringify(source.data ?? {})
+    && JSON.stringify(entry.files ?? {}) === JSON.stringify(source.files ?? {});
 }
 
 // Mirror of @adlc/gate-manifest sign.mjs canonicalEntryBytes — the signed payload
@@ -64,12 +79,6 @@ function canonicalEntryBytes(entry) {
   return JSON.stringify(c);
 }
 
-function lastRawLine(text) {
-  const lines = (text ?? '').split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].trim()) return lines[i];
-  return null;
-}
-
 /**
  * Append-only re-attestation of `oldId`'s evidence under `newId`.
  *
@@ -79,48 +88,30 @@ function lastRawLine(text) {
  * @param {object} opts
  * @param {string} opts.now    ISO timestamp for the new entries
  * @param {NodeJS.ProcessEnv} [opts.env]  for the optional ADLC_MANIFEST_KEY
- * @param {(name,dir)=>{entries}} [opts.read]   injectable reader (test seam)
- * @param {(name,entry,dir)=>void} [opts.append] injectable appender (test seam)
- * @param {() => string|null} [opts.readRaw]  raw-ledger reader for chain linking
+ * @param {Function} [opts.appendBatch] injectable ownership-safe batch appender
  * @returns {{ migrated: number, entries: object[] }}
  */
-export function migrateManifestEvidence(dir, oldId, newId, { now, env = process.env, read = readEntries, append = appendEntry, readRaw } = {}) {
+export function migrateManifestEvidence(dir, oldId, newId, { now, env = process.env, appendBatch = appendEntries } = {}) {
   const adlcDir = `${dir}/.adlc`;
-  const { entries } = read('manifest', adlcDir);
-  const sources = planManifestMigration(entries, oldId);
-  if (sources.length === 0) return { migrated: 0, entries: [] };
-
   const key = (() => { const k = env?.ADLC_MANIFEST_KEY; return typeof k === 'string' && k.length ? k : null; })();
-  // Chain link: prev = sha256(last raw ledger line). Use the injected raw reader
-  // when present (tests), else re-read the file via the same primitive the
-  // recorder uses so the byte-exact previous line is hashed.
-  const rawTail = typeof readRaw === 'function'
-    ? readRaw()
-    : lastRawLine(safeReadFile(`${adlcDir}/manifest.jsonl`));
-  let prev = rawTail !== null ? sha256(rawTail) : null;
-  let seq = entries.length ? Math.max(...entries.map((e) => (typeof e.seq === 'number' ? e.seq : 0))) : 0;
-
-  const out = [];
-  for (const src of sources) {
-    seq += 1;
-    const entry = { seq, gate: src.gate, ts: now };
-    entry.ticket = newId;
-    entry.data = { ...(src.data ?? {}), migratedFrom: oldId };
-    entry.files = src.files ?? {};
-    entry.prev = prev;
-    if (key) entry.sig = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
-    append('manifest', entry, adlcDir);
-    out.push(entry);
-    // The next entry chains off THIS one's raw bytes (same serialization append uses).
-    prev = sha256(JSON.stringify(entry));
-  }
+  const out = appendBatch('manifest', ({ entries, skipped, lastRawLine }) => {
+    if (skipped.length) throw new Error(`cannot re-attest evidence: manifest contains malformed line ${skipped[0].line}`);
+    const sources = planManifestMigration(entries, oldId, newId);
+    let prev = lastRawLine !== null ? sha256(lastRawLine) : null;
+    let seq = entries.length ? Math.max(...entries.map((e) => (typeof e.seq === 'number' ? e.seq : 0))) : 0;
+    const additions = [];
+    for (const src of sources) {
+      seq += 1;
+      const entry = { seq, gate: src.gate, ts: now };
+      entry.ticket = newId;
+      entry.data = { ...(src.data ?? {}), migratedFrom: oldId, migratedEvidenceHash: sha256(JSON.stringify(src)) };
+      entry.files = src.files ?? {};
+      entry.prev = prev;
+      if (key) entry.sig = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
+      additions.push(entry);
+      prev = sha256(JSON.stringify(entry));
+    }
+    return additions;
+  }, adlcDir);
   return { migrated: out.length, entries: out };
-}
-
-function safeReadFile(path) {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
 }

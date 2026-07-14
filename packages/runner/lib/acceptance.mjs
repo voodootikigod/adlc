@@ -1,6 +1,8 @@
-import { appendEntry, canonicalJson, readEntries, resolveRevision, sha256 } from '@adlc/core';
-import { readFileSync, statSync } from 'node:fs';
+import { canonicalJson, readEntries, resolveRevision, sha256 } from '@adlc/core';
+import { appendManifestEntry } from '@adlc/gate-manifest';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
 
 function now() {
   return new Date().toISOString();
@@ -99,20 +101,14 @@ function validateInWorktreeEvidencePath(cwd, label, path) {
   return null;
 }
 
-function ticketDefinitionHash(cwd, ticket, dir) {
-  const paths = [resolve(cwd, dir, 'tickets.json'), resolve(cwd, '.adlc/tickets.json')];
-  for (const path of paths) {
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = JSON.parse(raw);
-      const tickets = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
-      const definition = tickets.find((candidate) => candidate?.id === ticket);
-      if (definition) return sha256(canonicalJson(definition));
-    } catch {
-      // Try the next supported ticket location.
-    }
-  }
-  return null;
+function ticketDefinitionBinding(cwd, ticket, dir) {
+  try {
+    const customPath = resolve(cwd, dir, 'tickets.json');
+    const snapshot = customPath !== resolve(cwd, '.adlc/tickets.json') && existsSync(customPath)
+      ? new LegacyTicketStore(customPath).load()
+      : loadTicketSnapshot({ root: cwd });
+    return snapshot.get(ticket) ? { ticketHash: snapshot.ticketHashes[ticket], storeHash: snapshot.hash } : null;
+  } catch { return null; }
 }
 
 function staleTicketDefinitionError(recordedHash, currentHash) {
@@ -187,7 +183,8 @@ export function recordAcceptancePacket({
   const transcriptPaths = p5TranscriptPaths(assertedP5Entry, cwd);
   const reviewPacketPaths = p5ReviewPacketPaths(assertedP5Entry, cwd);
   const p5TicketHash = assertedP5Entry?.ticketHash ?? null;
-  const currentTicketHash = assertedP5Entry ? ticketDefinitionHash(cwd, ticket, dir) : null;
+  const currentBinding = assertedP5Entry ? ticketDefinitionBinding(cwd, ticket, dir) : null;
+  const currentTicketHash = currentBinding?.ticketHash ?? null;
   const ticketStaleError = assertedP5Entry
     ? staleTicketDefinitionError(p5TicketHash, currentTicketHash)
     : null;
@@ -212,7 +209,7 @@ export function recordAcceptancePacket({
   if (!resolvedRevision) errors.push('revision could not be resolved; pass --revision or run inside a git worktree');
   if (errors.length > 0) return { ok: false, exitCode: 1, errors };
 
-  appendEntry('manifest', {
+  appendManifestEntry({
     ts: now(),
     type: 'p6-acceptance-packet',
     ticket,
@@ -221,6 +218,9 @@ export function recordAcceptancePacket({
     packetHash,
     artifactPaths,
     artifactHashes,
+    ticketHash: currentBinding.ticketHash,
+    storeHash: currentBinding.storeHash,
+    bindingScope: 'ticket',
   }, dir);
 
   return {
@@ -232,5 +232,8 @@ export function recordAcceptancePacket({
     packetHash,
     artifactPaths,
     artifactHashes,
+    ticketHash: currentBinding.ticketHash,
+    storeHash: currentBinding.storeHash,
+    bindingScope: 'ticket',
   };
 }

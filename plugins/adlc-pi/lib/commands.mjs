@@ -15,8 +15,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, sha256 } from '@adlc/core';
-import { ensureGitignore, ensureFormatterIgnores } from '@adlc/core';
+import { ensureGitignore, ensureFormatterIgnores, ensureTicketStore } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { ticketHash } from '@adlc/tickets';
 import { recordGateEvent } from './evidence.mjs';
 import { buildRollbackCandidates } from './rollback.mjs';
 
@@ -47,7 +48,10 @@ function parseJsonStdout(stdout) {
  *   completion callback (which pi calls without a ctx).
  */
 export function registerCommands(pi, { env = process.env, reload, getActive, getCwd } = {}) {
-  const ticketsPathFor = (cwd) => env.ADLC_TICKETS ?? join(cwd, '.adlc', 'tickets.json');
+  const ticketsPathFor = (cwd) => {
+    const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS;
+    return configured ? (isAbsolute(configured) ? configured : join(cwd, configured)) : join(cwd, '.adlc', 'tickets.json');
+  };
   const ticketLabel = (t) => (t.title ? `${t.id} — ${t.title}` : t.id);
 
   // =====================================================================
@@ -75,17 +79,45 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       }
 
       const adlcDir = join(root, '.adlc');
-      const ticketsPath = join(adlcDir, 'tickets.json');
-      let ticketsCreated = false;
+      let ticketStore;
       try {
         mkdirSync(adlcDir, { recursive: true });
-        if (!existsSync(ticketsPath)) {
-          writeFileSync(ticketsPath, JSON.stringify({ tickets: [] }, null, 2) + '\n');
-          ticketsCreated = true;
-        }
+        ticketStore = ensureTicketStore(root);
       } catch (err) {
         ctx.ui.notify(`ADLC init failed to scaffold .adlc/: ${err.message}`, 'error');
         return;
+      }
+
+      // A legacy store remains fully usable until the human explicitly accepts
+      // migration. Non-interactive init never prompts or migrates.
+      if (ticketStore.legacyMigrationAvailable && ctx.hasUI) {
+        let plan = null;
+        try {
+          const preview = await pi.exec('adlc', ['ticket', 'store', 'migrate', '--json'], { cwd: root });
+          plan = parseJsonStdout(preview?.stdout);
+        } catch {
+          // The legacy store still works; preview failure is reported below.
+        }
+        if (!plan) {
+          ctx.ui.notify('ADLC found legacy .adlc/tickets.json, but could not calculate a migration plan. Continuing on legacy storage.', 'warning');
+        } else {
+          const approved = await ctx.ui.confirm(
+            'Migrate ticket storage?',
+            `Replace .adlc/tickets.json with ${plan.ticketCount ?? '?'} independently mergeable ticket shard(s)? This changes representation only and does not commit files.`
+          );
+          if (approved) {
+            try {
+              const applied = await pi.exec('adlc', ['ticket', 'store', 'migrate', '--write', '--yes', '--json'], { cwd: root });
+              if (applied?.code !== undefined && applied.code !== 0) throw new Error(applied.stderr || `exit ${applied.code}`);
+              ticketStore = { backend: 'directory', created: true, legacyMigrationAvailable: false };
+            } catch (err) {
+              ctx.ui.notify(`ADLC migration failed; the recovery journal preserves the state: ${err.message}`, 'error');
+              return;
+            }
+          } else {
+            ctx.ui.notify('ADLC migration declined. Continuing on the legacy flat file; you can migrate later with `adlc ticket store migrate`.', 'info');
+          }
+        }
       }
 
       // Track the contract, ignore the runtime; exclude .adlc/ from whatever
@@ -113,7 +145,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
 
       ctx.ui.notify(
         `ADLC init complete. ` +
-          `${ticketsCreated ? 'Created .adlc/tickets.json' : '.adlc/tickets.json already present'}. ` +
+          `${ticketStore.created ? 'Created sharded ticket and archive stores' : `${ticketStore.backend} ticket store already present`}. ` +
           `${giMsg}. ${fmtMsg}.`,
         'info'
       );
@@ -153,6 +185,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
 
       const requested = (args ?? '').trim();
       let chosenId;
+      let chosenTicket;
       if (requested) {
         const match = tickets.find((t) => t.id === requested);
         if (!match) {
@@ -160,6 +193,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           return;
         }
         chosenId = match.id;
+        chosenTicket = match;
       } else {
         // No id → interactive picker. In non-TUI modes select() resolves
         // undefined, so require an explicit id there instead of prompting.
@@ -180,6 +214,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           return;
         }
         chosenId = tickets[idx].id;
+        chosenTicket = tickets[idx];
       }
 
       // Activate: write the pointer DIRECTLY. This is the human acting through
@@ -188,7 +223,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       const currentPath = join(root, '.adlc', 'current-ticket.json');
       try {
         mkdirSync(join(root, '.adlc'), { recursive: true });
-        writeFileSync(currentPath, JSON.stringify({ id: chosenId }, null, 2) + '\n');
+        writeFileSync(currentPath, JSON.stringify({ id: chosenId, ticketHash: ticketHash(chosenTicket) }, null, 2) + '\n');
       } catch (err) {
         ctx.ui.notify(`ADLC: failed to write current-ticket.json: ${err.message}`, 'error');
         return;

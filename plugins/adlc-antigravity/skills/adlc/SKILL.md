@@ -50,8 +50,10 @@ on PATH. See ADR-0008 (adversarial-review coverage map) in the ADLC repo.
 ## The phases
 
 ### P0 — Triage → `/adlc-ticket`
-Turn a request into a self-contained ticket in `.adlc/tickets.json`. Everything
-downstream reads this file; nothing else creates it. Author here first.
+Turn a request into a self-contained ticket through the unified ticket service. New repositories
+use one canonical shard per ticket under `.adlc/tickets/`; legacy
+`.adlc/tickets.json` remains supported until an approved migration. Everything
+downstream reads the logical store.
 
 ### P1 — Interrogate (spec is testable and stress-tested)
 - `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
@@ -84,7 +86,7 @@ downstream reads this file; nothing else creates it. Author here first.
   PreToolUse hook is **advisory** — agy fails OPEN on a non-zero hook exit, so it
   is best-effort, not a guarantee. The unbypassable control is the CI diff gate
   (`scripts/rails-guard-ci.mjs`). See the "Rails in Antigravity (agy)" section
-  below. It freezes `.adlc/tickets.json` itself once rails exist.
+  below. It freezes the active ticket store itself once rails exist.
   **Bash is not gated in-session** — a shell can't be reliably parsed, so rail
   mutations via Bash are caught by the CI diff gate (any spelling), not the hook.
   Wire that gate with the template at `docs/ci/rails-guard.yml` and make it a

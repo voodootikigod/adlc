@@ -9,9 +9,8 @@
 // per-session tool-call counter, and a `session.compacted` event marks the
 // session degraded outright (compaction IS the context-rot event).
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { loadTickets } from '@adlc/core';
+import { isAbsolute, join } from 'node:path';
+import { loadTickets, ticketStoreExists } from '@adlc/core';
 import { computeRiskTier } from '@adlc/build-gate/lib/risk.mjs';
 import { isDegraded, DEFAULT_DEPTH_THRESHOLD } from '@adlc/build-gate/lib/depth-signal.mjs';
 import { decideBuildGate } from '@adlc/build-gate/lib/decide.mjs';
@@ -55,8 +54,9 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
-  const ticketsPath = join(root, '.adlc', 'tickets.json');
-  if (!existsSync(ticketsPath)) {
+  const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
+  const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
+  if (!ticketStoreExists(root, override)) {
     return { decision: 'allow', reason: 'repo not ADLC-initialized' };
   }
   const active = resolveActiveTicketId(root, env);

@@ -14,8 +14,8 @@ import { join } from 'node:path';
 // The .gitignore stanza + formatter-ignore hygiene logic (issue #97) is shared
 // with plugins/adlc-cursor via @adlc/core, which this package already
 // depends on.
-import { ensureGitignore, ensureFormatterIgnores } from '@adlc/core';
-export { ensureGitignore, ensureFormatterIgnores };
+import { ensureGitignore, ensureFormatterIgnores, ensureTicketStore } from '@adlc/core';
+export { ensureGitignore, ensureFormatterIgnores, ensureTicketStore };
 
 const DEFAULT_CONFIG = {
   securityMode: 'unsigned-fallback',
@@ -209,6 +209,7 @@ export function deploySkills(pkgRoot, destRoot) {
  * sources under command/, agent/, and skill/ respectively. Returns a summary.
  */
 export function scaffold(root, pkgRoot) {
+  const ticketStore = ensureTicketStore(root);
   const config = ensureConfig(root);
   const plugin = ensurePluginRegistered(root, pluginEntryFor(pkgRoot));
   const commands = deployDir(pkgRoot, root, 'command', 'commands');
@@ -221,7 +222,7 @@ export function scaffold(root, pkgRoot) {
   const gitignore = ensureGitignore(root);
   const formatterIgnores = ensureFormatterIgnores(root);
   return {
-    config, plugin, commands, agents, skills,
+    ticketStore, config, plugin, commands, agents, skills,
     preservedLegacySkills, deferredToClaudeSkills, gitignore, formatterIgnores,
   };
 }

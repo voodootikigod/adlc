@@ -23,10 +23,16 @@ function gitRepo({ tickets }) {
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   mkdirSync(join(dir, 'test'), { recursive: true });
   mkdirSync(join(dir, 'src'), { recursive: true });
+  tickets = structuredClone(tickets);
+  for (const ticket of tickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(tickets));
   writeFileSync(join(dir, 'test', 'x.mjs'), RAIL_CONTENT);
   writeFileSync(join(dir, 'src', 'ok.mjs'), 'export const ok = 1;\n');
-  const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+  const git = (...args) => execFileSync('git', args, {
+    cwd: dir,
+    stdio: 'pipe',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+  });
   git('init', '-q');
   git('add', '-A');
   git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
@@ -88,7 +94,7 @@ test('spoofed .adlc/current-ticket.json (creating a conflict) is restored, not s
     // Commit an initial current-ticket pointer so HEAD has the clean version.
     writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
     execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
-    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'pin ticket'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'pin ticket'], { cwd: dir, stdio: 'pipe' });
     // A spoof writes a DIFFERENT id — with ADLC_TICKET=T1 this creates a conflict.
     writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T2' }));
     const { actions } = handleFileEdited({ file: join(dir, '.adlc', 'current-ticket.json'), root: dir, env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }, state: createWatcherState() });
@@ -106,7 +112,7 @@ test('symlink alias resolving to a trust root is restored under a conflict', () 
     // alias.json → .adlc/current-ticket.json, committed so HEAD has the clean target.
     symlinkSync(join(dir, '.adlc', 'current-ticket.json'), join(dir, 'alias.json'));
     execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
-    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'pin+alias'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'pin+alias'], { cwd: dir, stdio: 'pipe' });
     // Spoof the trust root THROUGH the alias, and report the alias path in the event.
     writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T2' })); // creates the conflict
     const { actions } = handleFileEdited({ file: join(dir, 'alias.json'), root: dir, env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }, state: createWatcherState() });

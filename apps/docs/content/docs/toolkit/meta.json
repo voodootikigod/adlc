@@ -3,7 +3,7 @@
   "pages": [
     "index",
     "---Spec & ticket shaping---",
-    "parallax", "spec-lint", "premortem", "coldstart", "ticket-sync", "ticket-prune",
+    "tickets", "parallax", "spec-lint", "premortem", "coldstart", "ticket-sync", "ticket-prune",
     "---Execution supervision & rails---",
     "preflight", "model-router", "merge-forecast", "build-gate", "rails-guard", "flail-detector", "consensus-fix", "runner",
     "---Review evidence & calibration---",

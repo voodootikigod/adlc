@@ -7,6 +7,7 @@ import { validityGate, pull } from '../lib/pull.mjs';
 import { serializeBlock } from '../lib/block.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
+import { loadTicketSnapshot } from '@adlc/tickets';
 
 // ---- validityGate (pure) ----
 
@@ -51,7 +52,7 @@ const issue = (number, block, prose = 'desc') => ({
   number, nodeId: `N${number}`, url: `https://github.com/acme/app/issues/${number}`,
   title: `issue ${number}`, body: serializeBlock({ prefix: `${prose}\n`, suffix: '' }, block), labels: [], state: 'open',
 });
-const readTickets = (dir) => JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8')).tickets;
+const readTickets = (dir) => loadTicketSnapshot({ root: dir }).mutableTickets();
 
 test('pull is dry-run by default: no write, plan reported', async () => {
   const dir = repo();

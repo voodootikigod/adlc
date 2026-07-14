@@ -10,12 +10,12 @@
 
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch } from '@adlc/core';
+import { loadTickets, globMatch, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
 // rail set cannot be quietly edited away. Mirrors adlc-opencode/rails-checker.mjs.
-export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
+export const TRUST_ROOT_RAILS = [...TICKET_TRUST_ROOT_RAILS];
 
 // Cursor's structured file-mutation tools (normalized to lowercase, non-alpha
 // stripped). Cursor exposes Write/Edit/MultiEdit/search_replace/delete_file-style
@@ -182,9 +182,10 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { state: 'inactive', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
-  const ticketsPath = join(root, '.adlc', 'tickets.json');
-  if (!existsSync(ticketsPath)) {
-    return { state: 'inactive', reason: 'repo not ADLC-initialized (no .adlc/tickets.json)' };
+  const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
+  const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
+  if (!ticketStoreExists(root, override)) {
+    return { state: 'inactive', reason: 'repo not ADLC-initialized (no supported ticket store)' };
   }
   const active = resolveActiveTicketId(root, env);
   if (active.conflict) {

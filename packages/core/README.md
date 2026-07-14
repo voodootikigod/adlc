@@ -44,17 +44,21 @@ import { mutate } from '../../core/index.mjs'; // mutate.generateMutants / apply
 ## ledger (persistence at `.adlc/`)
 
 - `appendEntry(name, entry, dir?)` → appends to `.adlc/<name>.jsonl`.
+- `appendEntries(name, entriesOrFactory, dir?)` → appends a durable batch under one
+  owner-token lock; factories receive the byte-exact locked ledger tail for safe sequence
+  and hash-chain allocation.
 - `readEntries(name, dir?)` → `{ entries, skipped }` — malformed lines reported, never swallowed.
 - `sha256(content)`, `hashFiles(paths)` → `{ path: hash | null }`.
 
 Well-known ledger names: `manifest` (gate-manifest entries), `findings`
 (prosecution findings: `{ ts, tool, file, line, category, severity, desc, verdict }`).
 
-## tickets (`.adlc/tickets.json`)
+## tickets (canonical logical store)
 
 Schema (see lib/tickets.mjs header): `{ id, title, body, scope[], rails[], edges[{to, contract}], duration, category, budget }`.
 
-- `loadTickets(path?)` → `{ tickets, errors }` (validates ids, duplicate ids, unknown edges).
+- `loadTickets(path?)` → `{ tickets, errors }` (reads legacy JSON or the sibling
+  sharded store and validates ids, duplicate ids, unknown edges).
 - `validateTicket(t)` → `errors[]`.
 - `topoSort(tickets)` → `{ order, cycle | null }`. Edges mean "completes before edge.to".
 - `computeFloat(tickets)` → `{ floats: {id: n}, criticalPath: [ids], makespan }` (CPM; duration default 1) or `{ error }` on cycle.

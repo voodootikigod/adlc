@@ -1,5 +1,10 @@
 # ADLC Ticket Sync (`@adlc/ticket-sync`)
 
+Ticket synchronization consumes the shared `@adlc/tickets` logical snapshot and
+service boundary. Provider sidecars remain gitignored and outside the active trust root;
+ID reassignment must rename a shard and rewrite active edges in one recoverable
+transaction. Legacy stores remain supported during 1.x.
+
 Two-way sync between ADLC tickets (`.adlc/tickets.json`) and an external tracker —
 **GitHub Issues** first. ADLC reads tickets, creates issues for local-only tickets,
 and writes execution metadata back into the issue body; conversely it imports issues
@@ -130,8 +135,10 @@ More human prose may follow (also preserved).
 
 ## Sidecar — `.adlc/ticket-sync.state.json`
 
-All sync bookkeeping lives in a **gitignored, rebuildable cache** so routine syncs
-never touch the rails trust root. It is keyed by ticket id and read by no gate:
+Sync bookkeeping lives in a **gitignored sidecar** so routine syncs never touch the
+rails trust root. Ordinary tracker metadata is rebuildable, while `pendingCreates`
+temporarily acts as a recovery log until ID reassignment and evidence re-attestation
+finish. It is keyed by ticket id and read by no gate:
 
 ```json
 {
@@ -146,9 +153,11 @@ never touch the rails trust root. It is keyed by ticket id and read by no gate:
 
 - `nodeId` is the durable identity (stable across transfer/renumber); reconcile
   matches by `nodeId`, falling back to `provider+repo+number`.
-- `syncedHash` is the 3-way base. A **missing or unparseable** base fails safe to
-  **conflict** (never a silent take-remote) — so tampering with or deleting the
-  sidecar can at worst force a conflict prompt.
+- `syncedHash` is the 3-way base. A **missing** base fails safe to **conflict**
+  (never a silent take-remote). Read-only flows may treat an unparseable sidecar as
+  absent, but `--write` fails closed because corruption could hide a live recovery
+  handle.
+- Sidecar replacement is temp-write, file-flush, rename, and directory-flush durable.
 - The sidecar is gitignored: a committed base could be pre-seeded, and it would churn
   git history. On a fresh clone it is absent and rebuilt on the next pull.
 
@@ -158,18 +167,25 @@ Creating an issue for a local-only `T<n>` ticket is the highest-blast-radius pat
 (it can duplicate real issues or orphan edges), so it is defended in depth:
 
 1. A **stable sentinel `key`** (uuid) is recorded in `pendingCreates` **before** the
-   remote call (crash recovery).
+   remote call and retained until both the local ID rewrite and evidence re-attestation
+   are durable. A retry resumes either half before clearing the handle.
 2. A **pre-create adoption scan** of the already-paginated issue list looks for that
    key. Exactly one match → adopt it (no duplicate). **More than one match → fail
    closed (exit 2)**; a human reconciles.
 3. After create/adopt, the ticket id is reassigned `T<n>` → `gh:<owner>/<repo>#<n>`,
    **every `edges[].to` is rewritten store-wide**, and gate-manifest evidence is
    carried forward by **append-only re-attestation** (the manifest is a hash-chained,
-   signable ledger — history is never rewritten).
+   signable ledger — history is never rewritten). Sequence allocation, chain linking,
+   signing, and the full re-attestation batch occur under one owner-token manifest lock.
 
 A re-run after a lost local write re-adopts the existing issue instead of creating a
 second one. Integrity comes from **convergence** (the next push overwrites drift),
 not from trusting the rendered labels/comment, which are display-only.
+
+Pull and push bind their eventual local commit to the exact store hash read before remote
+work. If another writer changes any ticket while synchronization is in flight, the local
+commit fails with `STALE_SNAPSHOT`; rerun to reconcile against the new snapshot. Sync never
+uses a freshly reloaded hash to authorize replacement with an older ticket array.
 
 ## GitHub token scopes
 

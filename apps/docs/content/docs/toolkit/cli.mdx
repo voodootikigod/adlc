@@ -44,7 +44,7 @@ Every tool listed on the [Toolkit landing page](/docs/toolkit) is reachable as
 | `adlc <tool>` | Resolves the local `@adlc/<tool>` bin and runs it with the remaining args. |
 | `adlc run` / `adlc accept` | Runner verbs — route to `@adlc/runner` to assert phase evidence (`run`) or record P6 acceptance (`accept`). |
 | `adlc review` | External passthrough — shells out to `npx adversarial-review`, the model-judged reviewer that `prosecute` records evidence for but never runs itself. |
-| `adlc ticket` | Dispatcher shorthand for the `@adlc/ticket-sync` package (routes to its bin). |
+| `adlc ticket` | Unified local-store commands (`list`, `create`, `update`, archive, migration) plus external sync verbs (`pull`, `push`, `sync`, `doctor`). |
 
 ### Unknown tools
 

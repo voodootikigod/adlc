@@ -13,7 +13,18 @@ gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c]
 gate-manifest verify [--json] [--dir path]
 gate-manifest show   [--ticket id] [--json] [--dir path]
 gate-manifest attest [--ticket id] [--dir path]
+gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
 ```
+
+Prosecution, runner acceptance, rails evidence, and manual gate records use the
+same atomic chain writer. `repair-chain` recovers ledgers made
+by older raw appenders: it refuses valid ledgers, preserves the original bytes
+in a hash-named backup, rechains entries in order, and records the repair as the
+final entry. Signed ledgers require the original matching `ADLC_MANIFEST_KEY`;
+repair verifies every existing signature before it rewrites anything. If keyed
+repair would sign previously unsigned entries, it refuses unless the operator
+passes `--attest-unsigned`; the repair plan and audit entry disclose their count
+and original line numbers.
 
 ### record
 
@@ -118,7 +129,10 @@ Chain status: **valid** (2 entries)
 
 ## Chain integrity
 
-`record` reads the ledger file via `readFileSync` (raw bytes) — never via `readEntries` which re-serialises and would lose byte-exact fidelity. The `prev` field is `sha256(previous raw JSONL line)` (null for the first entry). Tampering any middle line breaks all subsequent `prev` hashes, detected by `verify`.
+The atomic writer derives `prev` from the byte-exact ledger state while holding
+the append lock—never from parsed and re-serialized entries. The `prev` field is
+`sha256(previous raw JSONL line)` (null for the first entry). Tampering any
+middle line breaks all subsequent links and is detected by `verify`.
 
 ## Signing & provenance
 
@@ -132,7 +146,7 @@ gate-manifest record spec-lint --ticket T-42
 gate-manifest verify --json    # → { ..., "signed": true }
 ```
 
-- **record** computes `sig = HMAC-SHA256(key, canonicalEntryBytes)`. The signed bytes are the deterministic JSON of `{ seq, gate, ts, ticket?, data?, files, prev }` in that fixed key order (optional `ticket`/`data` included only when present), **excluding** `sig` itself. `sig` is appended last.
+- **record** keeps its compatible v1 signature over `{ seq, gate, ts, ticket?, data?, files, prev }`. Generalized first-party evidence uses `sigVersion: 2` and signs canonical JSON for every entry field except `sig`, including ticket, revision, and provenance data.
 - **verify** (run with the key) requires every entry to carry a valid sig — comparison is constant-time (`crypto.timingSafeEqual`). A missing sig → `unsigned entry`; a wrong sig → `signature invalid`. Either breaks the chain (exit 2). This defeats the forge-from-scratch attack: without the key, an attacker cannot produce valid signatures.
 - **verify** without a key still checks the hash chain but reports `signed: false`, so callers cannot claim cryptographic provenance.
 

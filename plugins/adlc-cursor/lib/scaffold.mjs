@@ -16,8 +16,8 @@ import { PRETOOL_MATCHER } from '../constants.mjs';
 // depends on and already imports elsewhere (rails-checker.mjs) — unlike
 // PRETOOL_MATCHER above, this is not part of the pre-npm-install-critical
 // bootstrap path, so depending on @adlc/core here is safe.
-import { ensureGitignore, ensureFormatterIgnores } from '@adlc/core';
-export { ensureGitignore, ensureFormatterIgnores };
+import { ensureGitignore, ensureFormatterIgnores, ensureTicketStore } from '@adlc/core';
+export { ensureGitignore, ensureFormatterIgnores, ensureTicketStore };
 
 // The installed @adlc/cursor root (this file lives at <root>/lib/scaffold.mjs).
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -197,10 +197,11 @@ export function ensureConfig(projectRoot) {
 
 /** Full bootstrap: config + hooks + rule + commands + .gitignore contract + formatter ignores. */
 export function scaffold(projectRoot, opts = {}) {
+  const ticketStore = ensureTicketStore(projectRoot);
   const config = ensureConfig(projectRoot);
   const { hooks, rule } = ensurePluginRegistered(projectRoot, opts);
   const commands = deployCommands(projectRoot, opts);
   const gitignore = ensureGitignore(projectRoot);
   const formatterIgnores = ensureFormatterIgnores(projectRoot);
-  return { config, hooks, rule, commands, gitignore, formatterIgnores };
+  return { ticketStore, config, hooks, rule, commands, gitignore, formatterIgnores };
 }

@@ -68,15 +68,24 @@ test('planManifestMigration picks the highest seq even when entries are out of a
   assert.equal(plan[0].data.verdict, 'clear', 'seq drives selection, not array order');
 });
 
+test('legacy re-attestation without a source hash does not hide newer old-id evidence', () => {
+  const old = ev('T7', 'prosecution', 1, { verdict: 'clear' });
+  const legacy = { ...ev('gh:r#2', 'prosecution', 2, { verdict: 'clear', migratedFrom: 'T7' }) };
+  const newer = ev('T7', 'prosecution', 3, { verdict: 'reject' });
+  assert.deepEqual(planManifestMigration([old, legacy, newer], 'T7', 'gh:r#2'), [newer]);
+});
+
 // ---- migrateManifestEvidence (append-only, chain-safe) ----
 
 function fakeLedger(initial = []) {
   const lines = initial.map((e) => JSON.stringify(e));
   return {
-    appended: [],
-    read: () => ({ entries: lines.map((l) => JSON.parse(l)), skipped: [] }),
-    append: (_name, entry) => { lines.push(JSON.stringify(entry)); fakeLedger._last = entry; },
-    readRaw: () => (lines.length ? lines[lines.length - 1] : null),
+    appendBatch: (_name, factory) => {
+      const entries = lines.map((line) => JSON.parse(line));
+      const additions = factory({ entries, skipped: [], rawLines: [...lines], lastRawLine: lines.at(-1) ?? null });
+      for (const entry of additions) lines.push(JSON.stringify(entry));
+      return additions;
+    },
     get all() { return lines.map((l) => JSON.parse(l)); },
   };
 }
@@ -88,9 +97,11 @@ test('migrateManifestEvidence appends (never rewrites) re-attestation entries un
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:acme/app#7', {
     now: '2026-06-27T00:00:00Z',
     env: {},
-    read: lg.read,
-    append: (name, entry) => { appended.push(entry); lg.append(name, entry); },
-    readRaw: lg.readRaw,
+    appendBatch: (name, factory) => {
+      const additions = lg.appendBatch(name, factory);
+      appended.push(...additions);
+      return additions;
+    },
   });
   assert.equal(r.migrated, 1);
   // The original entry is untouched; a NEW entry is appended.
@@ -112,7 +123,7 @@ test('migrateManifestEvidence chains a multi-gate migration correctly (entry N l
   const base = [ev('T7', 'p0', 1), ev('T7', 'prosecution', 2, { verdict: 'clear' })];
   const lg = fakeLedger(base);
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#9', {
-    now: '2026-06-27T00:00:00Z', env: {}, read: lg.read, append: lg.append, readRaw: lg.readRaw,
+    now: '2026-06-27T00:00:00Z', env: {}, appendBatch: lg.appendBatch,
   });
   assert.equal(r.migrated, 2);
   assert.equal(r.entries[0].prev, sha256(JSON.stringify(base[base.length - 1])), 'first re-attestation links to the seeded tail');
@@ -124,8 +135,7 @@ test('migrateManifestEvidence signs re-attestation entries when ADLC_MANIFEST_KE
   const lg = fakeLedger([ev('T7', 'prosecution', 1, { verdict: 'clear' })]);
   const KEY = 'secret-key';
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', {
-    now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: KEY },
-    read: lg.read, append: lg.append, readRaw: lg.readRaw,
+    now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: KEY }, appendBatch: lg.appendBatch,
   });
   const e = r.entries[0];
   // Recompute the expected sig over the documented canonical byte order.
@@ -136,10 +146,31 @@ test('migrateManifestEvidence signs re-attestation entries when ADLC_MANIFEST_KE
 
 test('migrateManifestEvidence is a no-op (no append) when there is no evidence', () => {
   const lg = fakeLedger([ev('T8', 'prosecution', 1)]);
-  let appends = 0;
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', {
-    now: 'T', env: {}, read: lg.read, append: () => { appends += 1; }, readRaw: lg.readRaw,
+    now: 'T', env: {}, appendBatch: lg.appendBatch,
   });
   assert.equal(r.migrated, 0);
-  assert.equal(appends, 0);
+  assert.equal(lg.all.length, 1);
+});
+
+test('migrateManifestEvidence is idempotent after evidence append but before sidecar cleanup', () => {
+  const lg = fakeLedger([ev('T7', 'prosecution', 1, { verdict: 'clear' })]);
+  const first = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T1', env: {}, appendBatch: lg.appendBatch });
+  const retry = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T2', env: {}, appendBatch: lg.appendBatch });
+  assert.equal(first.migrated, 1);
+  assert.equal(retry.migrated, 0);
+  assert.equal(lg.all.length, 2);
+  assert.match(lg.all[1].data.migratedEvidenceHash, /^[0-9a-f]{64}$/);
+});
+
+test('migrateManifestEvidence derives sequence and prev from state observed inside the batch lock', () => {
+  const lg = fakeLedger([ev('T7', 'prosecution', 1)]);
+  const external = ev('OTHER', 'p0', 2);
+  const appendBatch = (name, factory) => {
+    lg.appendBatch(name, () => [external]);
+    return lg.appendBatch(name, factory);
+  };
+  const result = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T', env: {}, appendBatch });
+  assert.equal(result.entries[0].seq, 3);
+  assert.equal(result.entries[0].prev, sha256(JSON.stringify(external)));
 });

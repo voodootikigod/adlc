@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runProsecution } from '../lib/run.mjs';
 import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
+import { ticketHash as domainTicketHash } from '@adlc/tickets';
 import { FIXTURE_REVISION, finding, gitRepo, input, killedFinding, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
 
 describe('revision binding: transcript and review-packet proofs', () => {
@@ -299,7 +300,7 @@ describe('revision binding: default resolution and ticket lookup', () => {
         .split('\n')
         .map((line) => JSON.parse(line))
         .find((entry) => entry.type === 'p5-complete');
-      assert.equal(complete.ticketHash, sha256(canonicalJson(activeTicket)));
+      assert.equal(complete.ticketHash, domainTicketHash(activeTicket));
     } finally {
       rmSync(repo.dir, { recursive: true, force: true });
     }

@@ -30,7 +30,7 @@ const saved = { ...process.env };
 try {
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'),
-    JSON.stringify({ tickets: [{ id: 'T1', risk: 'high', rails: ['test/**'], scope: ['src/**'] }] }));
+    JSON.stringify({ tickets: [{ id: 'T1', title: 'Live compaction fixture', risk: 'high', rails: ['test/**'], scope: ['src/**'] }] }));
 
   process.env.ADLC_P4_ENFORCEMENT = '1';
   process.env.ADLC_TICKET = 'T1';

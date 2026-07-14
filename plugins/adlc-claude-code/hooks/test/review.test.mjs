@@ -25,7 +25,11 @@ const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..',
 const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // adlc reachable
 
 function git(args, cwd) {
-  execFileSync('git', args, { cwd, encoding: 'utf8' });
+  execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+  });
 }
 
 /**

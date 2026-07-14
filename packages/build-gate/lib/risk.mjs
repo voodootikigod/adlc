@@ -20,7 +20,7 @@ import { globMatch } from '@adlc/core/tickets';
  * declared scope/rails touch any of these is high risk by definition — it can
  * rewrite the record of what gates have verified.
  */
-export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
+export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json'];
 
 /** The manifest ledger is checked separately so its signal name is specific. */
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';

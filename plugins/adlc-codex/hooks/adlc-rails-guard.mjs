@@ -8,6 +8,7 @@
 // (packages/core/test/shell.test.mjs) pins the two together.
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
+import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 
 function fail(message) {
   console.error(`adlc-rails-guard: ${message}`);
@@ -315,7 +316,7 @@ function resolveActiveTicketId() {
   if (envTicket && fileTicket && envTicket !== fileTicket) {
     fail(`ADLC_TICKET (${envTicket}) conflicts with .adlc/current-ticket.json (${fileTicket})`);
   }
-  return envTicket ?? fileTicket;
+  return { id: envTicket ?? fileTicket, ticketHash: current && typeof current === 'object' ? current.ticketHash ?? null : null };
 }
 
 function safeRealpath(fp) {
@@ -345,17 +346,22 @@ if (process.env.ADLC_P4_ENFORCEMENT !== '1') {
   process.exit(0);
 }
 
-const ticketId = resolveActiveTicketId();
+const activeTicket = resolveActiveTicketId();
+const ticketId = activeTicket.id;
 if (!ticketId) fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
 
-const tickets = loadTickets(process.env.ADLC_TICKETS ?? '.adlc/tickets.json');
+let snapshot;
+try { snapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }); }
+catch (error) { fail(`ticket store failed to load: ${error.message}`); }
+const tickets = snapshot.tickets;
 
 const ticket = tickets.find((t) => t.id === ticketId);
 if (!ticket) fail(`unknown active ticket: ${ticketId}`);
-const ticketsPath = process.env.ADLC_TICKETS ?? '.adlc/tickets.json';
+if (activeTicket.ticketHash && activeTicket.ticketHash !== snapshot.ticketHashes[ticketId]) fail(`active ticket ${ticketId} changed after selection`);
+const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
 const declaredRails = ticket.rails ?? [];
 if (declaredRails.length === 0) fail(`ticket ${ticketId} has no rails`);
-const rails = [...declaredRails, normalizePath(ticketsPath), '.adlc/current-ticket.json'];
+const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
 
 let payload = {};
 const raw = await stdinText();

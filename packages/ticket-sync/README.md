@@ -1,6 +1,6 @@
 # @adlc/ticket-sync
 
-Two-way sync between ADLC tickets (`.adlc/tickets.json`) and an external tracker —
+Two-way sync between the canonical ADLC ticket store and an external tracker —
 **GitHub Issues** first. Import issues into tickets, create issues for local-only
 tickets, and write ADLC execution metadata back into the issue body. Dry-run by
 default; all network I/O goes through the `gh` CLI.
@@ -15,7 +15,7 @@ adlc-ticket-sync --help
 
 | Command | What it does |
 |---|---|
-| `adlc-ticket-sync pull` | Import issues → `.adlc/tickets.json` (3-way reconcile; unions; fails closed on conflict). |
+| `adlc-ticket-sync pull` | Import issues → the active ticket store (3-way reconcile; unions; fails closed on conflict). |
 | `adlc-ticket-sync push` | Write tickets back: update synced issues + **idempotent create** for local-only tickets + display-only status labels/comment. |
 | `adlc-ticket-sync sync` | `pull` then `push` (a non-clean pull aborts before push). |
 | `adlc-ticket-sync doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). |
@@ -36,10 +36,15 @@ adlc-ticket-sync doctor             # check repo health, read-only
   between `<!-- adlc:begin … -->` / `<!-- adlc:end -->` sentinels. Prose around it is
   preserved verbatim.
 - **Sync bookkeeping** (node ids, the 3-way base hash, create keys) lives in a
-  gitignored, rebuildable **sidecar** (`.adlc/ticket-sync.state.json`) — so routine
-  syncs never touch the rails trust root.
+  gitignored **sidecar** (`.adlc/ticket-sync.state.json`) — so routine syncs never
+  touch the rails trust root. Its metadata is rebuildable, but writers durably retain
+  and fail closed around `pendingCreates` recovery handles.
+- **Storage-independent**: sharded `.adlc/tickets/` is canonical for new repos;
+  legacy `.adlc/tickets.json` continues to work through the migration bridge.
 - **Idempotent create**: a stable sentinel key + a pre-create adoption scan +
-  `pendingCreates` crash-recovery mean a re-run never duplicates an issue. On create,
+  `pendingCreates` crash-recovery mean a re-run never duplicates an issue. The handle
+  remains until the ID rewrite and hash-chained evidence re-attestation both complete,
+  so a re-run can resume either half. On create,
   the ticket id is reassigned `T<n>` → `gh:<owner>/<repo>#<n>` with a store-wide edge
   rewrite.
 - **Offline-first**: all logic is tested offline via an injected `gh` runner; the one

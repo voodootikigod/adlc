@@ -2,15 +2,17 @@
 
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
-import { record, buildEntry, parseData, parseFileList, readLastRawLine } from '../lib/record.mjs';
+import { appendManifestEntry, record, buildEntry, parseData, parseFileList, readLastRawLine } from '../lib/record.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { canonicalEntryBytes, KEY_ENV } from '../lib/sign.mjs';
+import { repairChain } from '../lib/repair.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
 
 // ── key env helper ─────────────────────────────────────────────────────────────
@@ -218,6 +220,61 @@ describe('record → verify round-trip', () => {
     }
   });
 
+  it('chains top-level runner evidence after a gate record', () => {
+    try {
+      record({ gate: 'rails-bypass', dir });
+      const evidence = appendManifestEntry({
+        type: 'p5-complete',
+        ticket: 'T-1',
+        revision: 'git-worktree:abc',
+      }, dir);
+      assert.equal(evidence.seq, 2);
+      assert.equal(evidence.gate, 'p5-complete');
+      assert.equal(evidence.type, 'p5-complete');
+      assert.equal(verify(dir).valid, true);
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('signs every field of generalized evidence so last-entry tampering fails', () => {
+    try {
+      withKey('test-key', () => {
+        record({ gate: 'rails-bypass', dir });
+        appendManifestEntry({
+          type: 'p5-complete',
+          ticket: 'T-1',
+          revision: 'git-worktree:abc',
+        }, dir);
+        assert.equal(verify(dir).valid, true);
+
+        const lp = ledgerPath('manifest', dir);
+        const lines = readFileSync(lp, 'utf8').trimEnd().split('\n');
+        const last = JSON.parse(lines.at(-1));
+        last.revision = 'git-worktree:tampered';
+        lines[lines.length - 1] = JSON.stringify(last);
+        writeFileSync(lp, `${lines.join('\n')}\n`);
+        const result = verify(dir);
+        assert.equal(result.valid, false);
+        assert.equal(result.break.reason, 'signature invalid');
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects appending to a legacy unchained tail', () => {
+    try {
+      writeFileSync(ledgerPath('manifest', dir), '{"type":"legacy"}\n');
+      assert.throws(
+        () => appendManifestEntry({ type: 'p5-complete' }, dir),
+        /manifest chain is invalid/
+      );
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
   it('empty ledger is valid', () => {
     try {
       const r = verify(dir);
@@ -235,6 +292,133 @@ describe('record → verify round-trip', () => {
       assert.equal(entries.length, 1);
       assert.equal(entries[0].ticket, 'T-1');
       assert.deepEqual(entries[0].data, { model: 'haiku' });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+});
+
+describe('repairChain', () => {
+  it('plans without writing, then preserves a backup and rechains mixed evidence', () => {
+    const dir = makeTmp();
+    try {
+      record({ gate: 'rails-bypass', dir });
+      const path = ledgerPath('manifest', dir);
+      appendFileSync(path, '{"type":"p5-complete","ticket":"T-1"}\n');
+      assert.equal(verify(dir).valid, false);
+
+      const before = readFileSync(path, 'utf8');
+      const plan = repairChain({ dir, reason: 'recorder interoperability defect' });
+      assert.equal(plan.write, false);
+      assert.equal(readFileSync(path, 'utf8'), before);
+
+      const result = repairChain({ dir, reason: 'recorder interoperability defect', write: true });
+      assert.equal(result.write, true);
+      assert.equal(existsSync(result.backup), true);
+      assert.equal(readFileSync(result.backup, 'utf8'), before);
+      assert.equal(verify(dir).valid, true);
+      const { entries } = loadFiltered({ dir });
+      assert.equal(entries[1].type, 'p5-complete');
+      assert.equal(entries.at(-1).type, 'manifest-chain-repair');
+      assert.equal(entries.at(-1).originalHash, sha256(before));
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('re-signs every repaired entry when a manifest key is configured', () => {
+    const dir = makeTmp();
+    try {
+      withKey('test-key', () => {
+        record({ gate: 'rails-bypass', dir });
+        appendFileSync(ledgerPath('manifest', dir), '{"type":"p5-complete"}\n');
+        assert.throws(
+          () => repairChain({ dir, reason: 'recorder interoperability defect', write: true }),
+          /repair would cryptographically attest them/,
+        );
+        const repair = repairChain({
+          dir,
+          reason: 'recorder interoperability defect',
+          write: true,
+          attestUnsigned: true,
+        });
+        assert.equal(repair.newlySignedEntries, 1);
+        assert.deepEqual(repair.newlySignedLines, [2]);
+        const result = verify(dir);
+        assert.equal(result.valid, true);
+        assert.equal(result.signed, true);
+        const { entries } = loadFiltered({ dir });
+        assert.equal(entries.at(-1).newlySignedEntries, 1);
+        assert.deepEqual(entries.at(-1).newlySignedLines, [2]);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects --attest-unsigned when no signing key is configured', () => {
+    const dir = makeTmp();
+    try {
+      writeFileSync(ledgerPath('manifest', dir), '{"type":"p5-complete"}\n');
+      withKey(null, () => {
+        assert.throws(
+          () => repairChain({
+            dir,
+            reason: 'recorder interoperability defect',
+            attestUnsigned: true,
+          }),
+          /requires ADLC_MANIFEST_KEY/,
+        );
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('requires and audits explicit unsigned attestation through the CLI', () => {
+    const dir = makeTmp();
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    const env = { ...process.env, [KEY_ENV]: 'test-key' };
+    try {
+      withKey('test-key', () => record({ gate: 'rails-bypass', dir }));
+      appendFileSync(ledgerPath('manifest', dir), '{"type":"p5-complete"}\n');
+      const args = [
+        bin,
+        'repair-chain',
+        '--dir', dir,
+        '--reason', 'recorder interoperability defect',
+        '--write',
+        '--json',
+      ];
+      const refused = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+      assert.equal(refused.status, 1);
+      assert.match(`${refused.stdout}${refused.stderr}`, /--attest-unsigned/);
+
+      const accepted = spawnSync(
+        process.execPath,
+        [...args, '--attest-unsigned'],
+        { encoding: 'utf8', env },
+      );
+      assert.equal(accepted.status, 0, accepted.stderr);
+      const result = JSON.parse(accepted.stdout);
+      assert.equal(result.newlySignedEntries, 1);
+      assert.deepEqual(result.newlySignedLines, [2]);
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('refuses to rewrite signed history under the wrong key', () => {
+    const dir = makeTmp();
+    try {
+      withKey('original-key', () => record({ gate: 'rails-bypass', dir }));
+      appendFileSync(ledgerPath('manifest', dir), '{"type":"p5-complete"}\n');
+      withKey('wrong-key', () => {
+        assert.throws(
+          () => repairChain({ dir, reason: 'recorder interoperability defect', write: true }),
+          /does not match ADLC_MANIFEST_KEY/,
+        );
+      });
     } finally {
       cleanTmp(dir);
     }
@@ -297,6 +481,30 @@ describe('tamper detection', () => {
         assert.equal(r.valid, false);
         assert.ok(r.break !== null);
       });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects a first entry without a positive sequence number', () => {
+    const dir = makeTmp();
+    try {
+      writeFileSync(ledgerPath('manifest', dir), '{"gate":"forged","prev":null}\n');
+      const result = verify(dir);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.reason, 'invalid seq');
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects a JSON value that is not an entry object', () => {
+    const dir = makeTmp();
+    try {
+      writeFileSync(ledgerPath('manifest', dir), 'null\n');
+      const result = verify(dir);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.reason, 'entry must be an object');
     } finally {
       cleanTmp(dir);
     }

@@ -11,6 +11,7 @@ import { loadTickets } from '@adlc/core';
 import { loadConfig } from './config.mjs';
 import { validateSyncState } from './validate.mjs';
 import { generateAll } from '../scripts/gen-schema.mjs';
+import { detectTicketStore, doctorTicketStore } from '@adlc/tickets';
 
 // The package's own committed schemas (resolved relative to THIS file, not the
 // target repo) — the drift check verifies the installed tool, independent of dir.
@@ -37,6 +38,18 @@ export function doctor({ dir = '.', now = Date.now(), lockMaxAgeMs = DEFAULT_LOC
   // 2. tickets.json loads with no relational/schema errors (catches hand-edits).
   const lt = loadTickets(join(dir, '.adlc', 'tickets.json'));
   add('tickets-load', lt.errors.length === 0, lt.errors.join('; '));
+
+  // Compose the canonical store/runtime/archive checks into the unified doctor.
+  // This stays offline and read-only; the sync-specific checks continue below.
+  try {
+    const store = detectTicketStore({ root: dir, allowRecovery: true });
+    const storeDoctor = doctorTicketStore(store, { root: dir, archive: true });
+    for (const check of storeDoctor.checks) {
+      add(`store:${check.name}`, check.ok, check.message ?? check.code ?? (check.pending?.join(', ') || null));
+    }
+  } catch (error) {
+    add('store:active-store', false, `${error.code ?? 'UNEXPECTED'}: ${error.message}`);
+  }
 
   // 3. committed JSON Schemas == regenerated (bedrock drift / tampered install).
   const drift = [];

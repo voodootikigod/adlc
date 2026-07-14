@@ -26,11 +26,14 @@
 // port the YAML bootstrap step before treating this as an enforcement boundary.
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { DirectoryTicketStore, GitTreeTicketStore, detectTicketStore, storeHash, validateTickets } from '@adlc/tickets';
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
+let trustedBase = base;
 
 function fail(msg) {
   console.error(`rails-guard-ci: ${msg}`);
@@ -54,6 +57,45 @@ function parseJson(text, label) {
     return JSON.parse(text);
   } catch (err) {
     fail(`cannot parse ${label}: ${err.message}`);
+  }
+}
+
+function manifestLines(text, label) {
+  return text.split('\n').filter((line) => line.trim()).map((line, index) => parseJson(line, `${label} line ${index + 1}`));
+}
+
+function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
+  const baseEntries = manifestLines(baseText, 'base manifest');
+  const headEntries = manifestLines(headText, 'HEAD manifest');
+  const appended = headEntries.slice(baseEntries.length);
+  if (![1, 2].includes(appended.length)) deny('migration must append apply evidence and at most one recovery-complete entry');
+  const entry = appended[0];
+  if (entry?.gate !== 'ticket-migrate' || entry?.data?.operation !== 'migrate' || entry?.data?.action !== 'apply') {
+    deny('migration evidence must be a ticket-migrate/apply entry');
+  }
+  if (entry.data.bindingScope !== 'store' || entry.data.storeHash !== expectedStoreHash || entry.data.archiveHash !== expectedArchiveHash || typeof entry.data.transactionId !== 'string') {
+    deny('migration evidence is not bound to the migrated active/archive hashes and transaction');
+  }
+  if (appended.length === 2) {
+    const recovery = appended[1];
+    if (recovery?.gate !== 'ticket-migrate' || recovery?.data?.operation !== 'migrate' || recovery?.data?.action !== 'recover-complete') {
+      deny('second migration evidence entry must be ticket-migrate/recover-complete');
+    }
+    if (recovery.data.transactionId !== entry.data.transactionId
+      || recovery.data.bindingScope !== 'store'
+      || recovery.data.storeHash !== expectedStoreHash
+      || recovery.data.archiveHash !== expectedArchiveHash) {
+      deny('migration recovery evidence is not bound to the apply transaction and migrated hashes');
+    }
+  }
+  let previousLine = baseText.split('\n').filter((line) => line.trim()).at(-1) ?? null;
+  let previousSeq = baseEntries.length ? baseEntries.at(-1).seq : 0;
+  for (const appendedEntry of appended) {
+    const expectedPrev = previousLine ? createHash('sha256').update(previousLine).digest('hex') : null;
+    if (appendedEntry.prev !== expectedPrev) deny('migration evidence does not extend the manifest hash chain');
+    if (appendedEntry.seq !== previousSeq + 1) deny('migration evidence sequence does not extend the manifest');
+    previousLine = JSON.stringify(appendedEntry);
+    previousSeq = appendedEntry.seq;
   }
 }
 
@@ -163,7 +205,7 @@ function rejectNewSigners(trustedSigners, headSigners) {
 
 function validateConfigIntegrity() {
   if (!baseHasConfig) return;
-  const baseConfig = git(['show', `${base}:.adlc/config.json`], 'git show base config');
+  const baseConfig = git(['show', `${trustedBase}:.adlc/config.json`], 'git show base config');
   if (baseConfig.status !== 0) {
     fail(`git show failed for an existing base config file (operational error) — failing closed.`);
   }
@@ -241,50 +283,32 @@ const ref = git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], 'git r
 if (ref.status !== 0) {
   fail(`base ref '${base}' does not resolve — rails cannot be verified. Fetch it (or pass the correct base).`);
 }
+trustedBase = ref.stdout.trim();
+if (!/^[0-9a-f]{40,64}$/i.test(trustedBase)) fail(`base ref '${base}' did not resolve to an exact object ID`);
 
-const configLs = git(['ls-tree', '--name-only', base, '--', '.adlc/config.json'], 'git ls-tree base config');
+const configLs = git(['ls-tree', '--name-only', trustedBase, '--', '.adlc/config.json'], 'git ls-tree base config');
 if (configLs.status !== 0) {
   fail(`git ls-tree failed for '${base}' config (operational error) — failing closed.`);
 }
 const baseHasConfig = Boolean(configLs.stdout.trim());
 validateConfigIntegrity();
 
-// Distinguish "the file is genuinely absent at base" from an operational git
-// error. `git ls-tree` lists the path in the base tree: a non-zero status is an
-// operational failure (lock, IO) → fail closed; empty output means the file is
-// truly absent → nothing was frozen. Only `git show` an existing file, so a
-// failure THERE is also operational → fail closed (never read as "no rails").
-const ls = git(['ls-tree', '--name-only', base, '--', '.adlc/tickets.json'], 'git ls-tree base tickets');
-if (ls.status !== 0) {
-  fail(`git ls-tree failed for '${base}' (operational error) — failing closed.`);
-}
-if (!ls.stdout.trim()) {
+let baseSnapshot = null;
+try {
+  baseSnapshot = new GitTreeTicketStore({ cwd: process.cwd(), revision: trustedBase }).load();
+} catch (error) {
+  if (error.code !== 'STORE_NOT_FOUND') fail(`cannot load trusted-base ticket store: ${error.code ?? 'UNEXPECTED'}: ${error.message}`);
   if (baseHasConfig) {
-    console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — protecting ADLC trust roots only.`);
+    console.log(`rails-guard-ci: no ticket store at ${base} — protecting ADLC trust roots only.`);
   } else {
     if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
       fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
     }
-    console.log(`rails-guard-ci: no .adlc/tickets.json at ${base} — nothing was frozen.`);
+    console.log(`rails-guard-ci: no ticket store at ${base} — nothing was frozen.`);
     process.exit(0);
   }
 }
-
-let show = { stdout: '{"tickets":[]}', status: 0 };
-if (ls.stdout.trim()) {
-  show = git(['show', `${base}:.adlc/tickets.json`], 'git show base tickets');
-  if (show.status !== 0) {
-    fail(`git show failed for an existing base ticket file (operational error) — failing closed.`);
-  }
-}
-
-let data;
-try {
-  data = JSON.parse(show.stdout);
-} catch (e) {
-  fail(`cannot parse ${base}:.adlc/tickets.json (${e.message}) — failing closed.`);
-}
-const baseTickets = validateTicketsEnvelope(data, 'base');
+const baseTickets = baseSnapshot?.mutableTickets() ?? [];
 
 // T36 — rails completion lifecycle. A completed ticket's build-time rails
 // auto-expire (stop freezing sibling paths), so a merged ticket no longer needs
@@ -310,15 +334,54 @@ for (const t of baseTickets) {
   }
 }
 
-if (ls.stdout.trim()) {
-  if (!existsSync('.adlc/tickets.json')) {
-    deny('.adlc/tickets.json exists at base but is absent at HEAD');
+let verifiedMigration = false;
+let verifiedMigrationStoreHash = null;
+let verifiedMigrationArchiveHash = null;
+if (baseSnapshot) {
+  let headSnapshot;
+  try {
+    headSnapshot = detectTicketStore({ root: process.cwd() }).load();
+  } catch (error) {
+    if (error.code === 'STORE_NOT_FOUND') deny('base ticket store was removed or renamed at HEAD');
+    fail(`cannot load HEAD ticket store: ${error.code ?? 'UNEXPECTED'}: ${error.message}`);
   }
-  const headTickets = parseJson(readFileSync('.adlc/tickets.json', 'utf8'), 'head .adlc/tickets.json');
-  assertBaseTicketContractsPreserved(baseTickets, validateTicketsEnvelope(headTickets, 'head'));
+  const isMigration = baseSnapshot.formatVersion === 0 && headSnapshot.formatVersion === 1;
+  if (isMigration) {
+    if (baseSnapshot.hash !== headSnapshot.hash) deny('legacy-to-directory migration changed logical ticket content');
+    const legacyArchiveLs = git(['ls-tree', '--name-only', trustedBase, '--', '.adlc/tickets.archive.json'], 'git ls-tree base legacy archive');
+    if (legacyArchiveLs.status !== 0) fail('cannot inspect trusted-base legacy archive');
+    const baseHasLegacyArchive = Boolean(legacyArchiveLs.stdout.trim());
+    let baseArchivedTickets = [];
+    if (baseHasLegacyArchive) {
+      const legacyArchive = git(['show', `${trustedBase}:.adlc/tickets.archive.json`], 'git show base legacy archive');
+      if (legacyArchive.status !== 0) fail('cannot read existing trusted-base legacy archive');
+      const parsedArchive = parseJson(legacyArchive.stdout, `${base}:.adlc/tickets.archive.json`);
+      if (!parsedArchive || !Array.isArray(parsedArchive.tickets)) fail('base legacy archive has no tickets array');
+      try { validateTickets(parsedArchive.tickets, { archive: true, validateGraph: false }); }
+      catch (error) { fail(`base legacy archive is invalid: ${error.message}`); }
+      baseArchivedTickets = parsedArchive.tickets;
+    }
+    let headArchive;
+    try { headArchive = new DirectoryTicketStore('.adlc/ticket-archive', { archive: true }).load(); }
+    catch (error) { fail(`cannot load migrated ticket archive: ${error.code ?? 'UNEXPECTED'}: ${error.message}`); }
+    if (headArchive.hash !== storeHash(baseArchivedTickets)) deny('legacy-to-directory migration changed logical archive content');
+    const migrationDiff = git(['diff', '--name-only', `${trustedBase}...HEAD`], 'git diff migration shape');
+    if (migrationDiff.status !== 0) fail('cannot verify migration diff shape');
+    const allowed = migrationDiff.stdout.trim().split('\n').filter(Boolean).every((path) =>
+      path === '.adlc/tickets.json' || path === '.adlc/tickets.archive.json' || path === '.adlc/manifest.jsonl' || path === '.gitignore' || path.startsWith('.adlc/ticket-archive/') || path.startsWith('.adlc/tickets/')
+    );
+    if (!allowed) deny('legacy-to-directory transition must be a dedicated migration-only diff');
+    verifiedMigration = true;
+    verifiedMigrationStoreHash = headSnapshot.hash;
+    verifiedMigrationArchiveHash = headArchive.hash;
+  } else if (baseSnapshot.formatVersion !== headSnapshot.formatVersion) {
+    deny('ticket store backend changed outside the supported legacy-to-directory migration');
+  } else {
+    assertBaseTicketContractsPreserved(baseTickets, headSnapshot.mutableTickets());
+  }
 }
 
-const manifestLs = git(['ls-tree', '--name-only', base, '--', '.adlc/manifest.jsonl'], 'git ls-tree base manifest');
+const manifestLs = git(['ls-tree', '--name-only', trustedBase, '--', '.adlc/manifest.jsonl'], 'git ls-tree base manifest');
 if (manifestLs.status !== 0) {
   fail(`git ls-tree failed for '${base}' manifest (operational error) — failing closed.`);
 }
@@ -326,19 +389,26 @@ if (manifestLs.stdout.trim()) {
   if (!existsSync('.adlc/manifest.jsonl')) {
     deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
   }
-  const baseManifest = git(['show', `${base}:.adlc/manifest.jsonl`], 'git show base manifest');
+  const baseManifest = git(['show', `${trustedBase}:.adlc/manifest.jsonl`], 'git show base manifest');
   if (baseManifest.status !== 0) fail('git show failed for an existing base manifest (operational error) — failing closed.');
   const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
   if (!headManifest.startsWith(baseManifest.stdout)) {
     deny('.adlc/manifest.jsonl must be append-only in PRs');
   }
+  if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
-  deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
+  const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
+  if (verifiedMigration) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+  else deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
+}
+if (verifiedMigration && (!existsSync('.adlc/manifest.jsonl') || !readFileSync('.adlc/manifest.jsonl', 'utf8').trim())) {
+  deny('legacy-to-directory migration requires hash-bound migration evidence');
 }
 
 const immutableTrustRoots = rails.length || baseHasConfig
   ? [
       '.adlc/config.json',
+      ...(verifiedMigration ? [] : ['.adlc/tickets/.store.json']),
       '.adlc/admin.pub',
       '.github/workflows/adlc-rails-guard.yml',
       'CODEOWNERS',
@@ -356,7 +426,7 @@ if (unique.length === 0) {
 }
 
 if (immutableTrustRoots.length) {
-  const trustRootDiff = git(['diff', '--name-status', '-M', `${base}...HEAD`, '--', ...immutableTrustRoots], 'git diff trust roots');
+  const trustRootDiff = git(['diff', '--name-status', '-M', `${trustedBase}...HEAD`, '--', ...immutableTrustRoots], 'git diff trust roots');
   if (trustRootDiff.status !== 0) {
     fail('git diff trust roots failed (operational error) — failing closed.');
   }
@@ -365,7 +435,7 @@ if (immutableTrustRoots.length) {
   }
 }
 
-const argv = ['--base', base, ...unique.flatMap((r) => ['--rails', r])];
+const argv = ['--base', trustedBase, ...unique.flatMap((r) => ['--rails', r])];
 
 // Prefer the in-repo bin (this repo); fall back to a globally installed `adlc`.
 const localBin = join(

@@ -13,7 +13,9 @@ directory is created by `/adlc-init` (or the per-editor scaffolders) and grows a
 
 ```
 .adlc/
-├── tickets.json            # the ticket store (authored) — see Ticket authoring
+├── tickets/                # canonical active store: manifest + one shard per ticket
+├── ticket-archive/         # canonical immutable archive shards
+├── tickets.json            # legacy 1.x bridge; absent after approved migration
 ├── current-ticket.json     # pointer to the in-flight ticket (rails/prosecution use it)
 ├── config.json             # runtime config (ticket-sync, security posture)
 ├── manifest.jsonl          # hash-chained gate provenance ledger
@@ -22,12 +24,15 @@ directory is created by `/adlc-init` (or the per-editor scaffolders) and grows a
 └── ticket-sync.state.json  # gitignored sync sidecar (rebuildable cache)
 ```
 
-### `tickets.json` — the ticket store
+### `tickets/` — the canonical ticket store
 
 The executable contract between P2 decomposition, P3 rails, P4 build, and P5/P6 evidence.
 Each ticket carries `{ id, title, body, scope[], rails[], edges[], duration, category, budget }`.
-Tools load it with `loadTickets()`, which validates ids, catches duplicates, and
-rejects edges to unknown tickets. `TICKETS_PATH` defaults to `.adlc/tickets.json`. The full
+Tools load it through `@adlc/tickets`, which validates ids, filenames, duplicate
+ids, closed layout, and graph edges. Each ticket is independently mergeable,
+while the logical store hash is independent of shard ordering. Legacy
+`.adlc/tickets.json` remains fully operational until an interactive user approves
+`adlc ticket store migrate`; declining leaves it unchanged. The full
 schema and rules live in
 [`docs/ticket-authoring.md`](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-authoring.md),
 and `.adlc/tickets.example.json` is a complete fixture.
@@ -81,7 +86,7 @@ on the next pull) and can be deleted and rebuilt at any time.
 ## Rails trust root
 
 A small set of runtime paths is the **trust root** the build gate treats specially. When
-computing whether a builder edited frozen rails, `.adlc/tickets.json` and
+computing whether a builder edited frozen rails, the active ticket store and
 `.adlc/current-ticket.json` are the trust-root inputs, and the mutable ledgers
 (`manifest.jsonl`, `manifest.lock`) are ignored so ordinary gate activity does not read as a
 rail edit.
@@ -91,6 +96,7 @@ rail edit.
 | Variable | Effect |
 | --- | --- |
 | `ADLC_TICKET` | Sets the active ticket id, overriding / cross-checked against `current-ticket.json`. A disagreement fails closed. |
+| `ADLC_TICKET_STORE` | Overrides the canonical ticket-store path. `ADLC_TICKETS` remains a 1.x compatibility alias. |
 | `ADLC_P4_ENFORCEMENT` | In-session rail enforcement is active only when set to `1`. Otherwise the harness hooks are advisory and the CI gate remains authoritative. |
 | `ADLC_PROVIDER` | Forces the LLM provider (`anthropic`, `openai`, `gemini`, `agy`) for LLM-backed tools. |
 | `ADLC_MODEL_CHEAP` / `ADLC_MODEL_MID` / `ADLC_MODEL_FRONTIER` | Override the model id resolved for each tier. |

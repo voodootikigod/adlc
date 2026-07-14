@@ -8,15 +8,12 @@
 // without the key cannot produce a valid `sig`, so a forged chain fails verify.
 //
 // CANONICAL BYTES SIGNED — must be byte-identical on record and verify:
-//   We sign the deterministic JSON of an object containing ONLY the
-//   chain-relevant fields, in this fixed key order:
-//       { seq, gate, ts, ticket, data, files, prev }
-//   built via canonicalEntryBytes() below. Optional fields (ticket, data) are
-//   included only when present on the entry — matching how buildEntry omits
-//   them — so the signed bytes mirror the entry's own shape. The `sig` field
-//   itself is never part of the signed bytes.
+//   Legacy gate records use the fixed v1 field set. Generalized runner evidence
+//   carries sigVersion:2 and signs canonical JSON for every field except `sig`,
+//   so ticket/revision/provenance fields on the final ledger entry are covered.
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { canonicalJson } from '@adlc/core';
 
 /** Env var holding the secret signing key. */
 export const KEY_ENV = 'ADLC_MANIFEST_KEY';
@@ -35,13 +32,17 @@ export function getKey(env = process.env) {
 /**
  * Build the canonical byte string that gets signed for an entry.
  *
- * Deterministic: fixed key order, optional fields included only when the entry
- * carries them. The `sig` field is always excluded.
+ * Deterministic: v1 uses the historical fixed key order; v2 recursively sorts
+ * and signs every field carried by the entry. The `sig` field is always excluded.
  *
  * @param {object} entry  a manifest entry (with or without `sig`)
  * @returns {string} canonical JSON string
  */
 export function canonicalEntryBytes(entry) {
+  if (entry.sigVersion === 2) {
+    const { sig: _sig, ...signed } = entry;
+    return canonicalJson(signed);
+  }
   const canonical = {
     seq: entry.seq,
     gate: entry.gate,

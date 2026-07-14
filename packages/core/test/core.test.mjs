@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as corePublic from '../index.mjs';
 import { extractJson } from '../lib/llm.mjs';
-import { appendEntry, canonicalJson, readEntries, sha256, hashFiles } from '../lib/ledger.mjs';
+import { appendEntry, canonicalJson, readEntries, sha256, hashFiles, withLedgerLock } from '../lib/ledger.mjs';
 import { resolveBase, refExists } from '../lib/git.mjs';
 import {
   validateTicket, loadTickets, topoSort, computeFloat,
@@ -483,6 +483,22 @@ test('resolveRevision: ignored .adlc tickets stay out of the generic worktree ha
   }
 });
 
+test('resolveRevision: sharded active/archive ticket files stay out of the generic worktree hash', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    mkdirSync(join(dir, '.adlc/tickets'), { recursive: true });
+    mkdirSync(join(dir, '.adlc/ticket-archive'), { recursive: true });
+    writeFileSync(join(dir, '.adlc/tickets/.store.json'), '{}\n');
+    writeFileSync(join(dir, '.adlc/ticket-archive/.store.json'), '{}\n');
+    const before = resolveWorktreeRevision({ cwd: dir });
+    writeFileSync(join(dir, '.adlc/tickets/t.json'), '{"id":"T"}\n');
+    writeFileSync(join(dir, '.adlc/ticket-archive/a.json'), '{"id":"A"}\n');
+    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('withLedgerLock: serialises writers so large concurrent lines never interleave', () => {
   const dir = mkdtempSync(join(tmpdir(), 'core-lock-'));
   try {
@@ -491,6 +507,21 @@ test('withLedgerLock: serialises writers so large concurrent lines never interle
     const { entries, skipped } = readEntries('manifest', dir);
     assert.equal(skipped.length, 0, 'no malformed (interleaved) lines');
     assert.equal(entries.length, 5);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('withLedgerLock: never steals an old lock from a potentially live owner', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'core-owner-lock-'));
+  try {
+    const target = join(dir, 'manifest.jsonl');
+    const lock = `${target}.lock`;
+    writeFileSync(lock, JSON.stringify({ token: 'existing-owner', pid: 1 }));
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    assert.throws(() => withLedgerLock(target, () => assert.fail('must not enter'), { retries: 0, delayMs: 0 }), /could not acquire ledger lock/);
+    assert.equal(JSON.parse(readFileSync(lock, 'utf8')).token, 'existing-owner');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

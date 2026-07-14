@@ -9,7 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath } from '@adlc/core';
+import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 
 // Re-exported for API stability: sibling adapters and tests may import the
 // symlink-aware resolver from this module even though @adlc/core owns it now.
@@ -18,7 +18,7 @@ export { resolveRailPath };
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
 // rail set cannot be quietly edited away. Mirrors adlc-codex/hooks/adlc-rails-guard.mjs.
-export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
+export const TRUST_ROOT_RAILS = [...TICKET_TRUST_ROOT_RAILS];
 
 // OpenCode's known structured file-mutation tools.
 export const MUTATING_TOOLS = ['edit', 'write', 'patch', 'multiedit', 'apply_patch'];
@@ -116,9 +116,10 @@ export function resolveRailsInForce(root, env) {
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { active: false, reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
-  const ticketsPath = join(root, '.adlc', 'tickets.json');
-  if (!existsSync(ticketsPath)) {
-    return { active: false, reason: 'repo not ADLC-initialized (no .adlc/tickets.json)' };
+  const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
+  const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
+  if (!ticketStoreExists(root, override)) {
+    return { active: false, reason: 'repo not ADLC-initialized (no supported ticket store)' };
   }
   const active = resolveActiveTicketId(root, env);
   if (active.conflict) {
@@ -127,9 +128,11 @@ export function resolveRailsInForce(root, env) {
   if (!active.id) {
     return { active: false, reason: 'no active ticket resolved' };
   }
-  const { tickets } = loadTickets(ticketsPath);
+  const { tickets, errors } = loadTickets(ticketsPath);
+  if (errors.length) return { active: true, conflict: true, reason: `ticket store failed to load: ${errors[0]}` };
   const ticket = tickets.find((t) => t.id === active.id);
-  return { active: true, conflict: false, ticketId: active.id, rails: normalizeRails([...(ticket?.rails ?? []), ...TRUST_ROOT_RAILS]) };
+  if (!ticket) return { active: true, conflict: true, reason: `active ticket ${active.id} not found in ticket store` };
+  return { active: true, conflict: false, ticketId: active.id, ticket, rails: normalizeRails([...(ticket?.rails ?? []), ...TRUST_ROOT_RAILS]) };
 }
 
 /**

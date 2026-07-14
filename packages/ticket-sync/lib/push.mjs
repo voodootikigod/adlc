@@ -12,7 +12,6 @@
 //   - On create the `T<n>` id is reassigned to `gh:<owner>/<repo>#<n>` with a
 //     store-wide edge rewrite + append-only manifest re-attestation (reassign.mjs).
 
-import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readEntries } from '@adlc/core';
@@ -24,6 +23,7 @@ import { reduceTicketOutcomes } from './outcomes.mjs';
 import { renderStatus } from './status-render.mjs';
 import { reassignId, migrateManifestEvidence } from './reassign.mjs';
 import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar } from './store.mjs';
+import { loadTicketSnapshot } from '@adlc/tickets';
 
 const SYNCED_RE = /^gh:[^#]+#(\d+)$/;
 const LOCAL_RE = /^T\d+$/;
@@ -36,14 +36,14 @@ export function extractSentinelKey(body) {
   return m ? m[1].replace(/-->$/, '') : null;
 }
 
-function loadLocalTickets(dir) {
-  const p = join(dir, '.adlc', 'tickets.json');
-  if (!existsSync(p)) return [];
+function loadLocalState(dir, { allowInvalid = false } = {}) {
   try {
-    const d = JSON.parse(readFileSync(p, 'utf8'));
-    return Array.isArray(d.tickets) ? d.tickets : [];
-  } catch {
-    return [];
+    const snapshot = loadTicketSnapshot({ root: dir });
+    return { tickets: snapshot.mutableTickets(), hash: snapshot.hash, absent: false };
+  } catch (error) {
+    if (error.code === 'STORE_NOT_FOUND') return { tickets: [], hash: null, absent: true };
+    if (allowInvalid) return { tickets: [], hash: null, absent: false };
+    throw error;
   }
 }
 
@@ -120,9 +120,12 @@ export async function push({
   if (!list.ok) return { exitCode: 1, errors: [list.error] };
   const issuesByNumber = new Map(list.issues.map((i) => [i.number, i]));
 
-  const localTickets = loadLocalTickets(dir);
-  const sidecar = readSidecar(dir);
-  const outcomes = reduceTicketOutcomes(manifestEntries ?? readEntries('manifest', join(dir, '.adlc')).entries);
+  const localState = loadLocalState(dir, { allowInvalid: !write });
+  const localTickets = localState.tickets;
+  let expectedSnapshotHash = localState.hash;
+  let expectedStoreAbsent = localState.absent;
+  const sidecar = readSidecar(dir, { strict: write });
+  let outcomes = reduceTicketOutcomes(manifestEntries ?? readEntries('manifest', join(dir, '.adlc')).entries);
 
   // Mutable working state (reassignment rewrites tickets store-wide).
   let tickets = localTickets.map((t) => ({ ...t }));
@@ -133,6 +136,7 @@ export async function push({
   let blocked = false; // exit 2 (validity)
   let failed = false; // exit 1 (operational/partial)
   let ticketsDirty = false;
+  const unresolvedReassignments = new Set();
 
   // Lock the trust root for the whole write phase so interleaving /adlc-ticket
   // writes can't corrupt the multi-step create→reassign sequence.
@@ -141,6 +145,41 @@ export async function push({
   }
 
   try {
+    // A create/adoption handle is deliberately retained until BOTH the ticket ID
+    // rewrite and manifest re-attestation are durable. Resume that second half when
+    // a prior run committed the gh: ID but failed before sidecar cleanup.
+    if (write) {
+      let recoveredEvidence = false;
+      for (const [createKey, pending] of Object.entries(state.pendingCreates)) {
+        if (!pending?.localId || !Number.isInteger(pending.number)) continue;
+        const newId = `gh:${repo}#${pending.number}`;
+        const oldPresent = tickets.some((ticket) => ticket.id === pending.localId);
+        const syncedTicket = tickets.find((ticket) => ticket.id === newId);
+        if (oldPresent || !syncedTicket) continue;
+        try {
+          migrateManifestEvidence(dir, pending.localId, newId, { now, env });
+          const issue = issuesByNumber.get(pending.number);
+          state.tickets[newId] = state.tickets[newId] ?? {
+            provider: 'github', repo, number: pending.number,
+            nodeId: pending.nodeId ?? issue?.nodeId ?? null,
+            url: pending.url ?? issue?.url ?? null,
+            syncedHash: blockHash(pickBlock(syncedTicket)), syncedAt: now, createKey,
+          };
+          delete state.pendingCreates[createKey];
+          writeSidecar(dir, state);
+          plan.push({ kind: 'resume-reassignment', id: pending.localId, newId });
+          recoveredEvidence = true;
+        } catch (error) {
+          unresolvedReassignments.add(newId);
+          errors.push(`${newId}: could not resume evidence re-attestation from ${pending.localId} — ${error.message}`);
+          failed = true;
+        }
+      }
+      if (recoveredEvidence && manifestEntries === undefined) {
+        outcomes = reduceTicketOutcomes(readEntries('manifest', join(dir, '.adlc')).entries);
+      }
+    }
+
     // ---- labels + comment for an issue we own (shared by update + create) ----
     const renderAndPush = async (ref, currentLabels, status, opLabel) => {
       const render = renderStatus(status, { statusLabels });
@@ -161,6 +200,7 @@ export async function push({
     for (const t of tickets) {
       const m = SYNCED_RE.exec(t.id);
       if (!m) continue;
+      if (unresolvedReassignments.has(t.id)) continue;
       const number = Number(m[1]);
       const issue = issuesByNumber.get(number);
       if (!issue) { plan.push({ kind: 'skip', id: t.id, reason: 'issue not in the current selection' }); continue; }
@@ -282,14 +322,26 @@ export async function push({
 
       if (write) {
         tickets = reassignId(tickets, t.id, newId);
-        migrateManifestEvidence(dir, t.id, newId, { now, env });
+        // Persist a resumable localId→newId handle for adopted issues too. The
+        // existing create path already has one, but adoption previously did not.
+        state.pendingCreates[createKey] = { localId: t.id, title: t.title, nodeId, number, url: url ?? null };
+        writeSidecar(dir, state);
+        ticketsDirty = true;
+        const after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent });
+        expectedSnapshotHash = after.hash;
+        expectedStoreAbsent = false;
+        try {
+          migrateManifestEvidence(dir, t.id, newId, { now, env });
+        } catch (error) {
+          errors.push(`${newId}: ticket ID was committed but evidence re-attestation is pending — ${error.message}`);
+          failed = true;
+          continue;
+        }
         state.tickets[newId] = {
           provider: 'github', repo, number, nodeId, url: url ?? null,
           syncedHash: blockHash(desired), syncedAt: now, createKey,
         };
         delete state.pendingCreates[createKey];
-        ticketsDirty = true;
-        writeTicketsAtomic(dir, { tickets });
         writeSidecar(dir, state);
         await renderAndPush({ number, nodeId }, currentLabels, outcomes.get(t.id)?.status ?? null, newId);
       }

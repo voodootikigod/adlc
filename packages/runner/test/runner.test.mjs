@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { assertPhase } from '../lib/assertions.mjs';
 import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
+import { appendManifestEntry } from '@adlc/gate-manifest';
 import { recordAcceptancePacket } from '../lib/acceptance.mjs';
+import { ticketHash as domainTicketHash } from '@adlc/tickets';
 
 const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);
 
@@ -17,11 +19,11 @@ function tmpAdlc() {
 }
 
 function writeManifest(dir, entries) {
-  for (const entry of entries) appendFileSync(join(dir, 'manifest.jsonl'), JSON.stringify(entry) + '\n');
+  for (const entry of entries) appendManifestEntry(entry, dir);
 }
 
 function ticketHash(ticket) {
-  return sha256(canonicalJson(ticket));
+  return domainTicketHash(ticket);
 }
 
 function ticketDefinition(ticket) {
@@ -406,6 +408,9 @@ describe('assertPhase', () => {
     const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
     assert.match(manifest, /"type":"p6-acceptance-packet"/);
     assert.match(manifest, /"packetHash":/);
+    assert.match(manifest, /"ticketHash":/);
+    assert.match(manifest, /"storeHash":/);
+    assert.match(manifest, /"bindingScope":"ticket"/);
   });
 
   it('uses explicit p6 revision as an offline manifest and artifact selector', () => {
@@ -454,23 +459,27 @@ describe('assertPhase', () => {
   });
 
   it('passes p6 when the acceptance packet is created inside an evidence root after p5', () => {
-    const dir = tmpAdlc();
-    const revision = resolveRevision();
-    const packet = join(repoRoot, '.adlc/acceptance.json');
+    const repo = gitRepo();
+    const dir = join(repo.dir, '.adlc');
+    const packet = join(dir, 'acceptance.json');
     try {
-      mkdirSync(join(repoRoot, '.adlc'), { recursive: true });
+      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+      repo.g('add', '-A');
+      repo.g('commit', '-qm', 'base');
+      const revision = resolveRevision({ cwd: repo.dir });
+      mkdirSync(dir, { recursive: true });
       writeP5Evidence(dir, { revision });
       writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet });
+      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
       assert.equal(recorded.ok, true);
       assert.equal(recorded.revision, revision);
 
-      const result = assertPhase('p6', { dir, ticket: 'T1' });
+      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
       assert.equal(result.ok, true);
       assert.equal(result.revision, revision);
     } finally {
-      rmSync(packet, { force: true });
+      rmSync(repo.dir, { recursive: true, force: true });
     }
   });
 

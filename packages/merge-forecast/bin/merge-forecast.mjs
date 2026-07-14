@@ -74,6 +74,19 @@ const conflictThreshold = parseNum(values['conflict-threshold'], 'conflict-thres
 // not be scheduled or conflict-forecast as open backlog.
 const { tickets: allTickets, errors: ticketErrors } = loadTickets(ticketsPath);
 if (ticketErrors.length > 0) {
+  const cycle = ticketErrors.find((error) => /cycle in ticket DAG/i.test(error));
+  if (cycle) {
+    const message = `dependency ${cycle} — cannot schedule`;
+    const result = {
+      pairs: [], waves: [], mergeOrder: [], certifiedWidth: 0,
+      backpressureWidth: null, recommendedWidth: 0, warnings: [],
+      gateFailures: [message],
+      pullQueueNote: 'idle builders claim next unblocked',
+    };
+    if (values.json) printJson(result);
+    else console.error(`merge-forecast: ${message}`);
+    process.exit(2);
+  }
   opError(`ticket errors:\n  ${ticketErrors.join('\n  ')}`);
 }
 const tickets = activeTickets(allTickets);

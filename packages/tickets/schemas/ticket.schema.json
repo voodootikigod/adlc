@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adlc.dev/schemas/ticket-v1.json",
+  "type": "object",
+  "required": ["id", "title"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "scope": { "type": "array", "items": { "type": "string" } },
+    "rails": { "type": "array", "items": { "type": "string" } },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["to"],
+        "properties": { "to": { "type": "string", "minLength": 1 } },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

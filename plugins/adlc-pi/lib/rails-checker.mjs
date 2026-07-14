@@ -10,12 +10,12 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch, inScope, classifyShellCommand, resolveRailPath } from '@adlc/core';
+import { loadTickets, globMatch, inScope, classifyShellCommand, resolveRailPath, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 
 // The ticket file and the active-ticket pointer are the rail trust root: frozen
 // whenever a ticket is active, even if the ticket declares no rails, so the
 // rail set cannot be quietly edited away.
-export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/current-ticket.json'];
+export const TRUST_ROOT_RAILS = [...TICKET_TRUST_ROOT_RAILS];
 
 // Directories the framework itself writes evidence into; always in scope
 // (except the trust roots, which are never writable by the agent).
@@ -82,7 +82,8 @@ export function resolveActiveTicket(root, env = process.env) {
     return { ticketId: null, ticket: null, error: null };
   }
 
-  const ticketsPath = env.ADLC_TICKETS ?? join(root, '.adlc', 'tickets.json');
+  const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS;
+  const ticketsPath = configured ? (isAbsolute(configured) ? configured : join(root, configured)) : join(root, '.adlc', 'tickets.json');
   const { tickets, errors } = loadTickets(ticketsPath);
   if (errors.length > 0) {
     return { ticketId, ticket: null, error: `ticket database failed to load: ${errors[0]}` };
@@ -102,7 +103,7 @@ export function resolveActiveTicket(root, env = process.env) {
 export function railHit(filePath, ticket, root) {
   const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
   for (const candidate of candidates) {
-    if (TRUST_ROOT_RAILS.includes(candidate)) return candidate;
+    for (const trustRoot of TRUST_ROOT_RAILS) if (globMatch(trustRoot, candidate)) return trustRoot;
     for (const rail of ticket?.rails ?? []) {
       if (globMatch(rail, candidate)) return rail;
     }
@@ -114,7 +115,7 @@ export function railHit(filePath, ticket, root) {
 export function pathInScope(filePath, ticket, root) {
   const canonical = canonicalizePath(filePath, root);
   // The trust roots are NEVER in scope for agent modification.
-  if (TRUST_ROOT_RAILS.includes(canonical)) return false;
+  if (TRUST_ROOT_RAILS.some((trustRoot) => globMatch(trustRoot, canonical))) return false;
   if (!ticket?.scope || ticket.scope.length === 0) return true;
   // Framework evidence dirs stay writable under any scope.
   if (FRAMEWORK_DIRS.some((dir) => canonical.startsWith(dir))) return true;

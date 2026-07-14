@@ -22,7 +22,7 @@ test('ensureGitignore creates the full stanza (including !.adlc/specs/) when no 
   try {
     const r = ensureGitignore(root);
     assert.equal(r.changed, true);
-    assert.deepEqual(r.added, ['.adlc/*', '!.adlc/tickets.json', '!.adlc/specs/']);
+    assert.deepEqual(r.added, ['.adlc/*', '!.adlc/tickets.json', '!.adlc/tickets/', '!.adlc/tickets/**', '!.adlc/ticket-archive/', '!.adlc/ticket-archive/**', '!.adlc/specs/']);
     const body = readFileSync(join(root, '.gitignore'), 'utf8');
     assert.match(body, /^\.adlc\/\*$/m);
     assert.match(body, /^!\.adlc\/tickets\.json$/m);
@@ -38,7 +38,7 @@ test('ensureGitignore adds the missing !.adlc/specs/ negation to a pre-existing 
     writeFileSync(join(root, '.gitignore'), 'node_modules/\n.adlc/*\n!.adlc/tickets.json\ndist/\n');
     const r = ensureGitignore(root);
     assert.equal(r.changed, true);
-    assert.deepEqual(r.added, ['!.adlc/specs/']);
+    assert.deepEqual(r.added, ['!.adlc/tickets/', '!.adlc/tickets/**', '!.adlc/ticket-archive/', '!.adlc/ticket-archive/**', '!.adlc/specs/']);
     const body = readFileSync(join(root, '.gitignore'), 'utf8');
     assert.match(body, /^!\.adlc\/specs\/$/m);
     assert.match(body, /node_modules\//);
@@ -51,7 +51,7 @@ test('ensureGitignore adds the missing !.adlc/specs/ negation to a pre-existing 
 test('ensureGitignore is a no-op when the full stanza is already present (idempotent)', () => {
   const root = mkRoot();
   try {
-    writeFileSync(join(root, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n!.adlc/specs/\n');
+    writeFileSync(join(root, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n!.adlc/tickets/\n!.adlc/tickets/**\n!.adlc/ticket-archive/\n!.adlc/ticket-archive/**\n!.adlc/specs/\n');
     const r = ensureGitignore(root);
     assert.equal(r.changed, false);
     assert.deepEqual(r.added, []);
@@ -66,7 +66,7 @@ test('ensureGitignore does not duplicate a standalone negation line when the .ad
     writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n');
     const r = ensureGitignore(root);
     assert.equal(r.changed, true);
-    assert.deepEqual(r.added, ['.adlc/*', '!.adlc/specs/']);
+    assert.deepEqual(r.added, ['.adlc/*', '!.adlc/tickets/', '!.adlc/tickets/**', '!.adlc/ticket-archive/', '!.adlc/ticket-archive/**', '!.adlc/specs/']);
     const body = readFileSync(join(root, '.gitignore'), 'utf8');
     const occurrences = body.split('\n').filter((l) => l === '!.adlc/tickets.json').length;
     assert.equal(occurrences, 1, '!.adlc/tickets.json must not be duplicated');
@@ -111,7 +111,7 @@ test('ensureGitignore relocates a misordered stanza even when every line is nomi
     // All three stanza lines exist somewhere in the file, but in the wrong
     // order relative to the anchor — a naive "is everything present" check
     // would wrongly treat this as already-correct and skip fixing it.
-    writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n!.adlc/specs/\n.adlc/*\n');
+    writeFileSync(join(root, '.gitignore'), '!.adlc/tickets.json\n!.adlc/tickets/\n!.adlc/tickets/**\n!.adlc/ticket-archive/\n!.adlc/ticket-archive/**\n!.adlc/specs/\n.adlc/*\n');
     const r = ensureGitignore(root);
     assert.equal(r.changed, true);
     const body = readFileSync(join(root, '.gitignore'), 'utf8');

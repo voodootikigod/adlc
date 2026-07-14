@@ -1,11 +1,65 @@
 // record.mjs — build and append a manifest entry.
-// IMPORTANT: chain integrity depends on sha256(raw previous line bytes),
-// so we read the ledger file directly via readFileSync — never via readEntries
-// which parses and re-serialises, losing byte-exact fidelity.
+// IMPORTANT: chain integrity depends on sha256(raw previous line bytes).
+// appendManifestEntry derives that link from appendEntries' byte-exact state
+// while holding the ledger lock; parsed/re-serialized entries are never used.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, hashFiles, appendEntry, ledgerPath, ADLC_DIR } from '@adlc/core';
+import { sha256, hashFiles, appendEntries, ledgerPath, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
+import { verify } from './verify.mjs';
+
+const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion'];
+
+/**
+ * Atomically append an arbitrary top-level evidence entry to the C11 manifest.
+ * Sequence allocation and the byte-exact previous-line hash happen under the
+ * same ledger lock as the write, so runner and gate evidence share one chain.
+ */
+export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2 } = {}) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('manifest payload must be an object');
+  }
+  for (const field of RESERVED_CHAIN_FIELDS) {
+    if (Object.hasOwn(payload, field)) {
+      throw new Error(`manifest payload must not provide reserved chain field: ${field}`);
+    }
+  }
+
+  const [entry] = appendEntries('manifest', (state) => {
+    if (state.skipped.length > 0) {
+      throw new Error(`manifest contains malformed JSON at line ${state.skipped[0].line}`);
+    }
+    if (state.rawLines.length > 0) {
+      const integrity = verify(dir);
+      if (!integrity.valid) {
+        throw new Error(`manifest chain is invalid: ${integrity.message}`);
+      }
+    }
+    const previous = state.entries.at(-1);
+    if (previous && (!Number.isInteger(previous.seq) || previous.seq < 1)) {
+      throw new Error('manifest tail is not hash-chain compatible: missing positive seq');
+    }
+
+    const normalized = {
+      ...payload,
+      gate: payload.gate ?? payload.type ?? 'evidence',
+      ts: payload.ts ?? new Date().toISOString(),
+      files: payload.files ?? {},
+    };
+    const chained = {
+      seq: previous ? previous.seq + 1 : 1,
+      ...normalized,
+      prev: state.lastRawLine === null ? null : sha256(state.lastRawLine),
+    };
+    const key = getKey();
+    if (key) {
+      if (signatureVersion === 2) chained.sigVersion = 2;
+      chained.sig = signEntry(key, chained);
+    }
+    return [chained];
+  }, dir);
+  return entry;
+}
 
 /**
  * Parse JSON data from a --data flag string.
@@ -95,25 +149,9 @@ export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq
 export function record({ gate, ticket, rawData, rawFiles, dir = ADLC_DIR }) {
   const data = parseData(rawData);
   const filePaths = parseFileList(rawFiles);
-
-  const lp = ledgerPath('manifest', dir);
-  const prevRawLine = readLastRawLine(lp);
-
-  // Determine previous seq by parsing the last raw line if present
-  let prevSeq = 0;
-  if (prevRawLine !== null) {
-    try {
-      const parsed = JSON.parse(prevRawLine);
-      prevSeq = typeof parsed.seq === 'number' ? parsed.seq : 0;
-    } catch {
-      // Malformed last line; still record but seq continues from 0
-    }
-  }
-
-  const ts = new Date().toISOString();
-  const key = getKey();
-  const entry = buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq, ts, key });
-
-  appendEntry('manifest', entry, dir);
-  return entry;
+  const payload = { gate, ts: new Date().toISOString() };
+  if (ticket !== undefined) payload.ticket = ticket;
+  if (data !== undefined) payload.data = data;
+  payload.files = filePaths.length > 0 ? hashFiles(filePaths) : {};
+  return appendManifestEntry(payload, dir, { signatureVersion: 1 });
 }

@@ -11,7 +11,7 @@ description: Two-way sync between ADLC tickets and an external tracker (GitHub I
 
 ## What it defends against
 
-The ticket backlog and its external tracker drift apart the moment either is edited alone — issues closed on GitHub still look open in `.adlc/tickets.json`, and locally-authored tickets never reach the tracker. `ticket-sync` reconciles both directions through the `gh` CLI. It is dry-run by default, and a `pull` that hits an unresolvable conflict aborts before any write (and before any `push`), so an unreconciled sync can never clobber the rails trust root. Sync bookkeeping lives in a gitignored, rebuildable sidecar; a stable sentinel key plus a pre-create adoption scan make `create` idempotent, so a re-run never duplicates an issue.
+The ticket backlog and its external tracker drift apart the moment either is edited alone. `ticket-sync` reconciles both directions through the `gh` CLI against either the canonical sharded store or the legacy bridge. It is dry-run by default, and a `pull` that hits an unresolvable conflict aborts before any write (and before any `push`), so an unreconciled sync can never clobber the rails trust root. Sync bookkeeping lives in a gitignored, rebuildable sidecar; a stable sentinel key plus a pre-create adoption scan make `create` idempotent, so a re-run never duplicates an issue.
 
 ## Usage
 
@@ -23,7 +23,7 @@ The standalone binary is `adlc-ticket-sync`; the same command dispatches through
 
 | Command / Flag | Description |
 | --- | --- |
-| `pull` | Import issues into `.adlc/tickets.json` (3-way reconcile; unions; fails closed on conflict). |
+| `pull` | Import issues into the active ticket store (3-way reconcile; unions; fails closed on conflict). |
 | `push` | Write tickets back — update synced issues, idempotent create for local-only tickets, display-only status. |
 | `sync` | `pull` then `push`; a non-clean pull aborts before push. |
 | `doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). |

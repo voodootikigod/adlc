@@ -23,18 +23,17 @@ Run `adlc --version`.
   Do not attempt to install it for them globally without their say-so. Once they
   confirm it is installed, re-run this command.
 
-## 2. Create the runtime directory and ticket file
+## 2. Initialize or migrate ticket storage
 
-- Create the `.adlc/` directory if it does not exist.
-- If `.adlc/tickets.json` does **not** exist, create it with the empty
-  skeleton (exactly this content):
-  ```json
-  {
-    "tickets": []
-  }
-  ```
-- If `.adlc/tickets.json` already exists, leave it untouched and note that in the
-  summary. Never overwrite existing tickets.
+- Run `adlc ticket store status --json`.
+- If no store exists, initialize through the installed ADLC scaffolder; new
+  repositories use `.adlc/tickets/` and `.adlc/ticket-archive/` manifests.
+- If legacy `.adlc/tickets.json` exists, preview with
+  `adlc ticket store migrate`. Show the representation-only plan and ask the
+  human `Apply migration? [y/N]`. Only after approval run
+  `adlc ticket store migrate --write --yes`. A decline leaves the legacy file
+  fully operational. Never prompt or migrate in non-interactive/JSON mode.
+- Never edit shards directly, stage files, commit, or create backup files.
 
 ## 3. Separate the contract from the runtime evidence in git
 
@@ -48,6 +47,10 @@ specs directory — add these three lines if absent:
 ```
 .adlc/*
 !.adlc/tickets.json
+!.adlc/tickets/
+!.adlc/tickets/**
+!.adlc/ticket-archive/
+!.adlc/ticket-archive/**
 !.adlc/specs/
 ```
 
@@ -63,8 +66,7 @@ just the missing `!.adlc/specs/` line — don't touch anything else.
 
 ## 4. Exclude `.adlc/` from the repo's formatters and linters
 
-`.adlc/tickets.json` is machine-written (`JSON.stringify(…, null, 2)`,
-multi-line arrays). Once any ticket declares `rails`, this file becomes a
+The ticket store is machine-written. Once any ticket declares `rails`, the active store becomes a
 **frozen trust root** — it cannot be reformatted on a ticket branch without
 tripping `rails-guard`. A repo formatter/linter that reformats it will silently
 break the next PR. Check for the following configs and, only for the ones that
@@ -103,8 +105,8 @@ this command.
 
 ## 6. Summarize
 
-Report: toolkit version, whether `.adlc/tickets.json` was created or already
-present, what (if anything) was added to `.gitignore`, which formatter/linter
+Report: toolkit version, the active backend, whether a legacy migration was
+accepted or declined, what was added to `.gitignore`, which formatter/linter
 configs (if any) were updated to exclude `.adlc/` and which need a manual entry,
 and the preflight verdict. Then point the user at `/adlc:adlc-ticket` to author
 their first ticket (P0), and note that the `adlc` discovery skill will route

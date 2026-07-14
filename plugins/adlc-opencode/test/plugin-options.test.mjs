@@ -13,7 +13,7 @@ import { adlcRailsGuard, optionsToEnv } from '../index.mjs';
 const railedRepo = () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-opts-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', rails: ['test/**'] }] }));
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['test/**'] }] }));
   return dir;
 };
 

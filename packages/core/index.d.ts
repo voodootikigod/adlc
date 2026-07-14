@@ -2,6 +2,7 @@ import type { ParseArgsConfig } from 'node:util';
 
 export const ADLC_DIR: string;
 export const TICKETS_PATH: string;
+export const TICKET_TRUST_ROOT_RAILS: readonly string[];
 
 export type ParsedArgs = {
   readonly values: Record<string, string | boolean | string[] | boolean[] | undefined>;
@@ -87,7 +88,12 @@ export function coChange(limit?: number, cwd?: string): {
 export function churn(limit?: number, cwd?: string): Record<string, number>;
 
 export function appendEntry<T = unknown>(name: string, entry: T, dir?: string): T;
-export function withLedgerLock<T>(target: string, fn: () => T): T;
+export function appendEntries<T = unknown>(
+  name: string,
+  entriesOrFactory: T[] | ((state: { entries: unknown[]; skipped: Array<{ line: number; error: string }>; rawLines: string[]; lastRawLine: string | null }) => T[]),
+  dir?: string
+): T[];
+export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number }): T;
 export function readEntries<T = unknown>(
   name: string,
   dir?: string
@@ -102,6 +108,7 @@ export function hashFiles(
 
 export function validateTicket(ticket: unknown): string[];
 export function loadTickets(path?: string): { tickets: unknown[]; errors: string[] };
+export function ticketStoreExists(root?: string, override?: string | null): boolean;
 export function topoSort(tickets: Array<{ id: string; edges?: Array<{ to: string }> }>): {
   order: string[];
   cycle: string[] | null;
@@ -189,6 +196,13 @@ export function isFenceClose(line: string, char: string, len: number): boolean;
 export function computeFencedLines(content: string, opts?: { unclosedToEof?: boolean }): Set<number>;
 
 export function ensureGitignore(root: string): { path: string; added: string[]; changed: boolean };
+export function ensureTicketStore(root: string): {
+  backend: 'legacy' | 'directory';
+  created: boolean;
+  legacyMigrationAvailable: boolean;
+  activeCreated?: boolean;
+  archiveCreated?: boolean;
+};
 export function ensureFormatterIgnores(root: string): {
   biome: { path: string | null; detected: boolean; changed: boolean; skipped?: string };
   prettier: { path: string; detected: boolean; changed: boolean };

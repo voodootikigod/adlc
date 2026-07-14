@@ -10,10 +10,7 @@
 // Pure and fail-safe: reads .adlc/ but never throws; returns null when there is
 // nothing to inject (not initialized, enforcement off, or no active ticket).
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { loadTickets } from '@adlc/core';
-import { resolveRailsInForce, resolveActiveTicketId } from '../rails-checker.mjs';
+import { resolveRailsInForce } from '../rails-checker.mjs';
 
 // Ticket fields (id, rails, scope) are repo data but are NOT trusted as prompt
 // content: a hostile or careless ticket could smuggle newlines or instructions
@@ -50,14 +47,7 @@ export function resolveTicketContext(root, env = process.env) {
   try {
     const force = resolveRailsInForce(root, env);
     if (!force.active || force.conflict || !force.ticketId) return null;
-    const active = resolveActiveTicketId(root, env);
-    let scope = [];
-    const ticketsPath = join(root, '.adlc', 'tickets.json');
-    if (existsSync(ticketsPath)) {
-      const { tickets } = loadTickets(ticketsPath);
-      const ticket = tickets.find((t) => t.id === active.id);
-      scope = Array.isArray(ticket?.scope) ? ticket.scope : [];
-    }
+    const scope = Array.isArray(force.ticket?.scope) ? force.ticket.scope : [];
     return {
       ticketId: sanitizeField(force.ticketId),
       rails: sanitizeList(force.rails),

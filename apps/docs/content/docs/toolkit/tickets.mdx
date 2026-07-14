@@ -1,0 +1,52 @@
+---
+title: tickets
+description: Canonical immutable ticket snapshots, sharded storage, migration, archive, transactions, and provenance.
+---
+
+# tickets
+
+**ADLC phases: P0–P6 shared contract** · **Default:** dry-run, no staging or commits.
+
+`@adlc/tickets` is the storage-independent ticket domain behind `adlc ticket`.
+New repositories use `.adlc/tickets/`: a static `.store.json` manifest plus one
+deterministically named canonical JSON shard per ticket. This removes the shared
+flat-file merge hotspot while retaining one logical, immutable snapshot and hash.
+
+## Commands
+
+```sh
+adlc ticket list
+adlc ticket show <id>
+adlc ticket create --input ticket.json          # dry-run plan
+adlc ticket create --input ticket.json --write
+adlc ticket update <id> --input ticket.json --expect <ticket-hash> --write
+adlc ticket archive <id> --write --authorize
+adlc ticket doctor --json
+adlc ticket store status --json
+```
+
+Writers use a per-worktree lock, expected-hash compare-and-swap, a durable
+journal, final hash verification, and dual ticket/store-hash evidence. Interrupted
+transactions fail closed until explicitly completed or rolled back.
+
+## Legacy migration
+
+Existing `.adlc/tickets.json` repositories remain writable. Interactive writers
+show the validated migration plan and ask permission; declining continues on the
+legacy backend. JSON and non-interactive modes never prompt or auto-migrate.
+
+```sh
+adlc ticket store migrate                 # preview
+adlc ticket store migrate --write --yes   # explicit approval
+adlc ticket store recover --complete      # or --rollback after interruption
+```
+
+Migration is representation-only, imports the legacy archive when present,
+requires a clean worktree, verifies logical hashes before deleting legacy files,
+and never stages or commits. Land it as a dedicated reviewed change.
+
+## Go deeper
+
+- [Migration guide](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-store-migration.md)
+- [Threat model](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-store-threat-model.md)
+- [packages/tickets](https://github.com/voodootikigod/adlc/tree/main/packages/tickets)

@@ -19,7 +19,10 @@ npm install -g @adlc/cli
 ## 2. Runtime + config
 
 - Create `.adlc/` if missing.
-- If `.adlc/tickets.json` is absent, create it as `{ "tickets": [] }`. If present, leave it.
+- Let the deterministic scaffolder initialize the sharded active/archive stores.
+  If legacy `.adlc/tickets.json` exists, preview `adlc ticket store migrate`,
+  ask the human, and apply only after approval with `--write --yes`; decline
+  leaves the legacy backend fully operational.
 - Run the deterministic scaffolder to create `.adlc/config.json` (defaults, no
   clobber), deploy this plugin's `command/`, `agent/`, and `skill/` into
   `.opencode/` (commands/, agents/, skills/<name>/SKILL.md), ensure `.gitignore`
@@ -42,6 +45,10 @@ P1 specs contract:
 ```
 .adlc/*
 !.adlc/tickets.json
+!.adlc/tickets/
+!.adlc/tickets/**
+!.adlc/ticket-archive/
+!.adlc/ticket-archive/**
 !.adlc/specs/
 ```
 
@@ -51,7 +58,7 @@ line — the scaffolder above does this automatically (`ensureGitignore` in
 
 ## 4. Exclude `.adlc/` from the repo's formatters and linters
 
-`.adlc/tickets.json` is machine-written and, once a ticket declares `rails`,
+The active ticket store is machine-written and, once a ticket declares `rails`,
 becomes a frozen trust root that a reformat would trip `rails-guard` on. The
 scaffolder's `ensureFormatterIgnores` detects and updates, only if already
 present in the repo:
@@ -75,7 +82,7 @@ Run `adlc preflight --json` and summarize the verdict (informational for setup).
 
 ## 6. Summarize
 
-Report: toolkit version, whether `.adlc/tickets.json`/`config.json` were created or
+Report: toolkit version, the ticket backend/migration decision and whether `config.json` was created or
 already present, what was deployed into `.opencode/`, gitignore changes, which
 formatter/linter configs were updated (or need a manual entry), and the
 preflight verdict. Point the user at `/adlc-ticket` to author their first ticket.

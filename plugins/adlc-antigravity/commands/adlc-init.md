@@ -16,18 +16,28 @@ Bootstrap the ADLC runtime for use with `agy`.
    ```sh
    adlc init || npx @adlc/cli init
    ```
-3. **Add the .gitignore stanza** so the ticket file and P1 specs are tracked,
+3. **Resolve ticket storage.** New repositories use `.adlc/tickets/` plus
+   `.adlc/ticket-archive/`. If legacy `.adlc/tickets.json` exists, run
+   `adlc ticket store migrate` to show the validated plan, ask for approval,
+   and apply only with `--write --yes`. If approval is declined—or the session
+   is non-interactive—leave the legacy backend active and continue without
+   modifying it.
+4. **Add the .gitignore stanza** so the ticket store and P1 specs are tracked,
    everything else under `.adlc/` is not:
    ```
    .adlc/*
    !.adlc/tickets.json
+   !.adlc/tickets/
+   !.adlc/tickets/**
+   !.adlc/ticket-archive/
+   !.adlc/ticket-archive/**
    !.adlc/specs/
    ```
    If `.gitignore` already has the older two-line form (no `!.adlc/specs/`),
    add just the missing `!.adlc/specs/` line — don't touch anything else. The
    `specs/` directory holds the P1 spec for every ticket, arguably the most
    important contract in the lifecycle, so it must be tracked by default.
-4. **Exclude `.adlc/` from this repo's formatters/linters.** `.adlc/tickets.json`
+5. **Exclude `.adlc/` from this repo's formatters/linters.** The ticket store
    is machine-written and, once a ticket declares `rails`, becomes a frozen
    trust root — reformatting it on a ticket branch trips `rails-guard`. Check
    for these configs and, only for the ones already present, add a `.adlc/`
@@ -42,10 +52,10 @@ Bootstrap the ADLC runtime for use with `agy`.
    Never create a new formatter/linter config just to add this exclusion. If
    none of these are present, or the repo uses a different tool, document the
    manual fallback and move on.
-5. **Wire the CI gate** (the real guarantee): copy `docs/ci/rails-guard.yml` into your
+6. **Wire the CI gate** (the real guarantee): copy `docs/ci/rails-guard.yml` into your
    pipeline and make it a required check. The in-session hook is advisory — `agy`
    fails **open** on a non-zero hook exit, so it cannot substitute for CI. The
    workflow template runs `scripts/rails-guard-ci.mjs` directly; treat that script
    as a required check in branch protection, not just an informational job.
-6. **Activate enforcement** for a build: `export ADLC_P4_ENFORCEMENT=1` with an active
+7. **Activate enforcement** for a build: `export ADLC_P4_ENFORCEMENT=1` with an active
    ticket whose `rails[]` are frozen.

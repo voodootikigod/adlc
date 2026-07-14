@@ -8,16 +8,21 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { ACTIVE_MANIFEST, ARCHIVE_MANIFEST, prettyCanonicalJson, sha256, storeHash, ticketFilename } from '@adlc/tickets';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'rails-guard-ci.mjs');
 
 function git(cwd, args) {
-  execFileSync('git', args, { cwd, stdio: 'pipe' });
+  execFileSync('git', args, {
+    cwd,
+    stdio: 'pipe',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+  });
 }
 
 /**
@@ -32,7 +37,13 @@ function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) 
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
     mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), baseTickets);
+    try {
+      const parsedBaseTickets = JSON.parse(baseTickets);
+      for (const ticket of parsedBaseTickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
+      writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(parsedBaseTickets));
+    } catch {
+      writeFileSync(join(dir, '.adlc', 'tickets.json'), baseTickets);
+    }
     for (const f of seedFiles) {
       mkdirSync(join(dir, dirname(f)), { recursive: true });
       writeFileSync(join(dir, f), seedFileContents[f] ?? 'orig\n');
@@ -41,6 +52,14 @@ function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) 
     git(dir, ['commit', '-qm', 'base']);
     git(dir, ['checkout', '-q', '-b', 'feat']);
     mutate(dir);
+    try {
+      const headPath = join(dir, '.adlc', 'tickets.json');
+      const parsedHeadTickets = JSON.parse(readFileSync(headPath, 'utf8'));
+      for (const ticket of parsedHeadTickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
+      writeFileSync(headPath, JSON.stringify(parsedHeadTickets));
+    } catch {
+      // Malformed/missing ticket-store attack fixtures must remain malformed.
+    }
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'change']);
     try {
@@ -71,6 +90,86 @@ const SIGNED_CONFIG = JSON.stringify({
   signedEvidenceRequired: true,
   runnerBinarySha256: '0'.repeat(64),
   signers: { alice: { roles: ['builder'] } },
+});
+
+function runMigrationScenario({ mutateTicket = (ticket) => ticket, extraChange = false, evidence = 'valid', legacyArchive = false, injectArchive = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-migrate-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    const ticket = { id: 'T1', title: 'Migration fixture', rails: ['src/critical/**'] };
+    writeFileSync(join(dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const archived = { id: 'OLD', title: 'Archived migration fixture', completed: true };
+    if (legacyArchive) writeFileSync(join(dir, '.adlc/tickets.archive.json'), JSON.stringify({ tickets: [archived] }));
+    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n');
+    git(dir, ['add', '-A']);
+    if (legacyArchive) git(dir, ['add', '-f', '.adlc/tickets.archive.json']);
+    git(dir, ['commit', '-qm', 'base']); git(dir, ['checkout', '-q', '-b', 'feat']);
+    rmSync(join(dir, '.adlc/tickets.json'));
+    mkdirSync(join(dir, '.adlc/tickets'), { recursive: true });
+    mkdirSync(join(dir, '.adlc/ticket-archive'), { recursive: true });
+    const next = mutateTicket(structuredClone(ticket));
+    writeFileSync(join(dir, '.adlc/tickets/.store.json'), prettyCanonicalJson(ACTIVE_MANIFEST));
+    writeFileSync(join(dir, '.adlc/tickets', ticketFilename(next.id)), prettyCanonicalJson(next));
+    writeFileSync(join(dir, '.adlc/ticket-archive/.store.json'), prettyCanonicalJson(ARCHIVE_MANIFEST));
+    if (legacyArchive) {
+      rmSync(join(dir, '.adlc/tickets.archive.json'));
+      writeFileSync(join(dir, '.adlc/ticket-archive', ticketFilename(archived.id)), prettyCanonicalJson(archived));
+    }
+    const injected = { id: 'INJECTED', title: 'Not present in the trusted base', completed: true };
+    if (injectArchive) writeFileSync(join(dir, '.adlc/ticket-archive', ticketFilename(injected.id)), prettyCanonicalJson(injected));
+    if (evidence !== 'missing') {
+      const hash = ['valid', 'recovered'].includes(evidence) ? storeHash([next]) : '0'.repeat(64);
+      const apply = {
+        seq: 1,
+        gate: 'ticket-migrate',
+        ts: '2026-07-13T00:00:00.000Z',
+        data: { operation: 'migrate', action: 'apply', transactionId: 'fixture-transaction', revision: null, ticketHash: null, storeHash: hash, archiveHash: storeHash(legacyArchive ? [archived] : injectArchive ? [injected] : []), bindingScope: 'store' },
+        files: {},
+        prev: null,
+      };
+      const entries = [apply];
+      if (evidence === 'recovered') entries.push({
+        seq: 2,
+        gate: 'ticket-migrate',
+        ts: '2026-07-13T00:01:00.000Z',
+        data: { ...apply.data, action: 'recover-complete' },
+        files: {},
+        prev: sha256(JSON.stringify(apply)),
+      });
+      writeFileSync(join(dir, '.adlc/manifest.jsonl'), `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+    }
+    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n!.adlc/tickets/\n!.adlc/tickets/**\n!.adlc/ticket-archive/\n!.adlc/ticket-archive/**\n');
+    if (extraChange) { mkdirSync(join(dir, 'src'), { recursive: true }); writeFileSync(join(dir, 'src/extra.mjs'), 'export {};\n'); }
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'migrate']);
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+    catch (error) { return error.status ?? 1; }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('legacy-to-directory migration with identical logical content is accepted', () => {
+  assert.equal(runMigrationScenario(), 0);
+  assert.equal(runMigrationScenario({ evidence: 'recovered' }), 0);
+});
+
+test('legacy-to-directory migration that changes ticket content is denied', () => {
+  assert.equal(runMigrationScenario({ mutateTicket: (ticket) => ({ ...ticket, title: 'Changed' }) }), 2);
+});
+
+test('legacy-to-directory migration mixed with unrelated changes is denied', () => {
+  assert.equal(runMigrationScenario({ extraChange: true }), 2);
+});
+
+test('legacy-to-directory migration requires hash-bound evidence', () => {
+  assert.equal(runMigrationScenario({ evidence: 'missing' }), 2);
+  assert.equal(runMigrationScenario({ evidence: 'invalid' }), 2);
+});
+
+test('legacy archive migration is accepted only with identical archived content', () => {
+  assert.equal(runMigrationScenario({ legacyArchive: true }), 0);
+  assert.equal(runMigrationScenario({ injectArchive: true }), 2);
 });
 
 test('ATTACK: PR empties rails AND edits a formerly-frozen file → exit 2 (base rails enforced)', () => {

@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { candidateRoots } from './adlc-rails-guard.mjs';
+import { ticketStoreExists } from '@adlc/core';
 
 // Field names the command string may arrive under. Cursor's docs name
 // `command` for beforeShellExecution; the rest are defensive fallbacks (same
@@ -81,7 +82,7 @@ export function adviseShell(payload, { root, env = process.env } = {}) {
     const pre = railPreconditions({ root: owningRoot, env });
     if (pre.state === 'active') {
       rails = pre.rails;
-    } else if (existsSync(join(owningRoot, '.adlc', 'tickets.json'))) {
+    } else if (ticketStoreExists(owningRoot, env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null)) {
       rails = [...TRUST_ROOT_RAILS];
     } else {
       return { permission: 'allow' }; // not an ADLC repo → nothing to advise on

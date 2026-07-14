@@ -19,55 +19,47 @@
 //   ]
 // }
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
+import {
+  DirectoryTicketStore,
+  LegacyTicketStore,
+  validateTicket as validateDomainTicket,
+} from '@adlc/tickets';
 
 export const TICKETS_PATH = '.adlc/tickets.json';
+export const TICKET_TRUST_ROOT_RAILS = Object.freeze([
+  '.adlc/tickets.json',
+  '.adlc/tickets/.store.json',
+  '.adlc/tickets/**',
+  '.adlc/current-ticket.json',
+]);
+
+/** True when either supported ticket backend (or an explicit override) exists. */
+export function ticketStoreExists(root = '.', override = null) {
+  if (override) return existsSync(isAbsolute(override) ? override : join(root, override));
+  return existsSync(join(root, '.adlc/tickets.json')) || existsSync(join(root, '.adlc/tickets/.store.json'));
+}
 
 /** Validate one ticket. Returns an array of error strings (empty = valid). */
 export function validateTicket(t) {
-  const errors = [];
-  if (!t || typeof t !== 'object') return ['ticket is not an object'];
-  if (!t.id || typeof t.id !== 'string') errors.push('missing string id');
-  if (!t.title || typeof t.title !== 'string') errors.push(`${t.id ?? '?'}: missing string title`);
-  if (t.scope !== undefined && !Array.isArray(t.scope)) errors.push(`${t.id}: scope must be an array of globs`);
-  if (t.rails !== undefined && !Array.isArray(t.rails)) errors.push(`${t.id}: rails must be an array of paths`);
-  if (t.edges !== undefined) {
-    if (!Array.isArray(t.edges)) errors.push(`${t.id}: edges must be an array`);
-    else for (const e of t.edges) {
-      if (!e || typeof e.to !== 'string') errors.push(`${t.id}: edge missing string "to"`);
-    }
-  }
-  if (t.duration !== undefined && (typeof t.duration !== 'number' || t.duration <= 0)) {
-    errors.push(`${t.id}: duration must be a positive number`);
-  }
-  return errors;
+  return validateDomainTicket(t);
 }
 
 /** Load + validate a tickets file. Returns { tickets, errors }. */
 export function loadTickets(path = TICKETS_PATH) {
-  if (!existsSync(path)) return { tickets: [], errors: [`tickets file not found: ${path}`] };
-  let data;
   try {
-    data = JSON.parse(readFileSync(path, 'utf8'));
+    const directoryPath = join(dirname(path), 'tickets');
+    const store = existsSync(path)
+      ? lstatSync(path).isDirectory() ? new DirectoryTicketStore(path) : new LegacyTicketStore(path)
+      : existsSync(directoryPath)
+        ? new DirectoryTicketStore(directoryPath)
+        : null;
+    if (!store) return { tickets: [], errors: [`tickets file not found: ${path}`] };
+    return { tickets: store.load().mutableTickets(), errors: [] };
   } catch (err) {
-    return { tickets: [], errors: [`invalid JSON in ${path}: ${err.message}`] };
+    return { tickets: [], errors: Array.isArray(err.details) ? [...err.details] : [err.message] };
   }
-  const tickets = data.tickets ?? [];
-  const errors = [];
-  const seen = new Set();
-  for (const t of tickets) {
-    errors.push(...validateTicket(t));
-    if (t.id) {
-      if (seen.has(t.id)) errors.push(`duplicate ticket id: ${t.id}`);
-      seen.add(t.id);
-    }
-  }
-  for (const t of tickets) {
-    for (const e of t.edges ?? []) {
-      if (e.to && !seen.has(e.to)) errors.push(`${t.id}: edge to unknown ticket ${e.to}`);
-    }
-  }
-  return { tickets, errors };
 }
 
 /**

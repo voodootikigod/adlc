@@ -8,6 +8,9 @@
 // adlc-codex's self-contained hook, we inline these primitives. Ported verbatim
 // from packages/core/lib/tickets.mjs — keep in sync if core's contract changes.
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname, isAbsolute } from 'node:path';
+import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
+export { ticketStoreExists };
 
 export const TICKETS_PATH = '.adlc/tickets.json';
 
@@ -31,29 +34,15 @@ export function validateTicket(t) {
 }
 
 export function loadTickets(path = TICKETS_PATH) {
-  if (!existsSync(path)) return { tickets: [], errors: [`tickets file not found: ${path}`] };
-  let data;
   try {
-    data = JSON.parse(readFileSync(path, 'utf8'));
+    const conventional = path === TICKETS_PATH || path.replaceAll('\\', '/').endsWith('/.adlc/tickets.json');
+    const root = path === TICKETS_PATH ? process.cwd() : conventional && isAbsolute(path) ? dirname(dirname(path)) : process.cwd();
+    const env = conventional ? process.env : { ...process.env, ADLC_TICKET_STORE: path, ADLC_TICKETS: undefined };
+    const snapshot = loadTicketStoreReadOnly({ root, env });
+    return { tickets: snapshot.tickets.map((ticket) => structuredClone(ticket)), errors: [] };
   } catch (err) {
-    return { tickets: [], errors: [`invalid JSON in ${path}: ${err.message}`] };
+    return { tickets: [], errors: [err.message] };
   }
-  const tickets = data.tickets ?? [];
-  const errors = [];
-  const seen = new Set();
-  for (const t of tickets) {
-    errors.push(...validateTicket(t));
-    if (t.id) {
-      if (seen.has(t.id)) errors.push(`duplicate ticket id: ${t.id}`);
-      seen.add(t.id);
-    }
-  }
-  for (const t of tickets) {
-    for (const e of t.edges ?? []) {
-      if (e.to && !seen.has(e.to)) errors.push(`${t.id}: edge to unknown ticket ${e.to}`);
-    }
-  }
-  return { tickets, errors };
 }
 
 export function globMatch(pattern, path) {

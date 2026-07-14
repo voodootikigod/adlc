@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decide } from '../hooks/adlc-rails-guard.mjs';
+import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 const ENF = { ADLC_P4_ENFORCEMENT: '1' };
 
@@ -45,6 +46,19 @@ test('rail hit: mutating write to a frozen rail denied', () => {
 test('non-rail write in ADLC repo allowed', () => {
   const root = adlcRepo({ rails: ['src/frozen.js'] });
   assert.equal(call('write_to_file', { TargetFile: join(root, 'src', 'ok.js') }).allow_tool, true);
+});
+test('sharded store enforces rails and freezes its shards', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-sharded-'));
+  const store = join(root, '.adlc/tickets');
+  mkdirSync(join(root, 'src'), { recursive: true });
+  mkdirSync(store, { recursive: true });
+  const ticket = { id: 'T1', title: 'sharded', rails: ['src/frozen.js'] };
+  const shard = ticketFilename(ticket.id);
+  writeFileSync(join(store, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+  writeFileSync(join(store, shard), JSON.stringify(ticket));
+  writeFileSync(join(root, '.adlc/current-ticket.json'), JSON.stringify({ id: 'T1' }));
+  assert.equal(call('write_to_file', { TargetFile: join(root, 'src/frozen.js') }).allow_tool, false);
+  assert.equal(call('write_to_file', { TargetFile: join(store, shard) }).allow_tool, false);
 });
 test('H1/H3: relative path + empty workspacePaths (headless) denied under enforcement', () => {
   const v = call('write_to_file', { TargetFile: 'src/frozen.js' }, ENF, { workspacePaths: [] });

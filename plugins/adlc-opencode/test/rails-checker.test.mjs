@@ -14,7 +14,11 @@ import { adlcRailsGuard } from '../index.mjs';
 function repo({ tickets, current } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-rails-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  if (tickets !== undefined) writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(tickets));
+  if (tickets !== undefined) {
+    tickets = structuredClone(tickets);
+    for (const ticket of tickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(tickets));
+  }
   if (current !== undefined) writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify(current));
   return dir;
 }

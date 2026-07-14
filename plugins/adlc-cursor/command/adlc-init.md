@@ -21,7 +21,9 @@ npm install -g @adlc/cli
 ## 2. Runtime + Cursor wiring
 
 - Create `.adlc/` if missing.
-- If `.adlc/tickets.json` is absent, create it as `{ "tickets": [] }`. If present, leave it.
+- Let the deterministic scaffolder initialize the sharded active/archive stores.
+  If it finds legacy `.adlc/tickets.json`, show `adlc ticket store migrate`, ask
+  for approval, and apply only with `--write --yes`; decline keeps legacy active.
 - Run the deterministic scaffolder to create `.adlc/config.json` (no clobber),
   wire `.cursor/hooks.json` + `.cursor/rules/adlc.mdc`, deploy the packaged
   `/adlc-*` command palette into `.cursor/commands/`, ensure `.gitignore`
@@ -58,6 +60,10 @@ P1 specs contract:
 ```
 .adlc/*
 !.adlc/tickets.json
+!.adlc/tickets/
+!.adlc/tickets/**
+!.adlc/ticket-archive/
+!.adlc/ticket-archive/**
 !.adlc/specs/
 ```
 
@@ -67,7 +73,7 @@ line — the scaffolder above does this automatically (`ensureGitignore` in
 
 ## 4. Exclude `.adlc/` from the repo's formatters and linters
 
-`.adlc/tickets.json` is machine-written and is frozen as a rail trust root
+The active ticket store is machine-written and is frozen as a rail trust root
 whenever enforcement is active (`ADLC_P4_ENFORCEMENT=1` plus an active
 ticket). A repo formatter that reformats it causes red quality checks and
 diff churn on a file that must stay machine-canonical. (The in-session rail
@@ -94,7 +100,7 @@ Run `adlc preflight --json` and summarize the verdict (informational for setup).
 
 ## 6. Summarize
 
-Report: toolkit version, whether `.adlc/tickets.json`/`config.json` were created or
+Report: toolkit version, the ticket backend/migration decision and whether `config.json` was created or
 already present, what was wired into `.cursor/` (hooks, rule, and the deployed
 `.cursor/commands/` palette), gitignore changes, which formatter/linter configs
 were updated (or need a manual entry), and the preflight verdict. Remind the

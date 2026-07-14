@@ -130,7 +130,7 @@ mkdirSync(join(project, '.opencode', 'plugins'), { recursive: true });
 mkdirSync(home, { recursive: true });
 failHome = home;
 
-writeFileSync(join(project, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', rails: ['test/**'] }] }, null, 2));
+writeFileSync(join(project, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'Live deny fixture', rails: ['test/**'] }] }, null, 2));
 writeFileSync(join(project, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
 writeFileSync(join(project, 'test', 'x.mjs'), RAIL_ORIGINAL);
 // Load the real plugin from this repo via a shim (project-local plugin file).

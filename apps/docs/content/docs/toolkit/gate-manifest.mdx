@@ -26,12 +26,15 @@ adlc gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a
 adlc gate-manifest verify [--json] [--dir path]
 adlc gate-manifest show   [--ticket id] [--json] [--dir path]
 adlc gate-manifest attest [--ticket id] [--dir path]
+adlc gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
 ```
 
 | Verb / Flag | Description |
 | --- | --- |
 | `record <gate-name>` | Append one entry to the ledger; signs it when `ADLC_MANIFEST_KEY` is set. |
 | `verify` | Walk the raw lines and validate the hash chain (and signatures, when keyed). |
+| `repair-chain` | Preserve and rechain a ledger produced by an older incompatible writer; dry-run unless `--write` is supplied. |
+| `--attest-unsigned` | Explicitly authorize keyed repair to sign previously unsigned entries; their count and original lines are audited. |
 | `show` | Print entries, optionally filtered by ticket. |
 | `attest` | Emit a Markdown gate-evidence table suitable for a PR comment. |
 | `--ticket id` | Associate or filter entries by ticket id. |
@@ -47,6 +50,14 @@ adlc gate-manifest attest [--ticket id] [--dir path]
   <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: bad input, unreadable file, or malformed `--data` JSON.</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2** — `verify` gate fails: the chain is broken (reports the seq and line of the first break).</span>
 </div>
+
+Prosecution, runner acceptance, rails evidence, and manual records share one
+atomic chain writer. Repair refuses an already-valid ledger, preserves the
+original bytes in a hash-named backup, and requires the original matching
+signing key when signed entries are present. Every existing signature is
+verified before repair rewrites anything. A keyed repair that would sign
+previously unsigned entries refuses unless `--attest-unsigned` is supplied and
+records their count and original line numbers.
 
 ## Example
 

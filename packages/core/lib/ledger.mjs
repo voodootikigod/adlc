@@ -1,9 +1,10 @@
 // Append-only JSONL ledgers under .adlc/ — the shared persistence layer for
 // gate-manifest entries, prosecution findings, routing priors, etc.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
+import { dirname, join } from 'node:path';
 
 export const ADLC_DIR = '.adlc';
 
@@ -17,54 +18,87 @@ export function ledgerPath(name, dir = ADLC_DIR) {
 // advisory lockfile serialises writers across processes.
 const LOCK_RETRY_DELAY_MS = 5;
 const LOCK_MAX_RETRIES = 400; // ~2s ceiling
-const LOCK_STALE_MS = 30_000;
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** Run `fn` while holding an advisory lock on `${target}.lock`. */
-export function withLedgerLock(target, fn) {
+/** Run `fn` while holding an ownership-checked advisory lock on `${target}.lock`. */
+export function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS } = {}) {
   const lockPath = `${target}.lock`;
-  for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
+  mkdirSync(dirname(target), { recursive: true });
+  const owner = { version: 1, token: randomUUID(), pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString() };
+  for (let i = 0; i <= retries; i++) {
     let fd;
     try {
       fd = openSync(lockPath, 'wx'); // fails if lock already held
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
-      // Steal a stale lock left by a crashed writer.
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
-          unlinkSync(lockPath);
-          continue;
-        }
-      } catch {
-        // lock vanished between open and stat — just retry
-      }
-      sleepSync(LOCK_RETRY_DELAY_MS);
+      if (i < retries) sleepSync(delayMs);
       continue;
     }
     try {
+      writeFileSync(fd, `${JSON.stringify(owner)}\n`);
+      fsyncSync(fd);
+    } finally {
       closeSync(fd);
+    }
+    try {
       return fn();
     } finally {
       try {
-        unlinkSync(lockPath);
-      } catch {
-        // best effort
-      }
+        const current = JSON.parse(readFileSync(lockPath, 'utf8'));
+        if (current.token === owner.token) unlinkSync(lockPath);
+      } catch {}
     }
   }
-  throw new Error(`could not acquire ledger lock: ${lockPath} (held > ${LOCK_MAX_RETRIES * LOCK_RETRY_DELAY_MS}ms)`);
+  throw new Error(`could not acquire ledger lock: ${lockPath} (held > ${retries * delayMs}ms)`);
+}
+
+function parseLedger(content) {
+  const entries = [];
+  const skipped = [];
+  const rawLines = [];
+  for (const [i, line] of content.split('\n').entries()) {
+    if (!line.trim()) continue;
+    rawLines.push(line);
+    try { entries.push(JSON.parse(line)); }
+    catch (err) { skipped.push({ line: i + 1, error: String(err.message ?? err) }); }
+  }
+  return { entries, skipped, rawLines, lastRawLine: rawLines.at(-1) ?? null };
+}
+
+/**
+ * Append a batch under one ledger lock. A factory is evaluated after the lock is
+ * acquired and receives the byte-exact current ledger state, so callers can safely
+ * allocate sequence numbers and hash-chain links without a read/append race.
+ */
+export function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const p = ledgerPath(name, dir);
+  return withLedgerLock(p, () => {
+    const content = existsSync(p) ? readFileSync(p, 'utf8') : '';
+    const state = parseLedger(content);
+    const additions = typeof entriesOrFactory === 'function' ? entriesOrFactory(state) : entriesOrFactory;
+    if (!Array.isArray(additions)) throw new TypeError('ledger append batch must be an array');
+    if (additions.length === 0) return [];
+    const descriptor = openSync(p, 'a');
+    try {
+      writeFileSync(descriptor, additions.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
+      fsyncSync(descriptor);
+    } finally { closeSync(descriptor); }
+    if (process.platform !== 'win32') {
+      const directory = openSync(dirname(p), 'r');
+      try { fsyncSync(directory); }
+      finally { closeSync(directory); }
+    }
+    return additions;
+  });
 }
 
 /** Append one entry (object) to the named ledger. Creates dir/file as needed. */
 export function appendEntry(name, entry, dir = ADLC_DIR) {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const p = ledgerPath(name, dir);
-  withLedgerLock(p, () => {
-    appendFileSync(p, JSON.stringify(entry) + '\n');
-  });
+  appendEntries(name, [entry], dir);
   return entry;
 }
 
@@ -76,17 +110,7 @@ export function appendEntry(name, entry, dir = ADLC_DIR) {
 export function readEntries(name, dir = ADLC_DIR) {
   const p = ledgerPath(name, dir);
   if (!existsSync(p)) return { entries: [], skipped: [] };
-  const entries = [];
-  const skipped = [];
-  const lines = readFileSync(p, 'utf8').split('\n');
-  for (const [i, line] of lines.entries()) {
-    if (!line.trim()) continue;
-    try {
-      entries.push(JSON.parse(line));
-    } catch (err) {
-      skipped.push({ line: i + 1, error: String(err.message ?? err) });
-    }
-  }
+  const { entries, skipped } = parseLedger(readFileSync(p, 'utf8'));
   return { entries, skipped };
 }
 

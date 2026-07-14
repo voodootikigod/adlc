@@ -12,7 +12,7 @@
 // the live smoke (scripts/pi-live-prosecute.mjs) proves real registration +
 // callability end-to-end.
 
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { prosecute, defaultRunLens, renderSummary } from './prosecutor.mjs';
 import { resolvePiPeer } from './pi-resolve.mjs';
@@ -109,7 +109,8 @@ async function collectDiff(pi, root, base) {
 function resolveTicketContext({ requestedId, active, env, root }) {
   if (!requestedId) return active?.ticket ?? null;
   try {
-    const path = env.ADLC_TICKETS ?? join(root, '.adlc', 'tickets.json');
+    const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS;
+    const path = configured ? (isAbsolute(configured) ? configured : join(root, configured)) : join(root, '.adlc', 'tickets.json');
     const { tickets } = loadTickets(path);
     const match = tickets.find((t) => t.id === requestedId);
     if (match) return match;

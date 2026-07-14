@@ -1,7 +1,7 @@
 export const TOOLKIT_GROUPS = [
   {
     group: 'Spec & ticket shaping',
-    packages: ['parallax', 'spec-lint', 'premortem', 'coldstart', 'ticket-sync', 'ticket-prune'],
+    packages: ['tickets', 'parallax', 'spec-lint', 'premortem', 'coldstart', 'ticket-sync', 'ticket-prune'],
   },
   {
     group: 'Execution supervision & rails',

@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { initializeTicketStores } from '@adlc/tickets';
 
 // ---------------------------------------------------------------------------
 // .gitignore: track the ticket contract AND the P1 spec contract, ignore the
@@ -15,7 +16,20 @@ import { join } from 'node:path';
 // from an existing stanza.
 // ---------------------------------------------------------------------------
 
-const GITIGNORE_STANZA = ['.adlc/*', '!.adlc/tickets.json', '!.adlc/specs/'];
+const GITIGNORE_STANZA = [
+  '.adlc/*',
+  '!.adlc/tickets.json',
+  '!.adlc/tickets/',
+  '!.adlc/tickets/**',
+  '!.adlc/ticket-archive/',
+  '!.adlc/ticket-archive/**',
+  '!.adlc/specs/',
+];
+
+/** Initialize sharded stores for a new repo; preserve a legacy store for consent-based migration. */
+export function ensureTicketStore(root) {
+  return initializeTicketStores(root);
+}
 
 /**
  * Ensure `.gitignore` ignores all of `.adlc/` except the tracked contracts

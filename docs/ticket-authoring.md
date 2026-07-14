@@ -1,5 +1,11 @@
 # ADLC Ticket Authoring
 
+> ADLC 1.3 stores new tickets as independently mergeable JSON shards under
+> `.adlc/tickets/`. Use `adlc ticket create|update|edit`; mutations are dry-run by
+> default and require `--write`. Existing `.adlc/tickets.json` repositories remain
+> supported during the 1.x consent-based migration bridge. See
+> [the migration guide](ticket-store-migration.md).
+
 Tickets are the executable contract between P2 decomposition, P3 rails, P4 build, and
 P5/P6 evidence. Keep them small enough for one fresh agent context.
 
@@ -46,12 +52,15 @@ stay consistent.
 ## The sync sidecar is not authored
 
 Sync bookkeeping (tracker node ids, the 3-way base hash, create keys) lives in
-`.adlc/ticket-sync.state.json` — a **gitignored, rebuildable cache**, never authored
-by hand and read by no gate. It is deliberately *not* part of the rails trust root,
+`.adlc/ticket-sync.state.json` — a **gitignored sidecar**, never authored by hand and
+read by no gate. Ordinary tracker metadata is rebuildable; `pendingCreates` is a
+durably written recovery handle while a remote create, local ID rewrite, and evidence
+re-attestation converge. It is deliberately *not* part of the rails trust root,
 so routine syncs leave `tickets.json` byte-identical and never trip the rails-guard.
 Only genuine ticket-**content** changes land in `tickets.json` and go through the
-normal human + CI review. A missing/tampered sidecar fails safe (at worst it forces a
-conflict prompt on the next pull); it can be deleted and rebuilt at any time. See
+normal human + CI review. Missing state forces conservative reconciliation, and write
+commands fail closed on corrupt state so they cannot discard an in-flight handle. Do
+not delete a sidecar while `pendingCreates` is non-empty. See
 [docs/ticket-sync.md](./ticket-sync.md) for the full sync model.
 
 See `.adlc/tickets.example.json` for a complete fixture.

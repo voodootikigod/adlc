@@ -69,25 +69,19 @@ test('normal-risk ticket, deep session → allow, exit 0', () => {
 // ---- fail closed on a malformed (non-array) scope/rails field, instead of
 // crashing with an uncaught TypeError (issue #48 review round 3 finding) ----
 
-test('non-array scope field → fails closed to high risk (deny once deep), not a crash', () => {
+test('non-array scope field → strict store validation fails closed as an operational error', () => {
   withTicketRepo([{ id: 'T1', title: 'x', scope: 42 }], (dir) => {
     const r = run(['T1', '--depth', '999', '--json'], { cwd: dir });
-    assert.equal(r.code, 2);
-    const out = JSON.parse(r.stdout);
-    assert.equal(out.decision, 'deny');
-    assert.equal(out.riskTier, 'high');
-    assert.ok(out.signals.includes('malformed-scope'));
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /scope must be an array of strings/);
   });
 });
 
-test('non-array rails field (object) → fails closed to high risk, not a crash', () => {
+test('non-array rails field → strict store validation fails closed as an operational error', () => {
   withTicketRepo([{ id: 'T1', title: 'x', rails: { foo: 'bar' } }], (dir) => {
     const r = run(['T1', '--depth', '999', '--json'], { cwd: dir });
-    assert.equal(r.code, 2);
-    const out = JSON.parse(r.stdout);
-    assert.equal(out.decision, 'deny');
-    assert.equal(out.riskTier, 'high');
-    assert.ok(out.signals.includes('malformed-rails'));
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /rails must be an array of strings/);
   });
 });
 

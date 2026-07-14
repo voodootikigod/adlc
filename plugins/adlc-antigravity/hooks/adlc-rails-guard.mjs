@@ -51,13 +51,13 @@ export function extractFilePaths(payload) {
 
 const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', 'workspace_roots'];
 
-/** Nearest ancestor dir of absPath containing .adlc/tickets.json, or null. */
+/** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null. */
 export function findAdlcRoot(absPath) {
   let cur = dirname(absPath);
   const { root: fsRoot } = parse(cur);
   // Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir).
   while (true) {
-    if (existsSync(join(cur, '.adlc', 'tickets.json'))) return cur;
+    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
     if (cur === fsRoot) return null;
     cur = dirname(cur);
   }

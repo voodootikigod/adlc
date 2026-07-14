@@ -12,6 +12,8 @@ import { createDepthTracker } from '../lib/build-gate.mjs';
 function repo(tickets) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-compact-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
+  tickets = structuredClone(tickets);
+  for (const ticket of tickets) ticket.title ??= `${ticket.id} fixture`;
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }));
   return dir;
 }

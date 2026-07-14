@@ -13,7 +13,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { classifyRiskTier, decideAdversarialReviewNotice } from '@adlc/core';
+import { classifyRiskTier, decideAdversarialReviewNotice, ticketStoreExists } from '@adlc/core';
 import { resolveActiveTicketId } from '../rails-checker.mjs';
 
 function run(spawnImpl, bin, args, cwd) {
@@ -30,7 +30,7 @@ function run(spawnImpl, bin, args, cwd) {
  * Advisory only. Returns { ready, skipped, warnings[] }.
  */
 export function checkPreflight(root, { spawnImpl = spawnSync, env = process.env } = {}) {
-  if (!existsSync(join(root, '.adlc', 'tickets.json'))) {
+  if (!ticketStoreExists(root, env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null)) {
     return { ready: true, skipped: true, warnings: [] }; // not ADLC-initialized → no-op
   }
   const warnings = [];
@@ -198,7 +198,7 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
  * did", matching plugins/adlc-claude-code/hooks/adlc-hook.mjs's `review` mode.
  */
 export function auditAdversarialReview(root, { spawnImpl = spawnSync, env = process.env, base } = {}) {
-  if (!existsSync(join(root, '.adlc', 'tickets.json'))) {
+  if (!ticketStoreExists(root, env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null)) {
     return { needed: false, skipped: true, warning: null, matches: [] };
   }
 

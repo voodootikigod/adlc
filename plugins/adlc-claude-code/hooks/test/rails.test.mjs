@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 
@@ -32,7 +33,14 @@ function runRails(ticketsJson, relPath, { env = {}, keepDir = false, rawFilePath
   let manifest = '';
   try {
     mkdirSync(join(dir, '.adlc'));
-    if (ticketsJson !== null) writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
+    if (ticketsJson !== null) {
+      try {
+        const fixture = JSON.parse(ticketsJson);
+        for (const ticket of fixture.tickets ?? []) if (ticket && typeof ticket === 'object') ticket.title ??= `${ticket.id ?? '?'} fixture`;
+        ticketsJson = JSON.stringify(fixture);
+      } catch {}
+      writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
+    }
     // rawFilePath lets a test pass a non-canonical path verbatim (the default
     // `join` would otherwise normalize it before the hook sees it). `%DIR%` is
     // substituted with the temp project dir.
@@ -72,6 +80,29 @@ test('schema-valid empty tickets → allow', () => {
 test('rails declared but path is not a rail → allow', () => {
   const t = '{"tickets":[{"id":"T1","rails":["test/**"]}]}';
   assert.equal(runRails(t, 'src/app.mjs').verdict, 'allow');
+});
+
+test('sharded ticket store enforces declared rails and freezes every shard', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-sharded-'));
+  try {
+    const store = join(dir, '.adlc/tickets');
+    mkdirSync(store, { recursive: true });
+    const ticket = { id: 'T1', title: 'Sharded fixture', rails: ['test/**'] };
+    writeFileSync(join(store, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+    writeFileSync(join(store, ticketFilename(ticket.id)), JSON.stringify(ticket));
+    const run = (filePath) => {
+      try {
+        return execFileSync(process.execPath, [HOOK, 'rails'], {
+          cwd: dir,
+          input: JSON.stringify({ cwd: dir, tool_input: { file_path: join(dir, filePath) } }),
+          encoding: 'utf8',
+          env: { ...process.env },
+        });
+      } catch (error) { return error.stdout ?? ''; }
+    };
+    assert.match(run('test/x.mjs'), /"permissionDecision":"deny"/);
+    assert.match(run(`.adlc/tickets/${ticketFilename(ticket.id)}`), /"permissionDecision":"deny"/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ---- enforcement ----
@@ -118,6 +149,11 @@ function runPayload(ticketsJson, toolInput, { env = {}, cwdOverride = null } = {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {
     mkdirSync(join(dir, '.adlc'));
+    try {
+      const fixture = JSON.parse(ticketsJson);
+      for (const ticket of fixture.tickets ?? []) if (ticket && typeof ticket === 'object') ticket.title ??= `${ticket.id ?? '?'} fixture`;
+      ticketsJson = JSON.stringify(fixture);
+    } catch {}
     writeFileSync(join(dir, '.adlc', 'tickets.json'), ticketsJson);
     const input = JSON.stringify({ cwd: cwdOverride ?? dir, tool_input: toolInput });
     let out = '';
@@ -562,7 +598,7 @@ test('bypass on a multi-file edit hitting two rails → allow + BOTH audited', (
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rails-'));
   try {
     mkdirSync(join(dir, '.adlc'));
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","rails":["a/**"]},{"id":"T2","rails":["b/**"]}]}');
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{"tickets":[{"id":"T1","title":"T1 fixture","rails":["a/**"]},{"id":"T2","title":"T2 fixture","rails":["b/**"]}]}');
     const input = JSON.stringify({ cwd: dir, tool_input: { files: ['a/x.mjs', 'b/y.mjs'] } });
     let out = '';
     try {

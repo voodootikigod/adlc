@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,9 +63,15 @@ test('suggest returns near misses only', () => {
 test('resolves package-local tool bins without PATH lookup', () => {
   assert.match(resolveBin('spec-lint') ?? '', /packages\/spec-lint\/bin\/spec-lint\.mjs$/);
   assert.match(resolveBin('prosecute') ?? '', /packages\/prosecute\/bin\/adlc-prosecute\.mjs$/);
-  assert.match(resolveBin('ticket') ?? '', /packages\/ticket-sync\/bin\/ticket-sync\.mjs$/);
+  assert.match(resolveBin('ticket') ?? '', /packages\/tickets\/bin\/adlc-tickets\.mjs$/);
   assert.match(resolveBin('ticket-prune') ?? '', /packages\/ticket-prune\/bin\/ticket-prune\.mjs$/);
   assert.equal(resolveBin('definitely-not-real'), null);
+});
+
+test('umbrella package declares both local ticket and external-sync dispatch targets', () => {
+  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
+  assert.equal(pkg.dependencies['@adlc/tickets'], pkg.version);
+  assert.equal(pkg.dependencies['@adlc/ticket-sync'], pkg.version);
 });
 
 test('external verbs like "review" have no local bin to resolve (they are npx passthroughs)', () => {

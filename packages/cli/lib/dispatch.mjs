@@ -14,6 +14,12 @@ function packageJsonPath(packageName) {
   }
 }
 
+function resolvePackageBin(packageName, binName) {
+  const pkgJsonPath = packageJsonPath(packageName);
+  if (!pkgJsonPath) return null;
+  return binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName);
+}
+
 function readPackage(path) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
@@ -75,6 +81,9 @@ function runExternal(packageName, args, spawnFn) {
 export function dispatch(toolName, args, opts = {}) {
   const spawnFn = opts.spawnFn ?? spawnSync;
   const tool = getTool(toolName);
+  if (toolName === 'ticket' && ['pull', 'push', 'sync', 'doctor'].includes(args[0])) {
+    return runBin('@adlc/ticket-sync', resolvePackageBin('@adlc/ticket-sync', 'adlc-ticket-sync'), args, spawnFn);
+  }
   if (tool?.external) {
     return runExternal(tool.packageName, args, spawnFn);
   }

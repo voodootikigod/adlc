@@ -119,7 +119,7 @@ chmodSync(adlcShim, 0o755);
 
 // Enforcement ON with an active ticket + a real rail — proves adlc_gate is not
 // denied by the plugin's own tool.execute.before rail guard (P5 finding).
-writeFileSync(join(project, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', rails: ['locked/**'] }] }, null, 2));
+writeFileSync(join(project, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'Live tool fixture', rails: ['locked/**'] }] }, null, 2));
 writeFileSync(join(project, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
 writeFileSync(join(project, '.opencode', 'plugins', 'adlc.js'),
   `export { adlcRailsGuard } from ${JSON.stringify('file://' + PLUGIN_INDEX)};\n`);

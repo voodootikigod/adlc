@@ -57,7 +57,7 @@ export const GROUPS = [
   {
     title: 'External integration',
     tools: [
-      { name: 'ticket', packageName: '@adlc/ticket-sync', binName: 'adlc-ticket-sync', summary: 'Two-way sync ADLC tickets with external trackers (GitHub Issues).' },
+      { name: 'ticket', packageName: '@adlc/tickets', binName: 'adlc-tickets', summary: 'Create, inspect, migrate, archive, and synchronize ADLC tickets.' },
     ],
   },
 ];

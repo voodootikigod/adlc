@@ -27,6 +27,7 @@ export function parseFlags(args) {
     else if (a === '--force') flags.force = true;
     else if (a === '--allow-rail-narrowing') flags['allow-rail-narrowing'] = true;
     else if (a === '--json') flags.json = true;
+    else if (a === '--archive') {} // retained for store-doctor CLI compatibility
     else { process.stderr.write(`unknown flag: ${a}\n`); process.exit(1); }
   }
   return flags;

@@ -96,6 +96,8 @@ const DEFAULT_IGNORED_PATHS = [
   '.adlc/manifest.jsonl',
   '.adlc/manifest.lock',
   '.adlc/tickets.json',
+  '.adlc/tickets',
+  '.adlc/ticket-archive',
   '.adlc/current-ticket.json',
 ];
 
@@ -115,7 +117,7 @@ function ignoredPathSet(cwd, paths) {
 
 function isIgnoredPath(relativePath, ignoredPaths) {
   const normalized = relativePath.replaceAll('\\', '/');
-  return ignoredPaths.has(normalized);
+  return [...ignoredPaths].some((path) => normalized === path || normalized.startsWith(`${path}/`));
 }
 
 export function resolveRevision({ cwd = process.cwd(), revision, ignorePaths = [] } = {}) {

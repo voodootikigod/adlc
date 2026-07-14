@@ -3,6 +3,7 @@
   "version": "1.3.0",
   "description": "Hash-chained evidence ledger recording what each ADLC gate verified — agentic provenance with optional HMAC signing (C11).",
   "type": "module",
+  "main": "./index.mjs",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",
   "repository": {
@@ -25,6 +26,7 @@
     "gate-manifest": "./bin/gate-manifest.mjs"
   },
   "files": [
+    "index.mjs",
     "bin/",
     "lib/",
     "README.md",

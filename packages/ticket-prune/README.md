@@ -2,7 +2,7 @@
 
 **ADLC phase: C12 — maintenance (ticket lifecycle hygiene)**
 
-`.adlc/tickets.json` is a mutable working scratchpad. Nothing else prunes it
+The active ADLC ticket store is a mutable working set. Nothing else prunes it
 after a ticket's work ships, so completed tickets accumulate and masquerade as
 an open backlog — you can't tell live work from leftovers without
 cross-checking deliverables and merged PRs by hand. `ticket-prune` reports
@@ -17,20 +17,22 @@ ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 ```
 
 Dry-run by default, consistent with every other ADLC writer (`skill-rot`,
-`rejection-mining`, `model-ratchet`): it reports what it would tombstone
-without touching `.adlc/tickets.json` until you pass `--write`.
+`rejection-mining`, `model-ratchet`): it reports what it would prune without
+mutating the store until you pass `--write`. On a canonical sharded store,
+`--write` archives stale tickets through the active→archive transaction; on a
+legacy `.adlc/tickets.json` store it tombstones them in place, as described next.
 
-## Tombstoning, not removal (#104)
+## Tombstoning (legacy store), not removal (#104)
 
-`--write` does **not** delete a stale ticket or move it to a side file. It adds
-`completed: true` to the ticket **in place** and changes nothing else. This is
-deliberate: `.adlc/tickets.json` is the rails-guard trust root, and its CI gate
-(`scripts/rails-guard-ci.mjs`) hard-denies any PR that *removes* or otherwise
-mutates a base ticket. The one exception the gate carves out is adding exactly
-`completed: true` to a ticket that declares **no rails** — that annotation
-grants zero unfreeze privilege, so it is safe in an ordinary PR. Tombstoning is
-built to produce precisely that diff, so a routine prune merges without an admin
-override.
+On a legacy `.adlc/tickets.json` store, `--write` does **not** delete a stale
+ticket or move it to a side file. It adds `completed: true` to the ticket **in
+place** and changes nothing else. This is deliberate: `.adlc/tickets.json` is the
+rails-guard trust root, and its CI gate (`scripts/rails-guard-ci.mjs`) hard-denies
+any PR that *removes* or otherwise mutates a base ticket. The one exception the
+gate carves out is adding exactly `completed: true` to a ticket that declares
+**no rails** — that annotation grants zero unfreeze privilege, so it is safe in an
+ordinary PR. Tombstoning is built to produce precisely that diff, so a routine
+prune merges without an admin override.
 
 A stale ticket that **still freezes rails** is *not* auto-tombstoned: completing
 it would expire its rails from the union (a privileged unfreeze), which the gate
@@ -74,7 +76,8 @@ matching, and is exactly the check the issue's worked example did by hand.
 
 | Flag | Description |
 |------|-------------|
-| `--tickets <path>` | Ticket file to read (default `.adlc/tickets.json`). |
+| `--tickets <path>` | Ticket-store override. The default auto-detects sharded `.adlc/tickets/` or legacy `.adlc/tickets.json`. |
+| `--archive <path>` | Legacy-backend archive override. Sharded stores always use `.adlc/ticket-archive/`. |
 | `--base-ref <ref>` | Git ref to check declared `scope` globs against (default `HEAD`). Point at `origin/main` to audit a feature branch's tickets against what's already shipped on trunk. |
 | `--write` | Tombstone rails-less stale tickets: add `completed: true` in place (never remove, never mutate any other field). Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
 | `--json` | Machine-readable `{ baseRef, write, stale[], active[], tombstoned[], needsCeremony[] }`. |
@@ -101,24 +104,23 @@ ticket-prune --write
 
 ## Locking and atomicity
 
-`--write` takes the shared `.adlc/tickets.lock` mkdir-lock before mutating
-`tickets.json`, the same lock path `@adlc/ticket-sync`'s writer uses, so the
-two writers interoperate instead of racing. `tickets.json` is replaced with a
-tmp-file-then-rename (atomic on POSIX filesystems). Under the lock the tool
-re-reads and re-classifies before writing, so a ticket another writer un-staled
-in the race window is never tombstoned.
+On sharded stores, `--write` uses the canonical ticket service's worktree lock,
+hash CAS, journal, evidence, and active→archive transaction. The legacy bridge
+retains the shared `.adlc/tickets.lock` plus archive-first atomic replacement so
+sync and prune do not race and a ticket never disappears from both stores. Under
+the lock the tool re-reads and re-classifies before writing, so a ticket another
+writer un-staled in the race window is never pruned.
 
 ## Relationship to sibling tools
 
-- **`@adlc/ticket-sync`** — writes/reads `.adlc/tickets.json` from an external
+- **`@adlc/ticket-sync`** — writes/reads the active ticket store from an external
   tracker; shares the same lock path so a sync and a prune never interleave.
 - **`model-ratchet` / `skill-rot`** — the other decay-driven, dry-run-by-default
   maintenance checks wired into `/adlc-maintain`; `ticket-prune` follows the
   same reporting contract.
 
-## Core gaps
+## Compatibility
 
-`packages/core` (frozen — CONVENTIONS rule 2) has no shared writer for
-`.adlc/tickets.json`. `lib/store.mjs` re-implements the same mkdir-lock +
-tmp-rename protocol `@adlc/ticket-sync`'s `lib/store.mjs` uses (at the same
-lock path) rather than inlining a divergent one.
+New repositories archive to immutable shards through `@adlc/tickets`. The old
+flat active/archive pair remains writable only as the 1.x compatibility path;
+use `adlc ticket store migrate` to preview the representation-only migration.

@@ -6,64 +6,111 @@
 // the two writers interoperate. The sidecar is a gitignored rebuildable cache and
 // is NOT a rail — routine sync writes here never touch the trust root.
 
-import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync, rmdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import {
+  TicketService,
+  acquireTicketLock,
+  conflict,
+  detectTicketStore,
+  durableRename,
+  durableWrite,
+  initializeTicketStores,
+  operational,
+  releaseTicketLock,
+} from '@adlc/tickets';
+import { validateSyncState } from './validate.mjs';
 
-const LOCK_DIR = '.adlc/tickets.lock';
 const SIDECAR = '.adlc/ticket-sync.state.json';
-const TICKETS = '.adlc/tickets.json';
 
-/** Zero-dep synchronous sleep (no busy-wait) for lock retry backoff. */
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
+const heldLocks = new Map();
 
 /** Acquire the mkdir lock (atomic; one winner). Bounded retry, then false. */
 export function acquireLock(dir = '.', { retries = 50, delayMs = 20 } = {}) {
-  const path = join(dir, LOCK_DIR);
-  for (let i = 0; i <= retries; i++) {
-    try {
-      mkdirSync(path);
-      return true;
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      if (i < retries) sleepSync(delayMs);
-    }
+  const key = resolve(dir);
+  if (heldLocks.has(key)) return false;
+  try {
+    heldLocks.set(key, acquireTicketLock(dir, { retries, delayMs, command: 'ticket-sync' }));
+    return true;
+  } catch (error) {
+    if (error.code === 'LOCK_TIMEOUT') return false;
+    throw error;
   }
-  return false;
 }
 
 export function releaseLock(dir = '.') {
-  try {
-    rmdirSync(join(dir, LOCK_DIR));
-  } catch {
-    /* already released */
-  }
+  const key = resolve(dir);
+  const lock = heldLocks.get(key);
+  if (!lock) return;
+  releaseTicketLock(lock);
+  heldLocks.delete(key);
 }
 
 function writeAtomic(path, text) {
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  durableWrite(tmp, text);
+  durableRename(tmp, path);
 }
 
 /** Atomically replace .adlc/tickets.json (caller must hold the lock). */
-export function writeTicketsAtomic(dir, ticketsObj) {
-  writeAtomic(join(dir, TICKETS), `${JSON.stringify(ticketsObj, null, 2)}\n`);
+export function writeTicketsAtomic(dir, ticketsObj, { expectedSnapshotHash, expectedStoreAbsent = false } = {}) {
+  let store;
+  let storeWasAbsent = false;
+  try { store = detectTicketStore({ root: dir }); }
+  catch (error) {
+    if (error.code !== 'STORE_NOT_FOUND') throw error;
+    storeWasAbsent = true;
+    initializeTicketStores(dir);
+    store = detectTicketStore({ root: dir });
+  }
+  if (expectedStoreAbsent && !storeWasAbsent) throw conflict('STALE_SNAPSHOT', 'ticket store appeared after synchronization planning');
+  const service = new TicketService(store, { root: dir });
+  const plan = service.planReconciliation(ticketsObj.tickets, { authorized: true, expectedSnapshotHash });
+  return service.apply(plan, { lock: heldLocks.get(resolve(dir)) ?? null });
 }
 
 const EMPTY_SIDECAR = { version: 1, tickets: {}, pendingCreates: {} };
 
-/** Read the sidecar; an absent or corrupt sidecar yields the empty cache (rebuildable). */
-export function readSidecar(dir = '.') {
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function sidecarErrors(parsed) {
+  const errors = validateSyncState(parsed);
+  if (parsed?.version !== 1) errors.push('version: unsupported sidecar format');
+  for (const [id, entry] of Object.entries(isRecord(parsed?.tickets) ? parsed.tickets : {})) {
+    if (!isRecord(entry)) errors.push(`tickets.${id}: expected object`);
+  }
+  for (const [key, pending] of Object.entries(isRecord(parsed?.pendingCreates) ? parsed.pendingCreates : {})) {
+    if (!isRecord(pending)) {
+      errors.push(`pendingCreates.${key}: expected object`);
+      continue;
+    }
+    if (typeof pending.localId !== 'string' || !pending.localId) errors.push(`pendingCreates.${key}.localId: required string`);
+    if (pending.number !== undefined && (!Number.isInteger(pending.number) || pending.number <= 0)) errors.push(`pendingCreates.${key}.number: expected positive integer`);
+  }
+  return errors;
+}
+
+/**
+ * Read the sidecar. Read-only flows may rebuild ordinary cache state after
+ * corruption, but writers fail closed because pendingCreates is a recovery log
+ * until ID reassignment and evidence re-attestation both finish.
+ */
+export function readSidecar(dir = '.', { strict = false } = {}) {
   const path = join(dir, SIDECAR);
   if (!existsSync(path)) return { ...EMPTY_SIDECAR };
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return { ...EMPTY_SIDECAR, ...parsed };
-  } catch {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (strict) throw operational('SIDECAR_CORRUPT', `cannot safely continue with corrupt ${SIDECAR}: ${error.message}`);
     return { ...EMPTY_SIDECAR };
   }
+  const errors = sidecarErrors(parsed);
+  if (errors.length) {
+    if (strict) throw operational('SIDECAR_CORRUPT', `cannot safely continue with invalid ${SIDECAR}: ${errors.join('; ')}`);
+    return { ...EMPTY_SIDECAR };
+  }
+  return { ...EMPTY_SIDECAR, ...parsed };
 }
 
 export function writeSidecar(dir, state) {

@@ -1,5 +1,5 @@
 ---
-description: Author and triage an ADLC ticket (P0) into .adlc/tickets.json, then check it is executable.
+description: Author and triage an ADLC ticket (P0) through the canonical ticket store, then check it is executable.
 argument-hint: [short description of the work]
 ---
 
@@ -7,17 +7,19 @@ argument-hint: [short description of the work]
 
 Tickets are the contract every downstream ADLC tool reads (`coldstart`,
 `model-router`, `merge-forecast`, `rails-guard`). This command turns a request
-into a well-formed, self-contained ticket appended to `.adlc/tickets.json`.
+into a well-formed, self-contained ticket through `adlc ticket`. The command
+supports both the sharded store and the 1.x legacy bridge.
 
 The request to triage: **$ARGUMENTS** (if empty, ask the user what the ticket is
 for).
 
 ## 0. Preconditions
 
-- Ensure `.adlc/tickets.json` exists. If it does not, tell the user to run
+- Run `adlc ticket store status --json`. If no store exists, tell the user to run
   `/adlc:adlc-init` first (do not silently create the workspace here).
-- Read the current `.adlc/tickets.json` so you know the existing ticket ids and
-  can pick the next unused one.
+- Run `adlc ticket list --json` to inspect existing IDs and hashes. If the
+  interactive command offers legacy migration, show the plan and honor the
+  human's answer; decline continues on legacy storage.
 
 ## 1. Shape the ticket
 
@@ -52,7 +54,25 @@ A ticket must be **executable without guesswork** (that is exactly what
 If anything required for a *self-contained* ticket is ambiguous, ask the user
 rather than guessing — a vague ticket fails `coldstart`.
 
-## 2. Apply the change safely, then write
+## 2. Apply the change safely through the store service
+
+Write the proposed full ticket document to a temporary JSON file outside the
+tracked store. Preview it with `adlc ticket create --input <file> --json`; show
+the dry-run plan, validation, graph effects, file operations, and after hash.
+Only after the human accepts the plan run the same command with `--write`.
+Never directly edit `.adlc/tickets.json` or shard files, and never stage or
+commit the result. Existing-prerequisite edge updates use `adlc ticket update`
+with the current `ticketHash` supplied via `--expect`.
+
+The canonical service owns locking, full-graph validation, compare-and-swap,
+journaling, recovery, and evidence. If it reports `RECOVERY_REQUIRED`, stop and
+ask the human to choose `adlc ticket store recover --complete` or `--rollback`.
+
+### Legacy protocol reference (do not execute)
+
+The following describes the old flat-file algorithm for historical context;
+it is superseded by the service commands above and must not be performed by an
+agent.
 
 The mutation model has exactly one allowed write to existing data: **adding a
 prerequisite→new edge to a prerequisite ticket** (the second case in step 1).

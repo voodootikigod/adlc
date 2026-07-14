@@ -90,6 +90,7 @@ test('AC1: npm pack --dry-run ships the runtime surface and NO test files', () =
     cwd: pkgDir,
     encoding: 'utf8',
     timeout: 120_000,
+    env: { ...process.env, npm_config_cache: join(tmpdir(), 'adlc-npm-cache') },
   });
   assert.equal(res.status, 0, `npm pack failed:\n${res.stderr}`);
   const manifest = JSON.parse(res.stdout);

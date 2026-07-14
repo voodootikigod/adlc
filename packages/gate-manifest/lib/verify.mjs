@@ -76,6 +76,26 @@ export function verify(dir = ADLC_DIR) {
       };
     }
 
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return {
+        valid: false,
+        message: `chain broken at line ${lineNo}: entry must be an object`,
+        count: lineNo - 1,
+        signed: false,
+        break: { seq: null, lineNo, reason: 'entry must be an object' },
+      };
+    }
+
+    if (!Number.isInteger(entry.seq) || entry.seq < 1) {
+      return {
+        valid: false,
+        message: `chain broken at line ${lineNo}: seq must be a positive integer`,
+        count: lineNo - 1,
+        signed: false,
+        break: { seq: entry.seq ?? null, lineNo, reason: 'invalid seq' },
+      };
+    }
+
     // Check prev hash
     if (prevRawLine === null) {
       // First entry: prev must be null
