@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -101,8 +101,30 @@ const DEFAULT_IGNORED_PATHS = [
   '.adlc/current-ticket.json',
 ];
 
+// Canonicalize a path through symlinks so that different aliases of the same
+// location collapse to one form (macOS /var -> /private/var, /tmp -> /private/tmp).
+// A not-yet-existent leaf (e.g. manifest.jsonl before it is written) is handled by
+// resolving the longest existing ancestor and re-appending the remainder.
+function canonicalize(absPath) {
+  try {
+    return realpathSync.native(absPath);
+  } catch {
+    const parent = dirname(absPath);
+    if (parent === absPath) return absPath; // reached the filesystem root
+    return join(canonicalize(parent), basename(absPath));
+  }
+}
+
+// Return `path` relative to `cwd`, or null if it falls outside the worktree. Both
+// sides are symlink-canonicalized first: without this, an ignore path recorded via
+// a symlink alias of cwd (e.g. an evidence file stored as /var/... while
+// process.cwd() reports /private/var/...) yields a spurious '../'-escaping relative
+// path, silently drops out of the ignore set, and makes the worktree revision
+// self-referential (it would hash evidence that itself embeds the revision).
 function normalizeRelativePath(cwd, path) {
-  const normalized = relative(cwd, resolve(cwd, path)).replaceAll('\\', '/');
+  const base = canonicalize(resolve(cwd));
+  const target = canonicalize(resolve(cwd, path));
+  const normalized = relative(base, target).replaceAll('\\', '/');
   if (!normalized || normalized.startsWith('../') || normalized === '..') return null;
   return normalized;
 }
