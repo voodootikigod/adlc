@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,8 +56,22 @@ test('AC1: publishConfig grants public access + provenance (release.mjs relies o
 });
 
 test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never "default access"', () => {
-  const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8', timeout: 60_000 });
-  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+  // Dry-run against a throwaway, never-published version. npm aborts a dry-run for
+  // an ALREADY-published version before printing the access line ("cannot publish
+  // over the previously published versions: X"), which would flip this assertion red
+  // the moment the current version ships. Bumping to an unpublishable-high version
+  // keeps the public-access check deterministic regardless of what is live on the
+  // registry. The real package.json is restored in finally.
+  const pkgJsonPath = join(pkgDir, 'package.json');
+  const originalPkgJson = readFileSync(pkgJsonPath, 'utf8');
+  let out;
+  try {
+    writeFileSync(pkgJsonPath, JSON.stringify({ ...JSON.parse(originalPkgJson), version: '999.999.999' }, null, 2) + '\n');
+    const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8', timeout: 60_000 });
+    out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+  } finally {
+    writeFileSync(pkgJsonPath, originalPkgJson);
+  }
   assert.match(out, /with tag latest and public access/, `expected real npm to report public access:\n${out}`);
   assert.ok(!/default access/.test(out), `npm reported "default access" (restricted) — publishConfig is missing or wrong:\n${out}`);
 });
