@@ -17,7 +17,7 @@ export const VS_SDLC_ROWS = [
   {
     dimension: 'Unit of trust',
     sdlc: 'The engineer who wrote it',
-    adlc: 'Gate evidence: machine-checkable artifacts at every phase',
+    adlc: 'Explicit exit contracts: deterministic evidence plus human attestation',
   },
   {
     dimension: 'Audit trail',

@@ -5,7 +5,7 @@ export const MARKETING_ROUTES = [
     path: '/',
     title: 'ADLC: The Agentic Development Lifecycle',
     summary:
-      'A software lifecycle built around how AI models actually fail, with a machine-checkable gate at every phase.',
+      'A software lifecycle built around how AI models actually fail, with deterministic evidence and explicit human attestation.',
   },
   {
     path: '/lifecycle',

@@ -17,7 +17,7 @@ export const TOOLKIT_GROUPS = [
   },
   {
     group: 'Shared foundation',
-    packages: ['cli', 'core'],
+    packages: ['cli', 'core', 'init'],
   },
 ];
 

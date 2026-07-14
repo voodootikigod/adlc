@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADLC: Route phase"
+  short_description: "Route work to the right lifecycle gate"
+  default_prompt: "Use $adlc to route this work through the correct ADLC phase and gate."

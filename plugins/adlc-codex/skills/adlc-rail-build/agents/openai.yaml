@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADLC: Rail and build"
+  short_description: "Protect frozen rails while building"
+  default_prompt: "Use $adlc-rail-build to select the ticket, protect its rails, and supervise implementation."

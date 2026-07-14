@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADLC: Prosecute change"
+  short_description: "Verify review evidence before integration"
+  default_prompt: "Use $adlc-prosecute to prosecute this completed change against its ticket."

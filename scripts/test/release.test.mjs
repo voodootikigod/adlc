@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseMain, repinInternalDependencies, packagePublishOrder, findVersionDrift, publishTargets } from '../release.mjs';
 
-/** Build a throwaway repo: root + packages/{core,cli} + plugins/{adlc-pi, adlc-claude-code}. */
+/** Build a throwaway repo with package and Codex-manifest version surfaces. */
 function makeRepo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-release-'));
   const packagesDir = join(root, 'packages');
@@ -41,6 +41,16 @@ function makeRepo() {
   });
   // A plugin directory with NO package.json (e.g. adlc-claude-code) must be skipped.
   mkdirSync(join(pluginsDir, 'adlc-claude-code'));
+  mkdirSync(join(pluginsDir, 'adlc-codex', '.codex-plugin'), { recursive: true });
+  write(join(pluginsDir, 'adlc-codex', 'package.json'), {
+    name: '@adlc/codex',
+    version: '1.0.0',
+    dependencies: { '@adlc/cli': '1.0.0' },
+  });
+  write(join(pluginsDir, 'adlc-codex', '.codex-plugin', 'plugin.json'), {
+    name: 'adlc-codex',
+    version: '1.0.0',
+  });
   return { root, packagesDir, pluginsDir };
 }
 
@@ -56,6 +66,8 @@ test('releaseMain bumps packages, versioned plugins, and root in lockstep', () =
     assert.equal(ver(join(packagesDir, 'core', 'package.json')), '1.2.0');
     assert.equal(ver(join(packagesDir, 'cli', 'package.json')), '1.2.0');
     assert.equal(ver(join(pluginsDir, 'adlc-pi', 'package.json')), '1.2.0'); // NOT stranded
+    assert.equal(ver(join(pluginsDir, 'adlc-codex', 'package.json')), '1.2.0');
+    assert.equal(ver(join(pluginsDir, 'adlc-codex', '.codex-plugin', 'plugin.json')), '1.2.0');
     assert.equal(regen, 1); // lockfile regenerated exactly once
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -81,6 +93,19 @@ test('findVersionDrift flags a stranded plugin package', () => {
     const drift = findVersionDrift('1.2.0', { root, packagesDir, pluginsDir });
     assert.ok(drift.length >= 1);
     assert.ok(drift.some((d) => d.includes('adlc-pi')), `expected a plugin entry, got: ${drift.join(' | ')}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('findVersionDrift flags a stale Codex manifest independently of package.json', () => {
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    releaseMain(['1.2.0'], { root, packagesDir, pluginsDir, regenerateLockfile() {} });
+    const manifest = join(pluginsDir, 'adlc-codex', '.codex-plugin', 'plugin.json');
+    writeFileSync(manifest, '{"name":"adlc-codex","version":"1.1.0"}\n');
+    const drift = findVersionDrift('1.2.0', { root, packagesDir, pluginsDir });
+    assert.ok(drift.some((entry) => entry.includes('.codex-plugin')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

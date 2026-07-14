@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADLC: Distill findings"
+  short_description: "Turn repeated findings into defenses"
+  default_prompt: "Use $adlc-distill to turn repeated review findings into reusable defenses."

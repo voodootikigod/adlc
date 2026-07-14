@@ -341,14 +341,22 @@ function normalizePath(path, baseCwd = process.cwd()) {
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
-if (process.env.ADLC_P4_ENFORCEMENT !== '1') {
-  notice('P4 rail hook inactive');
+const explicitEnforcement = process.env.ADLC_P4_ENFORCEMENT;
+if (explicitEnforcement === '0') {
+  notice('P4 rail hook explicitly disabled');
   process.exit(0);
+}
+if (explicitEnforcement !== undefined && explicitEnforcement !== '1') {
+  fail('ADLC_P4_ENFORCEMENT must be 0, 1, or unset');
 }
 
 const activeTicket = resolveActiveTicketId();
 const ticketId = activeTicket.id;
-if (!ticketId) fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+if (!ticketId) {
+  if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+  notice('P4 rail hook inactive: no current ticket selected');
+  process.exit(0);
+}
 
 let snapshot;
 try { snapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }); }
@@ -360,7 +368,15 @@ if (!ticket) fail(`unknown active ticket: ${ticketId}`);
 if (activeTicket.ticketHash && activeTicket.ticketHash !== snapshot.ticketHashes[ticketId]) fail(`active ticket ${ticketId} changed after selection`);
 const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
 const declaredRails = ticket.rails ?? [];
-if (declaredRails.length === 0) fail(`ticket ${ticketId} has no rails`);
+if (explicitEnforcement !== '1' && ticket.completed === true) {
+  notice(`P4 rail hook inactive: ticket ${ticketId} is completed`);
+  process.exit(0);
+}
+if (declaredRails.length === 0) {
+  if (explicitEnforcement === '1') fail(`ticket ${ticketId} has no rails`);
+  notice(`P4 rail hook inactive: ticket ${ticketId} has no rails`);
+  process.exit(0);
+}
 const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
 
 let payload = {};

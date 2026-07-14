@@ -46,3 +46,18 @@ test('integrationFor resolves known slugs and returns undefined for unknown', ()
   assert.equal(integrationFor('claude-code')?.name, 'Claude Code');
   assert.equal(integrationFor('nope'), undefined);
 });
+
+test('Codex marketing facts describe the native marketplace surface', () => {
+  const codex = integrationFor('codex');
+  assert.equal(codex?.status, 'source');
+  assert.deepEqual(codex?.install, [
+    'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
+    'npm install --ignore-scripts',
+    'npm install -g @adlc/cli',
+    'node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project',
+    'codex plugin marketplace add "$PWD"',
+    'codex plugin add adlc-codex@adlc',
+  ]);
+  assert.match(codex?.tagline ?? '', /six skills/);
+  assert.match(codex?.tagline ?? '', /MCP gates/);
+});

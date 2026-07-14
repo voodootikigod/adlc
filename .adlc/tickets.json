@@ -1101,6 +1101,37 @@
       "duration": 4,
       "category": "docs",
       "budget": "mid"
+    },
+    {
+      "id": "T46",
+      "title": "Flush the ADLC through Codex-native install, hooks, MCP, agents, CI, and truthful docs",
+      "body": "Implement .adlc/specs/codex-native-roadmap.md as the contract. Deliver a publish-ready @adlc/codex plugin; deterministic adlc init plus $adlc-init; current-ticket-driven rail activation; advisory lifecycle continuity hooks; an allowlisted stdio MCP server; project-local reviewer/verifier/explorer agent templates; canonical, cleanup-safe isolated install smoke coverage; pinned and latest Codex CI proofs; executable marketing/docs command checks; and accurate Git marketplace install/update/remove guidance. Correct invalid homepage commands, qualify hook/enforcement claims, remove volatile Codex model assertions, and make advertised umbrella package coverage truthful. Acceptance is AC1-AC9 in the spec. Suppressions are denied. Publishing to npm and mutating user-global ~/.codex state are explicitly out of scope.",
+      "scope": [
+        "plugins/adlc-codex/**",
+        "packages/init/**",
+        "packages/cli/**",
+        "packages/fleet/**",
+        "scripts/codex-install-smoke.mjs",
+        "scripts/release.mjs",
+        "scripts/test/**",
+        ".github/workflows/ci.yml",
+        "apps/docs/**",
+        "docs/integrations/codex.md",
+        ".agents/plugins/marketplace.json",
+        ".adlc/specs/codex-native-roadmap.md"
+      ],
+      "rails": [
+        "scripts/test/rails-guard-ci.test.mjs"
+      ],
+      "edges": [
+        {
+          "contract": "T46 implements the Codex subset and executable truth checks; keep T45's all-harness documentation sweep independently grabbable",
+          "to": "T45"
+        }
+      ],
+      "duration": 6,
+      "category": "feature",
+      "budget": "frontier"
     }
   ]
 }

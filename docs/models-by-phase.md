@@ -1,6 +1,6 @@
 # Recommended Models by Phase
 
-> **Snapshot date: July 2026.** Model lineups, prices, and benchmark standings decay
+> **Snapshot date: 2026-07-14.** Model lineups, prices, and benchmark standings decay
 > fast — this document is a cache, and caches need invalidation
 > ([ADLC Principle 10](../ADLC.md)). Re-verify against provider pricing pages before
 > committing budget, run [`adlc model-ratchet`](./tools/model-ratchet.md) after any
@@ -29,8 +29,8 @@ Two doctrine points shape everything below:
 1. **"Frontier" means the best model you are allowed to run — not the most expensive
    model that exists.** The [Frontier-Free Doctrine](../ADLC.md#appendix-e--the-frontier-free-doctrine)
    sets an Opus-class ceiling as the *design center*: the lifecycle must hit its
-   accuracy targets with Opus/Sonnet/Haiku-class models alone. Fable-class and
-   GPT-5.5-Pro-class models are optional headroom, never a requirement. You never
+   accuracy targets without depending on any provider's preview or special-access
+   tier. Above-ceiling models are optional headroom, never a requirement. You never
    need a model smarter than the gate it must pass.
 2. **Measure the stack, not the model.** A 3-pass mid-tier prosecution stack with
    0.85 planted-bug recall *is* the more capable reviewer than a 1-pass frontier
@@ -72,13 +72,20 @@ and SWE-bench Pro are different benchmarks with non-comparable scores.**
 
 | Tier | Model | Price (in/out) | Context | Notes |
 | --- | --- | --- | --- | --- |
-| cheap | GPT-5.4 nano | $0.20 / $1.25 | ~1M | GPT-5.4 mini ($0.75 / $4.50) is the stronger cheap pick when the ladder start keeps failing |
-| mid | GPT-5.4 | $2.50 / $15 | ~1M | Previous flagship, still served; solid mid-tier |
-| frontier | GPT-5.5 | $5 / $30 | ~1M | Powers Codex; 58.6% SWE-bench Pro. Strong cross-family P5 counterpart to an Anthropic-primary stack |
-| above ceiling | GPT-5.5 Pro | $30 / $180 | ~1M | Max-reasoning tier; same caveat as Fable — headroom, not requirement |
+| cheap | GPT-5.4 nano or mini | Verify in the current catalog | Verify in the current catalog | Use the smallest model that clears your repository's rail-backed calibration |
+| mid | GPT-5.4 | Verify in the current catalog | Verify in the current catalog | Repository-default choice for routine coding, tests, debugging, and prosecution |
+| frontier | GPT-5.4 with the highest suitable reasoning setting | Verify in the current catalog | Verify in the current catalog | Repository-default choice for specs, contracts, architecture, and security review |
 
-The GPT-5.6 preview family (Sol/Terra/Luna) is preview-only as of this snapshot — do
-not put previews in the routing table; pin models per task (F8).
+The ADLC Codex plugin does not select or pin a Codex model. Model availability,
+context, and pricing are account- and release-dependent; verify them in the
+[official OpenAI model catalog](https://developers.openai.com/api/docs/models)
+before binding a router tier. Do not route production gates to previews merely
+because a preview has a higher benchmark headline.
+
+GPT-5.4 is this repository's operator default, not a claim that it is the newest
+model in OpenAI's catalog. At this snapshot the official catalog also documents
+the GPT-5.6 family; teams may calibrate an available newer model, but the plugin
+never silently retargets the repository policy.
 
 ### Google
 
@@ -86,7 +93,7 @@ not put previews in the routing table; pin models per task (F8).
 | --- | --- | --- | --- | --- |
 | cheap | Gemini 3.1 Flash-Lite | $0.25 / $1.50 | ~1M | Gemini 2.5 Flash-Lite ($0.10 / $0.40) is the absolute price floor for triage-class work |
 | mid | Gemini 3.5 Flash | $1.50 / $9 | ~1M | Strong quality-for-price mid; Gemini 3 Flash ($0.50 / $3) is the budget mid |
-| frontier | Gemini 3.1 Pro | $4 / $18 (>200K ctx rate) | 2M | ~80.6% SWE-bench Verified; the 2M window suits interrogation over large existing codebases |
+| frontier evaluation only | [Gemini 3.1 Pro Preview](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview) | Verify in the current catalog | 1M input | Preview endpoint; calibrate experimentally, but do not make it a production gate dependency until Google marks it stable |
 
 ### xAI
 
@@ -99,7 +106,7 @@ not put previews in the routing table; pin models per task (F8).
 
 | Tier | Model | Price (in/out) | Context | Notes |
 | --- | --- | --- | --- | --- |
-| cheap | Mistral Small 3.2 | $0.08 / $0.20 | — | Cheapest general model in this snapshot; Codestral ($0.30 / $0.90) is code-tuned but its 32K context limits it to small, well-railed tickets |
+| cheap | [Mistral Small 4](https://docs.mistral.ai/models/overview) | Verify in the current catalog | Verify in the current catalog | Current replacement for deprecated Mistral Small 3.2; calibrate against your rail-backed cheap tier before routing |
 | mid | Mistral Medium 3.5 | ~$1 / $3 (verify) | 256K | 77.6% SWE-bench Verified (vendor); also open-weight — see below. Mistral's Large/Medium price tiering was inconsistent across sources at snapshot time — verify before routing |
 
 ### Open-weight, hosted APIs
@@ -112,7 +119,7 @@ are *distinct model families* — exactly what the P5 multi-provider quorum need
 | cheap | DeepSeek V4 Flash | $0.14 / $0.28 | 1M | Extreme cache discount (~98%); arguably the best cheap-tier value of the snapshot |
 | cheap/mid | MiniMax M3 | ~$0.30 / $1.20 (launch promo) | 1M | ~59% SWE-bench Pro (vendor); verify steady-state pricing |
 | mid | Kimi K2.6 (Moonshot) | $0.55 / $2.65 | ~256K | ~58.6% SWE-bench Pro; the strongest open agentic/tool-use pick — good P4 builder and P5 reviewer |
-| mid | GLM-5.2 (Z.ai) | $1.40 / $4.40 (cheaper via OpenRouter) | 1M | 62.1% SWE-bench Pro — beat GPT-5.5 on that benchmark; MIT license |
+| mid | GLM-5.2 (Z.ai) | $1.40 / $4.40 (cheaper via OpenRouter) | 1M | Vendor-reported 62.1% SWE-bench Pro; MIT license; verify before routing |
 | frontier-adjacent | DeepSeek V4 Pro | $1.74 / $3.48 (promo $0.44 / $0.87) | 1M | ~80% SWE-bench Verified (semi-verified) — the highest open-weight coding score of the snapshot |
 
 ### Local / self-hosted
@@ -148,8 +155,8 @@ that work at this snapshot:
 
 | Primary stack | Cross-family second | Budget alternative |
 | --- | --- | --- |
-| Claude Sonnet 5 / Opus 4.8 | GPT-5.5 | GLM-5.2 or Kimi K2.6 |
-| GPT-5.5 | Claude Opus 4.8 | Gemini 3.1 Pro |
+| Claude Sonnet 5 / Opus 4.8 | GPT-5.4 | GLM-5.2 or Kimi K2.6 |
+| GPT-5.4 | Claude Opus 4.8 | Gemini 3.5 Flash |
 | Open-weight (Qwen/DeepSeek) | Claude Sonnet 5 or Gemini 3.5 Flash | Grok 4.3 |
 
 A single provider's clean approve on high-blast-radius paths is advisory, not a

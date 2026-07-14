@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADLC: Shape specification"
+  short_description: "Interrogate and decompose an executable spec"
+  default_prompt: "Use $adlc-spec to make this request executable before implementation."

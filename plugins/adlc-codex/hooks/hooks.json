@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+            "timeout": 10,
+            "statusMessage": "ADLC: Loading ticket and gate context"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^(apply_patch|functions\\.apply_patch|write|Write|edit|Edit|multi_edit|multiedit|MultiEdit|Bash|bash|Shell|shell|exec|exec_command|run_command|functions\\.exec_command|write_stdin|functions\\.write_stdin|multi_tool_use\\.parallel)$",
@@ -9,6 +22,75 @@
             "command": "node \"${PLUGIN_ROOT}/hooks/adlc-rails-guard.mjs\"",
             "timeout": 10,
             "statusMessage": "ADLC: Checking frozen rails"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(apply_patch|functions\\.apply_patch|Bash|bash|Shell|shell|exec|exec_command|functions\\.exec_command)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" flail",
+            "timeout": 10,
+            "statusMessage": "ADLC: Watching for repeated failures"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" verify",
+            "timeout": 30,
+            "statusMessage": "ADLC: Verifying gate evidence"
           }
         ]
       }

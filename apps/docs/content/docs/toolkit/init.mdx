@@ -1,0 +1,33 @@
+---
+title: init
+description: Idempotently bootstrap the committable ADLC runtime and current project-scoped Codex agents.
+---
+
+# `adlc init`
+
+This command is implemented in the current source but is not in the older
+registry release. From a checkout, use
+`node packages/init/bin/adlc-init.mjs`; use `adlc init` after the matching suite
+release is published.
+
+Initialize a repository without writing to user-global harness configuration:
+
+```sh
+adlc init
+```
+
+The command creates `.adlc/config.json`, `.adlc/specs/`, safe `.gitignore`
+entries, and three standalone `.codex/agents/*.toml` roles. It preserves every
+existing project-owned file, refuses symlink escapes from the project root, and
+produces the same result when run again.
+
+```sh
+adlc init --root ./other-repo --json
+adlc init --no-codex-agents
+```
+
+Use `$adlc-init` inside Codex to run the same initializer. The Codex skill does
+not maintain a second scaffold implementation.
+
+Exit code `0` means initialization completed, including a no-change rerun;
+exit code `1` means an operational or input error.

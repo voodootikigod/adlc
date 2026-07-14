@@ -7,14 +7,15 @@ ADLC_CODEX_SENTINEL_RAIL_BUILD_V1
 
 # ADLC Rail And Build
 
-P3 rails are authored before P4 build and are frozen during P4.
+P3 rails are authored before P4 build and are frozen during P4. Initialize the
+project with `$adlc-init`, then select the ticket through the normal ADLC ticket
+workflow. The native Codex hook automatically arms when
+`.adlc/current-ticket.json` selects an incomplete ticket with non-empty rails.
 
-Set P4 hook enforcement explicitly:
-
-```sh
-export ADLC_P4_ENFORCEMENT=1
-export ADLC_TICKET=<ticket-id>
-```
+Use `ADLC_P4_ENFORCEMENT=1` only to force enforcement in automation or unusual
+shell workflows. Use `ADLC_P4_ENFORCEMENT=0` only as a deliberate local opt-out;
+it does not bypass the authoritative CI gate. `ADLC_TICKET` remains an explicit
+selection override when no current-ticket file is present.
 
 Required gates:
 
@@ -25,4 +26,5 @@ adlc rails-guard --ticket "$ADLC_TICKET" --tickets .adlc/tickets.json --record -
 adlc flail-detector session.log --json
 ```
 
-Hooks are assistive. `adlc rails-guard` is the deterministic rail-freeze proof.
+Hooks are immediate guardrails. `adlc rails-guard` and the required CI job are
+the deterministic rail-freeze proof.

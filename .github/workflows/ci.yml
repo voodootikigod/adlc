@@ -33,6 +33,16 @@ jobs:
       - name: Test
         run: npm test
 
+      # Required proof against the Codex release this integration is developed
+      # against. Keep the pin deliberate so upstream drift cannot make the
+      # required job non-deterministic; the advisory job below tracks latest.
+      - name: Codex native plugin live install proof (pinned)
+        if: matrix.node-version == 22
+        run: |
+          npm install -g @openai/codex@0.144.1
+          codex --version
+          ADLC_CODEX_LIVE_INSTALL=1 node scripts/codex-install-smoke.mjs .
+
       # AC7 — OpenCode live deny proof (ADR 0004 amendment 2026-07-05).
       # Folded into the REQUIRED test job (not a separate optional job) on
       # purpose: on a private free-plan repo new required checks can't be added
@@ -129,6 +139,31 @@ jobs:
           opencode --version
           node scripts/opencode-live-deny.mjs --require
           node scripts/opencode-live-tool.mjs --require
+
+  # Advisory drift canary. The pinned proof in the required test matrix remains
+  # authoritative while this job exposes changes in the newest Codex release.
+  codex-live-latest:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: Codex native plugin live install proof vs latest
+        run: |
+          npm install -g @openai/codex@latest
+          codex --version
+          ADLC_CODEX_LIVE_INSTALL=1 node scripts/codex-install-smoke.mjs .
 
   pre-ga-gate:
     # Explicit CI gate that fails with a clear message while either of the two

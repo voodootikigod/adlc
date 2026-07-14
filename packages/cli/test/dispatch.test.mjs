@@ -42,7 +42,7 @@ function withTempSpec(contents, fn) {
 test('registry exposes the suite tools and omits internal packages', () => {
   // 24 as of build-gate's registration (issue #48) — bump deliberately when a
   // tool is intentionally added/removed from the registry.
-  assert.equal(TOOLS.length, 25);
+  assert.equal(TOOLS.length, 26);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
@@ -50,6 +50,7 @@ test('registry exposes the suite tools and omits internal packages', () => {
   assert.equal(isTool('ticket-prune'), true);
   assert.equal(isTool('build-gate'), true);
   assert.equal(isTool('fleet'), true);
+  assert.equal(isTool('init'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });
@@ -65,6 +66,7 @@ test('resolves package-local tool bins without PATH lookup', () => {
   assert.match(resolveBin('prosecute') ?? '', /packages\/prosecute\/bin\/adlc-prosecute\.mjs$/);
   assert.match(resolveBin('ticket') ?? '', /packages\/tickets\/bin\/adlc-tickets\.mjs$/);
   assert.match(resolveBin('ticket-prune') ?? '', /packages\/ticket-prune\/bin\/ticket-prune\.mjs$/);
+  assert.match(resolveBin('init') ?? '', /packages\/init\/bin\/adlc-init\.mjs$/);
   assert.equal(resolveBin('definitely-not-real'), null);
 });
 
@@ -72,6 +74,8 @@ test('umbrella package declares both local ticket and external-sync dispatch tar
   const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
   assert.equal(pkg.dependencies['@adlc/tickets'], pkg.version);
   assert.equal(pkg.dependencies['@adlc/ticket-sync'], pkg.version);
+  assert.equal(pkg.dependencies['@adlc/init'], pkg.version);
+  assert.equal(pkg.dependencies['@adlc/fleet'], pkg.version);
 });
 
 test('external verbs like "review" have no local bin to resolve (they are npx passthroughs)', () => {

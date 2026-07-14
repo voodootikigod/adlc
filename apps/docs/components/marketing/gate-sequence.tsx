@@ -1,13 +1,13 @@
 import { GateBadge } from './gate-badge';
 import type { GateState } from './gate-badge';
+import { MARKETING_GATES } from '@/lib/marketing-gates.mjs';
 
-const SEQUENCE: ReadonlyArray<{ cmd: string; state: GateState; detail: string }> = [
-  { cmd: 'adlc spec-lint ticket.md', state: 'pass', detail: 'spec is executable' },
-  { cmd: 'adlc premortem ticket.md', state: 'wish', detail: '2 assumptions flagged' },
-  { cmd: 'adlc rails-guard --check', state: 'pass', detail: 'frozen rails untouched' },
-  { cmd: 'adlc hollow-test suite/', state: 'fail', detail: '1 test asserts nothing' },
-  { cmd: 'adlc prosecute HEAD', state: 'pass', detail: 'change is load-bearing' },
-];
+const SEQUENCE: ReadonlyArray<{ cmd: string; state: GateState; detail: string }> =
+  MARKETING_GATES.map((gate) => ({
+    cmd: gate.command,
+    state: gate.state as GateState,
+    detail: gate.detail,
+  }));
 
 // Staggered entrance is pure CSS (.mk-gate-line + animation-delay), so the
 // prefers-reduced-motion guard in global.css shows all lines statically.
@@ -16,7 +16,7 @@ export function GateSequence() {
     <div
       className="flex flex-col gap-2"
       role="img"
-      aria-label="Terminal showing ADLC gates running: spec-lint pass, premortem wish, rails-guard pass, hollow-test fail, prosecute pass"
+      aria-label="Terminal showing executable ADLC gate commands and their example verdicts"
     >
       {SEQUENCE.map((line, i) => (
         <div

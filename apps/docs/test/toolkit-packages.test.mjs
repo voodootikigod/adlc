@@ -24,6 +24,7 @@ test('every package has a toolkit docs page', () => {
   for (const name of ALL_PACKAGES) {
     const p = path.join(__dirname, '..', 'content', 'docs', 'toolkit', `${name}.mdx`);
     assert.ok(existsSync(p), `missing docs page for ${name}`);
+    assert.ok(existsSync(path.join(packagesDir, name, 'package.json')), `${name}: not a publishable package`);
   }
 });
 

@@ -1,7 +1,30 @@
 {
   "name": "adlc-codex",
-  "version": "1.0.2",
-  "description": "Codex workflows for operating the Agentic Development Lifecycle with the ADLC toolkit.",
+  "version": "1.3.0",
+  "description": "Native Codex workflows for operating and enforcing the Agentic Development Lifecycle.",
+  "author": {
+    "name": "Chris Williams",
+    "url": "https://github.com/voodootikigod"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-codex",
+  "repository": "https://github.com/voodootikigod/adlc",
+  "license": "MIT",
+  "keywords": ["adlc", "software-development", "code-review", "testing", "agentic"],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json"
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "ADLC for Codex",
+    "shortDescription": "Lifecycle gates, rail protection, and review evidence",
+    "longDescription": "Operate ADLC from Codex with progressive-disclosure skills, trusted lifecycle hooks, allowlisted MCP gate tools, and project-scoped review agents.",
+    "developerName": "ADLC",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/voodootikigod/adlc",
+    "defaultPrompt": [
+      "Use $adlc to route this change through the correct lifecycle gate.",
+      "Use $adlc-init to initialize this repository for ADLC."
+    ],
+    "brandColor": "#4FB4D8"
+  }
 }

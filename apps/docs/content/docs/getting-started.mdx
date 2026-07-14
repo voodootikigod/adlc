@@ -6,7 +6,9 @@ description: Install the ADLC toolkit, bootstrap a repo, and run your first gate
 # Getting started
 
 The toolkit is a set of gate-shaped CLIs published under the `@adlc` npm scope.
-One install gives you every gate behind the stable `adlc <tool>` dispatcher.
+One install gives you every gate in that release behind the stable `adlc <tool>`
+dispatcher. This checkout adds the project initializer and fleet orchestrator;
+they become registry commands only when the matching suite release is published.
 
 ## 1. Install the CLI
 
@@ -45,27 +47,35 @@ adlc preflight        # environment & permissions table, pass/fail verdict
 ```
 
 Gates that need shared state (tickets, frozen rails, evidence) read it from a
-committable `.adlc/` directory. Bootstrap it from inside your agent harness with
-`/adlc-init` (see [integrations](/docs/integrations)). The
+committable `.adlc/` directory. From this unreleased checkout, bootstrap it with:
+
+```sh
+node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project
+```
+
+After the matching suite release, the same operation is `adlc init`; Codex users
+can then invoke `$adlc-init`. Other harnesses expose equivalent initialization
+commands on their own release schedules. The
 [.adlc runtime reference](/docs/reference/adlc-runtime) documents every file the
 gates read and write.
 
 ## 4. Wire it into your harness
 
 The lifecycle is meant to run where your agent runs. Native integrations ship
-for six harnesses — skills, hooks, and commands that fire the gates
-automatically:
+for six harnesses. Each guide uses that harness's own extension mechanism;
+there is no universal install syntax:
 
 ```sh
 npx plugins add voodootikigod/adlc   # vendor-neutral installer — Claude Code today
-npm install -g @adlc/cli             # the toolkit the plugin shells out to
+codex plugin marketplace add voodootikigod/adlc --ref main
+codex plugin add adlc-codex@adlc
 ```
 
-The [`plugins` installer](https://www.npmjs.com/package/plugins) covers harnesses whose
-plugin packages are published (Claude Code today); every integration page below also
-documents its native install path.
+Install `@adlc/cli` globally before using any integration. The [`plugins`
+installer](https://www.npmjs.com/package/plugins) covers Claude Code; Codex uses
+its native Git marketplace. Every guide documents its tested install path.
 
-Then `/adlc-init` once per repo. See the per-harness guides:
+Then initialize once per repo. See the per-harness guides:
 [Claude Code](/docs/integrations/claude-code), [Codex](/docs/integrations/codex),
 [Cursor](/docs/integrations/cursor), [opencode](/docs/integrations/opencode),
 [pi](/docs/integrations/pi), and [Antigravity](/docs/integrations/antigravity).

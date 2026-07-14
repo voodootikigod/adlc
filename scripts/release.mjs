@@ -109,6 +109,16 @@ function versionedPackageJsonPaths({ packagesDir = PKGS, pluginsDir = PLUGINS } 
   return paths;
 }
 
+function codexPluginManifestPaths(pluginsDir = PLUGINS) {
+  if (!existsSync(pluginsDir)) return [];
+  const paths = [];
+  for (const name of readdirSync(pluginsDir)) {
+    const manifest = join(pluginsDir, name, '.codex-plugin', 'plugin.json');
+    if (existsSync(manifest)) paths.push(manifest);
+  }
+  return paths;
+}
+
 /**
  * Deterministic post-bump gate: return a list of every place still NOT at
  * `version` — any versioned package.json (packages/* + plugins/*), the root, and
@@ -121,6 +131,10 @@ export function findVersionDrift(version, { root = ROOT, packagesDir = PKGS, plu
   for (const pj of versionedPackageJsonPaths({ packagesDir, pluginsDir })) {
     const v = readJson(pj).version;
     if (v !== version) problems.push(`${pj}: ${v} != ${version}`);
+  }
+  for (const manifest of codexPluginManifestPaths(pluginsDir)) {
+    const v = readJson(manifest).version;
+    if (v !== version) problems.push(`${manifest}: ${v} != ${version}`);
   }
   const rootV = readJson(join(root, 'package.json')).version;
   if (rootV !== version) problems.push(`${join(root, 'package.json')}: ${rootV} != ${version}`);
@@ -175,6 +189,12 @@ export function releaseMain(
       const pkg = repinInternalDependencies(readJson(pj), version);
       writeJson(pj, pkg);
       console.log(`set ${pkg.name}@${version} (plugin)`);
+    }
+    for (const manifest of codexPluginManifestPaths(pluginsDir)) {
+      const plugin = readJson(manifest);
+      plugin.version = version;
+      writeJson(manifest, plugin);
+      console.log(`set ${plugin.name}@${version} (Codex manifest)`);
     }
   }
 

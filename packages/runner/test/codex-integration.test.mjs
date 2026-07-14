@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveRevision, sha256 } from '@adlc/core';
@@ -15,7 +15,9 @@ describe('codex plugin smoke script', () => {
     });
     const parsed = JSON.parse(out);
     assert.equal(parsed.ok, true);
-    assert.equal(parsed.skills, 5);
+    assert.equal(parsed.skills, 6);
+    assert.equal(parsed.agents, 3);
+    assert.equal(parsed.mcpServers, 1);
   });
 
   it('fails if isolated install mutates real Codex plugin data', () => {
@@ -31,6 +33,19 @@ describe('codex plugin smoke script', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('cleans every temporary root when live setup fails partway through', () => {
+    const prefixes = ['adlc-codex-home-', 'adlc-codex-user-', 'adlc-codex-smoke-'];
+    const snapshot = () => readdirSync(tmpdir()).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).sort();
+    const before = snapshot();
+    const result = spawnSync(process.execPath, [join(repoRoot, 'scripts/codex-install-smoke.mjs'), repoRoot], {
+      env: { ...process.env, ADLC_CODEX_LIVE_INSTALL: '1', ADLC_CODEX_SMOKE_FAIL_AFTER_TEMP: '1' },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /injected failure after temporary setup/);
+    assert.deepEqual(snapshot(), before);
   });
 });
 
@@ -163,7 +178,7 @@ describe('adlc rails hook', () => {
     return dir;
   }
 
-  it('is inactive unless ADLC_P4_ENFORCEMENT=1', () => {
+  it('is inactive in auto mode when no ticket is selected', () => {
     const dir = fixture();
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADLC: Initialize"
+  short_description: "Bootstrap ADLC state and Codex agents"
+  default_prompt: "Use $adlc-init to initialize this repository for ADLC and Codex."

@@ -5,6 +5,7 @@ import { INTEGRATIONS } from '@/lib/integration-facts.mjs';
 import { SERIES_BASE, theoryLink } from '@/lib/theory-links.mjs';
 import { ALL_PACKAGES } from '@/lib/toolkit-packages.mjs';
 import { SITE_URL } from '@/lib/routes.mjs';
+import { MARKETING_GATES } from '@/lib/marketing-gates.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { TerminalCard } from '@/components/marketing/terminal-card';
 import { Backdrop } from '@/components/marketing/backdrop';
@@ -14,7 +15,7 @@ import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
 
 export const metadata: Metadata = {
   description:
-    'The SDLC defends against human failure modes. Your agents fail differently. ADLC is a lifecycle built around how models actually fail, with a machine-checkable gate at every phase.',
+    'The SDLC defends against human failure modes. Your agents fail differently. ADLC gives every phase an explicit exit contract: deterministic gates produce evidence, and human gates record attestation.',
 };
 
 const APP_STRUCTURED_DATA = {
@@ -30,13 +31,6 @@ const APP_STRUCTURED_DATA = {
     'Zero-dependency CLIs that each enforce one machine-checkable gate of the Agentic Development Lifecycle.',
   sameAs: ['https://github.com/voodootikigod/adlc'],
 };
-
-const HERO_TOOLS = [
-  { name: 'spec-lint', gate: 'Is the spec executable?', output: '$ adlc spec-lint ticket.md\n✓ PASS: 0 ambiguities, acceptance criteria machine-checkable' },
-  { name: 'rails-guard', gate: 'Are the frozen tests untouched?', output: '$ adlc rails-guard --check\n✗ FAIL: test/auth.test.mjs modified after freeze' },
-  { name: 'hollow-test', gate: 'Do the tests assert anything?', output: '$ adlc hollow-test suite/\n✗ FAIL: 1 hollow test asserts its own fixture' },
-  { name: 'prosecute', gate: 'Would review catch a planted defect?', output: '$ adlc prosecute HEAD\n✓ PASS: 3 probes, all caught by the suite' },
-];
 
 // Gate results stay glyph + word (spec §4); color only reinforces the verdict.
 function TerminalOutput({ output }: { output: string }) {
@@ -78,8 +72,8 @@ export default function HomePage() {
           </h1>
           <p className="max-w-2xl text-lg leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
             The Agentic Development Lifecycle rebuilds software delivery around the ways
-            models actually fail. Every phase ends in a machine-checkable gate, and every
-            gate leaves evidence you can audit.
+            models actually fail. Every phase has an explicit exit contract: deterministic
+            gates leave machine-checkable evidence, and human gates record attestation.
           </p>
           <div className="flex flex-wrap gap-4">
             <Link
@@ -135,7 +129,7 @@ export default function HomePage() {
       {/* 4 — Gates, not vibes */}
       <MarketingSection kicker="Gates, not vibes" title="Every claim gets checked by a machine">
         <div className="grid gap-4 md:grid-cols-2">
-          {HERO_TOOLS.map((t) => (
+          {MARKETING_GATES.map((t) => (
             <TerminalCard key={t.name} title={`${t.name}: ${t.gate}`}>
               <TerminalOutput output={t.output} />
             </TerminalCard>
