@@ -1,7 +1,7 @@
 {
   "name": "adlc-cursor",
-  "version": "1.3.0",
-  "description": "Agentic Development Lifecycle for Cursor — rails-guard hooks, phase skills, and /adlc-* commands backed by @adlc/cli.",
+  "version": "1.4.1",
+  "description": "Agentic Development Lifecycle for Cursor \u2014 rails-guard hooks, phase skills, and /adlc-* commands backed by @adlc/cli.",
   "author": {
     "name": "Chris Williams",
     "email": "chris@voodootikigod.com"
