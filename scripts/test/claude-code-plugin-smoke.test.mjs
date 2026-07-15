@@ -200,10 +200,12 @@ test('claude-code-plugin-smoke does not false-positive on excluded, genuinely ou
 
   // Sanity-check the fixture assumption: these files DO contain bare command
   // text today (proving the pass above isn't just "nothing to find").
+  // Cursor's palette is intentionally bare `/adlc-*` (not Claude's `/adlc:`
+  // namespace) — pin a command that the Cursor doc still documents.
   const archivePath = join(REPO, 'docs/archive/claude-code-plan.md');
   const cursorDocPath = join(REPO, 'docs/integrations/cursor.md');
   assert.match(readFileSync(archivePath, 'utf8'), /\/adlc-init/, 'fixture assumption stale: expected archived doc to still contain bare command text');
-  assert.match(readFileSync(cursorDocPath, 'utf8'), /\/adlc-init/, 'fixture assumption stale: expected Cursor doc to still contain its own bare command text');
+  assert.match(readFileSync(cursorDocPath, 'utf8'), /\/adlc-prosecute/, 'fixture assumption stale: expected Cursor doc to still contain its own bare command text');
 });
 
 // Regression coverage: namespacedCommandNames is derived from filenames on disk
