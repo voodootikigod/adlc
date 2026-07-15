@@ -82,6 +82,21 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
 assertHookConfig('hooks/hooks.json', join(PLUGIN, 'hooks', 'hooks.json'), { relativeNeedle: './hooks/' });
 assertHookConfig('hooks.json', join(PLUGIN, 'hooks.json'), { relativeNeedle: './node_modules/@adlc/cursor/hooks/' });
 
+// ---- T47 / Codex AR: never introduce .adlc/config.json on a rails-active base ----
+// Main already has tickets with rails, so rails-guard-ci treats .adlc/config.json as
+// an immutable trust root even when it is absent from main. Committing a generated
+// init config here would deny the PR. Bootstrap config only via the protected-base
+// ceremony (securityMode + acknowledgedNewRailBypass), never as a T47 side-effect.
+try {
+  const configIntroduced = execFileSync('git', ['diff', '--name-only', 'main...HEAD', '--', '.adlc/config.json'], {
+    cwd: ROOT, encoding: 'utf8',
+  }).trim();
+  if (configIntroduced) fail('branch introduces .adlc/config.json — keep it out of T47; bootstrap via protected-base ceremony');
+  else ok('branch does not introduce .adlc/config.json (Codex AR / rails-guard trust-root)');
+} catch (e) {
+  fail(`could not check config.json against main: ${e.message}`);
+}
+
 // ---- T47: marketplace + plugin manifest + skills ----
 const marketplacePath = join(ROOT, '.cursor-plugin', 'marketplace.json');
 if (!existsSync(marketplacePath)) fail('root .cursor-plugin/marketplace.json missing');

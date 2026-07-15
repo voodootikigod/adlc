@@ -15,7 +15,10 @@ function configForHarness(harness) {
   const harnesses = harness === 'cursor'
     ? { cursor: { railEnforcement: 'auto' } }
     : { codex: { railEnforcement: 'auto' } };
-  return `${JSON.stringify({ version: 1, harnesses }, null, 2)}\n`;
+  // securityMode is required for config-integrity once a config is committed;
+  // acknowledgedNewRailBypass must NOT be self-set here — that is a protected-base
+  // ceremony field. Keep generated configs local until that ceremony runs.
+  return `${JSON.stringify({ version: 1, securityMode: 'unsigned-fallback', harnesses }, null, 2)}\n`;
 }
 
 const WHOLE_ADLC_IGNORES = new Set(['.adlc', '.adlc/', '/.adlc', '/.adlc/']);

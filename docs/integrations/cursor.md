@@ -61,6 +61,13 @@ documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
    adlc init --harness cursor
    ```
 
+`adlc init` may write a **local** `.adlc/config.json`. Do **not** commit that
+file into a repository that already has frozen rails on the base branch — CI
+treats `.adlc/config.json` as a trust root once any base ticket declares rails.
+Bootstrap a real config only through the protected-base ceremony (with
+`securityMode` and `acknowledgedNewRailBypass`), not as part of installing the
+Cursor plugin.
+
 4. Wire the unbypassable CI rail-freeze gate
    ([`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) as a required check.
 
