@@ -11,23 +11,32 @@ const SEQUENCE: ReadonlyArray<{ cmd: string; state: GateState; detail: string }>
 
 // Staggered entrance is pure CSS (.mk-gate-line + animation-delay), so the
 // prefers-reduced-motion guard in global.css shows all lines statically.
+// The verdict detail rides above its command as a shell comment (dimmed like
+// the install snippets in IntegrationCard), which keeps command lines short
+// enough to sit on one line at the section width.
 export function GateSequence() {
   return (
     <div
-      className="flex flex-col gap-2"
+      className="flex flex-col gap-4"
       role="img"
       aria-label="Terminal showing executable ADLC gate commands and their example verdicts"
     >
       {SEQUENCE.map((line, i) => (
         <div
           key={line.cmd}
-          className="mk-gate-line flex flex-wrap items-center gap-3 font-mono text-sm"
+          className="mk-gate-line flex flex-col gap-1 font-mono text-sm"
           style={{ animationDelay: `${0.5 + i * 0.7}s` }}
         >
-          <span style={{ color: 'var(--mk-muted)' }}>$</span>
-          <span style={{ color: '#cbcdd2' }}>{line.cmd}</span>
-          <GateBadge state={line.state} />
-          <span style={{ color: 'var(--mk-muted)' }}>{line.detail}</span>
+          <span style={{ color: 'var(--mk-muted)' }}># {line.detail}</span>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* The prompt is inline with the command so a wrapped command
+                never strands a lone "$" on the line above. */}
+            <span style={{ color: '#cbcdd2' }}>
+              <span style={{ color: 'var(--mk-muted)' }}>$ </span>
+              {line.cmd}
+            </span>
+            <GateBadge state={line.state} />
+          </div>
         </div>
       ))}
       <div

@@ -92,7 +92,7 @@ export default function HomePage() {
             </Link>
           </div>
           <div
-            className="mt-4 max-w-2xl rounded-lg border p-6"
+            className="mt-4 rounded-lg border p-6"
             style={{ borderColor: '#3f4044', background: 'rgba(38,39,44,0.85)' }}
           >
             <GateSequence />
