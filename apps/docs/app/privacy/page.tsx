@@ -65,11 +65,11 @@ export default function PrivacyPage() {
           </p>
           <ul className="mt-2 list-disc space-y-1 pl-6">
             <li>
-              <strong style={{ color: '#cbcdd2' }}>Attio</strong> — a CRM that stores your inquiry so
+              <strong style={{ color: '#cbcdd2' }}>Attio</strong>, a CRM that stores your inquiry so
               we can follow up. See Attio&apos;s own privacy terms for how they handle data.
             </li>
             <li>
-              <strong style={{ color: '#cbcdd2' }}>Resend</strong> — an email delivery service that
+              <strong style={{ color: '#cbcdd2' }}>Resend</strong>, an email delivery service that
               sends your message to our inbox.
             </li>
           </ul>

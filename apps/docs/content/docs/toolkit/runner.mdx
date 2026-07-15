@@ -1,6 +1,6 @@
 ---
 title: runner
-description: Asserts that each ADLC phase's required manifest evidence is present, failing closed when reviewed content changes.
+description: Asserts that each ADLC phase's required manifest evidence is present, and fails closed when reviewed content changes.
 ---
 
 # runner
@@ -10,7 +10,7 @@ description: Asserts that each ADLC phase's required manifest evidence is presen
 ## What it defends against
 
 "A command ran" is not a gate. An orchestrator can call a tool, ignore its result,
-and march on — or edit the code after it was reviewed. The runner refuses that: it
+and march on, or edit the code after it was reviewed. The runner refuses that: it
 reads `.adlc/manifest.jsonl` and asserts the specific evidence each phase requires,
 scoped to a ticket for P3–P6. P5 and P6 bind to the current content fingerprint and
 fail closed if reviewed content changes after the fact, so committing the exact
@@ -42,9 +42,9 @@ Phases run p1 through p7; p3–p6 require `--ticket`.
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — required phase evidence is present (and still matches the reviewed content).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (unknown phase, missing `--ticket`, bad input).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — required phase evidence is missing.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: required phase evidence is present (and still matches the reviewed content).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (unknown phase, missing `--ticket`, bad input).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: required phase evidence is missing.</span>
 </div>
 
 ## Example

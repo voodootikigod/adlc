@@ -36,10 +36,10 @@ The `package.json` is uniform: `@adlc/<name>`, `"type": "module"`, a single `bin
 3. **Scope discipline.** Write ONLY inside your own `packages/<name>/`. Never touch other
    packages, `ADLC.md`, root files, or `.adlc/`.
 4. **Exit codes are the contract.** `0` = gate passes, `1` = operational error, `2` = gate
-   fails — using `pass` / `opError` / `gateFail` from core. CI gating depends on this. See
-   [Exit Codes](/docs/reference/exit-codes).
+   fails, produced with `pass` / `opError` / `gateFail` from core. CI gating depends on
+   this. See [Exit Codes](/docs/reference/exit-codes).
 5. **`--prompt-only` on every LLM-backed tool.** Print the exact prompt(s) and exit `0`, so
-   the tool is usable with zero API keys — paste the prompt into any harness. Uses
+   the tool is usable with zero API keys. Paste the prompt into any harness. Uses
    `promptOnly()` from core.
 6. **`--json` on every tool.** Machine-readable output for orchestrators, alongside the
    default human-readable output.
@@ -56,13 +56,13 @@ The `package.json` is uniform: `@adlc/<name>`, `"type": "module"`, a single `bin
     semantics, which ADLC phase (P0–P7 / D1–D3) the tool serves, and its relationship to
     sibling tools.
 
-## Shared data — read via core, never reinvent
+## Shared data: read via core, never reinvent
 
 Tools never re-parse shared state; they go through `@adlc/core`:
 
 | Data | Location | Access |
 | --- | --- | --- |
-| Tickets | `.adlc/tickets.json` | `loadTickets()` — schema in `packages/core/lib/tickets.mjs` |
+| Tickets | `.adlc/tickets.json` | `loadTickets()` (schema in `packages/core/lib/tickets.mjs`) |
 | Ledgers | `.adlc/<name>.jsonl` | `appendEntry` / `readEntries` |
 | Foundation rails | `rails` paths on a ticket | read-only to builders; enforced by tools that read them |
 

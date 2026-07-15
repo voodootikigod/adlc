@@ -1,6 +1,6 @@
 ---
 title: Claude Code
-description: Adopt the ADLC inside Claude Code — phase-routing skill, gate commands, prosecutor subagent, and hooks that fire the gates automatically.
+description: Adopt the ADLC inside Claude Code with a phase-routing skill, gate commands, a prosecutor subagent, and hooks that fire the gates automatically.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
@@ -9,7 +9,8 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 Claude Code runs the whole lifecycle from inside the editor: a phase-routing
 skill, ticket/distill/maintain commands, a prosecutor subagent, and hooks that
-fire the gates automatically. No API keys — Claude is the model via `--prompt-only`.
+fire the gates automatically. No API keys are required; Claude is the model via
+`--prompt-only`.
 
 ## Install
 
@@ -50,7 +51,7 @@ npm install -g @adlc/cli
 
 - **Skill:** the `adlc` phase-routing skill that picks the right gate.
 - **Commands:** `/adlc-init`, `/adlc-ticket`, `/adlc-prosecute`, `/adlc-distill`, `/adlc-maintain`.
-- **Subagents:** `adlc:prosecutor` — the P5 pre-merge gate — backed by a specialist
+- **Subagents:** `adlc:prosecutor`, the P5 pre-merge gate, backed by a specialist
   panel (contract, correctness, diff, security, tests, verifier).
 - **Hooks:** structured-edit rails-guard + CI backstop.
 

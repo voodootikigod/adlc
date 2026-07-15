@@ -1,12 +1,12 @@
 ---
 title: Toolkit
-description: The ADLC toolkit — one deterministic gate per lifecycle phase, installed once through @adlc/cli.
+description: "The ADLC toolkit: one deterministic gate per lifecycle phase, installed once through @adlc/cli."
 ---
 
 # Toolkit
 
 The toolkit makes the ADLC gates concrete. Each lifecycle phase asks one
-machine-checkable question, and one tool answers it with an exit code — `0`
+machine-checkable question, and one tool answers it with an exit code: `0`
 passes, `2` fails. The tools publish independently but install together and share
 one command surface: `adlc <tool>`. If you want the phase map first, read
 [The Lifecycle](/docs/lifecycle); this page is the index of every gate.
@@ -55,7 +55,7 @@ compounding defenses, and syncing outward.
 | [review-calibration](/docs/toolkit/review-calibration) | Measure reviewer recall by scoring whether review catches mutants. |
 | [model-ratchet](/docs/toolkit/model-ratchet) | Identify hot files for re-prosecution after model or repo drift. |
 | [gate-fuzzing](/docs/toolkit/gate-fuzzing) | Run hostile candidates against gate suites to find defeats. |
-| `review` | External passthrough — runs the model-judged `npx adversarial-review` that `prosecute` records evidence for. |
+| `review` | External passthrough. Runs the model-judged `npx adversarial-review` that `prosecute` records evidence for. |
 
 ## Compounding defenses
 
@@ -73,10 +73,10 @@ compounding defenses, and syncing outward.
 
 ## Shared foundation
 
-Not gates themselves — the layer every gate is built on.
+These are not gates. They are the layer every gate is built on.
 
 | Package | What it does |
 | --- | --- |
-| [cli](/docs/toolkit/cli) | The `adlc <tool>` dispatcher — one stable command surface for the whole suite. |
+| [cli](/docs/toolkit/cli) | The `adlc <tool>` dispatcher: one stable command surface for the whole suite. |
 | [core](/docs/toolkit/core) | Frozen shared library: exit-code helpers, provider selection, ledger, ticket, rail, and mutation primitives. |
-| [runner](/docs/toolkit/runner) | Backs `adlc run` and `adlc accept` — asserts phase evidence and records P6 acceptance. |
+| [runner](/docs/toolkit/runner) | Backs `adlc run` and `adlc accept`. Asserts phase evidence and records P6 acceptance. |

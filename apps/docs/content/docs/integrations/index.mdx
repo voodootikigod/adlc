@@ -1,26 +1,26 @@
 ---
 title: Integrations
-description: Native ADLC integrations for six agentic coding harnesses — Claude Code, Codex, Cursor, opencode, pi, and Antigravity.
+description: "Native ADLC integrations for six agentic coding harnesses: Claude Code, Codex, Cursor, opencode, pi, and Antigravity."
 ---
 
 # Integrations
 
 ADLC gates are implemented once in [`@adlc/core`](/docs/lifecycle) and wired into each
-harness through its own native mechanism — skills, hooks, plugins, or agents. Pick your
+harness through its own native mechanism: skills, hooks, plugins, or agents. Pick your
 harness below.
 
-- **[Claude Code](/docs/integrations/claude-code)** — phase-routing skill, gate
+- **[Claude Code](/docs/integrations/claude-code)** ships a phase-routing skill, gate
   commands, a `prosecutor` subagent, and hooks that fire the gates automatically.
-- **[Codex](/docs/integrations/codex)** — native Git-marketplace plugin with six
+- **[Codex](/docs/integrations/codex)** is a native Git-marketplace plugin with six
   skills, eight lifecycle hooks, allowlisted MCP gates, and project agents.
-- **[Cursor](/docs/integrations/cursor)** — marketplace `.cursor-plugin` with a
+- **[Cursor](/docs/integrations/cursor)** is a marketplace `.cursor-plugin` with a
   `preToolUse` rails dispatcher, skills, `/adlc-*` commands, and the sequential
   five-lens `/adlc-prosecute` loop, backed by the CI rail-freeze gate.
-- **[opencode](/docs/integrations/opencode)** — rails-guard plugin hook, eight
+- **[opencode](/docs/integrations/opencode)** ships a rails-guard plugin hook, eight
   lifecycle commands, a five-lens prosecutor panel, and a keyless gate bridge.
-- **[pi](/docs/integrations/pi)** — native extension with proactive rail blocking,
-  git-diff revert, and a suppression gate; five phase skills wrap the CLIs.
-- **[Antigravity](/docs/integrations/antigravity)** — native `agy` plugin with an
+- **[pi](/docs/integrations/pi)** is a native extension with proactive rail blocking,
+  git-diff revert, and a suppression gate. Five phase skills wrap the CLIs.
+- **[Antigravity](/docs/integrations/antigravity)** is a native `agy` plugin with an
   in-session rails-guard hook, backed by the unbypassable CI rail-freeze gate.
 
 ## Orchestrating harnesses in parallel
@@ -29,7 +29,7 @@ These integrations wire the gates *into* each harness. The
 [`@adlc/fleet`](/docs/toolkit/fleet) orchestrator runs the other direction: it
 dispatches ready tickets to sandboxed **headless workers** in isolated worktrees
 and merges them through the gates. Its scheduler is harness-blind via a
-`WorkerAdapter` seam — Claude Code is the default worker, and adapters for Codex,
+`WorkerAdapter` seam. Claude Code is the default worker, and adapters for Codex,
 Antigravity, opencode, pi, and Cursor let a single fleet run build tickets on any
 of them (the harness is an operator-local `--adapter` choice).
 

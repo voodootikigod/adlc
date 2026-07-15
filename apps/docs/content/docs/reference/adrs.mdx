@@ -5,20 +5,20 @@ description: The accepted ADRs behind ADLC's editor integrations and adversarial
 
 # Architecture Decision Records
 
-ADRs capture the decisions that shaped ADLC — chiefly how it integrates with each agentic
+ADRs capture the decisions that shaped ADLC, chiefly how it integrates with each agentic
 editor and where adversarial review sits in the lifecycle. Each links to the full record in
 the repo. All nine are **Accepted**.
 
 | # | Title | Summary |
 | --- | --- | --- |
 | [0001](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0001-codex-native-adlc-integration.md) | Codex-Native ADLC Integration | How the deterministic `@adlc/*` gates and doctrine are brought natively into Codex, following the Claude Code integration. |
-| [0002](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0002-adlc-command-reconciliation.md) | Reconciling the `adlc` command | Two parallel efforts each shipped an `adlc` bin; resolved with **Option D** — separate concern-focused binaries rather than one conflicting package. |
+| [0002](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0002-adlc-command-reconciliation.md) | Reconciling the `adlc` command | Two parallel efforts each shipped an `adlc` bin; resolved with **Option D**: separate concern-focused binaries rather than one conflicting package. |
 | [0003](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0003-adlc-claude-code-plugin.md) | ADLC as a Claude Code plugin | Packages the ~20 gate CLIs as a Claude Code plugin. Shipped GA (phases A–F merged). |
-| [0004](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0004-adlc-opencode-integration.md) | OpenCode integration — rails-guard MVP | The in-session P3 rails-guard hook for OpenCode as an MVP, with the remaining phases as follow-on. |
+| [0004](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0004-adlc-opencode-integration.md) | OpenCode integration: rails-guard MVP | The in-session P3 rails-guard hook for OpenCode as an MVP, with the remaining phases as follow-on. |
 | [0005](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0005-adversarial-design-review-gate.md) | Risk-gated adversarial design review | Adds a risk-gated adversarial design-review gate at the P1→P2 boundary, where clarity gates alone are insufficient. Recommended practice; deterministic tooling deferred. |
-| [0006](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0006-adlc-cursor-integration.md) | Cursor native integration — marketplace plugin | Ships `adlc-cursor` as a `.cursor-plugin` marketplace plugin (hooks, skills, commands) with CI rail backstop; npm scaffolder kept as legacy fallback. |
+| [0006](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0006-adlc-cursor-integration.md) | Cursor native integration: marketplace plugin | Ships `adlc-cursor` as a `.cursor-plugin` marketplace plugin (hooks, skills, commands) with CI rail backstop; npm scaffolder kept as legacy fallback. |
 | [0007](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0007-multimodel-adversarial-review.md) | Risk-tiered multi-model adversarial review | Prefers a reviewer model from a different provider than the builder, tiered by risk. Recommended practice; mechanical enforcement deferred. |
-| [0008](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0008-adversarial-review-coverage-map.md) | Adversarial-review coverage map | Maps the mature adversarial-review engine across the whole ADLC, closing the gap where it was wired into only P1→P2 and P5. |
+| [0008](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0008-adversarial-review-coverage-map.md) | Adversarial-review coverage map | Maps the mature adversarial-review engine across the whole ADLC. It had been wired into only P1→P2 and P5. |
 | [0009](https://github.com/voodootikigod/adlc/tree/main/docs/adr/0009-universal-install-via-plugins.md) | Universal install via the `plugins` installer | `npx plugins add` stays the recommended install path; the third-party-installer supply-chain exposure is an explicitly accepted residual risk, and docs may only claim harness coverage the installer actually has. |
 
 Browse the source directory:

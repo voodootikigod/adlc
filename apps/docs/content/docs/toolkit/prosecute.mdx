@@ -1,6 +1,6 @@
 ---
 title: prosecute
-description: A P5 review-evidence recorder — validates, hashes, and records ticket- and revision-bound reviewer findings, passing only after two dry passes across three lenses.
+description: A P5 review-evidence recorder. It validates, hashes, and records ticket- and revision-bound reviewer findings, and passes only after two dry passes across three lenses.
 ---
 
 # prosecute
@@ -13,13 +13,13 @@ description: A P5 review-evidence recorder — validates, hashes, and records ti
 
 <FailureMode id="F2" />
 
-`prosecute` is a **recorder, not a reviewer** — it makes zero model calls and finds no bugs
+`prosecute` is a **recorder, not a reviewer**. It makes zero model calls and finds no bugs
 of its own. The model-judged skeptical review is a separate tool (`npx adversarial-review`,
 which `adlc review` wraps); `adlc prosecute` consumes **that** review's output as evidence.
 It validates the findings, hashes and binds them to the ticket and reviewed revision, and
 appends normalized pass records to `.adlc/manifest.jsonl`. It passes only after two
-consecutive dry passes covering three distinct lenses — so a single sycophantic "looks good"
-cannot stand in for a real prosecution, and the recorded evidence is what P6 later checks.
+consecutive dry passes covering three distinct lenses, so a single sycophantic "looks good"
+cannot stand in for a real prosecution. The recorded evidence is what P6 later checks.
 
 Note the binary is `adlc-prosecute` (registry `binName`) but it dispatches as `adlc prosecute`.
 
@@ -41,14 +41,14 @@ adlc-prosecute --input <passes.json> --ticket id [--target label] [--revision re
 
 Evidence files (transcript, prompt, inputs) that resolve inside the worktree must live under
 `.adlc/` or `.omo/evidence/`, and the transcript must reference both the ticket and the
-resolved revision — a trust-boundary control against faked review evidence.
+resolved revision. These are trust-boundary controls against faked review evidence.
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — two consecutive dry passes were recorded.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (unreadable input, missing `--ticket`, bad evidence path).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — verified or needs-human findings remain, or the convergence budget ended before two dry passes.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: two consecutive dry passes were recorded.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (unreadable input, missing `--ticket`, bad evidence path).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: verified or needs-human findings remain, or the convergence budget ended before two dry passes.</span>
 </div>
 
 ## Example

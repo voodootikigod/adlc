@@ -11,7 +11,7 @@ Each phase has a machine-checkable gate. The toolkit makes those gates concrete.
 
 | Phase | Question the gate answers | Primary tools |
 | --- | --- | --- |
-| **P0 Triage** | Where does this work route on risk × blast radius — trivial, bounded, substantial, or architectural? | [preflight](/docs/toolkit/preflight) |
+| **P0 Triage** | Where does this work route on risk × blast radius: trivial, bounded, substantial, or architectural? | [preflight](/docs/toolkit/preflight) |
 | **P1 Interrogate** | Is the spec testable and stress-tested? | [spec-lint](/docs/toolkit/spec-lint), [premortem](/docs/toolkit/premortem), [parallax](/docs/toolkit/parallax) |
 | **P2 Decompose** | Can an agent execute this ticket without guessing? | [coldstart](/docs/toolkit/coldstart), [model-router](/docs/toolkit/model-router), [merge-forecast](/docs/toolkit/merge-forecast) |
 | **P3–P4 Rail & Build** | Are frozen rails protected; is an agent flailing? | [rails-guard](/docs/toolkit/rails-guard), [flail-detector](/docs/toolkit/flail-detector), [consensus-fix](/docs/toolkit/consensus-fix) |
@@ -21,5 +21,5 @@ Each phase has a machine-checkable gate. The toolkit makes those gates concrete.
 | **Calibration** (maintenance, cross-phase) | What must be re-prosecuted after drift? | [model-ratchet](/docs/toolkit/model-ratchet), [review-calibration](/docs/toolkit/review-calibration), [skill-rot](/docs/toolkit/skill-rot), [gate-fuzzing](/docs/toolkit/gate-fuzzing) |
 
 The two human gates sit at **P1** (spec approval) and **P6** (behavioral acceptance). Everything
-between is deterministic — read
+between is deterministic. Read
 [the full argument](https://voodootikigod.com/adlc-2-two-human-gates).

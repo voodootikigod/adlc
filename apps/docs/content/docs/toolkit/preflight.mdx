@@ -16,7 +16,7 @@ serialization point: one blocked agent stalls its N siblings, races half-started
 state, and wrecks the parallel wall-clock math. `preflight` front-loads bash,
 git, filesystem-write, and branch checks (plus optional worktree, test-command,
 `gh`, and LLM-provider checks) into one batch so the environment is proven
-deterministic before fan-out — not discovered non-deterministic during it.
+deterministic before fan-out, rather than discovered non-deterministic during it.
 
 ## Usage
 
@@ -39,9 +39,9 @@ that creates a side effect cleans up in a `finally` block.
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: every required and explicitly requested check passed.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational / internal error.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more required or requested checks failed.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Every required and explicitly requested check passed.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational / internal error.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more required or requested checks failed.</span>
 </div>
 
 ## Example

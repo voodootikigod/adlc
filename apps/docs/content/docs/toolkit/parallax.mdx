@@ -11,7 +11,7 @@ description: Fans N independent readers over a request and surfaces only the div
 
 ## What it defends against
 
-A single model reading an ambiguous request commits to one interpretation and states it with total confidence — the ambiguity never surfaces, it just silently becomes a decision. `parallax` replaces that introspection with measurement: it fans N independent cheap-tier readings, diffs them, and reports only where they disagree. The ambiguity score (`divergences / (divergences + agreements)`) turns "is this spec clear?" into a number you can gate on.
+A single model reading an ambiguous request commits to one interpretation and states it with total confidence. The ambiguity never surfaces; it just silently becomes a decision. `parallax` replaces that introspection with measurement: it fans N independent cheap-tier readings, diffs them, and reports only where they disagree. The ambiguity score (`divergences / (divergences + agreements)`) turns "is this spec clear?" into a number you can gate on.
 
 ## Usage
 
@@ -19,7 +19,7 @@ A single model reading an ambiguous request commits to one interpretation and st
 adlc parallax --request "text" | --file req.md | --edge T1 T2 | --route "question" [flags]
 ```
 
-Three modes: **spec** (default — fan readers over a raw request), **edge** (`--edge T1 T2` — author the contract implied between two tickets), and **route** (`--route` — answer a mid-build question and check the answers agree).
+Three modes: **spec** (default, fans readers over a raw request), **edge** (`--edge T1 T2`, authors the contract implied between two tickets), and **route** (`--route`, answers a mid-build question and checks that the answers agree).
 
 | Flag | Description |
 | --- | --- |
@@ -28,19 +28,19 @@ Three modes: **spec** (default — fan readers over a raw request), **edge** (`-
 | `--route <text>` | Route mode: the question to route. |
 | `--context <file>` | Route mode: context file, repeatable. |
 | `--tickets <path>` | Tickets file for edge mode (default `.adlc/tickets.json`). |
-| `--n <int>` | Fan width — number of independent readings (default 3). |
+| `--n <int>` | Fan width: number of independent readings (default 3). |
 | `--threshold <0-1>` | Ambiguity gate threshold (default 0.25). |
 | `--tier cheap\|mid\|frontier` | Override the LLM tier. |
 | `--json` | Machine-readable output (score + divergences). |
-| `--prompt-only` | Print the exact prompts and exit 0 — no API key needed. |
+| `--prompt-only` | Print the exact prompts and exit 0. No API key needed. |
 | `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only`. |
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: ambiguity score at or below threshold (spec/edge), or answers equivalent (route).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad input, missing file, network failure, too few readings).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: ambiguity score exceeds threshold, or route answers diverge.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Ambiguity score at or below threshold (spec/edge), or answers equivalent (route).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad input, missing file, network failure, too few readings).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. Ambiguity score exceeds threshold, or route answers diverge.</span>
 </div>
 
 ## Example

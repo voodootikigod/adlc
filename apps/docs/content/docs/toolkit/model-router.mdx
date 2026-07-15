@@ -1,6 +1,6 @@
 ---
 title: model-router
-description: Deterministically assigns every ticket a model tier and ladder mode from the ticket DAG and ledger history — no LLM calls.
+description: Deterministically assigns every ticket a model tier and ladder mode from the ticket DAG and ledger history, with no LLM calls.
 ---
 
 # model-router
@@ -17,7 +17,7 @@ Picking a model per ticket by vibe leaves the seams showing: a cheap model on an
 unrailed, hard-to-verify ticket, or a frontier model burned on slack work.
 `model-router` reads the ticket DAG's rail density and critical-path float, plus
 per-model first-pass rates mined from the manifest ledger, and emits a
-deterministic `tier` + `mode` for every ticket — the same inputs always produce
+deterministic `tier` + `mode` for every ticket. The same inputs always produce
 the same routing.
 
 ## Usage
@@ -40,9 +40,9 @@ ladder up on gate failure.
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: all tickets assigned.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad tickets file, JSON parse error, cycle in the DAG).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more non-frontier-category tickets fall below the rail-density floor.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. All tickets assigned.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad tickets file, JSON parse error, cycle in the DAG).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more non-frontier-category tickets fall below the rail-density floor.</span>
 </div>
 
 ## Example

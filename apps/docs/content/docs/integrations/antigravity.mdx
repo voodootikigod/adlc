@@ -1,6 +1,6 @@
 ---
 title: Antigravity
-description: Native ADLC integration for Google Antigravity (agy) — an in-session rails-guard hook plus the unbypassable CI diff gate that is the real enforcement layer.
+description: "Native ADLC integration for Google Antigravity (agy): an in-session rails-guard hook plus the unbypassable CI diff gate that is the real enforcement layer."
 ---
 
 # ADLC × Google Antigravity (`agy`)
@@ -23,8 +23,8 @@ agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 
 Then run `/adlc-init` inside your agent session (or execute the steps manually to bootstrap `.adlc/` in your repository).
 
-**npm-assisted install.** `agy` has no native `agy install npm:X` command — `agy
-plugin install` always takes a filesystem path — but `@adlc/antigravity` is now
+**npm-assisted install.** `agy` has no native `agy install npm:X` command, and `agy
+plugin install` always takes a filesystem path. But `@adlc/antigravity` is now
 published on npm, so you can install it as a normal dependency and point `agy` at
 `node_modules`:
 
@@ -33,7 +33,7 @@ npm install @adlc/antigravity
 agy plugin install ./node_modules/@adlc/antigravity
 ```
 
-**Universal installer (planned — not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
+**Universal installer (planned, not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 
 ```sh
 npx plugins add voodootikigod/adlc
@@ -53,10 +53,10 @@ Then `/adlc-init` (or manual bootstrap). Enforcement: `export ADLC_P4_ENFORCEMEN
 | P3 Rail | **PreToolUse rails-guard hook** (advisory) + CI gate (guarantee) |
 | P4 Build | doctrine skill; `adlc flail-detector/consensus-fix` |
 | P5 Prosecute | `adlc-prosecutor` skill + `prosecutor` agent; `adlc hollow-test/behavior-diff` |
-| P6 Integrate | human gate — `adlc gate-manifest` |
+| P6 Integrate | human gate via `adlc gate-manifest` |
 | P7 Distill | `adlc lesson-foundry/rejection-mining` |
 
-## Rail enforcement — two layers
+## Rail enforcement: two layers
 
 Antigravity's hooks are a **best-effort, in-session** layer, not the control:
 
@@ -74,7 +74,7 @@ Antigravity's hooks are a **best-effort, in-session** layer, not the control:
 
    **Scope limit:** because the rail set is read from the base ref, the gate protects
    rails **already frozen on the base branch**. A PR that *introduces* a new rail
-   **and** edits that path in the same PR is **not** caught — first-time rails are
+   **and** edits that path in the same PR is **not** caught. First-time rails are
    enforced only once they land on the base branch. Freeze rails in a separate,
    merged commit before the build PR if you need same-PR protection.
 
@@ -94,8 +94,8 @@ not re-implemented here):
 
 ## Platform notes / limitations
 
-- **POSIX only in-session** (`$HOME` command path); Windows in-session is unsupported —
-  the CI gate protects Windows users regardless.
+- **POSIX only in-session** (`$HOME` command path); Windows in-session is unsupported,
+  but the CI gate protects Windows users regardless.
 - Shell (`run_command`) writes are not gated in-session (CI gate catches them).
 
 ## Appendix: verified `agy` hook contract (agy 1.0.13)
@@ -107,11 +107,11 @@ any document describing the integration's enforcement surface.
 | # | Fact |
 | --- | --- |
 | V1 | agy has a **native plugin system**: `agy plugin install <path>` installs into `~/.gemini/config/plugins/<name>/`. Manifest is Claude-Code-shaped: root `plugin.json` (name, version) + `skills/`, `agents/`, `commands/` (auto-converted to skills), root `hooks.json`. `agy plugin import claude` even ingests Claude Code plugins. |
-| V2 | `agy plugin validate` checks component **presence only**, not deep hook schema — it passed a `hooks.json` the runtime later refused to parse. **Validation is not sufficient; runtime load must be tested.** |
-| V3 | **hooks.json schema (agy-native)** — verified working: `{ "<hook-name>": { "PreToolUse": [ { "matcher": ".*", "hooks": [ { "type":"command", "command":"<cmd>", "timeout":15 } ] } ] } }`. Top level is keyed by **hook name**, then event, then an **array** of `{matcher, hooks:[handler]}`. |
-| V4 | `matcher` is a **regex on the tool name**. `.*` matches all. `write` did **not** match tool `write_to_file` — so use `.*` or exact names. |
+| V2 | `agy plugin validate` checks component **presence only**, not deep hook schema: it passed a `hooks.json` the runtime later refused to parse. **Validation is not sufficient; runtime load must be tested.** |
+| V3 | **hooks.json schema (agy-native)**, verified working: `{ "<hook-name>": { "PreToolUse": [ { "matcher": ".*", "hooks": [ { "type":"command", "command":"<cmd>", "timeout":15 } ] } ] } }`. Top level is keyed by **hook name**, then event, then an **array** of `{matcher, hooks:[handler]}`. |
+| V4 | `matcher` is a **regex on the tool name**. `.*` matches all. `write` did **not** match tool `write_to_file`, so use `.*` or exact names. |
 | V5 | **Deny contract (inverted from Claude Code/Codex):** a hook denies by writing stdout `{"allow_tool": false, "deny_reason": "..."}` and **exiting 0**. `{"allow_tool": true}` allows. **Non-zero exit = hook FAILURE = FAIL-OPEN (tool proceeds).** |
-| V6 | Hooks **fire in `agy --print` (headless) mode** — a write to a rail was actually blocked. So rails-guard protects both interactive sessions and the headless fleet path. |
+| V6 | Hooks **fire in `agy --print` (headless) mode**: a write to a rail was actually blocked. So rails-guard protects both interactive sessions and the headless fleet path. |
 | V7 | **stdin payload** (verbatim): `{"toolCall":{"name":"write_to_file","args":{"TargetFile":"/abs","CodeContent":"…","Overwrite":true}},"workspacePaths":[],"conversationId":…,"transcriptPath":…,"stepIdx":3}`. The path field varies per tool: `write_to_file`→`TargetFile`, `view_file`→`AbsolutePath`, `run_command`→`CommandLine`. Observed target paths were **absolute**. |
 | V8 | Hook **cwd is the plugin dir** (`~/.gemini/config/plugins/<name>/`), **not the repo**. In `--print` mode `workspacePaths` was observed **empty (`[]`)**. There is **no workspace-root env var** (env exposes `ANTIGRAVITY_CONVERSATION_ID`, not a workspace path). |
 | V9 | agy **expands `$HOME`** (and shell env vars) in the `command` string; there is **no** `${CLAUDE_PLUGIN_ROOT}`/`${AGY_PLUGIN_ROOT}`. Because plugins always install to `$HOME/.gemini/config/plugins/<name>/`, `node $HOME/.gemini/config/plugins/adlc-antigravity/hooks/adlc-rails-guard.mjs` is portable across users with no install-time rewrite. |

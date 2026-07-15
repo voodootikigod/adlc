@@ -1,12 +1,12 @@
 ---
 title: Cursor
-description: Native ADLC integration for Cursor — a preToolUse rails dispatcher, the afterFileEdit audit, an advisory shell notice, the full /adlc-* command suite, and the sequential five-lens /adlc-prosecute loop, backstopped by the unbypassable CI rail-freeze gate.
+description: "Native ADLC integration for Cursor: a preToolUse rails dispatcher, the afterFileEdit audit, an advisory shell notice, the full /adlc-* command suite, and the sequential five-lens /adlc-prosecute loop, backstopped by the unbypassable CI rail-freeze gate."
 ---
 
 # ADLC in Cursor
 
 Wire the Agentic Development Lifecycle into [Cursor](https://cursor.com) using its
-**native** plugin surfaces — hooks, rules, skills, and commands. The integration
+**native** plugin surfaces: hooks, rules, skills, and commands. The integration
 ships as `plugins/adlc-cursor` with a Cursor marketplace manifest
 (`.cursor-plugin/`) plus an npm scaffolder kept as a legacy/dev fallback.
 
@@ -19,31 +19,31 @@ one GA honesty gate.
 
 ## What you get
 
-- **`preToolUse` dispatcher hook** — runs the rails decision **first** (a
+- **`preToolUse` dispatcher hook.** Runs the rails decision **first** (a
   frozen-rail edit is denied) and, only when rails allow **and**
   `ADLC_BUILD_GATE_ENFORCEMENT=1`, consults the advisory buildgate. One entry, so
   a second hook can never mask a rails deny.
-- **`afterFileEdit` audit hook** — surfaces a notice when a frozen rail was edited,
+- **`afterFileEdit` audit hook.** Surfaces a notice when a frozen rail was edited,
   plus a flail (edit-churn) reminder. It fires *after* the write and **cannot
   block**, so it is observational only.
-- **`beforeShellExecution` advisory** — string-matches obvious shell writes to the
-  active ticket's rails. It **never denies** and is trivially bypassable — an
+- **`beforeShellExecution` advisory.** String-matches obvious shell writes to the
+  active ticket's rails. It **never denies** and is trivially bypassable: an
   honesty nudge, not a control.
-- **Command palette** — the plugin ships the bare `/adlc-*` phase suite
+- **Command palette.** The plugin ships the bare `/adlc-*` phase suite
   (`init`, `ticket`, `spec`, `approve-spec`, `decompose`, `verify-build`,
   `prosecute`, `distill`, `maintain`). The legacy scaffolder can still copy them
   into a project `.cursor/commands/` for local-dev installs.
-- **`.cursor/rules/adlc.mdc`** — the ADLC phase-router rule.
+- **`.cursor/rules/adlc.mdc`** is the ADLC phase-router rule.
 
 The **buildgate is advisory, disabled by default** (opt in with
-`ADLC_BUILD_GATE_ENFORCEMENT=1`), and has **NO unbypassable backstop** — unlike the
+`ADLC_BUILD_GATE_ENFORCEMENT=1`), and has **NO unbypassable backstop**: unlike the
 rails guard, nothing at commit time enforces its verdict. The `stop`-audit and
 `preflight` hooks are **on by default**; opt out of the scaffold path with
 `--no-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=0`.
 
 ## Install
 
-### Preferred — marketplace plugin
+### Preferred: marketplace plugin
 
 1. In Cursor: **Settings → Plugins → Add marketplace** and paste
    `https://github.com/voodootikigod/adlc` (root `.cursor-plugin/marketplace.json`
@@ -57,7 +57,7 @@ adlc init --harness cursor
 ```
 
 `adlc init` may write a **local** `.adlc/config.json`. Do **not** commit that
-file into a repository that already has frozen rails on the base branch — CI
+file into a repository that already has frozen rails on the base branch. CI
 treats `.adlc/config.json` as a trust root once any base ticket declares rails.
 Bootstrap a real config only through the protected-base ceremony (with
 `securityMode` and `acknowledgedNewRailBypass`), not as part of installing the
@@ -65,7 +65,7 @@ Cursor plugin.
 
 4. Wire `docs/ci/rails-guard.yml` as a required check.
 
-### Legacy fallback — npm scaffolder
+### Legacy fallback: npm scaffolder
 
 ```sh
 npm install -g @adlc/cli
@@ -80,12 +80,12 @@ node plugins/adlc-cursor/lib/scaffold-cli.mjs .
 node scripts/cursor-install-smoke.mjs .
 ```
 
-## Rail enforcement — two layers
+## Rail enforcement: two layers
 
 Cursor's hooks are a **best-effort, in-session** layer, not the control:
 
 1. **In-session (advisory).** The `preToolUse` dispatcher returns
-   `{ "permission": "deny" }` on a frozen-rail edit. Cursor *should* block it — but
+   `{ "permission": "deny" }` on a frozen-rail edit. Cursor *should* block it, but
    `permission: "deny"` has [open reliability reports](https://forum.cursor.com/t/hooks-returning-deny-do-not-seem-to-block-tool-execution-possible-security-concern/154377),
    and `afterFileEdit` cannot block at all. The hook is configured
    `failClosed: false` so a hook bug can never brick your editor. Bash/shell writes
@@ -105,20 +105,20 @@ Cursor's hooks are a **best-effort, in-session** layer, not the control:
 
 | Phase | Surface in Cursor |
 | --- | --- |
-| P0 Triage | `/adlc-ticket` — authors a ticket into `.adlc/tickets.json` |
-| P1 Interrogate | `/adlc-spec` · `/adlc-approve-spec` — spec-lint / premortem + the human approval gate |
-| P2 Decompose | `/adlc-decompose` — coldstart + merge forecast |
-| **P3 Rail** | **`preToolUse` dispatcher** — rails-guard (this package + CI gate) + the advisory, default-off buildgate |
-| P4 Build | `/adlc-verify-build` — targeted tests + flail check |
-| P5 Prosecute | `/adlc-prosecute` — the sequential five-lens loop (**weaker independence** than the siblings' fresh-context fan-out) + `hollow-test` / `behavior-diff` + cross-model `adversarial-review --providers` |
-| P6 Integrate | `adlc gate-manifest` — human gate |
-| P7 Distill | `/adlc-distill` — lesson-foundry + rejection-mining |
+| P0 Triage | `/adlc-ticket` authors a ticket into `.adlc/tickets.json` |
+| P1 Interrogate | `/adlc-spec` · `/adlc-approve-spec`: spec-lint / premortem + the human approval gate |
+| P2 Decompose | `/adlc-decompose`: coldstart + merge forecast |
+| **P3 Rail** | **`preToolUse` dispatcher**: rails-guard (this package + CI gate) + the advisory, default-off buildgate |
+| P4 Build | `/adlc-verify-build`: targeted tests + flail check |
+| P5 Prosecute | `/adlc-prosecute`: the sequential five-lens loop (**weaker independence** than the siblings' fresh-context fan-out) + `hollow-test` / `behavior-diff` + cross-model `adversarial-review --providers` |
+| P6 Integrate | `adlc gate-manifest`, the human gate |
+| P7 Distill | `/adlc-distill`: lesson-foundry + rejection-mining |
 
 ## Gaps
 
 - **Live deny-proof** against a real Cursor binary, and pinning the exact
-  `preToolUse` payload field names — the one GA gate; the adapter extracts the path
-  defensively until then.
+  `preToolUse` payload field names. This is the one GA gate; the adapter extracts
+  the path defensively until then.
 - **Prosecutor independence caveat.** `/adlc-prosecute` runs its five lenses
   sequentially in one context (Cursor has no subagent fan-out), so it has **weaker
   independence** than the sibling reviews. Run

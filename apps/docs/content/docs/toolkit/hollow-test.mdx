@@ -1,11 +1,11 @@
 ---
 title: hollow-test
-description: Diff-scoped mutation gate — mutates only the lines your change touched and fails if any mutant survives your test suite, proving coverage is load-bearing.
+description: Diff-scoped mutation gate. Mutates only the lines your change touched and fails if any mutant survives your test suite, which proves the coverage is load-bearing.
 ---
 
 # hollow-test
 
-**ADLC phase: P3 Rail (C4)** · **Gate:** every changed line is constrained by an assertion — no mutant survives.
+**ADLC phase: P3 Rail (C4)** · **Gate:** every changed line is constrained by an assertion, so no mutant survives.
 
 <PhaseDiagram phase="P3" />
 
@@ -14,8 +14,8 @@ description: Diff-scoped mutation gate — mutates only the lines your change to
 <FailureMode id="F5" />
 
 Executed lines are not tested lines. A suite can run every changed statement and still
-assert nothing about its behavior — hollow coverage that a reward-seeking model will
-happily produce. `hollow-test` mutates only the lines in your diff (invert a comparison,
+assert nothing about its behavior. That is hollow coverage, and a reward-seeking model
+will happily produce it. `hollow-test` mutates only the lines in your diff (invert a comparison,
 flip a boolean, null a return), reruns the suite against each mutant, and fails if any
 survives. A survivor is proof the line's behavior is unconstrained. Diff-scoping keeps
 the run in seconds-to-minutes instead of the hours whole-codebase mutation testing costs.
@@ -43,9 +43,9 @@ so a failing suite cannot masquerade as killing every mutant.
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: every generated mutant was killed by the suite.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: dirty tree, not a git repo, bad arguments, non-green baseline, or nothing eligible to mutate with no `--target`/`--rails`.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more mutants survived (hollow coverage).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Every generated mutant was killed by the suite.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, not a git repo, bad arguments, non-green baseline, or nothing eligible to mutate with no `--target`/`--rails`.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more mutants survived (hollow coverage).</span>
 </div>
 
 ## Example

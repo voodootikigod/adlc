@@ -8,21 +8,21 @@ description: The canonical 0/1/2 exit-code convention that makes ADLC gates dete
 Every ADLC gate speaks the same three-value language on exit. This is what lets CI wire a
 dozen tools together and branch on a single number: a gate either passed, hit an
 operational problem, or failed. Tools produce these codes through `pass()`, `opError()`,
-and `gateFail()` in [`@adlc/core`](/docs/toolkit/core) — they never call `process.exit`
+and `gateFail()` in [`@adlc/core`](/docs/toolkit/core). They never call `process.exit`
 with a bare number.
 
 ## The canonical convention
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes. The check succeeded (or there was nothing to check; the tool warns loudly rather than fails).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error. The tool could not run the check: bad input, unreadable file, missing binary, network failure, or a failed LLM call.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails. The check ran and the change did not meet the bar. This is the blocking signal CI acts on.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. The check succeeded (or there was nothing to check; the tool warns loudly rather than fails).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. The tool could not run the check: bad input, unreadable file, missing binary, network failure, or a failed LLM call.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. The check ran and the change did not meet the bar. This is the blocking signal CI acts on.</span>
 </div>
 
 The distinction between `1` and `2` matters: **`1` is "I couldn't tell," `2` is "I looked
 and the answer is no."** CI treats `2` as a hard block on the change, while `1` signals a
 setup or environment problem to fix before the gate can render a verdict. Collapsing the
-two — for example, exiting `1` when a check actually fails — would let a genuine gate
+two (for example, exiting `1` when a check actually fails) would let a genuine gate
 failure read as a fixable hiccup.
 
 ## In CI
@@ -50,4 +50,4 @@ The convention holds across the toolkit. A few patterns worth knowing:
   successful "here is the prompt" response, so every LLM-backed tool exits `0` in this
   mode regardless of the underlying change.
 - **Help and usage.** Requesting `--help` exits `0`; invoking a tool with missing required
-  arguments prints usage and exits `1` (an operational error — the tool could not run).
+  arguments prints usage and exits `1` (an operational error: the tool could not run).

@@ -79,7 +79,7 @@ ticket explicitly. `ADLC_P4_ENFORCEMENT=1` forces enforcement and
 `ADLC_P4_ENFORCEMENT=0` deliberately opts out locally.
 
 Once active, conflicting or stale ticket state and writes to frozen rails fail
-closed. The hook gives immediate feedback, but Codex hooks are guardrails—not a
+closed. The hook gives immediate feedback, but Codex hooks are guardrails, not a
 complete security boundary. Keep the repository `rails-guard` CI job required;
 it is the authoritative proof over the committed diff.
 

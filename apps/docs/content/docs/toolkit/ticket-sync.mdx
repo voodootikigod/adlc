@@ -24,7 +24,7 @@ The standalone binary is `adlc-ticket-sync`; the same command dispatches through
 | Command / Flag | Description |
 | --- | --- |
 | `pull` | Import issues into the active ticket store (3-way reconcile; unions; fails closed on conflict). |
-| `push` | Write tickets back — update synced issues, idempotent create for local-only tickets, display-only status. |
+| `push` | Write tickets back: update synced issues, idempotent create for local-only tickets, display-only status. |
 | `sync` | `pull` then `push`; a non-clean pull aborts before push. |
 | `doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). |
 | `--write` | Apply changes (dry-run without it). |
@@ -35,9 +35,9 @@ The standalone binary is `adlc-ticket-sync`; the same command dispatches through
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — ok: command completed (or produced a clean dry-run plan).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad config, `gh` failure, unknown flag or subcommand).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — blocked: a conflict the sync refuses to resolve automatically.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: ok. Command completed (or produced a clean dry-run plan).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad config, `gh` failure, unknown flag or subcommand).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: blocked. A conflict the sync refuses to resolve automatically.</span>
 </div>
 
 ## Example

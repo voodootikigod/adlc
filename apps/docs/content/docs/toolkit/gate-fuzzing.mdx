@@ -12,8 +12,8 @@ description: Fans model instances to generate wrong-but-passing diffs and report
 A gate that never sees a hostile input is a gate nobody has tested.
 `gate-fuzzing` fans N cheap/mid model instances to produce candidate diffs
 engineered to pass every configured gate while being genuinely wrong. Each diff
-that slips through — valid, passing all gates, touching a gate's declared
-surface, and proven wrong by an independent held-out witness — is a defeat, and
+that slips through (valid, passing all gates, touching a gate's declared
+surface, and proven wrong by an independent held-out witness) is a defeat, and
 each defeat becomes a RED test you commit into that gate. It turns "we found
 some bypasses once" into a standing CI check.
 
@@ -35,7 +35,7 @@ adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--provider <n
 | `--providers <a,b,c>` | Fan across distinct named providers, one candidate each. |
 | `--max-rounds <int>` / `--dry-rounds <int>` | Round ceiling (default `10`) and consecutive-dry stop count (default `3`). |
 | `--witness-trials <int>` | Unanimous witness runs per side (default `3`). |
-| `--unsafe-no-sandbox` | Skip the OS sandbox — only inside a disposable VM. |
+| `--unsafe-no-sandbox` | Skip the OS sandbox. Use only inside a disposable VM. |
 | `--strict-budget` | Any inconclusive stop becomes exit 1 (recommended for CI). |
 | `--fail-on-behavioral` | Behavioral defeats exit 2 (default: report only). |
 | `--record` | Write repro artifacts to `.adlc/gate-defeats/` and cluster findings. |
@@ -45,9 +45,9 @@ adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--provider <n
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — earned clean: potency canary beaten, no defeats found, dry streak reached.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: dirty tree, no sandbox binary, failed control self-test, or an inconclusive stop under `--strict-budget`.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — a gate was defeated: wrong-but-passing, surface-bound, independently witnessed.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: earned clean. Potency canary beaten, no defeats found, dry streak reached.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, no sandbox binary, failed control self-test, or an inconclusive stop under `--strict-budget`.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate defeated. Wrong-but-passing, surface-bound, independently witnessed.</span>
 </div>
 
 ## Example

@@ -1,6 +1,6 @@
 ---
 title: cli
-description: The umbrella dispatcher — one stable command surface that routes every adlc verb to the right gate in the suite.
+description: "The umbrella dispatcher: one stable command surface that routes every adlc verb to the right gate in the suite."
 ---
 
 # cli
@@ -10,7 +10,7 @@ description: The umbrella dispatcher — one stable command surface that routes 
 ## What it is
 
 Every ADLC gate ships as its own `@adlc/*` package, but an agent harness needs a
-single stable prefix — a skill or hook that shells out to twenty different
+single stable prefix. A skill or hook that shells out to twenty different
 binaries is brittle and easy to route around. `@adlc/cli` installs the suite and
 makes every gate reachable through one verb: `adlc <tool>`.
 
@@ -42,8 +42,8 @@ Every tool listed on the [Toolkit landing page](/docs/toolkit) is reachable as
 | Verb | What it does |
 | --- | --- |
 | `adlc <tool>` | Resolves the local `@adlc/<tool>` bin and runs it with the remaining args. |
-| `adlc run` / `adlc accept` | Runner verbs — route to `@adlc/runner` to assert phase evidence (`run`) or record P6 acceptance (`accept`). |
-| `adlc review` | External passthrough — shells out to `npx adversarial-review`, the model-judged reviewer that `prosecute` records evidence for but never runs itself. |
+| `adlc run` / `adlc accept` | Runner verbs that route to `@adlc/runner` to assert phase evidence (`run`) or record P6 acceptance (`accept`). |
+| `adlc review` | External passthrough that shells out to `npx adversarial-review`, the model-judged reviewer that `prosecute` records evidence for but never runs itself. |
 | `adlc ticket` | Unified local-store commands (`list`, `create`, `update`, archive, migration) plus external sync verbs (`pull`, `push`, `sync`, `doctor`). |
 
 ### Unknown tools
@@ -60,13 +60,13 @@ exit 1
 
 ## Exit-code convention
 
-The dispatcher mirrors the routed tool's exit code exactly — it adds none of its
+The dispatcher mirrors the routed tool's exit code exactly and adds none of its
 own semantics:
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes or command succeeds.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (including dispatcher-level failures: unknown tool, missing package).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes or command succeeds.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (including dispatcher-level failures: unknown tool, missing package).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails.</span>
 </div>
 
 ## Go deeper

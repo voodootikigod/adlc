@@ -13,9 +13,9 @@ description: Measures reviewer recall by planting bugs and scoring whether the r
 
 "We do adversarial review" is a vibe until it is a number. `review-calibration`
 plants real bugs into files changed by a commit, runs your review command, and
-scores recall — with a built-in echo control that scores ~0 and an oracle
-control that scores 1.0, so the recall figure is trustworthy rather than gamed
-by a reviewer that merely echoes changed lines.
+scores recall. A built-in echo control scores ~0 and an oracle control scores
+1.0, so the recall figure is trustworthy rather than gamed by a reviewer that
+merely echoes changed lines.
 
 ## Usage
 
@@ -42,9 +42,9 @@ adlc review-calibration --review-cmd "cmd with {base} placeholder" [options]
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: recall (and precision, if set) meet the thresholds.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: dirty tree, no plants generatable, review command crashed (exit not in {0,2}), no judge provider, or a control self-test failed.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: recall/precision below the thresholds, or a `--strict` provider match.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Recall (and precision, if set) meet the thresholds.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (dirty tree, no plants generatable, review command crashed with an exit not in {0,2}, no judge provider, or a control self-test failed).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. Recall/precision below the thresholds, or a `--strict` provider match.</span>
 </div>
 
 ## Example

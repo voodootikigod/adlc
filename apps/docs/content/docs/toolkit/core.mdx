@@ -1,6 +1,6 @@
 ---
 title: core
-description: The frozen shared foundation every ADLC tool imports — exit-code helpers, provider selection, and the ledger, ticket, rail, and mutation primitives.
+description: "The frozen shared foundation every ADLC tool imports: exit-code helpers, provider selection, and the ledger, ticket, rail, and mutation primitives."
 ---
 
 # core
@@ -10,7 +10,7 @@ description: The frozen shared foundation every ADLC tool imports — exit-code 
 ## What it is
 
 `@adlc/core` is the foundation the whole toolkit stands on. Every gate imports
-from it; no gate modifies it. It is a **frozen contract during tool builds** — a
+from it; no gate modifies it. It is a **frozen contract during tool builds**: a
 rail. If a tool needs something core doesn't offer, it works around the gap in
 its own package and notes it in its README rather than editing core. That
 discipline is what keeps twenty-plus independently published tools behaving
@@ -24,13 +24,13 @@ mutation operators used by prosecution.
 
 This is the contract. Every gate that builds on core reports its result the same
 way, so an orchestrator, hook, or CI job can branch on the exit code without
-parsing output. Core exposes it as three helpers — `pass()`, `opError()`, and
-`gateFail()`:
+parsing output. Core exposes it as three helpers: `pass()`, `opError()`, and
+`gateFail()`.
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — `pass()`: the gate passes or the command succeeds.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — `opError()`: operational error (bad input, unreadable file, failed LLM call).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — `gateFail()`: the gate fails (the finding is real).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: `pass()`. The gate passes or the command succeeds.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: `opError()`. Operational error (bad input, unreadable file, failed LLM call).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: `gateFail()`. The gate fails (the finding is real).</span>
 </div>
 
 The split between 1 and 2 matters: an operational error means the gate couldn't
@@ -39,7 +39,7 @@ let a broken environment read as a clean pass.
 
 ## Provider selection
 
-Tools that run an LLM pass do not embed provider logic — they call core's
+Tools that run an LLM pass do not embed provider logic. They call core's
 `detectProvider` / `complete` / `fan` helpers, which auto-detect a provider from
 the environment. Detection runs in a fixed priority order (cheapest and lowest
 latency first, per ADR-0007), matching the first provider whose key is present:
@@ -61,7 +61,7 @@ overridden with `ADLC_MODEL_CHEAP`, `ADLC_MODEL_MID`, and `ADLC_MODEL_FRONTIER`.
 No ADLC gate requires an API key to be useful. Every LLM-backed tool exposes
 `--prompt-only`, backed by core's `promptOnly()` helper: it prints the exact
 prompt the tool would send and exits `0`. You can paste that prompt into any
-harness — a chat window, a different provider, an air-gapped review — and feed
+harness (a chat window, a different provider, an air-gapped review) and feed
 the answer back. Keys make the gate automatic; they are never a gate to entry.
 
 ## Rail-engine primitives

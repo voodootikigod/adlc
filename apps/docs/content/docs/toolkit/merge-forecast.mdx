@@ -12,7 +12,7 @@ description: Predicts merge conflicts before any agent runs, certifies the safe 
 ## What it defends against
 
 Fanning agents out wide only to have their branches collide at merge time burns
-the parallel speedup twice — once building, once untangling. `merge-forecast`
+the parallel speedup twice: once building, once untangling. `merge-forecast`
 scores every parallel-eligible ticket pair for scope overlap, namespace
 collision, import radius, and historical co-change, then certifies the largest
 independent set as the safe width and orders the merge foundation-first. A hard
@@ -39,9 +39,9 @@ adlc merge-forecast [--tickets <path>] [--width <N>] [--build-min <X>] [--merge-
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: the schedule is safe at the recommended width.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad tickets file, unresolvable input).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: `--width` exceeds the certified width, or a vetoed / high-risk pair is scheduled concurrently.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. The schedule is safe at the recommended width.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad tickets file, unresolvable input).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. `--width` exceeds the certified width, or a vetoed / high-risk pair is scheduled concurrently.</span>
 </div>
 
 ## Example

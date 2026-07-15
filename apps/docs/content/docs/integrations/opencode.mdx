@@ -1,6 +1,6 @@
 ---
 title: opencode
-description: Native ADLC integration for the opencode terminal agent — enforce-by-default rails-guard hook, nine lifecycle commands, native adlc_gate/adlc_prosecute tools, and a deterministic P5 prosecution loop (5 lenses + verifier) plus a prosecutor meta-agent.
+description: "Native ADLC integration for the opencode terminal agent: an enforce-by-default rails-guard hook, nine lifecycle commands, native adlc_gate/adlc_prosecute tools, and a deterministic P5 prosecution loop (5 lenses + verifier) plus a prosecutor meta-agent."
 ---
 
 # ADLC in opencode
@@ -8,25 +8,25 @@ description: Native ADLC integration for the opencode terminal agent — enforce
 Brings the lifecycle into the [opencode](https://opencode.ai) terminal agent as
 a native plugin: an in-session rails-guard hook (`tool.execute.before`),
 advisory session hooks, nine lifecycle commands, the `adlc` phase-routing
-skill, two native model-callable tools (`adlc_gate`, `adlc_prosecute`), and a
-**deterministic P5 prosecution loop** — five lenses + a verifier fanned out over
-write-disabled child sessions — plus a separate `@prosecutor` meta-agent (seven
-prosecution agents in all). The integration **enforces by default** — a thrown
+skill, two native model-callable tools (`adlc_gate`, `adlc_prosecute`), a
+**deterministic P5 prosecution loop** (five lenses + a verifier fanned out over
+write-disabled child sessions), and a separate `@prosecutor` meta-agent (seven
+prosecution agents in all). The integration **enforces by default**: a thrown
 denial in `tool.execute.before` aborts the tool call (documented host behavior,
 regression-tested against a real binary).
 
 ## What you get
 
-- **Rails-guard hook** on `tool.execute.before` — denies structured
+- **Rails-guard hook** on `tool.execute.before`. Denies structured
   `edit`/`write`/`apply_patch` to a frozen rail declared by the active ticket;
   in-session **bash is gated** too via the `@adlc/core` shell classifier.
 - **Native tools:** `adlc_gate` (the model runs a lifecycle gate, LLM-backed
   ones keyless through the host model) and `adlc_prosecute` (the **deterministic
-  first-party P5 loop** — fan-out → dedupe → verify → loop-until-dry over
+  first-party P5 loop**: fan-out → dedupe → verify → loop-until-dry over
   write-disabled child sessions).
-- **Advisory session/compaction hooks** — `session.created` preflight, a
+- **Advisory session/compaction hooks:** `session.created` preflight, a
   `session.idle` gate-manifest audit, per-turn + at-compaction context injection,
-  and slash-command lifecycle/tamper advisories; they warn, never throw.
+  and slash-command lifecycle/tamper advisories. They warn, never throw.
 - **Commands:** `/adlc-init`, `/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`,
   `/adlc-decompose`, `/adlc-verify-build`, `/adlc-prosecute`, `/adlc-distill`,
   `/adlc-maintain`.
@@ -56,10 +56,10 @@ node scripts/opencode-install-smoke.mjs .
 Per-repo config rides the `["@adlc/opencode", { … }]` plugin-options
 tuple (env vars override); see the integration guide for the option table.
 
-## Rail enforcement — two layers
+## Rail enforcement: two layers
 
 1. **In-session (enforcing by default).** A thrown denial in
-   `tool.execute.before` **aborts the tool call** — documented host behavior on
+   `tool.execute.before` **aborts the tool call**: documented host behavior on
    `@opencode-ai/plugin` ≥ 1.17.13, regression-tested end-to-end against a real
    opencode binary (required CI). Bash **is** gated via the `@adlc/core` shell
    classifier; unrecognized structured tools carrying a path fail closed. The
@@ -68,7 +68,7 @@ tuple (env vars override); see the integration guide for the option table.
 2. **Commit-time (unbypassable).** The real control is
    `scripts/rails-guard-ci.mjs` (via `docs/ci/rails-guard.yml`): it reads the
    frozen rail set **from the trusted base ref** and rejects any PR that edits a
-   rail — including the shell-driven writes the in-session hook cannot see.
+   rail, including the shell-driven writes the in-session hook cannot see.
    **Make it a required check.**
 
 ## Rail contract
@@ -97,15 +97,15 @@ Mirrors the sibling integrations; all glob/ticket logic delegates to `@adlc/core
 
 ## Gaps
 
-1. **`permission.ask` is a dormant lever** — defined but never dispatched
+1. **`permission.ask` is a dormant lever.** It is defined but never dispatched
    upstream (anomalyco/opencode#7006, re-verified at 1.17.17/1.17.18). The
    enforcing control is the `tool.execute.before` throw; the tolerant handler
    activates the instant upstream wires the hook.
-2. **The native TUI plugin module is deferred** — `PluginModule` types
+2. **The native TUI plugin module is deferred.** `PluginModule` types
    `tui?: never` at 1.17.17 (the surface is reserved, not shipped), so the
    persistent statusline slot / dialogs are a follow-on. The verifiable native
    touch (the statusline toast) ships now.
-3. **P6 acceptance is a human decision** — by design; the plugin surfaces
+3. **P6 acceptance is a human decision** by design. The plugin surfaces
    evidence, it does not automate approval.
 
 ## Go deeper

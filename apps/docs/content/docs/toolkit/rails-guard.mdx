@@ -12,7 +12,7 @@ description: Blocks builder edits to frozen rail paths and greps added diff line
 ## What it defends against
 
 During P4 a builder can quietly edit the very tests, contract types, or CI config
-that are supposed to hold it accountable — or slip a `.skip(`, `.only(`,
+that are supposed to hold it accountable, or slip a `.skip(`, `.only(`,
 `@ts-ignore`, or `# noqa` into the diff to turn a red gate green. `rails-guard`
 enforces two invariants on the diff: declared rail globs must not be touched, and
 any newly added suppression marker is blocked unless the active ticket body
@@ -28,7 +28,7 @@ adlc rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] [--rails <glo
 
 | Flag | Description |
 | --- | --- |
-| `--base <ref>` | Freeze baseline to diff against. When omitted, resolves to the merge-base of HEAD with trunk (`main`/`master`/`origin/main`/`origin/master`) and **fails closed if no trunk ref is found** — it never defaults to HEAD, which would hide already-committed rail edits. |
+| `--base <ref>` | Freeze baseline to diff against. When omitted, resolves to the merge-base of HEAD with trunk (`main`/`master`/`origin/main`/`origin/master`) and **fails closed if no trunk ref is found**. It never defaults to HEAD, which would hide already-committed rail edits. |
 | `--ticket <id>` | Load rail globs and `allow-suppression` declarations from this ticket. |
 | `--tickets <path>` | Path to the tickets file (default `.adlc/tickets.json`). |
 | `--rails <glob>` | Frozen-path glob, repeatable. Overrides `ticket.rails` when supplied. |
@@ -41,9 +41,9 @@ Rails resolve from `--rails` when given, otherwise from `--ticket`; with neither
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: no rail edits and no undeclared suppression markers.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (not a git repo, bad input, no rails resolvable, no trunk baseline).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more violations found (list printed to stderr / JSON).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. No rail edits and no undeclared suppression markers.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (not a git repo, bad input, no rails resolvable, no trunk baseline).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more violations found (list printed to stderr / JSON).</span>
 </div>
 
 ## Example

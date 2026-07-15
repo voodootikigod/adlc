@@ -18,7 +18,7 @@ test, applies each candidate in isolation, and keeps only those that pass BOTH t
 repro command and the full rail regression suite. Survivors are grouped by
 agreement and the smallest diff from the largest consensus group wins. When every
 survivor is a singleton (with `--n >= 3`), that divergence is treated as evidence
-the spec is ambiguous — the tool escalates rather than guessing.
+the spec is ambiguous, and the tool escalates rather than guessing.
 
 ## Usage
 
@@ -38,14 +38,14 @@ adlc consensus-fix --test-cmd "..." --files a.mjs,b.mjs [--rails "..."] [--n 3] 
 | `--apply` | Write the winning fix. Default is dry-run. Never applies when all-divergent. |
 | `--allow-dirty` | Skip the dirty-tree guard (useful in CI with staged-only changes). |
 | `--json` | Machine-readable output. |
-| `--prompt-only` | Print the prompts that would be sent and exit 0 — works with zero API keys. |
+| `--prompt-only` | Print the prompts that would be sent and exit 0. Works with zero API keys. |
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: at least one candidate survived both gates with a usable consensus.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (bad arguments, unreadable files, dirty tree, no provider).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: no survivors, or all survivors are singletons with `--n >= 3` (spec ambiguity — escalate).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. At least one candidate survived both gates with a usable consensus.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad arguments, unreadable files, dirty tree, no provider).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. No survivors, or all survivors are singletons with `--n >= 3` (spec ambiguity; escalate).</span>
 </div>
 
 ## Example

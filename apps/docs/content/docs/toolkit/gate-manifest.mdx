@@ -10,14 +10,14 @@ description: A hash-chained evidence ledger recording what each ADLC gate verifi
 ## What it defends against
 
 Agentic code arrives at the merge gate with no memory of what was checked along the way.
-`gate-manifest` is the append-only ledger the other gates write to — spec-lint, hollow-test,
-rails-guard, review-calibration — each recording what it verified into `.adlc/manifest.jsonl`.
+`gate-manifest` is the append-only ledger the other gates write to: spec-lint, hollow-test,
+rails-guard, and review-calibration each record what they verified into `.adlc/manifest.jsonl`.
 Every entry's `prev` is the SHA-256 of the previous raw line, so tampering with any line
 breaks the chain. Set `ADLC_MANIFEST_KEY` and each entry is additionally HMAC-SHA256 signed:
 without it the chain proves only internal consistency (anyone who can write the file can
 forge a clean one); with it, the chain attests authorship and defeats the forge-from-scratch
-attack. It spans phases rather than owning one, giving auditors and the P6 gate the provenance
-that agentic code was checked before it shipped.
+attack. It spans phases rather than owning one, and it gives auditors and the P6 gate the
+provenance that agentic code was checked before it shipped.
 
 ## Usage
 
@@ -46,9 +46,9 @@ adlc gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — `record`, `show`, and `attest` always; `verify` when the chain (and signatures, if keyed) is valid.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: bad input, unreadable file, or malformed `--data` JSON.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — `verify` gate fails: the chain is broken (reports the seq and line of the first break).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: `record`, `show`, and `attest` always; `verify` when the chain (and signatures, if keyed) is valid.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Bad input, unreadable file, or malformed `--data` JSON.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: `verify` gate fails. The chain is broken (reports the seq and line of the first break).</span>
 </div>
 
 Prosecution, runner acceptance, rails evidence, and manual records share one

@@ -14,7 +14,7 @@ description: Captures each route's observable HTTP behavior before and after a c
 A large code diff hides its own consequences: the reviewer cannot tell, from 5,000
 changed lines, which of them actually altered what a client observes. `behavior-diff`
 captures the HTTP surface (status, content-type, body structure) of every route
-before and after a change, then reports the delta in behavior-space — "2 routes
+before and after a change, then reports the delta in behavior-space: "2 routes
 identical, 2 changed, 0 errored." The human spends the gate on the one judgment a
 machine cannot make: does the observed behavior change match the intended one?
 
@@ -33,16 +33,17 @@ adlc behavior-diff compare before.json after.json [--json]
 | `compare` | Diff two snapshots and print a human-readable behavior report. |
 | `--json` | Machine-readable output for orchestrators (both verbs). |
 
-Per-route errors are recorded, not fatal — the snapshot always has an entry for
-every route. `capture` fails operationally if no route returns a real response
-(target down), since an all-errored snapshot cannot be meaningfully diffed.
+Per-route errors are recorded rather than fatal, so the snapshot always has an
+entry for every route. `capture` fails operationally if no route returns a real
+response (target down), since an all-errored snapshot cannot be meaningfully
+diffed.
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — `capture` wrote a snapshot with at least one reachable route; `compare` found every route identical.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: unreadable config or snapshot, invalid JSON, cannot write output, or every route was unreachable.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — `compare` gate fails: one or more routes changed, were added, removed, or are dead in both snapshots.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: `capture` wrote a snapshot with at least one reachable route; `compare` found every route identical.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Unreadable config or snapshot, invalid JSON, cannot write output, or every route was unreachable.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: `compare` gate fails. One or more routes changed, were added, removed, or are dead in both snapshots.</span>
 </div>
 
 ## Example

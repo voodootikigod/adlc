@@ -14,7 +14,7 @@ description: Analyzes a build-session log for flail signatures and fails the gat
 A build agent that has lost the thread will loop: hitting the same error over and
 over, wandering outside its declared scope, or churning the same file. Left alone
 it burns context and produces noise. `flail-detector` encodes the mechanical
-two-strike rule — it reads a session log and fails closed when it finds any of
+two-strike rule. It reads a session log and fails closed when it finds any of
 four signatures: a normalized error signature repeating past `--max-repeat`, a
 written path outside every `--scope` glob, one file edited three or more times, or
 a log exceeding `--max-bytes`. It is fully deterministic and makes no LLM calls.
@@ -37,9 +37,9 @@ adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-byt
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — clean: no flail signals detected, the session may continue.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (log file not found, bad argument).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — flail: one or more signals triggered; kill the session and append the dead-ends to the ticket.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: clean. No flail signals detected, the session may continue.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (log file not found, bad argument).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: flail. One or more signals triggered; kill the session and append the dead-ends to the ticket.</span>
 </div>
 
 ## Example

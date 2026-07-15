@@ -29,18 +29,18 @@ it will be verified.
 adlc spec-lint spec.md
 ```
 
-Exit code `0` means the gate passes, `2` means it fails (wishes found — line
+Exit code `0` means the gate passes, `2` means it fails (wishes found, with line
 numbers printed), `1` means an operational error. Every gate in the toolkit
 follows this [exit-code convention](/docs/reference/exit-codes), so they compose
 in scripts and CI without special-casing.
 
-No API keys are required for the core checks. Gates with an LLM-assisted pass
-accept `--prompt-only`, which prints the exact prompt and exits `0` — paste it
-into whatever harness you already have.
+The core checks need no API keys. Gates with an LLM-assisted pass accept
+`--prompt-only`, which prints the exact prompt and exits `0`, so you can paste
+it into whatever harness you already have.
 
 ## 3. Bootstrap a repo
 
-Check the workspace is ready before any fan-out — the P0 gate:
+Check the workspace is ready before any fan-out. This is the P0 gate:
 
 ```sh
 adlc preflight        # environment & permissions table, pass/fail verdict
@@ -69,7 +69,7 @@ for six harnesses. Each guide uses that harness's own extension mechanism;
 there is no universal install syntax:
 
 ```sh
-npx plugins add voodootikigod/adlc   # vendor-neutral installer — Claude Code today
+npx plugins add voodootikigod/adlc   # vendor-neutral installer, Claude Code today
 codex plugin marketplace add voodootikigod/adlc --ref main
 codex plugin add adlc-codex@adlc
 ```
@@ -85,6 +85,6 @@ Then initialize once per repo. See the per-harness guides:
 
 ## Where to go next
 
-- [The Lifecycle](/docs/lifecycle) — which gate guards each phase, end to end.
-- [Toolkit](/docs/toolkit) — every tool's flags, exit codes, and examples.
-- [Theory](/docs/theory) — the eight failure modes the gates defend against.
+- [The Lifecycle](/docs/lifecycle): which gate guards each phase, end to end.
+- [Toolkit](/docs/toolkit): every tool's flags, exit codes, and examples.
+- [Theory](/docs/theory): the eight failure modes the gates defend against.

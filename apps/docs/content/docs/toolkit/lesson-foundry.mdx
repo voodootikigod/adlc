@@ -5,7 +5,7 @@ description: Clusters recurring prosecution findings and routes each to its chea
 
 # lesson-foundry
 
-**ADLC phase: P7 Compound** · **Gate:** with `--gate`, every recurring finding cluster has a banked defense file — no lesson is re-bought.
+**ADLC phase: P7 Compound** · **Gate:** with `--gate`, every recurring finding cluster has a banked defense file, so no lesson is re-bought.
 
 <PhaseDiagram phase="P7" />
 
@@ -16,8 +16,8 @@ description: Clusters recurring prosecution findings and routes each to its chea
 Without a compounding step the lifecycle never gets cheaper: the same finding is
 re-discovered by probabilistic review every run. `lesson-foundry` reads the
 prosecution findings ledger, clusters findings by semantic similarity, and
-routes each recurring cluster to its cheapest permanent defense — a grep-gate
-LINT, a `SKILL.md` stub, or a SPEC-GAP question for P1 — demoting a
+routes each recurring cluster to its cheapest permanent defense: a grep-gate
+LINT, a `SKILL.md` stub, or a SPEC-GAP question for P1. That demotes a
 dollars-per-catch LLM finding into a free-forever deterministic one.
 
 ## Usage
@@ -31,7 +31,7 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 | `--ledger <name>` | Ledger name under `.adlc/` to read findings from (default `findings`). |
 | `--min <n>` | Minimum cluster size to surface (default `2`). |
 | `--out-dir <path>` | Output directory for defense files (default `.adlc/lessons`). |
-| `--write` | Emit files (default is dry-run — prints what would be written). |
+| `--write` | Emit files (default is dry-run, which prints what would be written). |
 | `--gate` | Exit 2 if any cluster ≥ `--min` has no defense file in `--out-dir`. |
 | `--llm` | Refine cluster wording via one mid-tier LLM call per cluster. |
 | `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
@@ -41,9 +41,9 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: no recurring unbanked lessons (or `--gate` not set).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: bad input, unreadable ledger, or a write failure.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: one or more clusters have no defense file in `--out-dir`.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. No recurring unbanked lessons (or `--gate` not set).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Bad input, unreadable ledger, or a write failure.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more clusters have no defense file in `--out-dir`.</span>
 </div>
 
 ## Example

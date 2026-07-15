@@ -69,7 +69,7 @@ export function ContactForm() {
         style={{ borderColor: '#3f4044', background: '#26272c' }}
       >
         <p className="font-semibold" style={{ color: '#4fb4d8' }}>
-          Thanks — your message is in.
+          Thanks, your message is in.
         </p>
         <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
           We read every enterprise inquiry ourselves and reply within a couple of business days.

@@ -5,13 +5,13 @@ description: Mines human PR review objections into reusable prosecution lenses s
 
 # rejection-mining
 
-**ADLC phase: P7 Compound** · **Gate:** none — it authors prosecution lens files from clustered PR objections for `adversarial-review` to reuse.
+**ADLC phase: P7 Compound** · **Gate:** none. It authors prosecution lens files from clustered PR objections for `adversarial-review` to reuse.
 
 <PhaseDiagram phase="P7" />
 
 ## What it defends against
 
-Institutional reviewers reject the same classes of change over and over — the
+Institutional reviewers reject the same classes of change over and over: the
 "nights of no" that cost days in queue. `rejection-mining` fetches PR review
 threads via the GitHub CLI, filters for negative-signal language, clusters
 similar objections, and authors each cluster into a lens file with a
@@ -40,9 +40,9 @@ Requires the `gh` CLI installed and authenticated (`gh auth login`).
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — success: mining complete (lenses printed, or written with `--write`).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: `gh` missing, auth failure, no PRs found, or bad arguments.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — reserved for a gate-fail; not currently emitted by this tool.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: success. Mining complete (lenses printed, or written with `--write`).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (`gh` missing, auth failure, no PRs found, or bad arguments).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: reserved for a gate-fail; not currently emitted by this tool.</span>
 </div>
 
 ## Example

@@ -37,7 +37,7 @@ export function Barbell() {
         ))}
       </div>
       <figcaption className="mt-4 text-sm" style={{ color: 'var(--mk-muted)' }}>
-        Relative spend by phase — heavy at the ends, light in the middle.
+        Relative spend by phase: heavy at the ends, light in the middle.
         Schematic, not to scale.
       </figcaption>
     </figure>

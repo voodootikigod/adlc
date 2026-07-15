@@ -166,16 +166,18 @@ export default function HomePage() {
               className="border-l-2 pl-5 text-xl font-medium leading-snug"
               style={{ borderColor: '#ef7c2a', color: '#cbcdd2' }}
             >
-              The unit of account is cost per merged, verified change — never
+              The unit of account is cost per merged, verified change. Not
               tokens per developer per month.
             </blockquote>
             <p className="leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
-              Inverted from the SDLC, because misbuilding is expensive and
-              building is cheap. What that buys the executive: throughput
-              without a review bottleneck, review depth no human team sustains,
-              a lifecycle that gets cheaper every run as lessons distill into
-              lints and skills, senior time redeployed to the two human gates,
-              and auditability — an evidence manifest attached to every merge.
+              This is the SDLC inverted, because misbuilding is expensive and
+              building is cheap. Review stops being the bottleneck, and it goes
+              deeper than a human team could sustain anyway. Every merge carries
+              an evidence manifest, so auditors get an answer without an
+              engineer translating. Senior time goes to the two human gates
+              instead of rubber-stamping diffs. And each run costs a little less
+              than the last, as findings distill into lints and skills nobody
+              has to learn twice.
             </p>
             <p className="text-sm">
               <a href={theoryLink('distill')} style={{ color: '#4fb4d8' }}>

@@ -40,7 +40,7 @@ export const INTEGRATIONS = [
       'npm install -g @adlc/cli',
       'adlc init --harness cursor',
     ],
-    note: 'Marketplace install is preferred — the plugin brings hooks, skills, and /adlc-* commands. adlc init only bootstraps the .adlc/ runtime (do not commit a generated .adlc/config.json into a repo that already freezes that path). Legacy fallback: npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control.',
+    note: 'Marketplace install is preferred, because the plugin brings hooks, skills, and /adlc-* commands. adlc init only bootstraps the .adlc/ runtime (do not commit a generated .adlc/config.json into a repo that already freezes that path). Legacy fallback: npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control.',
   },
   {
     slug: 'opencode',

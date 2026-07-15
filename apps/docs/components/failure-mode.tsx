@@ -10,7 +10,7 @@ export function FailureMode({ id }: { id: keyof typeof FAILURE_MODES }) {
       style={{ borderColor: 'var(--adlc-highlight)', background: '#2f3137' }}
     >
       <strong>
-        {id} — {fm.name}
+        {id}: {fm.name}
       </strong>{' '}
       <a href={theoryLink(id)} className="text-sm">
         (theory ↗)

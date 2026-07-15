@@ -1,12 +1,12 @@
 ---
 title: The .adlc/ Runtime
-description: The on-disk state ADLC gates read and write — tickets, the active-ticket pointer, config, ledgers, evidence — and the environment variables that steer them.
+description: "The on-disk state ADLC gates read and write: tickets, the active-ticket pointer, config, ledgers, evidence, and the environment variables that steer them."
 ---
 
 # The `.adlc/` Runtime
 
 `.adlc/` is the project-local directory where ADLC keeps its runtime state. Tools read and
-write it through [`@adlc/core`](/docs/toolkit/core) — none of them re-parse it by hand. The
+write it through [`@adlc/core`](/docs/toolkit/core); none of them re-parse it by hand. The
 directory is created by `/adlc-init` (or the per-editor scaffolders) and grows as gates run.
 
 ## Directory layout
@@ -24,7 +24,7 @@ directory is created by `/adlc-init` (or the per-editor scaffolders) and grows a
 └── ticket-sync.state.json  # gitignored sync sidecar (rebuildable cache)
 ```
 
-### `tickets/` — the canonical ticket store
+### `tickets/`: the canonical ticket store
 
 The executable contract between P2 decomposition, P3 rails, P4 build, and P5/P6 evidence.
 Each ticket carries `{ id, title, body, scope[], rails[], edges[], duration, category, budget }`.
@@ -37,51 +37,51 @@ schema and rules live in
 [`docs/ticket-authoring.md`](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-authoring.md),
 and `.adlc/tickets.example.json` is a complete fixture.
 
-### `current-ticket.json` — the active-ticket pointer
+### `current-ticket.json`: the active-ticket pointer
 
 Names which ticket is "in flight" so rails-guard and prosecution know what to enforce. It
 holds either a bare id string or `{ "id": "T7" }`. The active ticket is resolved from
 `ADLC_TICKET` **or** this file. If both are set and **disagree**, that is treated as a
-tamper signal, not an ambiguity — resolution fails closed (`conflict: true`) rather than
-guessing. An unparseable pointer file is likewise a tamper signal and fails closed. This
-resolution is shared verbatim across every harness integration (Codex, Cursor, Antigravity,
-OpenCode) and `@adlc/build-gate`.
+tamper signal rather than an ambiguity, and resolution fails closed (`conflict: true`)
+instead of guessing. An unparseable pointer file is likewise a tamper signal and fails
+closed. This resolution is shared verbatim across every harness integration (Codex,
+Cursor, Antigravity, OpenCode) and `@adlc/build-gate`.
 
-### `config.json` — runtime config
+### `config.json`: runtime config
 
 Created with safe defaults by the scaffolders and never clobbered on re-init. It carries the
 [`ticket-sync`](/docs/toolkit/ticket-sync) provider configuration and the security posture
 for signed bundles (`securityMode`, `signers`, `revokedKeys`, `securitySensitivePatterns`,
 `maxBundleAgeDays`).
 
-### Ledgers — `manifest.jsonl` and `findings.jsonl`
+### Ledgers: `manifest.jsonl` and `findings.jsonl`
 
 Append-only JSON-lines ledgers, one object per line, written with `appendEntry` and read
 with `readEntries` (which reports malformed lines rather than swallowing them).
 
-- **`manifest`** — the hash-chained provenance ledger written by
+- **`manifest`** is the hash-chained provenance ledger written by
   [`gate-manifest`](/docs/toolkit/gate-manifest) when a gate is recorded. `manifest.lock`
   guards concurrent appends, and `verify` walks the chain to detect a break. Entries can be
   HMAC-signed when `ADLC_MANIFEST_KEY` is set.
-- **`findings`** — prosecution findings, each `{ ts, tool, file, line, category, severity, desc, verdict }`,
+- **`findings`** holds prosecution findings, each `{ ts, tool, file, line, category, severity, desc, verdict }`,
   written by tools like [`lesson-foundry`](/docs/toolkit/lesson-foundry),
   [`model-ratchet`](/docs/toolkit/model-ratchet), and
   [`gate-fuzzing`](/docs/toolkit/gate-fuzzing).
 
 ### Evidence snapshots
 
-Behavior evidence is captured as JSON snapshots — [`behavior-diff`](/docs/toolkit/behavior-diff)
+Behavior evidence is captured as JSON snapshots. [`behavior-diff`](/docs/toolkit/behavior-diff)
 writes a before/after route snapshot with `writeSnapshot()` and compares the two to prove a
 change is visible. Snapshots are plain files you point the tool at, not a fixed filename in
 `.adlc/`.
 
-### `ticket-sync.state.json` — the sync sidecar
+### `ticket-sync.state.json`: the sync sidecar
 
 Sync bookkeeping (tracker node ids, the 3-way base hash, create keys). It is a **gitignored,
-rebuildable cache** — never authored by hand and read by no gate. It is deliberately outside
-the rails trust root, so a routine sync leaves `tickets.json` byte-identical and never trips
-rails-guard. A missing or tampered sidecar fails safe (at worst it forces a conflict prompt
-on the next pull) and can be deleted and rebuilt at any time.
+rebuildable cache**: no gate reads it, and it is never authored by hand. It is deliberately
+outside the rails trust root, so a routine sync leaves `tickets.json` byte-identical and
+never trips rails-guard. A missing or tampered sidecar fails safe (at worst it forces a
+conflict prompt on the next pull) and can be deleted and rebuilt at any time.
 
 ## Rails trust root
 
@@ -105,6 +105,6 @@ rail edit.
 
 ## Related
 
-- [Ticket authoring](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-authoring.md) — the ticket schema and rules in full.
-- [The Lifecycle](/docs/lifecycle) — which gate reads which state, phase by phase.
-- [Tool Conventions](/docs/reference/conventions) and [Exit Codes](/docs/reference/exit-codes) — the contracts tools honor while reading this runtime.
+- [Ticket authoring](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-authoring.md): the ticket schema and rules in full.
+- [The Lifecycle](/docs/lifecycle): which gate reads which state, phase by phase.
+- [Tool Conventions](/docs/reference/conventions) and [Exit Codes](/docs/reference/exit-codes): the contracts tools honor while reading this runtime.

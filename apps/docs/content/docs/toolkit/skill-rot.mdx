@@ -10,7 +10,7 @@ description: Verifies the checkable claims inside SKILL.md files still hold agai
 ## What it defends against
 
 Skills are caches, and a stale cache delivers misinformation with the authority
-of an expert — worse than no skill at all. `skill-rot` walks each `SKILL.md`,
+of an expert. That is worse than no skill at all. `skill-rot` walks each `SKILL.md`,
 extracts the claims it can actually check (command names, file paths, and
 `npm`/`npx`/`pnpm`/`yarn` script references), and verifies them against the
 repo. Verifiable-but-failing claims are `stale` and fail the gate; claims it
@@ -34,9 +34,9 @@ Positional paths override the default search roots (`.claude/skills`,
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — gate passes: all skills clean.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: no `SKILL.md` files found, or bad input.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — gate fails: at least one skill has stale claims.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. All skills clean.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (no `SKILL.md` files found, or bad input).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. At least one skill has stale claims.</span>
 </div>
 
 ## Example

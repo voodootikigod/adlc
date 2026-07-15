@@ -1,11 +1,11 @@
 ---
 title: premortem
-description: Tells a frontier model the project already failed and asks for the postmortem, surfacing concrete risks anchored to the spec.
+description: Tells a frontier model the project already failed and asks for the postmortem, which surfaces concrete risks anchored to the spec.
 ---
 
 # premortem
 
-**ADLC phase: P1 Interrogate** · **Gate:** advisory — every surfaced failure cause becomes an interrogation question folded into spec review before the spec is locked.
+**ADLC phase: P1 Interrogate** · **Gate:** advisory. Every surfaced failure cause becomes an interrogation question folded into spec review before the spec is locked.
 
 <PhaseDiagram phase="P1" />
 
@@ -27,16 +27,16 @@ adlc premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] 
 | `--tier cheap\|mid\|frontier` | Model tier (default `frontier`). |
 | `--out <path>` | Write the markdown report to this file instead of stdout. |
 | `--json` | Emit machine-readable JSON `{ causes: [...] }`. |
-| `--prompt-only` | Print the exact system + user prompt and exit 0 — no API key needed. |
+| `--prompt-only` | Print the exact system + user prompt and exit 0. No API key needed. |
 | `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only`. |
 | `--help` | Print usage and exit 0. |
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — report produced successfully (or `--prompt-only` / `--help`).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error (missing spec file, no LLM provider configured, malformed model response).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — reserved for future gate-fail use; not currently emitted (premortem is advisory).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: report produced successfully (or `--prompt-only` / `--help`).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (missing spec file, no LLM provider configured, malformed model response).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: reserved for future gate-fail use; not currently emitted (premortem is advisory).</span>
 </div>
 
 ## Example

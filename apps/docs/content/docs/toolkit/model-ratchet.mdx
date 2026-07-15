@@ -5,15 +5,15 @@ description: Ranks hot files (churn × import criticality) for re-prosecution af
 
 # model-ratchet
 
-**ADLC phase: calibration (cross-phase)** · **Gate:** none — it prints a prosecution plan or drives a review over the highest-value files and records findings.
+**ADLC phase: calibration (cross-phase)** · **Gate:** none. It prints a prosecution plan, or drives a review over the highest-value files and records findings.
 
 ## What it defends against
 
 Every frontier model release is a free re-audit: newer models find what older
-ones missed. `model-ratchet` picks the files worth re-prosecuting first —
-`SCORE = churn × (1 + inDegree)`, high change rate times how many source files
-import it — then either prints a prosecution plan or runs your review command
-over each, appending verified findings to the shared `.adlc/findings` ledger.
+ones missed. `model-ratchet` picks the files worth re-prosecuting first. It ranks
+them by `SCORE = churn × (1 + inDegree)`, high change rate times how many source
+files import it, then either prints a prosecution plan or runs your review command
+over each file and appends verified findings to the shared `.adlc/findings` ledger.
 Run it on every model release (or monthly) to ratchet quality monotonically up.
 
 ## Usage
@@ -33,9 +33,9 @@ adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-r
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0** — success: plan printed, or the review ran and findings were appended to the ledger.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1** — operational error: not a git repo, a `--review-cmd` exit outside {0,2}, or bad arguments.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2** — not used by model-ratchet itself; review findings route to the ledger rather than failing a gate.</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: success. Plan printed, or the review ran and findings were appended to the ledger.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Not a git repo, a `--review-cmd` exit outside {0,2}, or bad arguments.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: not used by model-ratchet itself. Review findings route to the ledger rather than failing a gate.</span>
 </div>
 
 ## Example

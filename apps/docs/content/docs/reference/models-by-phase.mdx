@@ -6,7 +6,7 @@ description: A dated binding from the router's abstract tiers to concrete provid
 # Recommended Models by Phase
 
 > **Snapshot date: 2026-07-14.** Model lineups, prices, and benchmark standings decay
-> fast — this page is a cache, and caches need invalidation (ADLC Principle 10).
+> fast. This page is a cache, and caches need invalidation (ADLC Principle 10).
 > Re-verify against provider pricing pages before committing budget, run
 > [`model-ratchet`](/docs/toolkit/model-ratchet) after any model swap, and let your own
 > [`gate-manifest`](/docs/toolkit/gate-manifest) first-pass ledger override every static
@@ -16,7 +16,7 @@ description: A dated binding from the router's abstract tiers to concrete provid
 
 The [ADLC series](https://voodootikigod.com/series/adlc) argues that using the most
 expensive model everywhere is the wrong default: **model tier is a function of the cost
-of detecting an error, not of task prestige**. The toolkit makes that mechanical —
+of detecting an error, not of task prestige**. The toolkit makes that mechanical.
 [`model-router`](/docs/toolkit/model-router) reads rail density and DAG float and emits
 an abstract tier (`cheap` / `mid` / `frontier`) per ticket. What neither the theory nor
 the router resolves is the binding from abstract tier to concrete model. This page is
@@ -28,11 +28,11 @@ that binding.
 | --- | --- | --- |
 | `cheap` | Errors are caught instantly and deterministically by dense rails; regeneration costs pennies | Codemods, mechanical refactors under test, formatting, triage classification, ladder starts |
 | `mid` | Errors are caught by rails + prosecution; paying for single-pass perfection is waste | The build phase proper, rail authoring, prosecution passes, distillation mining |
-| `frontier` | Errors are *expensive to detect* — a subtly wrong artifact sails through every gate | Specs, decomposition, interface contracts, final verdicts |
+| `frontier` | Errors are *expensive to detect*: a subtly wrong artifact sails through every gate | Specs, decomposition, interface contracts, final verdicts |
 
 Two doctrine points shape everything below:
 
-1. **"Frontier" means the best model you are allowed to run — not the most expensive
+1. **"Frontier" means the best model you are allowed to run, not the most expensive
    model that exists.** The Frontier-Free Doctrine sets an Opus-class ceiling as the
    *design center*: the lifecycle must hit its accuracy targets with
    stable, generally available models without depending on any provider's preview or
@@ -40,19 +40,19 @@ Two doctrine points shape everything below:
    You never need a model smarter than the gate it must pass.
 2. **Measure the stack, not the model.** A 3-pass mid-tier prosecution stack with 0.85
    planted-bug recall *is* the more capable reviewer than a 1-pass frontier model at
-   0.6 — [`review-calibration`](/docs/toolkit/review-calibration) makes that exchange
+   0.6. [`review-calibration`](/docs/toolkit/review-calibration) makes that exchange
    rate a number. Tier labels are cold-start estimates only.
 
 ## Phase → tier map
 
 | Phase | Tier | Why |
 | --- | --- | --- |
-| **P0 Triage** | cheap | Classification with low escaped-error cost — a mis-triaged ticket is caught by the lifecycle it's routed into. |
+| **P0 Triage** | cheap | Classification with low escaped-error cost: a mis-triaged ticket is caught by the lifecycle it's routed into. |
 | **P1 Interrogate** | **frontier** | The spec is the least-verified artifact in the system; a subtly wrong requirement poisons everything downstream. *Do not economize in this phase.* [`parallax`](/docs/toolkit/parallax) divergence readings can run on mid. |
 | **P2 Decompose** | **frontier** for contracts; **cheap** as the gate probe | Interface contracts are frontier work for the same reason as specs. The [`coldstart`](/docs/toolkit/coldstart) gate *deliberately* probes with a cheap model: if a cheap model can enumerate what's missing, the ticket is underspecified for the mid model that will build it. |
 | **P3 Rail** | mid | Tests and contracts authored from spec alone in fresh context; [`hollow-test`](/docs/toolkit/hollow-test) catches weak rails deterministically. |
 | **P4 Build** | router-decided: **ladder cheap→mid** with float, **direct best-tier** on the critical path | [`model-router`](/docs/toolkit/model-router)'s home turf. Float > 0 and rail density ≥ 0.5 → start cheap and ladder up on gate failure (escalation is regeneration, never rescue). Float = 0 → the tier with the best first-pass rate from your manifest. |
-| **P5 Prosecute** | **mid, stacked** — plus a **second provider family** on high blast radius | N fresh-context mid passes with loop-until-dry beat one frontier pass. For trust-boundary, auth, secrets, data-loss, schema, or CI/CD changes, run ≥2 distinct-family providers — different models have different blind spots. |
+| **P5 Prosecute** | **mid, stacked**, plus a **second provider family** on high blast radius | N fresh-context mid passes with loop-until-dry beat one frontier pass. For trust-boundary, auth, secrets, data-loss, schema, or CI/CD changes, run ≥2 distinct-family providers, because different models have different blind spots. |
 | **P6 Integrate** | none (human gate) | [`behavior-diff`](/docs/toolkit/behavior-diff) is deterministic. The human is the frontier tier here. |
 | **P7 Distill** | mid for mining; **rent one frontier pass to mint structure** | Lesson mining runs fine on mid. Occasionally rent the frontier model to crystallize judgment into a skill or template, then spend mid inside that structure indefinitely. |
 
@@ -62,7 +62,7 @@ where rails make building cheap.
 ## Tier → model, by provider
 
 Prices are USD per million tokens, input/output, standard API rates. Benchmark numbers
-are directional only — **SWE-bench Verified and SWE-bench Pro are different benchmarks
+are directional only. **SWE-bench Verified and SWE-bench Pro are different benchmarks
 with non-comparable scores.**
 
 ### Anthropic
@@ -116,20 +116,20 @@ never silently retargets the repository policy.
 ### Open-weight, hosted APIs
 
 These are the cheapest capable tiers available, and they are *distinct model
-families* — exactly what the P5 multi-provider quorum needs.
+families*, exactly what the P5 multi-provider quorum needs.
 
 | Tier | Model | Price (in/out) | Context | Notes |
 | --- | --- | --- | --- | --- |
 | cheap | DeepSeek V4 Flash | $0.14 / $0.28 | 1M | Extreme cache discount; arguably the best cheap-tier value |
 | cheap/mid | MiniMax M3 | ~$0.30 / $1.20 (promo) | 1M | ~59% SWE-bench Pro (vendor) |
-| mid | Kimi K2.6 | $0.55 / $2.65 | ~256K | The strongest open agentic/tool-use pick — good P4 builder and P5 reviewer |
+| mid | Kimi K2.6 | $0.55 / $2.65 | ~256K | The strongest open agentic/tool-use pick: good P4 builder and P5 reviewer |
 | mid | GLM-5.2 | $1.40 / $4.40 | 1M | Vendor-reported 62.1% SWE-bench Pro; MIT license; verify before routing |
-| frontier-adjacent | DeepSeek V4 Pro | $1.74 / $3.48 (promo $0.44 / $0.87) | 1M | ~80% SWE-bench Verified (semi-verified) — highest open-weight coding score of the snapshot |
+| frontier-adjacent | DeepSeek V4 Pro | $1.74 / $3.48 (promo $0.44 / $0.87) | 1M | ~80% SWE-bench Verified (semi-verified), the highest open-weight coding score of the snapshot |
 
 ### Local / self-hosted
 
-Local models are a legitimate **cheap tier** — and on strong hardware a legitimate
-**mid tier** — for rail-dense work where the gates do the verification. The practical
+Local models are a legitimate **cheap tier** for rail-dense work where the gates do the
+verification, and on strong hardware a legitimate **mid tier**. The practical
 single-machine ceiling at this snapshot is ~71–72% SWE-bench Verified. Do **not**
 assign local models frontier duties (P1/P2 specs and contracts): those phases exist
 precisely because their errors escape gates.
@@ -138,12 +138,12 @@ precisely because their errors escape gates.
 | --- | --- | --- |
 | 16GB RAM / GPU | gpt-oss-20b; Qwen2.5-Coder 7B/14B | cheap: formatting, codemods, triage, coldstart probe |
 | 24–32GB GPU | Qwen3-Coder-30B-A3B; Devstral Small 2 | cheap, and ladder starts on rail-dense P4 tickets |
-| 64–128GB unified / 96GB GPU | **Qwen3-Coder-Next (80B/A3B)** — the sweet spot; Devstral 2 / gpt-oss-120b at Q4 | mid: P4 builds, P3 rails, P5 fan-out passes |
+| 64–128GB unified / 96GB GPU | **Qwen3-Coder-Next (80B/A3B)**, the sweet spot; Devstral 2 / gpt-oss-120b at Q4 | mid: P4 builds, P3 rails, P5 fan-out passes |
 | Multi-GPU cluster | GLM-5.2, Kimi K2.x, DeepSeek V4 | usually better rented via API unless data residency forces self-hosting |
 
 Notes:
 
-- The [`coldstart`](/docs/toolkit/coldstart) probe is a perfect local job — free,
+- The [`coldstart`](/docs/toolkit/coldstart) probe is a perfect local job: free,
   private, and the *weaker* the probe the more honest the gate.
 - Skip Llama 4 for coding work (~24% Verified at snapshot).
 - A local cheap tier changes the ladder math: when the ladder start costs ~$0, the
