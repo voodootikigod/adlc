@@ -136,8 +136,13 @@ test('mergeHooks wires stop/preflight by default; wireUnpinned:false removes ADL
   const base = mergeHooks(undefined);
   assert.match(base.hooks.stop[0].command, /adlc-stop\.mjs/);
   assert.match(base.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
-  assert.match(base.hooks.preToolUse[0].command, /^node "\.\/node_modules\/@adlc\/cursor\/hooks\/adlc-pretool\.mjs"$/);
-  assert.match(base.hooks.stop[0].command, /^node "\.\/node_modules\/@adlc\/cursor\/hooks\/adlc-stop\.mjs"$/);
+  // Without a projectRoot that has node_modules/@adlc/cursor, commands are absolute.
+  assert.match(base.hooks.preToolUse[0].command, /adlc-pretool\.mjs/);
+  assert.match(base.hooks.stop[0].command, /adlc-stop\.mjs/);
+  assert.ok(
+    !/\.\/node_modules\/@adlc\/cursor\//.test(base.hooks.preToolUse[0].command),
+    'default mergeHooks (no projectRoot) must not emit node_modules-relative hooks',
+  );
   assert.deepEqual(
     Object.keys(base.hooks).sort(),
     ['afterFileEdit', 'beforeShellExecution', 'beforeSubmitPrompt', 'preToolUse', 'stop'],
@@ -161,7 +166,10 @@ test('ensureCursorHooks honors the wireUnpinned option end-to-end', () => {
   let hooks = readJson(join(root, '.cursor', 'hooks.json'));
   assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
   assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
-  assert.match(hooks.hooks.preToolUse[0].command, /\.\/node_modules\/@adlc\/cursor\//);
+  // Fresh temp root has no node_modules/@adlc/cursor → absolute plugin path.
+  assert.match(hooks.hooks.preToolUse[0].command, /adlc-pretool\.mjs/);
+  assert.ok(!/\.\/node_modules\/@adlc\/cursor\//.test(hooks.hooks.preToolUse[0].command),
+    'absent project install must not emit node_modules-relative hooks');
   ensureCursorHooks(root, { wireUnpinned: false });
   hooks = readJson(join(root, '.cursor', 'hooks.json'));
   assert.equal(hooks.hooks.stop, undefined);
@@ -208,7 +216,9 @@ test('scaffold CLI: scaffolds the POSITIONAL project root; stop/preflight wired 
   const hooks = readJson(hooksPath);
   assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
   assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
-  assert.match(hooks.hooks.preToolUse[0].command, /node_modules\/@adlc\/cursor\/hooks\/adlc-pretool\.mjs/);
+  assert.match(hooks.hooks.preToolUse[0].command, /adlc-pretool\.mjs/);
+  assert.ok(!/\.\/node_modules\/@adlc\/cursor\//.test(hooks.hooks.preToolUse[0].command),
+    'CLI scaffold into empty repo must fall back to absolute plugin paths');
 });
 
 test('scaffold CLI: --no-unpinned omits stop + beforeSubmitPrompt (T47)', () => {
@@ -293,3 +303,14 @@ test('scaffold() command deployment is idempotent: package source wins, unrelate
   assert.equal(deployed.length, shipped.length + 1, 'no duplicates on re-run');
 });
 
+
+test('ensureCursorHooks uses node_modules-relative commands when @adlc/cursor is installed in the project (T47 P5)', () => {
+  const root = mkRepo();
+  const nmHook = join(root, 'node_modules', '@adlc', 'cursor', 'hooks');
+  mkdirSync(nmHook, { recursive: true });
+  writeFileSync(join(nmHook, 'adlc-pretool.mjs'), '// stub\n');
+  ensureCursorHooks(root);
+  const hooks = readJson(join(root, '.cursor', 'hooks.json'));
+  assert.match(hooks.hooks.preToolUse[0].command, /^node "\.\/node_modules\/@adlc\/cursor\/hooks\/adlc-pretool\.mjs"$/);
+  assert.match(hooks.hooks.stop[0].command, /^node "\.\/node_modules\/@adlc\/cursor\/hooks\/adlc-stop\.mjs"$/);
+});

@@ -55,20 +55,25 @@ function isAdlcHook(entry) {
  * any non-array (non-standard) value is replaced by our canonical entry. */
 const asHookList = (v) => (Array.isArray(v) ? v : []);
 
-/** Project-relative hook commands for the legacy npm scaffold path.
- * Marketplace installs use hooks/hooks.json with `./hooks/…` (plugin cwd).
- * Scaffolded consumer repos point at node_modules so relocating the global
- * npm cache cannot break hooks.json (T47). Absolute PLUGIN_ROOT paths are
- * intentionally not used. */
-const NM_HOOK = (rel) => `node "./node_modules/@adlc/cursor/${rel}"`;
+/** Build hook command strings for the legacy project-scaffold path.
+ * Prefer project-relative `./node_modules/@adlc/cursor/…` when that package is
+ * installed in the target repo (relocatable; survives npx-cache moves).
+ * Fall back to absolute paths under `pluginRoot` when it is not — otherwise
+ * `npx @adlc/cursor .` would write hooks that cannot resolve (T47 P5 finding).
+ * Marketplace installs use hooks/hooks.json with `./hooks/…` (plugin cwd). */
+const NM_PREFIX = 'node_modules/@adlc/cursor';
+const nmHook = (rel) => `node "./${NM_PREFIX}/${rel}"`;
+const absHook = (pluginRoot, rel) => `node "${join(pluginRoot, rel)}"`;
 
-export function buildHookCommands(_pluginRoot = PLUGIN_ROOT) {
+export function buildHookCommands(pluginRoot = PLUGIN_ROOT, { projectRoot } = {}) {
+  const useNm = Boolean(projectRoot) && existsSync(join(projectRoot, NM_PREFIX));
+  const hook = (rel) => (useNm ? nmHook(rel) : absHook(pluginRoot, rel));
   return {
-    pretool: NM_HOOK(PRETOOL_REL),
-    audit: NM_HOOK(AUDIT_REL),
-    shellAdvisory: NM_HOOK(SHELL_ADVISORY_REL),
-    stop: NM_HOOK(STOP_REL),
-    preflight: NM_HOOK(PREFLIGHT_REL),
+    pretool: hook(PRETOOL_REL),
+    audit: hook(AUDIT_REL),
+    shellAdvisory: hook(SHELL_ADVISORY_REL),
+    stop: hook(STOP_REL),
+    preflight: hook(PREFLIGHT_REL),
   };
 }
 
@@ -86,8 +91,8 @@ export function buildHookCommands(_pluginRoot = PLUGIN_ROOT) {
  * wires `stop` / `beforeSubmitPrompt` to the stop-audit / preflight scripts.
  * When false, any previously wired ADLC entry on those events is REMOVED.
  */
-export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = true } = {}) {
-  const cmds = buildHookCommands(pluginRoot);
+export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = true, projectRoot } = {}) {
+  const cmds = buildHookCommands(pluginRoot, { projectRoot });
   const base = existing && typeof existing === 'object' ? existing : {};
   const hooks = { ...(base.hooks ?? {}) };
 
@@ -144,7 +149,7 @@ export function ensureCursorHooks(projectRoot, {
       existing = undefined;
     }
   }
-  const merged = mergeHooks(existing, pluginRoot, { wireUnpinned });
+  const merged = mergeHooks(existing, pluginRoot, { wireUnpinned, projectRoot });
   writeFileSync(hooksPath, `${JSON.stringify(merged, null, 2)}\n`);
   return { path: hooksPath, created: !existing, backedUp };
 }

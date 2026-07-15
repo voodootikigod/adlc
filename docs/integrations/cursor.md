@@ -77,10 +77,13 @@ npm install -g @adlc/cli
 npx @adlc/cursor .
 ```
 
-The scaffolder merges hooks (relative `./node_modules/@adlc/cursor/hooks/…`
-paths, including `stop` / `beforeSubmitPrompt` by default), deploys
-`.cursor/commands/`, and creates `.adlc/config.json`. Prefer the marketplace path
-so hooks and skills update with the plugin instead of drifting project copies.
+The scaffolder merges hooks (including `stop` / `beforeSubmitPrompt` by
+default). If `@adlc/cursor` is installed in the project (`npm i -D @adlc/cursor`),
+hook commands are relocatable `./node_modules/@adlc/cursor/hooks/…` paths;
+otherwise they fall back to absolute paths into the scaffolder install so
+`npx @adlc/cursor .` still works. It deploys `.cursor/commands/` and creates
+`.adlc/config.json`. Prefer the marketplace path so hooks and skills update with
+the plugin instead of drifting project copies.
 
 From a source checkout:
 
