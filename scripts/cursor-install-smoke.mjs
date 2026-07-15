@@ -39,50 +39,76 @@ else {
   if (!pkg.cursor?.rules) fail('package.json cursor.rules entry missing'); else ok('cursor.rules manifest entry');
 }
 
-// ---- AC1 + T18: hooks.json wiring (preToolUse DISPATCHER + afterFileEdit audit
-// ---- + beforeShellExecution advisory; unpinned events absent) ----
-const hooksJsonPath = join(PLUGIN, 'hooks.json');
-if (!existsSync(hooksJsonPath)) fail('hooks.json missing');
-else {
+// ---- AC1 + T47: hooks wiring (dispatcher + audit + shell + stop + preflight) ----
+function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
+  if (!existsSync(hooksJsonPath)) { fail(`${label} missing`); return; }
   const hj = JSON.parse(read(hooksJsonPath));
-  if (hj.version !== 1) fail('hooks.json version is not 1'); else ok('hooks.json version 1');
+  if (hj.version !== 1) fail(`${label} version is not 1`); else ok(`${label} version 1`);
   const pre = hj.hooks?.preToolUse ?? [];
-  // T18 amendment 1: ONE dispatcher entry, not a rails-guard + buildgate pair —
-  // Cursor's multi-entry permission-combination semantics are unpinned, so a
-  // second entry could mask a rails deny.
-  if (!pre.some((e) => /adlc-pretool\.mjs/.test(e.command ?? ''))) fail('preToolUse does not wire the adlc-pretool.mjs dispatcher');
-  else ok('preToolUse wires the single dispatcher (rails first, buildgate second)');
-  if (pre.some((e) => /adlc-rails-guard\.mjs/.test(e.command ?? ''))) fail('preToolUse still wires adlc-rails-guard.mjs directly (must be the single dispatcher — multi-entry semantics are unpinned)');
-  else ok('preToolUse has no direct rails-guard entry (migrated into the dispatcher)');
-  if (pre.filter((e) => /adlc-/.test(e.command ?? '')).length !== 1) fail('preToolUse must carry exactly ONE ADLC entry (the dispatcher)');
-  else ok('preToolUse carries exactly one ADLC entry');
+  if (!pre.some((e) => /adlc-pretool\.mjs/.test(e.command ?? ''))) fail(`${label}: preToolUse does not wire the adlc-pretool.mjs dispatcher`);
+  else ok(`${label}: preToolUse wires the single dispatcher`);
+  if (pre.some((e) => /adlc-rails-guard\.mjs/.test(e.command ?? ''))) fail(`${label}: preToolUse still wires adlc-rails-guard.mjs directly`);
+  else ok(`${label}: no direct rails-guard preToolUse entry`);
+  if (pre.filter((e) => /adlc-/.test(e.command ?? '')).length !== 1) fail(`${label}: preToolUse must carry exactly ONE ADLC entry`);
+  else ok(`${label}: exactly one ADLC preToolUse entry`);
+  if (!pre.every((e) => typeof e.command === 'string' && e.command.includes(relativeNeedle) && !/^node\s+"?\//.test(e.command))) {
+    fail(`${label}: hook commands must be relative (needle=${relativeNeedle}), not absolute`);
+  } else ok(`${label}: relative hook command paths`);
   const after = hj.hooks?.afterFileEdit ?? [];
-  if (!after.some((e) => /adlc-audit\.mjs/.test(e.command ?? ''))) fail('afterFileEdit does not wire adlc-audit.mjs');
-  else ok('afterFileEdit wires the observational audit hook');
-  // T18: beforeShellExecution is a PINNED event — the advisory-only shell notice.
+  if (!after.some((e) => /adlc-audit\.mjs/.test(e.command ?? ''))) fail(`${label}: afterFileEdit missing audit`);
+  else ok(`${label}: afterFileEdit audit`);
   const shell = hj.hooks?.beforeShellExecution ?? [];
-  if (!shell.some((e) => /adlc-shell-advisory\.mjs/.test(e.command ?? ''))) fail('beforeShellExecution does not wire adlc-shell-advisory.mjs');
-  else ok('beforeShellExecution wires the advisory-only shell notice');
-  // T18 AC4: the UNPINNED events ship DISABLED — hooks.json must not reference
-  // the stop/preflight scripts, and must contain ONLY verified event names.
-  const raw = read(hooksJsonPath);
-  if (/adlc-stop\.mjs|adlc-preflight\.mjs/.test(raw)) fail('hooks.json wires a DISABLED-by-default mode (adlc-stop/adlc-preflight) — stop/beforeSubmitPrompt are not pinned events');
-  else ok('disabled modes (stop-audit, preflight) are absent from hooks.json');
-  const VERIFIED_EVENTS = new Set(['preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile']);
+  if (!shell.some((e) => /adlc-shell-advisory\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeShellExecution missing`);
+  else ok(`${label}: beforeShellExecution advisory`);
+  const stop = hj.hooks?.stop ?? [];
+  if (!stop.some((e) => /adlc-stop\.mjs/.test(e.command ?? ''))) fail(`${label}: stop must wire adlc-stop.mjs by default (T47)`);
+  else ok(`${label}: stop wired by default`);
+  const preflight = hj.hooks?.beforeSubmitPrompt ?? [];
+  if (!preflight.some((e) => /adlc-preflight\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeSubmitPrompt must wire adlc-preflight.mjs by default (T47)`);
+  else ok(`${label}: beforeSubmitPrompt wired by default`);
+  const VERIFIED_EVENTS = new Set(['preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile', 'stop', 'beforeSubmitPrompt']);
   const unverified = Object.keys(hj.hooks ?? {}).filter((k) => !VERIFIED_EVENTS.has(k));
-  if (unverified.length) fail(`hooks.json references unverified event(s): ${unverified.join(', ')} (ADR 0006 pins only ${[...VERIFIED_EVENTS].join('/')})`);
-  else ok('hooks.json references only ADR-0006-pinned events');
-  // advisory: failClosed must be false so a hook bug cannot brick the editor
-  if (pre[0]?.failClosed !== false) fail('preToolUse failClosed is not false (advisory layer must not brick the editor)');
-  else ok('preToolUse is advisory (failClosed:false)');
-  // F1: the matcher must ROUTE every tool to the guard (catch-all) so a novel
-  // mutator name can't bypass the fail-closed classifier. Anything narrower is an
-  // allowlist with a hole.
+  if (unverified.length) fail(`${label}: unverified event(s): ${unverified.join(', ')}`);
+  else ok(`${label}: only documented Cursor events`);
+  if (pre[0]?.failClosed !== false) fail(`${label}: preToolUse failClosed must be false`);
+  else ok(`${label}: failClosed:false`);
   const matcher = pre.find((e) => /adlc-pretool/.test(e.command ?? ''))?.matcher ?? '';
   const re = new RegExp(matcher, 'i');
   const routed = ['Write', 'str_replace', 'modify_file', 'frobnicate', 'Read'].every((t) => re.test(t));
-  if (!routed) fail(`preToolUse matcher is an allowlist, not catch-all (matcher="${matcher}") — novel mutators bypass the guard`);
-  else ok('preToolUse matcher is catch-all (every tool reaches the guard; classifier decides)');
+  if (!routed) fail(`${label}: preToolUse matcher is not catch-all`);
+  else ok(`${label}: catch-all matcher`);
+}
+
+assertHookConfig('hooks/hooks.json', join(PLUGIN, 'hooks', 'hooks.json'), { relativeNeedle: './hooks/' });
+assertHookConfig('hooks.json', join(PLUGIN, 'hooks.json'), { relativeNeedle: './node_modules/@adlc/cursor/hooks/' });
+
+// ---- T47: marketplace + plugin manifest + skills ----
+const marketplacePath = join(ROOT, '.cursor-plugin', 'marketplace.json');
+if (!existsSync(marketplacePath)) fail('root .cursor-plugin/marketplace.json missing');
+else {
+  const m = JSON.parse(read(marketplacePath));
+  const entry = (m.plugins ?? []).find((p) => p.name === 'adlc-cursor');
+  if (!entry) fail('marketplace missing adlc-cursor plugin entry');
+  else if (entry.source !== './plugins/adlc-cursor') fail(`marketplace source is ${entry.source}`);
+  else ok('marketplace lists adlc-cursor → ./plugins/adlc-cursor');
+}
+const pluginManifestPath = join(PLUGIN, '.cursor-plugin', 'plugin.json');
+if (!existsSync(pluginManifestPath)) fail('plugins/adlc-cursor/.cursor-plugin/plugin.json missing');
+else {
+  const pm = JSON.parse(read(pluginManifestPath));
+  const pkg = JSON.parse(read(join(PLUGIN, 'package.json')));
+  if (pm.name !== 'adlc-cursor') fail(`plugin.json name is ${pm.name}`); else ok('plugin.json name');
+  if (pm.version !== pkg.version) fail(`plugin.json version ${pm.version} != package ${pkg.version}`); else ok('plugin.json version lockstep');
+}
+for (const skill of ['adlc', 'adlc-init']) {
+  const skillPath = join(PLUGIN, 'skills', skill, 'SKILL.md');
+  if (!existsSync(skillPath)) fail(`skills/${skill}/SKILL.md missing`);
+  else {
+    const body = read(skillPath);
+    if (!new RegExp(`^name:\\s*${skill}\\s*$`, 'm').test(body)) fail(`skills/${skill} missing name frontmatter`);
+    else if (!/^description:/m.test(body)) fail(`skills/${skill} missing description frontmatter`);
+    else ok(`skills/${skill}/SKILL.md`);
+  }
 }
 
 // ---- AC1: hook scripts present + contract ----
@@ -132,10 +158,9 @@ else {
   if (!/TRIVIALLY BYPASSABLE/i.test(s)) fail('shell advisory does not document that the string match is trivially bypassable');
   else ok('shell advisory documents its trivial bypassability');
 }
-// The disabled-by-default scripts must still SHIP (opt-in via wireUnpinned).
 for (const f of ['adlc-stop.mjs', 'adlc-preflight.mjs']) {
-  if (!existsSync(join(PLUGIN, 'hooks', f))) fail(`hooks/${f} missing (disabled-by-default mode must still ship)`);
-  else ok(`hooks/${f} ships (disabled by default, opt-in wiring)`);
+  if (!existsSync(join(PLUGIN, 'hooks', f))) fail(`hooks/${f} missing`);
+  else ok(`hooks/${f} ships`);
 }
 
 // ---- AC1: rule registration ----
@@ -270,6 +295,10 @@ else {
   if (!/ci\/rails-guard\.yml/.test(doc)) fail('cursor.md does not point at the mandatory CI gate (docs/ci/rails-guard.yml)'); else ok('links the unbypassable CI gate');
   if (!/advisor/i.test(doc)) fail('cursor.md does not frame the in-session hook as advisory'); else ok('frames in-session hook as advisory');
   if (!/Formal ADLC Coverage/.test(doc)) fail('cursor.md missing the Formal ADLC Coverage table'); else ok('has Formal ADLC Coverage table');
+  if (/no plugin marketplace/i.test(doc)) fail('cursor.md still claims Cursor has no plugin marketplace (T47)');
+  else ok('cursor.md does not claim Cursor has no plugin marketplace');
+  if (!/\.cursor-plugin\/marketplace\.json|cursor marketplace|marketplace plugin/i.test(doc)) fail('cursor.md does not describe marketplace plugin install');
+  else ok('cursor.md describes marketplace plugin install');
 }
 
 // ---- AC5: ADR exists and pins the Cursor hook facts ----
@@ -277,9 +306,11 @@ const adrPath = join(ROOT, 'docs', 'adr', '0006-adlc-cursor-integration.md');
 if (!existsSync(adrPath)) fail('docs/adr/0006-adlc-cursor-integration.md missing');
 else {
   const adr = read(adrPath);
-  for (const needle of ['preToolUse', 'afterFileEdit', '## Threat Model']) {
+  for (const needle of ['preToolUse', 'afterFileEdit', '## Threat Model', 'stop', 'beforeSubmitPrompt']) {
     if (!adr.includes(needle)) fail(`ADR 0006 does not pin "${needle}"`); else ok(`ADR pins ${needle}`);
   }
+  if (/no plugin marketplace/i.test(adr)) fail('ADR 0006 still claims Cursor has no plugin marketplace (T47)');
+  else ok('ADR 0006 does not claim Cursor has no plugin marketplace');
 }
 
 // ---- T19: the docs must tell the exact truth about T16-T18 — the honesty

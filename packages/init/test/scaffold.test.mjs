@@ -94,3 +94,24 @@ test('scaffold repairs a whole-directory ADLC ignore so committed state can be r
     assert.match(ignore, /^!\.adlc\/specs\/$/m);
   });
 });
+
+test('scaffold --harness cursor writes cursor harness config and skips Codex agents', () => {
+  fixture((root) => {
+    const result = scaffold({ root, harness: 'cursor' });
+    const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.equal(cfg.harnesses.cursor.railEnforcement, 'auto');
+    assert.equal(cfg.harnesses.codex, undefined);
+    assert.equal(existsSync(join(root, '.codex')), false);
+    assert.ok(result.created.includes('.adlc/config.json'));
+  });
+});
+
+test('CLI --harness cursor implies no Codex agents', () => {
+  fixture((root) => {
+    const result = JSON.parse(execFileSync(process.execPath, [BIN, '--root', root, '--harness', 'cursor', '--json'], { encoding: 'utf8' }));
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(join(root, '.codex')), false);
+    const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.equal(cfg.harnesses.cursor.railEnforcement, 'auto');
+  });
+});

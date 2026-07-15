@@ -2,20 +2,30 @@
 import { scaffold } from '../lib/scaffold.mjs';
 
 function usage() {
-  console.log(`adlc init [--root <path>] [--json] [--no-codex-agents]
+  console.log(`adlc init [--root <path>] [--json] [--no-codex-agents] [--harness <codex|cursor>]
 
-Idempotently creates the committable .adlc runtime and project-scoped Codex agents.
-It confines writes to --root and never edits user-global Codex configuration implicitly.`);
+Idempotently creates the committable .adlc runtime and optional project-scoped
+Codex agents. --harness cursor implies --no-codex-agents and records
+harnesses.cursor in a fresh config. Writes are confined to --root; never edits
+user-global Codex/Cursor configuration implicitly.`);
 }
 
 function parse(argv) {
-  const options = { root: '.', json: false, codexAgents: true };
+  const options = { root: '.', json: false, codexAgents: true, harness: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { help: true, ...options };
     if (arg === '--json') options.json = true;
     else if (arg === '--no-codex-agents') options.codexAgents = false;
-    else if (arg === '--root') {
+    else if (arg === '--harness') {
+      if (index + 1 >= argv.length) throw new Error('--harness requires a value');
+      const value = argv[++index];
+      if (value !== 'codex' && value !== 'cursor') {
+        throw new Error(`--harness must be codex or cursor (got ${value})`);
+      }
+      options.harness = value;
+      if (value === 'cursor') options.codexAgents = false;
+    } else if (arg === '--root') {
       if (index + 1 >= argv.length) throw new Error('--root requires a path');
       options.root = argv[++index];
     } else throw new Error(`unknown option: ${arg}`);

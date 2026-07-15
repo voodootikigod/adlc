@@ -1,7 +1,7 @@
 {
   "name": "@adlc/cursor",
   "version": "1.4.1",
-  "description": "ADLC native integration for the Cursor agent (rails-guard hooks + discovery rule)",
+  "description": "ADLC native Cursor plugin \u2014 marketplace hooks, skills, rules, and /adlc-* commands (npm scaffolder remains as legacy fallback).",
   "type": "module",
   "main": "hooks/adlc-rails-guard.mjs",
   "license": "MIT",
@@ -26,9 +26,10 @@
     "provenance": true
   },
   "cursor": {
-    "hooks": "./hooks.json",
+    "hooks": "./hooks/hooks.json",
     "rules": "./rules/",
-    "command": "./command/"
+    "command": "./command/",
+    "skills": "./skills/"
   },
   "bin": {
     "adlc-cursor-scaffold": "lib/scaffold-cli.mjs"
@@ -42,7 +43,9 @@
     "rails-checker.mjs",
     "rules/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    ".cursor-plugin/",
+    "skills/"
   ],
   "dependencies": {
     "@adlc/build-gate": "^1.4.1",

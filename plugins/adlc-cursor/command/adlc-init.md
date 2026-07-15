@@ -21,10 +21,15 @@ npm install -g @adlc/cli
 ## 2. Runtime + Cursor wiring
 
 - Create `.adlc/` if missing.
-- Let the deterministic scaffolder initialize the sharded active/archive stores.
-  If it finds legacy `.adlc/tickets.json`, show `adlc ticket store migrate`, ask
-  for approval, and apply only with `--write --yes`; decline keeps legacy active.
-- Run the deterministic scaffolder to create `.adlc/config.json` (no clobber),
+- Preferred: if the `adlc-cursor` marketplace plugin is already installed, run
+  only the runtime initializer:
+
+  ```sh
+  adlc init --harness cursor --json
+  ```
+
+- Legacy / local-dev: if the user still wants project-copied `.cursor/` files,
+  run the deterministic scaffolder to create `.adlc/config.json` (no clobber),
   wire `.cursor/hooks.json` + `.cursor/rules/adlc.mdc`, deploy the packaged
   `/adlc-*` command palette into `.cursor/commands/`, ensure `.gitignore`
   tracks the ticket + specs contracts, and exclude `.adlc/` from any detected
@@ -34,23 +39,15 @@ npm install -g @adlc/cli
   node "$(dirname "$(node -e "process.stdout.write(require.resolve('@adlc/cursor/package.json'))" 2>/dev/null || echo .)")/lib/scaffold-cli.mjs" .
   ```
 
-  The scaffolder MERGES three ADLC hook entries into any existing
-  `.cursor/hooks.json` without removing your other hooks:
+  The scaffolder MERGES ADLC hook entries into any existing `.cursor/hooks.json`
+  without removing your other hooks (relative `./node_modules/@adlc/cursor/hooks/…`
+  paths):
 
-  - `preToolUse` → the **dispatcher** (`adlc-pretool.mjs`): runs the rails
-    decision first (a frozen-rail edit is denied verbatim) and only consults the
-    advisory buildgate when rails allow **and** `ADLC_BUILD_GATE_ENFORCEMENT=1`
-    (default-off, no unbypassable backstop). Exactly one `preToolUse` entry, so a
-    second hook can never mask a rails deny.
-  - `afterFileEdit` → the **audit + flail** notice (`adlc-audit.mjs`):
-    observational only (Cursor's `afterFileEdit` cannot block).
-  - `beforeShellExecution` → the **shell advisory** (`adlc-shell-advisory.mjs`):
-    reminds the agent about rail writes; it never denies and is trivially
-    bypassable.
-
-  The `stop`-audit and `preflight` hooks are unverified Cursor events, so they
-  ship **disabled**; opt in with `--wire-unpinned` (or
-  `ADLC_CURSOR_WIRE_UNPINNED=1`).
+  - `preToolUse` → the **dispatcher** (`adlc-pretool.mjs`)
+  - `afterFileEdit` → the **audit + flail** notice (`adlc-audit.mjs`)
+  - `beforeShellExecution` → the **shell advisory** (`adlc-shell-advisory.mjs`)
+  - `stop` / `beforeSubmitPrompt` → stop-audit + preflight (**on by default**;
+    opt out with `--no-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=0`)
 
 ## 3. Separate the contract from runtime evidence in git
 

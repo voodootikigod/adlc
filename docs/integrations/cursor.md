@@ -1,21 +1,21 @@
 # Adopt the ADLC in Cursor
 
 Wire the Agentic Development Lifecycle into [Cursor](https://cursor.com) using its
-**native** extension surfaces — hooks, rules, and commands. Cursor has no plugin
-marketplace, so the integration ships as a small Node package
-(`plugins/adlc-cursor`) plus a scaffolder that writes the `.cursor/` config into
-your repo.
+**native** plugin surfaces — hooks, rules, skills, and commands. The integration
+ships as `plugins/adlc-cursor` with a `.cursor-plugin/plugin.json` manifest and a
+repo marketplace at `.cursor-plugin/marketplace.json`. An npm scaffolder remains
+as a legacy/dev fallback that can still copy `.cursor/` config into a consumer
+repo.
 
 > Companion to [Claude Code](./claude-code.md), [OpenCode](./opencode.md), and
 > [Codex](./codex.md). Design rationale: [ADR 0006](../adr/0006-adlc-cursor-integration.md).
 
 ## Status
 
-**Native parity shipped.** The in-session rails-guard is now surrounded by the
-full phase command suite, the `/adlc-prosecute` sequential five-lens prosecution
-loop, and hook parity (a single `preToolUse` dispatcher, the `afterFileEdit`
-audit + flail notice, and an advisory `beforeShellExecution` reminder). A live
-deny-proof against a real Cursor binary remains the one GA gate (see
+**Marketplace plugin shipped (T47).** Native parity (T16–T19) plus Cursor's
+plugin distribution model: marketplace manifest, relative hooks, default-on
+`stop` / `beforeSubmitPrompt`, and `adlc` / `adlc-init` skills. A live deny-proof
+against a real Cursor binary remains the one GA honesty gate (see
 [Gaps](#gaps)).
 
 ## What you get
@@ -41,66 +41,57 @@ The **buildgate is advisory, disabled by default** (opt in with
 `ADLC_BUILD_GATE_ENFORCEMENT=1`), and has **NO unbypassable backstop** — unlike
 the rails guard, nothing at commit time enforces its verdict (its depth signal is
 an agent-writable `.adlc/` file). It exists to slow a flailing session, not to gate
-merges. The `stop`-audit and `preflight` hooks ship **disabled** (unverified Cursor
-events); opt in with `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`.
+merges. The `stop`-audit and `preflight` hooks are **on by default** (Cursor-
+documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
+`ADLC_CURSOR_WIRE_UNPINNED=0`.
 
 ## Install
 
-`@adlc/cursor` is published on npm and folds into the lockstep `/release`:
+### Preferred — Cursor marketplace plugin
 
-```sh
-npm install -g @adlc/cli          # the gate toolkit the hooks/commands shell out to
-npx @adlc/cursor .        # bootstrap the scaffold into the current repo
-```
-
-`npx @adlc/cursor` works because the package's single `bin` entry
-(`adlc-cursor-scaffold`) resolves for the bare package name — passing a path
-argument (`.` for the current repo) is forwarded straight to the scaffolder.
-
-Developing against a checkout instead? Run the scaffolder from source:
-
-1. Install the gate toolkit (the hooks/commands shell out to the `adlc` binary):
+1. Clone this repo (or add it as a Cursor plugin marketplace source). The root
+   [`.cursor-plugin/marketplace.json`](../../.cursor-plugin/marketplace.json)
+   lists `adlc-cursor` → `./plugins/adlc-cursor`.
+2. Install the `adlc-cursor` plugin in Cursor (see
+   [Cursor plugins](https://cursor.com/docs/reference/plugins)).
+3. Install the gate toolkit and initialize only the `.adlc/` runtime:
 
    ```sh
    npm install -g @adlc/cli
+   adlc init --harness cursor
    ```
 
-2. Install the repo's workspace dependencies so the rails-guard hook can resolve
-   `@adlc/core` at runtime (the bootstrap scaffolder itself has no third-party
-   dependency, but the hook it wires imports `@adlc/core`):
+4. Wire the unbypassable CI rail-freeze gate
+   ([`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) as a required check.
 
-   ```sh
-   cd /path/to/adlc && npm install
-   ```
+Publishing to [cursor.com/marketplace](https://cursor.com/marketplace/publish) is
+a human submit step after the plugin layout is green — follow Cursor's checklist;
+this repo is already structured for it.
 
-3. Bootstrap from the plugin source (idempotent — **merges** into any existing
-   `.cursor/hooks.json`; if that file is present but unparseable it is preserved
-   verbatim in a `.bak` sibling before a fresh one is written, never silently
-   dropped):
+### Legacy / local-dev fallback — npm scaffolder
 
-   ```sh
-   node /path/to/adlc/plugins/adlc-cursor/lib/scaffold-cli.mjs .
-   ```
+`@adlc/cursor` remains published on npm for project-local copies of `.cursor/`:
 
-   This writes `.adlc/config.json`, `.cursor/hooks.json` (wiring the three pinned
-   hooks — the `preToolUse` dispatcher, the `afterFileEdit` audit, and the
-   `beforeShellExecution` advisory), `.cursor/rules/adlc.mdc`, and **deploys the
-   `/adlc-*` command palette into `.cursor/commands/`**. Once the commands are on
-   disk you can drive every phase from inside Cursor — including re-running this
-   bootstrap via the `/adlc-init` command (`/adlc-ticket`, `/adlc-prosecute`, …).
+```sh
+npm install -g @adlc/cli
+npx @adlc/cursor .
+```
 
-   **Upgrading a pre-command-suite scaffold.** `ensureRule()` never overwrites an
-   existing `.cursor/rules/adlc.mdc`, so a repo scaffolded before the command suite
-   landed keeps its old router rule with no command references (and re-running the
-   scaffolder will not refresh it). To upgrade: delete `.cursor/rules/adlc.mdc` and
-   re-run the scaffolder — it regenerates the current rule (the hooks and the
-   `.cursor/commands/` palette update on every run).
+The scaffolder merges hooks (relative `./node_modules/@adlc/cursor/hooks/…`
+paths, including `stop` / `beforeSubmitPrompt` by default), deploys
+`.cursor/commands/`, and creates `.adlc/config.json`. Prefer the marketplace path
+so hooks and skills update with the plugin instead of drifting project copies.
 
-4. Verify locally (no Cursor binary required):
+From a source checkout:
 
-   ```sh
-   node scripts/cursor-install-smoke.mjs .
-   ```
+```sh
+cd /path/to/adlc && npm install
+node plugins/adlc-cursor/lib/scaffold-cli.mjs .
+node scripts/cursor-install-smoke.mjs .
+```
+
+Opt out of stop/preflight on the scaffold path with `--no-unpinned` /
+`ADLC_CURSOR_WIRE_UNPINNED=0`.
 
 ## Rail enforcement — two layers
 
@@ -181,10 +172,8 @@ These are the real residual gaps after the native-parity build — no overstatem
   default (`ADLC_BUILD_GATE_ENFORCEMENT=1`); nothing at commit time enforces its
   verdict (its depth signal is an agent-writable file). Only the rails guard has
   the CI backstop.
-- **`stop` / `preflight` hooks ship disabled.** Those Cursor events are not yet
-  verified against Cursor's docs, so the stop-audit and preflight scripts ship
-  but are **not wired** (opt in with `--wire-unpinned` /
-  `ADLC_CURSOR_WIRE_UNPINNED=1`).
+- **Marketplace publish** to cursor.com is documented but the human submit is
+  out of band for this repo's automated release.
 - **Shell writes are advisory-only.** `beforeShellExecution` **never denies** and
   the match is trivially bypassable; a Turing-complete shell can't be reliably
   parsed, so shell-driven rail writes are covered only by the CI gate.

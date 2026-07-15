@@ -130,39 +130,38 @@ test('mergeHooks MIGRATES a pre-T18 direct adlc-rails-guard.mjs preToolUse entry
   assert.ok(merged.hooks.preToolUse.some((e) => e.command === './scripts/my-guard.sh'));
 });
 
-// T18 AC4: the UNPINNED events (stop / beforeSubmitPrompt) are DISABLED by
-// default — mergeHooks does not wire them — and only an explicit opt-in wires
-// them. Turning the flag back off removes them again (restores the default).
-test('mergeHooks ships stop/preflight DISABLED by default; wireUnpinned opts in; unflagging removes them (T18 AC4)', () => {
+// T47: stop / beforeSubmitPrompt are documented Cursor events — ON by default.
+// wireUnpinned:false opts out; user entries on those events are preserved.
+test('mergeHooks wires stop/preflight by default; wireUnpinned:false removes ADLC entries (T47)', () => {
   const base = mergeHooks(undefined);
-  assert.equal(base.hooks.stop, undefined, 'stop must not be wired by default (event unpinned)');
-  assert.equal(base.hooks.beforeSubmitPrompt, undefined, 'beforeSubmitPrompt must not be wired by default (event unpinned)');
+  assert.match(base.hooks.stop[0].command, /adlc-stop\.mjs/);
+  assert.match(base.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
+  assert.match(base.hooks.preToolUse[0].command, /^node "\.\/node_modules\/@adlc\/cursor\/hooks\/adlc-pretool\.mjs"$/);
+  assert.match(base.hooks.stop[0].command, /^node "\.\/node_modules\/@adlc\/cursor\/hooks\/adlc-stop\.mjs"$/);
   assert.deepEqual(
     Object.keys(base.hooks).sort(),
-    ['afterFileEdit', 'beforeShellExecution', 'preToolUse'],
-    'default hooks.json contains ONLY verified events',
+    ['afterFileEdit', 'beforeShellExecution', 'beforeSubmitPrompt', 'preToolUse', 'stop'],
   );
 
-  const optIn = mergeHooks(base, undefined, { wireUnpinned: true });
-  assert.match(optIn.hooks.stop[0].command, /adlc-stop\.mjs/);
-  assert.match(optIn.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
-  // idempotent under the flag
-  const optInTwice = mergeHooks(optIn, undefined, { wireUnpinned: true });
+  const optInTwice = mergeHooks(base, undefined, { wireUnpinned: true });
   assert.equal(optInTwice.hooks.stop.filter((e) => /adlc-stop/.test(e.command)).length, 1);
 
-  // un-flagging restores the verified-events-only default; user entries survive
-  const withUser = mergeHooks({ ...optIn, hooks: { ...optIn.hooks, stop: [...optIn.hooks.stop, { command: './mine.sh' }] } });
-  assert.ok(!(withUser.hooks.stop ?? []).some((e) => /adlc-stop/.test(e.command)), 'our stop entry is removed without the flag');
+  const withUser = mergeHooks(
+    { ...base, hooks: { ...base.hooks, stop: [...base.hooks.stop, { command: './mine.sh' }] } },
+    undefined,
+    { wireUnpinned: false },
+  );
+  assert.ok(!(withUser.hooks.stop ?? []).some((e) => /adlc-stop/.test(e.command)), 'our stop entry is removed when opted out');
   assert.ok(withUser.hooks.stop.some((e) => e.command === './mine.sh'), 'the user stop entry is preserved');
 });
 
 test('ensureCursorHooks honors the wireUnpinned option end-to-end', () => {
   const root = mkRepo();
-  ensureCursorHooks(root, { wireUnpinned: true });
+  ensureCursorHooks(root); // default ON
   let hooks = readJson(join(root, '.cursor', 'hooks.json'));
   assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
   assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
-  // re-running without the flag restores the disabled default
+  assert.match(hooks.hooks.preToolUse[0].command, /\.\/node_modules\/@adlc\/cursor\//);
   ensureCursorHooks(root, { wireUnpinned: false });
   hooks = readJson(join(root, '.cursor', 'hooks.json'));
   assert.equal(hooks.hooks.stop, undefined);
@@ -201,31 +200,29 @@ function runScaffoldCli(cliArgs, { extraEnv = {} } = {}) {
   return { target, spawnCwd, stdout };
 }
 
-test('scaffold CLI: scaffolds the POSITIONAL project root, not the cwd; stop/preflight stay unwired by default (T18)', () => {
+test('scaffold CLI: scaffolds the POSITIONAL project root; stop/preflight wired by default (T47)', () => {
   const { target, spawnCwd } = runScaffoldCli([]);
   const hooksPath = join(target, '.cursor', 'hooks.json');
   assert.ok(existsSync(hooksPath), 'the positional <project-root> argument must be scaffolded');
   assert.ok(!existsSync(join(spawnCwd, '.cursor')), 'the spawn cwd must NOT be scaffolded');
   const hooks = readJson(hooksPath);
-  assert.equal(hooks.hooks.stop, undefined, 'stop must not be wired without --wire-unpinned');
-  assert.equal(hooks.hooks.beforeSubmitPrompt, undefined, 'beforeSubmitPrompt must not be wired without --wire-unpinned');
-  const raw = readFileSync(hooksPath, 'utf8');
-  assert.ok(!raw.includes('adlc-stop.mjs') && !raw.includes('adlc-preflight.mjs'),
-    'no adlc-stop/adlc-preflight entry may appear anywhere in the default hooks.json');
-});
-
-test('scaffold CLI: --wire-unpinned wires stop + beforeSubmitPrompt (T18)', () => {
-  const { target } = runScaffoldCli(['--wire-unpinned']);
-  const hooks = readJson(join(target, '.cursor', 'hooks.json'));
   assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
   assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
+  assert.match(hooks.hooks.preToolUse[0].command, /node_modules\/@adlc\/cursor\/hooks\/adlc-pretool\.mjs/);
 });
 
-test('scaffold CLI: ADLC_CURSOR_WIRE_UNPINNED=1 wires stop + beforeSubmitPrompt without the flag (T18)', () => {
-  const { target } = runScaffoldCli([], { extraEnv: { ADLC_CURSOR_WIRE_UNPINNED: '1' } });
+test('scaffold CLI: --no-unpinned omits stop + beforeSubmitPrompt (T47)', () => {
+  const { target } = runScaffoldCli(['--no-unpinned']);
   const hooks = readJson(join(target, '.cursor', 'hooks.json'));
-  assert.match(hooks.hooks.stop[0].command, /adlc-stop\.mjs/);
-  assert.match(hooks.hooks.beforeSubmitPrompt[0].command, /adlc-preflight\.mjs/);
+  assert.equal(hooks.hooks.stop, undefined);
+  assert.equal(hooks.hooks.beforeSubmitPrompt, undefined);
+});
+
+test('scaffold CLI: ADLC_CURSOR_WIRE_UNPINNED=0 omits stop + beforeSubmitPrompt (T47)', () => {
+  const { target } = runScaffoldCli([], { extraEnv: { ADLC_CURSOR_WIRE_UNPINNED: '0' } });
+  const hooks = readJson(join(target, '.cursor', 'hooks.json'));
+  assert.equal(hooks.hooks.stop, undefined);
+  assert.equal(hooks.hooks.beforeSubmitPrompt, undefined);
 });
 
 // Issue #97: ensureGitignore/ensureFormatterIgnores used to be independently

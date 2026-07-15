@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +34,18 @@ test('AC1: package.json is publishable (not private, licensed, sourced)', () => 
   assert.ok(pkg.bugs, 'bugs required');
   assert.ok(pkg.author, 'author required');
   assert.ok(Array.isArray(pkg.keywords) && pkg.keywords.includes('cursor'), 'keywords must include "cursor"');
+});
+
+test('AC1: Cursor plugin manifest locksteps package version (T47)', () => {
+  const manifestPath = join(pkgDir, '.cursor-plugin', 'plugin.json');
+  assert.ok(existsSync(manifestPath), '.cursor-plugin/plugin.json must exist');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.name, 'adlc-cursor');
+  assert.equal(manifest.version, pkg.version);
+  assert.equal(manifest.commands, './command/');
+  assert.equal(manifest.hooks, './hooks/hooks.json');
+  assert.equal(manifest.skills, './skills/');
+  assert.equal(manifest.rules, './rules/');
 });
 
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {
@@ -66,21 +78,24 @@ test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never 
   const originalPkgJson = readFileSync(pkgJsonPath, 'utf8');
   let out;
   try {
-    writeFileSync(pkgJsonPath, JSON.stringify({ ...JSON.parse(originalPkgJson), version: '999.999.999' }, null, 2) + '\n');
+    writeFileSync(pkgJsonPath, JSON.stringify({ ...JSON.parse(originalPkgJson), version: '999.999.999' }, null, 2) + '
+');
     const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8', timeout: 60_000 });
     out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
   } finally {
     writeFileSync(pkgJsonPath, originalPkgJson);
   }
-  assert.match(out, /with tag latest and public access/, `expected real npm to report public access:\n${out}`);
-  assert.ok(!/default access/.test(out), `npm reported "default access" (restricted) — publishConfig is missing or wrong:\n${out}`);
+  assert.match(out, /with tag latest and public access/, `expected real npm to report public access:
+${out}`);
+  assert.ok(!/default access/.test(out), `npm reported "default access" (restricted) — publishConfig is missing or wrong:
+${out}`);
 });
 
 // --- AC2: files allowlist + real npm pack ----------------------------------
 
 test('AC2: files allowlist ships the runtime surface and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'rails-checker.mjs', 'rules/', 'README.md', 'LICENSE']) {
+  for (const entry of ['command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'rails-checker.mjs', 'rules/', 'skills/', '.cursor-plugin/', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -92,7 +107,7 @@ test('AC2: npm pack --dry-run ships the runtime surface and NO test files', () =
   const manifest = JSON.parse(res.stdout);
   const paths = manifest[0].files.map((f) => f.path.replace(/^\.\//, ''));
 
-  for (const dir of ['command/', 'hooks/', 'lib/', 'rules/']) {
+  for (const dir of ['command/', 'hooks/', 'lib/', 'rules/', 'skills/', '.cursor-plugin/']) {
     assert.ok(paths.some((p) => p.startsWith(dir)), `pack must include ${dir}`);
   }
   for (const file of ['constants.mjs', 'hooks.json', 'rails-checker.mjs', 'README.md', 'LICENSE']) {

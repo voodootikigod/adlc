@@ -18,13 +18,14 @@ plus the T18 hook-parity pins below. The working spec is
 
 ## Context
 
-ADLC already integrates with Claude Code, OpenCode, and Codex. Cursor is the
-remaining major agentic editor. Unlike Claude Code it has **no plugin
-marketplace**, so the integration must use Cursor's native surfaces directly:
-**hooks** (`.cursor/hooks.json`), **rules** (`.cursor/rules/*.mdc`), and
-**commands** (`.cursor/commands/*.md`). This ADR covers the **MVP**: the
-in-session rails-guard hook plus the discovery rule and a scaffolder — the
-smallest increment that makes rail enforcement real in Cursor.
+ADLC already integrates with Claude Code, OpenCode, and Codex. Cursor is a major
+agentic editor. The original MVP assumed Cursor **lacked a plugin marketplace** and
+therefore scaffolded hooks/rules/commands into each consumer repo. **T47 updates
+that premise:** Cursor now documents a first-class plugin model
+(`.cursor-plugin/plugin.json`, repo marketplaces, cursor.com/marketplace). The
+integration ships as a marketplace plugin (`plugins/adlc-cursor`) while keeping
+the npm scaffolder as a legacy/dev fallback. Native surfaces remain **hooks**,
+**rules**, **commands**, and (T47) **skills**.
 
 ## Decision
 
@@ -45,7 +46,9 @@ edit interception:  preToolUse   (fires before any tool, incl. Write/Edit)
   stdout:  { permission: "allow" | "deny" | "ask", user_message, agent_message }
 post-edit observe:  afterFileEdit   (fires AFTER the edit; OBSERVATIONAL — cannot block)
 shell:              beforeShellExecution   (Bash writes NOT rail-gated in-session)
+session:            stop, beforeSubmitPrompt (documented Cursor events; default-on since T47)
 rule host:          .cursor/rules/adlc.mdc   (frontmatter: description / globs / alwaysApply)
+plugin host:        .cursor-plugin/plugin.json + repo marketplace.json (T47)
 ```
 
 ### Enforcement honesty (the load-bearing constraint)
@@ -184,7 +187,7 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
    adversarial-review notice) and preflight (`hooks/adlc-preflight.mjs`:
    once-per-session `adlc preflight` + ADLC precedence assertion) ship as
    scripts the scaffolder does **not** wire. Opt-in: scaffold option
-   `wireUnpinned` / `--wire-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=1`;
+   `wireUnpinned` default true; opt out with `--no-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=0` (T47);
    re-scaffolding without the flag removes them again. `hooks.json` contains
    only pinned events (`preToolUse`, `afterFileEdit`,
    `beforeShellExecution`) — smoke-asserted. **TODO:** pin both events (name +
@@ -215,7 +218,7 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
 - **Session/conversation id in hook payloads** — unverified (see T18 decision 3);
   TTL scoping stands in until pinned.
 - **`stop` / `beforeSubmitPrompt` events** — unverified (see T18 decision 4);
-  shipped disabled with opt-in wiring until pinned.
+  default-on since T47 after Cursor documented the events.
 - **Live deny proof** — a maintainer-only end-to-end test against a real Cursor
   binary (does `permission: "deny"` actually abort the Write on the target
   platform?) remains the GA gate.

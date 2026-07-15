@@ -9,19 +9,20 @@
 import { resolve } from 'node:path';
 import { scaffold } from './scaffold.mjs';
 
-// --wire-unpinned (or ADLC_CURSOR_WIRE_UNPINNED=1): ALSO wire the UNPINNED
-// `stop` / `beforeSubmitPrompt` events to the disabled-by-default stop-audit /
-// preflight hooks. Off by default — those events are not verified against
-// Cursor documentation (ADR 0006).
+// stop / beforeSubmitPrompt are ON by default (T47; Cursor-documented events).
+// Opt out: --no-unpinned or ADLC_CURSOR_WIRE_UNPINNED=0.
+// Legacy --wire-unpinned remains accepted as an explicit on.
 const args = process.argv.slice(2);
-const wireUnpinned = args.includes('--wire-unpinned') || process.env.ADLC_CURSOR_WIRE_UNPINNED === '1';
+const wireUnpinned = args.includes('--no-unpinned') || process.env.ADLC_CURSOR_WIRE_UNPINNED === '0'
+  ? false
+  : true;
 const projectRoot = resolve(args.filter((a) => !a.startsWith('--'))[0] ?? '.');
 const { config, hooks, rule, commands, gitignore, formatterIgnores } = scaffold(projectRoot, { wireUnpinned });
 
 const tag = (r) => (r.created ? 'created' : 'present');
 console.log(`adlc-cursor scaffold (${projectRoot}):`);
 console.log(`  .adlc/config.json     — ${tag(config)}`);
-console.log(`  .cursor/hooks.json    — ${hooks.created ? 'created' : 'merged'} (preToolUse dispatcher + audit + shell advisory wired${wireUnpinned ? ' + UNPINNED stop/beforeSubmitPrompt (opt-in)' : ''})`);
+console.log(`  .cursor/hooks.json    — ${hooks.created ? 'created' : 'merged'} (preToolUse dispatcher + audit + shell advisory${wireUnpinned ? ' + stop/beforeSubmitPrompt' : ' (stop/preflight omitted via --no-unpinned)'})`);
 if (hooks.backedUp) {
   console.log(`  ⚠ existing .cursor/hooks.json was unparseable — preserved verbatim at ${hooks.backedUp} before writing a fresh file`);
 }

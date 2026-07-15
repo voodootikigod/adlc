@@ -47,6 +47,14 @@ test('integrationFor resolves known slugs and returns undefined for unknown', ()
   assert.equal(integrationFor('nope'), undefined);
 });
 
+test('Cursor marketing facts describe the marketplace plugin install', () => {
+  const cursor = integrationFor('cursor');
+  assert.equal(cursor?.status, 'source');
+  assert.ok(cursor?.install.some((c) => c.includes('adlc init --harness cursor')));
+  assert.match(cursor?.tagline ?? '', /marketplace|plugin/i);
+  assert.match(cursor?.note ?? '', /marketplace|\.cursor-plugin/i);
+});
+
 test('Codex marketing facts describe the native marketplace surface', () => {
   const codex = integrationFor('codex');
   assert.equal(codex?.status, 'source');
