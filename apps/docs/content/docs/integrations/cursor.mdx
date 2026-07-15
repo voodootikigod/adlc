@@ -29,9 +29,10 @@ one GA honesty gate.
 - **`beforeShellExecution` advisory** — string-matches obvious shell writes to the
   active ticket's rails. It **never denies** and is trivially bypassable — an
   honesty nudge, not a control.
-- **Command palette** — the scaffolder deploys the bare `/adlc-*` phase suite into
-  `.cursor/commands/` (`init`, `ticket`, `spec`, `approve-spec`, `decompose`,
-  `verify-build`, `prosecute`, `distill`, `maintain`).
+- **Command palette** — the plugin ships the bare `/adlc-*` phase suite
+  (`init`, `ticket`, `spec`, `approve-spec`, `decompose`, `verify-build`,
+  `prosecute`, `distill`, `maintain`). The legacy scaffolder can still copy them
+  into a project `.cursor/commands/` for local-dev installs.
 - **`.cursor/rules/adlc.mdc`** — the ADLC phase-router rule.
 
 The **buildgate is advisory, disabled by default** (opt in with
@@ -44,9 +45,10 @@ rails guard, nothing at commit time enforces its verdict. The `stop`-audit and
 
 ### Preferred — marketplace plugin
 
-1. Add this repo as a Cursor plugin marketplace (root
-   `.cursor-plugin/marketplace.json` lists `adlc-cursor`).
-2. Install the `adlc-cursor` plugin.
+1. In Cursor: **Settings → Plugins → Add marketplace** and paste
+   `https://github.com/voodootikigod/adlc` (root `.cursor-plugin/marketplace.json`
+   lists `adlc-cursor`).
+2. Install the **`adlc-cursor`** plugin.
 3. Initialize the `.adlc/` runtime:
 
 ```sh

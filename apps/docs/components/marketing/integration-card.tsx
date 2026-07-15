@@ -5,6 +5,7 @@ export const STATUS_LABEL: Record<string, string> = {
   installer: 'One-line install',
   source: 'Install from source',
   local: 'Local plugin install',
+  marketplace: 'Marketplace plugin',
 };
 
 interface IntegrationCardProps {

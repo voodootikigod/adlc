@@ -36,7 +36,7 @@ test('every integration has a name, tagline, valid status, and at least one inst
   for (const i of INTEGRATIONS) {
     assert.ok(i.name.length > 0, `${i.slug}: name`);
     assert.ok(i.tagline.length > 0, `${i.slug}: tagline`);
-    assert.ok(['installer', 'source', 'local'].includes(i.status), `${i.slug}: status "${i.status}"`);
+    assert.ok(['installer', 'source', 'local', 'marketplace'].includes(i.status), `${i.slug}: status "${i.status}"`);
     assert.ok(Array.isArray(i.install) && i.install.length > 0, `${i.slug}: install commands`);
     for (const cmd of i.install) assert.ok(cmd.trim().length > 0, `${i.slug}: empty install command`);
   }
@@ -49,8 +49,10 @@ test('integrationFor resolves known slugs and returns undefined for unknown', ()
 
 test('Cursor marketing facts describe the marketplace plugin install', () => {
   const cursor = integrationFor('cursor');
-  assert.equal(cursor?.status, 'source');
+  assert.equal(cursor?.status, 'marketplace');
   assert.ok(cursor?.install.some((c) => c.includes('adlc init --harness cursor')));
+  assert.ok(cursor?.install.some((c) => /adlc-cursor|marketplace/i.test(c)));
+  assert.ok(!cursor?.install.some((c) => c.includes('git clone')), 'marketing install must not lead with a clone-from-source path');
   assert.match(cursor?.tagline ?? '', /marketplace|plugin/i);
   assert.match(cursor?.note ?? '', /marketplace|\.cursor-plugin/i);
 });

@@ -31,15 +31,16 @@ export const INTEGRATIONS = [
   {
     slug: 'cursor',
     name: 'Cursor',
-    status: 'source',
+    status: 'marketplace',
     tagline: 'Native Cursor plugin: marketplace hooks, skills, rules, and /adlc-* commands with CI rail backstop.',
     install: [
-      'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
+      '# Cursor → Settings → Plugins → Add marketplace:',
+      '#   https://github.com/voodootikigod/adlc',
+      '# Install plugin: adlc-cursor',
       'npm install -g @adlc/cli',
       'adlc init --harness cursor',
-      '# In Cursor: add this repo as a plugin marketplace, then install adlc-cursor',
     ],
-    note: 'Preferred path: add the repo .cursor-plugin marketplace, install the adlc-cursor plugin, then run adlc init --harness cursor for the .adlc/ runtime only. Legacy fallback: npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control. Do not commit a generated .adlc/config.json into a repo that already freezes that path as a trust root.',
+    note: 'Marketplace install is preferred — the plugin brings hooks, skills, and /adlc-* commands. adlc init only bootstraps the .adlc/ runtime (do not commit a generated .adlc/config.json into a repo that already freezes that path). Legacy fallback: npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control.',
   },
   {
     slug: 'opencode',

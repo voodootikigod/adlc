@@ -31,9 +31,10 @@ against a real Cursor binary remains the one GA honesty gate (see
 - **`beforeShellExecution` advisory** — string-matches obvious shell writes to the
   active ticket's rails and reminds the agent that the CI gate catches rail edits.
   It **never denies** and is **trivially bypassable** — an honesty nudge, not a control.
-- **Command palette** — the scaffolder deploys the bare `/adlc-*` phase suite into
-  `.cursor/commands/` (init, ticket, spec, approve-spec, decompose, verify-build,
-  prosecute, distill, maintain).
+- **Command palette** — the plugin ships the bare `/adlc-*` phase suite
+  (init, ticket, spec, approve-spec, decompose, verify-build, prosecute,
+  distill, maintain). The legacy scaffolder can still copy them into a project
+  `.cursor/commands/` for local-dev installs.
 - **`.cursor/rules/adlc.mdc`** — the ADLC phase-router rule, available to the agent
   in-session.
 
@@ -49,10 +50,11 @@ documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
 
 ### Preferred — Cursor marketplace plugin
 
-1. Clone this repo (or add it as a Cursor plugin marketplace source). The root
+1. In Cursor: **Settings → Plugins → Add marketplace** and paste
+   `https://github.com/voodootikigod/adlc`. The root
    [`.cursor-plugin/marketplace.json`](../../.cursor-plugin/marketplace.json)
    lists `adlc-cursor` → `./plugins/adlc-cursor`.
-2. Install the `adlc-cursor` plugin in Cursor (see
+2. Install the `adlc-cursor` plugin (see
    [Cursor plugins](https://cursor.com/docs/reference/plugins)).
 3. Install the gate toolkit and initialize only the `.adlc/` runtime:
 
