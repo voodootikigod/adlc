@@ -11,9 +11,10 @@ const SEQUENCE: ReadonlyArray<{ cmd: string; state: GateState; detail: string }>
 
 // Staggered entrance is pure CSS (.mk-gate-line + animation-delay), so the
 // prefers-reduced-motion guard in global.css shows all lines statically.
-// The verdict detail rides above its command as a shell comment (dimmed like
-// the install snippets in IntegrationCard), which keeps command lines short
-// enough to sit on one line at the section width.
+// The verdict detail sits below its command as a shell comment (dimmed like
+// the install snippets in IntegrationCard): it explains a result, so it reads
+// as output rather than intent. Keeping it off the command line also lets
+// every command sit on one line at the section width.
 export function GateSequence() {
   return (
     <div
@@ -27,7 +28,6 @@ export function GateSequence() {
           className="mk-gate-line flex flex-col gap-1 font-mono text-sm"
           style={{ animationDelay: `${0.5 + i * 0.7}s` }}
         >
-          <span style={{ color: 'var(--mk-muted)' }}># {line.detail}</span>
           <div className="flex flex-wrap items-center gap-3">
             {/* The prompt is inline with the command so a wrapped command
                 never strands a lone "$" on the line above. */}
@@ -37,6 +37,7 @@ export function GateSequence() {
             </span>
             <GateBadge state={line.state} />
           </div>
+          <span style={{ color: 'var(--mk-muted)' }}># {line.detail}</span>
         </div>
       ))}
       <div
