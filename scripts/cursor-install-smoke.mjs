@@ -87,14 +87,49 @@ assertHookConfig('hooks.json', join(PLUGIN, 'hooks.json'), { relativeNeedle: './
 // an immutable trust root even when it is absent from main. Committing a generated
 // init config here would deny the PR. Bootstrap config only via the protected-base
 // ceremony (securityMode + acknowledgedNewRailBypass), never as a T47 side-effect.
+function resolveDiffBase() {
+  const candidates = [
+    process.env.RAILS_BASE,
+    process.env.GITHUB_BASE_REF ? `origin/${process.env.GITHUB_BASE_REF}` : null,
+    'origin/main',
+    'main',
+  ].filter(Boolean);
+  for (const ref of candidates) {
+    try {
+      execFileSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], {
+        cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return ref;
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
 try {
-  const configIntroduced = execFileSync('git', ['diff', '--name-only', 'main...HEAD', '--', '.adlc/config.json'], {
-    cwd: ROOT, encoding: 'utf8',
-  }).trim();
-  if (configIntroduced) fail('branch introduces .adlc/config.json — keep it out of T47; bootstrap via protected-base ceremony');
-  else ok('branch does not introduce .adlc/config.json (Codex AR / rails-guard trust-root)');
+  const base = resolveDiffBase();
+  if (base) {
+    const configIntroduced = execFileSync('git', ['diff', '--name-only', `${base}...HEAD`, '--', '.adlc/config.json'], {
+      cwd: ROOT, encoding: 'utf8',
+    }).trim();
+    if (configIntroduced) fail('branch introduces .adlc/config.json — keep it out of T47; bootstrap via protected-base ceremony');
+    else ok(`branch does not introduce .adlc/config.json vs ${base} (Codex AR / rails-guard trust-root)`);
+  } else {
+    // Shallow / missing-base fallback: refuse a tracked config.json on HEAD itself.
+    let tracked = '';
+    try {
+      tracked = execFileSync('git', ['ls-files', '--', '.adlc/config.json'], {
+        cwd: ROOT, encoding: 'utf8',
+      }).trim();
+    } catch {
+      tracked = '';
+    }
+    if (tracked) fail('HEAD tracks .adlc/config.json — keep it out of T47; bootstrap via protected-base ceremony');
+    else ok('HEAD does not track .adlc/config.json (Codex AR / rails-guard trust-root; no local main ref)');
+  }
 } catch (e) {
-  fail(`could not check config.json against main: ${e.message}`);
+  fail(`could not check config.json against base: ${e.message}`);
 }
 
 // ---- T47: marketplace + plugin manifest + skills ----
