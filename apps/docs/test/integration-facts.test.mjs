@@ -229,9 +229,9 @@ test('Codex marketing facts describe the native marketplace surface', () => {
   assert.match(codex?.tagline ?? '', /native Codex plugin/);
   assert.deepEqual(codex?.phaseRoutes.map(({ phase, entry }) => [phase, entry]), [
     ['P0', '$adlc'],
-    ['P1–P2', '$adlc-spec'],
-    ['P3–P4', '$adlc-rail-build'],
-    ['P5–P6', '$adlc-prosecute'],
+    ['P1-P2', '$adlc-spec'],
+    ['P3-P4', '$adlc-rail-build'],
+    ['P5-P6', '$adlc-prosecute'],
     ['P7', '$adlc-distill'],
   ]);
   assert.match(codex?.note ?? '', /newer than the current tagged suite release/);
