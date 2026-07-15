@@ -10,8 +10,9 @@ const read = (relative) => readFileSync(path.join(repoRoot, relative), 'utf8');
 const fumadocs = read('apps/docs/content/docs/integrations/codex.mdx');
 const groundTruth = read('docs/integrations/codex.md');
 const combinedDocs = `${fumadocs}\n${groundTruth}`;
-const marketing = read('apps/docs/components/marketing/codex-integration.tsx');
+const marketing = read('apps/docs/components/marketing/integration-detail.tsx');
 const marketingRoute = read('apps/docs/app/(home)/integrations/[slug]/page.tsx');
+const facts = read('apps/docs/lib/integration-facts.mjs');
 
 test('Codex guides match the shipped native payload counts', () => {
   const skills = readdirSync(path.join(repoRoot, 'plugins/adlc-codex/skills'));
@@ -43,15 +44,40 @@ test('Codex guides carry current install, update, and legacy recovery commands',
 });
 
 test('Codex marketing page exposes the native surfaces instead of the generic install-only page', () => {
-  assert.match(marketingRoute, /integration\.slug === 'codex'/);
-  assert.match(marketing, /Native surfaces/);
-  assert.match(marketing, /Phase routing/);
-  assert.match(marketing, /Frozen rails/);
-  assert.match(marketing, /adlc-codex\//);
-  assert.match(marketing, /├─ \.codex-plugin\/plugin\.json/);
-  assert.match(marketing, /codex plugin marketplace upgrade adlc/);
-  assert.match(marketing, /codex plugin remove adlc@plugins-cli/);
-  assert.match(marketing, /developers\.openai\.com\/codex\/build-plugins/);
+  assert.match(marketingRoute, /IntegrationDetailPage/);
+  assert.doesNotMatch(marketingRoute, /IntegrationCard/);
+  // Fact object carries the section kickers the shared layout reads; the layout
+  // source must still wire those fields into MarketingSection (source contract).
+  const codex = integrationFor('codex');
+  assert.equal(codex.surfacesSection.kicker, 'Native surfaces');
+  assert.equal(codex.phaseSection.kicker, 'Phase routing');
+  assert.equal(codex.railsSection.kicker, 'Frozen rails');
+  assert.match(marketing, /kicker=\{integration\.surfacesSection\.kicker\}/);
+  assert.match(marketing, /kicker=\{integration\.phaseSection\.kicker\}/);
+  assert.match(marketing, /kicker=\{integration\.railsSection\.kicker\}/);
+  assert.match(marketing, /const \{ bundle \} = integration/);
+  assert.match(marketing, /integration\.operate/);
+  assert.match(marketing, /<NativeSurfaces integration=\{integration\} \/>/);
+  assert.match(marketing, /<PhaseRouting integration=\{integration\} \/>/);
+  assert.match(marketing, /<EnforcementBoundary integration=\{integration\} \/>/);
+  assert.ok(codex.bundle.entries.some((e) => e.path.includes('.codex-plugin/plugin.json')));
+  assert.ok(codex.operate.lines.includes('codex plugin marketplace upgrade adlc'));
+  assert.ok(codex.operate.lines.includes('codex plugin remove adlc@plugins-cli'));
+  assert.ok(codex.resources.some((r) => r.href.includes('developers.openai.com/codex/build-plugins')));
+  assert.match(facts, /export const CODEX_INTEGRATION/);
+});
+
+test('every marketing integration page uses the shared rich detail layout', () => {
+  assert.match(marketingRoute, /IntegrationDetailPage integration=\{integration\}/);
+  for (const slug of ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'antigravity']) {
+    const fact = integrationFor(slug);
+    assert.ok(fact?.surfaces?.length >= 3, `${slug} surfaces`);
+    assert.ok(fact?.phaseRoutes?.length >= 4, `${slug} phaseRoutes`);
+    assert.ok(fact?.enforcement?.ci?.body, `${slug} ci enforcement`);
+    assert.equal(fact?.surfacesSection?.kicker, 'Native surfaces', `${slug} surfaces kicker`);
+    assert.equal(fact?.phaseSection?.kicker, 'Phase routing', `${slug} phase kicker`);
+    assert.equal(fact?.railsSection?.kicker, 'Frozen rails', `${slug} rails kicker`);
+  }
 });
 
 test('unpublished initializer paths are labeled and have a working checkout command', () => {

@@ -19,7 +19,7 @@ Nothing below is claimed shipped unless it has a runtime caller in
 | Live deny proof in CI (`scripts/pi-live-deny.mjs`, scripted stub provider, real `pi --mode rpc`) | **Shipped** — required-job step on the Node 22 leg |
 | Build-gate + flail backstops (§Phase 2) | **Shipped** — degraded high-risk builds denied w/o audited override; flail advisories |
 | Evidence rail + custom-tool coverage (§Phase 2) | **Shipped** — `.adlc/`/`.omo/` stay writable; non-core file-write tools are rail-checked |
-| Command suite + scaffolder + footer widget (§Phase 3) | **Shipped** — `/ticket`, `/adlc-init`, `/adlc-accept`, prompt templates, ticket/verdict widget |
+| Command suite + scaffolder + footer widget (§Phase 3) | **Shipped** — `/ticket`, `/adlc-ticket`, `/adlc-init`, `/adlc-approve-spec`, `/adlc-accept`, `/adlc-rollback`, prompt templates, ticket/verdict widget |
 | Native `adlc_prosecute` tool: deterministic P5 loop (§4) | **Shipped** — in-session fan-out → verify → loop-until-dry over write-disabled children; live proof `scripts/pi-live-prosecute.mjs` (required, Node 22 leg) |
 | `TICKET-DONE` completion listener → prosecution nudge (§4) | **Shipped** |
 | Native `adlc_gate` tool + compaction defense (§Phase 4) | **Shipped** — LLM-backed gates keyless via the session model; rail context survives compaction |

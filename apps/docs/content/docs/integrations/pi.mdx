@@ -35,8 +35,9 @@ each phase to the deterministic `adlc` gates.
   loop in-session (fan-out → verify → loop-until-dry over write-disabled child
   sessions); `adlc_gate` runs the LLM-backed gates keyless through your session
   model. A `TICKET-DONE` listener nudges prosecution at ticket completion.
-- **Commands + footer status pill** — `/ticket`, `/adlc-init`, `/adlc-accept`,
-  and a live pill for constant visibility into the active enforcement context.
+- **Commands + footer status pill** — `/ticket`, `/adlc-ticket`, `/adlc-init`,
+  `/adlc-approve-spec`, `/adlc-accept`, `/adlc-rollback`, and a live pill for
+  constant visibility into the active enforcement context.
 - **Skills:** `adlc` (phase router), `adlc-spec` (P0–P2), `adlc-rail-build`
   (P3–P4), `adlc-prosecute` (P5–P6), `adlc-distill` (P7) — each wraps the
   deterministic `adlc` CLIs; hooks are assistive, `adlc rails-guard` is the
@@ -95,16 +96,15 @@ made. **Make it a required check.**
 | **P6 Integrate** | **native `adlc_gate` tool** + `/adlc-accept` command + rollback path; `adlc behavior-diff` / `adlc run p6` |
 | P7 Distill | `adlc-distill` skill (`lesson-foundry`, `rejection-mining`, `skill-rot`, `model-ratchet`); scheduled runs via CI cron |
 
-Command surface: `/ticket`, `/adlc-init`, `/adlc-accept`, plus the `adlc-*`
-prompt templates. The footer widget renders the active ticket and last gate
-verdict.
+Command surface: `/ticket`, `/adlc-ticket`, `/adlc-init`, `/adlc-approve-spec`,
+`/adlc-accept`, `/adlc-rollback`, plus the `adlc-*` prompt templates. The footer
+widget renders the active ticket and last gate verdict.
 
 **Remaining gaps** (design intent, not yet shipped): a `session_shutdown`
 auto-capture for P6 (accept is command-driven today), and an in-harness P7
-scheduler (pi has no `/schedule`; CI cron is the substrate). npm publication is
-release-ready and folds into the lockstep `/release` flow — the one-command
-`pi install` story above goes live with the first published release; load from a
-checkout until then.
+scheduler (pi has no `/schedule`; CI cron is the substrate). `@adlc/pi` is
+published on npm — the `pi install` one-liner above works today; a weekly
+version-matrix smoke tracks upstream pi drift.
 
 ## Go deeper
 
