@@ -37,8 +37,9 @@ export const INTEGRATIONS = [
       'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
       'npm install -g @adlc/cli',
       'adlc init --harness cursor',
+      '# In Cursor: add this repo as a plugin marketplace, then install adlc-cursor',
     ],
-    note: 'Install the adlc-cursor plugin from the repo .cursor-plugin marketplace (or keep using npx @adlc/cursor . as a legacy project-scaffold fallback). Then adlc init writes only the .adlc/ runtime. Wire docs/ci/rails-guard.yml as the unbypassable control.',
+    note: 'Preferred path: add the repo .cursor-plugin marketplace, install the adlc-cursor plugin, then run adlc init --harness cursor for the .adlc/ runtime only. Legacy fallback: npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control. Do not commit a generated .adlc/config.json into a repo that already freezes that path as a trust root.',
   },
   {
     slug: 'opencode',

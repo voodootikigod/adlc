@@ -51,11 +51,14 @@ committable `.adlc/` directory. From this unreleased checkout, bootstrap it with
 
 ```sh
 node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project
+# Cursor-only runtime (skips Codex agents):
+# node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project --harness cursor
 ```
 
-After the matching suite release, the same operation is `adlc init`; Codex users
-can then invoke `$adlc-init`. Other harnesses expose equivalent initialization
-commands on their own release schedules. The
+After the matching suite release, the same operation is `adlc init` (or
+`adlc init --harness cursor`); Codex users can then invoke `$adlc-init`, and
+other harnesses expose equivalent initialization commands on their own release
+schedules. See [integrations](/docs/integrations). The
 [.adlc runtime reference](/docs/reference/adlc-runtime) documents every file the
 gates read and write.
 
