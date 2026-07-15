@@ -59,7 +59,7 @@ documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
 3. Install the gate toolkit and initialize only the `.adlc/` runtime:
 
    ```sh
-   npm install -g @adlc/cli
+   npm install -g @adlc/cli@1.4.2   # 1.4.1 rejects --harness
    adlc init --harness cursor
    ```
 

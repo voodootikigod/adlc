@@ -9,6 +9,18 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-07-15
+
+### Added
+- **`adlc init --harness cursor`** — Cursor-only `.adlc/` bootstrap (skips Codex
+  agents, writes `harnesses.cursor`). This landed in T47 but was not on npm yet:
+  `@adlc/init@1.4.1` still rejected `--harness` as an unknown option.
+- Cursor marketplace plugin layout (`adlc-cursor`) from T47 is included in this
+  lockstep publish so `npm i -g @adlc/cli` matches the docs install path.
+
+### Fixed
+- Marketing/docs Cursor install no longer leads with a clone-from-source path.
+
 ## [1.4.1] - 2026-07-14
 
 ### Fixed
