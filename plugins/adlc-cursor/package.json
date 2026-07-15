@@ -45,7 +45,8 @@
     "README.md",
     "LICENSE",
     ".cursor-plugin/",
-    "skills/"
+    "skills/",
+    "assets/"
   ],
   "dependencies": {
     "@adlc/build-gate": "^1.4.1",

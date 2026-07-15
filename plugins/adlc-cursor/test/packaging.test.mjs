@@ -47,6 +47,8 @@ test('AC1: Cursor plugin manifest locksteps package version (T47)', () => {
   assert.equal(manifest.hooks, './hooks/hooks.json');
   assert.equal(manifest.skills, './skills/');
   assert.equal(manifest.rules, './rules/');
+  assert.equal(manifest.logo, 'assets/logo.svg');
+  assert.ok(existsSync(join(pkgDir, 'assets', 'logo.svg')), 'assets/logo.svg must exist');
 });
 
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {
@@ -93,7 +95,7 @@ test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never 
 
 test('AC2: files allowlist ships the runtime surface and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'rails-checker.mjs', 'rules/', 'skills/', '.cursor-plugin/', 'README.md', 'LICENSE']) {
+  for (const entry of ['command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'rails-checker.mjs', 'rules/', 'skills/', '.cursor-plugin/', 'assets/', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -105,7 +107,7 @@ test('AC2: npm pack --dry-run ships the runtime surface and NO test files', () =
   const manifest = JSON.parse(res.stdout);
   const paths = manifest[0].files.map((f) => f.path.replace(/^\.\//, ''));
 
-  for (const dir of ['command/', 'hooks/', 'lib/', 'rules/', 'skills/', '.cursor-plugin/']) {
+  for (const dir of ['command/', 'hooks/', 'lib/', 'rules/', 'skills/', '.cursor-plugin/', 'assets/']) {
     assert.ok(paths.some((p) => p.startsWith(dir)), `pack must include ${dir}`);
   }
   for (const file of ['constants.mjs', 'hooks.json', 'rails-checker.mjs', 'README.md', 'LICENSE']) {

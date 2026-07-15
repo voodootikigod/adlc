@@ -98,6 +98,8 @@ try {
 }
 
 // ---- T47: marketplace + plugin manifest + skills ----
+const pkg = JSON.parse(read(join(PLUGIN, 'package.json')));
+const pkgVersion = pkg.version;
 const marketplacePath = join(ROOT, '.cursor-plugin', 'marketplace.json');
 if (!existsSync(marketplacePath)) fail('root .cursor-plugin/marketplace.json missing');
 else {
@@ -105,15 +107,20 @@ else {
   const entry = (m.plugins ?? []).find((p) => p.name === 'adlc-cursor');
   if (!entry) fail('marketplace missing adlc-cursor plugin entry');
   else if (entry.source !== './plugins/adlc-cursor') fail(`marketplace source is ${entry.source}`);
-  else ok('marketplace lists adlc-cursor → ./plugins/adlc-cursor');
+  else if (entry.version !== pkgVersion) fail(`marketplace plugin version ${entry.version} != package ${pkgVersion}`);
+  else if (m.metadata?.version !== pkgVersion) fail(`marketplace metadata.version ${m.metadata?.version} != package ${pkgVersion}`);
+  else ok('marketplace lists adlc-cursor → ./plugins/adlc-cursor (version lockstep)');
 }
+const logoPath = join(PLUGIN, 'assets', 'logo.svg');
+if (!existsSync(logoPath)) fail('plugins/adlc-cursor/assets/logo.svg missing');
+else ok('plugin logo assets/logo.svg');
 const pluginManifestPath = join(PLUGIN, '.cursor-plugin', 'plugin.json');
 if (!existsSync(pluginManifestPath)) fail('plugins/adlc-cursor/.cursor-plugin/plugin.json missing');
 else {
   const pm = JSON.parse(read(pluginManifestPath));
-  const pkg = JSON.parse(read(join(PLUGIN, 'package.json')));
   if (pm.name !== 'adlc-cursor') fail(`plugin.json name is ${pm.name}`); else ok('plugin.json name');
   if (pm.version !== pkg.version) fail(`plugin.json version ${pm.version} != package ${pkg.version}`); else ok('plugin.json version lockstep');
+  if (pm.logo !== 'assets/logo.svg') fail(`plugin.json logo is ${pm.logo}`); else ok('plugin.json logo');
 }
 for (const skill of ['adlc', 'adlc-init']) {
   const skillPath = join(PLUGIN, 'skills', skill, 'SKILL.md');
