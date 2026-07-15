@@ -1,6 +1,63 @@
 // Single source of truth for the native-integration marketing pages.
 // Grounded in docs/integrations/<slug>.md — the test cross-checks existence.
 
+export const CODEX_INTEGRATION = {
+  slug: 'codex',
+  name: 'Codex',
+  status: 'source',
+  tagline: 'Phase routing, frozen-rail feedback, deterministic gate tools, and project review agents in one native Codex plugin.',
+  install: [
+    'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
+    'npm install --ignore-scripts',
+    'npm install -g @adlc/cli',
+    'node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project',
+    'codex plugin marketplace add "$PWD"',
+    'codex plugin add adlc-codex@adlc',
+  ],
+  note: 'The native plugin works from source today. The initializer is newer than the current tagged suite release, so use the checkout command above until the matching release is published. Then start a new Codex session in the target project and review the bundled hooks.',
+  surfaces: [
+    {
+      key: 'skills',
+      count: 6,
+      label: 'skills',
+      title: 'Progressive disclosure across the lifecycle',
+      detail: '$adlc routes the task, then focused skills load only the P0–P7 workflow the current phase needs.',
+      items: ['$adlc', '$adlc-init', '$adlc-spec', '$adlc-rail-build', '$adlc-prosecute', '$adlc-distill'],
+    },
+    {
+      key: 'hooks',
+      count: 8,
+      label: 'hook events',
+      title: 'Lifecycle context and fast rail feedback',
+      detail: 'Native hooks restore context, guard frozen rails, detect repeated failures, and verify evidence before the session stops.',
+      items: ['session context', 'rail guard', 'flail detection', 'stop verification'],
+    },
+    {
+      key: 'mcp',
+      count: 2,
+      label: 'MCP tools',
+      title: 'Narrow tools for gates and prosecution',
+      detail: 'The local MCP server exposes an allowlisted, non-shell gate runner plus an explicit evidence-producing prosecution tool.',
+      items: ['adlc_gate', 'adlc_prosecute'],
+    },
+    {
+      key: 'agents',
+      count: 3,
+      label: 'project agents',
+      title: 'Independent exploration, review, and verification',
+      detail: 'The initializer writes project-scoped Codex roles without modifying the user’s global ~/.codex configuration.',
+      items: ['explorer', 'reviewer', 'verifier'],
+    },
+  ],
+  phaseRoutes: [
+    { phase: 'P0', entry: '$adlc', evidence: 'preflight' },
+    { phase: 'P1–P2', entry: '$adlc-spec', evidence: 'spec-lint · premortem · coldstart' },
+    { phase: 'P3–P4', entry: '$adlc-rail-build', evidence: 'hollow-test · rails-guard · phase manifest' },
+    { phase: 'P5–P6', entry: '$adlc-prosecute', evidence: 'prosecution · behavior diff · acceptance' },
+    { phase: 'P7', entry: '$adlc-distill', evidence: 'foundry · rejection mining · rot · ratchet' },
+  ],
+};
+
 export const INTEGRATIONS = [
   {
     slug: 'claude-code',
@@ -13,21 +70,7 @@ export const INTEGRATIONS = [
       '/adlc:adlc-init',
     ],
   },
-  {
-    slug: 'codex',
-    name: 'Codex',
-    status: 'source',
-    tagline: 'Native Codex plugin with six skills, lifecycle hooks, MCP gates, and project-scoped agents.',
-    install: [
-      'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
-      'npm install --ignore-scripts',
-      'npm install -g @adlc/cli',
-      'node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project',
-      'codex plugin marketplace add "$PWD"',
-      'codex plugin add adlc-codex@adlc',
-    ],
-    note: 'This is the working-now source flow because the initializer change is not in the current registry release. Start a new Codex session in the target project and trust the bundled hooks when prompted. Until the matching release exists, rerun the checkout initializer to refresh the scaffold.',
-  },
+  CODEX_INTEGRATION,
   {
     slug: 'cursor',
     name: 'Cursor',

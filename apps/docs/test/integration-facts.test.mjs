@@ -68,6 +68,19 @@ test('Codex marketing facts describe the native marketplace surface', () => {
     'codex plugin marketplace add "$PWD"',
     'codex plugin add adlc-codex@adlc',
   ]);
-  assert.match(codex?.tagline ?? '', /six skills/);
-  assert.match(codex?.tagline ?? '', /MCP gates/);
+  assert.match(codex?.tagline ?? '', /native Codex plugin/);
+  assert.deepEqual(codex?.surfaces.map(({ key, count }) => [key, count]), [
+    ['skills', 6],
+    ['hooks', 8],
+    ['mcp', 2],
+    ['agents', 3],
+  ]);
+  assert.deepEqual(codex?.phaseRoutes.map(({ phase, entry }) => [phase, entry]), [
+    ['P0', '$adlc'],
+    ['P1–P2', '$adlc-spec'],
+    ['P3–P4', '$adlc-rail-build'],
+    ['P5–P6', '$adlc-prosecute'],
+    ['P7', '$adlc-distill'],
+  ]);
+  assert.match(codex?.note ?? '', /newer than the current tagged suite release/);
 });

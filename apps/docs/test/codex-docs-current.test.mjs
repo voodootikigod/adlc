@@ -3,20 +3,29 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { integrationFor } from '../lib/integration-facts.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const read = (relative) => readFileSync(path.join(repoRoot, relative), 'utf8');
 const fumadocs = read('apps/docs/content/docs/integrations/codex.mdx');
 const groundTruth = read('docs/integrations/codex.md');
 const combinedDocs = `${fumadocs}\n${groundTruth}`;
+const marketing = read('apps/docs/components/marketing/codex-integration.tsx');
+const marketingRoute = read('apps/docs/app/(home)/integrations/[slug]/page.tsx');
 
 test('Codex guides match the shipped native payload counts', () => {
   const skills = readdirSync(path.join(repoRoot, 'plugins/adlc-codex/skills'));
   const agents = readdirSync(path.join(repoRoot, 'plugins/adlc-codex/agents')).filter((name) => name.endsWith('.toml'));
   const hooks = Object.keys(JSON.parse(read('plugins/adlc-codex/hooks/hooks.json')).hooks);
+  const mcpTools = read('plugins/adlc-codex/mcp/server.mjs').match(/^    name: 'adlc_[a-z_]+',$/gm) ?? [];
+  const marketingCounts = Object.fromEntries(
+    integrationFor('codex').surfaces.map((surface) => [surface.key, surface.count]),
+  );
   assert.equal(skills.length, 6);
   assert.equal(agents.length, 3);
   assert.equal(hooks.length, 8);
+  assert.equal(mcpTools.length, 2);
+  assert.deepEqual(marketingCounts, { skills: skills.length, hooks: hooks.length, mcp: mcpTools.length, agents: agents.length });
   assert.match(fumadocs, /six progressive-disclosure skills/);
   assert.match(fumadocs, /eight Codex lifecycle/);
   assert.match(fumadocs, /three project-agent templates/);
@@ -31,6 +40,18 @@ test('Codex guides carry current install, update, and legacy recovery commands',
     'codex plugin marketplace upgrade adlc',
     'codex plugin remove adlc@plugins-cli',
   ]) assert.match(combinedDocs, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('Codex marketing page exposes the native surfaces instead of the generic install-only page', () => {
+  assert.match(marketingRoute, /integration\.slug === 'codex'/);
+  assert.match(marketing, /Native surfaces/);
+  assert.match(marketing, /Phase routing/);
+  assert.match(marketing, /Frozen rails/);
+  assert.match(marketing, /adlc-codex\//);
+  assert.match(marketing, /├─ \.codex-plugin\/plugin\.json/);
+  assert.match(marketing, /codex plugin marketplace upgrade adlc/);
+  assert.match(marketing, /codex plugin remove adlc@plugins-cli/);
+  assert.match(marketing, /developers\.openai\.com\/codex\/build-plugins/);
 });
 
 test('unpublished initializer paths are labeled and have a working checkout command', () => {

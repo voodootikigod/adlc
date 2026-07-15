@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { INTEGRATIONS, integrationFor } from '@/lib/integration-facts.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { IntegrationCard } from '@/components/marketing/integration-card';
+import { CodexIntegrationPage } from '@/components/marketing/codex-integration';
 
 export function generateStaticParams() {
   return INTEGRATIONS.map((i) => ({ slug: i.slug }));
@@ -33,6 +34,7 @@ export default async function IntegrationPage({
   const { slug } = await params;
   const integration = integrationFor(slug);
   if (!integration) notFound();
+  if (integration.slug === 'codex') return <CodexIntegrationPage />;
 
   return (
     <main>
