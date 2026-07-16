@@ -10,33 +10,15 @@ ships six progressive-disclosure skills, hooks across eight Codex lifecycle
 events, an allowlisted MCP gate server, and three project-agent templates. ADLC
 evidence under `.adlc/` remains the source of truth.
 
-## Install from the current source
+## Install
 
-The unreleased initializer is available from this repository now. Clone the
-repository, install its workspace dependencies, initialize the target project,
-then register that checkout as a local Codex marketplace:
-
-```sh
-git clone https://github.com/voodootikigod/adlc.git
-cd adlc
-npm install --ignore-scripts
-npm install -g @adlc/cli
-node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project
-codex plugin marketplace add "$PWD"
-codex plugin add adlc-codex@adlc
-```
-
-This source change adds `adlc init` to the suite, but does not publish npm
-packages. Do not assume the current registry release contains the new verb.
-Start a new Codex session in the initialized project and trust the bundled hooks
-when Codex prompts you. Until the matching release exists, rerun the checkout
-command above to refresh the scaffold; `$adlc-init` delegates to the new CLI verb
-and therefore becomes available with that release.
-
-After a matching suite release is published, the shorter registry/Git install is:
+ADLC releases the CLI and Codex plugin package in lockstep. Use `@adlc/cli`
+1.4.2 or newer so the `adlc mcp-server` entrypoint is available. Codex installs
+the native plugin through its Git marketplace; installing `@adlc/codex` with npm
+alone does not register the plugin with Codex.
 
 ```sh
-npm install -g @adlc/cli
+npm install -g @adlc/cli@latest
 codex plugin marketplace add voodootikigod/adlc --ref main
 codex plugin add adlc-codex@adlc
 adlc init --root /absolute/path/to/project
@@ -44,7 +26,8 @@ adlc init --root /absolute/path/to/project
 
 The initializer is idempotent. It creates the committable `.adlc/` runtime and
 current `.codex/agents/*.toml` project roles without modifying `~/.codex` or
-overwriting project-owned files.
+overwriting project-owned files. Start a new Codex thread after installation and
+review the bundled hooks when Codex prompts you.
 
 If an older compatibility install is producing a translated
 `PostToolUse hook exited with code 1` error, remove it and install the native
@@ -67,9 +50,10 @@ codex plugin add adlc-codex@adlc
 The MCP gate tool exposes a deliberately small read-only allowlist, requires
 `--prompt-only` for generative gates, and rejects path escapes, control
 characters, mutating flags, and nested-command/provider arguments. Commands are
-executed without a shell. The lifecycle hooks use Codex's
-`PLUGIN_ROOT` and `PLUGIN_DATA` contracts, so the plugin works from its installed
-cache rather than assuming a source checkout.
+executed without a shell. The MCP transport launches the stable CLI entrypoint
+`adlc mcp-server` and preserves the active project directory; it does not depend
+on plugin-root placeholder expansion. Lifecycle hooks separately use Codex's
+`PLUGIN_ROOT` and `PLUGIN_DATA` contracts.
 
 ## Rail enforcement
 
@@ -89,10 +73,15 @@ errors and exits successfully, so telemetry cannot break a Codex tool call.
 ## Update, inspect, and remove
 
 ```sh
+npm install -g @adlc/cli@latest
 codex plugin marketplace upgrade adlc
+codex plugin add adlc-codex@adlc
 codex plugin list --json --available
 codex plugin remove adlc-codex@adlc
 ```
+
+Upgrade the CLI and marketplace plugin together, then start a new Codex thread
+so the refreshed MCP transport is loaded.
 
 Maintainers can run the offline contract and the isolated live install proof:
 

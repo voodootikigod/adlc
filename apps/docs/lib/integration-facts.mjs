@@ -34,17 +34,15 @@
 export const CODEX_INTEGRATION = {
   slug: 'codex',
   name: 'Codex',
-  status: 'source',
+  status: 'marketplace',
   tagline: 'A native Codex plugin with phase routing, frozen-rail feedback, gate tools, and project review agents.',
   install: [
-    'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
-    'npm install --ignore-scripts',
-    'npm install -g @adlc/cli',
-    'node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project',
-    'codex plugin marketplace add "$PWD"',
+    'npm install -g @adlc/cli@latest',
+    'codex plugin marketplace add voodootikigod/adlc --ref main',
     'codex plugin add adlc-codex@adlc',
+    'adlc init --root /absolute/path/to/project',
   ],
-  note: 'The native plugin works from source today. The initializer is newer than the current tagged suite release, so use the checkout command above until the matching release is published. Then start a new Codex session in the target project and review the bundled hooks.',
+  note: 'Install @adlc/cli 1.4.2 or newer from npm, then install the native plugin from the Codex Git marketplace. Keep the CLI and plugin updated together, and start a new Codex thread after installation or upgrade.',
   pluginDir: 'plugins/adlc-codex',
   hero: {
     kicker: 'Codex integration',
@@ -52,7 +50,7 @@ export const CODEX_INTEGRATION = {
     identity: 'Built for Codex directly. It is not a Claude compatibility shim.',
     badges: [
       { label: 'Native plugin', accent: true },
-      { label: 'Available from source' },
+      { label: 'Git marketplace' },
     ],
   },
   bundle: {
@@ -145,18 +143,22 @@ export const CODEX_INTEGRATION = {
   },
   installSection: {
     kicker: 'Install',
-    title: 'Install the current native plugin from source',
+    title: 'Install from npm and the Codex Git marketplace',
   },
   operate: {
     title: 'operate: Codex plugin',
     lines: [
-      '# Refresh the Git marketplace snapshot',
+      '# Update the CLI and plugin together',
+      'npm install -g @adlc/cli@latest',
       'codex plugin marketplace upgrade adlc',
+      'codex plugin add adlc-codex@adlc',
       'codex plugin list --json --available',
       '',
       '# Replace the older compatibility install',
       'codex plugin remove adlc@plugins-cli',
       'codex plugin add adlc-codex@adlc',
+      '',
+      '# Start a new Codex thread to load the refreshed MCP transport',
     ],
   },
   resources: [

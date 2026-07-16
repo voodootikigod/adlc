@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -91,53 +91,87 @@ function isInside(root, target) {
   return path === '' || (!path.startsWith('..') && !isAbsolute(path));
 }
 
-function exerciseInstalledMcp({ repo, fixture, installedPluginRoot, env }) {
-  const mcp = readJson(join(installedPluginRoot, '.mcp.json')).adlc;
-  if (!mcp || typeof mcp.command !== 'string' || !Array.isArray(mcp.args)) {
-    fail('installed MCP declaration is invalid');
-  }
-  const expand = (value) => value.replaceAll('${PLUGIN_ROOT}', installedPluginRoot);
-  const command = expand(mcp.command);
-  const args = mcp.args.map(expand);
-  if ([command, ...args].some((value) => value.includes('${PLUGIN_ROOT}'))) {
-    fail('installed MCP declaration contains an unresolved PLUGIN_ROOT');
-  }
-  const requests = [
-    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
-    { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
-    {
-      jsonrpc: '2.0',
-      id: 3,
-      method: 'tools/call',
-      params: { name: 'adlc_gate', arguments: { gate: 'spec-lint', args: ['smoke-spec.md', '--json'] } },
-    },
-  ];
-  const result = spawnSync(command, args, {
-    cwd: fixture,
-    env: {
-      PATH: process.env.PATH,
-      TERM: process.env.TERM,
-      NO_COLOR: '1',
-      CI: '1',
-      ...env,
-      ADLC_CLI_BIN: join(repo, 'packages/cli/bin/adlc.mjs'),
-    },
-    input: `${requests.map((request) => JSON.stringify(request)).join('\n')}\n`,
-    encoding: 'utf8',
+function exerciseInstalledMcp({ fixture, env }) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('codex', ['app-server', '--stdio'], { cwd: fixture, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let buffered = '';
+    let statusResponse;
+    let toolResponse;
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        child.kill();
+        reject(error);
+      } else resolvePromise({ statusResponse, toolResponse });
+    };
+    const timer = setTimeout(() => finish(new SmokeFailure(`Codex MCP handshake timed out: ${stderr}`)), 30_000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', finish);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      buffered += chunk;
+      const lines = buffered.split('\n');
+      buffered = lines.pop() ?? '';
+      try {
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const message = JSON.parse(line);
+          if (message.id === 1) {
+            child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
+            child.stdin.write(`${JSON.stringify({ method: 'mcpServerStatus/list', id: 2, params: { detail: 'full' } })}\n`);
+          } else if (message.id === 2) {
+            statusResponse = message;
+            child.stdin.write(`${JSON.stringify({
+              method: 'thread/start',
+              id: 3,
+              params: {
+                cwd: fixture,
+                ephemeral: true,
+                approvalPolicy: 'never',
+                sandbox: 'workspace-write',
+              },
+            })}\n`);
+          } else if (message.id === 3) {
+            const threadId = message.result?.thread?.id;
+            if (!threadId) throw new Error(`Codex did not return an ephemeral thread: ${JSON.stringify(message)}`);
+            child.stdin.write(`${JSON.stringify({
+              method: 'mcpServer/tool/call',
+              id: 4,
+              params: {
+                threadId,
+                server: 'adlc',
+                tool: 'adlc_gate',
+                arguments: { gate: 'spec-lint', args: ['smoke-spec.md', '--json'] },
+              },
+            })}\n`);
+          } else if (message.id === 4) {
+            toolResponse = message;
+            child.stdin.end();
+          }
+        }
+      } catch (error) {
+        finish(new SmokeFailure(`Codex app-server returned invalid MCP JSON: ${error.message}: ${stdout}`));
+      }
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      if (code !== 0) finish(new SmokeFailure(`Codex app-server exited ${code}: ${stderr}`));
+      else if (!statusResponse || !toolResponse) finish(new SmokeFailure(`Codex app-server omitted MCP responses: ${stdout}`));
+      else finish();
+    });
+    child.stdin.write(`${JSON.stringify({
+      method: 'initialize',
+      id: 1,
+      params: { clientInfo: { name: 'adlc_smoke', title: 'ADLC smoke', version: '1.0.0' } },
+    })}\n`);
   });
-  if (result.status !== 0) fail(`installed MCP server exited ${result.status}: ${result.stderr}`);
-  let responses;
-  try {
-    responses = result.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-  } catch (error) {
-    fail(`installed MCP server returned invalid JSON-RPC: ${error.message}: ${result.stdout}`);
-  }
-  if (responses[0]?.result?.serverInfo?.name !== 'adlc-codex') fail('installed MCP server did not initialize');
-  if (!responses[1]?.result?.tools?.some((tool) => tool.name === 'adlc_gate')) fail('installed MCP server did not list adlc_gate');
-  const toolResult = responses[2]?.result;
-  const execution = toolResult?.content?.[0]?.text ? JSON.parse(toolResult.content[0].text) : null;
-  if (toolResult?.isError || !execution?.ok) fail(`installed MCP tool call failed: ${JSON.stringify(responses[2])}`);
-  return true;
 }
 
 function structuralContract(repo) {
@@ -176,11 +210,16 @@ function structuralContract(repo) {
   if (!hooks?.PreToolUse?.some((group) => group.hooks?.some((hook) => hook.command?.includes('${PLUGIN_ROOT}/hooks/adlc-rails-guard.mjs')))) fail('rails hook must use the Codex PLUGIN_ROOT contract');
   if (JSON.stringify(hooks).includes('CODEX_PLUGIN_ROOT')) fail('hooks must not use the non-existent CODEX_PLUGIN_ROOT variable');
   const mcp = readJson(join(pluginRoot, '.mcp.json'));
-  if (!mcp.adlc?.args?.includes('${PLUGIN_ROOT}/mcp/server.mjs')) fail('MCP config must point at the bundled server');
+  if (mcp.adlc?.command !== 'adlc' || JSON.stringify(mcp.adlc.args) !== JSON.stringify(['mcp-server'])) {
+    fail('MCP config must use the stable adlc mcp-server entrypoint');
+  }
+  if (JSON.stringify(mcp).includes('${PLUGIN_ROOT}') || JSON.stringify(mcp).includes('${CLAUDE_PLUGIN_ROOT}')) {
+    fail('MCP config must not rely on plugin-root placeholder expansion');
+  }
   return { marketplacePath, pluginRoot, sentinels, hooks };
 }
 
-function main() {
+async function main() {
   const repo = resolve(process.argv[2] ?? '.');
   const contract = structuralContract(repo);
   const realHomeBefore = snapshotRealCodexHomes();
@@ -225,7 +264,17 @@ function main() {
     mkdirSync(configHome, { recursive: true });
     mkdirSync(cacheHome, { recursive: true });
     mkdirSync(dataHome, { recursive: true });
-    const env = { CODEX_HOME: codexHome, HOME: isolatedHome, XDG_CONFIG_HOME: configHome, XDG_CACHE_HOME: cacheHome, XDG_DATA_HOME: dataHome };
+    const env = {
+      CODEX_HOME: codexHome,
+      HOME: isolatedHome,
+      XDG_CONFIG_HOME: configHome,
+      XDG_CACHE_HOME: cacheHome,
+      XDG_DATA_HOME: dataHome,
+      PATH: `${join(repo, 'node_modules/.bin')}:${process.env.PATH ?? ''}`,
+      TERM: process.env.TERM ?? 'dumb',
+      NO_COLOR: '1',
+      CI: '1',
+    };
     if (process.env.ADLC_CODEX_SMOKE_FAIL_AFTER_TEMP === '1') fail('injected failure after temporary setup');
 
     const marketplaceAdd = runCodexJson(repo, env, ['plugin', 'marketplace', 'add', repo, '--json']);
@@ -238,7 +287,7 @@ function main() {
     if (!list.installed?.find((plugin) => plugin.pluginId === 'adlc-codex@adlc')?.enabled) fail('isolated plugin list does not show adlc-codex enabled');
     const mcpList = runCodexJson(repo, env, ['mcp', 'list', '--json']);
     const registeredMcp = mcpList.find((server) => server.name === 'adlc');
-    if (!registeredMcp?.enabled || !registeredMcp.transport?.args?.includes('${PLUGIN_ROOT}/mcp/server.mjs')) {
+    if (!registeredMcp?.enabled || registeredMcp.transport?.command !== 'adlc' || JSON.stringify(registeredMcp.transport?.args) !== JSON.stringify(['mcp-server'])) {
       fail('Codex did not register the installed adlc MCP declaration');
     }
     for (const path of ['package.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json', 'mcp/server.mjs', 'agents/adlc-reviewer.toml', 'skills/adlc-init/SKILL.md']) {
@@ -266,7 +315,18 @@ function main() {
     if (advisory.status !== 0 || !advisory.stdout.includes('ADLC advisory hook could not complete')) {
       fail(`installed advisory hook was not failure-isolated: status=${advisory.status} stdout=${advisory.stdout} stderr=${advisory.stderr}`);
     }
-    const mcpToolCall = exerciseInstalledMcp({ repo, fixture, installedPluginRoot, env });
+    const { statusResponse, toolResponse } = await exerciseInstalledMcp({ fixture, env });
+    if (statusResponse.error || !JSON.stringify(statusResponse.result).includes('adlc_gate')) {
+      fail(`Codex did not initialize the installed ADLC MCP tools: ${JSON.stringify(statusResponse)}`);
+    }
+    const toolText = toolResponse.result?.content?.find((item) => item.type === 'text')?.text;
+    let toolResult;
+    try { toolResult = toolText ? JSON.parse(toolText) : undefined; }
+    catch (error) { fail(`installed MCP tool returned invalid result JSON: ${error.message}: ${toolText}`); }
+    if (toolResponse.error || toolResponse.result?.isError || toolResult?.ok !== true) {
+      fail(`installed MCP tool call failed through Codex: ${JSON.stringify(toolResponse)}`);
+    }
+    const mcpToolCall = true;
     assertRealHomeUnchanged(realHomeBefore);
 
     console.log(JSON.stringify({
@@ -290,7 +350,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(`codex-install-smoke: ${error.message}`);
   process.exitCode = error instanceof SmokeFailure ? 2 : 1;

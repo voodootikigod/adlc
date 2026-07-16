@@ -7,13 +7,13 @@ description: Install the ADLC toolkit, bootstrap a repo, and run your first gate
 
 The toolkit is a set of gate-shaped CLIs published under the `@adlc` npm scope.
 One install gives you every gate in that release behind the stable `adlc <tool>`
-dispatcher. This checkout adds the project initializer and fleet orchestrator;
-they become registry commands only when the matching suite release is published.
+dispatcher. Use release 1.4.2 or newer for the project initializer and the Codex
+MCP server entrypoint.
 
 ## 1. Install the CLI
 
 ```sh
-npm install -g @adlc/cli
+npm install -g @adlc/cli@latest
 adlc --help          # lists every tool, grouped by lifecycle phase
 
 # or run without installing
@@ -47,18 +47,17 @@ adlc preflight        # environment & permissions table, pass/fail verdict
 ```
 
 Gates that need shared state (tickets, frozen rails, evidence) read it from a
-committable `.adlc/` directory. From this unreleased checkout, bootstrap it with:
+committable `.adlc/` directory. Bootstrap it with:
 
 ```sh
-node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project
+adlc init --root /absolute/path/to/project
 # Cursor-only runtime (skips Codex agents):
-# node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project --harness cursor
+# adlc init --root /absolute/path/to/project --harness cursor
 ```
 
-After the matching suite release, the same operation is `adlc init` (or
-`adlc init --harness cursor`); Codex users can then invoke `$adlc-init`, and
-other harnesses expose equivalent initialization commands on their own release
-schedules. See [integrations](/docs/integrations). The
+Codex users can also invoke `$adlc-init`; other harnesses expose equivalent
+initialization commands through their native integrations. See
+[integrations](/docs/integrations). The
 [.adlc runtime reference](/docs/reference/adlc-runtime) documents every file the
 gates read and write.
 

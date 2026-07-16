@@ -137,7 +137,7 @@ test('filesystem-derived surface counts match marketing facts for every harness'
   const codexHookKeys = Object.keys(JSON.parse(readFileSync(path.join(repoRoot, 'plugins/adlc-codex/hooks/hooks.json'), 'utf8')).hooks);
   assert.deepEqual(codex.surfaces.find((s) => s.key === 'hooks')?.items, codexHookKeys);
   assert.equal(surfaceCount(codex, 'agents'), listEntries('plugins/adlc-codex/agents', { files: true, ext: '.toml' }).length);
-  const mcpTools = readFileSync(path.join(repoRoot, 'plugins/adlc-codex/mcp/server.mjs'), 'utf8')
+  const mcpTools = readFileSync(path.join(repoRoot, 'packages/cli/lib/mcp-server.mjs'), 'utf8')
     .match(/^    name: 'adlc_[a-z_]+',$/gm) ?? [];
   assert.equal(surfaceCount(codex, 'mcp'), mcpTools.length);
 
@@ -217,14 +217,12 @@ test('Cursor marketing facts describe the marketplace plugin install', () => {
 
 test('Codex marketing facts describe the native marketplace surface', () => {
   const codex = integrationFor('codex');
-  assert.equal(codex?.status, 'source');
+  assert.equal(codex?.status, 'marketplace');
   assert.deepEqual(codex?.install, [
-    'git clone https://github.com/voodootikigod/adlc.git && cd adlc',
-    'npm install --ignore-scripts',
-    'npm install -g @adlc/cli',
-    'node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project',
-    'codex plugin marketplace add "$PWD"',
+    'npm install -g @adlc/cli@latest',
+    'codex plugin marketplace add voodootikigod/adlc --ref main',
     'codex plugin add adlc-codex@adlc',
+    'adlc init --root /absolute/path/to/project',
   ]);
   assert.match(codex?.tagline ?? '', /native Codex plugin/);
   assert.deepEqual(codex?.phaseRoutes.map(({ phase, entry }) => [phase, entry]), [
@@ -234,7 +232,8 @@ test('Codex marketing facts describe the native marketplace surface', () => {
     ['P5-P6', '$adlc-prosecute'],
     ['P7', '$adlc-distill'],
   ]);
-  assert.match(codex?.note ?? '', /newer than the current tagged suite release/);
+  assert.match(codex?.note ?? '', /1\.4\.2 or newer/);
+  assert.doesNotMatch(codex?.note ?? '', /checkout|unreleased/i);
   assert.equal(codex?.surfacesSection.kicker, 'Native surfaces');
   assert.equal(codex?.phaseSection.kicker, 'Phase routing');
   assert.equal(codex?.railsSection.kicker, 'Frozen rails');

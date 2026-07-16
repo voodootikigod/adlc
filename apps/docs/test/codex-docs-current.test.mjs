@@ -18,7 +18,7 @@ test('Codex guides match the shipped native payload counts', () => {
   const skills = readdirSync(path.join(repoRoot, 'plugins/adlc-codex/skills'));
   const agents = readdirSync(path.join(repoRoot, 'plugins/adlc-codex/agents')).filter((name) => name.endsWith('.toml'));
   const hooks = Object.keys(JSON.parse(read('plugins/adlc-codex/hooks/hooks.json')).hooks);
-  const mcpTools = read('plugins/adlc-codex/mcp/server.mjs').match(/^    name: 'adlc_[a-z_]+',$/gm) ?? [];
+  const mcpTools = read('packages/cli/lib/mcp-server.mjs').match(/^    name: 'adlc_[a-z_]+',$/gm) ?? [];
   const marketingCounts = Object.fromEntries(
     integrationFor('codex').surfaces.map((surface) => [surface.key, surface.count]),
   );
@@ -34,13 +34,14 @@ test('Codex guides match the shipped native payload counts', () => {
 
 test('Codex guides carry current install, update, and legacy recovery commands', () => {
   for (const command of [
-    'node packages/init/bin/adlc-init.mjs --root /absolute/path/to/project',
-    'codex plugin marketplace add "$PWD"',
+    'npm install -g @adlc/cli@latest',
     'codex plugin marketplace add voodootikigod/adlc --ref main',
     'codex plugin add adlc-codex@adlc',
+    'adlc init --root /absolute/path/to/project',
     'codex plugin marketplace upgrade adlc',
     'codex plugin remove adlc@plugins-cli',
   ]) assert.match(combinedDocs, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(combinedDocs, /@adlc\/cli`\s+1\.4\.2 or newer/);
 });
 
 test('Codex marketing page exposes the native surfaces instead of the generic install-only page', () => {
@@ -80,11 +81,14 @@ test('every marketing integration page uses the shared rich detail layout', () =
   }
 });
 
-test('unpublished initializer paths are labeled and have a working checkout command', () => {
-  const installDocs = `${combinedDocs}\n${read('apps/docs/content/docs/getting-started.mdx')}\n${read('plugins/adlc-codex/README.md')}`;
-  assert.match(installDocs, /does not publish|not in the older\s+registry release/);
-  assert.match(installDocs, /node packages\/init\/bin\/adlc-init\.mjs --root \/absolute\/path\/to\/project/);
-  assert.match(installDocs, /\$adlc-init[^.]*becomes available with that release/);
+test('published Codex install paths are npm-first and do not require a checkout', () => {
+  const gettingStarted = read('apps/docs/content/docs/getting-started.mdx');
+  for (const installDocs of [fumadocs, groundTruth, gettingStarted]) {
+    assert.match(installDocs, /npm install -g @adlc\/cli@latest/);
+    assert.match(installDocs, /adlc init --root \/absolute\/path\/to\/project/);
+    assert.doesNotMatch(installDocs, /git clone https:\/\/github\.com\/voodootikigod\/adlc\.git/);
+    assert.doesNotMatch(installDocs, /node packages\/init\/bin\/adlc-init\.mjs/);
+  }
 });
 
 test('Codex docs reject superseded checkout-only and environment-only claims', () => {

@@ -16,6 +16,7 @@ function runAdlc(args, options = {}) {
     const stdout = execFileSync(process.execPath, [BIN, ...args], {
       encoding: 'utf8',
       cwd: options.cwd,
+      input: options.input,
       stderr: 'pipe',
     });
     return { code: 0, stdout, stderr: '' };
@@ -137,4 +138,16 @@ test('routes accept verb to runner', () => {
   const { code, stdout } = runAdlc(['accept', '--help']);
   assert.equal(code, 0);
   assert.match(stdout, /adlc accept --ticket id/);
+});
+
+test('mcp-server is a stable hidden entrypoint that initializes and lists ADLC tools', () => {
+  const input = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+  ].map((request) => JSON.stringify(request)).join('\n');
+  const { code, stdout, stderr } = runAdlc(['mcp-server'], { input: `${input}\n` });
+  assert.equal(code, 0, stderr);
+  const responses = stdout.trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(responses[0].result.serverInfo.name, 'adlc-codex');
+  assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ['adlc_gate', 'adlc_prosecute']);
 });

@@ -36,6 +36,12 @@ if (first === 'run' || first === 'accept') {
   process.exit(code);
 }
 
+if (first === 'mcp-server') {
+  const { runStdioServer } = await import('../lib/mcp-server.mjs');
+  await runStdioServer();
+  process.exit(0);
+}
+
 if (!isTool(first)) {
   console.error(`error: unknown tool: ${first}`);
   const hint = suggest(first);

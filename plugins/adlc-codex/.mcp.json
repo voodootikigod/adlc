@@ -1,6 +1,6 @@
 {
   "adlc": {
-    "command": "node",
-    "args": ["${PLUGIN_ROOT}/mcp/server.mjs"]
+    "command": "adlc",
+    "args": ["mcp-server"]
   }
 }

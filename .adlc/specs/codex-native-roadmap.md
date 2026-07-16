@@ -26,8 +26,12 @@ nor the marketing examples execute the contract they advertise.
    evidence verification. Advisory hook failures must not produce a non-zero hook
    exit. Keep `PreToolUse` as the only in-session deny hook and document CI as the
    enforcement backstop.
-5. Add a plugin-bundled, zero-shell MCP stdio server exposing allowlisted ADLC gate and
-   prosecution tools. Validate every argument and use `execFile`, never a shell.
+5. Add a plugin-declared, zero-shell MCP stdio server exposing allowlisted ADLC gate and
+   prosecution tools through the stable `adlc mcp-server` entrypoint. Keep the plugin
+   wrapper as an npm-compatible delegate to the same implementation. Validate every
+   argument and use `execFile`, never a shell. The installed Codex plugin must launch
+   the server without relying on shell or hook-only `${PLUGIN_ROOT}` interpolation, and
+   the server must retain the active repository as its working directory.
 6. Repair the Codex install smoke test: canonicalize macOS paths, clean all temporary
    homes on every exit, validate the package/MCP/agent/init surfaces, and exercise a
    real isolated Codex marketplace install when enabled.
@@ -35,9 +39,10 @@ nor the marketing examples execute the contract they advertise.
    executable documentation tests that reject invented CLI examples and stale install
    claims.
 8. Replace the Fumadocs, Markdown, and marketing Codex installation story with the
-   real Git marketplace path; document update, inspection, uninstall, hook trust, and the
-   translated-plugin recovery path. Correct the homepage gate commands and qualify
-   machine-checkability claims.
+   npm CLI plus Git marketplace path. Require `@adlc/cli` 1.4.2 or newer, keep CLI and
+   plugin upgrades coupled, and document initialization, new-thread pickup, inspection,
+   uninstall, hook trust, and the translated-plugin recovery path. Correct the homepage
+   gate commands and qualify machine-checkability claims.
 9. Remove volatile "powers Codex" model assertions and label the model table as a
    dated, directional snapshot with primary-source verification required.
 10. Make the umbrella installation complete for every advertised toolkit package, or
@@ -59,7 +64,10 @@ nor the marketing examples execute the contract they advertise.
 - **AC4 — MCP:** a protocol test initializes the real stdio server, lists the ADLC
   tools, rejects unallowlisted commands/arguments and symlink escapes, bounds subprocess
   time/output, and executes an injected safe gate without shell interpolation. Verify with
-  `node --test plugins/adlc-codex/mcp/test/*.test.mjs`.
+  `node --test plugins/adlc-codex/mcp/test/*.test.mjs`. The installed-plugin smoke must
+  additionally make Codex itself start the registered MCP transport and complete an
+  `initialize` plus `tools/list` exchange. The smoke must fail if Codex receives an
+  unresolved `${PLUGIN_ROOT}` argument; test-only placeholder replacement is forbidden.
 - **AC5 — package/release:** `npm pack --dry-run` for `plugins/adlc-codex` contains the
   manifest, skills, hooks, MCP server, and agent templates; release tests prove the
   Codex manifest and package remain in lockstep with the suite version.
@@ -71,7 +79,8 @@ nor the marketing examples execute the contract they advertise.
   `ADLC_CODEX_LIVE_INSTALL=1 node scripts/codex-install-smoke.mjs .`.
 - **AC7 — docs truth:** docs tests execute or parse every homepage command against the
   CLI help contract and reject the phrases claiming Git marketplace installation is
-  unsupported. Marketing and Fumadocs show the same install/update/remove sequence.
+  unsupported. Marketing, Fumadocs, and the canonical Markdown guide show the same
+  npm-first install and coupled CLI/plugin update sequence without requiring a checkout.
   Verify with `node --test apps/docs/test/*.test.mjs`.
 - **AC8 — CI:** root tests include the Codex hook/MCP/init/smoke suites, and CI has a
   pinned required Codex proof plus an advisory latest Codex proof. Verify with
@@ -107,6 +116,11 @@ nor the marketing examples execute the contract they advertise.
 - **An npm-ready package works only from a checkout.** Package contents are asserted by
   `npm pack --dry-run`; the smoke installs from the marketplace into an isolated
   `CODEX_HOME` and inspects the cached payload rather than the source tree.
+- **The MCP protocol passes while the Codex launcher is broken.** The isolated smoke
+  starts the transport through Codex's registered configuration, not a separately
+  rewritten command. Plugin-root discovery and repository working-directory behavior
+  are tested independently so fixing the entrypoint cannot redirect ADLC gates into the
+  installed plugin cache.
 - **Release automation leaves the plugin cache pinned to an old version.** The release
   drift gate reads both `package.json` and `.codex-plugin/plugin.json` and fails if
   either differs from the suite version.
