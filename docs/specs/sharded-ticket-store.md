@@ -387,7 +387,13 @@ Evidence records include Git revision, ticket ID when applicable, `ticketHash`,
 
 `.adlc/current-ticket.json` pins `id` and `ticketHash`. An ID mismatch with
 `ADLC_TICKET`, an absent ticket, or a changed ticket hash fails closed. Unrelated shard
-changes do not stale active-ticket selection.
+changes do not stale active-ticket selection. An object pointer carrying no recognized
+id key is malformed and MUST fail closed; it MUST NOT be read as "no active ticket",
+which would fail open. Deactivation is deleting the file. One canonical implementation
+in `packages/tickets/lib/pointer.mjs` is generated into every harness; hand-copied
+resolvers are forbidden for the same reason as §14's loaders. Full contract:
+[the active-ticket pointer](../active-ticket-pointer.md) and
+`packages/tickets/schemas/current-ticket.schema.json`.
 
 Mandatory evidence operations are migration, recovery/rollback, ID reassignment,
 forced remote reconciliation, rail narrowing, scope widening, protected lifecycle
@@ -470,6 +476,21 @@ Release timeline:
 - 1.4.x: bridge may continue if required by field evidence; and
 - 2.0.0: normal legacy, old environment variable, and old CLI flag support removed;
   migration input retained indefinitely.
+
+Active-ticket pointer timeline. The pointer's schema was undocumented through 1.4.x,
+so pointers in the wild guessed at it: harness readers accept the deprecated id keys
+`ticket`/`ticketId`, a bare-string pointer, and a pointer omitting `ticketHash`.
+
+- 1.x: deprecated forms resolve in every reader with a warning; `adlc ticket doctor`
+  reports them; `@adlc/tickets`' own API is strict by default (`allowLegacyPointer:
+  false`) and denies a missing `ticketHash`. A `ticketHash` that IS present is
+  verified in every reader, bridge or not — no reader may skip it.
+- 2.0.0: deprecated id keys, the bare-string form, and the missing-`ticketHash`
+  bridge are removed; `{id, ticketHash}` becomes the only accepted pointer.
+
+The fail-closed rule for an unrecognized pointer object is NOT bridged: it shipped in
+1.x, because reading an unrecognized shape as "no active ticket" silently disabled
+enforcement.
 
 ## 14. Harness packaging and boundary enforcement
 

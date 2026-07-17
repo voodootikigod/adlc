@@ -104,7 +104,11 @@ test('(g) conflicting ADLC_TICKET vs current-ticket.json denies (fail closed)', 
   try {
     const v = decide(payload('Write', 'src/anything.js'), { root, env: env({ ADLC_TICKET: 'T1' }) });
     assert.equal(v.permission, 'deny');
-    assert.match(v.user_message, /conflicting active-ticket/);
+    // Assert the CONTRACT, not one phrase of the prose: fail closed, name BOTH
+    // tickets, and give the real remedy (a second ticket needs a second worktree).
+    assert.match(v.user_message, /T1/);
+    assert.match(v.user_message, /T2/);
+    assert.match(v.user_message, /worktree/i);
   } finally { cleanup(root); }
 });
 

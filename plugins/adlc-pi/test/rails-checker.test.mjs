@@ -70,7 +70,14 @@ test('resolveActiveTicket: env vs file conflict fails closed', () => {
   try {
     const active = resolveActiveTicket(root, { ADLC_TICKET: 'T9' });
     assert.equal(active.ticket, null);
-    assert.match(active.error, /disagree/);
+    // Assert the CONTRACT, not one word of the prose: fail closed, name both
+    // tickets so the operator can see the disagreement, and point at the actual
+    // remedy (a second ticket needs a second worktree). Pinning a single word made
+    // this test fail when the message started explaining the per-worktree model.
+    assert.ok(active.ticketId, 'a conflict must not degrade to "no active ticket"');
+    assert.match(active.error, /T9/);
+    assert.match(active.error, /T1/);
+    assert.match(active.error, /worktree/i);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

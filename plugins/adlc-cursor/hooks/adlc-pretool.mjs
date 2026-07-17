@@ -146,7 +146,7 @@ export async function consultBuildGate(payload, {
     const active = activeTicket.resolveActiveTicketId({ dir: root, env });
     if (active.conflict) {
       if (!mutating) return null;
-      return buildGateDeny('conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json) — failing closed.');
+      return buildGateDeny(`${active.message ?? 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)'} — failing closed.`);
     }
     if (!active.id) return null; // no active ticket → opt-in gate no-ops
 

@@ -14,6 +14,8 @@ export * from './lib/archive.mjs';
 export * from './lib/migrate.mjs';
 export * from './lib/doctor.mjs';
 export * from './lib/provenance.mjs';
+export * from './lib/pointer.mjs';
+export * from './lib/pointer-write.mjs';
 export * from './lib/prompt.mjs';
 export * from './lib/evidence.mjs';
 export * from './lib/stores/legacy.mjs';

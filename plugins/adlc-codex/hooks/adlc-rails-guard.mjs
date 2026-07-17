@@ -9,6 +9,10 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+import {
+  resolveActiveTicketId as resolveActiveTicketIdCanonical,
+  resolveActiveTicketAgainst,
+} from './generated-active-ticket.mjs';
 
 function fail(message) {
   console.error(`adlc-rails-guard: ${message}`);
@@ -37,14 +41,6 @@ function readRequiredJson(path) {
   }
 }
 
-function readOptionalJson(path) {
-  try {
-    return parseJson(path);
-  } catch (err) {
-    if (err?.code === 'ENOENT') return undefined;
-    throw err;
-  }
-}
 
 function globMatch(pattern, path) {
   const regex = new RegExp(
@@ -305,18 +301,17 @@ async function stdinText() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/**
+ * Resolve the active ticket id through the canonical pointer contract
+ * (generated-active-ticket.mjs, generated from packages/tickets/lib/pointer.mjs).
+ * This was a hand-rolled copy; it accepted `ticketId` while the claude-code and
+ * build-gate copies did not, so the same pointer enforced here and silently
+ * disabled enforcement there. Any denial fails closed.
+ */
 function resolveActiveTicketId() {
-  const envTicket = process.env.ADLC_TICKET;
-  let fileTicket;
-  const current = readOptionalJson('.adlc/current-ticket.json');
-  if (current) {
-    fileTicket = current.id ?? current.ticket ?? current.ticketId;
-  }
-
-  if (envTicket && fileTicket && envTicket !== fileTicket) {
-    fail(`ADLC_TICKET (${envTicket}) conflicts with .adlc/current-ticket.json (${fileTicket})`);
-  }
-  return { id: envTicket ?? fileTicket, ticketHash: current && typeof current === 'object' ? current.ticketHash ?? null : null };
+  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
+  if (!resolved.ok) fail(resolved.message);
+  return { id: resolved.value?.id ?? undefined };
 }
 
 function safeRealpath(fp) {
@@ -365,7 +360,12 @@ const tickets = snapshot.tickets;
 
 const ticket = tickets.find((t) => t.id === ticketId);
 if (!ticket) fail(`unknown active ticket: ${ticketId}`);
-if (activeTicket.ticketHash && activeTicket.ticketHash !== snapshot.ticketHashes[ticketId]) fail(`active ticket ${ticketId} changed after selection`);
+// Re-resolve against the loaded store so the pinned ticketHash is verified by the
+// same contract every other reader uses. allowLegacyPointer keeps the documented
+// 1.x bridge: a pointer that pins no hash still resolves (this harness never
+// required one), but a hash that IS present is always verified.
+const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: process.cwd(), env: process.env, allowLegacyPointer: true });
+if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
 const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
 const declaredRails = ticket.rails ?? [];
 if (explicitEnforcement !== '1' && ticket.completed === true) {

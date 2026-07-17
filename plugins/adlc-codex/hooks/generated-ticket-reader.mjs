@@ -47,7 +47,18 @@ function snapshot(backend, tickets) {
   validate(tickets);
   const copies = tickets.map((ticket) => Object.freeze(structuredClone(ticket))).sort((a, b) => compare(a.id, b.id));
   const ticketHashes = Object.freeze(Object.fromEntries(copies.map((ticket) => [ticket.id, ticketHash(ticket)])));
-  return Object.freeze({ backend, formatVersion: backend === 'legacy' ? 0 : 1, tickets: Object.freeze(copies), ticketHashes, hash: storeHash(copies) });
+  // get(id) is part of the TicketSnapshot interface (spec §8.1). It was missing
+  // here, so a generated snapshot was not substitutable for a domain one — any
+  // shared consumer (e.g. the generated pointer reader) crashed on it.
+  const byId = new Map(copies.map((ticket) => [ticket.id, ticket]));
+  return Object.freeze({
+    backend,
+    formatVersion: backend === 'legacy' ? 0 : 1,
+    tickets: Object.freeze(copies),
+    ticketHashes,
+    hash: storeHash(copies),
+    get: (id) => byId.get(id),
+  });
 }
 
 function loadLegacy(path) {

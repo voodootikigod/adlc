@@ -60,7 +60,8 @@ PostCompact, SubagentStart, SubagentStop, and Stop hooks using Codex's
 `PLUGIN_ROOT` and `PLUGIN_DATA` variables.
 
 The `PreToolUse` rail guard automatically activates when
-`.adlc/current-ticket.json` selects an incomplete ticket with non-empty rails.
+`.adlc/current-ticket.json` selects an incomplete ticket with non-empty rails
+(that file's schema and read semantics: [the active-ticket pointer](../active-ticket-pointer.md)).
 `ADLC_TICKET` is an explicit ticket override. `ADLC_P4_ENFORCEMENT=1` forces
 enforcement; `ADLC_P4_ENFORCEMENT=0` is a deliberate local opt-out. Conflicting
 ticket selectors and stale active state fail closed once enforcement is active.

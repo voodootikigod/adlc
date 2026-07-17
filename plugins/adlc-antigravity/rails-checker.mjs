@@ -8,9 +8,10 @@
 // Cursor-specific tool classifier. The Cursor wire-format mapping (preToolUse
 // stdin/stdout) lives in hooks/adlc-rails-guard.mjs; this file is editor-agnostic.
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
+import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
@@ -164,23 +165,12 @@ export function resolveRailPath(filePath, root) {
  * signal — return { conflict: true } so the caller fails closed.
  */
 export function resolveActiveTicketId(root, env) {
-  const envTicket = (env.ADLC_TICKET ?? '').trim() || null;
-  let fileTicket = null;
-  const currentPath = join(root, '.adlc', 'current-ticket.json');
-  if (existsSync(currentPath)) {
-    try {
-      const data = JSON.parse(readFileSync(currentPath, 'utf8'));
-      const raw = typeof data === 'string' ? data : data.id ?? data.ticket;
-      fileTicket = (raw ?? '').toString().trim() || null;
-    } catch {
-      // An unparseable pointer is itself a tamper signal: fail closed.
-      return { id: null, conflict: true };
-    }
-  }
-  if (envTicket && fileTicket && envTicket !== fileTicket) {
-    return { id: null, conflict: true };
-  }
-  return { id: envTicket ?? fileTicket, conflict: false };
+  const resolved = resolveActiveTicketIdCanonical({ root, env });
+  // conflict: true = fail closed. Beyond an ADLC_TICKET-vs-pointer disagreement it
+  // now also covers an unparseable pointer AND an object pointer whose id key is
+  // unrecognized — the latter used to read as "no active ticket" and ALLOW.
+  if (!resolved.ok) return { id: null, conflict: true, code: resolved.code, message: resolved.message };
+  return { id: resolved.value?.id ?? null, conflict: false };
 }
 
 /**
@@ -206,7 +196,9 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   }
   const active = resolveActiveTicketId(root, env);
   if (active.conflict) {
-    return { state: 'deny', reason: 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
+    // Surface the canonical reason rather than assuming an env-vs-pointer conflict;
+    // a malformed pointer is the more common fail-closed cause and it explains itself.
+    return { state: 'deny', reason: active.message ?? 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
   }
   if (!active.id) {
     return { state: 'inactive', reason: 'no active ticket resolved' };

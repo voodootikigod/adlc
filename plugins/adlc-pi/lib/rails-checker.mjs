@@ -8,9 +8,10 @@
 // pi's enforcement switch is the active ticket itself (no ADLC_P4_ENFORCEMENT)
 // — documented in docs/integrations/pi.md.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, inScope, classifyShellCommand, resolveRailPath, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
+import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: frozen
 // whenever a ticket is active, even if the ticket declares no rails, so the
@@ -54,33 +55,17 @@ export function canonicalizePath(filePath, root) {
  *   ticketId + error string  → enforcement requested but broken → fail closed
  */
 export function resolveActiveTicket(root, env = process.env) {
-  const envId = (env.ADLC_TICKET ?? '').trim() || null;
-  let fileId = null;
-  let fileError = null;
-  const currentPath = join(root, '.adlc', 'current-ticket.json');
-  if (existsSync(currentPath)) {
-    try {
-      const data = JSON.parse(readFileSync(currentPath, 'utf8'));
-      const raw = typeof data === 'string' ? data : data.id ?? data.ticket ?? data.ticketId;
-      fileId = typeof raw === 'string' && raw.trim() ? raw.trim() : null;
-    } catch (err) {
-      fileError = `unreadable .adlc/current-ticket.json: ${err.message}`;
-    }
+  // The pointer parse, the accepted keys, and the conflict rule come from the
+  // canonical contract (generated from packages/tickets/lib/pointer.mjs); only the
+  // {ticketId, ticket, error} shape below is pi-specific. A denial keeps this
+  // harness's "enforcement requested but broken" form: a non-null ticketId with an
+  // error, so the caller fails closed rather than reading it as inert.
+  const resolved = resolveActiveTicketIdCanonical({ root, env });
+  if (!resolved.ok) {
+    return { ticketId: '(unknown)', ticket: null, error: resolved.message };
   }
-
-  if (envId && fileId && envId !== fileId) {
-    return {
-      ticketId: envId,
-      ticket: null,
-      error: `ADLC_TICKET ("${envId}") and .adlc/current-ticket.json ("${fileId}") disagree — tamper signal, failing closed`,
-    };
-  }
-  const ticketId = envId ?? fileId;
-  if (!ticketId) {
-    // An unreadable pointer with no env override is still a tamper signal.
-    if (fileError) return { ticketId: '(unknown)', ticket: null, error: fileError };
-    return { ticketId: null, ticket: null, error: null };
-  }
+  const ticketId = resolved.value?.id ?? null;
+  if (!ticketId) return { ticketId: null, ticket: null, error: null };
 
   const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS;
   const ticketsPath = configured ? (isAbsolute(configured) ? configured : join(root, configured)) : join(root, '.adlc', 'tickets.json');

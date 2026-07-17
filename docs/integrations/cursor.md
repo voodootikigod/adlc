@@ -142,8 +142,11 @@ Cursor's hooks are a **best-effort, in-session** layer, not the control:
 Enforcement is identical to the sibling integrations (the engine is `@adlc/core`,
 not re-implemented here):
 
-- Active ticket via `ADLC_TICKET` **or** `.adlc/current-ticket.json`; a conflict
-  between the two fails closed (denied).
+- Active ticket via `ADLC_TICKET` **or** `.adlc/current-ticket.json` (schema and
+  full read semantics: [the active-ticket pointer](../active-ticket-pointer.md)).
+  A conflict between the two fails closed (denied) — the active ticket is
+  per-worktree state, so parallel work on a second ticket needs its own worktree.
+  An unparseable pointer, or an object with no recognized id key, also fails closed.
 - Enforcement is phase-scoped to `ADLC_P4_ENFORCEMENT=1`; otherwise no-op.
 - Rails in force = the **single** active ticket's `rails` plus the trust-root rails
   `.adlc/tickets.json` and `.adlc/current-ticket.json` (not a union across tickets).

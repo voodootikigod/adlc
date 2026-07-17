@@ -58,6 +58,7 @@ import { join, relative, resolve, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
+import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 const MODE = process.argv[2];
 
@@ -527,29 +528,20 @@ function decideAdversarialReviewNotice({ changedPaths = [], manifestEntries = []
 }
 
 /**
- * Resolve the active ticket id the SAME way the sibling integrations do
- * (process.env.ADLC_TICKET OR .adlc/current-ticket.json — see
- * plugins/adlc-opencode/rails-checker.mjs `resolveActiveTicketId`). Unlike that
- * enforcing helper, an unresolvable/conflicting signal here does NOT fail
- * closed — `review` is advisory, so it degrades to "no active ticket" (the
- * notice then checks for ANY adversarial-review record, unscoped) rather than
- * blocking on a bad pointer file.
+ * Resolve the active ticket id through the canonical pointer contract
+ * (generated-active-ticket.mjs, generated from packages/tickets/lib/pointer.mjs).
+ *
+ * Unlike the enforcing readers, a bad pointer here does NOT fail closed —
+ * `review` is advisory, so any denial degrades to "no active ticket" (the notice
+ * then checks for ANY adversarial-review record, unscoped) rather than blocking
+ * on a bad pointer file. Only the ADVISORY DEGRADATION is local; the parse, the
+ * accepted keys, and the conflict rule are the shared contract, so this no longer
+ * disagrees with the enforcing readers about which ticket the pointer names.
  */
 function resolveActiveTicketIdAdvisory() {
-  const envTicket = (process.env.ADLC_TICKET ?? '').trim() || null;
-  let fileTicket = null;
-  const currentPath = join('.adlc', 'current-ticket.json');
-  if (existsSync(currentPath)) {
-    try {
-      const data = JSON.parse(readFileSync(currentPath, 'utf8'));
-      const raw = typeof data === 'string' ? data : (data.id ?? data.ticket);
-      fileTicket = (raw ?? '').toString().trim() || null;
-    } catch {
-      return null; // unparseable pointer — degrade to "unknown", stay advisory
-    }
-  }
-  if (envTicket && fileTicket && envTicket !== fileTicket) return null; // conflict — degrade
-  return envTicket ?? fileTicket;
+  const resolved = resolveActiveTicketIdCanonical({ root: '.', env: process.env });
+  if (!resolved.ok) return null; // advisory: degrade rather than block
+  return resolved.value?.id ?? null;
 }
 
 /**
@@ -1138,31 +1130,24 @@ function rails(input) {
 // ---------------------------------------------------------------------------
 
 /**
- * Active-ticket resolution — KEEP IN SYNC with
- * packages/build-gate/lib/active-ticket.mjs's resolveActiveTicketId(). Ported
- * verbatim (same reason globMatch is ported above: this hook cannot resolve
- * @adlc/build-gate at runtime, it only shells to the globally-installed
- * `adlc` binary). Also mirrors plugins/adlc-codex/hooks/adlc-rails-guard.mjs
- * and plugins/adlc-antigravity/rails-checker.mjs's resolveActiveTicketId().
+ * Active-ticket resolution through the canonical pointer contract
+ * (generated-active-ticket.mjs, generated verbatim from
+ * packages/tickets/lib/pointer.mjs by scripts/ticket-readers/generate.mjs).
+ *
+ * This was a hand-ported copy carrying a "KEEP IN SYNC" comment, and it did not
+ * stay in sync: it accepted only `id`/`ticket` while the codex and pi copies also
+ * accepted `ticketId`, so a pointer written with `ticketId` enforced there and
+ * resolved to "no active ticket" HERE — silently disabling the build gate. The
+ * copies are gone; packages/tickets/test/pointer.test.mjs runs every generated
+ * reader over one vector table and fails if any of them disagree.
+ *
+ * `conflict: true` means fail closed: a conflicting signal, an unparseable
+ * pointer, OR an object pointer whose id key is unrecognized.
  */
 function resolveActiveTicketIdForBuildGate() {
-  const env = process.env;
-  const envTicket = (env.ADLC_TICKET ?? '').trim() || null;
-  let fileTicket = null;
-  const currentPath = join('.adlc', 'current-ticket.json');
-  if (existsSync(currentPath)) {
-    try {
-      const data = JSON.parse(readFileSync(currentPath, 'utf8'));
-      const raw = typeof data === 'string' ? data : (data?.id ?? data?.ticket);
-      fileTicket = (raw ?? '').toString().trim() || null;
-    } catch {
-      return { id: null, conflict: true }; // unparseable pointer is itself a tamper signal
-    }
-  }
-  if (envTicket && fileTicket && envTicket !== fileTicket) {
-    return { id: null, conflict: true };
-  }
-  return { id: envTicket ?? fileTicket, conflict: false };
+  const resolved = resolveActiveTicketIdCanonical({ root: '.', env: process.env });
+  if (!resolved.ok) return { id: null, conflict: true, code: resolved.code, message: resolved.message };
+  return { id: resolved.value?.id ?? null, conflict: false };
 }
 
 /** Trust-root paths — KEEP IN SYNC with packages/build-gate/lib/risk.mjs's TRUST_ROOT_PATHS. */
@@ -1260,8 +1245,11 @@ function buildgate(input) {
 
   const active = resolveActiveTicketIdForBuildGate();
   if (active.conflict) {
+    // Report the canonical reason. Assuming an ADLC_TICKET-vs-pointer conflict
+    // misreports every other fail-closed cause — most often a malformed pointer,
+    // where ADLC_TICKET may not be set at all and the actual fix is in the message.
     return denyBuildGate(
-      'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json) — failing closed'
+      `${active.message ?? 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)'} — failing closed`
     );
   }
   if (!active.id) return; // no active ticket declared → allow (opt-in gate)

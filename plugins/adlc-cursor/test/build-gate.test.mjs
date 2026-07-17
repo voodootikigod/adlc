@@ -155,7 +155,13 @@ test('FAIL CLOSED: conflicting active-ticket signal denies a structured edit und
     writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'OTHER' }));
     const v = await dispatch(editPayload, { root, env: env() }); // ADLC_TICKET=T9 vs file=OTHER
     assert.equal(v.permission, 'deny');
-    assert.match(v.user_message, /conflicting active-ticket/);
+    // Assert the CONTRACT, not one phrase of the prose: fail closed, name BOTH
+    // tickets so the operator can see the disagreement, and give the real remedy.
+    // Pinning a single wording made this fail once the message started carrying
+    // the canonical reason (which is what tells a typo'd-key operator what broke).
+    assert.match(v.user_message, /T9/);
+    assert.match(v.user_message, /OTHER/);
+    assert.match(v.user_message, /worktree/i);
   } finally { cleanup(root); }
 });
 

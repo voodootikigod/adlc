@@ -107,7 +107,10 @@ All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
 into a repo with no rails can never block editing. The build-gate similarly
 no-ops until an active ticket is resolved via `ADLC_TICKET`/
-`.adlc/current-ticket.json` — see [`docs/specs/build-gate-fitness.md`](../specs/build-gate-fitness.md)
+`.adlc/current-ticket.json` — see [the active-ticket pointer](../active-ticket-pointer.md)
+for that file's schema and read semantics (an unparseable pointer, an object with
+no recognized id key, or a pointer conflicting with `ADLC_TICKET` all fail closed),
+plus [`docs/specs/build-gate-fitness.md`](../specs/build-gate-fitness.md)
 and [`@adlc/build-gate`](../../packages/build-gate/README.md).
 
 **Build-gate bypass.** `ADLC_BUILD_GATE_BYPASS=1` overrides a build-gate deny

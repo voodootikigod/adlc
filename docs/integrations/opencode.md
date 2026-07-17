@@ -184,7 +184,10 @@ Mirrors the sibling integrations (`adlc-codex`, `adlc-pi`), delegating all
 glob/ticket logic to `@adlc/core`:
 
 - Active ticket resolved from `ADLC_TICKET` or `.adlc/current-ticket.json`
-  (conflict → fail closed).
+  (conflict → fail closed). Schema and full read semantics:
+  [the active-ticket pointer](../active-ticket-pointer.md). The active ticket is
+  per-worktree state, so parallel work on a second ticket needs its own worktree.
+  An unparseable pointer, or an object with no recognized id key, also fails closed.
 - Rails in force = the **single active ticket's** `rails` plus the implicit
   trust-root rails `.adlc/tickets.json` and `.adlc/current-ticket.json` (frozen so
   the rail set can't be quietly edited away).

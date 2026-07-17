@@ -12,12 +12,12 @@
 // there (ctx.hasUI === false in print/json), and a command must notify + return
 // rather than hang or throw.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, sha256 } from '@adlc/core';
 import { ensureGitignore, ensureFormatterIgnores, ensureTicketStore } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
-import { ticketHash } from '@adlc/tickets';
+import { ticketHash, writeActiveTicket } from '@adlc/tickets';
 import { recordGateEvent } from './evidence.mjs';
 import { buildRollbackCandidates } from './rollback.mjs';
 
@@ -220,10 +220,13 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       // Activate: write the pointer DIRECTLY. This is the human acting through
       // a command handler, not the agent through a tool — the trust-root freeze
       // governs agent tool_call events, not this privileged path.
-      const currentPath = join(root, '.adlc', 'current-ticket.json');
+      //
+      // Atomic (temp + rename): every hook re-reads this pointer on each tool
+      // call, so a plain writeFileSync exposes a torn read to whatever is gating
+      // concurrently. writeActiveTicket also guarantees the canonical
+      // {id, ticketHash} shape — never a deprecated alias.
       try {
-        mkdirSync(join(root, '.adlc'), { recursive: true });
-        writeFileSync(currentPath, JSON.stringify({ id: chosenId, ticketHash: ticketHash(chosenTicket) }, null, 2) + '\n');
+        writeActiveTicket(root, { id: chosenId, ticketHash: ticketHash(chosenTicket) });
       } catch (err) {
         ctx.ui.notify(`ADLC: failed to write current-ticket.json: ${err.message}`, 'error');
         return;

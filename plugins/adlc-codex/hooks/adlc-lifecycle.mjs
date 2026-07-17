@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+import { readActiveTicketPointer } from './generated-active-ticket.mjs';
 
 async function stdinJson() {
   const chunks = [];
@@ -22,10 +23,17 @@ function readJson(path) {
 }
 
 function stateContext(root) {
-  const current = readJson(join(root, '.adlc/current-ticket.json'));
-  if (!current) return null;
-  const id = current.id ?? current.ticket ?? current.ticketId;
-  if (!id) return 'ADLC is initialized, but current-ticket.json has no ticket id.';
+  // Parse through the canonical pointer contract so this narration names the same
+  // ticket the enforcing readers do (it used to hand-roll its own key list).
+  //
+  // Throw on a bad pointer rather than returning the reason as context: this hook's
+  // established advisory contract is that malformed state surfaces through main()'s
+  // catch as "could not complete" and still exits 0. The canonical message rides
+  // along on the error, so the operator gets the specific reason either way.
+  const pointer = readActiveTicketPointer(root);
+  if (!pointer.ok) throw new Error(pointer.message);
+  if (!pointer.value.present) return null;
+  const id = pointer.value.id;
   const snapshot = loadTicketStoreReadOnly({ root, env: process.env });
   const ticket = snapshot.tickets.find((candidate) => candidate.id === id);
   if (!ticket) return `ADLC current ticket ${id} is not present in the ticket store.`;

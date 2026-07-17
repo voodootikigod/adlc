@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adlc.dev/schemas/current-ticket-v1.json",
+  "title": "ADLC active-ticket pointer (.adlc/current-ticket.json)",
+  "description": "Names the one ticket in flight in this worktree. Gitignored runtime state, not tracked. The active ticket is per-worktree: parallel work on a second ticket needs its own worktree (git worktree add), not a second pointer. To deactivate, DELETE this file — an object with no recognized id key is malformed and fails closed, never 'no active ticket'. Absent this file (and ADLC_TICKET), enforcement is inert.",
+  "oneOf": [
+    {
+      "title": "Canonical pointer",
+      "type": "object",
+      "required": ["id", "ticketHash"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The active ticket id, exactly as it appears in the ticket store."
+        },
+        "ticketHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The ticket's hash at selection time. Pinning it is what makes 'the ticket changed after I selected it' detectable; a mismatch fails closed (ACTIVE_TICKET_STALE)."
+        }
+      }
+    },
+    {
+      "title": "Deprecated alias pointer (removed in 2.0)",
+      "description": "Accepted by every reader so existing pointers do not brick, reported by `adlc ticket doctor`, and never written by ADLC. The `ticketId` spelling entered the wild by being copied from the gate-manifest's evidence field name while this schema went undocumented.",
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [{ "required": ["ticket"] }, { "required": ["ticketId"] }],
+      "properties": {
+        "ticket": { "type": "string", "minLength": 1, "deprecated": true },
+        "ticketId": { "type": "string", "minLength": 1, "deprecated": true },
+        "ticketHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    {
+      "title": "Legacy bare-string pointer (removed in 2.0)",
+      "description": "Pins no ticketHash, so it resolves only under the documented 1.x bridge and denies under the strict default.",
+      "type": "string",
+      "minLength": 1,
+      "deprecated": true
+    }
+  ]
+}

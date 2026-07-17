@@ -1,29 +1,22 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { CURRENT_TICKET_FILE } from './constants.mjs';
-import { conflict, invalid } from './errors.mjs';
+import { resolveActiveTicketAgainst } from './pointer.mjs';
+import { conflict, invalid, operational } from './errors.mjs';
+
+/**
+ * Adapt pointer.mjs's discriminated result into the domain's throwing contract.
+ * pointer.mjs stays free of the error classes so the generator can copy it into
+ * harnesses verbatim; the mapping back to TicketStoreError lives here.
+ */
+function raise(result) {
+  const make = result.kind === 'conflict' ? conflict : result.kind === 'operational' ? operational : invalid;
+  throw make(result.code, result.message);
+}
 
 export function resolveActiveTicket(snapshot, { root = '.', env = process.env, allowLegacyPointer = false } = {}) {
-  const envId = (env.ADLC_TICKET ?? '').trim() || null;
-  const path = join(root, CURRENT_TICKET_FILE);
-  let pointer = null;
-  if (existsSync(path)) {
-    try { pointer = JSON.parse(readFileSync(path, 'utf8')); }
-    catch (error) { throw invalid('INVALID_CURRENT_TICKET', `cannot parse ${CURRENT_TICKET_FILE}: ${error.message}`); }
-  }
-  const fileId = typeof pointer === 'string' ? pointer : (pointer?.id ?? pointer?.ticket ?? null);
-  if (envId && fileId && envId !== fileId) throw conflict('ACTIVE_TICKET_CONFLICT', 'ADLC_TICKET conflicts with current-ticket.json');
-  const id = envId ?? fileId;
-  if (!id) return null;
-  const ticket = snapshot.get(id);
-  if (!ticket) throw invalid('ACTIVE_TICKET_MISSING', `active ticket not found: ${id}`);
-  if (pointer && typeof pointer === 'object') {
-    if (!pointer.ticketHash && !allowLegacyPointer) throw invalid('ACTIVE_TICKET_HASH_MISSING', 'current-ticket.json must pin ticketHash');
-    if (pointer.ticketHash && pointer.ticketHash !== snapshot.ticketHashes[id]) throw conflict('ACTIVE_TICKET_STALE', `active ticket ${id} changed after selection`);
-  } else if (pointer && !allowLegacyPointer) {
-    throw invalid('ACTIVE_TICKET_HASH_MISSING', 'legacy string current-ticket pointer does not pin ticketHash');
-  }
-  return { id, ticket, ticketHash: snapshot.ticketHashes[id], storeHash: snapshot.hash };
+  const result = resolveActiveTicketAgainst(snapshot, { root, env, allowLegacyPointer });
+  if (!result.ok) raise(result);
+  if (result.value === null) return null;
+  const { id, ticket, ticketHash, storeHash } = result.value;
+  return { id, ticket, ticketHash, storeHash };
 }
 
 export function verifyEvidenceBinding(evidence, snapshot) {
