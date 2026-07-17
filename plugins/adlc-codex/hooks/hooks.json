@@ -22,6 +22,12 @@
             "command": "node \"${PLUGIN_ROOT}/hooks/adlc-rails-guard.mjs\"",
             "timeout": 10,
             "statusMessage": "ADLC: Checking frozen rails"
+          },
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-build-gate.mjs\"",
+            "timeout": 10,
+            "statusMessage": "ADLC: Checking build-gate context fitness"
           }
         ]
       }

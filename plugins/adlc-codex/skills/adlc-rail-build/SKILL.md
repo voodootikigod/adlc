@@ -1,6 +1,6 @@
 ---
 name: adlc-rail-build
-description: Run ADLC P3-P4 rail and build workflows in Codex, including frozen rails, hollow-test, rails-guard, preflight, and flail detection.
+description: Run ADLC P3-P4 rail and build workflows in Codex, including frozen rails, hollow-test, rails-guard, preflight, flail detection, and the context-fitness build gate.
 ---
 
 ADLC_CODEX_SENTINEL_RAIL_BUILD_V1
@@ -16,6 +16,26 @@ Use `ADLC_P4_ENFORCEMENT=1` only to force enforcement in automation or unusual
 shell workflows. Use `ADLC_P4_ENFORCEMENT=0` only as a deliberate local opt-out;
 it does not bypass the authoritative CI gate. `ADLC_TICKET` remains an explicit
 selection override when no current-ticket file is present.
+
+## Context-fitness build gate
+
+A second PreToolUse hook, `adlc-build-gate.mjs`, guards against continuing a
+high-blast-radius build in a context-rotted session. It only applies to
+tickets whose risk tier is `'high'` (declared `risk: 'high'`, an
+external-system effect, identity mutation, or scope/rails touching the
+manifest or ticket-store trust root, or category `contract`/`architecture`) —
+a normal-risk ticket is never gated. For a high-risk ticket, the hook reads
+the session transcript (`transcript_path` on the hook payload) and denies the
+next mutating tool call once the session looks context-degraded (more than 40
+tool calls in a bounded window, or a transcript past 256 KiB). It does not
+gate a fresh or shallow session, even a high-risk one.
+
+If you hit this gate: resume in a fresh session (or an isolated subagent)
+rather than continuing in a degraded one — that is the fix, not the bypass.
+To override deliberately, set `ADLC_BUILD_GATE_BYPASS=1`; the override is
+refused unless it durably records to the gate-manifest
+(`adlc gate-manifest record build-gate-bypass`), so an unaudited bypass is
+never silently honored.
 
 Required gates:
 
