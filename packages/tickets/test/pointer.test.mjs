@@ -15,15 +15,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from '../lib/pointer.mjs';
 import { writeActiveTicket } from '../lib/pointer-write.mjs';
 import { resolveActiveTicket } from '../lib/provenance.mjs';
 import { LegacyTicketStore } from '../lib/stores/legacy.mjs';
 
-const REPO = join(import.meta.dirname, '../../..');
+// import.meta.dirname is only available in Node >= 20.11; derive it so the
+// suite runs on the package's declared floor (engines.node >=18).
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 /** Every generated harness copy of the pointer module. Byte-identical by contract. */
 const GENERATED_READERS = [
