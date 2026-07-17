@@ -35,6 +35,8 @@
     "commands/",
     "constants.mjs",
     "core-inline.mjs",
+    "generated-active-ticket.mjs",
+    "generated-ticket-reader.mjs",
     "hooks/",
     "hooks.json",
     "rails-checker.mjs",

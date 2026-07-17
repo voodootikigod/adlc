@@ -10,10 +10,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(here, '..');
@@ -111,4 +112,59 @@ test('AC2: plugin.json version is untouched by this ticket (still agy-native, no
   // Not asserting an exact version — only that it exists and is independent of
   // package.json's lockstep version (proves the two are not accidentally synced).
   assert.ok(pluginManifest.version, 'plugin.json keeps its own version field');
+});
+
+// --- AC4: the packed tarball actually loads --------------------------------
+
+// The AC1/AC2 checks above compare against a HARDCODED file list, so they pass
+// whenever the list matches itself — they cannot see a module the tarball
+// imports but never ships. That blind spot published 1.4.1 with
+// core-inline.mjs importing ./generated-ticket-reader.mjs while the files
+// allowlist omitted it: every npm install hit the shim fail-safe, which
+// allow-alls when ADLC_P4_ENFORCEMENT is unset, so rails were silently
+// unenforced on the primary distribution path.
+//
+// Resolving the real entry point out of a real tarball is what makes that class
+// of defect impossible to ship: the import graph is the assertion, so a newly
+// added relative import is covered without anyone remembering to list it.
+// agy copies plugins WITHOUT node_modules (see AC3), so extracting with no
+// node_modules present is the faithful install, not a stricter one.
+test('AC4: packed tarball extracted outside the repo imports rails-checker with no node_modules', () => {
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-pack-'));
+  try {
+    const tarballName = execFileSync('npm', ['pack', '--pack-destination', work], {
+      cwd: pkgDir,
+      encoding: 'utf8',
+      timeout: 120_000,
+    })
+      .trim()
+      .split('\n')
+      .pop();
+    const extractedRoot = join(work, 'extracted');
+    mkdirSync(extractedRoot, { recursive: true });
+    execFileSync('tar', ['-xzf', join(work, tarballName), '-C', extractedRoot]);
+    const pkgRoot = join(extractedRoot, 'package'); // npm tarballs always nest under package/
+
+    // Every module the plugin's own manifest points agy at must both ship and
+    // resolve — including each module they import transitively.
+    const entryPoints = ['rails-checker.mjs', 'core-inline.mjs', pkg.agy.hooks.replace(/^\.\//, '')];
+    for (const entry of entryPoints) {
+      assert.ok(existsSync(join(pkgRoot, entry)), `tarball must ship ${entry}`);
+    }
+
+    // Importing is the real gate: a relative import of an unshipped module
+    // throws ERR_MODULE_NOT_FOUND here, which is exactly the 1.4.1 break.
+    const res = spawnSync(
+      'node',
+      ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(pkgRoot, 'rails-checker.mjs')).href)})`],
+      { encoding: 'utf8', timeout: 30_000, cwd: pkgRoot }
+    );
+    assert.equal(
+      res.status,
+      0,
+      `packed rails-checker.mjs must import standalone with no node_modules — a relative import is missing from the files allowlist:\n${res.stderr}`
+    );
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 });

@@ -37,6 +37,7 @@
   "files": [
     "command/",
     "constants.mjs",
+    "generated-active-ticket.mjs",
     "hooks/",
     "hooks.json",
     "lib/",
