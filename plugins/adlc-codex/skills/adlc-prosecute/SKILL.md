@@ -41,6 +41,16 @@ implement — Codex reuses the identical pure orchestration logic
 `@adlc/core` via `plugins/adlc-codex/lib/prosecutor.mjs`, driven by a skill-instructed
 sequential loop instead of a host-level fan-out primitive.
 
+## Automatic Stop-time reminder
+
+A native Stop hook checks the session's changed files against the risk-tier
+categories (auth/trust-boundary, security-control deny-path, secrets,
+data-loss/destructive, schema-migration, CI/CD supply-chain) and, if any are
+touched with no recorded `adversarial-review` gate-manifest entry for the
+active ticket, surfaces an advisory nudge to run the loop above and record
+its evidence. This does not replace running the loop yourself — it is a
+safety net for the case where it was skipped.
+
 ## Recording evidence
 
 Once the loop above is dry, capture the transcript and record the reviewer-produced

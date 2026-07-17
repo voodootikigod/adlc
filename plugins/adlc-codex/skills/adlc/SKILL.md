@@ -45,3 +45,10 @@ findings), `--loop` (autonomous fix loop over working-tree code changes only, ne
 write sandbox), `--providers` (multi-provider quorum). Installed separately — invoke via
 `npx adversarial-review` if not on PATH. See ADR-0008 (adversarial-review coverage map)
 in the ADLC repo.
+
+At session Stop, a native hook automatically checks whether the session's changed
+files fall in a risk-gated category (auth/trust-boundary, security-control deny-path,
+secrets, data-loss/destructive, schema-migration, CI/CD supply-chain) with no
+recorded `adversarial-review` gate-manifest entry, and surfaces an advisory nudge
+naming the command to run and record. This is advisory only — it never blocks — and
+is scoped to the active ticket (a record for a different ticket does not silence it).
