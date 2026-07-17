@@ -452,9 +452,21 @@ for (const exportName of ['LENSES', 'VERIFIER', 'ALL_AGENTS', 'findingKey', 'ded
 }
 const prosecutorLibTestPath = join(repo, 'plugins/adlc-claude-code/lib/test/prosecutor.test.mjs');
 if (!existsSync(prosecutorLibTestPath)) fail('missing plugins/adlc-claude-code/lib/test/prosecutor.test.mjs');
-const rootPackageJson = readJson(join(repo, 'package.json'));
-if (!(rootPackageJson.scripts?.test ?? '').includes('plugins/adlc-claude-code/lib/test')) {
-  fail('root package.json "test" script must run plugins/adlc-claude-code/lib/test/*.test.mjs so the prosecution convergence contract is exercised in CI');
+// The contract is that CI ACTUALLY RUNS these tests. That used to be visible as a
+// literal path in package.json's test script, but the script now delegates to a
+// runner (so one failing suite cannot abort the rest), which moved the segment list
+// one level down. Follow the delegation rather than grepping only the top level —
+// otherwise this guard silently stops seeing the thing it exists to protect.
+const rootTestScript = readJson(join(repo, 'package.json')).scripts?.test ?? '';
+const runnerMatch = rootTestScript.match(/node\s+(scripts\/[\w.-]+\.mjs)/);
+const testEntrypoints = [rootTestScript];
+if (runnerMatch) {
+  const runnerPath = join(repo, runnerMatch[1]);
+  if (!existsSync(runnerPath)) fail(`root package.json "test" script delegates to ${runnerMatch[1]}, which does not exist`);
+  testEntrypoints.push(readFileSync(runnerPath, 'utf8'));
+}
+if (!testEntrypoints.some((source) => source.includes('plugins/adlc-claude-code/lib/test'))) {
+  fail('the root "test" script (or the runner it delegates to) must run plugins/adlc-claude-code/lib/test/*.test.mjs so the prosecution convergence contract is exercised in CI');
 }
 
 // --- plugins/adlc-claude-code/skills/adlc/SKILL.md + frontmatter + sentinel ---

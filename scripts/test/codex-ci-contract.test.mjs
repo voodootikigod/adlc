@@ -20,7 +20,17 @@ test('latest Codex drift canary is advisory', () => {
 });
 
 test('ordinary npm test always exercises the offline Codex contracts', () => {
-  assert.match(rootPackage.scripts.test, /plugins\/adlc-codex\/hooks\/test/);
-  assert.match(rootPackage.scripts.test, /plugins\/adlc-codex\/mcp\/test/);
-  assert.match(rootPackage.scripts.test, /scripts\/codex-install-smoke\.mjs/);
+  // The contract is that `npm test` RUNS these, not that package.json spells them
+  // out. The test script now delegates to a runner (so one failing suite cannot
+  // abort the rest), which moved the segment list one level down — asserting only
+  // against the top-level string would make this guard stop seeing what it guards.
+  // Follow the delegation and assert against everything `npm test` actually executes.
+  const sources = [rootPackage.scripts.test];
+  const runner = rootPackage.scripts.test.match(/node\s+(scripts\/[\w.-]+\.mjs)/);
+  if (runner) sources.push(readFileSync(new URL(`../../${runner[1]}`, import.meta.url), 'utf8'));
+  const executed = sources.join('\n');
+
+  assert.match(executed, /plugins\/adlc-codex\/hooks\/test/);
+  assert.match(executed, /plugins\/adlc-codex\/mcp\/test/);
+  assert.match(executed, /scripts\/codex-install-smoke\.mjs/);
 });
