@@ -16,7 +16,7 @@ describe('codex plugin smoke script', () => {
     const parsed = JSON.parse(out);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.skills, 6);
-    assert.equal(parsed.agents, 3);
+    assert.equal(parsed.agents, 9);
     assert.equal(parsed.mcpServers, 1);
   });
 
