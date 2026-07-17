@@ -1,7 +1,7 @@
 # Codex Integration
 
 ADLC installs as a native Codex plugin with six skills, hooks across eight
-lifecycle events, two MCP tools, and three project-agent templates. The plugin
+lifecycle events, two MCP tools, and nine project-agent templates. The plugin
 reads and writes the same `.adlc/` evidence as every other harness integration.
 
 ## Install
@@ -19,9 +19,12 @@ adlc init --root /absolute/path/to/project
 ```
 
 The initializer creates the committable `.adlc/` runtime and
-`.codex/agents/adlc-{explorer,reviewer,verifier}.toml`. It is idempotent,
-preserves existing files, and never changes `~/.codex`. Start a new Codex thread
-after installation and trust the bundled hooks when prompted.
+`.codex/agents/adlc-{explorer,reviewer,verifier}.toml` plus the six P5
+prosecution agents,
+`.codex/agents/adlc-prosecutor-{correctness,security,contract,diff,tests,verifier}.toml`.
+It is idempotent, preserves existing files, and never changes `~/.codex`. Start
+a new Codex thread after installation and trust the bundled hooks when
+prompted.
 
 An older plugin installed through the compatibility marketplace can surface a
 `PostToolUse hook exited with code 1` error from its translator. Replace it with
@@ -37,7 +40,9 @@ codex plugin add adlc-codex@adlc
 - `$adlc` routes a task to the correct lifecycle gate.
 - `$adlc-spec` handles P1–P2 shaping and decomposition.
 - `$adlc-rail-build` handles frozen rails and P4 supervision.
-- `$adlc-prosecute` handles P5 review evidence and P6 acceptance.
+- `$adlc-prosecute` runs the P5 multi-lens adversarial fan-out (five
+  independent read-only lenses, cross-lens dedupe, independent verification,
+  loop until dry) and handles P5 review evidence and P6 acceptance.
 - `$adlc-distill` handles P7 compounding defenses.
 - `$adlc-init` safely bootstraps the project runtime.
 

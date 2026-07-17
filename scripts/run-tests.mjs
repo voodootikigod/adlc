@@ -35,6 +35,8 @@ const SEGMENTS = [
   ['claude-code hooks', 'node --test plugins/adlc-claude-code/hooks/test/*.test.mjs'],
   ['claude-code lib', 'node --test plugins/adlc-claude-code/lib/test/*.test.mjs'],
   ['codex hooks', 'node --test plugins/adlc-codex/hooks/test/*.test.mjs'],
+  ['codex lib', 'node --test plugins/adlc-codex/lib/test/*.test.mjs'],
+  ['codex agents', 'node --test plugins/adlc-codex/agents/test/*.test.mjs'],
   ['codex mcp', 'node --test plugins/adlc-codex/mcp/test/*.test.mjs'],
   ['codex install smoke', 'node scripts/codex-install-smoke.mjs .'],
   ['scripts', 'node --test scripts/test/*.test.mjs'],

@@ -7,7 +7,7 @@ description: Install ADLC as a native Codex plugin with skills, lifecycle hooks,
 
 The Codex integration is a native plugin, not a Claude compatibility shim. It
 ships six progressive-disclosure skills, hooks across eight Codex lifecycle
-events, an allowlisted MCP gate server, and three project-agent templates. ADLC
+events, an allowlisted MCP gate server, and nine project-agent templates. ADLC
 evidence under `.adlc/` remains the source of truth.
 
 ## Install
@@ -45,7 +45,7 @@ codex plugin add adlc-codex@adlc
 | Skills | `$adlc`, `$adlc-init`, `$adlc-spec`, `$adlc-rail-build`, `$adlc-prosecute`, `$adlc-distill` |
 | Hooks | Session start, pre/post tool use, pre/post compact, subagent start/stop, and stop |
 | MCP | `adlc_gate` for an allowlisted, non-shell gate invocation and `adlc_prosecute` for explicit prosecution |
-| Agents | Project-scoped explorer, reviewer, and verifier roles created by `$adlc-init` |
+| Agents | Project-scoped explorer, reviewer, and verifier roles, plus the five-lens P5 prosecution fan-out (correctness, security, contract, diff, tests) and its independent verifier — all created by `$adlc-init` |
 
 The MCP gate tool exposes a deliberately small read-only allowlist, requires
 `--prompt-only` for generative gates, and rejects path escapes, control

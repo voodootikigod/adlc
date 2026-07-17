@@ -23,13 +23,13 @@ test('Codex guides match the shipped native payload counts', () => {
     integrationFor('codex').surfaces.map((surface) => [surface.key, surface.count]),
   );
   assert.equal(skills.length, 6);
-  assert.equal(agents.length, 3);
+  assert.equal(agents.length, 9);
   assert.equal(hooks.length, 8);
   assert.equal(mcpTools.length, 2);
   assert.deepEqual(marketingCounts, { skills: skills.length, hooks: hooks.length, mcp: mcpTools.length, agents: agents.length });
   assert.match(fumadocs, /six progressive-disclosure skills/);
   assert.match(fumadocs, /eight Codex lifecycle/);
-  assert.match(fumadocs, /three project-agent templates/);
+  assert.match(fumadocs, /nine project-agent templates/);
 });
 
 test('Codex guides carry current install, update, and legacy recovery commands', () => {

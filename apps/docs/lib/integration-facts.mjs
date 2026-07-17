@@ -101,11 +101,11 @@ export const CODEX_INTEGRATION = {
     },
     {
       key: 'agents',
-      count: 3,
+      count: 9,
       label: 'project agents',
-      title: 'Project roles for explore, review, verify',
-      detail: 'The initializer writes project-scoped Codex roles and leaves ~/.codex alone.',
-      items: ['explorer', 'reviewer', 'verifier'],
+      title: 'Project roles for explore, review, verify, and the P5 fan-out',
+      detail: 'The initializer writes project-scoped Codex roles — explore/review/verify plus the five-lens P5 prosecution fan-out and its independent verifier — and leaves ~/.codex alone.',
+      items: ['explorer', 'reviewer', 'verifier', 'prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff', 'prosecutor-tests', 'prosecutor-verifier'],
     },
   ],
   surfacesSection: {

@@ -1,14 +1,50 @@
 ---
 name: adlc-prosecute
-description: Record ADLC P5 review evidence and P6 acceptance packet workflows in Codex. Use after skeptical review to record verified findings, dry-pass evidence, and behavior acceptance evidence.
+description: Run the multi-lens P5 adversarial prosecution fan-out and record ADLC P5 review evidence and P6 acceptance packet workflows in Codex. Fans out five independent read-only lenses, dedupes findings, verifies each independently, and loops until dry before recording evidence.
 ---
 
 ADLC_CODEX_SENTINEL_PROSECUTE_V1
 
 # ADLC Prosecute
 
-This skill does not run the reviewer by itself. Run the skeptical review first, capture the
-transcript, then record the reviewer-produced evidence with `adlc prosecute`.
+## The multi-lens prosecution fan-out (P5)
+
+Codex has no primitive identical to Claude Code's Task-tool subagent fan-out, so this
+skill instructs the *sequence* explicitly rather than claiming automatic parallel
+execution. Run it as a loop:
+
+1. **Fan out five independent lenses.** Invoke each of the following read-only agent
+   profiles against the change diff, one at a time, collecting each lens's JSON findings
+   array before moving to the next: `adlc-prosecutor-correctness`,
+   `adlc-prosecutor-security`, `adlc-prosecutor-contract`, `adlc-prosecutor-diff`,
+   `adlc-prosecutor-tests` (`plugins/adlc-codex/agents/adlc-prosecutor-*.toml`). Each
+   lens hunts one specific failure class only — do not let one lens's prompt bleed into
+   another's judgment.
+2. **Dedupe.** Combine all five lenses' findings and dedupe with `dedupeFindings` from
+   `lib/prosecutor.mjs` (re-exported, by reference, from `@adlc/core`), keeping the
+   highest-severity instance of each `findingKey`-identical finding.
+3. **Verify independently.** For each deduped finding, invoke
+   `adlc-prosecutor-verifier` once, with a fresh context and no memory of other
+   findings' verdicts. Its job is to try to refute the finding, not confirm it — default
+   to refuted on weak evidence. Collect `{ real, reason, repro }` per finding.
+4. **Decide survival.** A finding survives only if `survivesVerification` (strict
+   majority of valid `real: true` votes) says so. A finding with no valid vote survives
+   as an unverified blocker (fail closed) rather than being silently dropped.
+5. **Loop until dry.** If any finding survived this round, fix it, then repeat steps 1-4
+   against the updated diff. Use `shouldContinue` (`maxDry: 2`, the default) to decide
+   when to stop: two consecutive rounds with zero surviving findings ends the loop.
+
+This is the same fan-out → dedupe → independent-verify → loop-until-dry shape Claude
+Code's `prosecutor-{correctness,security,contract,diff,tests,verifier}` subagents
+implement — Codex reuses the identical pure orchestration logic
+(`findingKey`/`dedupeFindings`/`survivesVerification`/`shouldContinue`) from
+`@adlc/core` via `plugins/adlc-codex/lib/prosecutor.mjs`, driven by a skill-instructed
+sequential loop instead of a host-level fan-out primitive.
+
+## Recording evidence
+
+Once the loop above is dry, capture the transcript and record the reviewer-produced
+evidence with `adlc prosecute`.
 The transcript must name the ticket and reviewed `git-worktree:<hash>` revision that P5
 records. Do not pass `--revision` in normal git worktrees; auto-resolved revisions keep
 P6 staleness protection active.

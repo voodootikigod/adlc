@@ -201,7 +201,11 @@ function structuralContract(repo) {
     if (!existsSync(join(pluginRoot, path.replace('/SKILL.md', '/agents/openai.yaml')))) fail(`missing Codex interface metadata for ${path}`);
   }
 
-  for (const name of ['adlc-explorer.toml', 'adlc-reviewer.toml', 'adlc-verifier.toml']) {
+  for (const name of [
+    'adlc-explorer.toml', 'adlc-reviewer.toml', 'adlc-verifier.toml',
+    'adlc-prosecutor-correctness.toml', 'adlc-prosecutor-security.toml', 'adlc-prosecutor-contract.toml',
+    'adlc-prosecutor-diff.toml', 'adlc-prosecutor-tests.toml', 'adlc-prosecutor-verifier.toml',
+  ]) {
     if (!existsSync(join(pluginRoot, 'agents', name))) fail(`missing project agent template: ${name}`);
   }
   if (!existsSync(join(pluginRoot, 'hooks/adlc-rails-guard.mjs')) || !existsSync(join(pluginRoot, 'hooks/adlc-lifecycle.mjs'))) fail('missing native Codex hooks');
@@ -239,7 +243,7 @@ async function main() {
       realHomeUnchanged: true,
       liveInstall: false,
       skills: Object.keys(contract.sentinels).length,
-      agents: 3,
+      agents: 9,
       hooks: Object.keys(contract.hooks).length,
       mcpServers: 1,
     }, null, 2));
@@ -338,7 +342,7 @@ async function main() {
       realHomeUnchanged: true,
       liveInstall: true,
       skills: Object.keys(contract.sentinels).length,
-      agents: 3,
+      agents: 9,
       hooks: Object.keys(contract.hooks).length,
       mcpServers: 1,
       mcpRegistered: true,

@@ -26,13 +26,15 @@
     "agents/*.toml",
     "hooks/*.mjs",
     "hooks/hooks.json",
+    "lib/*.mjs",
     "mcp/server.mjs",
     "skills/",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/cli": "1.4.1"
+    "@adlc/cli": "1.4.1",
+    "@adlc/core": "1.4.1"
   },
   "engines": {
     "node": ">=18"
