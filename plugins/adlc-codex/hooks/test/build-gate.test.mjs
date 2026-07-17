@@ -16,12 +16,33 @@ import {
   countToolCalls as hookCountToolCalls,
   computeDepthSignal as hookComputeDepthSignal,
   isDegraded as hookIsDegraded,
+  globMatch as hookGlobMatch,
   decide,
   recordBuildGateBypass,
 } from '../adlc-build-gate.mjs';
 
 import { computeRiskTier as coreComputeRiskTier, deriveRiskSignals as coreDeriveRiskSignals } from '../../../../packages/build-gate/lib/risk.mjs';
 import { countToolCalls as coreCountToolCalls, computeDepthSignal as coreComputeDepthSignal, isDegraded as coreIsDegraded } from '../../../../packages/build-gate/lib/depth-signal.mjs';
+import { globMatch as coreGlobMatch } from '../../../../packages/core/lib/tickets.mjs';
+
+// A naive "replace ** then replace *" globMatch implementation does NOT
+// correctly handle a leading `**/` (fails to match a root-level path) --
+// caught during T50 by comparing this hook's copy against the canonical
+// implementation with these exact fixtures. Pinned here so it can't regress.
+const GLOB_FIXTURES = [
+  ['**/.env', '.env'],
+  ['**/.env', 'src/.env'],
+  ['**/auth/**', 'auth/login.mjs'],
+  ['**/*guard*', 'guard.mjs'],
+  ['.adlc/tickets/**', '.adlc/tickets/t1.json'],
+  ['src/**', 'src/a/b.mjs'],
+];
+
+test('drift: globMatch is identical to @adlc/core (packages/core/lib/tickets.mjs), including leading **/ patterns', () => {
+  for (const [pattern, path] of GLOB_FIXTURES) {
+    assert.equal(hookGlobMatch(pattern, path), coreGlobMatch(pattern, path), `globMatch drift for ${pattern} ~ ${path}`);
+  }
+});
 
 const TICKET_FIXTURES = [
   { id: 'T1', title: 'plain', category: 'feature' },
