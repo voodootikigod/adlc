@@ -1,71 +1,108 @@
 # Spec — Codex Stop-time adversarial-review nudge (T50)
 
-**Phase:** P1 contract for porting Claude Code's Stop-hook `review()` advisory to
-`plugins/adlc-codex`.
+**Phase:** P1 contract for porting the Stop-time adversarial-review notice to
+`plugins/adlc-codex`, using the canonical `@adlc/core` risk-tier module and
+following Cursor's `stopAudit` shape as the primary reference.
+
+**Revision note:** replaces an earlier draft written before
+`packages/core/lib/risk-tier.mjs` and `plugins/adlc-cursor/hooks/adlc-stop.mjs`
+were read directly.
 
 ## Problem
 
-Codex's Stop hook (`plugins/adlc-codex/hooks/adlc-lifecycle.mjs`, `verify` mode) only
-shells out to `adlc gate-manifest verify --json` and prints an advisory on failure. It
-has no equivalent to Claude Code's `review()` (`plugins/adlc-claude-code/hooks/
-adlc-hook.mjs`, roughly lines 691-1112), which classifies git-diff-touched files by risk
-tier, resolves the active ticket, and decides whether to surface a "you touched X without
-recorded review evidence, run adversarial-review" notice — tracking cases where changes
-overlap declared scope with no manifest entry, or are entirely unscoped.
+Codex's Stop hook (`adlc-lifecycle.mjs`, `verify` mode) only shells to
+`adlc gate-manifest verify --json` and prints an advisory on failure. It has
+no equivalent of the mechanical trigger from voodootikigod/adlc#59: when a
+session's changed files fall in a risk-gated category (auth/trust-boundary,
+security-control deny-path, secrets, data-loss/destructive, schema-migration,
+CI/CD supply-chain) and no satisfying `adversarial-review` gate-manifest
+record exists, surface a notice.
 
-## Mechanism
+## Canonical source and prior art
 
-`gitChangedPaths` is ported verbatim in logic (parses `git status --porcelain`, handling
-quoted paths with spaces and rename arrows `->`) into a new function in
-`plugins/adlc-codex/hooks/adlc-lifecycle.mjs`. `matchRiskTier`/`classifyRiskTier` reuse
-the same tiering module introduced by T49 (`packages/build-gate/lib/tier.mjs`) applied to
-file paths rather than tickets, if that module's shape supports it; otherwise this ticket
-ports Claude Code's path-based tier matcher independently — the implementer decides based
-on what T49 actually ships and documents the choice inline. `resolveActiveTicketIdAdvisory`
-reuses the existing `.adlc/current-ticket.json` read already present in `stateContext()`.
-`decideAdversarialReviewNotice({ changedPaths, manifestEntries, ticketId })` is ported
-verbatim: it fires when changed paths intersect a risk-tier-flagged glob and no matching
-gate-manifest review entry exists for the ticket's current revision; it is suppressed when
-a review entry already exists.
+`packages/core/lib/risk-tier.mjs` is the single canonical implementation:
+`RISK_TIER_PATTERNS`, `matchRiskTier`, `classifyRiskTier`,
+`decideAdversarialReviewNotice`. Its own header comment says outright:
+Claude Code's hook can't resolve `@adlc/core` at runtime, so it carries a
+verbatim `KEEP IN SYNC` copy (confirmed at `adlc-hook.mjs:438`); OpenCode's
+`plugins/adlc-opencode/lib/session-hooks.mjs` imports the module directly.
 
-## Output composition
+`plugins/adlc-cursor/hooks/adlc-stop.mjs` implements the same feature for
+Cursor and is the better reference for *shape*, not just for confirming the
+canonical source:
+- One `stopAudit(root, opts)` function covers both the gate-manifest-verify
+  check and the risk-gated notice, rather than Claude Code's two separate
+  Stop-hook modes (`manifest` + `review`).
+- Its `gitChangedPaths` uses `git status --porcelain --no-renames -z` (NUL-
+  delimited) plus `git ls-files --others --exclude-standard -z` plus a
+  merge-base diff — no manual quote-unescaping, unlike Claude Code's
+  `unquoteGitStatusPath`. This is strictly more robust and is what Codex's
+  port should follow.
+- Active-ticket resolution degrades a conflict to `null` (advisory: never
+  fail closed) rather than erroring: `active.conflict ? null : active.id`.
 
-Both `verify` and the new `review` notice run at Stop and must be able to coexist in one
-Stop hook response. Since Codex's `hookOutput()` currently returns a single
-`{ systemMessage }` object per invocation and `hooks.json`'s Stop entry can list multiple
-hook commands, each mode continues to run as its own hook invocation (matching the
-existing pattern where `context`/`flail`/`verify` are separate `mode` arguments to the
-same script) — `review` is added as a fourth mode, invoked as its own Stop hook entry, not
-merged into `verify`'s output.
+Cursor's plugin can `import` `@adlc/core` directly in a hook file — its
+install mechanism differs from Codex's (confirmed for T49: Codex installs via
+git marketplace, not `npm install`, so the installed hook location has no
+`node_modules`). Codex's port therefore inline-copies from
+`packages/core/lib/risk-tier.mjs` (same `KEEP IN SYNC` pattern as T49's
+build-gate copy), while following Cursor's cleaner algorithm shape.
+
+## Design
+
+Extend `plugins/adlc-codex/hooks/adlc-lifecycle.mjs` with a `review`
+capability (kept as a separate `mode` argument value, consistent with the
+file's existing `context`/`flail`/`verify` mode dispatch — not merged into
+`verify`, so Stop's two hooks.json entries stay independently timeoutable and
+one failing does not silently swallow the other's output):
+
+1. Inline `KEEP IN SYNC` copies of `RISK_TIER_PATTERNS`, `matchRiskTier`,
+   `classifyRiskTier`, `decideAdversarialReviewNotice` from
+   `packages/core/lib/risk-tier.mjs`.
+2. A `gitChangedPaths(root)` helper following Cursor's `-z` NUL-delimited
+   approach (working tree status, untracked files, merge-base diff against
+   the first reachable trunk candidate).
+3. Active-ticket resolution reusing the same `resolveActiveTicketId` inline
+   copy T49 already added to this hooks directory (import it from
+   `adlc-build-gate.mjs` or duplicate the same small function — the spec
+   prefers duplication with a `KEEP IN SYNC` comment over cross-hook-file
+   imports, since each hook script must remain independently invocable
+   without assuming another hook file's module shape is stable), degrading a
+   conflict to `null` rather than failing the Stop hook.
 
 ## Deliverables
 
-1. New `review` mode in `plugins/adlc-codex/hooks/adlc-lifecycle.mjs`, porting
-   `gitChangedPaths`, risk-tier classification, `resolveActiveTicketIdAdvisory`, and
-   `decideAdversarialReviewNotice`.
-2. `plugins/adlc-codex/hooks/hooks.json` — add the `review` invocation to the Stop entry
-   alongside the existing `verify` command.
-3. Tests in `plugins/adlc-codex/hooks/test/lifecycle.test.mjs`: notice fires on unscoped
-   changes with no manifest entry; notice suppressed when the manifest already records
-   review evidence; correct handling of quoted/renamed git-status paths.
-4. Docs: `plugins/adlc-codex/skills/adlc/SKILL.md` and `adlc-prosecute/SKILL.md` updated
-   to mention the automatic Stop-time nudge.
+1. `review` mode added to `plugins/adlc-codex/hooks/adlc-lifecycle.mjs`.
+2. `plugins/adlc-codex/hooks/hooks.json` — add the `review` invocation to the
+   Stop entry alongside the existing `verify` command.
+3. `plugins/adlc-codex/hooks/test/review-notice.test.mjs` — a drift test
+   (inline copy vs. `packages/core/lib/risk-tier.mjs`'s real exports across
+   shared fixtures) plus: notice fires on risk-gated changes with no record,
+   notice suppressed when a satisfying record exists, `gitChangedPaths`
+   handles quoted/renamed paths via the `-z` form, ticket-conflict degrades to
+   `null` instead of failing the whole Stop hook.
+4. `plugins/adlc-codex/skills/adlc/SKILL.md` and `adlc-prosecute/SKILL.md`
+   updated to mention the automatic Stop-time nudge.
 
 ## Acceptance criteria
 
-- **AC1:** A session that touched risk-tier-flagged files with no corresponding
-  gate-manifest review entry receives a `systemMessage` nudge naming adversarial-review at
-  Stop. VERIFY: `plugins/adlc-codex/hooks/test/lifecycle.test.mjs`, fixture-based.
-- **AC2:** The notice is suppressed when the manifest already shows review evidence for
-  the active ticket's current revision. VERIFY: same test file, suppressed-case
-  assertion.
-- **AC3:** The existing `verify` Stop behavior is unchanged; both advisories can coexist
-  as separate Stop hook entries. VERIFY: hooks.json review + existing verify tests both
-  passing unmodified.
-- **AC4:** `adlc rails-guard --base main --ticket T50` passes; `npm test` passes at the
-  root.
+- **AC1:** A session touching risk-gated files with no satisfying
+  `adversarial-review` gate-manifest record gets a `systemMessage` nudge at
+  Stop. VERIFY: `plugins/adlc-codex/hooks/test/review-notice.test.mjs`.
+- **AC2:** The notice is suppressed once a satisfying record exists. VERIFY:
+  same test file.
+- **AC3:** The inline copy's `matchRiskTier`/`classifyRiskTier`/
+  `decideAdversarialReviewNotice` are IDENTICAL to
+  `packages/core/lib/risk-tier.mjs`'s real exports across shared fixtures.
+  VERIFY: same test file.
+- **AC4:** The existing `verify` Stop behavior is unchanged; both hooks run at
+  Stop. VERIFY: hooks.json entry + existing `verify` tests unmodified.
+- **AC5:** `adlc rails-guard --base main --ticket T50` passes; `npm test`
+  passes at the root.
 
 ## Out of scope
 
-- Making the notice a hard gate — it stays advisory.
-- T48/T49/T51/T52.
+- A hard gate (stays advisory).
+- Changing `packages/core/lib/risk-tier.mjs` or
+  `plugins/adlc-cursor/hooks/adlc-stop.mjs`.
+- T48/T49/T51/T52/T53.
