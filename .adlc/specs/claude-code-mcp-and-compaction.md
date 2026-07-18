@@ -101,4 +101,4 @@ spec that guessed instead of checking:
 ## Out of scope
 
 - Changing Codex's MCP server or its exposed toolset.
-- T48-T51.
+- T54-T51.

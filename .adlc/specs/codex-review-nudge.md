@@ -105,4 +105,4 @@ one failing does not silently swallow the other's output):
 - A hard gate (stays advisory).
 - Changing `packages/core/lib/risk-tier.mjs` or
   `plugins/adlc-cursor/hooks/adlc-stop.mjs`.
-- T48/T49/T51/T52/T53.
+- T54/T49/T51/T52/T53.

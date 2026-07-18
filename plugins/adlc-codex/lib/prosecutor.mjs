@@ -1,4 +1,4 @@
-// prosecutor.mjs — re-export shim over @adlc/core's prosecutor module (T48,
+// prosecutor.mjs — re-export shim over @adlc/core's prosecutor module (T54,
 // mirroring plugins/adlc-claude-code/lib/prosecutor.mjs). The single
 // implementation of the P5 prosecution registry and pure orchestration
 // helpers (dedupe, verifier-majority, loop-until-dry) lives in

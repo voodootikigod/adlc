@@ -1,4 +1,4 @@
-// profiles.test.mjs — T48 AC1: the six P5 prosecution agent profiles exist,
+// profiles.test.mjs — T54 AC1: the six P5 prosecution agent profiles exist,
 // are read-only, and each names its lens's specific hunted failure classes.
 // No TOML parser dependency (this repo is zero-dependency by convention) —
 // these are lightweight text assertions, matching how

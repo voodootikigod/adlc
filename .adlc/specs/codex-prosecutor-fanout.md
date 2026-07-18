@@ -1,4 +1,4 @@
-# Spec — Codex P5 multi-lens prosecutor fan-out (T48)
+# Spec — Codex P5 multi-lens prosecutor fan-out (T54)
 
 **Phase:** P1 contract for porting Claude Code's multi-lens adversarial P5 prosecution
 architecture to `plugins/adlc-codex`.
@@ -25,7 +25,7 @@ itself" — the actual multi-lens review is not native to Codex today.
 ## Invocation mechanism decision
 
 Codex has no primitive identical to Claude Code's Task-tool subagent fan-out. This spec
-resolves the CONTRACT question from T48 as follows: the `adlc-prosecute` skill instructs
+resolves the CONTRACT question from T54 as follows: the `adlc-prosecute` skill instructs
 the operating Codex session to invoke each of the six `agents/adlc-prosecutor-*.toml`
 profiles in turn, using Codex's existing agent-profile invocation convention (the same
 mechanism `adlc-explorer`/`adlc-reviewer`/`adlc-verifier` already use), collecting each
@@ -79,7 +79,7 @@ by a host-level loop primitive Codex doesn't have.
   sequence and no longer states the skill "does not run the reviewer by itself" without
   qualification. VERIFY: a smoke test asserting required section markers are present in
   the SKILL.md body.
-- **AC4:** `adlc rails-guard --base main --ticket T48` passes; `npm test` passes at the
+- **AC4:** `adlc rails-guard --base main --ticket T54` passes; `npm test` passes at the
   root.
 - **AC5:** `packages/core/lib/prosecutor.mjs` is untouched — dedupe/verify/loop logic is
   reused, not reimplemented. VERIFY: prosecutor-delegation test plus `git diff --stat

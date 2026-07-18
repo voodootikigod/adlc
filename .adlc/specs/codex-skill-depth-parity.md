@@ -64,6 +64,6 @@ under `plugins/adlc-codex/skills/` in this ticket — do not assume.
 ## Out of scope
 
 - `scripts/router/router-model.mjs` or any generated router file.
-- Hook/agent code (T48-T50).
+- Hook/agent code (T54-T50).
 - Renaming/removing any skill.
-- T48/T49/T50/T52/T53.
+- T54/T49/T50/T52/T53.

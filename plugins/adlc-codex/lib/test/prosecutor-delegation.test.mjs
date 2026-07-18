@@ -1,4 +1,4 @@
-// prosecutor-delegation.test.mjs — T48 AC2 (mirrors plugins/adlc-claude-code's
+// prosecutor-delegation.test.mjs — T54 AC2 (mirrors plugins/adlc-claude-code's
 // prosecutor-delegation.test.mjs): the plugin's prosecutor surface must BE
 // @adlc/core's prosecutor surface (reference equality, not value equality),
 // so a reintroduced local copy of the convergence logic — even a

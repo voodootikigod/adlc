@@ -142,4 +142,4 @@ refused (deny) — an unaudited override is never honored.
 - Changing `packages/build-gate`'s own logic, tiering rule, or thresholds.
 - Retroactively adding a drift test for Claude Code's own inline copy (a real
   gap, but not this ticket).
-- T48/T50/T51/T52/T53.
+- T54/T50/T51/T52/T53.
