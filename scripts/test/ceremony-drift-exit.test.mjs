@@ -25,6 +25,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
 
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ceremony-drift.mjs');
 const BOT = 'github-actions[bot]';
 
@@ -233,4 +234,68 @@ test('two marked issues fail closed rather than guessing which to overwrite', ()
     assert.match(r.stderr, /ambiguous tracking issue/);
     assert.doesNotMatch(r.calls, /issue close/);
   });
+});
+
+// ---- the documented command must not write outside the reported set ----
+//
+// The report is built from `needsCeremony`, which contains only rail-freezing and
+// preexisting-completed-field entries. `ticket-prune --ceremony --write` ALSO
+// tombstones rails-less stale tickets — which never appear in the report. An
+// operator running the advertised command on the strength of what the issue lists
+// would then complete a rails-less ticket that may still be in progress.
+//
+// This drives the EXACT command string the reporter renders, so the test fails if
+// someone reintroduces `--write` into it.
+
+function makeMixedRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-drift-mixed-'));
+  const g = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  g('init', '-q', '.');
+  g('config', 'user.email', 'test@example.invalid');
+  g('config', 'user.name', 'test');
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  mkdirSync(join(dir, 'packages', 'core'), { recursive: true });
+  mkdirSync(join(dir, 'packages', 'util'), { recursive: true });
+  writeFileSync(join(dir, 'packages', 'core', 'a.mjs'), 'export const a = 1;\n');
+  writeFileSync(join(dir, 'packages', 'util', 'b.mjs'), 'export const b = 2;\n');
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [
+    // Rail-freezing and stale → appears in the report.
+    { id: 'RAILED', title: 'railed', scope: ['packages/core/**'], rails: ['packages/core/**'] },
+    // Rails-less; scope already resolves so it LOOKS stale, but it is in progress.
+    // It never appears in needsCeremony, so the report never mentions it.
+    { id: 'RAILLESS', title: 'rails-less in progress', scope: ['packages/util/**'] },
+  ] }));
+  g('add', '-A');
+  g('commit', '-m', 'fixture');
+  return dir;
+}
+
+const completedIds = (repo) =>
+  JSON.parse(readFileSync(join(repo, '.adlc', 'tickets.json'), 'utf8'))
+    .tickets.filter((t) => t.completed === true).map((t) => t.id).sort();
+
+test('the rendered command completes only the reported ticket, not rails-less ones', async () => {
+  const repo = makeMixedRepo();
+  try {
+    // Take the command straight out of the rendered issue body.
+    const { renderIssueBody } = await import('../ceremony-drift.mjs');
+    const body = renderIssueBody([
+      { id: 'RAILED', reason: 'inferred: scope resolves', rails: ['packages/core/**'], blocker: 'rails-freeze' },
+    ]);
+    const cmd = body.split('\n').map((l) => l.trim())
+      .find((l) => l.startsWith('ADLC_RAILS_BYPASS=1 adlc ticket-prune'));
+    assert.ok(cmd, 'the body should document a ceremony command');
+
+    const args = cmd.replace('ADLC_RAILS_BYPASS=1 adlc ticket-prune', '').trim().split(/\s+/)
+      .map((a) => (a === 'origin/main' ? 'HEAD' : a)); // fixture has no origin
+    const BIN = join(REPO_ROOT, 'packages', 'ticket-prune', 'bin', 'ticket-prune.mjs');
+    execFileSync(process.execPath, [BIN, ...args], {
+      cwd: repo, stdio: 'ignore', env: { ...process.env, ADLC_RAILS_BYPASS: '1' },
+    });
+
+    assert.deepEqual(completedIds(repo), ['RAILED'],
+      'the rails-less ticket must be untouched — it never appeared in the report');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

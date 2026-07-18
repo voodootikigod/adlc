@@ -43,8 +43,21 @@ export const MARKER = '<!-- adlc:ceremony-drift -->';
 // so lookup stays deterministic no matter how large the repo gets.
 export const LABEL = 'ceremony-drift';
 
+// NO `--write`. That flag widens the write set beyond what this report shows:
+// with it, runTicketPrune also TOMBSTONES rails-less stale tickets (completing
+// them), and those never appear here — the report is built from `needsCeremony`,
+// which covers only rail-freezing and preexisting-completed-field entries. A
+// rails-less ticket that is actually in progress but whose scope already resolves
+// would be marked completed by a command the operator ran on the strength of a
+// report that never listed it.
+//
+// `--ceremony` alone still completes the rail-freezing candidates (its branch in
+// run.mjs does not test `write`), so nothing is lost. Verified on a fixture with
+// one of each: with --write both are completed; without it, only the
+// rail-freezing one is, and the rails-less ticket is untouched. See the
+// end-to-end test in scripts/test/ceremony-drift-exit.test.mjs.
 const CEREMONY_CMD =
-  'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main';
+  'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main';
 
 /**
  * Render the tracking-issue body. Deterministic: entries are sorted by id, so an
