@@ -1000,6 +1000,13 @@ function rails(input) {
   // rail could be hiding (non-object entry, non-array rails, non-string rail
   // element) fails closed — never silently read as "no rails".
   const railDecls = [];
+  // Tracks whether ANY ticket declared a rail — including tickets whose rails
+  // have since expired via completion. This is deliberately NOT the same as
+  // `railDecls.length`: the trust-root freeze below keys off "this repo uses
+  // rails at all", not "a rail is in force right now". Conflating the two would
+  // unfreeze `.adlc/tickets.json` the moment the last railed ticket completed,
+  // letting a single edit rewrite the rail config itself. See issue #162.
+  let anyRailsDeclared = false;
   for (const t of parsed.tickets) {
     if (!t || typeof t !== 'object' || Array.isArray(t)) {
       return failClosed(
@@ -1013,6 +1020,21 @@ function rails(input) {
         'invalid-rails-field-bypass'
       );
     }
+    // T36 / issue #162 — completion expires a ticket's build-time rails. A
+    // ticket's rails are a PER-BUILD freeze: they stop that build from editing
+    // its own frozen foundation while it runs. Once the ticket is completed
+    // there is no in-flight build left to protect, so continuing to freeze its
+    // rails only blocks legitimate new work (a completed ticket that declared
+    // `packages/**` otherwise freezes that subtree forever). This matches
+    // scripts/rails-guard-ci.mjs — the unbypassable commit-time gate, which
+    // already skips completed tickets — so in-session and commit-time agree.
+    //
+    // STRICT `=== true` only: a missing, truthy-ish, or tampered `completed`
+    // value is NOT a completion and the rail keeps freezing (fail closed).
+    // Note this check does NOT short-circuit the validation above or the
+    // per-rail string check below — a completed ticket carrying malformed rail
+    // data still fails closed rather than being skipped unvalidated.
+    const expired = t.completed === true;
     for (const r of t.rails ?? []) {
       if (typeof r !== 'string') {
         return failClosed(
@@ -1020,6 +1042,8 @@ function rails(input) {
           'invalid-rail-entry-bypass'
         );
       }
+      anyRailsDeclared = true; // set BEFORE the expiry skip — see the note above
+      if (expired) continue; // rails retired with the ticket; trust roots stay frozen
       const tid = typeof t.id === 'string' ? t.id : '?';
       const normGlob = r.split('\\').join('/'); // normalize Windows-style backslashes
       railDecls.push({ glob: normGlob, ticket: tid });
@@ -1027,7 +1051,7 @@ function rails(input) {
       if (canon !== normGlob) railDecls.push({ glob: canon, ticket: tid });
     }
   }
-  if (railDecls.length === 0) return; // schema-valid, no rails declared → no-op
+  if (!anyRailsDeclared) return; // schema-valid, no rails declared → no-op
 
   // The rail config is its own trust root: once rails exist, editing
   // .adlc/tickets.json to remove them would silently disable enforcement, so

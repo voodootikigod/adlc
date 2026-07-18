@@ -117,6 +117,68 @@ test('edit to an exact-file rail → deny', () => {
   assert.equal(runRails(t, 'src/types/api.d.ts').verdict, 'deny');
 });
 
+// ---- completion expires a ticket's rails (issue #162) ----
+//
+// A ticket's `rails` are a PER-BUILD freeze: they stop that build from editing
+// its own frozen foundation while it runs. Once the ticket is `completed: true`
+// there is no in-flight build left to protect, so its rails expire — matching
+// scripts/rails-guard-ci.mjs (the commit-time gate, which already does this)
+// and the opencode/pi in-session checkers, which narrow to one active ticket.
+// The trust-root freeze is a SEPARATE mechanism and must survive expiry.
+
+test("a COMPLETED ticket's rail no longer freezes → allow", () => {
+  const t = '{"tickets":[{"id":"T1","completed":true,"rails":["packages/**"]}]}';
+  assert.equal(runRails(t, 'packages/fleet/package.json').verdict, 'allow');
+});
+
+test("an INCOMPLETE ticket's rail still denies (regression guard)", () => {
+  const t = '{"tickets":[{"id":"T1","completed":false,"rails":["packages/**"]}]}';
+  assert.equal(runRails(t, 'packages/fleet/package.json').verdict, 'deny');
+});
+
+test('the issue #162 repro: completed T37 freezes packages/**, active T42 rails packages/core/** only', () => {
+  const t = JSON.stringify({ tickets: [
+    { id: 'T37', completed: true, rails: ['packages/**', 'docs/ci/**'] },
+    { id: 'T42', rails: ['packages/core/**'] },
+  ] });
+  // T42's scope authorizes a brand-new sibling package — previously denied by T37.
+  assert.equal(runRails(t, 'packages/fleet/package.json').verdict, 'allow');
+  // T42's OWN rail is untouched by the fix.
+  assert.equal(runRails(t, 'packages/core/lib/x.mjs').verdict, 'deny');
+});
+
+test('trust root stays frozen even when EVERY declaring ticket is completed', () => {
+  const t = '{"tickets":[{"id":"T1","completed":true,"rails":["packages/**"]}]}';
+  assert.equal(runRails(t, '.adlc/tickets.json').verdict, 'deny');
+  assert.equal(runRails(t, '.adlc/current-ticket.json').verdict, 'deny');
+});
+
+// `completed` is a strict boolean gate: anything that is not exactly `true` is
+// NOT a completion, and the rail keeps freezing. Guards against a truthy-ish or
+// tampered value silently expiring a live rail.
+for (const [name, value] of [
+  ['string "true"', '"true"'],
+  ['number 1', '1'],
+  ['null', 'null'],
+  ['object', '{}'],
+  ['string "yes"', '"yes"'],
+]) {
+  test(`completed: ${name} is NOT a completion → rail still denies`, () => {
+    const t = `{"tickets":[{"id":"T1","completed":${value},"rails":["packages/**"]}]}`;
+    assert.equal(runRails(t, 'packages/fleet/package.json').verdict, 'deny');
+  });
+}
+
+test('a COMPLETED ticket with a malformed rails field still fails closed', () => {
+  const t = '{"tickets":[{"id":"T1","completed":true,"rails":"packages/**"}]}';
+  assert.equal(runRails(t, 'src/app.mjs').verdict, 'deny');
+});
+
+test('a COMPLETED ticket with a non-string rail entry still fails closed', () => {
+  const t = '{"tickets":[{"id":"T1","completed":true,"rails":["ok/**",42]}]}';
+  assert.equal(runRails(t, 'src/app.mjs').verdict, 'deny');
+});
+
 
 // ---- trust root: tickets.json is frozen once rails exist (structured edits) ----
 
