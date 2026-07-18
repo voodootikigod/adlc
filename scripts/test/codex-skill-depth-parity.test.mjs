@@ -1,7 +1,11 @@
-// depth-parity.test.mjs — T51. Content-presence checks for the satellite-skill
-// depth added to adlc-spec (P0 ticket authoring) and adlc-distill (P7
-// maintenance). Does NOT touch plugins/adlc-codex/skills/adlc/SKILL.md — that
-// file is GENERATED (scripts/router/gen-routers.mjs) and is a T51 rail.
+// codex-skill-depth-parity.test.mjs — T51. Content-presence checks for the
+// satellite-skill depth added to adlc-spec (P0 ticket authoring) and
+// adlc-distill (P7 maintenance). Does NOT touch plugins/adlc-codex/skills/
+// adlc/SKILL.md — that file is GENERATED (scripts/router/gen-routers.mjs).
+//
+// Lives in scripts/test/, not plugins/adlc-codex/skills/test/ — a sibling
+// directory there is enumerated by codex-skill-metadata.test.mjs as if it
+// were a 7th skill, which a `skills/test/` location broke on first attempt.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +14,7 @@ import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugins', 'adlc-codex', 'skills');
 const read = (rel) => readFileSync(join(SKILLS_DIR, rel), 'utf8');
 
 test('adlc-spec/SKILL.md covers the P0 ticket-authoring protocol steps', () => {
