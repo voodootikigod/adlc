@@ -52,10 +52,32 @@ adlc ticket-prune --json
   way; exit `1` only on an operational error such as a missing/invalid
   `.adlc/tickets.json`).
 - List the stale tickets it finds and recommend confirming them by hand, then
-  re-running with `adlc ticket-prune --write` to archive them into the
-  gitignored `.adlc/tickets.archive.json` (never deletes outright). Treat
-  `--write` as a human-confirmed action, not something this command should
-  run unattended — `.adlc/tickets.json` is a shared, hand-edited file.
+  re-running with `adlc ticket-prune --write` to tombstone the **rails-less**
+  ones (`completed: true` in place — never deletes outright, and the exact
+  add-only diff an ordinary PR's rails-guard gate accepts). Treat `--write` as
+  a human-confirmed action, not something this command should run unattended —
+  `.adlc/tickets.json` is a shared, hand-edited file.
+- **Rail-cleanup drift (issue #198).** The `--json` output's `needsCeremony`
+  array now surfaces, in dry-run, the shipped tickets that **still freeze rails**
+  (`blocker: "rails-freeze"`). These are the drift: a shipped ticket that was
+  never marked `completed: true`, so its rails never expired (T36) and keep
+  freezing sibling paths against unrelated future PRs. An ordinary PR
+  *structurally cannot* complete them — `rails-guard-ci` denies field changes to
+  existing base tickets — so completion is reserved for the **protected-base
+  admin ceremony**. Report the `needsCeremony` ids and their frozen rails.
+- **Completing them (admin, on `main` only).** After confirming each is genuinely
+  shipped, an admin runs the ceremony directly on a protected-base checkout of
+  `main` (it produces a diff an ordinary PR is denied, so it lands via the admin
+  path, like the manual sweep in PR #199):
+
+  ```
+  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main
+  ```
+
+  `--ceremony` refuses to write without `ADLC_RAILS_BYPASS=1`. It adds
+  `completed: true` to each rail-freezing shipped ticket (reported under
+  `ceremonyCompleted`), expiring its rails per T36. Rails-less
+  `preexisting-completed-field` tickets are left reported, never rewritten.
 
 ## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 

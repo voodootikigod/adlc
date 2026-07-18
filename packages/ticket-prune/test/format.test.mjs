@@ -20,7 +20,7 @@ test('renderReport (write): a mixed result shows the tombstoned line, the comple
     ],
   });
 
-  assert.match(text, /Tombstoned 1 stale ticket\(s\) with completed:true in place:/);
+  assert.match(text, /Tombstoned 1 rails-less stale ticket\(s\) with completed:true in place:/);
   assert.match(text, /- T1: shipped scope/);
   assert.match(text, /Stale but not auto-tombstonable — needs the protected-base admin ceremony \(2\):/);
   // rails-freeze blocker renders the frozen globs...
@@ -76,9 +76,42 @@ test('toJson projects exactly the machine-readable fields, defaulting the new ar
   assert.deepEqual(json, {
     baseRef: 'HEAD',
     write: true,
+    ceremony: false,
     stale: [],
     active: [],
     tombstoned: [{ id: 'T1', reason: 'x' }],
+    ceremonyCompleted: [],
     needsCeremony: [],
   });
+});
+
+test('#198 renderReport (dry-run): a railed shipped ticket is listed under the ceremony section so the drift is visible without --write', () => {
+  const text = renderReport({
+    baseRef: 'origin/main',
+    write: false,
+    ceremony: false,
+    stale: [{ id: 'T7', reason: 'shipped scope' }],
+    active: [],
+    tombstoned: [],
+    ceremonyCompleted: [],
+    needsCeremony: [{ id: 'T7', reason: 'shipped scope', rails: ['test/codec/**'], blocker: 'rails-freeze' }],
+  });
+  assert.match(text, /needs the protected-base admin ceremony \(1\):/);
+  assert.match(text, /- T7: shipped scope \[freezes: test\/codec\/\*\*\]/);
+});
+
+test('#198 renderReport (ceremony): completed rail-freezing tickets render under the "Completed … via the admin ceremony" section', () => {
+  const text = renderReport({
+    baseRef: 'origin/main',
+    write: false,
+    ceremony: true,
+    stale: [{ id: 'T7', reason: 'shipped scope' }],
+    active: [],
+    tombstoned: [],
+    ceremonyCompleted: [{ id: 'T7', reason: 'shipped scope', rails: ['test/codec/**'] }],
+    needsCeremony: [],
+  });
+  assert.match(text, /\(ceremony\)/);
+  assert.match(text, /Completed 1 rail-freezing ticket\(s\) via the admin ceremony \(rails now expire, T36\):/);
+  assert.match(text, /- T7: freezes test\/codec\/\*\*/);
 });

@@ -42,6 +42,19 @@ Run `adlc ticket-prune --json`.
   and the commit-time CI gate hard-denies removing a base-ref ticket in a PR, so
   a prune of already-merged tickets can only land through the protected-base
   ceremony, not a normal PR.
+- **Rail-cleanup drift (#198).** The `--json` `needsCeremony` array surfaces, in
+  dry-run, shipped tickets that still freeze rails (`blocker: "rails-freeze"`) —
+  never marked `completed: true`, so their rails never expired (T36) and keep
+  freezing sibling paths. Report those ids and rails. An admin completes them on
+  a protected-base checkout of `main` (the diff an ordinary PR is denied):
+
+  ```
+  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main
+  ```
+
+  `--ceremony` refuses to write without `ADLC_RAILS_BYPASS=1`; it adds
+  `completed: true` to each rail-freezing shipped ticket (`ceremonyCompleted`),
+  expiring its rails per T36.
 
 ## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 Only if a gate suite exists at `.adlc/gate-suite.json` (without one the tool

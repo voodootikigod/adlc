@@ -5,6 +5,7 @@ import {
   scopeShipped,
   classifyTicket,
   classifyTickets,
+  ceremonyDisposition,
 } from '../lib/detect.mjs';
 
 // ── explicit status field (preferred signal when present) ───────────────────
@@ -89,5 +90,35 @@ test('classifyTickets maps a whole ticket array', () => {
       ['T2', false],
       ['T3', true],
     ]
+  );
+});
+
+// ── ceremonyDisposition — the shared tombstone/ceremony/done split (#198) ────
+
+test('ceremonyDisposition: an already-completed stale ticket is "done" (nothing to do)', () => {
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', completed: true, rails: ['x/**'] }, 'r'),
+    { disposition: 'done' },
+  );
+});
+
+test('ceremonyDisposition: a rails-less pristine stale ticket is "tombstone" (ordinary PR may complete it)', () => {
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', title: 'x' }, 'r'),
+    { disposition: 'tombstone' },
+  );
+});
+
+test('ceremonyDisposition: a rail-freezing stale ticket needs the ceremony (blocker rails-freeze; rails checked first)', () => {
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', rails: ['test/a/**'], completed: false }, 'r'),
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: ['test/a/**'], blocker: 'rails-freeze' } },
+  );
+});
+
+test('ceremonyDisposition: a rails-less ticket that already carries a completed field needs the ceremony (blocker preexisting-completed-field)', () => {
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', completed: false }, 'r'),
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: [], blocker: 'preexisting-completed-field' } },
   );
 });

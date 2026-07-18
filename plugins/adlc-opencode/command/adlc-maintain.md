@@ -53,10 +53,24 @@ adlc ticket-prune --json
   `0` either way; exit `1` only on an operational error such as a
   missing/invalid `.adlc/tickets.json`).
 - List the stale tickets and recommend confirming them by hand, then re-running
-  `adlc ticket-prune --write` to archive them into the gitignored
-  `.adlc/tickets.archive.json` (never deletes outright). Treat `--write` as a
-  human-confirmed action — `.adlc/tickets.json` is a shared, hand-edited file
-  and the rail trust root.
+  `adlc ticket-prune --write` to tombstone the rails-less ones (`completed: true`
+  in place — never deletes outright). Treat `--write` as a human-confirmed
+  action — `.adlc/tickets.json` is a shared, hand-edited file and the rail trust
+  root.
+- **Rail-cleanup drift (#198).** The `--json` `needsCeremony` array surfaces, in
+  dry-run, shipped tickets that still freeze rails (`blocker: "rails-freeze"`) —
+  never marked `completed: true`, so their rails never expired (T36) and keep
+  freezing sibling paths against unrelated future PRs. An ordinary PR cannot
+  complete them (`rails-guard-ci` denies field changes to existing base
+  tickets); an admin completes them on a protected-base checkout of `main`:
+
+  ```
+  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main
+  ```
+
+  `--ceremony` refuses to write without `ADLC_RAILS_BYPASS=1`; it adds
+  `completed: true` to each rail-freezing shipped ticket (reported under
+  `ceremonyCompleted`), expiring its rails per T36.
 
 ## 4. Gate fuzzing — NOT run automatically (needs a model AND a sandbox)
 

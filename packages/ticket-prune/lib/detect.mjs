@@ -106,3 +106,36 @@ export function classifyTicket(ticket, trackedFiles) {
 export function classifyTickets(tickets, trackedFiles) {
   return tickets.map((ticket) => classifyTicket(ticket, trackedFiles));
 }
+
+/**
+ * Given a ticket already classified STALE (shipped), decide HOW it can be
+ * completed. This is the single source of truth shared by ticket-prune's
+ * dry-run report and its write/ceremony paths, so what the dry-run surfaces is
+ * exactly what a write would do (#198).
+ *
+ * Returns one of:
+ *   { disposition: 'done' }                       already completed:true — nothing to do
+ *   { disposition: 'tombstone' }                  rails-less + pristine — an ordinary PR
+ *                                                 may add completed:true (rails-guard's
+ *                                                 isCompletionAnnotationOnly exemption)
+ *   { disposition: 'ceremony', entry: {...} }     requires the protected-base admin
+ *                                                 ceremony; entry carries { id, reason,
+ *                                                 rails, blocker }
+ *
+ * Blocker kinds (mirror rails-guard-ci.mjs's two denial reasons exactly):
+ *   'rails-freeze'                completing it would expire frozen rails (privileged)
+ *   'preexisting-completed-field' it already carries a `completed` field, so setting
+ *                                 it is a MUTATION the add-only PR exemption denies
+ * The rails check comes FIRST, matching the write path's original ordering.
+ */
+export function ceremonyDisposition(ticket, reason) {
+  if (ticket.completed === true) return { disposition: 'done' };
+  const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
+  if (rails.length > 0) {
+    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'rails-freeze' } };
+  }
+  if (Object.prototype.hasOwnProperty.call(ticket, 'completed')) {
+    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'preexisting-completed-field' } };
+  }
+  return { disposition: 'tombstone' };
+}

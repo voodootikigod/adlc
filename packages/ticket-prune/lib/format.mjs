@@ -1,17 +1,23 @@
 // format.mjs — human-readable + JSON rendering for a runTicketPrune() result.
 
 export function renderReport(result) {
-  const { baseRef, write, stale, active, tombstoned = [], needsCeremony = [] } = result;
+  const { baseRef, write, ceremony, stale, active, tombstoned = [], ceremonyCompleted = [], needsCeremony = [] } = result;
   const lines = [];
-  lines.push(`ticket-prune — base ref: ${baseRef} (${write ? 'write' : 'dry-run'})`);
+  const mode = ceremony ? (write ? 'write+ceremony' : 'ceremony') : write ? 'write' : 'dry-run';
+  lines.push(`ticket-prune — base ref: ${baseRef} (${mode})`);
   lines.push('');
 
-  if (write) {
+  if (write || ceremony) {
     if (tombstoned.length === 0) {
       lines.push('No stale tickets tombstoned.');
     } else {
-      lines.push(`Tombstoned ${tombstoned.length} stale ticket(s) with completed:true in place:`);
+      lines.push(`Tombstoned ${tombstoned.length} rails-less stale ticket(s) with completed:true in place:`);
       for (const t of tombstoned) lines.push(`  - ${t.id}: ${t.reason}`);
+    }
+    if (ceremonyCompleted.length > 0) {
+      lines.push('');
+      lines.push(`Completed ${ceremonyCompleted.length} rail-freezing ticket(s) via the admin ceremony (rails now expire, T36):`);
+      for (const t of ceremonyCompleted) lines.push(`  - ${t.id}: freezes ${t.rails.join(', ')}`);
     }
   } else if (stale.length === 0) {
     lines.push('No stale tickets found.');
@@ -46,6 +52,6 @@ export function renderReport(result) {
 }
 
 export function toJson(result) {
-  const { baseRef, write, stale, active, tombstoned = [], needsCeremony = [] } = result;
-  return { baseRef, write, stale, active, tombstoned, needsCeremony };
+  const { baseRef, write, ceremony = false, stale, active, tombstoned = [], ceremonyCompleted = [], needsCeremony = [] } = result;
+  return { baseRef, write, ceremony, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
 }

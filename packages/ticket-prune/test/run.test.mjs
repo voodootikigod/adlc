@@ -450,6 +450,224 @@ test('--write: a ticket concurrently un-staled (status flipped back to active) b
   });
 });
 
+// ── #198: dry-run surfaces the ceremony drift; --ceremony completes it ───────
+//
+// A railed shipped ticket can only be completed (which expires its rails, T36)
+// through the protected-base admin ceremony. ticket-prune must (a) surface that
+// set in DRY-RUN so the drift is visible before it blocks a PR, and (b) apply the
+// completion under --ceremony, but only with the recorded admin override.
+
+function withEnv(key, value, fn) {
+  const had = Object.prototype.hasOwnProperty.call(process.env, key);
+  const prev = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  try {
+    return fn();
+  } finally {
+    if (had) process.env[key] = prev;
+    else delete process.env[key];
+  }
+}
+
+test('#198 AC1: dry-run surfaces a railed shipped ticket under needsCeremony (blocker rails-freeze) without mutating tickets.json', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      {
+        id: 'T1',
+        title: 'Ship the widget',
+        scope: ['plugins/adlc-widget/**'],
+        rails: ['test/adlc-widget/**'],
+      },
+      { id: 'T2', title: 'Still building', scope: ['packages/never-built/**'] },
+    ]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const result = runTicketPrune({ cwd: dir }); // dry-run, no --write
+
+    assert.equal(result.ok, true);
+    assert.equal(result.write, false);
+    // The railed shipped ticket is reported for the ceremony — in DRY-RUN, which
+    // today would be empty. This is the visibility fix.
+    assert.deepEqual(result.needsCeremony.map((c) => c.id), ['T1']);
+    assert.equal(result.needsCeremony[0].blocker, 'rails-freeze');
+    assert.deepEqual(result.needsCeremony[0].rails, ['test/adlc-widget/**']);
+    // Nothing written.
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+  });
+});
+
+test('#198 AC1: dry-run surfaces a rails-less preexisting-completed-field ticket under needsCeremony', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], completed: false },
+    ]);
+    const result = runTicketPrune({ cwd: dir }); // dry-run
+    assert.deepEqual(result.needsCeremony.map((c) => c.id), ['T1']);
+    assert.equal(result.needsCeremony[0].blocker, 'preexisting-completed-field');
+  });
+});
+
+test('#198 AC2: --ceremony without ADLC_RAILS_BYPASS=1 writes nothing and returns ok:false', () => {
+  withEnv('ADLC_RAILS_BYPASS', undefined, () => {
+    withScratchRepo((dir) => {
+      writeTickets(dir, [
+        {
+          id: 'T1',
+          title: 'Ship the widget',
+          scope: ['plugins/adlc-widget/**'],
+          rails: ['test/adlc-widget/**'],
+        },
+      ]);
+      const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+      const result = runTicketPrune({ cwd: dir, ceremony: true });
+
+      assert.equal(result.ok, false);
+      assert.match(result.error, /ADLC_RAILS_BYPASS/);
+      assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+    });
+  });
+});
+
+test('#198 AC3: --ceremony with ADLC_RAILS_BYPASS=1 completes a railed shipped ticket add-only and reports it under ceremonyCompleted; an active railed ticket is untouched', () => {
+  withEnv('ADLC_RAILS_BYPASS', '1', () => {
+    withScratchRepo((dir) => {
+      writeTickets(dir, [
+        {
+          id: 'T1',
+          title: 'Ship the widget',
+          scope: ['plugins/adlc-widget/**'],
+          rails: ['test/adlc-widget/**'],
+        },
+        {
+          id: 'T2',
+          title: 'Still building',
+          scope: ['packages/never-built/**'], // NOT shipped → active
+          rails: ['test/never-built/**'],
+        },
+      ]);
+
+      const result = runTicketPrune({ cwd: dir, ceremony: true });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.ceremonyCompleted.map((c) => c.id), ['T1']);
+      assert.deepEqual(result.needsCeremony, []); // T1 moved out of needsCeremony
+
+      const after = readTickets(dir);
+      // T1 gained EXACTLY completed:true (add-only), nothing else changed.
+      assert.deepEqual(after.tickets[0], {
+        id: 'T1',
+        title: 'Ship the widget',
+        scope: ['plugins/adlc-widget/**'],
+        rails: ['test/adlc-widget/**'],
+        completed: true,
+      });
+      // T2 (active, not shipped) is untouched — no completed field.
+      assert.equal(after.tickets[1].completed, undefined);
+    });
+  });
+});
+
+test('#198 AC4: after the ceremony completes a railed ticket, the base-rail union (skip completed===true) no longer includes its rails', () => {
+  withEnv('ADLC_RAILS_BYPASS', '1', () => {
+    withScratchRepo((dir) => {
+      writeTickets(dir, [
+        {
+          id: 'T1',
+          title: 'Ship the widget',
+          scope: ['plugins/adlc-widget/**'],
+          rails: ['test/adlc-widget/**'],
+        },
+      ]);
+      // The rails-guard union: every non-completed ticket's rails.
+      const railUnion = (tickets) =>
+        tickets.filter((t) => t.completed !== true).flatMap((t) => t.rails ?? []);
+
+      assert.deepEqual(railUnion(readTickets(dir).tickets), ['test/adlc-widget/**']); // frozen before
+
+      const result = runTicketPrune({ cwd: dir, ceremony: true });
+      assert.equal(result.ok, true);
+
+      assert.deepEqual(railUnion(readTickets(dir).tickets), []); // expired after
+    });
+  });
+});
+
+test('#198 AC5: --ceremony does NOT touch a rails-less preexisting-completed-field ticket; it stays reported under needsCeremony', () => {
+  withEnv('ADLC_RAILS_BYPASS', '1', () => {
+    withScratchRepo((dir) => {
+      writeTickets(dir, [
+        { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], completed: false },
+      ]);
+      const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+      const result = runTicketPrune({ cwd: dir, ceremony: true });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.ceremonyCompleted, []);
+      assert.deepEqual(result.needsCeremony.map((c) => c.id), ['T1']);
+      assert.equal(result.needsCeremony[0].blocker, 'preexisting-completed-field');
+      // Not rewritten: completed:false stays false, byte-identical.
+      assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+    });
+  });
+});
+
+test('#198: --write --ceremony together tombstone the rails-less and complete the railed shipped tickets in one pass', () => {
+  withEnv('ADLC_RAILS_BYPASS', '1', () => {
+    withScratchRepo((dir) => {
+      mkdirSync(join(dir, 'packages', 'second-widget'), { recursive: true });
+      writeFileSync(join(dir, 'packages', 'second-widget', 'index.mjs'), '// shipped later\n');
+      git(['add', '-A'], dir);
+      git(['commit', '-q', '-m', 'ship the second widget'], dir);
+
+      writeTickets(dir, [
+        { id: 'T1', title: 'rails-less shipped', scope: ['plugins/adlc-widget/**'] },
+        {
+          id: 'T2',
+          title: 'railed shipped',
+          scope: ['packages/second-widget/**'],
+          rails: ['test/second-widget/**'],
+        },
+      ]);
+
+      const result = runTicketPrune({ cwd: dir, write: true, ceremony: true });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
+      assert.deepEqual(result.ceremonyCompleted.map((t) => t.id), ['T2']);
+
+      const after = readTickets(dir);
+      assert.equal(after.tickets[0].completed, true);
+      assert.equal(after.tickets[1].completed, true);
+    });
+  });
+});
+
+test('#198: bin --ceremony without the bypass env exits 1 (operational error) and writes nothing', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], rails: ['test/x/**'] },
+    ]);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+    // Run the bin with ADLC_RAILS_BYPASS explicitly cleared from the child env.
+    const env = { ...process.env };
+    delete env.ADLC_RAILS_BYPASS;
+    let code = 0;
+    let stderr = '';
+    try {
+      execFileSync(process.execPath, [BIN, '--ceremony', '--json'], { cwd: dir, encoding: 'utf8', env });
+    } catch (err) {
+      code = err.status ?? 1;
+      stderr = err.stderr?.toString() ?? '';
+    }
+    assert.equal(code, 1);
+    assert.match(stderr, /ADLC_RAILS_BYPASS/);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before);
+  });
+});
+
 test('empty tickets.json (no tickets) reports cleanly and is a no-op', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, []);
