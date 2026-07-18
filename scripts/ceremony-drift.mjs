@@ -17,9 +17,11 @@
 // hard failure would therefore block every contributor on drift none of them can
 // fix, and the only unblock would be an admin sweep — a gate people learn to
 // route around. (Habituating operators to a bypass is the erosion #162 was
-// about; this must not recreate it.) So this reports into a tracking issue and
-// always exits 0. The authoritative, unbypassable rail enforcement stays in
-// scripts/rails-guard-ci.mjs.
+// about; this must not recreate it.) So this reports into a tracking issue, and
+// the mere EXISTENCE of drift never fails the job. An operational failure of the
+// reporter itself (revoked token, gh/API error) DOES exit non-zero — see the
+// exit-code contract at the bottom. The authoritative, unbypassable rail
+// enforcement stays in scripts/rails-guard-ci.mjs.
 //
 // Idempotence is the whole design constraint: an unchanged drift set must leave
 // the issue untouched, or the signal becomes noise and gets muted.
@@ -27,9 +29,17 @@
 import { execFileSync } from 'node:child_process';
 import { runTicketPrune } from '../packages/ticket-prune/lib/run.mjs';
 
-// Embedded in the body so the job can find its own issue without needing a label
-// to exist, survive being renamed, or depend on search ranking.
+// Embedded in the body so the job can identify its own issue even if the label
+// is removed by hand, and so a human editing the issue can see it is managed.
 export const MARKER = '<!-- adlc:ceremony-drift -->';
+
+// Discovery is by LABEL, not by scanning recent issues. A bounded scan of the N
+// most recent open issues silently breaks both contracts once the tracker ages
+// out of the window: non-empty drift opens a duplicate, and cleared drift never
+// finds the issue to close, leaving a false warning open forever. Filtering by a
+// dedicated label means the result set only ever contains this job's own issue,
+// so lookup stays deterministic no matter how large the repo gets.
+export const LABEL = 'ceremony-drift';
 
 const CEREMONY_CMD =
   'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main';
@@ -139,17 +149,27 @@ export function decideAction({ drift, existingIssue }) {
 const gh = (args, input) =>
   execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 10 * 1024 * 1024 });
 
+/** Idempotent; --force makes re-creating an existing label a no-op. */
+function ensureLabel() {
+  gh(['label', 'create', LABEL, '--force', '--color', 'B60205',
+    '--description', 'Shipped tickets whose rails have not expired (managed by ceremony-drift.yml)']);
+}
+
 function findExistingIssue() {
-  const raw = gh(['issue', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body']);
+  // Label-scoped, so this set contains only this job's own issue(s) — the limit
+  // is a sanity bound, not a search window (see LABEL above).
+  const raw = gh(['issue', 'list', '--state', 'open', '--label', LABEL, '--limit', '100',
+    '--json', 'number,title,body']);
   return selectTrackingIssue(JSON.parse(raw));
 }
 
 async function main() {
   const result = runTicketPrune({ cwd: process.cwd(), baseRef: process.env.BASE_REF || 'origin/main' });
   if (!result.ok) {
-    // Report and exit 0: this job is a reporter, never a gate. A prune failure
-    // must not redden main — rails-guard-ci is the check that may.
+    // OPERATIONAL failure — the reporter itself could not do its job. This must
+    // be loud (see the exit-code contract in main's catch below).
     console.error(`ceremony-drift: could not compute drift — ${result.error}`);
+    process.exitCode = 1;
     return;
   }
 
@@ -162,10 +182,11 @@ async function main() {
     return;
   }
 
+  ensureLabel();
   const decision = decideAction({ drift, existingIssue: findExistingIssue() });
   switch (decision.action) {
     case 'open': {
-      const url = gh(['issue', 'create', '--title', decision.title, '--body-file', '-'], decision.body).trim();
+      const url = gh(['issue', 'create', '--title', decision.title, '--label', LABEL, '--body-file', '-'], decision.body).trim();
       console.log(`ceremony-drift: opened ${url}`);
       break;
     }
@@ -186,7 +207,20 @@ async function main() {
 // Only run main() when executed directly, so the test can import the pure parts.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   main().catch((e) => {
-    // Never fail the workflow: see the "NOT A BLOCKING GATE" note above.
+    // EXIT-CODE CONTRACT — two different failures, deliberately treated apart:
+    //
+    //   drift EXISTS            -> exit 0. Not a malfunction; it is the normal
+    //                             finding, and failing on it would recreate the
+    //                             blocking-gate problem this job exists to avoid.
+    //   the REPORTER is broken  -> exit 1. A revoked token, a gh/API failure, or
+    //                             a CLI incompatibility must be visible.
+    //
+    // The earlier version swallowed both, reasoning "a reporter must never fail".
+    // That rationale only ever applied to the first case: this workflow does not
+    // run on pull_request, so a non-zero exit blocks nobody — it just surfaces a
+    // broken job. Swallowing the second case let the reporter die silently while
+    // every scheduled run still looked green, which defeats its only purpose.
     console.error(`ceremony-drift: ${e.message}`);
+    process.exitCode = 1;
   });
 }
