@@ -36,7 +36,11 @@ const DONE = [
 // MENTIONS the command in prose explaining why it is being withheld. A substring
 // check would then read "the command is offered" from text saying the opposite.
 // This looks for the runnable line inside the fenced block.
-const RUNNABLE = 'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main';
+// No `--write`: that flag also tombstones rails-less stale tickets, which never
+// appear in this report, so the command would write outside the set it shows.
+// Pinned literally here so reintroducing the flag fails this suite too, not only
+// the end-to-end blast-radius test.
+const RUNNABLE = 'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main';
 const offersCommand = (body) => body.split('\n').some((l) => l.trim() === RUNNABLE);
 
 // The report documents the ceremony as a PROCEDURE WITH PRECONDITIONS. It never
