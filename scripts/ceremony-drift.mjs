@@ -29,8 +29,9 @@
 import { execFileSync } from 'node:child_process';
 import { runTicketPrune } from '../packages/ticket-prune/lib/run.mjs';
 
-// Embedded in the body so the job can identify its own issue even if the label
-// is removed by hand, and so a human editing the issue can see it is managed.
+// The DURABLE identity of the managed issue. Labels can be stripped by hand; the
+// marker survives in the body, and findExistingIssue falls back to sweeping open
+// issues for it (then re-attaches the label).
 export const MARKER = '<!-- adlc:ceremony-drift -->';
 
 // Discovery is by LABEL, not by scanning recent issues. A bounded scan of the N
@@ -55,42 +56,78 @@ export function renderIssueBody(needsCeremony) {
     String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
   );
 
-  const rows = entries.map((t) => {
-    const rails = Array.isArray(t?.rails) ? t.rails : [];
-    const railList = rails.length ? rails.map((r) => `\`${r}\``).join(', ') : '_(none recorded)_';
-    return [
-      `### ${t?.id ?? '(unknown id)'}`,
+  const rowsFor = (list) =>
+    list.map((t) => {
+      const rails = Array.isArray(t?.rails) ? t.rails : [];
+      const railList = rails.length ? rails.map((r) => `\`${r}\``).join(', ') : '_(none)_';
+      return [
+        `### ${t?.id ?? '(unknown id)'}`,
+        '',
+        `- **Blocker:** \`${t?.blocker ?? 'unknown'}\``,
+        `- **Frozen rails:** ${railList}`,
+        `- **Detected because:** ${t?.reason ?? '(no reason recorded)'}`,
+      ].join('\n');
+    });
+
+  // The two blockers need DIFFERENT remedies, and conflating them produces an
+  // issue that can never close: `ticket-prune --ceremony` completes only
+  // 'rails-freeze' entries. A 'preexisting-completed-field' ticket would require
+  // overwriting a deliberately-set `completed` value — a riskier field mutation
+  // kept deliberately out of scope (see run.mjs) — so it stays in needsCeremony
+  // no matter how many times the advertised command is run. Telling an operator
+  // that one command clears everything listed would be false instructions that
+  // never stop being wrong.
+  const railsFreeze = entries.filter((t) => t?.blocker === 'rails-freeze');
+  const manual = entries.filter((t) => t?.blocker !== 'rails-freeze');
+
+  const sections = [];
+
+  if (railsFreeze.length) {
+    sections.push(
+      `## Clearable by the ceremony (${railsFreeze.length})`,
       '',
-      `- **Blocker:** \`${t?.blocker ?? 'unknown'}\``,
-      `- **Frozen rails:** ${railList}`,
-      `- **Detected because:** ${t?.reason ?? '(no reason recorded)'}`,
-    ].join('\n');
-  });
+      'These have shipped but are still active and still freezing rails. Under T36 a',
+      "ticket's rails expire only when it is marked `completed: true`, so until then",
+      'they keep freezing paths for unrelated future work.',
+      '',
+      '`rails-guard-ci.assertBaseTicketContractsPreserved` denies field changes to',
+      'existing base tickets, so an ordinary PR cannot complete a railed ticket. This',
+      'is reserved for the protected-base admin ceremony:',
+      '',
+      '```bash',
+      CEREMONY_CMD,
+      '```',
+      '',
+      'Review the diff before pushing — it completes every ticket in *this* section.',
+      '',
+      ...rowsFor(railsFreeze),
+      ''
+    );
+  }
+
+  if (manual.length) {
+    sections.push(
+      `## Needs a manual decision (${manual.length})`,
+      '',
+      'These carry a `completed` field that is present but not `true`. The completion',
+      'ceremony will **not** clear them — completing them means overwriting a value',
+      'someone set deliberately, which it refuses to do by design. Decide per ticket',
+      'whether the field is stale (set it to `true` via the protected-base path) or',
+      'the ticket genuinely is not done (leave it, and it will keep being reported',
+      'here until it is completed or its scope changes).',
+      '',
+      ...rowsFor(manual),
+      ''
+    );
+  }
 
   return [
     MARKER,
     '',
-    'These tickets have shipped (their declared scope resolves to tracked files on',
-    '`main`) but are still active and still freezing rails. Under T36 a ticket\'s',
-    'rails expire only when it is marked `completed: true`, so until that happens',
-    'these rails keep freezing paths for unrelated future work.',
+    'Shipped tickets whose declared scope resolves to tracked files on `main`, but',
+    'which are still active in the ticket store.',
     '',
-    '## Why a PR cannot fix this',
-    '',
-    '`rails-guard-ci.assertBaseTicketContractsPreserved` denies field changes to',
-    'existing base tickets, so an ordinary PR cannot complete a railed ticket. This',
-    'is reserved for the protected-base admin ceremony:',
-    '',
-    '```bash',
-    CEREMONY_CMD,
-    '```',
-    '',
-    'Review the diff before pushing — it completes every ticket listed below.',
-    '',
-    `## Drifting tickets (${entries.length})`,
-    '',
-    ...rows,
-    '',
+    ...sections,
     '---',
     '',
     '_Maintained automatically by `.github/workflows/ceremony-drift.yml`. This issue',
@@ -98,10 +135,15 @@ export function renderIssueBody(needsCeremony) {
   ].join('\n');
 }
 
-/** Title reflects the count so the drift is legible from a notification alone. */
+/**
+ * Title reflects the count so the drift is legible from a notification alone.
+ * Deliberately does NOT say "freezing rails": a 'preexisting-completed-field'
+ * entry always has `rails: []` (ceremonyDisposition checks non-empty rails
+ * first), so that phrasing would be false whenever such an entry is present.
+ */
 export function renderIssueTitle(needsCeremony) {
   const n = (needsCeremony ?? []).length;
-  return `Ticket ceremony drift: ${n} shipped ticket${n === 1 ? '' : 's'} still freezing rails`;
+  return `Ticket ceremony drift: ${n} shipped ticket${n === 1 ? '' : 's'} awaiting completion`;
 }
 
 /**
@@ -155,12 +197,34 @@ function ensureLabel() {
     '--description', 'Shipped tickets whose rails have not expired (managed by ceremony-drift.yml)']);
 }
 
+// Sanity bound for the unlabeled sweep. Far above any plausible open-issue count
+// for this repo; if it is ever hit, the labeled lookup above is the load-bearing
+// path anyway.
+const SWEEP_LIMIT = 1000;
+
 function findExistingIssue() {
-  // Label-scoped, so this set contains only this job's own issue(s) — the limit
-  // is a sanity bound, not a search window (see LABEL above).
-  const raw = gh(['issue', 'list', '--state', 'open', '--label', LABEL, '--limit', '100',
-    '--json', 'number,title,body']);
-  return selectTrackingIssue(JSON.parse(raw));
+  // Fast path: label-scoped, so this set contains only this job's own issue(s)
+  // and stays deterministic no matter how large the repo gets.
+  const labeled = selectTrackingIssue(
+    JSON.parse(gh(['issue', 'list', '--state', 'open', '--label', LABEL, '--limit', '100',
+      '--json', 'number,title,body']))
+  );
+  if (labeled) return labeled;
+
+  // Fallback: the label can be removed by hand, and label-only lookup would then
+  // open a duplicate (active drift) or never close the stale issue (cleared
+  // drift). The marker is the durable identity, so sweep open issues for it.
+  // This path is what makes the marker an actual fallback rather than a claim.
+  const unlabeled = selectTrackingIssue(
+    JSON.parse(gh(['issue', 'list', '--state', 'open', '--limit', String(SWEEP_LIMIT),
+      '--json', 'number,title,body']))
+  );
+  if (!unlabeled) return null;
+
+  // Self-heal so the fast path works again next run.
+  gh(['issue', 'edit', String(unlabeled.number), '--add-label', LABEL]);
+  console.log(`ceremony-drift: re-attached '${LABEL}' to issue #${unlabeled.number}`);
+  return unlabeled;
 }
 
 async function main() {

@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,4 +88,58 @@ test('DRY_RUN reports drift and exits 0 without touching `gh`', () => {
   const r = runWith('exit 1', { DRY_RUN: '1' });
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   assert.match(r.stdout, /DRY_RUN=1, no issue changes/);
+});
+
+// ---- the tracker survives having its label stripped ----
+//
+// Label-scoped discovery is the fast path, but a label can be removed by hand.
+// If lookup were label-only, that would silently open a DUPLICATE (active drift)
+// or leave a stale issue open forever (cleared drift). The marker in the body is
+// the durable identity; these prove the fallback is real rather than a comment.
+//
+// The stub distinguishes the labeled query from the unlabeled sweep so it can
+// return "nothing labeled, but a marked issue exists".
+
+// Single-line body on purpose: `echo` interprets backslash escapes in some
+// /bin/sh implementations (dash does, bash does not), which would inject a real
+// newline into the JSON string literal and make it unparseable. printf keeps
+// this stable across shells.
+const MARKED_ISSUE = '[{"number":42,"title":"stale title","body":"<!-- adlc:ceremony-drift --> old"}]';
+
+const UNLABELED_STUB = `
+case "$*" in
+  *"--label ceremony-drift"*"--json"*) printf '%s' "[]" ;;                # labeled lookup: nothing
+  *"issue list"*)                      printf '%s' '${MARKED_ISSUE}' ;;   # sweep: found by marker
+  *)                                   printf '%s' "https://example.test/issues/42" ;;
+esac
+exit 0`;
+
+test('an UNLABELED marked issue is found and updated, not duplicated', () => {
+  const r = runWith(UNLABELED_STUB);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  assert.match(r.stdout, /re-attached 'ceremony-drift' to issue #42/);
+  // Drift exists here (the real repo has 9), so it must UPDATE #42, never open.
+  assert.match(r.stdout, /updated issue #42/);
+  assert.doesNotMatch(r.stdout, /opened https/);
+});
+
+test('label re-attachment is attempted so the fast path works next run', () => {
+  // Records every gh invocation so we can assert the self-heal actually ran.
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-drift-log-'));
+  try {
+    const log = join(dir, 'calls.txt');
+    const ghPath = join(dir, 'gh');
+    writeFileSync(ghPath, `#!/bin/sh\necho "$*" >> ${log}\n${UNLABELED_STUB}\n`);
+    chmodSync(ghPath, 0o755);
+    const r = spawnSync(process.execPath, [SCRIPT], {
+      cwd: REPO,
+      encoding: 'utf8',
+      env: { ...process.env, ADLC_RAILS_BYPASS: undefined, PATH: `${dir}:${process.env.PATH}` },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = readFileSync(log, 'utf8');
+    assert.match(calls, /issue edit 42 --add-label ceremony-drift/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

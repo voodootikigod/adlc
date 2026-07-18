@@ -61,9 +61,9 @@ test('body states the completion rule correctly', () => {
 // ---- title ----
 
 test('title is singular for one ticket and plural otherwise', () => {
-  assert.match(renderIssueTitle([{ id: 'T1' }]), /1 shipped ticket still/);
-  assert.match(renderIssueTitle([{ id: 'T1' }, { id: 'T2' }]), /2 shipped tickets still/);
-  assert.match(renderIssueTitle([]), /0 shipped tickets still/);
+  assert.match(renderIssueTitle([{ id: "T1" }]), /1 shipped ticket awaiting/);
+  assert.match(renderIssueTitle([{ id: "T1" }, { id: "T2" }]), /2 shipped tickets awaiting/);
+  assert.match(renderIssueTitle([]), /0 shipped tickets awaiting/);
 });
 
 // ---- issue discovery ----
@@ -103,14 +103,45 @@ test('body is stable regardless of input order (idempotence depends on this)', (
   assert.equal(renderIssueBody(DRIFT), renderIssueBody([...DRIFT].reverse()));
 });
 
-test('body distinguishes the two blocker kinds', () => {
-  const mixed = [
-    { id: 'T1', reason: 'r', rails: ['a/**'], blocker: 'rails-freeze' },
-    { id: 'T2', reason: 'r', rails: ['b/**'], blocker: 'preexisting-completed-field' },
-  ];
-  const body = renderIssueBody(mixed);
-  assert.match(body, /rails-freeze/);
-  assert.match(body, /preexisting-completed-field/);
+// Fixture note: a 'preexisting-completed-field' entry ALWAYS has `rails: []` —
+// ceremonyDisposition() checks non-empty rails first and classifies those as
+// 'rails-freeze'. An earlier version of this test gave it rails, asserting
+// against a state the producer cannot emit.
+const MIXED = [
+  { id: 'T1', reason: 'r', rails: ['a/**'], blocker: 'rails-freeze' },
+  { id: 'T2', reason: 'r', rails: [], blocker: 'preexisting-completed-field' },
+];
+
+test('body separates the two blockers into their own sections', () => {
+  const body = renderIssueBody(MIXED);
+  assert.match(body, /## Clearable by the ceremony \(1\)/);
+  assert.match(body, /## Needs a manual decision \(1\)/);
+});
+
+// The advertised command completes ONLY rails-freeze entries; --ceremony refuses
+// to overwrite a deliberately-set `completed` value. Promising it clears
+// everything would be instructions that never stop being wrong, on an issue that
+// can never close.
+test('the ceremony command is not advertised as clearing manual-decision entries', () => {
+  const body = renderIssueBody(MIXED);
+  const manualIdx = body.indexOf('## Needs a manual decision');
+  const cmdIdx = body.indexOf('ticket-prune --ceremony');
+  assert.ok(cmdIdx !== -1 && manualIdx !== -1);
+  assert.ok(cmdIdx < manualIdx, 'ceremony command must sit in the clearable section, above it');
+  assert.match(body.slice(manualIdx), /will \*\*not\*\* clear them/);
+});
+
+test('a drift set of only manual-decision entries advertises no ceremony command', () => {
+  const body = renderIssueBody([MIXED[1]]);
+  assert.doesNotMatch(body, /ticket-prune --ceremony/);
+  assert.match(body, /## Needs a manual decision \(1\)/);
+});
+
+// 'preexisting-completed-field' entries always have empty rails, so a title
+// asserting everything is "freezing rails" would be false whenever one appears.
+test('title does not claim rails are frozen', () => {
+  assert.doesNotMatch(renderIssueTitle(MIXED), /freezing rails/);
+  assert.match(renderIssueTitle(MIXED), /2 shipped tickets awaiting completion/);
 });
 
 // ---- decisions ----
