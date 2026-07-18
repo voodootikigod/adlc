@@ -81,7 +81,10 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   const railsFreeze = entries.filter((t) => t?.blocker === 'rails-freeze');
   const manual = entries.filter((t) => t?.blocker !== 'rails-freeze');
 
-  // EVIDENCE STRENGTH decides what may be advertised as a bulk action.
+  // EVIDENCE STRENGTH — presentation only. It sorts entries so a reader can see
+  // at a glance which claims are solid, but it does NOT gate anything: see "why
+  // this report never certifies the command" below for why a gate computed here
+  // cannot hold.
   //
   // classifyTicket() reports two very different things under one `stale` flag:
   //   explicit status: "done"  -> the ticket SAYS it is finished. Authoritative.
@@ -90,21 +93,10 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   //                               ticket looks like when its work touches paths
   //                               that already exist, which is the common case.
   //
-  // Completing a ticket expires its rails. Advertising a one-line bulk command
-  // over heuristic evidence therefore invites an operator to disable rail
-  // protection on work that is still in flight — and an issue filed by a bot
-  // carries more apparent authority than a CLI someone chose to run.
-  //
-  // So this is an ALLOW-LIST: only an explicit done-status earns the bulk
-  // command. Inferred, missing, malformed, or unrecognized evidence all fall to
-  // "needs confirmation". Keying off `inferred:` instead would mean a renamed
-  // reason string, or an absent one, silently promotes a ticket into the
-  // rail-expiring instruction — failing OPEN on the one decision here that can
-  // destroy in-flight protection.
-  //
-  // And if the active-ticket pointer could not be resolved at all, nothing is
-  // clearable: we cannot say which ticket is in flight, so we cannot say which
-  // one the command would wrongly complete.
+  // Classification is still an ALLOW-LIST: only an explicit done-status counts as
+  // confirmed. Inferred, missing, malformed, or renamed reason strings all sort
+  // into "needs confirmation", so a change upstream degrades toward more caution
+  // in the report rather than less.
   const isConfirmedDone = (t) =>
     !activeTicketUnknown && String(t?.reason ?? '').startsWith('explicit status:');
   const isActive = (t) => activeTicketId != null && t?.id === activeTicketId;
@@ -113,15 +105,35 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   const confirmed = railsFreeze.filter((t) => !isActive(t) && isConfirmedDone(t));
   const unconfirmed = railsFreeze.filter((t) => !isActive(t) && !isConfirmedDone(t));
 
-  // The command may be shown ONLY when every rail-freezing entry is confirmed.
+  // WHY THIS REPORT NEVER CERTIFIES THE COMMAND AS SAFE TO RUN
   //
-  // `ticket-prune --ceremony` has no per-ticket filter: it completes EVERY stale
-  // rail-freezing ticket it finds. Splitting the report into sections therefore
-  // partitions the DISPLAY, not the command's effect. Rendering it beside an
-  // active or unconfirmed entry — under a heading saying that entry is excluded —
-  // would be a false safety claim an operator acts on, completing in-flight work
-  // and expiring its rails. Sectioning is presentation; this is the safety gate.
-  const bulkIsSafe = confirmed.length > 0 && activeEntries.length === 0 && unconfirmed.length === 0;
+  // Earlier revisions gated a ready-to-run bulk command on a `bulkIsSafe` check
+  // computed here. That certification cannot be sound, for two independent
+  // reasons, and a bot-filed instruction saying "safe to run as-is" is acted on:
+  //
+  //   1. TIME. This renders a snapshot at commit A. The command carries no ticket
+  //      IDs and no revision, and recomputes the stale set when the operator runs
+  //      it — possibly much later, against a moved checkout. A ticket added after
+  //      this issue was written enters the write set without ever appearing in the
+  //      report that called it safe. Workflow concurrency serializes the runs, not
+  //      the human action afterwards.
+  //
+  //   2. PLACE. The active-ticket quarantine reads `.adlc/current-ticket.json`,
+  //      which is gitignored and untracked. In the fresh CI checkout this job runs
+  //      in, the file is simply ABSENT — which resolves cleanly to "no active
+  //      ticket" rather than to "unknown". So CI reads an empty checkout as proof
+  //      that nothing is in flight, while real activity lives in contributors'
+  //      local worktrees where this job cannot see it.
+  //
+  // Both make CI the wrong vantage point to authorize a destructive bulk action.
+  // So the report does what it can honestly do — name the drift and its evidence
+  // — and hands the safety decision to the point of execution, where the local
+  // pointer and the current tree are both visible. The procedure is documented
+  // with its preconditions rather than presented as a vetted one-liner.
+  //
+  // The stronger fix belongs in ticket-prune: a revision-bound, per-ticket
+  // ceremony (explicit IDs + expected HEAD, refusing if the candidate set moved).
+  // That is a CLI contract change and is deliberately not attempted here.
 
   const sections = [];
 
@@ -135,10 +147,10 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
       '',
       '**Completing it would expire its rails while it is still being built.**',
       '',
-      'Because the ceremony command has no per-ticket filter — it completes every',
-      'stale rail-freezing ticket it finds — no bulk command is offered while this',
-      'ticket is listed. If it genuinely is finished, clear the active-ticket',
-      'pointer first, then re-run this check.',
+      'The ceremony command has no per-ticket filter — it completes every stale',
+      'rail-freezing ticket it finds, including this one. It is not excluded by',
+      'listing it here. If it is genuinely finished, clear the active-ticket',
+      'pointer first; otherwise complete the other tickets individually.',
       '',
       ...rowsFor(activeEntries),
       ''
@@ -147,7 +159,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
 
   if (confirmed.length) {
     sections.push(
-      `## Confirmed shipped — clearable by the ceremony (${confirmed.length})`,
+      `## Explicitly done (${confirmed.length})`,
       '',
       'These carry an explicit done-shaped `status`, so the ticket itself asserts it',
       'is finished. Under T36 rails expire only once a ticket is marked `completed: true`,',
@@ -155,22 +167,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
       '',
       '`rails-guard-ci.assertBaseTicketContractsPreserved` denies field changes to',
       'existing base tickets, so an ordinary PR cannot complete a railed ticket. This',
-      'is reserved for the protected-base admin ceremony.',
-      '',
-      ...(bulkIsSafe
-        ? ['Every rail-freezing entry below is confirmed done, so the bulk command is',
-           'safe to run as-is:',
-           '',
-           '```bash',
-           CEREMONY_CMD,
-           '```',
-           '',
-           'Review the diff before pushing.']
-        : ['> **No bulk command is offered on this run.** `ticket-prune --ceremony` has',
-           '> no per-ticket filter — it completes *every* stale rail-freezing ticket,',
-           '> which would include the entries listed in the other sections. Resolve',
-           '> those first (or complete these individually via the protected-base path),',
-           '> then re-run this check.']),
+      'is reserved for the protected-base admin ceremony — see the procedure below.',
       '',
       ...rowsFor(confirmed),
       ''
@@ -195,8 +192,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
       '',
       'Completing a ticket expires its rails, so confirm each one is genuinely done',
       'before including it. The ceremony command has no per-ticket filter: if any of',
-      'these is not finished, give it an explicit status (or complete the others',
-      'individually) rather than running the bulk command.',
+      'these is not finished, complete the finished ones individually instead.',
       '',
       ...rowsFor(unconfirmed),
       ''
@@ -219,6 +215,36 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
     );
   }
 
+  // Rendered whenever there is anything the ceremony could act on. It is a
+  // PROCEDURE with preconditions, never a vetted one-liner: see the "never
+  // certifies" note above for why this job cannot vouch for it.
+  const procedure = railsFreeze.length
+    ? [
+        '## Clearing these',
+        '',
+        '> **This check runs in CI and cannot tell you it is safe to run the command',
+        '> below.** Two things it cannot see: any ticket added since this issue was',
+        '> last updated (the command re-computes its own target set when you run it,',
+        '> and takes no ticket IDs), and whether a ticket is actively being built —',
+        '> `.adlc/current-ticket.json` is gitignored, so a CI checkout never has one',
+        '> and an empty checkout looks identical to "nothing in progress".',
+        '',
+        'Run the dry run first, from an up-to-date `main` checkout on the machine',
+        'where your active-ticket pointer lives, and confirm the listed set is what',
+        'you expect **now**:',
+        '',
+        '```bash',
+        'adlc ticket-prune --base-ref origin/main        # dry run: review the set',
+        CEREMONY_CMD,
+        '```',
+        '',
+        'Completing a ticket expires its rails. If the dry run names anything still',
+        'in flight, complete the finished tickets individually instead — the bulk',
+        'command has no per-ticket filter.',
+        '',
+      ]
+    : [];
+
   return [
     MARKER,
     '',
@@ -226,6 +252,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
     'which are still active in the ticket store.',
     '',
     ...sections,
+    ...procedure,
     '---',
     '',
     '_Maintained automatically by `.github/workflows/ceremony-drift.yml`. This issue',

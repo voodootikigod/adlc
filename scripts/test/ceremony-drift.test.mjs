@@ -39,6 +39,18 @@ const DONE = [
 const RUNNABLE = 'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main';
 const offersCommand = (body) => body.split('\n').some((l) => l.trim() === RUNNABLE);
 
+// The report documents the ceremony as a PROCEDURE WITH PRECONDITIONS. It never
+// certifies it as safe, because it cannot: it renders a snapshot at commit A
+// while the command recomputes its own target set whenever the operator runs it,
+// and `.adlc/current-ticket.json` is gitignored so a CI checkout can never see
+// whether anything is in flight. These assert the report keeps saying so.
+const CERTIFICATION_CLAIMS = [
+  /safe to run as-is/,
+  /excluded from the command/,
+  /no bulk command is offered/,
+];
+const makesNoSafetyClaim = (body) => CERTIFICATION_CLAIMS.every((re) => !re.test(body));
+
 // ---- rendering ----
 
 test('body names every drifting ticket and its frozen rails', () => {
@@ -51,8 +63,8 @@ test('body names every drifting ticket and its frozen rails', () => {
 
 test('body carries the exact ceremony command for EXPLICITLY done tickets', () => {
   const body = renderIssueBody(DONE);
-  assert.ok(offersCommand(body), 'explicit-status drift should offer the runnable command');
-  assert.match(body, /## Confirmed shipped/);
+  assert.ok(offersCommand(body), 'the procedure documents the runnable command');
+  assert.match(body, /## Explicitly done/);
 });
 
 // The core safety property. `inferred:` means "every scope glob already resolves
@@ -60,29 +72,32 @@ test('body carries the exact ceremony command for EXPLICITLY done tickets', () =
 // work touches existing paths. Completing such a ticket expires its rails
 // mid-build, and an instruction in a bot-filed issue carries more apparent
 // authority than a CLI someone chose to run.
-test('heuristic-only drift is NEVER given the bulk completion command', () => {
+test('heuristic-only drift is sorted as unconfirmed and never certified', () => {
   const body = renderIssueBody(DRIFT);
-  assert.ok(!offersCommand(body), 'heuristic-only drift must not offer the command');
   assert.match(body, /## Needs confirmation before completing \(2\)/);
   assert.match(body, /cannot distinguish "finished" from "in progress on existing files"/);
+  assert.ok(makesNoSafetyClaim(body));
 });
 
-test('the ACTIVE ticket is quarantined out of every completion instruction', () => {
+test('the ACTIVE ticket is listed first, under its own warning', () => {
   const body = renderIssueBody([...DONE, ...DRIFT], { activeTicketId: 'T42' });
   assert.match(body, /## ⚠ Currently active — do NOT complete \(1\)/);
   const activeIdx = body.indexOf('Currently active');
-  const confirmedIdx = body.indexOf('## Confirmed shipped');
-  assert.ok(activeIdx < confirmedIdx, 'the warning must precede any command');
-  // T42 must not appear under the clearable heading.
-  const confirmedSection = body.slice(confirmedIdx, body.indexOf('## Needs confirmation'));
-  assert.doesNotMatch(confirmedSection, /T42/);
+  const doneIdx = body.indexOf('## Explicitly done');
+  assert.ok(activeIdx < doneIdx, 'the warning must precede the rest of the report');
+  // The active ticket is not double-listed under the done heading.
+  const doneSection = body.slice(doneIdx, body.indexOf('## Needs confirmation'));
+  assert.doesNotMatch(doneSection, /T42/);
   assert.match(body, /expire its rails while it is still being built/);
+  assert.ok(makesNoSafetyClaim(body));
 });
 
-test('an explicitly-done ticket that is ALSO active stays quarantined', () => {
+test('an explicitly-done ticket that is ALSO active is flagged, not silently cleared', () => {
   const body = renderIssueBody(DONE, { activeTicketId: 'T7' });
   assert.match(body, /## ⚠ Currently active/);
-  assert.doesNotMatch(body, /ticket-prune --ceremony/);
+  // It must NOT claim the command skips it — the command has no per-ticket filter.
+  assert.match(body, /including this one/);
+  assert.ok(makesNoSafetyClaim(body));
 });
 
 test('body embeds the discovery marker', () => {
@@ -116,17 +131,17 @@ test('body states the completion rule correctly', () => {
 const CONFIRMED = { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' };
 const HEURISTIC = { id: 'T9', reason: 'inferred: scope resolves', rails: ['b/**'], blocker: 'rails-freeze' };
 
-test('confirmed alongside UNCONFIRMED withholds the command', () => {
+test('mixed confirmed/unconfirmed states the blast radius rather than certifying', () => {
   const body = renderIssueBody([CONFIRMED, HEURISTIC]);
-  assert.ok(!offersCommand(body), 'command would also complete the unconfirmed ticket');
-  assert.match(body, /No bulk command is offered on this run/);
   assert.match(body, /no per-ticket filter/);
+  assert.ok(makesNoSafetyClaim(body));
 });
 
-test('confirmed alongside an ACTIVE ticket withholds the command', () => {
+test('an ACTIVE ticket is surfaced with an explicit do-not-complete warning', () => {
   const body = renderIssueBody([CONFIRMED, HEURISTIC], { activeTicketId: 'T9' });
-  assert.ok(!offersCommand(body), 'command would also complete the in-flight ticket');
   assert.match(body, /## ⚠ Currently active/);
+  assert.match(body, /expire its rails while it is still being built/);
+  assert.ok(makesNoSafetyClaim(body));
 });
 
 // The active section must not promise an exclusion the command cannot deliver.
@@ -135,15 +150,17 @@ test('the active-ticket warning never claims the command excludes it', () => {
   assert.doesNotMatch(body, /excluded from the command below/);
 });
 
-test('confirmed plus a manual-decision entry still offers the command', () => {
-  // preexisting-completed-field entries are not rails-freeze, so --ceremony
-  // leaves them alone; withholding here would be needlessly restrictive.
+test('confirmed plus a manual-decision entry still renders the procedure', () => {
   const manual = { id: 'T8', reason: 'explicit status: "done"', rails: [], blocker: 'preexisting-completed-field' };
-  assert.ok(offersCommand(renderIssueBody([CONFIRMED, manual])));
+  const body = renderIssueBody([CONFIRMED, manual]);
+  assert.ok(offersCommand(body));
+  assert.ok(makesNoSafetyClaim(body));
 });
 
-test('an unresolvable pointer withholds the command even when all are confirmed', () => {
-  assert.ok(!offersCommand(renderIssueBody([CONFIRMED], { activeTicketUnknown: true })));
+test('an unresolvable pointer sorts everything as unconfirmed', () => {
+  const body = renderIssueBody([CONFIRMED], { activeTicketUnknown: true });
+  assert.match(body, /## Needs confirmation before completing \(1\)/);
+  assert.doesNotMatch(body, /## Explicitly done/);
 });
 
 // ---- title ----
@@ -237,7 +254,7 @@ const MIXED = [
 
 test('body separates the two blockers into their own sections', () => {
   const body = renderIssueBody(MIXED);
-  assert.match(body, /## Confirmed shipped — clearable by the ceremony \(1\)/); // rails-freeze
+  assert.match(body, /## Explicitly done \(1\)/);                        // rails-freeze
   assert.match(body, /## Needs a manual decision \(1\)/);                       // preexisting-completed-field
 });
 
@@ -245,12 +262,10 @@ test('body separates the two blockers into their own sections', () => {
 // to overwrite a deliberately-set `completed` value. Promising it clears
 // everything would be instructions that never stop being wrong, on an issue that
 // can never close.
-test('the ceremony command is not advertised as clearing manual-decision entries', () => {
+test('manual-decision entries are documented as NOT cleared by the ceremony', () => {
   const body = renderIssueBody(MIXED);
   const manualIdx = body.indexOf('## Needs a manual decision');
-  const cmdIdx = body.indexOf('ticket-prune --ceremony');
-  assert.ok(cmdIdx !== -1 && manualIdx !== -1);
-  assert.ok(cmdIdx < manualIdx, 'ceremony command must sit in the clearable section, above it');
+  assert.ok(manualIdx !== -1);
   assert.match(body.slice(manualIdx), /will \*\*not\*\* clear them/);
 });
 
@@ -274,7 +289,7 @@ test('title does not claim rails are frozen', () => {
 test('unknown or missing evidence falls back to needs-confirmation, not clearable', () => {
   for (const reason of [undefined, '', 'r', 'some future reason string', null]) {
     const body = renderIssueBody([{ id: 'TX', reason, rails: ['a/**'], blocker: 'rails-freeze' }]);
-    assert.doesNotMatch(body, /ticket-prune --ceremony/, `reason ${JSON.stringify(reason)} must not be clearable`);
+    assert.doesNotMatch(body, /## Explicitly done/, `reason ${JSON.stringify(reason)} must not read as confirmed`);
     assert.match(body, /## Needs confirmation before completing \(1\)/);
   }
 });
@@ -283,10 +298,9 @@ test('unknown or missing evidence falls back to needs-confirmation, not clearabl
 // conflicting pointer is ok:false (#196's fail-closed contract). When it cannot
 // be resolved we do not know which ticket is in flight, so nothing may be
 // advertised as safe to bulk-complete — not even explicitly-done entries.
-test('an unresolvable active-ticket pointer suppresses the bulk command entirely', () => {
+test('an unresolvable active-ticket pointer downgrades every entry to unconfirmed', () => {
   const body = renderIssueBody(DONE, { activeTicketUnknown: true });
-  assert.doesNotMatch(body, /ticket-prune --ceremony/);
-  assert.doesNotMatch(body, /## Confirmed shipped/);
+  assert.doesNotMatch(body, /## Explicitly done/);
   assert.match(body, /## Needs confirmation before completing \(1\)/);
   assert.match(body, /active-ticket pointer could not be resolved/);
 });
@@ -294,7 +308,27 @@ test('an unresolvable active-ticket pointer suppresses the bulk command entirely
 test('decideAction threads the unknown-pointer state into the body', () => {
   const d = decideAction({ drift: DONE, existingIssue: null, activeTicketUnknown: true });
   assert.equal(d.action, 'open');
-  assert.doesNotMatch(d.body, /ticket-prune --ceremony/);
+  assert.doesNotMatch(d.body, /## Explicitly done/);
+});
+
+// The procedure section is the one place the command appears. It must always
+// disclose what CI cannot see, and always lead with the dry run.
+test('the procedure discloses the CI blind spots and leads with a dry run', () => {
+  const body = renderIssueBody(DRIFT);
+  assert.ok(offersCommand(body), 'the procedure documents the command');
+  assert.match(body, /cannot tell you it is safe to run the command/);
+  assert.match(body, /gitignored/);                       // the place blind spot
+  assert.match(body, /re-computes its own target set/);   // the time blind spot
+  const dryIdx = body.indexOf('# dry run');
+  assert.ok(dryIdx !== -1 && dryIdx < body.indexOf(RUNNABLE), 'dry run must come first');
+  assert.ok(makesNoSafetyClaim(body));
+});
+
+test('a drift set with nothing rail-freezing renders no procedure at all', () => {
+  const manualOnly = [{ id: 'T8', reason: 'explicit status: "done"', rails: [], blocker: 'preexisting-completed-field' }];
+  const body = renderIssueBody(manualOnly);
+  assert.doesNotMatch(body, /## Clearing these/);
+  assert.ok(!offersCommand(body));
 });
 
 // ---- decisions ----
