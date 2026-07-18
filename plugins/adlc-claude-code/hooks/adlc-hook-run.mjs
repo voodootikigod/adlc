@@ -34,6 +34,7 @@ if (!existsSync(hookScript)) {
 const mode = process.argv[2] ?? '';
 const TIMEOUTS_MS = {
   preflight: 55_000,  // hooks.json: 60 s
+  context: 10_000,    // hooks.json: 15 s — T52: PreCompact/PostCompact/SubagentStart/SubagentStop
   flail: 25_000,      // hooks.json: 30 s
   manifest: 25_000,   // hooks.json: 30 s
   review: 25_000,     // hooks.json: 30 s

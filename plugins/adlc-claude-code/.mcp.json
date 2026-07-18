@@ -1,0 +1,6 @@
+{
+  "adlc": {
+    "command": "adlc",
+    "args": ["mcp-server"]
+  }
+}

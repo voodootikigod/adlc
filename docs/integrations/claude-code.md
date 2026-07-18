@@ -97,6 +97,7 @@ supplies independent model judgment with cross-lens verification.
 | Hook | Event | Behavior |
 | --- | --- | --- |
 | preflight | SessionStart | Advisory: warns if the environment isn't ready for fan-out. |
+| **ticket-context re-injection** | SessionStart, PreCompact, PostCompact, SubagentStart, SubagentStop | Advisory: re-surfaces the active ticket's id, title, rail-protection status, and scope so a compaction or subagent boundary can't silently drop rail-protection awareness — the same summary a fresh `adlc coldstart`-certified session would see. |
 | flail-detection | PostToolUse | Advisory: flags repeated-error / churn loops over a bounded recent window of the transcript. |
 | gate-manifest audit | Stop | Advisory: warns only if the gate-evidence chain is broken. |
 | **adversarial-review trigger** | Stop | Advisory by default: diffs the working tree/branch against the [ADR-0007](../adr/0007-multimodel-adversarial-review.md) §1 risk-tier path patterns (auth/trust boundary, security controls/deny paths, secrets, data-loss ops, schema/migration, CI/CD/supply-chain) and warns if a risk-gated change has no `adversarial-review` gate-manifest record. This is the mechanical trigger [ADR-0005](../adr/0005-adversarial-design-review-gate.md)/[ADR-0007](../adr/0007-multimodel-adversarial-review.md) deferred pending operator-reliance proving insufficient — set `ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1` to make it block (Stop `decision: "block"`) instead of just warn. |
@@ -136,6 +137,16 @@ overrides the required `rails-guard` check (admin merge) — which is the correc
 posture, since changing a frozen rail is exactly the kind of decision that should
 require a human, not an environment variable. Once any rail is declared,
 `.adlc/tickets.json` itself is frozen so the rail set can't be quietly edited away.
+
+### MCP server
+
+The plugin bundles an MCP server (`plugins/adlc-claude-code/.mcp.json`,
+auto-discovered by Claude Code at the plugin root — no `plugin.json` entry
+needed) exposing the same `adlc_gate`/`adlc_prosecute` tools the Codex
+integration ships, over the stable `adlc mcp-server` entrypoint. It shells to
+the globally-installed `adlc` binary rather than resolving `@adlc/cli` as a
+local npm dependency, so it works the same way whether the plugin was
+installed via the `plugins` installer or Claude Code's native marketplace.
 
 ## CI backstops (recommended)
 

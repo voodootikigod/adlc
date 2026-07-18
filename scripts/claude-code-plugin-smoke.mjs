@@ -469,6 +469,23 @@ if (!testEntrypoints.some((source) => source.includes('plugins/adlc-claude-code/
   fail('the root "test" script (or the runner it delegates to) must run plugins/adlc-claude-code/lib/test/*.test.mjs so the prosecution convergence contract is exercised in CI');
 }
 
+// --- T52: MCP server, auto-discovered by location (.mcp.json at plugin root) ---
+// per the live Claude Code plugins reference — NOT a plugin.json pointer field
+// (that is Codex's convention, not this platform's).
+const mcpConfigPath = join(repo, 'plugins/adlc-claude-code/.mcp.json');
+if (!existsSync(mcpConfigPath)) fail('missing plugins/adlc-claude-code/.mcp.json');
+const mcpConfig = readJson(mcpConfigPath);
+if (mcpConfig.adlc?.command !== 'adlc' || JSON.stringify(mcpConfig.adlc.args) !== JSON.stringify(['mcp-server'])) {
+  fail('.mcp.json must use the stable adlc mcp-server entrypoint (shells to the globally-installed adlc binary, not a locally-resolved import)');
+}
+const mcpServerPath = join(repo, 'plugins/adlc-claude-code/mcp/server.mjs');
+if (!existsSync(mcpServerPath)) fail('missing plugins/adlc-claude-code/mcp/server.mjs');
+const mcpServerSource = readFileSync(mcpServerPath, 'utf8');
+if (!/runStdioServer/.test(mcpServerSource)) fail('plugins/adlc-claude-code/mcp/server.mjs must delegate to @adlc/cli/lib/mcp-server.mjs runStdioServer');
+if (readFileSync(pluginPath, 'utf8').includes('mcpServers')) {
+  fail('plugin.json must NOT declare an mcpServers pointer field — Claude Code auto-discovers .mcp.json by its fixed plugin-root location');
+}
+
 // --- plugins/adlc-claude-code/skills/adlc/SKILL.md + frontmatter + sentinel ---
 const skillPath = join(repo, 'plugins/adlc-claude-code/skills/adlc/SKILL.md');
 if (!existsSync(skillPath)) fail('missing plugins/adlc-claude-code/skills/adlc/SKILL.md');
@@ -674,6 +691,7 @@ console.log(JSON.stringify({
   rootMarketplaceJson: rootMarketplacePath,
   pluginJson: pluginPath,
   hooksJson: hooksConfigPath,
+  mcpServers: 1,
   hookTypes: Object.keys(hooks),
   commands: requiredCommands,
   agents: ['prosecutor.md', ...requiredProsecutionAgents],

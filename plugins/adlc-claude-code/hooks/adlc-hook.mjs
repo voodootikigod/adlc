@@ -217,12 +217,48 @@ function main() {
   }
 
   if (MODE === 'preflight') return preflight();
+  if (MODE === 'context') return context(input);
   if (MODE === 'flail') return flail(input);
   if (MODE === 'manifest') return manifest();
   if (MODE === 'review') return review(input);
   if (MODE === 'rails') return rails(input);
   if (MODE === 'buildgate') return buildgate(input);
   // unknown mode → no-op
+}
+
+// SessionStart/PreCompact/PostCompact/SubagentStart/SubagentStop — re-inject the
+// active-ticket summary so a compaction or subagent boundary doesn't silently
+// drop rail-protection awareness. T52: mirrors plugins/adlc-codex/hooks/
+// adlc-lifecycle.mjs's stateContext() — same summary shape, same "manifest is
+// gate truth" reminder — adapted to this file's emit()/hookOutput conventions.
+function context(input) {
+  if (!existsSync('.adlc')) return; // not an ADLC repo → silent
+  let current;
+  try {
+    current = JSON.parse(readFileSync(join('.adlc', 'current-ticket.json'), 'utf8'));
+  } catch {
+    return; // no/unparseable pointer → nothing to inject, stay silent (advisory)
+  }
+  const id = current?.id ?? current?.ticket ?? current?.ticketId;
+  if (!id) return;
+  let ticket;
+  try {
+    ticket = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }).tickets.find((t) => t.id === id);
+  } catch {
+    return; // store unreadable → advisory, stay silent rather than error
+  }
+  const msg = ticket
+    ? (() => {
+        const rails = ticket.rails ?? [];
+        const status = ticket.completed === true ? 'completed' : rails.length > 0 ? 'rail protection auto-active' : 'no rails declared';
+        return `ADLC current ticket: ${id} — ${ticket.title}. Status: ${status}. Scope: ${(ticket.scope ?? []).join(', ') || '(none)'}. Treat .adlc/manifest.jsonl as gate truth; narration cannot pass a phase.`;
+      })()
+    : `ADLC current ticket ${id} is not present in the ticket store.`;
+  const eventName = typeof input.hook_event_name === 'string' && input.hook_event_name ? input.hook_event_name : 'SessionStart';
+  emit({
+    hookSpecificOutput: { hookEventName: eventName, additionalContext: msg },
+    systemMessage: msg,
+  });
 }
 
 // SessionStart — surface only genuine environment failures, stay silent when ready.
