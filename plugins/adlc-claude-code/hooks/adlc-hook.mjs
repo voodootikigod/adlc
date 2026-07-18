@@ -233,13 +233,10 @@ function main() {
 // gate truth" reminder — adapted to this file's emit()/hookOutput conventions.
 function context(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo → silent
-  let current;
-  try {
-    current = JSON.parse(readFileSync(join('.adlc', 'current-ticket.json'), 'utf8'));
-  } catch {
-    return; // no/unparseable pointer → nothing to inject, stay silent (advisory)
-  }
-  const id = current?.id ?? current?.ticket ?? current?.ticketId;
+  // Resolved through the canonical pointer contract (generated-active-ticket.mjs),
+  // not a hand-parse — see resolveActiveTicketIdAdvisory()'s own doc comment for
+  // why this degrades to "no active ticket" rather than failing closed here.
+  const id = resolveActiveTicketIdAdvisory();
   if (!id) return;
   let ticket;
   try {

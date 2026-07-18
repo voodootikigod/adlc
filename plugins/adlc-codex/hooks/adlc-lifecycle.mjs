@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
-import { readActiveTicketPointer } from './generated-active-ticket.mjs';
+import { readActiveTicketPointer, resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 async function stdinJson() {
   const chunks = [];
@@ -245,20 +245,16 @@ export function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
 }
 
 /**
- * Advisory active-ticket resolution: unlike the enforcing hooks (rails-guard,
- * build-gate), a conflict here degrades to null rather than failing the Stop
- * hook — an advisory notice must never crash the session's end.
+ * Advisory active-ticket resolution through the canonical pointer contract
+ * (generated-active-ticket.mjs) — not a hand-parse. Unlike the enforcing hooks
+ * (rails-guard, build-gate), any failure here (malformed pointer, conflict)
+ * degrades to null rather than failing the Stop hook — an advisory notice
+ * must never crash the session's end.
  */
 export function resolveActiveTicketIdAdvisory(root, env = process.env) {
-  const envTicket = (env.ADLC_TICKET ?? '').trim() || null;
-  let fileTicket = null;
-  try {
-    const raw = JSON.parse(readFileSync(join(root, '.adlc', 'current-ticket.json'), 'utf8'));
-    const v = typeof raw === 'string' ? raw : (raw?.id ?? raw?.ticket);
-    fileTicket = (v ?? '').toString().trim() || null;
-  } catch { /* absent or malformed → no file ticket, degrade rather than fail */ }
-  if (envTicket && fileTicket && envTicket !== fileTicket) return null; // conflict → degrade
-  return envTicket ?? fileTicket;
+  const resolved = resolveActiveTicketIdCanonical({ root, env });
+  if (!resolved.ok) return null; // advisory: degrade rather than block
+  return resolved.value?.id ?? null;
 }
 
 /**

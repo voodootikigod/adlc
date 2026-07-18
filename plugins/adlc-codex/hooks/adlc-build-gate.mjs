@@ -12,14 +12,16 @@
 // A drift test (hooks/test/build-gate.test.mjs) pins this copy against the
 // real packages/build-gate exports.
 //
-// KEEP IN SYNC — resolveActiveTicketId is a verbatim inline copy of
-// adlc-rails-guard.mjs's own resolveActiveTicketId(). Not imported: that file
-// is a top-level executable script (reads stdin, calls process.exit), not a
-// module structured for import, so importing it would run its side effects.
+// Active-ticket resolution goes through the canonical pointer contract
+// (generated-active-ticket.mjs, generated from packages/tickets/lib/pointer.mjs)
+// via the same pattern adlc-rails-guard.mjs uses — not a hand-rolled parse.
+// scripts/test/ticket-store-boundary.test.mjs enforces that the pointer has
+// exactly one reader across the whole repo.
 
 import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
+import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 function fail(message) {
   console.error(`adlc-build-gate: ${message}`);
@@ -33,27 +35,12 @@ async function stdinJson() {
   return text ? JSON.parse(text) : {};
 }
 
-function readOptionalJson(path) {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch (err) {
-    if (err?.code === 'ENOENT') return undefined;
-    return undefined; // malformed pointer file — treated as absent by this gate (rails-guard's fail() covers tamper detection for edits)
-  }
-}
-
-// KEEP IN SYNC with adlc-rails-guard.mjs's resolveActiveTicketId().
+// Enforcing gate: a malformed/conflicting pointer fails closed, matching
+// adlc-rails-guard.mjs's resolveActiveTicketId().
 function resolveActiveTicketId() {
-  const envTicket = process.env.ADLC_TICKET;
-  let fileTicket;
-  const current = readOptionalJson('.adlc/current-ticket.json');
-  if (current) {
-    fileTicket = current.id ?? current.ticket ?? current.ticketId;
-  }
-  if (envTicket && fileTicket && envTicket !== fileTicket) {
-    fail(`ADLC_TICKET (${envTicket}) conflicts with .adlc/current-ticket.json (${fileTicket})`);
-  }
-  return { id: envTicket ?? fileTicket };
+  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
+  if (!resolved.ok) fail(resolved.message);
+  return { id: resolved.value?.id ?? undefined };
 }
 
 // ---------------------------------------------------------------------------
