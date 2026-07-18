@@ -21,6 +21,7 @@
     "agent/",
     "skill/",
     "gate-bins.mjs",
+    "generated-active-ticket.mjs",
     "rails-checker.mjs",
     "README.md",
     "LICENSE"
