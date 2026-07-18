@@ -72,8 +72,12 @@ export const routerModel = {
       includes: ["minimal:adversarial-loop"],
       local: {
         "body": "\nADLC_CODEX_SENTINEL_PHASE_ROUTER_V1\n\n# ADLC Router\n\nClassify the work before acting:\n\n- Trivial: direct edit, existing rails, one prosecution pass.\n- Bounded: write or identify rails, build, prosecute-lite.\n- Substantial: P1-P7 full lifecycle.\n- Architectural: P1 design alternatives, then full lifecycle.\n\nUse deterministic ADLC CLIs for pass/fail. Skills may recommend commands; they do not\ndeclare gates complete unless the relevant CLI and `.adlc/manifest.jsonl` evidence pass.\n\nStart with:\n\n```sh\nadlc preflight --json\n```\n\nFor strict phase assertions, use:\n\n```sh\nadlc run <p1|p2|p3|p4|p5|p6|p7> --dir .adlc --json\n```\n\nP3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for\nthose phases.\n\n",
+        // Codex-specific (T50): the native Stop hook this plugin ships. NOT shared
+        // with pi's "minimal" layout below -- pi has no equivalent hook, so this is
+        // a codex-only local section, not a `shared` block.
+        "codex:review-nudge": "\nAt session Stop, a native hook automatically checks whether the session's changed\nfiles fall in a risk-gated category (auth/trust-boundary, security-control deny-path,\nsecrets, data-loss/destructive, schema-migration, CI/CD supply-chain) with no\nrecorded `adversarial-review` gate-manifest entry, and surfaces an advisory nudge\nnaming the command to run and record. This is advisory only — it never blocks — and\nis scoped to the active ticket (a record for a different ticket does not silence it).\n",
       },
-      layout: ["body","minimal:adversarial-loop"],
+      layout: ["body","minimal:adversarial-loop","codex:review-nudge"],
     },
     "pi": {
       path: "plugins/adlc-pi/skills/adlc/SKILL.md",
