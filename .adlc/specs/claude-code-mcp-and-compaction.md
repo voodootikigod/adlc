@@ -17,18 +17,35 @@ gets automatically.
 
 ## Verified platform facts
 
-Confirmed against the live Claude Code hooks reference (code.claude.com/docs/en/hooks) —
-do not re-derive this from memory during implementation; re-check the live docs if this
-spec is stale by the time T52 is built:
+Confirmed against the live Claude Code plugins reference
+(code.claude.com/docs/en/plugins-reference) and hooks reference
+(code.claude.com/docs/en/hooks) — do not re-derive this from memory during
+implementation; re-check the live docs if this spec is stale by the time
+T52 is built. Two corrections were made against an earlier draft of this
+spec that guessed instead of checking:
 
-- Claude Code plugin manifests register MCP servers via an `mcpServers` field (either
-  inline in `plugin.json` or via a referenced file), following the same convention
-  documented for Claude Code plugins generally — not Codex's `.mcp.json`-file-reference
-  form specifically, though the shape is compatible enough that
-  `plugins/adlc-claude-code/.claude-plugin/plugin.json` gets an `"mcpServers":
-  "./.mcp.json"` entry pointing at a new `plugins/adlc-claude-code/.mcp.json`, matching
-  the `{ "adlc": { "command": "adlc", "args": ["mcp-server"] } }` shape Codex already
-  uses (same underlying `@adlc/cli mcp-server` entrypoint, same tool surface).
+- **MCP registration is auto-discovery by file location, not a plugin.json
+  pointer field.** The reference states: "Location: `.mcp.json` in plugin
+  root, or inline in plugin.json" and the file-locations table lists
+  `.mcp.json` at the plugin root directly (sibling to `.claude-plugin/`,
+  same level as `hooks/`) with **no** separate manifest entry required — the
+  plugin loader discovers it by its fixed location. An earlier draft of this
+  spec assumed Claude Code needed an explicit `"mcpServers": "./.mcp.json"`
+  pointer in `.claude-plugin/plugin.json`, mirroring Codex's own convention
+  (`.codex-plugin/plugin.json` does carry that pointer) — Claude Code does
+  not need or use that pointer field. `plugins/adlc-claude-code/.claude-plugin/
+  plugin.json` needs NO change for the MCP server to be discovered; only
+  `plugins/adlc-claude-code/.mcp.json` itself needs to exist.
+- **The `.mcp.json` config shells to the globally-installed `adlc` binary,
+  not a locally-resolved npm import** — `{ "adlc": { "command": "adlc",
+  "args": ["mcp-server"] } }`, identical to Codex's `.mcp.json`. This sidesteps
+  the "hooks can't resolve npm packages from their installed location"
+  constraint entirely (confirmed for T49/T50): there is no local resolution
+  involved, `adlc` is on PATH from the `npm install -g @adlc/cli` every
+  harness already requires. `plugins/adlc-claude-code/mcp/server.mjs`
+  (mirroring Codex's own `mcp/server.mjs`) is a secondary "delegate" file for
+  interface parity, not the path `.mcp.json` actually invokes — do not
+  over-index on it being load-bearing; the `.mcp.json` entry is what matters.
 - Claude Code's documented hook events include `PreToolUse`, `PostToolUse`,
   `Notification`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, and —
   contrary to an earlier draft of this spec, which wrongly assumed otherwise —
@@ -46,8 +63,8 @@ spec is stale by the time T52 is built:
    '@adlc/cli/lib/mcp-server.mjs'; await runStdioServer();`, identical in structure to
    `plugins/adlc-codex/mcp/server.mjs`.
 2. `plugins/adlc-claude-code/.mcp.json` — `{ "adlc": { "command": "adlc", "args":
-   ["mcp-server"] } }`, and `plugins/adlc-claude-code/.claude-plugin/plugin.json` gains
-   `"mcpServers": "./.mcp.json"`.
+   ["mcp-server"] } }`, at the plugin root (auto-discovered by location; no
+   `.claude-plugin/plugin.json` change needed for this).
 3. A `context` mode added to `plugins/adlc-claude-code/hooks/adlc-hook.mjs` (or a new
    focused hook file), reusing the same current-ticket-summary logic Codex's
    `adlc-lifecycle.mjs` `stateContext()` already implements, wired to `PreCompact`,
@@ -64,10 +81,11 @@ spec is stale by the time T52 is built:
 
 ## Acceptance criteria
 
-- **AC1:** `plugins/adlc-claude-code/mcp/server.mjs` exists, is wired via `mcpServers` in
-  `plugin.json`, and imports cleanly. VERIFY: a smoke test analogous to
-  `scripts/claude-code-plugin-smoke.mjs` asserting the MCP registration and successful
-  module import.
+- **AC1:** `plugins/adlc-claude-code/.mcp.json` exists at the plugin root with the
+  `adlc`/`mcp-server` entry, and `plugins/adlc-claude-code/mcp/server.mjs` exists and
+  imports cleanly. VERIFY: a smoke test analogous to `scripts/claude-code-plugin-smoke.mjs`
+  asserting `.mcp.json`'s presence/shape and successful module import — not a
+  `plugin.json` pointer, which this platform does not use.
 - **AC2:** A ticket with declared rails produces the same context summary content via
   Claude Code's new `PreCompact`/`PostCompact`/`SubagentStart`/`SubagentStop` hook as
   Codex's `adlc-lifecycle.mjs` `context` mode produces for the same ticket-state
