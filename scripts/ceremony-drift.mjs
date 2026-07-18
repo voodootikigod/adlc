@@ -95,6 +95,19 @@ export function renderIssueTitle(needsCeremony) {
 }
 
 /**
+ * Pick this job's tracking issue out of the open-issue list by its embedded
+ * marker. Pure so it is testable without a GitHub token — and it must be tested:
+ * if this ever fails to match an issue that exists, the job opens a DUPLICATE on
+ * every run, which is precisely the churn the idempotence design exists to
+ * prevent. Tolerates entries with a missing/non-string body (the API shape is
+ * not guaranteed) rather than throwing mid-run.
+ * @param {{number: number, title?: string, body?: unknown}[]} issues
+ */
+export function selectTrackingIssue(issues) {
+  return (issues ?? []).find((i) => typeof i?.body === 'string' && i.body.includes(MARKER)) ?? null;
+}
+
+/**
  * Decide what to do with the tracking issue. Pure — no I/O — so the idempotence
  * and close-on-clear contracts are testable without a GitHub token.
  * @param {{drift: object[], existingIssue: {number: number, title: string, body: string} | null}} input
@@ -128,8 +141,7 @@ const gh = (args, input) =>
 
 function findExistingIssue() {
   const raw = gh(['issue', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body']);
-  const issues = JSON.parse(raw);
-  return issues.find((i) => typeof i.body === 'string' && i.body.includes(MARKER)) ?? null;
+  return selectTrackingIssue(JSON.parse(raw));
 }
 
 async function main() {
