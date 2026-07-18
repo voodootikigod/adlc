@@ -41,7 +41,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0 # full history so the base ref resolves
+          # ALWAYS main, for every trigger. workflow_dispatch can be launched
+          # against any branch or tag, and checkout defaults to the triggering
+          # ref — which would load that branch's ticket store while the tracker
+          # being rewritten is repository-wide. Someone dispatching from a
+          # feature branch could then close or rewrite the authoritative issue
+          # from a non-authoritative snapshot.
+          ref: main
+          fetch-depth: 0 # full history so scope-vs-tracked-files resolves
+          # Do NOT leave the job's issues:write token in .git/config. Anything
+          # that runs later in the job (notably dependency install scripts) could
+          # otherwise recover it and mutate issues as github-actions[bot].
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -49,15 +60,19 @@ jobs:
           node-version: 20
 
       - name: Install
-        run: npm install # links @adlc/core and @adlc/tickets workspaces
-
-      - name: Fetch base ref
-        # Explicit refspec so origin/main exists as a remote-tracking ref the
-        # drift detector can resolve (mirrors the rails-guard job).
-        run: git fetch --no-tags origin "main:refs/remotes/origin/main"
+        # `ci` for a lockfile-exact tree, `--ignore-scripts` so no dependency
+        # lifecycle script executes in a job that holds issues:write. The five
+        # packages in this lockfile with install scripts (esbuild, sharp,
+        # protobufjs, ...) are not needed here: this job only imports
+        # @adlc/core and @adlc/tickets, which npm links itself without scripts.
+        run: npm ci --ignore-scripts
 
       - name: Report ceremony drift
         env:
+          # The ONLY step given the token. Nothing before it can reach one.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASE_REF: origin/main
+          # HEAD *is* main here (checkout is pinned above), so drift is computed
+          # against exactly the snapshot that was checked out — no mixing a
+          # branch ticket store with a main base ref.
+          BASE_REF: HEAD
         run: node scripts/ceremony-drift.mjs
