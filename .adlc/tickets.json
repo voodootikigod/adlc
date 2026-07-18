@@ -1067,8 +1067,6 @@
       "edges": [],
       "id": "T49",
       "rails": [
-        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
-        "plugins/adlc-claude-code/hooks/adlc-hook-run.mjs",
         "packages/build-gate/**"
       ],
       "scope": [
@@ -1100,9 +1098,7 @@
       "edges": [],
       "id": "T50",
       "rails": [
-        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
-        "plugins/adlc-cursor/hooks/adlc-stop.mjs",
-        "packages/core/lib/risk-tier.mjs"
+        "plugins/adlc-cursor/hooks/adlc-stop.mjs"
       ],
       "scope": [
         "plugins/adlc-codex/hooks/**",
