@@ -113,6 +113,16 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   const confirmed = railsFreeze.filter((t) => !isActive(t) && isConfirmedDone(t));
   const unconfirmed = railsFreeze.filter((t) => !isActive(t) && !isConfirmedDone(t));
 
+  // The command may be shown ONLY when every rail-freezing entry is confirmed.
+  //
+  // `ticket-prune --ceremony` has no per-ticket filter: it completes EVERY stale
+  // rail-freezing ticket it finds. Splitting the report into sections therefore
+  // partitions the DISPLAY, not the command's effect. Rendering it beside an
+  // active or unconfirmed entry — under a heading saying that entry is excluded —
+  // would be a false safety claim an operator acts on, completing in-flight work
+  // and expiring its rails. Sectioning is presentation; this is the safety gate.
+  const bulkIsSafe = confirmed.length > 0 && activeEntries.length === 0 && unconfirmed.length === 0;
+
   const sections = [];
 
   if (activeEntries.length) {
@@ -123,9 +133,12 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
       'flight. It appears here only because its declared scope already resolves to',
       'tracked files, which is what in-progress work on existing paths looks like.',
       '',
-      '**Completing it would expire its rails while it is still being built.** It is',
-      'excluded from the command below. If it genuinely is finished, complete it on',
-      'its own after clearing the active-ticket pointer.',
+      '**Completing it would expire its rails while it is still being built.**',
+      '',
+      'Because the ceremony command has no per-ticket filter — it completes every',
+      'stale rail-freezing ticket it finds — no bulk command is offered while this',
+      'ticket is listed. If it genuinely is finished, clear the active-ticket',
+      'pointer first, then re-run this check.',
       '',
       ...rowsFor(activeEntries),
       ''
@@ -142,14 +155,22 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
       '',
       '`rails-guard-ci.assertBaseTicketContractsPreserved` denies field changes to',
       'existing base tickets, so an ordinary PR cannot complete a railed ticket. This',
-      'is reserved for the protected-base admin ceremony:',
+      'is reserved for the protected-base admin ceremony.',
       '',
-      '```bash',
-      CEREMONY_CMD,
-      '```',
-      '',
-      '> The command completes **every** rail-freezing ticket it finds, including any',
-      '> listed under "Needs confirmation" below. Review the diff before pushing.',
+      ...(bulkIsSafe
+        ? ['Every rail-freezing entry below is confirmed done, so the bulk command is',
+           'safe to run as-is:',
+           '',
+           '```bash',
+           CEREMONY_CMD,
+           '```',
+           '',
+           'Review the diff before pushing.']
+        : ['> **No bulk command is offered on this run.** `ticket-prune --ceremony` has',
+           '> no per-ticket filter — it completes *every* stale rail-freezing ticket,',
+           '> which would include the entries listed in the other sections. Resolve',
+           '> those first (or complete these individually via the protected-base path),',
+           '> then re-run this check.']),
       '',
       ...rowsFor(confirmed),
       ''

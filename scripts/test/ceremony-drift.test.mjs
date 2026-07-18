@@ -32,6 +32,13 @@ const DONE = [
   { id: 'T7', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
 ];
 
+// Asserting on /ticket-prune --ceremony/ is NOT sufficient: the body also
+// MENTIONS the command in prose explaining why it is being withheld. A substring
+// check would then read "the command is offered" from text saying the opposite.
+// This looks for the runnable line inside the fenced block.
+const RUNNABLE = 'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main';
+const offersCommand = (body) => body.split('\n').some((l) => l.trim() === RUNNABLE);
+
 // ---- rendering ----
 
 test('body names every drifting ticket and its frozen rails', () => {
@@ -44,7 +51,7 @@ test('body names every drifting ticket and its frozen rails', () => {
 
 test('body carries the exact ceremony command for EXPLICITLY done tickets', () => {
   const body = renderIssueBody(DONE);
-  assert.match(body, /ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin\/main/);
+  assert.ok(offersCommand(body), 'explicit-status drift should offer the runnable command');
   assert.match(body, /## Confirmed shipped/);
 });
 
@@ -55,7 +62,7 @@ test('body carries the exact ceremony command for EXPLICITLY done tickets', () =
 // authority than a CLI someone chose to run.
 test('heuristic-only drift is NEVER given the bulk completion command', () => {
   const body = renderIssueBody(DRIFT);
-  assert.doesNotMatch(body, /ticket-prune --ceremony/);
+  assert.ok(!offersCommand(body), 'heuristic-only drift must not offer the command');
   assert.match(body, /## Needs confirmation before completing \(2\)/);
   assert.match(body, /cannot distinguish "finished" from "in progress on existing files"/);
 });
@@ -95,6 +102,48 @@ test('body states the completion rule correctly', () => {
   const body = renderIssueBody(DONE);
   assert.match(body, /marked `completed: true`/);
   assert.doesNotMatch(body, /marked `completed: false`/);
+});
+
+// ---- the bulk command's blast radius ----
+//
+// `ticket-prune --ceremony` has NO per-ticket filter: it completes every stale
+// rail-freezing ticket. Splitting the report into sections partitions the
+// DISPLAY only. Rendering the command next to an "excluded" entry would be a
+// false safety claim an operator acts on — completing in-flight work and
+// expiring its rails. So the command appears only when EVERY rail-freezing entry
+// is confirmed done.
+
+const CONFIRMED = { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' };
+const HEURISTIC = { id: 'T9', reason: 'inferred: scope resolves', rails: ['b/**'], blocker: 'rails-freeze' };
+
+test('confirmed alongside UNCONFIRMED withholds the command', () => {
+  const body = renderIssueBody([CONFIRMED, HEURISTIC]);
+  assert.ok(!offersCommand(body), 'command would also complete the unconfirmed ticket');
+  assert.match(body, /No bulk command is offered on this run/);
+  assert.match(body, /no per-ticket filter/);
+});
+
+test('confirmed alongside an ACTIVE ticket withholds the command', () => {
+  const body = renderIssueBody([CONFIRMED, HEURISTIC], { activeTicketId: 'T9' });
+  assert.ok(!offersCommand(body), 'command would also complete the in-flight ticket');
+  assert.match(body, /## ⚠ Currently active/);
+});
+
+// The active section must not promise an exclusion the command cannot deliver.
+test('the active-ticket warning never claims the command excludes it', () => {
+  const body = renderIssueBody([CONFIRMED, HEURISTIC], { activeTicketId: 'T9' });
+  assert.doesNotMatch(body, /excluded from the command below/);
+});
+
+test('confirmed plus a manual-decision entry still offers the command', () => {
+  // preexisting-completed-field entries are not rails-freeze, so --ceremony
+  // leaves them alone; withholding here would be needlessly restrictive.
+  const manual = { id: 'T8', reason: 'explicit status: "done"', rails: [], blocker: 'preexisting-completed-field' };
+  assert.ok(offersCommand(renderIssueBody([CONFIRMED, manual])));
+});
+
+test('an unresolvable pointer withholds the command even when all are confirmed', () => {
+  assert.ok(!offersCommand(renderIssueBody([CONFIRMED], { activeTicketUnknown: true })));
 });
 
 // ---- title ----
