@@ -1121,9 +1121,7 @@
       "id": "T51",
       "rails": [
         "plugins/adlc-claude-code/skills/**",
-        "plugins/adlc-claude-code/commands/**",
-        "plugins/adlc-codex/skills/adlc/SKILL.md",
-        "scripts/router/router-model.mjs"
+        "plugins/adlc-claude-code/commands/**"
       ],
       "scope": [
         "plugins/adlc-codex/skills/adlc-spec/SKILL.md",
@@ -1131,7 +1129,8 @@
         "plugins/adlc-codex/skills/test/**",
         "docs/integrations/codex.md",
         "apps/docs/content/docs/integrations/codex.mdx",
-        ".adlc/specs/codex-skill-depth-parity.md"
+        ".adlc/specs/codex-skill-depth-parity.md",
+        "package.json"
       ],
       "title": "Enrich Codex's satellite skills (P0 ticket authoring + P7 maintenance) — NOT the router"
     },
