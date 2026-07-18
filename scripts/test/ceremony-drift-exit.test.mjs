@@ -1,145 +1,212 @@
-// ceremony-drift-exit.test.mjs — the exit-code contract of the drift reporter.
+// ceremony-drift-exit.test.mjs — the reporter's process-level contracts.
 //
 // Drives the real script as a subprocess with a stubbed `gh` on PATH, because
-// the property under test is the process exit code, which cannot be observed by
-// importing the module.
+// the properties under test (exit code, which gh calls are made) cannot be
+// observed by importing the module.
 //
-// The contract has two halves, and conflating them was a real defect caught in
-// review: drift EXISTING must never fail the job (that would recreate the
-// blocking-gate problem the design exists to avoid), while the REPORTER being
-// broken must fail loudly (otherwise a revoked token or API error disables the
-// signal indefinitely while every scheduled run still looks green).
+// HERMETIC BY CONSTRUCTION. Every case builds its own throwaway git repo with an
+// explicit ticket fixture. An earlier version ran against THIS repository's live
+// ticket store and hard-coded "drift exists" — so the moment the ceremony
+// actually succeeded and drift reached zero, the reporter would correctly close
+// the issue and this suite would fail, breaking `npm test` for every later PR
+// precisely because the feature worked. A test must not punish the outcome it
+// exists to enable.
+//
+// The exit contract has two halves, and conflating them was a real defect caught
+// in review: drift EXISTING must never fail the job (that would recreate the
+// blocking-gate problem the design avoids), while the REPORTER being broken must
+// fail loudly (otherwise a revoked token silently disables the signal).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, chmodSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 
-const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SCRIPT = join(REPO, 'scripts', 'ceremony-drift.mjs');
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ceremony-drift.mjs');
+const BOT = 'github-actions[bot]';
 
 /**
- * Run the reporter with a fake `gh` first on PATH.
- * @param {string} ghScript shell body for the stub
+ * Build a throwaway git repo whose drift state is exactly what the test wants.
+ * @param {{drift: boolean}} opts drift:true → one shipped rail-freezing ticket
  */
-function runWith(ghScript, env = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-drift-'));
+function makeRepo({ drift }) {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-drift-repo-'));
+  const run = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  run('init', '-q', '.');
+  run('config', 'user.email', 'test@example.invalid');
+  run('config', 'user.name', 'test');
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  mkdirSync(join(dir, 'packages', 'core'), { recursive: true });
+  writeFileSync(join(dir, 'packages', 'core', 'a.mjs'), 'export const a = 1;\n');
+  // Scope resolves to a tracked file => "shipped". Rails non-empty => rails-freeze.
+  // `completed: true` expires it, which is the no-drift fixture.
+  const ticket = {
+    id: 'T1', title: 'fixture',
+    scope: ['packages/core/**'], rails: ['packages/core/**'],
+    ...(drift ? {} : { completed: true }),
+  };
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+  run('add', '-A');
+  run('commit', '-qm', 'fixture');
+  return dir;
+}
+
+/** Run the reporter in `repo` with a fake `gh` first on PATH. Returns the gh call log too. */
+function runWith(ghScript, { repo, env = {} } = {}) {
+  const binDir = mkdtempSync(join(tmpdir(), 'adlc-drift-bin-'));
   try {
-    const ghPath = join(dir, 'gh');
-    writeFileSync(ghPath, `#!/bin/sh\n${ghScript}\n`);
+    const log = join(binDir, 'calls.txt');
+    const ghPath = join(binDir, 'gh');
+    writeFileSync(ghPath, `#!/bin/sh\necho "$*" >> ${log}\n${ghScript}\n`);
     chmodSync(ghPath, 0o755);
     const r = spawnSync(process.execPath, [SCRIPT], {
-      cwd: REPO,
+      cwd: repo,
       encoding: 'utf8',
       env: {
         ...process.env,
         ADLC_RAILS_BYPASS: undefined, // keep the harness hermetic (see issue #204)
-        PATH: `${dir}:${process.env.PATH}`,
+        BASE_REF: 'HEAD', // the fixture repo has no origin/main
+        PATH: `${binDir}:${process.env.PATH}`,
         ...env,
       },
     });
-    return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    let calls = '';
+    try { calls = readFileSync(log, 'utf8'); } catch {}
+    return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', calls };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
   }
 }
 
-// ---- operational failure must be LOUD ----
+const withRepo = (opts, fn) => {
+  const repo = makeRepo(opts);
+  try { return fn(repo); } finally { rmSync(repo, { recursive: true, force: true }); }
+};
 
-test('a failing `gh` exits non-zero (a broken reporter must not look healthy)', () => {
-  const r = runWith('echo "gh: HTTP 403 Resource not accessible by integration" >&2; exit 1');
-  assert.notEqual(r.status, 0, 'expected a non-zero exit when gh fails');
-});
+/** gh stub: `issue list` returns `listJson`, everything else succeeds. */
+const stubListing = (listJson) =>
+  `case "$*" in *"issue list"*) printf '%s' '${listJson}' ;; *) printf '%s' "https://example.test/issues/42" ;; esac\nexit 0`;
 
-test('a `gh` that returns unparseable JSON exits non-zero', () => {
-  const r = runWith('echo "not json at all"');
-  assert.notEqual(r.status, 0, 'expected a non-zero exit when the gh response cannot be parsed');
-});
-
-test('a missing `gh` binary exits non-zero', () => {
-  // PATH is set to a dir with no gh at all.
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-drift-nogh-'));
-  try {
-    const r = spawnSync(process.execPath, [SCRIPT], {
-      cwd: REPO,
-      encoding: 'utf8',
-      env: { ...process.env, ADLC_RAILS_BYPASS: undefined, PATH: dir },
-    });
-    assert.notEqual(r.status, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// ---- drift existing must stay QUIET ----
-
-test('drift present with a working `gh` exits 0 (drift is not a malfunction)', () => {
-  // `issue list` yields no tracker → the script opens one; every gh call succeeds.
-  const r = runWith('case "$*" in *"issue list"*) echo "[]";; *) echo "https://example.test/issues/1";; esac; exit 0');
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  assert.match(r.stdout, /ticket\(s\) awaiting the completion ceremony/);
-});
-
-test('DRY_RUN reports drift and exits 0 without touching `gh`', () => {
-  // gh would fail if called; DRY_RUN must return before any issue I/O.
-  const r = runWith('exit 1', { DRY_RUN: '1' });
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  assert.match(r.stdout, /DRY_RUN=1, no issue changes/);
-});
-
-// ---- the tracker survives having its label stripped ----
-//
-// Label-scoped discovery is the fast path, but a label can be removed by hand.
-// If lookup were label-only, that would silently open a DUPLICATE (active drift)
-// or leave a stale issue open forever (cleared drift). The marker in the body is
-// the durable identity; these prove the fallback is real rather than a comment.
-//
-// The stub distinguishes the labeled query from the unlabeled sweep so it can
-// return "nothing labeled, but a marked issue exists".
-
-// Single-line body on purpose: `echo` interprets backslash escapes in some
-// /bin/sh implementations (dash does, bash does not), which would inject a real
-// newline into the JSON string literal and make it unparseable. printf keeps
-// this stable across shells.
-const MARKED_ISSUE = '[{"number":42,"title":"stale title","body":"<!-- adlc:ceremony-drift --> old"}]';
-
-const UNLABELED_STUB = `
+/** gh stub: nothing under the label, `listJson` on the unlabeled sweep. */
+const stubUnlabeled = (listJson) => `
 case "$*" in
-  *"--label ceremony-drift"*"--json"*) printf '%s' "[]" ;;                # labeled lookup: nothing
-  *"issue list"*)                      printf '%s' '${MARKED_ISSUE}' ;;   # sweep: found by marker
+  *"--label ceremony-drift"*"--json"*) printf '%s' "[]" ;;
+  *"issue list"*)                      printf '%s' '${listJson}' ;;
   *)                                   printf '%s' "https://example.test/issues/42" ;;
 esac
 exit 0`;
 
-test('an UNLABELED marked issue is found and updated, not duplicated', () => {
-  const r = runWith(UNLABELED_STUB);
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  assert.match(r.stdout, /re-attached 'ceremony-drift' to issue #42/);
-  // Drift exists here (the real repo has 9), so it must UPDATE #42, never open.
-  assert.match(r.stdout, /updated issue #42/);
-  assert.doesNotMatch(r.stdout, /opened https/);
+const marked = (extra) =>
+  `[{"number":42,"title":"stale","body":"<!-- adlc:ceremony-drift --> old","author":{"login":"${extra}"}}]`;
+
+// ---- operational failure must be LOUD ----
+
+test('a failing `gh` exits non-zero (a broken reporter must not look healthy)', () => {
+  withRepo({ drift: true }, (repo) => {
+    const r = runWith('echo "gh: HTTP 403 Resource not accessible" >&2; exit 1', { repo });
+    assert.notEqual(r.status, 0);
+  });
 });
 
-test('label re-attachment is attempted so the fast path works next run', () => {
-  // Records every gh invocation so we can assert the self-heal actually ran.
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-drift-log-'));
-  try {
-    const log = join(dir, 'calls.txt');
-    const ghPath = join(dir, 'gh');
-    writeFileSync(ghPath, `#!/bin/sh\necho "$*" >> ${log}\n${UNLABELED_STUB}\n`);
-    chmodSync(ghPath, 0o755);
-    const r = spawnSync(process.execPath, [SCRIPT], {
-      cwd: REPO,
-      encoding: 'utf8',
-      env: { ...process.env, ADLC_RAILS_BYPASS: undefined, PATH: `${dir}:${process.env.PATH}` },
-    });
+test('a `gh` returning unparseable JSON exits non-zero', () => {
+  withRepo({ drift: true }, (repo) => {
+    assert.notEqual(runWith('printf "%s" "not json"', { repo }).status, 0);
+  });
+});
+
+test('a missing `gh` binary exits non-zero', () => {
+  withRepo({ drift: true }, (repo) => {
+    const empty = mkdtempSync(join(tmpdir(), 'adlc-drift-nogh-'));
+    try {
+      const r = spawnSync(process.execPath, [SCRIPT], {
+        cwd: repo, encoding: 'utf8',
+        env: { ...process.env, ADLC_RAILS_BYPASS: undefined, BASE_REF: 'HEAD', PATH: empty },
+      });
+      assert.notEqual(r.status, 0);
+    } finally { rmSync(empty, { recursive: true, force: true }); }
+  });
+});
+
+// ---- drift existing must stay QUIET ----
+
+test('drift present with a working `gh` exits 0 and opens a tracker', () => {
+  withRepo({ drift: true }, (repo) => {
+    const r = runWith(stubListing('[]'), { repo });
     assert.equal(r.status, 0, r.stderr);
-    const calls = readFileSync(log, 'utf8');
-    assert.match(calls, /issue edit 42 --add-label ceremony-drift/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+    assert.match(r.stdout, /1 ticket\(s\) awaiting the completion ceremony/);
+    assert.match(r.calls, /issue create/);
+  });
+});
+
+test('DRY_RUN reports drift and exits 0 without touching `gh`', () => {
+  withRepo({ drift: true }, (repo) => {
+    const r = runWith('exit 1', { repo, env: { DRY_RUN: '1' } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /DRY_RUN=1, no issue changes/);
+  });
+});
+
+// ---- close-on-clear, end to end ----
+//
+// The case the previous version structurally could not express, because it read
+// the live store: drift genuinely cleared, tracker open, must CLOSE.
+
+test('no drift with an open tracker closes it (exit 0)', () => {
+  withRepo({ drift: false }, (repo) => {
+    const r = runWith(stubListing(marked(BOT)), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /0 ticket\(s\) awaiting/);
+    assert.match(r.stdout, /closed issue #42/);
+    assert.match(r.calls, /issue close 42/);
+  });
+});
+
+test('no drift and no tracker does nothing (exit 0)', () => {
+  withRepo({ drift: false }, (repo) => {
+    const r = runWith(stubListing('[]'), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.calls, /issue create/);
+  });
+});
+
+// ---- the tracker survives having its label stripped ----
+
+test('an UNLABELED tracker authored by the bot is adopted, relabeled, and updated', () => {
+  withRepo({ drift: true }, (repo) => {
+    const r = runWith(stubUnlabeled(marked(BOT)), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /re-attached 'ceremony-drift' to issue #42/);
+    assert.match(r.calls, /issue edit 42 --add-label ceremony-drift/);
+    assert.match(r.stdout, /updated issue #42/);
+    assert.doesNotMatch(r.calls, /issue create/); // never a duplicate
+  });
+});
+
+// ---- the marker is public, so it is not authorization ----
+
+test('a FORGED marker from another author is not adopted', () => {
+  withRepo({ drift: true }, (repo) => {
+    const r = runWith(stubUnlabeled(marked('untrusted-user')), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    // Must not label, rewrite, or close someone else's issue...
+    assert.doesNotMatch(r.calls, /issue edit 42/);
+    assert.doesNotMatch(r.calls, /issue close 42/);
+    // ...and must still do its own job.
+    assert.match(r.calls, /issue create/);
+  });
+});
+
+test('two marked issues fail closed rather than guessing which to overwrite', () => {
+  withRepo({ drift: true }, (repo) => {
+    const two =
+      `[{"number":42,"title":"a","body":"<!-- adlc:ceremony-drift --> a","author":{"login":"${BOT}"}},` +
+      `{"number":43,"title":"b","body":"<!-- adlc:ceremony-drift --> b","author":{"login":"${BOT}"}}]`;
+    const r = runWith(stubUnlabeled(two), { repo });
+    assert.notEqual(r.status, 0, 'ambiguous match must not silently pick one');
+    assert.match(r.stderr, /ambiguous tracking issue/);
+    assert.doesNotMatch(r.calls, /issue close/);
+  });
 });

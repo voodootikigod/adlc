@@ -86,6 +86,41 @@ test('selectTrackingIssue returns null when no issue carries the marker', () => 
   assert.equal(selectTrackingIssue(null), null);
 });
 
+// The marker is public — it renders into the issue body and is trivially copied.
+// Treating "body contains the marker" as authority would let anyone who can open
+// an issue have it labeled, rewritten, or closed by a job holding issues:write.
+test('an authors filter rejects a forged marker from another author', () => {
+  const issues = [{ number: 9, body: `${MARKER} forged`, author: { login: 'untrusted-user' } }];
+  assert.equal(selectTrackingIssue(issues, { authors: ['github-actions[bot]'] }), null);
+  // Without the filter (the labeled fast path) the same issue is still matched —
+  // there, applying the label was itself the authorization.
+  assert.equal(selectTrackingIssue(issues)?.number, 9);
+});
+
+test('an authors filter accepts the managed author', () => {
+  const issues = [{ number: 9, body: `${MARKER} real`, author: { login: 'github-actions[bot]' } }];
+  assert.equal(selectTrackingIssue(issues, { authors: ['github-actions[bot]'] }).number, 9);
+});
+
+// Guessing between two marked issues risks overwriting or closing the wrong one,
+// and both are destructive under issues:write.
+test('two marked issues throw rather than picking one', () => {
+  const two = [
+    { number: 1, body: `${MARKER} a`, author: { login: 'github-actions[bot]' } },
+    { number: 2, body: `${MARKER} b`, author: { login: 'github-actions[bot]' } },
+  ];
+  assert.throws(() => selectTrackingIssue(two), /ambiguous tracking issue/);
+  assert.throws(() => selectTrackingIssue(two, { authors: ['github-actions[bot]'] }), /ambiguous/);
+});
+
+test('ambiguity is judged AFTER the author filter (one real + one forged is fine)', () => {
+  const mixed = [
+    { number: 1, body: `${MARKER} real`, author: { login: 'github-actions[bot]' } },
+    { number: 2, body: `${MARKER} forged`, author: { login: 'untrusted-user' } },
+  ];
+  assert.equal(selectTrackingIssue(mixed, { authors: ['github-actions[bot]'] }).number, 1);
+});
+
 test('selectTrackingIssue tolerates missing/non-string bodies without throwing', () => {
   const found = selectTrackingIssue([
     { number: 1 },

@@ -155,8 +155,32 @@ export function renderIssueTitle(needsCeremony) {
  * not guaranteed) rather than throwing mid-run.
  * @param {{number: number, title?: string, body?: unknown}[]} issues
  */
-export function selectTrackingIssue(issues) {
-  return (issues ?? []).find((i) => typeof i?.body === 'string' && i.body.includes(MARKER)) ?? null;
+export function selectTrackingIssue(issues, { authors = null } = {}) {
+  let candidates = (issues ?? []).filter(
+    (i) => typeof i?.body === 'string' && i.body.includes(MARKER)
+  );
+
+  // AUTHORIZATION. The marker is public: it is visible in the rendered issue and
+  // trivially copied. Treating "body contains the marker" as authority to seize
+  // an issue would let any user who can open one get it labeled, rewritten, or
+  // closed by a job holding `issues: write`, and would let a forged issue divert
+  // management away from the real tracker. So on the unlabeled sweep the author
+  // must also be one this job could plausibly have created the issue as.
+  if (authors) candidates = candidates.filter((i) => authors.includes(i?.author?.login));
+
+  // Ambiguity fails closed rather than picking one. Two marked issues means
+  // something is wrong (a forgery, or a genuine duplicate); guessing could
+  // overwrite or close the wrong one, and both are destructive under
+  // `issues: write`.
+  if (candidates.length > 1) {
+    throw new Error(
+      `ambiguous tracking issue: ${candidates.length} open issues carry the marker ` +
+        `(#${candidates.map((i) => i.number).join(', #')}). Refusing to guess — ` +
+        `close or unmark the extras, or re-label the correct one.`
+    );
+  }
+
+  return candidates[0] ?? null;
 }
 
 /**
@@ -202,22 +226,34 @@ function ensureLabel() {
 // path anyway.
 const SWEEP_LIMIT = 1000;
 
+// Applying the label requires write access, so a labeled issue is already an
+// authorization signal. The unlabeled sweep has no such signal and must verify
+// authorship instead — see selectTrackingIssue. Overridable for tests and for
+// repos whose automation runs under a different identity.
+const MANAGED_AUTHORS = (process.env.ADLC_DRIFT_AUTHORS ?? 'github-actions[bot]')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const ISSUE_FIELDS = 'number,title,body,author';
+
 function findExistingIssue() {
   // Fast path: label-scoped, so this set contains only this job's own issue(s)
   // and stays deterministic no matter how large the repo gets.
   const labeled = selectTrackingIssue(
     JSON.parse(gh(['issue', 'list', '--state', 'open', '--label', LABEL, '--limit', '100',
-      '--json', 'number,title,body']))
+      '--json', ISSUE_FIELDS]))
   );
   if (labeled) return labeled;
 
   // Fallback: the label can be removed by hand, and label-only lookup would then
   // open a duplicate (active drift) or never close the stale issue (cleared
-  // drift). The marker is the durable identity, so sweep open issues for it.
-  // This path is what makes the marker an actual fallback rather than a claim.
+  // drift). The marker is the durable identity, so sweep open issues for it —
+  // but only accept one this job could have authored (the marker is public).
   const unlabeled = selectTrackingIssue(
     JSON.parse(gh(['issue', 'list', '--state', 'open', '--limit', String(SWEEP_LIMIT),
-      '--json', 'number,title,body']))
+      '--json', ISSUE_FIELDS])),
+    { authors: MANAGED_AUTHORS }
   );
   if (!unlabeled) return null;
 
