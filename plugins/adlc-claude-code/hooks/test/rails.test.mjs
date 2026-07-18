@@ -169,14 +169,46 @@ for (const [name, value] of [
   });
 }
 
+// Malformed rail data on a COMPLETED ticket must still fail closed — completion
+// must never become a way to smuggle an unvalidated store past the gate.
+//
+// These assert WHY it denied, not just that it denied. A bare `deny` assertion
+// is close to hollow here: this hook denies on many unrelated conditions (an
+// unreachable project dir, a symlink loop, an unextractable path), so a
+// verdict-only test still passes if the rail validation is gone entirely and
+// something else happens to deny.
+//
+// The reason is matched layer-AGNOSTICALLY. Two layers can legitimately reject
+// this input: the store reader (loadTicketStoreReadOnly → validate(), which is
+// what rejects today, before rails() iterates at all) and the hook's own
+// in-loop checks (defense-in-depth, currently unreachable through the reader).
+// Either is a correct fail-closed, so pinning one layer's exact wording would
+// fail the suite while the gate is working — a brittle change-detector. The
+// property under test is "denied BECAUSE the rails data is invalid", which is
+// what the alternation encodes.
+// NB: `out` is the raw JSON the hook prints, so any quotes inside a message are
+// backslash-escaped there. Match on unquoted fragments only.
+const RAILS_VALIDATION_DENIAL =
+  /rails must be an array of strings|non-string rail entry|has a non-array/;
+
 test('a COMPLETED ticket with a malformed rails field still fails closed', () => {
-  const t = '{"tickets":[{"id":"T1","completed":true,"rails":"packages/**"}]}';
-  assert.equal(runRails(t, 'src/app.mjs').verdict, 'deny');
+  const r = runRails('{"tickets":[{"id":"T1","completed":true,"rails":"packages/**"}]}', 'src/app.mjs');
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, RAILS_VALIDATION_DENIAL);
 });
 
 test('a COMPLETED ticket with a non-string rail entry still fails closed', () => {
-  const t = '{"tickets":[{"id":"T1","completed":true,"rails":["ok/**",42]}]}';
-  assert.equal(runRails(t, 'src/app.mjs').verdict, 'deny');
+  const r = runRails('{"tickets":[{"id":"T1","completed":true,"rails":["ok/**",42]}]}', 'src/app.mjs');
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, RAILS_VALIDATION_DENIAL);
+});
+
+test('a COMPLETED ticket with a non-array rails object still fails closed', () => {
+  const r = runRails('{"tickets":[{"id":"T1","completed":true,"rails":{"glob":"packages/**"}}]}', 'packages/x.mjs');
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, RAILS_VALIDATION_DENIAL);
+  // Completion must never be reported as "schema-valid, nothing declared".
+  assert.doesNotMatch(r.out, /no rails declared/);
 });
 
 

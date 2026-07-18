@@ -1025,15 +1025,27 @@ function rails(input) {
     // its own frozen foundation while it runs. Once the ticket is completed
     // there is no in-flight build left to protect, so continuing to freeze its
     // rails only blocks legitimate new work (a completed ticket that declared
-    // `packages/**` otherwise freezes that subtree forever). This matches
-    // scripts/rails-guard-ci.mjs — the unbypassable commit-time gate, which
-    // already skips completed tickets — so in-session and commit-time agree.
+    // `packages/**` otherwise freezes that subtree forever).
+    //
+    // This adopts the same completion rule as scripts/rails-guard-ci.mjs, the
+    // unbypassable commit-time gate. The two are NOT unconditionally identical:
+    // CI reads `completed` from the BASE ref (a deliberate trust anchor — see
+    // its note at rails-guard-ci.mjs:317), whereas this hook reads the working
+    // tree, because in-session there is no committed state to anchor to. They
+    // agree whenever `.adlc/tickets.json` matches base. Where they diverge, a
+    // working-tree edit that marks a live ticket completed expires its rails
+    // in-session but is still DENIED by CI at commit time, so the gate holds.
     //
     // STRICT `=== true` only: a missing, truthy-ish, or tampered `completed`
     // value is NOT a completion and the rail keeps freezing (fail closed).
-    // Note this check does NOT short-circuit the validation above or the
-    // per-rail string check below — a completed ticket carrying malformed rail
-    // data still fails closed rather than being skipped unvalidated.
+    //
+    // Placement note: the expiry skip sits AFTER the shape checks above and
+    // before the per-rail string check below, so a completed ticket carrying
+    // malformed rail data is never skipped unvalidated. In practice those two
+    // in-loop checks are unreachable — `loadTicketStoreReadOnly` validates the
+    // store and throws first (see the failClosed above) — so they are
+    // defense-in-depth against a regression in the reader's contract, not the
+    // live rejection path. Tests assert the reader's message accordingly.
     const expired = t.completed === true;
     for (const r of t.rails ?? []) {
       if (typeof r !== 'string') {
