@@ -137,6 +137,7 @@
       "duration": 8,
       "edges": [],
       "id": "T-SHARDED-STORE",
+      "completed": true,
       "rails": [
         "docs/adr/0010-sharded-ticket-store.md",
         "docs/specs/sharded-ticket-store.md"
@@ -284,6 +285,7 @@
       "duration": 3,
       "edges": [],
       "id": "T16",
+      "completed": true,
       "rails": [
         "packages/core/lib/tickets.mjs",
         "packages/core/lib/scaffold-hygiene.mjs",
@@ -312,6 +314,7 @@
         }
       ],
       "id": "T17",
+      "completed": true,
       "rails": [
         "plugins/adlc-claude-code/lib/test/prosecutor.test.mjs",
         "plugins/adlc-opencode/test/prosecutor.test.mjs",
@@ -345,6 +348,7 @@
         }
       ],
       "id": "T18",
+      "completed": true,
       "rails": [
         "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
         "plugins/adlc-cursor/rails-checker.mjs",
@@ -392,6 +396,7 @@
         }
       ],
       "id": "T19",
+      "completed": true,
       "rails": [
         "packages/core/lib/tickets.mjs",
         "plugins/adlc-cursor/test/rails-guard.test.mjs",
@@ -1038,6 +1043,7 @@
         }
       ],
       "id": "T47",
+      "completed": true,
       "rails": [
         "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
         "plugins/adlc-cursor/rails-checker.mjs",
