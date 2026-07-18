@@ -28,6 +28,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { runTicketPrune } from '../packages/ticket-prune/lib/run.mjs';
+import { resolveActiveTicketId } from '../packages/tickets/lib/pointer.mjs';
 
 // The DURABLE identity of the managed issue. Labels can be stripped by hand; the
 // marker survives in the body, and findExistingIssue falls back to sweeping open
@@ -51,7 +52,7 @@ const CEREMONY_CMD =
  * compare bodies to decide whether anything actually changed.
  * @param {{id?: string, reason?: string, rails?: string[], blocker?: string}[]} needsCeremony
  */
-export function renderIssueBody(needsCeremony) {
+export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false } = {}) {
   const entries = [...(needsCeremony ?? [])].sort((a, b) =>
     String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
   );
@@ -80,15 +81,64 @@ export function renderIssueBody(needsCeremony) {
   const railsFreeze = entries.filter((t) => t?.blocker === 'rails-freeze');
   const manual = entries.filter((t) => t?.blocker !== 'rails-freeze');
 
+  // EVIDENCE STRENGTH decides what may be advertised as a bulk action.
+  //
+  // classifyTicket() reports two very different things under one `stale` flag:
+  //   explicit status: "done"  -> the ticket SAYS it is finished. Authoritative.
+  //   inferred: all N scope glob(s) resolve to tracked files on the base ref
+  //                            -> a HEURISTIC. It is also exactly what an ACTIVE
+  //                               ticket looks like when its work touches paths
+  //                               that already exist, which is the common case.
+  //
+  // Completing a ticket expires its rails. Advertising a one-line bulk command
+  // over heuristic evidence therefore invites an operator to disable rail
+  // protection on work that is still in flight — and an issue filed by a bot
+  // carries more apparent authority than a CLI someone chose to run.
+  //
+  // So this is an ALLOW-LIST: only an explicit done-status earns the bulk
+  // command. Inferred, missing, malformed, or unrecognized evidence all fall to
+  // "needs confirmation". Keying off `inferred:` instead would mean a renamed
+  // reason string, or an absent one, silently promotes a ticket into the
+  // rail-expiring instruction — failing OPEN on the one decision here that can
+  // destroy in-flight protection.
+  //
+  // And if the active-ticket pointer could not be resolved at all, nothing is
+  // clearable: we cannot say which ticket is in flight, so we cannot say which
+  // one the command would wrongly complete.
+  const isConfirmedDone = (t) =>
+    !activeTicketUnknown && String(t?.reason ?? '').startsWith('explicit status:');
+  const isActive = (t) => activeTicketId != null && t?.id === activeTicketId;
+
+  const activeEntries = railsFreeze.filter(isActive);
+  const confirmed = railsFreeze.filter((t) => !isActive(t) && isConfirmedDone(t));
+  const unconfirmed = railsFreeze.filter((t) => !isActive(t) && !isConfirmedDone(t));
+
   const sections = [];
 
-  if (railsFreeze.length) {
+  if (activeEntries.length) {
     sections.push(
-      `## Clearable by the ceremony (${railsFreeze.length})`,
+      `## ⚠ Currently active — do NOT complete (${activeEntries.length})`,
       '',
-      'These have shipped but are still active and still freezing rails. Under T36 a',
-      "ticket's rails expire only when it is marked `completed: true`, so until then",
-      'they keep freezing paths for unrelated future work.',
+      'The active-ticket pointer names this ticket, so work on it is presumably in',
+      'flight. It appears here only because its declared scope already resolves to',
+      'tracked files, which is what in-progress work on existing paths looks like.',
+      '',
+      '**Completing it would expire its rails while it is still being built.** It is',
+      'excluded from the command below. If it genuinely is finished, complete it on',
+      'its own after clearing the active-ticket pointer.',
+      '',
+      ...rowsFor(activeEntries),
+      ''
+    );
+  }
+
+  if (confirmed.length) {
+    sections.push(
+      `## Confirmed shipped — clearable by the ceremony (${confirmed.length})`,
+      '',
+      'These carry an explicit done-shaped `status`, so the ticket itself asserts it',
+      'is finished. Under T36 rails expire only once a ticket is marked `completed: true`,',
+      'so until then they keep freezing paths for unrelated work.',
       '',
       '`rails-guard-ci.assertBaseTicketContractsPreserved` denies field changes to',
       'existing base tickets, so an ordinary PR cannot complete a railed ticket. This',
@@ -98,9 +148,36 @@ export function renderIssueBody(needsCeremony) {
       CEREMONY_CMD,
       '```',
       '',
-      'Review the diff before pushing — it completes every ticket in *this* section.',
+      '> The command completes **every** rail-freezing ticket it finds, including any',
+      '> listed under "Needs confirmation" below. Review the diff before pushing.',
       '',
-      ...rowsFor(railsFreeze),
+      ...rowsFor(confirmed),
+      ''
+    );
+  }
+
+  if (unconfirmed.length) {
+    sections.push(
+      `## Needs confirmation before completing (${unconfirmed.length})`,
+      '',
+      'These have **no explicit done-status**. Most were inferred shipped only',
+      'because every declared scope glob already resolves to a tracked file — which',
+      'is equally true of an active ticket whose work touches existing paths. That',
+      'evidence cannot distinguish "finished" from "in progress on existing files".',
+      'Entries whose evidence could not be read at all land here too, deliberately.',
+      ...(activeTicketUnknown
+        ? ['',
+           '> The active-ticket pointer could not be resolved on this run, so **every**',
+           '> entry is listed here: without knowing which ticket is in flight, none can',
+           '> be advertised as safe to bulk-complete.']
+        : []),
+      '',
+      'Completing a ticket expires its rails, so confirm each one is genuinely done',
+      'before including it. The ceremony command has no per-ticket filter: if any of',
+      'these is not finished, give it an explicit status (or complete the others',
+      'individually) rather than running the bulk command.',
+      '',
+      ...rowsFor(unconfirmed),
       ''
     );
   }
@@ -155,10 +232,17 @@ export function renderIssueTitle(needsCeremony) {
  * not guaranteed) rather than throwing mid-run.
  * @param {{number: number, title?: string, body?: unknown}[]} issues
  */
-export function selectTrackingIssue(issues, { authors = null } = {}) {
-  let candidates = (issues ?? []).filter(
-    (i) => typeof i?.body === 'string' && i.body.includes(MARKER)
-  );
+export function selectTrackingIssue(issues, { authors = null, requireMarker = true } = {}) {
+  // The marker is the identity on the UNLABELED sweep, where nothing else
+  // distinguishes this job's issue. On the labeled path it must NOT be required:
+  // a maintainer editing the body can delete the invisible comment while leaving
+  // the label intact, and demanding the marker there would orphan a correctly
+  // labeled tracker — opening a duplicate under drift, or never closing it once
+  // drift clears. The canonical body (marker included) is restored on the next
+  // update, which is what the footer promises.
+  let candidates = requireMarker
+    ? (issues ?? []).filter((i) => typeof i?.body === 'string' && i.body.includes(MARKER))
+    : [...(issues ?? [])].filter(Boolean);
 
   // AUTHORIZATION. The marker is public: it is visible in the rendered issue and
   // trivially copied. Treating "body contains the marker" as authority to seize
@@ -188,7 +272,7 @@ export function selectTrackingIssue(issues, { authors = null } = {}) {
  * and close-on-clear contracts are testable without a GitHub token.
  * @param {{drift: object[], existingIssue: {number: number, title: string, body: string} | null}} input
  */
-export function decideAction({ drift, existingIssue }) {
+export function decideAction({ drift, existingIssue, activeTicketId = null, activeTicketUnknown = false }) {
   const entries = drift ?? [];
 
   if (entries.length === 0) {
@@ -198,7 +282,7 @@ export function decideAction({ drift, existingIssue }) {
   }
 
   const title = renderIssueTitle(entries);
-  const body = renderIssueBody(entries);
+  const body = renderIssueBody(entries, { activeTicketId, activeTicketUnknown });
 
   if (!existingIssue) return { action: 'open', title, body };
 
@@ -242,7 +326,8 @@ function findExistingIssue() {
   // and stays deterministic no matter how large the repo gets.
   const labeled = selectTrackingIssue(
     JSON.parse(gh(['issue', 'list', '--state', 'open', '--label', LABEL, '--limit', '100',
-      '--json', ISSUE_FIELDS]))
+      '--json', ISSUE_FIELDS])),
+    { authors: MANAGED_AUTHORS, requireMarker: false }
   );
   if (labeled) return labeled;
 
@@ -277,13 +362,38 @@ async function main() {
   console.log(`ceremony-drift: ${drift.length} ticket(s) awaiting the completion ceremony`);
   for (const t of drift) console.log(`  - ${t.id} (${t.blocker})`);
 
+  // Resolved BEFORE the dry-run return, so a dry run previews the most
+  // safety-relevant fact rather than hiding it: which ticket is excluded from
+  // bulk-completion advice because completing it would expire the rails of work
+  // still in flight. If the pointer cannot be read the design still degrades
+  // safely — without an explicit done-status a ticket lands in "needs
+  // confirmation", which never advertises the bulk command.
+  // resolveActiveTicketId returns a RESULT ({ok, value}) and does not throw —
+  // a malformed or conflicting pointer comes back as ok:false (the fail-closed
+  // contract from #196). Reading it as a bare id yields an object, which would
+  // never equal a ticket id and would silently disable the exclusion entirely.
+  const resolvedActive = resolveActiveTicketId({ root: process.cwd() });
+  const activeTicketUnknown = !resolvedActive.ok;
+  const activeTicketId = resolvedActive.ok ? (resolvedActive.value?.id ?? null) : null;
+
+  if (activeTicketUnknown) {
+    // We cannot tell which ticket is in flight, so we cannot tell which one the
+    // bulk command would wrongly complete. Suppress that advice entirely.
+    console.log(
+      `ceremony-drift: active-ticket pointer unresolvable (${resolvedActive.code ?? 'error'}); ` +
+        `suppressing bulk-completion advice`
+    );
+  } else if (activeTicketId) {
+    console.log(`ceremony-drift: active ticket is ${activeTicketId} (excluded from bulk advice)`);
+  }
+
   if (process.env.DRY_RUN === '1') {
     console.log(`ceremony-drift: DRY_RUN=1, no issue changes`);
     return;
   }
 
   ensureLabel();
-  const decision = decideAction({ drift, existingIssue: findExistingIssue() });
+  const decision = decideAction({ drift, existingIssue: findExistingIssue(), activeTicketId, activeTicketUnknown });
   switch (decision.action) {
     case 'open': {
       const url = gh(['issue', 'create', '--title', decision.title, '--label', LABEL, '--body-file', '-'], decision.body).trim();

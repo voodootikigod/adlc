@@ -19,9 +19,17 @@ import {
   MARKER,
 } from '../ceremony-drift.mjs';
 
+// Heuristic evidence: scope globs already resolve. Indistinguishable from an
+// ACTIVE ticket whose work touches existing paths, so it must never be swept
+// into a bulk-completion instruction.
 const DRIFT = [
   { id: 'T9', reason: 'inferred: all 6 declared scope glob(s) resolve to tracked files', rails: ['packages/ticket-sync/lib/schema.mjs'], blocker: 'rails-freeze' },
   { id: 'T42', reason: 'inferred: all 3 declared scope glob(s) resolve to tracked files', rails: ['packages/core/**'], blocker: 'rails-freeze' },
+];
+
+// Explicit evidence: the ticket itself asserts it is finished.
+const DONE = [
+  { id: 'T7', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
 ];
 
 // ---- rendering ----
@@ -34,9 +42,40 @@ test('body names every drifting ticket and its frozen rails', () => {
   }
 });
 
-test('body carries the exact ceremony command an operator must run', () => {
-  const body = renderIssueBody(DRIFT);
+test('body carries the exact ceremony command for EXPLICITLY done tickets', () => {
+  const body = renderIssueBody(DONE);
   assert.match(body, /ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin\/main/);
+  assert.match(body, /## Confirmed shipped/);
+});
+
+// The core safety property. `inferred:` means "every scope glob already resolves
+// to a tracked file", which is exactly what an ACTIVE ticket looks like when its
+// work touches existing paths. Completing such a ticket expires its rails
+// mid-build, and an instruction in a bot-filed issue carries more apparent
+// authority than a CLI someone chose to run.
+test('heuristic-only drift is NEVER given the bulk completion command', () => {
+  const body = renderIssueBody(DRIFT);
+  assert.doesNotMatch(body, /ticket-prune --ceremony/);
+  assert.match(body, /## Needs confirmation before completing \(2\)/);
+  assert.match(body, /cannot distinguish "finished" from "in progress on existing files"/);
+});
+
+test('the ACTIVE ticket is quarantined out of every completion instruction', () => {
+  const body = renderIssueBody([...DONE, ...DRIFT], { activeTicketId: 'T42' });
+  assert.match(body, /## ⚠ Currently active — do NOT complete \(1\)/);
+  const activeIdx = body.indexOf('Currently active');
+  const confirmedIdx = body.indexOf('## Confirmed shipped');
+  assert.ok(activeIdx < confirmedIdx, 'the warning must precede any command');
+  // T42 must not appear under the clearable heading.
+  const confirmedSection = body.slice(confirmedIdx, body.indexOf('## Needs confirmation'));
+  assert.doesNotMatch(confirmedSection, /T42/);
+  assert.match(body, /expire its rails while it is still being built/);
+});
+
+test('an explicitly-done ticket that is ALSO active stays quarantined', () => {
+  const body = renderIssueBody(DONE, { activeTicketId: 'T7' });
+  assert.match(body, /## ⚠ Currently active/);
+  assert.doesNotMatch(body, /ticket-prune --ceremony/);
 });
 
 test('body embeds the discovery marker', () => {
@@ -53,7 +92,7 @@ test('marker is a well-formed HTML comment (renders invisibly)', () => {
 // This line is the operator-facing statement of the T36 rule. Inverted, it is
 // not a typo — it is wrong instructions in the one place someone reads them.
 test('body states the completion rule correctly', () => {
-  const body = renderIssueBody(DRIFT);
+  const body = renderIssueBody(DONE);
   assert.match(body, /marked `completed: true`/);
   assert.doesNotMatch(body, /marked `completed: false`/);
 });
@@ -143,14 +182,14 @@ test('body is stable regardless of input order (idempotence depends on this)', (
 // 'rails-freeze'. An earlier version of this test gave it rails, asserting
 // against a state the producer cannot emit.
 const MIXED = [
-  { id: 'T1', reason: 'r', rails: ['a/**'], blocker: 'rails-freeze' },
-  { id: 'T2', reason: 'r', rails: [], blocker: 'preexisting-completed-field' },
+  { id: 'T1', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
+  { id: 'T2', reason: 'explicit status: "done"', rails: [], blocker: 'preexisting-completed-field' },
 ];
 
 test('body separates the two blockers into their own sections', () => {
   const body = renderIssueBody(MIXED);
-  assert.match(body, /## Clearable by the ceremony \(1\)/);
-  assert.match(body, /## Needs a manual decision \(1\)/);
+  assert.match(body, /## Confirmed shipped — clearable by the ceremony \(1\)/); // rails-freeze
+  assert.match(body, /## Needs a manual decision \(1\)/);                       // preexisting-completed-field
 });
 
 // The advertised command completes ONLY rails-freeze entries; --ceremony refuses
@@ -177,6 +216,36 @@ test('a drift set of only manual-decision entries advertises no ceremony command
 test('title does not claim rails are frozen', () => {
   assert.doesNotMatch(renderIssueTitle(MIXED), /freezing rails/);
   assert.match(renderIssueTitle(MIXED), /2 shipped tickets awaiting completion/);
+});
+
+// Evidence handling is an ALLOW-LIST: anything that is not an explicit
+// done-status — inferred, absent, malformed, or a reason string that gets
+// renamed upstream — must land in "needs confirmation". Failing open here would
+// promote a ticket into the rail-expiring command on evidence nobody verified.
+test('unknown or missing evidence falls back to needs-confirmation, not clearable', () => {
+  for (const reason of [undefined, '', 'r', 'some future reason string', null]) {
+    const body = renderIssueBody([{ id: 'TX', reason, rails: ['a/**'], blocker: 'rails-freeze' }]);
+    assert.doesNotMatch(body, /ticket-prune --ceremony/, `reason ${JSON.stringify(reason)} must not be clearable`);
+    assert.match(body, /## Needs confirmation before completing \(1\)/);
+  }
+});
+
+// resolveActiveTicketId returns a RESULT and never throws; a malformed or
+// conflicting pointer is ok:false (#196's fail-closed contract). When it cannot
+// be resolved we do not know which ticket is in flight, so nothing may be
+// advertised as safe to bulk-complete — not even explicitly-done entries.
+test('an unresolvable active-ticket pointer suppresses the bulk command entirely', () => {
+  const body = renderIssueBody(DONE, { activeTicketUnknown: true });
+  assert.doesNotMatch(body, /ticket-prune --ceremony/);
+  assert.doesNotMatch(body, /## Confirmed shipped/);
+  assert.match(body, /## Needs confirmation before completing \(1\)/);
+  assert.match(body, /active-ticket pointer could not be resolved/);
+});
+
+test('decideAction threads the unknown-pointer state into the body', () => {
+  const d = decideAction({ drift: DONE, existingIssue: null, activeTicketUnknown: true });
+  assert.equal(d.action, 'open');
+  assert.doesNotMatch(d.body, /ticket-prune --ceremony/);
 });
 
 // ---- decisions ----

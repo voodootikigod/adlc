@@ -185,6 +185,30 @@ test('an UNLABELED tracker authored by the bot is adopted, relabeled, and update
   });
 });
 
+// A malformed active-ticket pointer must not crash the reporter, and must not
+// let it advertise completing tickets when it cannot tell which one is live.
+// This drives the real Result-shaped API, which unit tests (passing a plain id)
+// cannot exercise — the first version read the Result as a bare id, silently
+// disabling the exclusion.
+test('a malformed active-ticket pointer still exits 0 and suppresses bulk advice', () => {
+  withRepo({ drift: true }, (repo) => {
+    writeFileSync(join(repo, '.adlc', 'current-ticket.json'), '{ not valid json');
+    const r = runWith(stubListing('[]'), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /pointer unresolvable|treating as none|suppressing bulk-completion/);
+  });
+});
+
+test('a well-formed pointer is reported as an exclusion, not as an object', () => {
+  withRepo({ drift: true }, (repo) => {
+    writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+    const r = runWith(stubListing('[]'), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /active ticket is T1 \(excluded from bulk advice\)/);
+    assert.doesNotMatch(r.stdout, /\[object Object\]/);
+  });
+});
+
 // ---- the marker is public, so it is not authorization ----
 
 test('a FORGED marker from another author is not adopted', () => {
