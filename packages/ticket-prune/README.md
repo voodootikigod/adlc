@@ -119,8 +119,10 @@ ticket-prune --base-ref origin/main --json
 ticket-prune --write
 
 # Admin, on a protected-base checkout of main: complete the rail-freezing
-# shipped tickets too, expiring their rails (T36). Refuses without the override.
-ADLC_RAILS_BYPASS=1 ticket-prune --ceremony --write --base-ref origin/main
+# shipped tickets, expiring their rails (T36). Refuses without the override.
+# NOT --write: that would ALSO tombstone the rails-less stale tickets in the
+# same run. Keep the two operations separate so each write set is reviewed.
+ADLC_RAILS_BYPASS=1 ticket-prune --ceremony --base-ref origin/main
 ```
 
 ## Locking and atomicity

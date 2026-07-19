@@ -50,8 +50,13 @@ Run `adlc ticket-prune --json`.
   a protected-base checkout of `main` (the diff an ordinary PR is denied):
 
   ```
-  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main
+  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main
   ```
+  Deliberately no `--write`: that flag additionally tombstones rails-less stale
+  tickets, which the drift report above does not list, so the operator would be
+  writing outside the reviewed set. `--ceremony` alone completes the
+  rail-freezing tickets.
+
 
   `--ceremony` refuses to write without `ADLC_RAILS_BYPASS=1`; it adds
   `completed: true` to each rail-freezing shipped ticket (`ceremonyCompleted`),

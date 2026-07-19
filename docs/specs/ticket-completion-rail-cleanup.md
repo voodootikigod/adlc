@@ -86,7 +86,7 @@ protected-base admin checkout of `main`** (this cannot land in an ordinary PR):
 node packages/ticket-prune/bin/ticket-prune.mjs --json --base-ref origin/main   # inspect needsCeremony
 
 # Apply the ceremony (admin override recorded), then push directly to main:
-ADLC_RAILS_BYPASS=1 node packages/ticket-prune/bin/ticket-prune.mjs --ceremony --write --base-ref origin/main
+ADLC_RAILS_BYPASS=1 node packages/ticket-prune/bin/ticket-prune.mjs --ceremony --base-ref origin/main
 ```
 
 Each completed ticket's rails then auto-expire per T36, unfreezing their paths for future
