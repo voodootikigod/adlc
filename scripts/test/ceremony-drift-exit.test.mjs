@@ -307,3 +307,58 @@ test('the rendered command completes only the reported ticket, not rails-less on
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+// ---- a truncated recovery scan must not be treated as "not found" ----
+//
+// If the unlabeled sweep fills its window without a match, whether a tracker
+// exists is UNKNOWN. Acting on it would open a duplicate (drift present) or
+// leave an obsolete warning open (drift cleared) — the exact pair of failures
+// this recovery path exists to prevent. A previous revision logged a warning and
+// proceeded anyway; a loud bad inference is still a bad inference. These assert
+// the run fails and mutates nothing.
+
+/** gh stub whose unlabeled sweep returns a full window of unmarked issues. */
+function stubSaturatedSweep(dir) {
+  const many = JSON.stringify(
+    Array.from({ length: 1000 }, (_, i) => ({
+      number: i + 1, title: `unrelated ${i}`, body: 'nothing here', author: { login: 'someone' },
+    }))
+  );
+  const payload = join(dir, 'many.json');
+  writeFileSync(payload, many);
+  return `
+case "$*" in
+  *"--label ceremony-drift"*"--json"*) printf '%s' "[]" ;;
+  *"issue list"*)                      cat ${payload} ;;
+  *)                                   printf '%s' "https://example.test/issues/99" ;;
+esac
+exit 0`;
+}
+
+for (const drift of [true, false]) {
+  test(`a saturated sweep with drift=${drift} exits non-zero and mutates nothing`, () => {
+    const repo = makeRepo({ drift });
+    const payloadDir = mkdtempSync(join(tmpdir(), 'adlc-drift-payload-'));
+    try {
+      const r = runWith(stubSaturatedSweep(payloadDir), { repo });
+      assert.notEqual(r.status, 0, 'an indeterminate scan must fail the run');
+      assert.match(r.stderr, /scan hit that limit|Refusing to open or close/);
+      assert.doesNotMatch(r.calls, /issue create/, 'must not open a duplicate');
+      assert.doesNotMatch(r.calls, /issue close/, 'must not close on an unknown');
+      assert.doesNotMatch(r.calls, /issue edit \d+ --title/, 'must not rewrite a tracker');
+    } finally {
+      rmSync(payloadDir, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+}
+
+// The bound only fails closed when it is actually reached — an exhaustive scan
+// that finds nothing is a legitimate "no tracker", and must still open one.
+test('an UNSATURATED sweep finding nothing is treated as an exhaustive miss', () => {
+  withRepo({ drift: true }, (repo) => {
+    const r = runWith(stubUnlabeled('[]'), { repo });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.calls, /issue create/);
+  });
+});

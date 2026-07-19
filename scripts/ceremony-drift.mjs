@@ -429,17 +429,26 @@ function findExistingIssue() {
   const unlabeled = selectTrackingIssue(swept, { authors: MANAGED_AUTHORS });
 
   if (!unlabeled) {
-    // NO SILENT CAP. If the scan filled its window, an older unlabeled tracker
-    // may exist beyond it — in which case a duplicate is about to be opened, or a
-    // stale one left open. Say so rather than reporting a clean "not found".
+    // FAIL CLOSED on a truncated scan. If the sweep filled its window without a
+    // match, "not found" is unknown, not false — an older unlabeled tracker may
+    // sit beyond it. Returning null would make the caller act on that unknown:
+    // opening a duplicate when drift exists, or leaving an obsolete warning open
+    // once drift clears — the two failures this recovery path exists to prevent.
+    //
+    // An earlier revision logged a warning here and returned null anyway. Making
+    // a bad inference LOUD is not the same as not making it; the caller still
+    // could not tell a truncated miss from an exhaustive one. Throwing keeps the
+    // distinction, and the exit-code contract turns it into a visibly failed run
+    // with no issue mutation rather than a silently wrong one.
     if (swept.length >= SWEEP_LIMIT) {
-      console.log(
-        `ceremony-drift: WARNING — scanned the ${SWEEP_LIMIT} most recent open issues and did ` +
-          `not find a marked tracker; an older unlabeled one may exist beyond that window. ` +
-          `Re-apply the '${LABEL}' label to it to restore the fast path.`
+      throw new Error(
+        `scanned the ${SWEEP_LIMIT} most recent open issues without finding a tracker, and the ` +
+          `scan hit that limit — an older unlabeled tracker may exist beyond it, so whether one ` +
+          `exists is unknown. Refusing to open or close anything. Re-apply the '${LABEL}' label ` +
+          `to the tracker to restore the fast path, or raise SWEEP_LIMIT.`
       );
     }
-    return null;
+    return null; // scan was exhaustive: genuinely no tracker
   }
 
   // Self-heal so the fast path works again next run.
