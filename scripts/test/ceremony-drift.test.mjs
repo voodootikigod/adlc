@@ -318,7 +318,7 @@ test('decideAction threads the unknown-pointer state into the body', () => {
 // The procedure section is the one place the command appears. It must always
 // disclose what CI cannot see, and always lead with the dry run.
 test('the procedure discloses the CI blind spots and leads with a dry run', () => {
-  const body = renderIssueBody(DRIFT);
+  const body = renderIssueBody(DONE); // explicit-done, so the command is present
   assert.ok(offersCommand(body), 'the procedure documents the command');
   assert.match(body, /cannot tell you it is safe to run the command/);
   assert.match(body, /gitignored/);                       // the place blind spot
@@ -326,6 +326,35 @@ test('the procedure discloses the CI blind spots and leads with a dry run', () =
   const dryIdx = body.indexOf('# dry run');
   assert.ok(dryIdx !== -1 && dryIdx < body.indexOf(RUNNABLE), 'dry run must come first');
   assert.ok(makesNoSafetyClaim(body));
+});
+
+// The mutating command is EVIDENCE-GATED, not just captioned. A warning is not an
+// enforced invariant: in CI the active-ticket quarantine cannot fire (the pointer
+// is gitignored), so heuristic entries must not even be handed the command.
+test('heuristic-only drift shows the dry run but withholds the mutating command', () => {
+  const body = renderIssueBody(DRIFT); // both entries are `inferred:`
+  assert.match(body, /# dry run/, 'the read-only dry run is always available');
+  assert.ok(!offersCommand(body), 'no rail-expiring command without authoritative evidence');
+  assert.match(body, /No completion command is shown/);
+});
+
+test('a confirmed entry alongside a heuristic one still withholds the command', () => {
+  // The bulk command completes ALL rail-freezing tickets, so one unconfirmed
+  // entry taints the whole set — same reasoning as the round-6 blast-radius fix.
+  const body = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
+    { id: 'T9', reason: 'inferred: scope resolves', rails: ['b/**'], blocker: 'rails-freeze' },
+  ]);
+  assert.ok(!offersCommand(body));
+  assert.match(body, /No completion command is shown/);
+});
+
+test('the mutating command appears only when every rail-freezing entry is explicit-done', () => {
+  const body = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
+    { id: 'T8', reason: 'explicit status: "done"', rails: ['b/**'], blocker: 'rails-freeze' },
+  ]);
+  assert.ok(offersCommand(body));
 });
 
 test('a drift set with nothing rail-freezing renders no procedure at all', () => {
@@ -406,8 +435,10 @@ test('a directory-store repo gets a manual remedy, not the unusable command', ()
   assert.match(body, /add `completed: true` to each ticket/);
 });
 
-test('a tickets.json repo still gets the command', () => {
-  assert.ok(offersCommand(renderIssueBody(DRIFT, { ceremonySupported: true })));
+test('a tickets.json repo gets the command (when evidence allows it)', () => {
+  // DONE is explicit-done, so the command is not withheld by the evidence gate —
+  // this isolates the backend behaviour from the evidence gate.
+  assert.ok(offersCommand(renderIssueBody(DONE, { ceremonySupported: true })));
 });
 
 test('backend support defaults to the tickets.json behaviour', () => {

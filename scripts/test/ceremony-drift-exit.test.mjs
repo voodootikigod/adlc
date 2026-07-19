@@ -289,14 +289,19 @@ const completedIds = (repo) =>
 test('the rendered command completes only the reported ticket, not rails-less ones', async () => {
   const repo = makeMixedRepo();
   try {
-    // Take the command straight out of the rendered issue body.
+    // Take the command straight out of the rendered issue body. The reporter only
+    // renders the mutating command when every rail-freezing entry is explicit-done
+    // (the evidence gate), so RAILED carries a done-status here — otherwise no
+    // command would be offered, which is a separate test. The point of THIS test
+    // is the command's blast radius: even when offered, it must not touch a
+    // rails-less ticket that never appeared in the report.
     const { renderIssueBody } = await import('../ceremony-drift.mjs');
     const body = renderIssueBody([
-      { id: 'RAILED', reason: 'inferred: scope resolves', rails: ['packages/core/**'], blocker: 'rails-freeze' },
+      { id: 'RAILED', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
     ]);
     const cmd = body.split('\n').map((l) => l.trim())
       .find((l) => l.startsWith('ADLC_RAILS_BYPASS=1 adlc ticket-prune'));
-    assert.ok(cmd, 'the body should document a ceremony command');
+    assert.ok(cmd, 'an all-confirmed set should document the ceremony command');
 
     const args = cmd.replace('ADLC_RAILS_BYPASS=1 adlc ticket-prune', '').trim().split(/\s+/)
       .map((a) => (a === 'origin/main' ? 'HEAD' : a)); // fixture has no origin

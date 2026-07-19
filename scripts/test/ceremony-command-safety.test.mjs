@@ -67,11 +67,19 @@ const HISTORICAL = new Set([
 ]);
 
 // Known-bad files whose paths are frozen by an ACTIVE ticket, so the fix cannot
-// land here. Each entry names the blocking ticket. Remove the entry with the fix.
+// land here. Keyed by file → the ticket id whose rails freeze it. The exception
+// is valid ONLY while that ticket is genuinely active; the self-cleaning test
+// below verifies that against the live store, not just the file text.
 const FROZEN_PENDING = new Map([
-  ['plugins/adlc-claude-code/commands/adlc-maintain.md', 'T51 (active; rails plugins/adlc-claude-code/commands/**)'],
-  ['plugins/adlc-opencode/command/adlc-maintain.md', 'T53 (active; rails plugins/adlc-opencode/**)'],
+  ['plugins/adlc-claude-code/commands/adlc-maintain.md', 'T51'],
+  ['plugins/adlc-opencode/command/adlc-maintain.md', 'T53'],
 ]);
+
+/** A ticket is active iff it is present in the store and not `completed`. */
+function activeTicketIds() {
+  const store = JSON.parse(readFileSync(join(REPO, '.adlc', 'tickets.json'), 'utf8'));
+  return new Set((store.tickets ?? []).filter((t) => t?.completed !== true).map((t) => t?.id));
+}
 
 const scanFor = (predicate) => {
   const hits = [];
@@ -87,24 +95,50 @@ const scanFor = (predicate) => {
   return hits;
 };
 
-test('no shipped doc advertises `ticket-prune --ceremony --write`', () => {
+test('no shipped doc advertises `ticket-prune --ceremony --write` (except the two rail-frozen files tracked in FROZEN_PENDING)', () => {
   const offenders = scanFor((f) => !FROZEN_PENDING.has(f));
   assert.deepEqual(offenders, [],
     'these files instruct an operator to run the ceremony with --write, which also ' +
     'completes rails-less tickets outside the reviewed set:\n  ' + offenders.join('\n  '));
 });
 
-// SELF-CLEANING. If a frozen file no longer carries the pattern, the exception has
-// served its purpose and must go — otherwise the allowance outlives the problem
-// and silently weakens the guard for that path forever.
-test('every frozen-pending exception is still necessary', () => {
-  const stale = [];
+// SELF-CLEANING, on TWO independent conditions — either dissolves the exception:
+//
+//   (a) the file no longer carries the unsafe command (someone fixed it), or
+//   (b) the blocking ticket is no longer active (its rails expired, so the file
+//       is now editable and the exception has no justification left).
+//
+// A previous version checked only (a). That let the exception outlive its
+// blocker: once T51/T53 completed, the file stayed editable and unsafe, yet the
+// suite stayed green because the bad text was still there and still excused. An
+// exception that survives the removal of its own justification is not a temporary
+// allowance, it is a permanent hole. Failing on (b) forces the fix the moment the
+// rail unfreezes.
+test('every frozen-pending exception is still justified (file unfixed AND blocker active)', () => {
+  const active = activeTicketIds();
+  const invalid = [];
   for (const [file, ticket] of FROZEN_PENDING) {
-    if (scanFor((f) => f === file).length === 0) stale.push(`${file} (was blocked by ${ticket})`);
+    const stillUnsafe = scanFor((f) => f === file).length > 0;
+    if (!stillUnsafe) {
+      invalid.push(`${file}: fixed — remove its FROZEN_PENDING entry so the guard covers it again`);
+    } else if (!active.has(ticket)) {
+      invalid.push(`${file}: blocking ticket ${ticket} is no longer active — the rail has expired, ` +
+        `so fix the file (remove --write) and delete this exception`);
+    }
   }
-  assert.deepEqual(stale, [],
-    'these files are fixed — delete their FROZEN_PENDING entries so the guard covers ' +
-    'them again:\n  ' + stale.join('\n  '));
+  assert.deepEqual(invalid, [], 'stale FROZEN_PENDING exceptions:\n  ' + invalid.join('\n  '));
+});
+
+// The exception file names two ticket ids; if a typo or rename made them
+// unresolvable, `activeTicketIds()` would never contain them and (b) would fire —
+// but assert presence explicitly so the failure reads as "unknown ticket" rather
+// than "blocker completed".
+test('every frozen-pending blocker id exists in the ticket store', () => {
+  const store = JSON.parse(readFileSync(join(REPO, '.adlc', 'tickets.json'), 'utf8'));
+  const known = new Set((store.tickets ?? []).map((t) => t?.id));
+  for (const ticket of FROZEN_PENDING.values()) {
+    assert.ok(known.has(ticket), `FROZEN_PENDING names ${ticket}, which is not in .adlc/tickets.json`);
+  }
 });
 
 // Guards the guard: if the pattern stops matching the shape it is meant to catch,

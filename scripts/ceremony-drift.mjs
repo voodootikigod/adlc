@@ -120,6 +120,30 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   const confirmed = railsFreeze.filter((t) => !isActive(t) && isConfirmedDone(t));
   const unconfirmed = railsFreeze.filter((t) => !isActive(t) && !isConfirmedDone(t));
 
+  // Whether the MUTATING bulk command may appear at all. This is evidence-gated,
+  // not certification: it renders only when every rail-freezing entry carries an
+  // explicit done-status. Heuristic entries (`inferred:` — scope globs already
+  // resolve, indistinguishable from an active ticket touching existing files)
+  // must NOT get a copy-pasteable rail-expiring command, because in CI the
+  // active-ticket quarantine cannot fire (the pointer is gitignored) and a
+  // warning is not an enforced invariant.
+  //
+  // This is deliberately distinct from the `bulkIsSafe` check removed earlier:
+  // that one relied on the active-ticket pointer, which CI cannot see. This one
+  // relies only on the ticket's own committed `status` field, which is visible in
+  // every checkout. `activeEntries === 0` stays as defense-in-depth for local
+  // runs where the pointer IS present; it is a bonus, never the load-bearing
+  // signal. The dry-run command below is always shown regardless — it is
+  // read-only and cannot expire a rail.
+  //
+  // The residual TIME window (a ticket added after this render enters the
+  // command's set — the command takes no IDs and recomputes) is NOT closed here;
+  // that needs a revision-bound, per-ticket ceremony in ticket-prune (explicit
+  // IDs + expected HEAD), a CLI contract change tracked separately. The dry-run
+  // is the operator's guard against it in the meantime.
+  const mutatingCommandAllowed =
+    confirmed.length > 0 && unconfirmed.length === 0 && activeEntries.length === 0;
+
   // WHY THIS REPORT NEVER CERTIFIES THE COMMAND AS SAFE TO RUN
   //
   // Earlier revisions gated a ready-to-run bulk command on a `bulkIsSafe` check
@@ -273,12 +297,26 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
         '',
         '```bash',
         'adlc ticket-prune --base-ref origin/main        # dry run: review the set',
-        CEREMONY_CMD,
+        ...(mutatingCommandAllowed ? [CEREMONY_CMD] : []),
         '```',
         '',
-        'Completing a ticket expires its rails. If the dry run names anything still',
-        'in flight, complete the finished tickets individually instead — the bulk',
-        'command has no per-ticket filter.',
+        ...(mutatingCommandAllowed
+          ? [
+              'Every rail-freezing entry here carries an explicit done-status, so the',
+              'completion command is shown. Completing a ticket expires its rails; if the',
+              'dry run names anything still in flight, complete the finished tickets',
+              'individually instead — the bulk command has no per-ticket filter.',
+            ]
+          : [
+              '**No completion command is shown.** At least one rail-freezing entry above',
+              'was inferred shipped only because its scope already resolves to tracked',
+              'files — which is exactly what an active ticket editing existing files looks',
+              'like — so there is no authoritative signal it is finished. Give each',
+              'genuinely-done ticket an explicit done-`status` (it then moves to the',
+              '"Explicitly done" section and the command appears), or complete them one at',
+              'a time via the protected-base path. The bulk command would complete every',
+              'rail-freezing ticket it finds, including any still in flight.',
+            ]),
         '',
       ];
 
