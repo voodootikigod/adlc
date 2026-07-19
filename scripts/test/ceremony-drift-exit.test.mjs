@@ -67,7 +67,11 @@ function runWith(ghScript, { repo, env = {} } = {}) {
   try {
     const log = join(binDir, 'calls.txt');
     const ghPath = join(binDir, 'gh');
-    writeFileSync(ghPath, `#!/bin/sh\necho "$*" >> ${log}\n${ghScript}\n`);
+    // Drain stdin first. The reporter pipes the issue body to `gh ... --body-file -`;
+    // real gh reads it, but a stub that printf's and exits leaves the writer on a
+    // closed pipe -> EPIPE -> spurious non-zero exit. Node 22 tolerated the race;
+    // Node 18/20 surfaced it, so this passed locally and failed in CI.
+    writeFileSync(ghPath, `#!/bin/sh\ncat >/dev/null 2>&1\necho "$*" >> ${log}\n${ghScript}\n`);
     chmodSync(ghPath, 0o755);
     const r = spawnSync(process.execPath, [SCRIPT], {
       cwd: repo,
