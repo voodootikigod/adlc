@@ -27,8 +27,6 @@
 // the issue untouched, or the signal becomes noise and gets muted.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { runTicketPrune } from '../packages/ticket-prune/lib/run.mjs';
 import { resolveActiveTicketId } from '../packages/tickets/lib/pointer.mjs';
 
@@ -45,21 +43,29 @@ export const MARKER = '<!-- adlc:ceremony-drift -->';
 // so lookup stays deterministic no matter how large the repo gets.
 export const LABEL = 'ceremony-drift';
 
-// NO `--write`. That flag widens the write set beyond what this report shows:
-// with it, runTicketPrune also TOMBSTONES rails-less stale tickets (completing
-// them), and those never appear here — the report is built from `needsCeremony`,
-// which covers only rail-freezing and preexisting-completed-field entries. A
-// rails-less ticket that is actually in progress but whose scope already resolves
-// would be marked completed by a command the operator ran on the strength of a
-// report that never listed it.
+// The read-only review command. Always safe to run; it only prints the drift set.
+const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main        # dry run: review the set';
+
+// The completion command is PER-TICKET and canonical, not a bulk sweep.
 //
-// `--ceremony` alone still completes the rail-freezing candidates (its branch in
-// run.mjs does not test `write`), so nothing is lost. Verified on a fixture with
-// one of each: with --write both are completed; without it, only the
-// rail-freezing one is, and the rails-less ticket is untouched. See the
-// end-to-end test in scripts/test/ceremony-drift-exit.test.mjs.
-const CEREMONY_CMD =
-  'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main';
+// `adlc-tickets complete <id> --write --authorize` goes through TicketService's
+// transaction: it completes exactly the named ticket, validates the expected
+// snapshot (CAS), holds the worktree lock, journals, and records completion
+// evidence to `.adlc/manifest.jsonl`. It works identically on the tickets.json
+// and directory backends (verified on both).
+//
+// This replaces two earlier remedies, and fixes what each got wrong:
+//   - the bulk `ticket-prune --ceremony`, which recomputed its own target set at
+//     run time (no ids, no revision) — so a ticket that landed after this issue
+//     was reviewed could be swept in (a TOCTOU window), and it had no per-ticket
+//     filter (one heuristic entry tainted the whole set);
+//   - the directory-store raw-edit ("add completed:true to each shard"), which
+//     bypassed the lock, CAS, journal, and manifest evidence the directory
+//     contract requires, and was not "the same minimal diff" it claimed to be.
+//
+// A per-ticket command is bound to one id, so neither problem exists: no
+// recomputation, no blast radius, and the write goes through the canonical path.
+const completeCmd = (id) => `adlc-tickets complete ${id} --write --authorize`;
 
 /**
  * Render the tracking-issue body. Deterministic: entries are sorted by id, so an
@@ -67,7 +73,7 @@ const CEREMONY_CMD =
  * compare bodies to decide whether anything actually changed.
  * @param {{id?: string, reason?: string, rails?: string[], blocker?: string}[]} needsCeremony
  */
-export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false, ceremonySupported = true } = {}) {
+export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false } = {}) {
   const entries = [...(needsCeremony ?? [])].sort((a, b) =>
     String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
   );
@@ -120,29 +126,20 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   const confirmed = railsFreeze.filter((t) => !isActive(t) && isConfirmedDone(t));
   const unconfirmed = railsFreeze.filter((t) => !isActive(t) && !isConfirmedDone(t));
 
-  // Whether the MUTATING bulk command may appear at all. This is evidence-gated,
-  // not certification: it renders only when every rail-freezing entry carries an
-  // explicit done-status. Heuristic entries (`inferred:` — scope globs already
-  // resolve, indistinguishable from an active ticket touching existing files)
-  // must NOT get a copy-pasteable rail-expiring command, because in CI the
-  // active-ticket quarantine cannot fire (the pointer is gitignored) and a
-  // warning is not an enforced invariant.
+  // A ready-to-run completion command is offered ONLY for confirmed entries —
+  // rail-freezing tickets that carry an explicit done-status and are not the
+  // active ticket. Because each command names one id, a heuristic or active entry
+  // elsewhere in the set cannot be swept in: there is no all-or-nothing gate to
+  // get wrong. Heuristic entries (`inferred:` — scope already resolves,
+  // indistinguishable from an active ticket editing existing files) simply do not
+  // get a ready command; they are listed under "Needs confirmation" with the
+  // generic form, to be run only after a human verifies each one.
   //
-  // This is deliberately distinct from the `bulkIsSafe` check removed earlier:
-  // that one relied on the active-ticket pointer, which CI cannot see. This one
-  // relies only on the ticket's own committed `status` field, which is visible in
-  // every checkout. `activeEntries === 0` stays as defense-in-depth for local
-  // runs where the pointer IS present; it is a bonus, never the load-bearing
-  // signal. The dry-run command below is always shown regardless — it is
-  // read-only and cannot expire a rail.
-  //
-  // The residual TIME window (a ticket added after this render enters the
-  // command's set — the command takes no IDs and recomputes) is NOT closed here;
-  // that needs a revision-bound, per-ticket ceremony in ticket-prune (explicit
-  // IDs + expected HEAD), a CLI contract change tracked separately. The dry-run
-  // is the operator's guard against it in the meantime.
-  const mutatingCommandAllowed =
-    confirmed.length > 0 && unconfirmed.length === 0 && activeEntries.length === 0;
+  // `confirmed` is derived from the ticket's committed `status` field, visible in
+  // every checkout — NOT from the active-ticket pointer, which a CI checkout
+  // cannot see (it is gitignored). That distinction is why the earlier
+  // pointer-dependent gate was unsound and this is not.
+  const completable = confirmed; // already: rail-freezing, explicit-done, not active
 
   // WHY THIS REPORT NEVER CERTIFIES THE COMMAND AS SAFE TO RUN
   //
@@ -254,70 +251,56 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
     );
   }
 
-  // Rendered whenever there is anything the ceremony could act on. It is a
-  // PROCEDURE with preconditions, never a vetted one-liner: see the "never
-  // certifies" note above for why this job cannot vouch for it.
-  //
-  // On a DIRECTORY-backed store the automated ceremony does not exist yet —
-  // run.mjs returns "not supported for the directory ticket store yet" — so
-  // publishing the command there would send an operator to a deterministic
-  // error and leave the rails frozen. Detection happens in main(); this renders
-  // the backend-appropriate remedy.
+  // A PROCEDURE with preconditions, never a vetted one-liner: see the "never
+  // certifies" note above. The remedy is the same on both backends — the
+  // canonical per-ticket completion works identically on tickets.json and the
+  // directory store — so there is no backend branch here.
   const procedure = !railsFreeze.length
     ? []
-    : !ceremonySupported
-    ? [
-        '## Clearing these',
-        '',
-        '> This repository uses the **directory ticket store** (`.adlc/tickets/`),',
-        '> for which `ticket-prune --ceremony` is not implemented yet — it exits with',
-        '> "not supported for the directory ticket store yet". No command is offered',
-        '> here because the one that exists would fail.',
-        '',
-        'Complete these tickets through the protected-base admin path directly:',
-        'add `completed: true` to each ticket listed above (an add-only edit, the same',
-        'minimal diff the ceremony would produce) and land it on `main` the way other',
-        'protected-base ticket changes are landed. Completing a ticket expires its',
-        'rails, so confirm each is genuinely finished first.',
-        '',
-      ]
     : [
         '## Clearing these',
         '',
-        '> **This check runs in CI and cannot tell you it is safe to run the command',
-        '> below.** Two things it cannot see: any ticket added since this issue was',
-        '> last updated (the command re-computes its own target set when you run it,',
-        '> and takes no ticket IDs), and whether a ticket is actively being built —',
-        '> `.adlc/current-ticket.json` is gitignored, so a CI checkout never has one',
-        '> and an empty checkout looks identical to "nothing in progress".',
+        '> **Protected-base admin action.** Completing a rail-freezing ticket expires',
+        "> its rails, and rails-guard-ci denies that diff on an ordinary PR, so these",
+        '> land on `main` the way other protected-base ticket changes do.',
+        '>',
+        '> **This check runs in CI and cannot see whether a ticket is still being',
+        "> built** — `.adlc/current-ticket.json` is gitignored, so a CI checkout never",
+        '> has one and an empty checkout looks identical to "nothing in progress".',
+        '> Run the review from a checkout where your active-ticket pointer lives, and',
+        '> confirm each id is genuinely finished before completing it.',
         '',
-        'Run the dry run first, from an up-to-date `main` checkout on the machine',
-        'where your active-ticket pointer lives, and confirm the listed set is what',
-        'you expect **now**:',
+        'Review the current drift set (read-only — expires no rails):',
         '',
         '```bash',
-        'adlc ticket-prune --base-ref origin/main        # dry run: review the set',
-        ...(mutatingCommandAllowed ? [CEREMONY_CMD] : []),
+        DRY_RUN_CMD,
         '```',
         '',
-        ...(mutatingCommandAllowed
+        ...(completable.length
           ? [
-              'Every rail-freezing entry here carries an explicit done-status, so the',
-              'completion command is shown. Completing a ticket expires its rails; if the',
-              'dry run names anything still in flight, complete the finished tickets',
-              'individually instead — the bulk command has no per-ticket filter.',
+              'Complete each finished ticket individually. Each command below is bound to',
+              "one id, goes through the store's transaction (lock + expected-snapshot",
+              'check), and records completion evidence to `.adlc/manifest.jsonl` — it',
+              'completes exactly that ticket and nothing else:',
+              '',
+              '```bash',
+              ...completable.map((t) => completeCmd(t.id)),
+              '```',
+              '',
             ]
-          : [
-              '**No completion command is shown.** At least one rail-freezing entry above',
-              'was inferred shipped only because its scope already resolves to tracked',
-              'files — which is exactly what an active ticket editing existing files looks',
-              'like — so there is no authoritative signal it is finished. Give each',
-              'genuinely-done ticket an explicit done-`status` (it then moves to the',
-              '"Explicitly done" section and the command appears), or complete them one at',
-              'a time via the protected-base path. The bulk command would complete every',
-              'rail-freezing ticket it finds, including any still in flight.',
-            ]),
-        '',
+          : []),
+        ...(unconfirmed.length
+          ? [
+              (completable.length ? 'The' : 'No ready command is offered: the') +
+                ` ${unconfirmed.length} ticket(s) under "Needs confirmation" were inferred` +
+                ' shipped only because their scope already resolves to tracked files —',
+              'indistinguishable from an active ticket editing existing files. Give each',
+              'genuinely-done ticket an explicit done-`status` so it appears above, or, once',
+              'you have verified one by hand, complete just that id:',
+              '`adlc-tickets complete <id> --write --authorize`.',
+              '',
+            ]
+          : []),
       ];
 
   return [
@@ -395,7 +378,7 @@ export function selectTrackingIssue(issues, { authors = null, requireMarker = tr
  * and close-on-clear contracts are testable without a GitHub token.
  * @param {{drift: object[], existingIssue: {number: number, title: string, body: string} | null}} input
  */
-export function decideAction({ drift, existingIssue, activeTicketId = null, activeTicketUnknown = false, ceremonySupported = true }) {
+export function decideAction({ drift, existingIssue, activeTicketId = null, activeTicketUnknown = false }) {
   const entries = drift ?? [];
 
   if (entries.length === 0) {
@@ -405,7 +388,7 @@ export function decideAction({ drift, existingIssue, activeTicketId = null, acti
   }
 
   const title = renderIssueTitle(entries);
-  const body = renderIssueBody(entries, { activeTicketId, activeTicketUnknown, ceremonySupported });
+  const body = renderIssueBody(entries, { activeTicketId, activeTicketUnknown });
 
   if (!existingIssue) return { action: 'open', title, body };
 
@@ -519,13 +502,6 @@ async function main() {
   // a malformed or conflicting pointer comes back as ok:false (the fail-closed
   // contract from #196). Reading it as a bare id yields an object, which would
   // never equal a ticket id and would silently disable the exclusion entirely.
-  // Same signal the Claude Code hook uses to detect the backend. The directory
-  // store has no ceremony implementation yet (run.mjs), so the remedy differs.
-  const ceremonySupported = !existsSync(join(process.cwd(), '.adlc', 'tickets', '.store.json'));
-  if (!ceremonySupported) {
-    console.log('ceremony-drift: directory ticket store detected — ceremony command not applicable');
-  }
-
   const resolvedActive = resolveActiveTicketId({ root: process.cwd() });
   const activeTicketUnknown = !resolvedActive.ok;
   const activeTicketId = resolvedActive.ok ? (resolvedActive.value?.id ?? null) : null;
@@ -547,7 +523,7 @@ async function main() {
   }
 
   ensureLabel();
-  const decision = decideAction({ drift, existingIssue: findExistingIssue(), activeTicketId, activeTicketUnknown, ceremonySupported });
+  const decision = decideAction({ drift, existingIssue: findExistingIssue(), activeTicketId, activeTicketUnknown });
   switch (decision.action) {
     case 'open': {
       const url = gh(['issue', 'create', '--title', decision.title, '--label', LABEL, '--body-file', '-'], decision.body).trim();

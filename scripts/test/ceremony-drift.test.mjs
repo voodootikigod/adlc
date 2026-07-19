@@ -32,16 +32,22 @@ const DONE = [
   { id: 'T7', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
 ];
 
-// Asserting on /ticket-prune --ceremony/ is NOT sufficient: the body also
-// MENTIONS the command in prose explaining why it is being withheld. A substring
-// check would then read "the command is offered" from text saying the opposite.
-// This looks for the runnable line inside the fenced block.
-// No `--write`: that flag also tombstones rails-less stale tickets, which never
-// appear in this report, so the command would write outside the set it shows.
-// Pinned literally here so reintroducing the flag fails this suite too, not only
-// the end-to-end blast-radius test.
-const RUNNABLE = 'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main';
-const offersCommand = (body) => body.split('\n').some((l) => l.trim() === RUNNABLE);
+// The remedy is a PER-TICKET canonical completion: `adlc-tickets complete <id>
+// --write --authorize`. A ready command is a fenced line naming a SPECIFIC id —
+// not the generic `<id>` form the "needs confirmation" guidance mentions in prose
+// (a substring check would read that as "offered" from text saying the opposite),
+// and not the read-only dry run.
+const readyCommandIds = (body) =>
+  body
+    .split('\n')
+    .map((l) => l.trim())
+    .map((l) => l.match(/^adlc-tickets complete (\S+) --write --authorize$/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+const offersCommand = (body) => readyCommandIds(body).length > 0;
+// The bulk command must never reappear — it recomputed its set (TOCTOU) and had
+// no per-ticket filter (blast radius). Both are why it was replaced.
+const offersBulkCommand = (body) => /ticket-prune --ceremony/.test(body);
 
 // The report documents the ceremony as a PROCEDURE WITH PRECONDITIONS. It never
 // certifies it as safe, because it cannot: it renders a snapshot at commit A
@@ -318,43 +324,52 @@ test('decideAction threads the unknown-pointer state into the body', () => {
 // The procedure section is the one place the command appears. It must always
 // disclose what CI cannot see, and always lead with the dry run.
 test('the procedure discloses the CI blind spots and leads with a dry run', () => {
-  const body = renderIssueBody(DONE); // explicit-done, so the command is present
-  assert.ok(offersCommand(body), 'the procedure documents the command');
-  assert.match(body, /cannot tell you it is safe to run the command/);
-  assert.match(body, /gitignored/);                       // the place blind spot
-  assert.match(body, /re-computes its own target set/);   // the time blind spot
+  const body = renderIssueBody(DONE); // explicit-done, so a per-ticket command is present
+  assert.ok(offersCommand(body), 'the procedure documents the completion command');
+  assert.match(body, /cannot see whether a ticket is still being/); // the blind spot it can name
+  assert.match(body, /gitignored/);
   const dryIdx = body.indexOf('# dry run');
-  assert.ok(dryIdx !== -1 && dryIdx < body.indexOf(RUNNABLE), 'dry run must come first');
-  assert.ok(makesNoSafetyClaim(body));
+  const cmdIdx = body.indexOf('adlc-tickets complete');
+  assert.ok(dryIdx !== -1 && cmdIdx !== -1 && dryIdx < cmdIdx, 'the read-only dry run must come first');
 });
 
-// The mutating command is EVIDENCE-GATED, not just captioned. A warning is not an
-// enforced invariant: in CI the active-ticket quarantine cannot fire (the pointer
-// is gitignored), so heuristic entries must not even be handed the command.
-test('heuristic-only drift shows the dry run but withholds the mutating command', () => {
+// The bulk `ticket-prune --ceremony` is gone entirely: it recomputed its target
+// set at run time (a TOCTOU window) and had no per-ticket filter. Its replacement
+// names one id per command, so neither failure mode is expressible.
+test('the report never renders the bulk ceremony command', () => {
+  for (const fixture of [DONE, DRIFT, [...DONE, ...DRIFT]]) {
+    assert.ok(!offersBulkCommand(renderIssueBody(fixture)), 'bulk ticket-prune --ceremony must not appear');
+  }
+});
+
+// A ready command is offered ONLY for confirmed (explicit-done) entries. A
+// heuristic entry gets no specific command — but note it does NOT suppress the
+// commands for confirmed entries beside it (see the next test), because per-ticket
+// commands don't share a blast radius.
+test('heuristic-only drift shows the dry run but offers no ready command', () => {
   const body = renderIssueBody(DRIFT); // both entries are `inferred:`
   assert.match(body, /# dry run/, 'the read-only dry run is always available');
-  assert.ok(!offersCommand(body), 'no rail-expiring command without authoritative evidence');
-  assert.match(body, /No completion command is shown/);
+  assert.deepEqual(readyCommandIds(body), [], 'no ready command without authoritative evidence');
 });
 
-test('a confirmed entry alongside a heuristic one still withholds the command', () => {
-  // The bulk command completes ALL rail-freezing tickets, so one unconfirmed
-  // entry taints the whole set — same reasoning as the round-6 blast-radius fix.
+// The round-6 blast-radius limitation is GONE. Under the old bulk command, one
+// heuristic entry tainted the whole set and withheld the command from everyone.
+// Per-ticket commands are scoped to a single id, so a confirmed ticket beside a
+// heuristic one still gets its own command — and the heuristic one does not.
+test('a confirmed entry beside a heuristic one gets its own command; the heuristic one does not', () => {
   const body = renderIssueBody([
     { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
     { id: 'T9', reason: 'inferred: scope resolves', rails: ['b/**'], blocker: 'rails-freeze' },
   ]);
-  assert.ok(!offersCommand(body));
-  assert.match(body, /No completion command is shown/);
+  assert.deepEqual(readyCommandIds(body), ['T7'], 'only the confirmed ticket gets a ready command');
 });
 
-test('the mutating command appears only when every rail-freezing entry is explicit-done', () => {
+test('every confirmed entry gets its own per-ticket command', () => {
   const body = renderIssueBody([
     { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
     { id: 'T8', reason: 'explicit status: "done"', rails: ['b/**'], blocker: 'rails-freeze' },
   ]);
-  assert.ok(offersCommand(body));
+  assert.deepEqual(readyCommandIds(body).sort(), ['T7', 'T8']);
 });
 
 test('a drift set with nothing rail-freezing renders no procedure at all', () => {
@@ -421,31 +436,23 @@ test('decideAction never throws on a malformed drift entry', () => {
   assert.match(d.body, /T1/);
 });
 
-// ---- backend compatibility ----
+// ---- backend independence ----
 //
-// `ticket-prune --ceremony` is not implemented for the directory ticket store
-// (run.mjs returns "not supported for the directory ticket store yet"). Publishing
-// the command to a repo on that backend would send an operator to a deterministic
-// error and leave the rails frozen, so the remedy is backend-specific.
+// The remedy is the same on both backends. `adlc-tickets complete <id> --write
+// --authorize` goes through TicketService and works identically on tickets.json
+// and the directory store (verified end-to-end in ceremony-drift-exit.test.mjs),
+// so there is no backend branch and no directory-specific raw-edit path — the
+// latter bypassed the store's lock, CAS, journal, and manifest evidence.
 
-test('a directory-store repo gets a manual remedy, not the unusable command', () => {
-  const body = renderIssueBody(DRIFT, { ceremonySupported: false });
-  assert.ok(!offersCommand(body), 'the ceremony command does not work on this backend');
-  assert.match(body, /not supported for the directory ticket store/);
-  assert.match(body, /add `completed: true` to each ticket/);
+test('the body carries the canonical per-ticket command, never a raw shard edit', () => {
+  const body = renderIssueBody(DONE);
+  assert.match(body, /adlc-tickets complete T7 --write --authorize/);
+  assert.doesNotMatch(body, /add `completed: true` to each/); // the old raw-edit remedy
+  assert.doesNotMatch(body, /not supported for the directory ticket store/);
 });
 
-test('a tickets.json repo gets the command (when evidence allows it)', () => {
-  // DONE is explicit-done, so the command is not withheld by the evidence gate —
-  // this isolates the backend behaviour from the evidence gate.
-  assert.ok(offersCommand(renderIssueBody(DONE, { ceremonySupported: true })));
-});
-
-test('backend support defaults to the tickets.json behaviour', () => {
-  assert.equal(renderIssueBody(DRIFT), renderIssueBody(DRIFT, { ceremonySupported: true }));
-});
-
-test('decideAction threads the backend through to the body', () => {
-  const d = decideAction({ drift: DRIFT, existingIssue: null, ceremonySupported: false });
-  assert.ok(!offersCommand(d.body));
+test('the completion command records evidence and uses the transaction (documented)', () => {
+  const body = renderIssueBody(DONE);
+  assert.match(body, /\.adlc\/manifest\.jsonl/, 'the body tells the operator evidence is recorded');
+  assert.match(body, /transaction/);
 });

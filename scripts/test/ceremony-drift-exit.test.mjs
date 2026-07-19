@@ -19,7 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, chmodSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, chmodSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -286,32 +286,32 @@ const completedIds = (repo) =>
   JSON.parse(readFileSync(join(repo, '.adlc', 'tickets.json'), 'utf8'))
     .tickets.filter((t) => t.completed === true).map((t) => t.id).sort();
 
-test('the rendered command completes only the reported ticket, not rails-less ones', async () => {
+test('the rendered per-ticket command completes only its named ticket, nothing else', async () => {
   const repo = makeMixedRepo();
   try {
-    // Take the command straight out of the rendered issue body. The reporter only
-    // renders the mutating command when every rail-freezing entry is explicit-done
-    // (the evidence gate), so RAILED carries a done-status here — otherwise no
-    // command would be offered, which is a separate test. The point of THIS test
-    // is the command's blast radius: even when offered, it must not touch a
-    // rails-less ticket that never appeared in the report.
+    // Take the command straight out of the rendered issue body and run it as-is.
+    // RAILED carries a done-status, so it gets a ready `adlc-tickets complete
+    // RAILED` line. The point: running EXACTLY what the issue prints must complete
+    // only RAILED and never touch RAILLESS, which never appeared in the report.
     const { renderIssueBody } = await import('../ceremony-drift.mjs');
     const body = renderIssueBody([
       { id: 'RAILED', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
     ]);
     const cmd = body.split('\n').map((l) => l.trim())
-      .find((l) => l.startsWith('ADLC_RAILS_BYPASS=1 adlc ticket-prune'));
-    assert.ok(cmd, 'an all-confirmed set should document the ceremony command');
+      .find((l) => /^adlc-tickets complete \S+ --write --authorize$/.test(l));
+    assert.ok(cmd, 'an explicit-done entry should document a per-ticket completion command');
 
-    const args = cmd.replace('ADLC_RAILS_BYPASS=1 adlc ticket-prune', '').trim().split(/\s+/)
-      .map((a) => (a === 'origin/main' ? 'HEAD' : a)); // fixture has no origin
-    const BIN = join(REPO_ROOT, 'packages', 'ticket-prune', 'bin', 'ticket-prune.mjs');
+    const args = cmd.replace('adlc-tickets', '').trim().split(/\s+/);
+    const BIN = join(REPO_ROOT, 'packages', 'tickets', 'bin', 'adlc-tickets.mjs');
     execFileSync(process.execPath, [BIN, ...args], {
-      cwd: repo, stdio: 'ignore', env: { ...process.env, ADLC_RAILS_BYPASS: '1' },
+      cwd: repo, stdio: 'ignore', env: { ...process.env },
     });
 
     assert.deepEqual(completedIds(repo), ['RAILED'],
       'the rails-less ticket must be untouched — it never appeared in the report');
+    // The canonical path records completion evidence; the raw-edit remedy did not.
+    assert.ok(existsSync(join(repo, '.adlc', 'manifest.jsonl')),
+      'completion must be journaled to the manifest');
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
