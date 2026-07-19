@@ -225,5 +225,5 @@ test('--json suppresses the legacy-migration offer even when both streams are a 
 test('the reporter renders the completion command WITH --json', async () => {
   const { renderIssueBody } = await import('../ceremony-drift.mjs');
   const body = renderIssueBody([{ id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
-  assert.match(body, /adlc-tickets complete T7 --write --authorize --json/);
+  assert.match(body, /adlc ticket complete T7 --write --authorize --json/);
 });

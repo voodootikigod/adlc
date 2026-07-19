@@ -32,7 +32,7 @@ const DONE = [
   { id: 'T7', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
 ];
 
-// The remedy is a PER-TICKET canonical completion: `adlc-tickets complete <id>
+// The remedy is a PER-TICKET canonical completion: `adlc ticket complete <id>
 // --write --authorize`. A ready command is a fenced line naming a SPECIFIC id —
 // not the generic `<id>` form the "needs confirmation" guidance mentions in prose
 // (a substring check would read that as "offered" from text saying the opposite),
@@ -41,7 +41,7 @@ const readyCommandIds = (body) =>
   body
     .split('\n')
     .map((l) => l.trim())
-    .map((l) => l.match(/^adlc-tickets complete (\S+) --write --authorize --json$/))
+    .map((l) => l.match(/^adlc ticket complete (\S+) --write --authorize --json$/))
     .filter(Boolean)
     .map((m) => m[1]);
 const offersCommand = (body) => readyCommandIds(body).length > 0;
@@ -334,7 +334,7 @@ test('the procedure discloses the CI blind spots and leads with a dry run', () =
   assert.match(body, /cannot see whether a ticket is still being/); // the blind spot it can name
   assert.match(body, /gitignored/);
   const dryIdx = body.indexOf('# dry run');
-  const cmdIdx = body.indexOf('adlc-tickets complete');
+  const cmdIdx = body.indexOf('adlc ticket complete');
   assert.ok(dryIdx !== -1 && cmdIdx !== -1 && dryIdx < cmdIdx, 'the read-only dry run must come first');
 });
 
@@ -443,7 +443,7 @@ test('decideAction never throws on a malformed drift entry', () => {
 
 // ---- backend independence ----
 //
-// The remedy is the same on both backends. `adlc-tickets complete <id> --write
+// The remedy is the same on both backends. `adlc ticket complete <id> --write
 // --authorize` goes through TicketService and works identically on tickets.json
 // and the directory store (verified end-to-end in ceremony-drift-exit.test.mjs),
 // so there is no backend branch and no directory-specific raw-edit path — the
@@ -451,7 +451,7 @@ test('decideAction never throws on a malformed drift entry', () => {
 
 test('the body carries the canonical per-ticket command, never a raw shard edit', () => {
   const body = renderIssueBody(DONE);
-  assert.match(body, /adlc-tickets complete T7 --write --authorize/);
+  assert.match(body, /adlc ticket complete T7 --write --authorize/);
   assert.doesNotMatch(body, /add `completed: true` to each/); // the old raw-edit remedy
   assert.doesNotMatch(body, /not supported for the directory ticket store/);
 });
@@ -486,7 +486,7 @@ for (const id of SHELL_INJECTION_IDS) {
   test(`a malicious ticket id (${JSON.stringify(id).slice(0, 24)}) is never rendered as a command`, () => {
     const body = renderIssueBody([{ id, reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
     // No runnable adlc-tickets line carries the raw id.
-    assert.ok(!body.split('\n').some((l) => l.trim().startsWith('adlc-tickets complete') && l.includes(id)),
+    assert.ok(!body.split('\n').some((l) => l.trim().startsWith('adlc ticket complete') && l.includes(id)),
       'the raw id must not appear in a runnable command');
     // It is surfaced as unsafe instead, not silently dropped.
     assert.match(body, /cannot be safely/);
@@ -495,7 +495,7 @@ for (const id of SHELL_INJECTION_IDS) {
 
 test('a safe id is rendered with --json (which suppresses interactive migration)', () => {
   const body = renderIssueBody([{ id: 'T-CC1', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
-  assert.match(body, /adlc-tickets complete T-CC1 --write --authorize --json/);
+  assert.match(body, /adlc ticket complete T-CC1 --write --authorize --json/);
 });
 
 test('a mix of safe and unsafe ids renders the safe one and flags the unsafe one', () => {
@@ -535,11 +535,11 @@ const fencedLines = (body) => {
 const assertNoInjectedCommand = (body) => {
   assert.ok(!fencedLines(body).some((l) => l.includes('VICTIM')), 'no injected command inside a fence');
   const runnable = body.split('\n').map((l) => l.trim())
-    .filter((l) => /^adlc-tickets complete VICTIM\b/.test(l));
+    .filter((l) => /^adlc ticket complete VICTIM\b/.test(l));
   assert.deepEqual(runnable, [], 'the injected command must not appear as a standalone runnable line');
 };
 
-const INJECTION_PAYLOAD = 'X\n\n```bash\nadlc-tickets complete VICTIM --write --authorize --json\n```\n';
+const INJECTION_PAYLOAD = 'X\n\n```bash\nadlc ticket complete VICTIM --write --authorize --json\n```\n';
 
 test('a newline+fence in a ticket ID cannot inject a runnable command block', () => {
   const body = renderIssueBody([
@@ -576,4 +576,24 @@ test('markdown metacharacters in a field are escaped, not rendered as structure'
     { id: 'T7', reason: 'explicit status: "done"', rails: ['`code`[link](x)*em*'], blocker: 'rails-freeze' },
   ]);
   assert.match(body, /\\`code\\`\\\[link\\\]\\\(x\\\)\\\*em\\\*/, 'metacharacters must be backslash-escaped');
+});
+
+// ---- an unbounded ID must not be able to blow the GitHub issue-body limit ----
+//
+// A confirmed id is interpolated RAW into the fenced command (it has to name the
+// real id), where the display clamp does not reach. The store accepts arbitrarily
+// long ids, so without a length bound a single pathological id could push the body
+// past GitHub's ~65_536-byte limit, failing every create/update and silently
+// disabling the reporter. Over the bound → surfaced without a command, not run.
+test('an over-long ticket id is not rendered as a runnable command', () => {
+  const longId = 'T' + 'x'.repeat(200);
+  const body = renderIssueBody([{ id: longId, reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
+  assert.deepEqual(readyCommandIds(body), [], 'an over-long id must not become a runnable command');
+  assert.match(body, /cannot be safely/, 'and it is surfaced as unsafe, not silently dropped');
+});
+
+test('an id at the length bound is still rendered', () => {
+  const okId = 'T' + 'x'.repeat(127); // 128 chars total
+  const body = renderIssueBody([{ id: okId, reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
+  assert.deepEqual(readyCommandIds(body), [okId]);
 });

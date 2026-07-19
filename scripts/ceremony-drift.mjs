@@ -62,13 +62,19 @@ const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main        # dry run: 
 //     bypassed the lock, CAS, journal, and manifest evidence the directory
 //     contract requires, and was not "the same minimal diff" it claimed to be.
 //
+// The UMBRELLA command, `adlc ticket …`, not the package-internal `adlc-tickets`
+// bin. `@adlc/cli` publishes only the `adlc` binary; `adlc-tickets` is a
+// dependency bin not guaranteed on an operator's PATH, so a copy-pasted
+// `adlc-tickets …` can stop at `command not found` and leave rails frozen. `adlc
+// ticket` routes local/store verbs (including `complete`) to @adlc/tickets.
+//
 // `--json` is REQUIRED, not cosmetic: on a legacy store the CLI otherwise offers
 // an interactive migration before mutating (offerLegacyMigration, gated on a TTY
 // and `!--json`). An admin who accepted that prompt would migrate the WHOLE store
 // before completing one ticket — a repo-wide change outside the reviewed diff.
 // `--json` makes the command non-interactive, so it does exactly what is
 // advertised: complete one ticket, nothing else.
-const completeCmd = (id) => `adlc-tickets complete ${id} --write --authorize --json`;
+const completeCmd = (id) => `adlc ticket complete ${id} --write --authorize --json`;
 
 // A ticket id is interpolated into a copy-paste shell command in a bot-authored
 // issue. The id comes from the repo (a merged ticket), and the store validator
@@ -81,8 +87,17 @@ const completeCmd = (id) => `adlc-tickets complete ${id} --write --authorize --j
 // Must START with an alphanumeric, so an id can never be parsed as a flag
 // (`--authorize`, `-x`) even though those contain only otherwise-allowed
 // characters. Every real id qualifies (T7, A142, T-CC1, T-01KX…).
+// Length-bounded as well as charset-bounded. The store accepts arbitrarily long
+// ids, and a confirmed id is interpolated RAW into the fenced command (it must be
+// — the command has to name the real id), where mdField's display clamp does not
+// reach. A very long id would bloat the issue body and eventually exceed GitHub's
+// ~65_536-byte limit, failing every create/update and silently disabling the
+// reporter. 128 is far above any real id (the longest here is a 26-char ULID
+// suffix) and far below any single-field body-size risk.
+const MAX_TICKET_ID = 128;
 const SAFE_TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const isRenderableId = (id) => typeof id === 'string' && SAFE_TICKET_ID.test(id);
+const isRenderableId = (id) =>
+  typeof id === 'string' && id.length <= MAX_TICKET_ID && SAFE_TICKET_ID.test(id);
 
 // Every ticket field rendered into the issue body is UNTRUSTED — ids, rails, and
 // reasons all trace back to a merged ticket, and the store accepts arbitrary
@@ -340,7 +355,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
               'indistinguishable from an active ticket editing existing files. Give each',
               'genuinely-done ticket an explicit done-`status` so it appears above, or, once',
               'you have verified one by hand, complete just that id:',
-              '`adlc-tickets complete <id> --write --authorize --json`.',
+              '`adlc ticket complete <id> --write --authorize --json`.',
               '',
             ]
           : []),

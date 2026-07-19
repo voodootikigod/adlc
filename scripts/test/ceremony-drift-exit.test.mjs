@@ -289,21 +289,26 @@ const completedIds = (repo) =>
 test('the rendered per-ticket command completes only its named ticket, nothing else', async () => {
   const repo = makeMixedRepo();
   try {
-    // Take the command straight out of the rendered issue body and run it as-is.
-    // RAILED carries a done-status, so it gets a ready `adlc-tickets complete
-    // RAILED` line. The point: running EXACTLY what the issue prints must complete
-    // only RAILED and never touch RAILLESS, which never appeared in the report.
+    // Take the command straight out of the rendered issue body and run it through
+    // the UMBRELLA `adlc` dispatcher — exactly the binary an operator has on PATH.
+    // An earlier version invoked packages/tickets' source bin directly, which hid
+    // that the reporter was printing `adlc-tickets` (not exposed by @adlc/cli); the
+    // command an operator copies must resolve through `adlc`. RAILED carries a
+    // done-status, so it gets a ready `adlc ticket complete RAILED` line. The
+    // point: running EXACTLY what the issue prints completes only RAILED and never
+    // touches RAILLESS, which never appeared in the report.
     const { renderIssueBody } = await import('../ceremony-drift.mjs');
     const body = renderIssueBody([
       { id: 'RAILED', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
     ]);
     const cmd = body.split('\n').map((l) => l.trim())
-      .find((l) => /^adlc-tickets complete \S+ --write --authorize --json$/.test(l));
-    assert.ok(cmd, 'an explicit-done entry should document a per-ticket completion command with --json');
+      .find((l) => /^adlc ticket complete \S+ --write --authorize --json$/.test(l));
+    assert.ok(cmd, 'an explicit-done entry should document `adlc ticket complete … --json`');
 
-    const args = cmd.replace('adlc-tickets', '').trim().split(/\s+/);
-    const BIN = join(REPO_ROOT, 'packages', 'tickets', 'bin', 'adlc-tickets.mjs');
-    execFileSync(process.execPath, [BIN, ...args], {
+    // Dispatch through the real `adlc` entrypoint, passing the printed args verbatim.
+    const args = cmd.replace(/^adlc\s+/, '').trim().split(/\s+/);
+    const ADLC = join(REPO_ROOT, 'packages', 'cli', 'bin', 'adlc.mjs');
+    execFileSync(process.execPath, [ADLC, ...args], {
       cwd: repo, stdio: 'ignore', env: { ...process.env },
     });
 
