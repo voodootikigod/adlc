@@ -391,3 +391,30 @@ test('decideAction never throws on a malformed drift entry', () => {
   assert.equal(d.action, 'open');
   assert.match(d.body, /T1/);
 });
+
+// ---- backend compatibility ----
+//
+// `ticket-prune --ceremony` is not implemented for the directory ticket store
+// (run.mjs returns "not supported for the directory ticket store yet"). Publishing
+// the command to a repo on that backend would send an operator to a deterministic
+// error and leave the rails frozen, so the remedy is backend-specific.
+
+test('a directory-store repo gets a manual remedy, not the unusable command', () => {
+  const body = renderIssueBody(DRIFT, { ceremonySupported: false });
+  assert.ok(!offersCommand(body), 'the ceremony command does not work on this backend');
+  assert.match(body, /not supported for the directory ticket store/);
+  assert.match(body, /add `completed: true` to each ticket/);
+});
+
+test('a tickets.json repo still gets the command', () => {
+  assert.ok(offersCommand(renderIssueBody(DRIFT, { ceremonySupported: true })));
+});
+
+test('backend support defaults to the tickets.json behaviour', () => {
+  assert.equal(renderIssueBody(DRIFT), renderIssueBody(DRIFT, { ceremonySupported: true }));
+});
+
+test('decideAction threads the backend through to the body', () => {
+  const d = decideAction({ drift: DRIFT, existingIssue: null, ceremonySupported: false });
+  assert.ok(!offersCommand(d.body));
+});

@@ -39,6 +39,12 @@ function makeRepo({ drift }) {
   run('init', '-q', '.');
   run('config', 'user.email', 'test@example.invalid');
   run('config', 'user.name', 'test');
+  // Fixtures must not inherit the developer's git configuration. With
+  // `commit.gpgsign=true` globally (common), these commits fail whenever the
+  // signing agent is locked or absent — a spurious failure in a test that has
+  // nothing to do with signing, and one that differs between a laptop and CI.
+  run('config', 'commit.gpgsign', 'false');
+  run('config', 'tag.gpgsign', 'false');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   mkdirSync(join(dir, 'packages', 'core'), { recursive: true });
   writeFileSync(join(dir, 'packages', 'core', 'a.mjs'), 'export const a = 1;\n');
@@ -253,6 +259,8 @@ function makeMixedRepo() {
   g('init', '-q', '.');
   g('config', 'user.email', 'test@example.invalid');
   g('config', 'user.name', 'test');
+  g('config', 'commit.gpgsign', 'false'); // see makeRepo: do not inherit signing
+  g('config', 'tag.gpgsign', 'false');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   mkdirSync(join(dir, 'packages', 'core'), { recursive: true });
   mkdirSync(join(dir, 'packages', 'util'), { recursive: true });

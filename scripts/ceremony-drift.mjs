@@ -27,6 +27,8 @@
 // the issue untouched, or the signal becomes noise and gets muted.
 
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { runTicketPrune } from '../packages/ticket-prune/lib/run.mjs';
 import { resolveActiveTicketId } from '../packages/tickets/lib/pointer.mjs';
 
@@ -65,7 +67,7 @@ const CEREMONY_CMD =
  * compare bodies to decide whether anything actually changed.
  * @param {{id?: string, reason?: string, rails?: string[], blocker?: string}[]} needsCeremony
  */
-export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false } = {}) {
+export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false, ceremonySupported = true } = {}) {
   const entries = [...(needsCeremony ?? [])].sort((a, b) =>
     String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
   );
@@ -231,8 +233,31 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   // Rendered whenever there is anything the ceremony could act on. It is a
   // PROCEDURE with preconditions, never a vetted one-liner: see the "never
   // certifies" note above for why this job cannot vouch for it.
-  const procedure = railsFreeze.length
+  //
+  // On a DIRECTORY-backed store the automated ceremony does not exist yet —
+  // run.mjs returns "not supported for the directory ticket store yet" — so
+  // publishing the command there would send an operator to a deterministic
+  // error and leave the rails frozen. Detection happens in main(); this renders
+  // the backend-appropriate remedy.
+  const procedure = !railsFreeze.length
+    ? []
+    : !ceremonySupported
     ? [
+        '## Clearing these',
+        '',
+        '> This repository uses the **directory ticket store** (`.adlc/tickets/`),',
+        '> for which `ticket-prune --ceremony` is not implemented yet — it exits with',
+        '> "not supported for the directory ticket store yet". No command is offered',
+        '> here because the one that exists would fail.',
+        '',
+        'Complete these tickets through the protected-base admin path directly:',
+        'add `completed: true` to each ticket listed above (an add-only edit, the same',
+        'minimal diff the ceremony would produce) and land it on `main` the way other',
+        'protected-base ticket changes are landed. Completing a ticket expires its',
+        'rails, so confirm each is genuinely finished first.',
+        '',
+      ]
+    : [
         '## Clearing these',
         '',
         '> **This check runs in CI and cannot tell you it is safe to run the command',
@@ -255,8 +280,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
         'in flight, complete the finished tickets individually instead — the bulk',
         'command has no per-ticket filter.',
         '',
-      ]
-    : [];
+      ];
 
   return [
     MARKER,
@@ -333,7 +357,7 @@ export function selectTrackingIssue(issues, { authors = null, requireMarker = tr
  * and close-on-clear contracts are testable without a GitHub token.
  * @param {{drift: object[], existingIssue: {number: number, title: string, body: string} | null}} input
  */
-export function decideAction({ drift, existingIssue, activeTicketId = null, activeTicketUnknown = false }) {
+export function decideAction({ drift, existingIssue, activeTicketId = null, activeTicketUnknown = false, ceremonySupported = true }) {
   const entries = drift ?? [];
 
   if (entries.length === 0) {
@@ -343,7 +367,7 @@ export function decideAction({ drift, existingIssue, activeTicketId = null, acti
   }
 
   const title = renderIssueTitle(entries);
-  const body = renderIssueBody(entries, { activeTicketId, activeTicketUnknown });
+  const body = renderIssueBody(entries, { activeTicketId, activeTicketUnknown, ceremonySupported });
 
   if (!existingIssue) return { action: 'open', title, body };
 
@@ -358,7 +382,7 @@ export function decideAction({ drift, existingIssue, activeTicketId = null, acti
 // ---- I/O shell (deliberately branch-free; all decisions live above) ----
 
 const gh = (args, input) =>
-  execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 10 * 1024 * 1024 });
+  execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: GH_MAX_BUFFER });
 
 /** Idempotent; --force makes re-creating an existing label a no-op. */
 function ensureLabel() {
@@ -370,6 +394,10 @@ function ensureLabel() {
 // for this repo; if it is ever hit, the labeled lookup above is the load-bearing
 // path anyway.
 const SWEEP_LIMIT = 1000;
+
+// Issue bodies are unbounded; 1000 of them can exceed a default buffer and make
+// every run fail. Generous, and paired with the truncation warning below.
+const GH_MAX_BUFFER = 128 * 1024 * 1024;
 
 // Applying the label requires write access, so a labeled issue is already an
 // authorization signal. The unlabeled sweep has no such signal and must verify
@@ -396,12 +424,23 @@ function findExistingIssue() {
   // open a duplicate (active drift) or never close the stale issue (cleared
   // drift). The marker is the durable identity, so sweep open issues for it —
   // but only accept one this job could have authored (the marker is public).
-  const unlabeled = selectTrackingIssue(
-    JSON.parse(gh(['issue', 'list', '--state', 'open', '--limit', String(SWEEP_LIMIT),
-      '--json', ISSUE_FIELDS])),
-    { authors: MANAGED_AUTHORS }
-  );
-  if (!unlabeled) return null;
+  const swept = JSON.parse(gh(['issue', 'list', '--state', 'open', '--limit', String(SWEEP_LIMIT),
+    '--json', ISSUE_FIELDS]));
+  const unlabeled = selectTrackingIssue(swept, { authors: MANAGED_AUTHORS });
+
+  if (!unlabeled) {
+    // NO SILENT CAP. If the scan filled its window, an older unlabeled tracker
+    // may exist beyond it — in which case a duplicate is about to be opened, or a
+    // stale one left open. Say so rather than reporting a clean "not found".
+    if (swept.length >= SWEEP_LIMIT) {
+      console.log(
+        `ceremony-drift: WARNING — scanned the ${SWEEP_LIMIT} most recent open issues and did ` +
+          `not find a marked tracker; an older unlabeled one may exist beyond that window. ` +
+          `Re-apply the '${LABEL}' label to it to restore the fast path.`
+      );
+    }
+    return null;
+  }
 
   // Self-heal so the fast path works again next run.
   gh(['issue', 'edit', String(unlabeled.number), '--add-label', LABEL]);
@@ -433,6 +472,13 @@ async function main() {
   // a malformed or conflicting pointer comes back as ok:false (the fail-closed
   // contract from #196). Reading it as a bare id yields an object, which would
   // never equal a ticket id and would silently disable the exclusion entirely.
+  // Same signal the Claude Code hook uses to detect the backend. The directory
+  // store has no ceremony implementation yet (run.mjs), so the remedy differs.
+  const ceremonySupported = !existsSync(join(process.cwd(), '.adlc', 'tickets', '.store.json'));
+  if (!ceremonySupported) {
+    console.log('ceremony-drift: directory ticket store detected — ceremony command not applicable');
+  }
+
   const resolvedActive = resolveActiveTicketId({ root: process.cwd() });
   const activeTicketUnknown = !resolvedActive.ok;
   const activeTicketId = resolvedActive.ok ? (resolvedActive.value?.id ?? null) : null;
@@ -454,7 +500,7 @@ async function main() {
   }
 
   ensureLabel();
-  const decision = decideAction({ drift, existingIssue: findExistingIssue(), activeTicketId, activeTicketUnknown });
+  const decision = decideAction({ drift, existingIssue: findExistingIssue(), activeTicketId, activeTicketUnknown, ceremonySupported });
   switch (decision.action) {
     case 'open': {
       const url = gh(['issue', 'create', '--title', decision.title, '--label', LABEL, '--body-file', '-'], decision.body).trim();
