@@ -84,6 +84,27 @@ const completeCmd = (id) => `adlc-tickets complete ${id} --write --authorize --j
 const SAFE_TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const isRenderableId = (id) => typeof id === 'string' && SAFE_TICKET_ID.test(id);
 
+// Every ticket field rendered into the issue body is UNTRUSTED — ids, rails, and
+// reasons all trace back to a merged ticket, and the store accepts arbitrary
+// strings. Interpolating them raw into Markdown lets a crafted value break out of
+// its heading or code span: a newline can start a NEW block — including a ```bash
+// fence containing an authoritative-looking command — and structural characters
+// can forge links or headings. The runnable-command allow-list (SAFE_TICKET_ID)
+// only guards the command line; this guards every OTHER place a field is shown.
+//
+// Two-layer defense:
+//   1. remove ALL control characters (newlines, tabs, CR) — without a line break
+//      no new block, fence, heading, or standalone line can be introduced at all;
+//   2. escape the inline-Markdown metacharacters that remain, so a value cannot
+//      forge a code span, link, or emphasis within its own line.
+// Applied to every interpolated field. Values are also clamped in length so one
+// pathological ticket cannot dominate the issue.
+const mdField = (value, { max = 200 } = {}) =>
+  String(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ') // (1) strip control chars -> no new blocks
+    .replace(/[\\`*_{}\[\]()#+!|<>]/g, (c) => `\\${c}`) // (2) escape inline-MD metacharacters
+    .slice(0, max)
+
 /**
  * Render the tracking-issue body. Deterministic: entries are sorted by id, so an
  * unchanged drift set always produces a byte-identical body and decideAction can
@@ -98,13 +119,14 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   const rowsFor = (list) =>
     list.map((t) => {
       const rails = Array.isArray(t?.rails) ? t.rails : [];
-      const railList = rails.length ? rails.map((r) => `\`${r}\``).join(', ') : '_(none)_';
+      // Each field is sanitized: ids/rails/reasons are untrusted (see mdField).
+      const railList = rails.length ? rails.map((r) => `\`${mdField(r)}\``).join(', ') : '_(none)_';
       return [
-        `### ${t?.id ?? '(unknown id)'}`,
+        `### ${t?.id != null ? mdField(t.id) : '(unknown id)'}`,
         '',
-        `- **Blocker:** \`${t?.blocker ?? 'unknown'}\``,
+        `- **Blocker:** \`${mdField(t?.blocker ?? 'unknown')}\``,
         `- **Frozen rails:** ${railList}`,
-        `- **Detected because:** ${t?.reason ?? '(no reason recorded)'}`,
+        `- **Detected because:** ${t?.reason != null ? mdField(t.reason) : '(no reason recorded)'}`,
       ].join('\n');
     });
 
@@ -329,7 +351,9 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
               '`[A-Za-z0-9._-]`). No command is shown for them, deliberately — an id is',
               'interpolated into copy-paste shell, and a crafted id could inject. Complete',
               'them through tooling that takes the id as a real argument, and consider',
-              `renaming: ${unsafeIds.map((t) => '`' + String(t?.id) + '`').join(', ')}.`,
+              // These ids failed SAFE_TICKET_ID, so they DO contain metacharacters —
+              // sanitizing here is the whole point, not a formality.
+              `renaming: ${unsafeIds.map((t) => '`' + mdField(t?.id) + '`').join(', ')}.`,
               '',
             ]
           : []),

@@ -67,7 +67,12 @@ test('body names every drifting ticket and its frozen rails', () => {
   const body = renderIssueBody(DRIFT);
   for (const t of DRIFT) {
     assert.match(body, new RegExp(t.id));
-    for (const rail of t.rails) assert.ok(body.includes(rail), `missing rail ${rail}`);
+    // Rails are Markdown-escaped (a `*` becomes `\*`), so compare against the
+    // escaped form rather than the raw glob.
+    for (const rail of t.rails) {
+      const escaped = rail.replace(/[\\`*_{}[\]()#+!|<>]/g, (c) => `\\${c}`);
+      assert.ok(body.includes(escaped), `missing rail ${rail}`);
+    }
   }
 });
 
@@ -500,4 +505,75 @@ test('a mix of safe and unsafe ids renders the safe one and flags the unsafe one
   ]);
   assert.deepEqual(readyCommandIds(body), ['T7']);
   assert.match(body, /cannot be safely/);
+});
+
+// ---- Markdown injection via ANY interpolated ticket field ----
+//
+// The runnable-command allow-list guards only the command line. Ids, rails, and
+// reasons are ALSO rendered — into headings and code spans — and all are
+// untrusted (a merged ticket, arbitrary strings). A newline-bearing value could
+// otherwise open its own ```bash fence with an authoritative-looking command.
+// Round 17 fixed only the command; this covers every other field.
+
+// The dry-run command is the one line the reporter legitimately fences. Any
+// OTHER fenced command, or any fence at all introduced by field content, is an
+// injection.
+const fencedLines = (body) => {
+  const out = [];
+  let inFence = false;
+  for (const l of body.split('\n')) {
+    if (l.trim().startsWith('```')) { inFence = !inFence; continue; }
+    if (inFence) out.push(l.trim());
+  }
+  return out;
+};
+// The property: a crafted field value cannot introduce the attacker's target
+// (VICTIM) as a fenced or standalone runnable command. Legitimate fenced
+// commands (the dry-run, a real `complete <safe-id>`) are fine; only injected
+// content is forbidden. The payload's text may still appear INLINE as inert,
+// backslash-escaped characters — harmless, not copy-pasteable.
+const assertNoInjectedCommand = (body) => {
+  assert.ok(!fencedLines(body).some((l) => l.includes('VICTIM')), 'no injected command inside a fence');
+  const runnable = body.split('\n').map((l) => l.trim())
+    .filter((l) => /^adlc-tickets complete VICTIM\b/.test(l));
+  assert.deepEqual(runnable, [], 'the injected command must not appear as a standalone runnable line');
+};
+
+const INJECTION_PAYLOAD = 'X\n\n```bash\nadlc-tickets complete VICTIM --write --authorize --json\n```\n';
+
+test('a newline+fence in a ticket ID cannot inject a runnable command block', () => {
+  const body = renderIssueBody([
+    { id: INJECTION_PAYLOAD, reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
+  ]);
+  assertNoInjectedCommand(body);
+});
+
+test('a newline+fence in a RAIL cannot inject a runnable command block', () => {
+  const body = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: [`packages/**${INJECTION_PAYLOAD}`], blocker: 'rails-freeze' },
+  ]);
+  assertNoInjectedCommand(body);
+});
+
+test('a newline+fence in the REASON cannot inject a runnable command block', () => {
+  // reason embeds ticket.status, which is user-controlled: `explicit status: "<status>"`.
+  const body = renderIssueBody([
+    { id: 'T9', reason: `inferred: x${INJECTION_PAYLOAD}`, rails: ['a/**'], blocker: 'rails-freeze' },
+  ]);
+  assertNoInjectedCommand(body);
+});
+
+test('control characters in a field cannot introduce any new line in the body', () => {
+  // Every rendered field is single-line after sanitization: a field value must
+  // not add a line to the body beyond the one heading/bullet it belongs to.
+  const clean = renderIssueBody([{ id: 'T7', reason: 'inferred: x', rails: ['a/**'], blocker: 'rails-freeze' }]);
+  const dirty = renderIssueBody([{ id: 'T7\n\n\n\n\n', reason: 'inferred: x', rails: ['a/**'], blocker: 'rails-freeze' }]);
+  assert.equal(dirty.split('\n').length, clean.split('\n').length, 'field newlines must not add body lines');
+});
+
+test('markdown metacharacters in a field are escaped, not rendered as structure', () => {
+  const body = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: ['`code`[link](x)*em*'], blocker: 'rails-freeze' },
+  ]);
+  assert.match(body, /\\`code\\`\\\[link\\\]\\\(x\\\)\\\*em\\\*/, 'metacharacters must be backslash-escaped');
 });
