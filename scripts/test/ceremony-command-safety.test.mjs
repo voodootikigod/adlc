@@ -38,6 +38,9 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { detectTicketStore, shouldOfferLegacyMigration } from '../../packages/tickets/index.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -75,10 +78,21 @@ const FROZEN_PENDING = new Map([
   ['plugins/adlc-opencode/command/adlc-maintain.md', 'T53'],
 ]);
 
+/**
+ * Load the active ticket set through the canonical store detector, which handles
+ * BOTH backends. Reading `.adlc/tickets.json` directly (as an earlier version
+ * did) throws ENOENT the moment the repo migrates to the directory store
+ * (`.adlc/tickets/`) — and the completion command this very branch advertises can
+ * trigger that migration — which would turn this guard into a red wall on every
+ * subsequent PR. Going through detectTicketStore keeps it backend-agnostic.
+ */
+function loadTickets() {
+  return detectTicketStore({ root: REPO }).load().tickets ?? [];
+}
+
 /** A ticket is active iff it is present in the store and not `completed`. */
 function activeTicketIds() {
-  const store = JSON.parse(readFileSync(join(REPO, '.adlc', 'tickets.json'), 'utf8'));
-  return new Set((store.tickets ?? []).filter((t) => t?.completed !== true).map((t) => t?.id));
+  return new Set(loadTickets().filter((t) => t?.completed !== true).map((t) => t?.id));
 }
 
 const scanFor = (predicate) => {
@@ -134,10 +148,9 @@ test('every frozen-pending exception is still justified (file unfixed AND blocke
 // but assert presence explicitly so the failure reads as "unknown ticket" rather
 // than "blocker completed".
 test('every frozen-pending blocker id exists in the ticket store', () => {
-  const store = JSON.parse(readFileSync(join(REPO, '.adlc', 'tickets.json'), 'utf8'));
-  const known = new Set((store.tickets ?? []).map((t) => t?.id));
+  const known = new Set(loadTickets().map((t) => t?.id));
   for (const ticket of FROZEN_PENDING.values()) {
-    assert.ok(known.has(ticket), `FROZEN_PENDING names ${ticket}, which is not in .adlc/tickets.json`);
+    assert.ok(known.has(ticket), `FROZEN_PENDING names ${ticket}, which is not in the ticket store`);
   }
 });
 
@@ -163,4 +176,54 @@ test('the detector does not flag the safe command, a usage synopsis, or lone --w
   ]) {
     assert.ok(!COMBINED.test(stripOptional(line)), `should NOT have matched: ${line}`);
   }
+});
+
+
+// ---- F3: the guard loads through the canonical detector, so a directory-store
+// migration does not turn it into a red wall ----
+
+test('the ticket loader works on a directory-store fixture (no ENOENT after migration)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-guard-dir-'));
+  try {
+    mkdirSync(join(dir, '.adlc', 'tickets'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets', '.store.json'),
+      JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+    // A directory store keyed by the canonical hashed shard name.
+    const store = detectTicketStore({ root: dir });
+    // Loading must not throw (the old readFileSync('.adlc/tickets.json') did).
+    assert.doesNotThrow(() => store.load());
+    assert.equal(store.constructor.name, 'DirectoryTicketStore');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- F4: the advertised command carries --json, which suppresses the
+// interactive legacy->directory migration even in an administrator's TTY ----
+
+test('--json suppresses the legacy-migration offer even when both streams are a TTY', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-guard-legacy-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T7', title: 'x' }] }));
+    const store = detectTicketStore({ root: dir });
+    assert.equal(store.constructor.name, 'LegacyTicketStore');
+    const tty = { input: { isTTY: true }, output: { isTTY: true } };
+    // The exact gate the advertised command relies on: with --json it does NOT
+    // offer migration; without it (the hazard) it would.
+    assert.equal(shouldOfferLegacyMigration(store, { json: true }, tty), false,
+      '--json must suppress the migration prompt, so the one-ticket command stays one-ticket');
+    assert.equal(shouldOfferLegacyMigration(store, { json: false }, tty), true,
+      'sanity: without --json the offer is what would fire');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The advertised command must actually contain --json, or the suppression above
+// is moot. Cross-checks the reporter against this guard.
+test('the reporter renders the completion command WITH --json', async () => {
+  const { renderIssueBody } = await import('../ceremony-drift.mjs');
+  const body = renderIssueBody([{ id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
+  assert.match(body, /adlc-tickets complete T7 --write --authorize --json/);
 });

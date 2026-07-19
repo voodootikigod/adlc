@@ -298,8 +298,8 @@ test('the rendered per-ticket command completes only its named ticket, nothing e
       { id: 'RAILED', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze' },
     ]);
     const cmd = body.split('\n').map((l) => l.trim())
-      .find((l) => /^adlc-tickets complete \S+ --write --authorize$/.test(l));
-    assert.ok(cmd, 'an explicit-done entry should document a per-ticket completion command');
+      .find((l) => /^adlc-tickets complete \S+ --write --authorize --json$/.test(l));
+    assert.ok(cmd, 'an explicit-done entry should document a per-ticket completion command with --json');
 
     const args = cmd.replace('adlc-tickets', '').trim().split(/\s+/);
     const BIN = join(REPO_ROOT, 'packages', 'tickets', 'bin', 'adlc-tickets.mjs');

