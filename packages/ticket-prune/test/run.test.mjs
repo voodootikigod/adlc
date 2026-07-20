@@ -765,3 +765,33 @@ test('#208: a directory batch that fails mid-way reports what already archived a
     assert.equal(result.failedId, 'BBB');
   });
 });
+
+test('#208: bin --write --json surfaces partial-batch data (archived + failedId) on a mid-batch failure', () => {
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    mkdirSync(join(dir, 'packages', 'a3'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'a3', 'x.mjs'), '// a\n');
+    mkdirSync(join(dir, 'packages', 'b3'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'b3', 'x.mjs'), '// b\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-q', '-m', 'ship a3 b3'], dir);
+    writeDirectoryStore(dir, [
+      { id: 'AAA', title: 'rails-less', scope: ['packages/a3/**'] },
+      { id: 'BBB', title: 'rails-less', scope: ['packages/b3/**'] },
+      { id: 'CCC', title: 'active', scope: ['packages/never-built/**'], edges: [{ to: 'BBB', kind: 'depends' }] },
+    ]);
+    let out = '';
+    let code = 0;
+    try {
+      out = execFileSync(process.execPath, [BIN, '--write', '--json'], { cwd: dir, encoding: 'utf8', env: process.env });
+    } catch (err) {
+      code = err.status ?? 1;
+      out = (err.stdout?.toString() ?? '') + (err.stderr?.toString() ?? '');
+    }
+    assert.equal(code, 1);
+    // The committed archive of AAA and the failed id must be visible, not hidden behind the bare error.
+    assert.match(out, /"archived"/);
+    assert.match(out, /AAA/);
+    assert.match(out, /"failedId": ?"BBB"/);
+  });
+});

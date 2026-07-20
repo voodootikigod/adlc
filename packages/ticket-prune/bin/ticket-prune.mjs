@@ -48,6 +48,16 @@ const result = runTicketPrune({
 });
 
 if (!result.ok) {
+  // A directory --write batch that fails mid-way returns what already committed
+  // (archived) and which id failed, so the operator can recover instead of
+  // guessing. Surface that structured data BEFORE exiting non-zero — dropping it
+  // would defeat the partial-batch reporting the writer produces.
+  if (values.json && (result.archived?.length || result.failedId)) {
+    printJson({ ok: false, error: result.error, archived: result.archived ?? [], failedId: result.failedId ?? null });
+  } else if (result.archived?.length) {
+    console.error(`partially applied before the failure — archived: ${result.archived.map((a) => a?.id ?? a).join(', ')}` +
+      (result.failedId ? `; failed on: ${result.failedId}` : ''));
+  }
   opError(result.error);
 }
 
