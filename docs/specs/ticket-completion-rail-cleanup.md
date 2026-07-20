@@ -36,12 +36,16 @@ someone tries to write, and there is **no command to apply the ceremony**.
   (bin exits non-zero) unless `ADLC_RAILS_BYPASS=1` is set. Verified by a
   `packages/ticket-prune/test/run.test.mjs` case that invokes `--ceremony` with the env
   unset and asserts the tickets file is byte-identical afterward.
-- **AC3 — ceremony completes railed shipped tickets, add-only.** With `ADLC_RAILS_BYPASS=1`
-  and `--ceremony --write`, each `needsCeremony` rails-freeze ticket gains exactly
-  `completed: true` (no other field changed, mirroring PR #199 — no manifest entry) and is
-  reported under `ceremonyCompleted`; a still-active railed ticket (scope not shipped) is
-  not completed. Verified by `node --test packages/ticket-prune/test/run.test.mjs` asserting
-  the resulting ticket diff is add-only and the active railed ticket is untouched.
+- **AC3 — ceremony completes railed shipped tickets, add-only.** _(Historical: this
+  verified the original `ticket-prune --ceremony --write` behavior, now DEPRECATED
+  in favor of per-ticket `adlc ticket complete <id> --write --authorize --json` —
+  see #208. Completion of a railed shipped ticket still produces the add-only
+  `completed: true` diff; it is now performed per-ticket and records manifest
+  evidence, rather than in a bulk pass.)_ With `ADLC_RAILS_BYPASS=1` and
+  `--ceremony --write`, each `needsCeremony` rails-freeze ticket gained exactly
+  `completed: true` (no other field changed, mirroring PR #199) and was reported
+  under `ceremonyCompleted`; a still-active railed ticket (scope not shipped) was
+  not completed.
 - **AC4 — rails expire after completion (T36).** After the ceremony completes a railed
   ticket, the rails-guard base-rail union (the `t.completed === true` skip) no longer
   includes that ticket's rails. Verified by a `packages/ticket-prune/test/run.test.mjs` case
@@ -83,11 +87,15 @@ protected-base admin checkout of `main`** (this cannot land in an ordinary PR):
 
 ```sh
 # Review first:
-node packages/ticket-prune/bin/ticket-prune.mjs --json --base-ref origin/main   # inspect needsCeremony
+adlc ticket-prune --json --base-ref origin/main   # inspect needsCeremony
 
-# Apply the ceremony (admin override recorded), then push directly to main:
-ADLC_RAILS_BYPASS=1 node packages/ticket-prune/bin/ticket-prune.mjs --ceremony --base-ref origin/main
+# Then complete each confirmed-shipped id individually and push directly to main.
+# Per-ticket (no bulk recompute), records manifest evidence, both backends:
+adlc ticket complete <id> --write --authorize --json
 ```
+
+_(The original one-time sweep used the now-deprecated bulk `ticket-prune
+--ceremony`; #208. The per-ticket command above is the current path.)_
 
 Each completed ticket's rails then auto-expire per T36, unfreezing their paths for future
 PRs. Confirm any ticket that is genuinely still in flight is excluded before pushing — the

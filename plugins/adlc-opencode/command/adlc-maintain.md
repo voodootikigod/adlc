@@ -65,16 +65,13 @@ adlc ticket-prune --json
   tickets); an admin completes them on a protected-base checkout of `main`:
 
   ```
-  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main
+  adlc ticket complete <id> --write --authorize --json
   ```
-  Deliberately no `--write`: that flag additionally tombstones rails-less stale
-  tickets, which the drift report above does not list, so the operator would be
-  writing outside the reviewed set. `--ceremony` alone completes the
-  rail-freezing tickets.
-
-  `--ceremony` refuses to write without `ADLC_RAILS_BYPASS=1`; it adds
-  `completed: true` to each rail-freezing shipped ticket (reported under
-  `ceremonyCompleted`), expiring its rails per T36.
+  Per-ticket by design: it names one id (no bulk recompute, no TOCTOU), goes
+  through the ticket-store transaction, records completion evidence to
+  `.adlc/manifest.jsonl`, and works on both backends. Completing a ticket adds
+  `completed: true` and expires its rails (T36). Do **not** use the deprecated
+  bulk `ticket-prune --ceremony` (evidence-less, legacy-store-only; #208).
 
 ## 4. Gate fuzzing — NOT run automatically (needs a model AND a sandbox)
 

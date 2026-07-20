@@ -66,22 +66,21 @@ adlc ticket-prune --json
   existing base tickets — so completion is reserved for the **protected-base
   admin ceremony**. Report the `needsCeremony` ids and their frozen rails.
 - **Completing them (admin, on `main` only).** After confirming each is genuinely
-  shipped, an admin runs the ceremony directly on a protected-base checkout of
-  `main` (it produces a diff an ordinary PR is denied, so it lands via the admin
+  shipped, an admin completes them **one id at a time** on a protected-base
+  checkout of `main` (the diff an ordinary PR is denied, so it lands via the admin
   path, like the manual sweep in PR #199):
 
   ```
-  ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main
+  adlc ticket complete <id> --write --authorize --json
   ```
-  Deliberately no `--write`: that flag additionally tombstones rails-less stale
-  tickets, which the drift report above does not list, so the operator would be
-  writing outside the reviewed set. `--ceremony` alone completes the
-  rail-freezing tickets.
 
-  `--ceremony` refuses to write without `ADLC_RAILS_BYPASS=1`. It adds
-  `completed: true` to each rail-freezing shipped ticket (reported under
-  `ceremonyCompleted`), expiring its rails per T36. Rails-less
-  `preexisting-completed-field` tickets are left reported, never rewritten.
+  Per-ticket by design: it names one id (no bulk recompute, no TOCTOU), goes
+  through the ticket-store transaction, records completion evidence to
+  `.adlc/manifest.jsonl`, and works on both the legacy and directory stores.
+  Completing a ticket adds `completed: true` and expires its rails (T36). A
+  `preexisting-completed-field` ticket carries a value someone set on purpose —
+  leave it unless you mean to override it. Do **not** use the deprecated bulk
+  `ticket-prune --ceremony` (evidence-less, legacy-store-only; #208).
 
 ## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 

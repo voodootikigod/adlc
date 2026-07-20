@@ -13,7 +13,7 @@ Addresses [issue #39](https://github.com/voodootikigod/adlc/issues/39).
 ## Usage
 
 ```
-ticket-prune [--tickets path] [--base-ref ref] [--write] [--ceremony] [--json]
+ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 ```
 
 Dry-run by default, consistent with every other ADLC writer (`skill-rot`,
@@ -41,20 +41,28 @@ reported — **in dry-run as well as write** (#198) — under `needsCeremony` wi
 `blocker: "rails-freeze"`, so the drift is visible before it blocks a PR rather
 than only when you try to write.
 
-## The rail-cleanup ceremony (`--ceremony`, admin-only) (#198)
+## Completing rail-freezing tickets (`--ceremony` is deprecated, #208)
 
-`--ceremony` is the protected-base admin action that completes the
-`needsCeremony` rail-freezing tickets — the one completion an ordinary PR cannot
-make. It adds `completed: true` to each in place (the same add-only edit as a
-tombstone; reported under `ceremonyCompleted`), expiring their rails per T36. It
-**refuses to write and returns an operational error unless `ADLC_RAILS_BYPASS=1`
-is set**, because the diff it produces is deliberately one the ordinary rails-guard
-PR gate denies — it only lands via the protected-base/admin path (as the manual
-sweep in PR #199 did by hand). Only the `rails-freeze` blocker is completed; a
-rails-less `preexisting-completed-field` ticket (one already carrying a
-`completed` field) would need a field *mutation*, a distinct riskier operation
-left out of scope and still only reported. Combine with `--write` to tombstone the
-rails-less stale tickets and complete the rail-freezing ones in a single pass.
+Rail-freezing tickets in `needsCeremony` are the one completion an ordinary PR
+cannot make (the diff expires rails, which `rails-guard-ci` denies for a base
+ticket). Complete them on a protected-base checkout of `main`, **one id at a
+time**, with the canonical command:
+
+```bash
+adlc ticket complete <id> --write --authorize --json
+```
+
+Per-ticket by design: it names one id (no bulk recompute, no TOCTOU), goes through
+the ticket-store transaction (worktree lock + expected-snapshot CAS), records
+completion evidence to `.adlc/manifest.jsonl`, and works on both the legacy and
+directory stores. A `preexisting-completed-field` ticket carries a `completed`
+value someone set on purpose — it stays reported, not overwritten.
+
+`ticket-prune --ceremony` used to do this as a bulk pass, but it took no ids and
+recomputed its target set at run time (a TOCTOU window and no per-ticket filter),
+wrote without recording manifest evidence, and had no directory-store support. It
+is **deprecated (#208)**: invoking it now fails closed and redirects to the
+command above.
 
 ## How "stale" is decided
 
@@ -96,7 +104,7 @@ matching, and is exactly the check the issue's worked example did by hand.
 | `--archive <path>` | Legacy-backend archive override. Sharded stores always use `.adlc/ticket-archive/`. |
 | `--base-ref <ref>` | Git ref to check declared `scope` globs against (default `HEAD`). Point at `origin/main` to audit a feature branch's tickets against what's already shipped on trunk. |
 | `--write` | Tombstone rails-less stale tickets: add `completed: true` in place (never remove, never mutate any other field). Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
-| `--ceremony` | Protected-base admin action: also complete the rail-freezing stale tickets in place (expiring their rails, T36), reported under `ceremonyCompleted`. Writes nothing unless `ADLC_RAILS_BYPASS=1` is set. |
+| `--ceremony` | **Deprecated (#208).** Fails closed and redirects to `adlc ticket complete <id> --write --authorize --json`. Rail-freezing tickets are completed per-ticket via that command, not in bulk here. |
 | `--json` | Machine-readable `{ baseRef, write, ceremony, stale[], active[], tombstoned[], ceremonyCompleted[], needsCeremony[] }`. |
 
 ## Exit codes
@@ -104,7 +112,7 @@ matching, and is exactly the check the issue's worked example did by hand.
 | Code | Meaning |
 |------|---------|
 | `0` | Report or tombstone succeeded — regardless of how many stale tickets were found. This is advisory (like `model-ratchet`), not a pass/fail gate: stale tickets are clutter, not a merge blocker. |
-| `1` | Operational error — bad/missing ticket file, invalid JSON, unresolvable `--base-ref`, the write lock could not be acquired, or `--ceremony` was invoked without `ADLC_RAILS_BYPASS=1`. |
+| `1` | Operational error — bad/missing ticket file, invalid JSON, unresolvable `--base-ref`, the write lock could not be acquired, or the deprecated `--ceremony` was invoked (it redirects). |
 
 ## Examples
 
@@ -118,11 +126,10 @@ ticket-prune --base-ref origin/main --json
 # Tombstone the rails-less stale tickets found above (completed:true in place)
 ticket-prune --write
 
-# Admin, on a protected-base checkout of main: complete the rail-freezing
-# shipped tickets, expiring their rails (T36). Refuses without the override.
-# NOT --write: that would ALSO tombstone the rails-less stale tickets in the
-# same run. Keep the two operations separate so each write set is reviewed.
-ADLC_RAILS_BYPASS=1 ticket-prune --ceremony --base-ref origin/main
+# Admin, on a protected-base checkout of main: complete a rail-freezing shipped
+# ticket, expiring its rails (T36). Per-ticket, records manifest evidence, both
+# backends. (ticket-prune --ceremony is deprecated — see #208.)
+adlc ticket complete <id> --write --authorize --json
 ```
 
 ## Locking and atomicity

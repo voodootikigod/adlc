@@ -48,6 +48,16 @@ function trackedDocs() {
 // (e.g. a historical acceptance criterion) is not caught, only runnable lines.
 const COMBINED = /^[^\n]*\bticket-prune\b[^\n]*(--ceremony[^\n]*--write|--write[^\n]*--ceremony)/;
 
+// #208: no doc may show a RUNNABLE `ticket-prune --ceremony` command line (the
+// flag is deprecated; completion is per-ticket via `adlc ticket complete`). This
+// must fire ONLY on a command line, not on prose that mentions the flag (the
+// deprecation notes do). A command line starts — after optional indent, a `$ `
+// prompt, or an `ENV=val ` prefix — with the invocation token itself; a prose
+// mention has a backtick or other text before `ticket-prune`. Anchoring at line
+// start after those prefixes is what makes the distinction.
+const RUNNABLE_CEREMONY =
+  /^\s*(\$ )?([A-Z_]+=\S+ )*(node \S*|adlc )?ticket-prune(\.mjs)?\s[^\n]*--ceremony\b/;
+
 // A usage synopsis lists every flag as an optional group:
 //   ticket-prune [--tickets path] [--base-ref ref] [--write] [--ceremony] [--json]
 // That is a flag LISTING, not an invocation combining them, and matching it would
@@ -62,6 +72,11 @@ const HISTORICAL = new Set([
   'docs/specs/ticket-completion-rail-cleanup.md', // AC3 records the verified invocation
 ]);
 
+// A line offends if it advertises the --ceremony --write combination OR shows a
+// runnable `ticket-prune --ceremony` command (deprecated, #208). Both fire only
+// on runnable lines, never on prose that mentions the flag.
+const lineOffends = (line) => COMBINED.test(stripOptional(line)) || RUNNABLE_CEREMONY.test(line);
+
 function offenders() {
   const hits = [];
   for (const file of trackedDocs()) {
@@ -69,7 +84,7 @@ function offenders() {
     let text;
     try { text = readFileSync(join(REPO, file), 'utf8'); } catch { continue; }
     for (const [i, line] of text.split('\n').entries()) {
-      if (COMBINED.test(stripOptional(line))) hits.push(`${file}:${i + 1}: ${line.trim()}`);
+      if (lineOffends(line)) hits.push(`${file}:${i + 1}: ${line.trim()}`);
     }
   }
   return hits;
@@ -77,34 +92,40 @@ function offenders() {
 
 // ---- the repo-wide guard (no exceptions) ----
 
-test('no shipped doc advertises `ticket-prune --ceremony --write`', () => {
+test('no shipped doc advertises a runnable `ticket-prune --ceremony` command', () => {
   assert.deepEqual(offenders(), [],
-    'these files instruct an operator to run the ceremony with --write, which also ' +
-    'completes rails-less tickets outside the reviewed set — remove --write:\n  ' +
+    'these files show a runnable ticket-prune --ceremony command; it is deprecated ' +
+    '(and --write also completes rails-less tickets outside the reviewed set). ' +
+    'Complete per-ticket with `adlc ticket complete <id> --write --authorize --json`:\n  ' +
     offenders().join('\n  '));
 });
 
-// Guards the guard: if the pattern stops matching the shape it is meant to catch,
-// the test above would pass vacuously across the whole repo.
-test('the detector matches the shapes it is meant to catch', () => {
+// Guards the guard: if the patterns stop matching the shapes they target, the test
+// above would pass vacuously across the whole repo.
+test('the detector matches the runnable shapes it is meant to catch', () => {
   for (const line of [
     'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --write --base-ref origin/main',
     'ADLC_RAILS_BYPASS=1 ticket-prune --write --ceremony',
     '  ADLC_RAILS_BYPASS=1 node packages/ticket-prune/bin/ticket-prune.mjs --ceremony --write',
+    'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main', // bare ceremony, still runnable
+    '  ticket-prune --ceremony',
   ]) {
-    assert.ok(COMBINED.test(line), `should have matched: ${line}`);
+    assert.ok(lineOffends(line), `should have matched: ${line}`);
   }
 });
 
-test('the detector does not flag the safe command, a usage synopsis, or lone --write', () => {
+test('the detector does not flag prose mentions, a usage synopsis, or lone --write', () => {
   for (const line of [
-    'ADLC_RAILS_BYPASS=1 adlc ticket-prune --ceremony --base-ref origin/main',
+    // Prose mentions of the deprecated flag — must NOT be flagged.
+    '`ticket-prune --ceremony` is deprecated; use `adlc ticket complete <id>` instead.',
+    'the deprecated bulk `ticket-prune --ceremony` (evidence-less, legacy-store-only; #208).',
+    '| `--ceremony` | **Deprecated (#208).** Fails closed and redirects. |',
     'ticket-prune --write', // tombstoning alone is a legitimate, separate operation
     'ticket-prune --base-ref origin/main --json',
-    // Usage synopsis: lists both flags as optional, does not invoke them together.
-    'ticket-prune [--tickets path] [--base-ref ref] [--write] [--ceremony] [--json]',
+    // Usage synopsis: lists flags as optional groups, does not invoke them.
+    'ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]',
   ]) {
-    assert.ok(!COMBINED.test(stripOptional(line)), `should NOT have matched: ${line}`);
+    assert.ok(!lineOffends(line), `should NOT have matched: ${line}`);
   }
 });
 
