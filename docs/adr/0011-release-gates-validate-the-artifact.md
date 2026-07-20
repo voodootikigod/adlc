@@ -78,8 +78,19 @@ shape regex is itself an enumeration: `.Codex-plugin`, `.claude_plugin`, and
 `.jetbrains.ai-plugin` match neither side, which reproduces Defect A exactly — a
 frozen manifest under a green gate. So `hostDiscoveryNearMisses` reports any
 depth-exact dotted directory holding a `plugin.json`/`marketplace.json` whose
-name does not match, and `findVersionDrift` surfaces those as drift. The silent
-class becomes a loud one; the regex is allowed to be wrong, but not quietly.
+name does not match. These are reported by a **pre-bump preflight inside
+`releaseMain` (step 0)**, NOT by `findVersionDrift`.
+
+That placement is load-bearing. A near miss names a *directory*, and no re-run of
+the bumper can rename a directory — so reporting it post-bump aborted identically
+on every invocation with a fully mutated tree. `findVersionDrift` must only ever
+return things the bumper is capable of fixing. **Consequence for CI: a job that
+calls `findVersionDrift` alone is NOT protected against a near-miss host
+directory; it must run the preflight (or `releaseMain`) to get that check.**
+
+The same preflight verifies that every JSON file the bump will rewrite actually
+parses, so an unparseable `marketplace.json` aborts with the tree untouched
+rather than throwing mid-write.
 
 **2b. The bumper and gate apply the same existence condition to every field.**
 Both write/check `metadata.version` and `plugins[].version` only where the key
@@ -116,20 +127,29 @@ every shipped `.mjs`/`.js`/`.cjs` file resolves to a path in that list. `files`
 interacts with `.npmignore`, always-included entries and always-excluded ones in
 ways a hand-rolled prefix match gets subtly wrong.
 
-**7. The packaging gate's coverage is stated, not implied.** Checked: static
-`import`, `export … from`, side-effect `import`, *literal* `import()`, and
-`require()` / `require.resolve()`. `require` is not optional — the file filter
-admits `.cjs`/`.js`, and a CommonJS `require('../scripts/gen-schema.js')` is
-Defect B in its other spelling; matching only ESM forms while claiming to scan
-`.cjs` would leave the original bug undetectable. Comments are stripped before
-scanning, so a refactor leftover like `// import … from './old-path.mjs'` cannot
-abort a release with a false diagnosis after the tree is already bumped.
+**7. Specifier extraction is AST-based, and its coverage is stated, not implied.**
+Source is parsed with **acorn** and the AST is walked; there is no pattern
+matching and no comment stripping, because comments, string contents and
+template contents never enter the AST at all. Checked node types:
+`ImportDeclaration`, `ExportNamedDeclaration`, `ExportAllDeclaration`,
+`ImportExpression`, and `CallExpression` for `require()` / `require.resolve()`.
+A template literal with no interpolations is a compile-time constant and is
+treated as a literal specifier.
+
+`require` is not optional — the scan admits `.cjs`/`.js`, and a CommonJS
+`require('../scripts/gen-schema.js')` is Defect B in its other spelling. Files
+are parsed as ESM first and re-parsed as script on failure (`.cjs` reversed);
+where both goals parse, they yield identical specifiers, so the fallback cannot
+silently pick a wrong answer.
 
 `node:` builtins and bare specifiers are ignored — they are dependency-resolved,
-not shipped. A **computed** `import()`/`require()` specifier is undecidable by
-static analysis; the gate says so in its failure output rather than implying
+not shipped. A **computed** `import()`/`require()` specifier remains undecidable
+by any parser; the gate says so in its failure output rather than implying
 coverage it does not have. Every one of these forms has a fixture in the rail:
-an unexercised pattern is a promise with nothing behind it.
+an unexercised branch is a promise with nothing behind it. `export * from` in
+particular is fixtured because `packages/core/index.mjs` is thirteen consecutive
+star re-exports — dropping that branch would make the most-depended-on package's
+entire import graph invisible.
 
 **8. "No problems" is never reported without a denominator.**
 `findPackagingProblems` returns `{ problems, consulted, unconsultable }`, because
@@ -185,6 +205,15 @@ emptiness verifies nothing.
 `AC5 end-to-end` packs the real `@adlc/ticket-sync`, extracts it, and imports
 `lib/doctor.mjs` from the extracted tree — the only assertion in the suite that
 is independent of the analyzer being audited.
+
+**10. Entrypoint existence is checked for every declaration, not just imports.**
+`bin`, `main`, `module` and every string leaf of `exports` must be present in the
+tarball. VERIFIED npm behaviour: npm force-includes `bin` and `main` regardless
+of `files`, but does **not** force-include `exports` targets — so a documented
+subpath can resolve for the author and 404 for everyone who installs it. Only
+`.mjs`/`.js`/`.cjs` and extensionless entrypoints are then PARSED: `exports`
+legitimately points at `index.d.ts` and `./package.json`, and treating those as
+parse failures marked three core packages unverifiable.
 
 ## Provenance of this decision
 

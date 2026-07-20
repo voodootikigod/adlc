@@ -150,12 +150,32 @@ const HOST_PLUGIN_DIR = /^\.[a-z0-9-]+-plugin$/;
  * ecosystem — an injected key is an install-time rejection. ADR 0011 §4 says the
  * bumper only updates what exists; that has to mean fields, not just files.
  */
-function declaresVersion(manifestPath) {
+/**
+ * Three distinct states, deliberately NOT collapsed into a boolean:
+ *   'unparseable' — the file is not valid JSON at all
+ *   'versioned'   — carries a string `version`
+ *   'unversioned' — parses, but declares no string `version`
+ *
+ * The distinction decides whether silence is correct. A NESTED
+ * `.<host>-plugin/plugin.json` is unambiguously a host manifest, so
+ * 'unversioned' there is a defect worth reporting. A FLAT
+ * `plugins/<x>/plugin.json` carries no such proof — it may legitimately be some
+ * tool's config file — so 'unversioned' there must stay silent, while
+ * 'unparseable' is a defect either way: a file named plugin.json that is not
+ * valid JSON is broken regardless of whose it is.
+ */
+function manifestState(manifestPath) {
+  let parsed;
   try {
-    return typeof readJson(manifestPath).version === 'string';
+    parsed = readJson(manifestPath);
   } catch {
-    return false; // unparseable — not something to stamp a version into
+    return 'unparseable';
   }
+  return typeof parsed?.version === 'string' ? 'versioned' : 'unversioned';
+}
+
+function declaresVersion(manifestPath) {
+  return manifestState(manifestPath) === 'versioned';
 }
 
 export function hostPluginManifestPaths(pluginsDir = PLUGINS) {
@@ -230,6 +250,21 @@ export function hostDiscoveryNearMisses({ root = ROOT, pluginsDir = PLUGINS } = 
       // Defect A at field granularity, and near-miss scanning cannot see it
       // because the DIRECTORY name is fine. Report it explicitly.
       const dir = join(pluginsDir, name);
+      // The FLAT manifest needs the same treatment as the nested ones below.
+      // Round three added the nested check and not this one, so a malformed or
+      // versionless plugins/<x>/plugin.json stayed invisible to bumper, gate and
+      // near-miss alike — reintroducing Defect A through the one shape the fix
+      // was originally written for (antigravity's layout).
+      const flatManifest = join(dir, 'plugin.json');
+      // UNPARSEABLE only. A flat plugin.json that parses but declares no
+      // version is legitimately somebody's config file, and reporting those
+      // would abort the release on files that are none of our business.
+      if (existsSync(flatManifest) && manifestState(flatManifest) === 'unparseable') {
+        misses.push(
+          `${flatManifest}: flat host manifest is not valid JSON — ` +
+            `it is invisible to BOTH the bump and the drift gate.`
+        );
+      }
       let entries;
       try {
         entries = readdirSync(dir).sort();
@@ -386,7 +421,18 @@ function relativeSpecifiers(source, { sourceType }) {
   const ast = parse(source, { ...ACORN_OPTIONS, sourceType });
   const found = new Set();
 
-  const literal = (node) => (node && node.type === 'Literal' && typeof node.value === 'string' ? node.value : null);
+  // A template literal with no interpolations is a compile-time constant and
+  // therefore statically decidable — `import(`./lib.mjs`)` must be checked like
+  // its quoted twin. Only a template with `${}` expressions is genuinely
+  // undecidable.
+  const literal = (node) => {
+    if (!node) return null;
+    if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+    if (node.type === 'TemplateLiteral' && node.expressions.length === 0 && node.quasis.length === 1) {
+      return node.quasis[0].value.cooked;
+    }
+    return null;
+  };
   const add = (value) => {
     if (typeof value === 'string' && value.startsWith('.')) found.add(value);
   };
@@ -460,10 +506,15 @@ function resolutionCandidates(resolved, mode) {
   // fallbacks there would let a genuine ERR_MODULE_NOT_FOUND pass as clean,
   // which is the very symptom this gate exists to catch.
   if (mode === 'esm') return [resolved];
+  // Mirrors Node's CommonJS resolver: X, X.js, X.json, X.node, then X/index.js,
+  // X/index.json, X/index.node. Omitting .node and the index.json/index.node
+  // forms produced a release-BLOCKING false positive on specifiers Node resolves
+  // fine (`require('./binding')` against a shipped binding.node).
   return [
     resolved,
-    `${resolved}.js`, `${resolved}.cjs`, `${resolved}.mjs`, `${resolved}.json`,
+    `${resolved}.js`, `${resolved}.cjs`, `${resolved}.mjs`, `${resolved}.json`, `${resolved}.node`,
     `${resolved}/index.js`, `${resolved}/index.cjs`, `${resolved}/index.mjs`,
+    `${resolved}/index.json`, `${resolved}/index.node`,
   ];
 }
 
@@ -493,21 +544,51 @@ function scannableFiles(dir, packed) {
   } catch {
     return { files, missingBins, type: undefined };
   }
-  const bin = pkg.bin;
-  // Both shapes are real: `"bin": "./cli.mjs"` (the majority single-bin CLI
-  // shape) and `"bin": { "name": "./cli.mjs" }`.
-  const declared = typeof bin === 'string'
-    ? [['.', bin]]
-    : (bin && typeof bin === 'object' ? Object.entries(bin) : []);
-  for (const [name, entry] of declared) {
+  // Every DECLARED entrypoint, not just bin. VERIFIED npm behaviour: npm
+  // force-includes `bin` and `main` regardless of `files`, but does NOT
+  // force-include `exports` targets — packing `exports: {'./side':
+  // './extra/side.mjs'}` with `files: ['lib/']` omits extra/side.mjs entirely.
+  // So an `exports` subpath is the same defect class as a missing bin, without
+  // npm's safety net: the import resolves for the author and 404s for everyone
+  // who installs it.
+  const entrypoints = [];
+  const collect = (label, value) => {
+    if (typeof value === 'string') {
+      if (value.startsWith('.')) entrypoints.push([label, value]);
+      return;
+    }
+    // `exports` nests arbitrarily: subpaths, and condition objects
+    // (import/require/default/node/browser...). Walk every string leaf.
+    if (value && typeof value === 'object') {
+      for (const [k, v] of Object.entries(value)) collect(`${label}${k.startsWith('.') ? k.slice(1) : `.${k}`}`, v);
+    }
+  };
+  collect('bin', pkg.bin);
+  collect('main', pkg.main);
+  collect('module', pkg.module);
+  collect('exports', pkg.exports);
+
+  const reported = new Set();
+  for (const [name, entry] of entrypoints) {
     const rel = String(entry).replace(/^\.\//, '');
+    if (rel.includes('*')) continue; // subpath PATTERN — not a single file, out of scope
     if (packed.has(rel)) {
-      files.add(rel);
-    } else {
-      // A declared bin missing from the tarball is WORSE than a broken import:
-      // `npm i -g` creates a shim pointing at a file that does not exist, so
-      // every invocation dies with ENOENT before any import is attempted.
-      // Dropping it silently reported such a package as verified clean.
+      // EXISTENCE is checked for every entrypoint; PARSING only for files that
+      // are actually JavaScript. `exports` legitimately points at `index.d.ts`
+      // (a types condition) and at `./package.json` — neither is parseable by a
+      // JS parser, and treating a parse failure there as "unconsultable" marked
+      // @adlc/core, @adlc/tickets and @adlc/init unverifiable, which under
+      // --publish would block the release outright.
+      if (/\.(mjs|js|cjs)$/.test(rel) || !/\.[a-z0-9]+$/i.test(rel)) files.add(rel);
+    } else if (!reported.has(rel)) {
+      // A declared entrypoint absent from the tarball is worse than a broken
+      // import: for `bin`, `npm i -g` creates a shim to a nonexistent file and
+      // every invocation dies with ENOENT before any import runs; for `exports`,
+      // the documented subpath simply does not exist in the published package.
+      // Deduped by target path — an `exports` condition object names the same
+      // file once per condition (import/require/default) and that is one defect,
+      // not three.
+      reported.add(rel);
       missingBins.push({ name, rel });
     }
   }
@@ -585,9 +666,12 @@ export function findPackagingProblems({ packagesDir = PKGS, pluginsDir = PLUGINS
     }
     const { files, missingBins, type } = scannableFiles(target.dir, packed.files);
     for (const { name, rel } of missingBins) {
+      const consequence = name.startsWith('bin')
+        ? 'the installed CLI would not exist — every invocation fails with ENOENT'
+        : 'the documented entrypoint would not exist in the published package';
       problems.push(
-        `${target.name}: package.json bin "${name}" points at ${rel}, which the "files" allowlist does not publish ` +
-          `(the installed CLI would not exist — every invocation fails with ENOENT)`
+        `${target.name}: package.json ${name} points at ${rel}, which the "files" allowlist does not publish ` +
+          `(${consequence})`
       );
     }
 
@@ -601,8 +685,13 @@ export function findPackagingProblems({ packagesDir = PKGS, pluginsDir = PLUGINS
       let source;
       try {
         source = readFileSync(join(target.dir, rel), 'utf8');
-      } catch {
-        continue;
+      } catch (err) {
+        // Same polarity as a parse failure. Skipping an unreadable file while
+        // still counting the package as `consulted` would put it in the
+        // denominator that callers read as "inspected" — a dangling symlink or
+        // a permission error would then be indistinguishable from a clean scan.
+        unparseable = `${rel} could not be read: ${err.message}`;
+        break;
       }
       try {
         specsByFile.set(rel, specifiersForFile(source, rel));
@@ -669,9 +758,23 @@ export function releaseMain(
   // it post-bump would abort forever with a mutated tree; checking it here aborts
   // with the tree untouched and a fixable instruction.
   const nearMisses = hostDiscoveryNearMisses({ root, pluginsDir });
+  // Every JSON file the bump will REWRITE must be parseable before we write the
+  // first one. hostMarketplacePaths checks only existence, and the bump then does
+  // a bare readJson — so a merge-conflict marker in .claude-plugin/marketplace.json
+  // threw an uncaught SyntaxError out of releaseMain AFTER packages/*, plugins/*
+  // and every host manifest had already been rewritten: a mutated tree, no
+  // diagnostic, and no return-1 path. Same failure class already fixed twice
+  // (metadata-less marketplace, non-JSON npm pack output).
+  for (const jsonPath of [...hostMarketplacePaths(root), join(root, 'package.json')]) {
+    try {
+      readJson(jsonPath);
+    } catch (err) {
+      nearMisses.push(`${jsonPath}: not valid JSON (${err.message}) — the bump would abort mid-write`);
+    }
+  }
   if (nearMisses.length > 0) {
     console.error(
-      `host discovery near miss — aborting before any file is modified:\n  ${nearMisses.join('\n  ')}`
+      `release preflight failed — aborting before any file is modified:\n  ${nearMisses.join('\n  ')}`
     );
     return 1;
   }

@@ -28,7 +28,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -53,6 +53,16 @@ const REPOSITORY = { type: 'git', url: 'git+https://github.com/voodootikigod/adl
 // offline instead of shelling out to real npm for every releaseMain call.
 const packAll = (fileList) => () => JSON.stringify([{ files: fileList.map((path) => ({ path })) }]);
 const packNothing = packAll([]);
+
+/** Every file under `dir` as {relativePath: contents} — for proving a run wrote nothing. */
+function snapshotTree(dir, base = dir, acc = {}) {
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) snapshotTree(full, base, acc);
+    else acc[full.slice(base.length + 1)] = readFileSync(full, 'utf8');
+  }
+  return acc;
+}
 
 /**
  * A fixture repo carrying every host-manifest SHAPE the real repo has, plus the
@@ -285,8 +295,11 @@ test('a near-miss host directory aborts loudly instead of passing green', () => 
     // green. Assert the abort, that nothing was published, and that the tree is
     // UNTOUCHED: a near miss names a directory, which no re-run of the bumper
     // can rename, so aborting after mutating would strand the tree forever.
-    const before = readFileSync(join(root, 'package.json'), 'utf8');
-    const claudeBefore = readFileSync(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json'), 'utf8');
+    // Snapshot the WHOLE tree. Sampling two files let the preflight be moved
+    // anywhere before those two writes — e.g. after the packages/* loop — while
+    // still passing, which would leave exactly the mutated-tree-with-no-path-to-
+    // green state this test exists to forbid.
+    const before = snapshotTree(root);
     let published = 0;
     const rc = releaseMain(['9.9.9', '--publish'], {
       root, packagesDir, pluginsDir,
@@ -296,10 +309,8 @@ test('a near-miss host directory aborts loudly instead of passing green', () => 
     });
     assert.equal(rc, 1, 'a near-miss host directory must abort the release');
     assert.equal(published, 0, 'nothing may be published');
-    assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), before,
-      'the abort must happen BEFORE any file is rewritten');
-    assert.equal(readFileSync(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json'), 'utf8'),
-      claudeBefore, 'no manifest may be mutated by an aborted run');
+    assert.deepEqual(snapshotTree(root), before,
+      'an aborted preflight must leave EVERY file byte-identical');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -428,15 +439,22 @@ test('every declared specifier form is actually detected', () => {
   // ADR 0011 §7 promises import / export…from / side-effect import / literal
   // import() / require(). Each needs a fixture or the promise is untested and
   // deleting a pattern breaks nothing.
+  // `export * from` is NOT decorative: packages/core/index.mjs is 13 consecutive
+  // star re-exports and packages/tickets/index.mjs the same. Those are the
+  // published entrypoints of the two most-depended-on packages, so without a
+  // fixture the ExportAllDeclaration case could be deleted and @adlc/core's
+  // entire relative import graph would become invisible to the gate.
   const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
     "export { a } from '../scripts/a.mjs';\n" +
     "import '../scripts/b.mjs';\n" +
     "const c = await import('../scripts/c.mjs');\n" +
     "const d = require('../scripts/d.cjs');\n" +
+    "export * from '../scripts/e.mjs';\n" +
+    "export * as ns from '../scripts/f.js';\n" +
     "export { c, d };\n");
   try {
     const blob = findPackagingProblems({ packagesDir, pluginsDir }).problems.join('\n');
-    for (const f of ['a.mjs', 'b.mjs', 'c.mjs', 'd.cjs']) {
+    for (const f of ['a.mjs', 'b.mjs', 'c.mjs', 'd.cjs', 'e.mjs', 'f.js']) {
       assert.match(blob, new RegExp(`scripts/${f.replace('.', '\\.')}`), `${f} must be detected`);
     }
   } finally {
@@ -641,6 +659,117 @@ test('a declared bin absent from the tarball is reported, not silently dropped',
   }
 });
 
+test('an exports subpath absent from the tarball is reported', () => {
+  // VERIFIED npm behaviour: npm force-includes `bin` and `main`, but NOT
+  // `exports` targets. Packing exports:{'./side':'./extra/side.mjs'} with
+  // files:['lib/'] omits extra/side.mjs entirely — so a documented subpath
+  // resolves for the author and 404s for everyone who installs it. Same defect
+  // class as a missing bin, without npm's safety net.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-exports-'));
+  const packagesDir = join(root, 'packages');
+  const pluginsDir = join(root, 'plugins');
+  mkdirSync(join(packagesDir, 'expo', 'lib'), { recursive: true });
+  mkdirSync(join(packagesDir, 'expo', 'extra'), { recursive: true });
+  mkdirSync(pluginsDir);
+  write(join(packagesDir, 'expo', 'package.json'), {
+    name: '@adlc/expo', version: '1.0.0', type: 'module', repository: REPOSITORY,
+    exports: {
+      '.': './lib/main.mjs',
+      './side': { import: './extra/side.mjs', default: './extra/side.mjs' },
+    },
+    files: ['lib/'],
+  });
+  writeFileSync(join(packagesDir, 'expo', 'lib', 'main.mjs'), 'export const m = 1;\n');
+  writeFileSync(join(packagesDir, 'expo', 'extra', 'side.mjs'), 'export const s = 1;\n');
+  try {
+    const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(consulted.length, 1);
+    assert.equal(problems.length, 1,
+      'one missing target = one problem, even though two conditions name it');
+    assert.match(problems[0], /extra[/\\]side\.mjs/);
+    assert.match(problems[0], /documented entrypoint would not exist/,
+      'an exports miss must not be described as a missing CLI');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('non-JS entrypoints are checked for existence but never parsed', () => {
+  // `exports` legitimately points at `index.d.ts` (types condition) and at
+  // `./package.json`. Adding those to the PARSE set made @adlc/core,
+  // @adlc/tickets and @adlc/init unconsultable against the real repo — which
+  // under --publish would have blocked the release outright.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-nonjs-'));
+  const packagesDir = join(root, 'packages');
+  const pluginsDir = join(root, 'plugins');
+  mkdirSync(join(packagesDir, 'typed', 'lib'), { recursive: true });
+  mkdirSync(pluginsDir);
+  write(join(packagesDir, 'typed', 'package.json'), {
+    name: '@adlc/typed', version: '1.0.0', type: 'module', repository: REPOSITORY,
+    exports: { '.': { types: './index.d.ts', import: './lib/main.mjs' }, './package.json': './package.json' },
+    files: ['lib/', 'index.d.ts'],
+  });
+  writeFileSync(join(packagesDir, 'typed', 'index.d.ts'), 'export declare const m: number;\n');
+  writeFileSync(join(packagesDir, 'typed', 'lib', 'main.mjs'), 'export const m = 1;\n');
+  try {
+    const { problems, consulted, unconsultable } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.deepEqual(unconsultable, [], 'a .d.ts or package.json entrypoint must not make a package unverifiable');
+    assert.equal(consulted.length, 1);
+    assert.deepEqual(problems, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a template-literal specifier with no interpolation is detected', () => {
+  // `import(`./lib.mjs`)` is a compile-time constant and therefore statically
+  // decidable — only a template carrying ${} expressions is genuinely undecidable.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    'const x = await import(`../scripts/a.mjs`);\nexport { x };\n');
+  try {
+    const { problems } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(problems.length, 1, 'a no-expression template specifier must be scanned like a quoted one');
+    assert.match(problems[0], /scripts[/\\]a\.mjs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unparseable marketplace.json aborts the preflight with the tree untouched', () => {
+  // hostMarketplacePaths checks existence only, and the bump then does a bare
+  // readJson. A merge-conflict marker in .claude-plugin/marketplace.json threw
+  // an uncaught SyntaxError AFTER packages/*, plugins/* and every host manifest
+  // had been rewritten — a mutated tree, no diagnostic, no return-1 path.
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    writeFileSync(join(root, '.claude-plugin', 'marketplace.json'), '{ "name": "adlc",\n<<<<<<< HEAD\n}\n');
+    const before = snapshotTree(root);
+    const rc = releaseMain(['9.9.9'], { root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: packNothing });
+    assert.equal(rc, 1, 'an unparseable marketplace must abort, not throw');
+    assert.deepEqual(snapshotTree(root), before, 'and must leave every file byte-identical');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a malformed FLAT plugin.json is reported, not silently skipped', () => {
+  // Round three added this check for NESTED manifests only, leaving the flat
+  // shape — antigravity's, the very layout the fix was written for — invisible
+  // to bumper, gate and near-miss alike.
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    writeFileSync(join(pluginsDir, 'adlc-antigravity', 'plugin.json'), '{ "name": "x", "version": "1.0",, }\n');
+    const misses = hostDiscoveryNearMisses({ root, pluginsDir });
+    assert.ok(misses.some((m) => m.includes('flat host manifest')),
+      'a malformed flat manifest must be reported');
+
+    const rc = releaseMain(['9.9.9'], { root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: packNothing });
+    assert.equal(rc, 1, 'and it must abort the release before anything is written');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an EXTENSIONLESS bin entrypoint is scanned, not skipped', () => {
   // "bin": { "cli": "bin/cli" } is an ordinary CLI pattern. Filtering the scan
   // set by extension skips the package's own entrypoint — a fail-open on the
@@ -781,10 +910,25 @@ test('an unconsultable package is fatal for --publish but only a warning for a b
     assert.equal(rcPublish, 1, '--publish must refuse to ship an unverified package');
     assert.equal(published, 0, 'nothing may be published');
 
-    const rcBump = releaseMain(['9.9.8'], {
-      root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: thrower,
-    });
+    // The WARNING is the entire behavior on this path: rc is 0 either way, so
+    // asserting only the exit code lets the console.warn be deleted, leaving a
+    // bump that silently proceeds with packages never verified — exactly the
+    // "no log and no counter" failure this gate was built to end.
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...args) => warned.push(args.join(' '));
+    let rcBump;
+    try {
+      rcBump = releaseMain(['9.9.8'], {
+        root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: thrower,
+      });
+    } finally {
+      console.warn = realWarn;
+    }
     assert.equal(rcBump, 0, 'a bare bump proceeds — nothing leaves the machine');
+    assert.match(warned.join('\n'), /could not be verified for 1 package/,
+      'the operator must be told, with a count');
+    assert.match(warned.join('\n'), /npm unavailable/, 'and the reason');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
