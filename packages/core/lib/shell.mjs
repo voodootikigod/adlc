@@ -90,17 +90,83 @@ export function shellHasOpaqueMutation(text) {
 }
 
 /**
+ * Split a shell payload on UNQUOTED separators (`;` `&` `|` `&&` `||` newline).
+ *
+ * Splitting with a plain regex ignores quoting, so a read-only command carrying
+ * a quoted separator was shredded into fragments that could not match the
+ * allowlist (issue #216):
+ *
+ *   rg -n '"(prepack|prepare|postpack)"' package.json
+ *     -> ["rg -n '\"(prepack", "prepare", "postpack)\"' package.json"]
+ *
+ * `rg` IS allowlisted; the parse defeated the allowlist before it was consulted.
+ *
+ * Returns `null` when the payload cannot be parsed confidently (an unterminated
+ * quote), so the caller can FAIL CLOSED. That direction matters: the allowlist
+ * only inspects each segment's PREFIX, so a separator we fail to split on is
+ * fail-open — `cat x | rm -rf rail` left unsplit still starts with `cat`.
+ * Missing a real separator is the dangerous error, never the reverse.
+ */
+function splitOnUnquotedSeparators(text) {
+  const segments = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (quote === null && c === '\\') {
+      current += c + (text[i + 1] ?? '');
+      i += 1;
+      continue;
+    }
+    if (quote === null && (c === "'" || c === '"')) {
+      quote = c;
+      current += c;
+      continue;
+    }
+    if (quote !== null) {
+      // Inside double quotes a backslash still escapes; inside single quotes
+      // everything is literal, so only consume an escape for the former.
+      if (quote === '"' && c === '\\') {
+        current += c + (text[i + 1] ?? '');
+        i += 1;
+        continue;
+      }
+      if (c === quote) quote = null;
+      current += c;
+      continue;
+    }
+    if ((c === '&' && text[i + 1] === '&') || (c === '|' && text[i + 1] === '|')) {
+      segments.push(current);
+      current = '';
+      i += 1;
+      continue;
+    }
+    if (c === ';' || c === '&' || c === '|' || c === '\n') {
+      segments.push(current);
+      current = '';
+      continue;
+    }
+    current += c;
+  }
+  if (quote !== null) return null; // unterminated quote — refuse to guess
+  segments.push(current);
+  return segments;
+}
+
+/**
  * Positively read-only only if EVERY command segment is individually a known
  * read-only command (empty string counts). Splitting on separators is
  * load-bearing: a read-only prefix must not shadow a later mutator — e.g.
- * `git status && curl -o rail` is NOT read-only.
+ * `git status && curl -o rail` is NOT read-only. The split is quote-aware, so a
+ * separator INSIDE a quoted argument is not mistaken for a command boundary.
  */
 export function shellIsPositivelyReadOnly(text) {
   const normalized = String(text ?? '').trim();
   if (normalized === '') return true;
   const readOnlyPrefix = /^(?:git\s+(?:status|diff|show|log|rev-parse|branch|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/;
-  return normalized
-    .split(/(?:&&|\|\||[;&|\n])/)
+  const segments = splitOnUnquotedSeparators(normalized);
+  if (segments === null) return false; // unparseable → not positively read-only
+  return segments
     .map((s) => s.trim())
     .filter((s) => s !== '')
     .every((segment) => readOnlyPrefix.test(segment));
