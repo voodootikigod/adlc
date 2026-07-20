@@ -118,9 +118,23 @@ export function runTicketPrune(options = {}) {
     if (ceremony) {
       return { ok: false, error: 'ticket-prune --ceremony is not supported for the directory ticket store yet; complete rail-freezing tickets through the protected-base admin ceremony directly.' };
     }
+    // Archive ONLY tombstone-eligible tickets — same boundary the legacy path
+    // enforces. A rail-freezing or preexisting-completed-field ticket must NOT be
+    // auto-archived: archiving removes it from the active store and so unfreezes
+    // its rails without the per-ticket review the contract reserves for that. They
+    // are reported under needsCeremony and completed per-ticket via
+    // `adlc ticket complete`, exactly as on the legacy backend.
     const archivedEntries = [];
+    const needsCeremony = [];
     try {
       for (const item of stale) {
+        const ticket = ticketsById.get(item.id);
+        const disposition = ceremonyDisposition(ticket ?? { id: item.id }, item.reason);
+        if (disposition.disposition === 'done') continue;
+        if (disposition.disposition === 'ceremony') {
+          needsCeremony.push(disposition.entry); // rails-freeze / preexisting-completed-field → reported, not archived
+          continue;
+        }
         const current = canonicalStore.load();
         const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), item.id, {
           root: cwd,
@@ -130,7 +144,7 @@ export function runTicketPrune(options = {}) {
         });
         archivedEntries.push(result.archived);
       }
-      return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries };
+      return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony };
     } catch (error) {
       return { ok: false, error: error.message };
     }

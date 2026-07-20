@@ -7,7 +7,7 @@ import { renderReport, toJson } from '../lib/format.mjs';
 // literal strings (e.g. "completed:true", the empty-state lines, the ceremony
 // section) can't silently drift into a display lie.
 
-test('renderReport (write): a mixed result shows the tombstoned line, the completed:true wording, and the not-auto-tombstonable ceremony section for both blockers', () => {
+test('renderReport (write): rails-freeze entries get the completion command; preexisting-completed-field entries are steered to a manual decision, NOT the command', () => {
   const text = renderReport({
     baseRef: 'HEAD',
     write: true,
@@ -22,13 +22,20 @@ test('renderReport (write): a mixed result shows the tombstoned line, the comple
 
   assert.match(text, /Tombstoned 1 rails-less stale ticket\(s\) with completed:true in place:/);
   assert.match(text, /- T1: shipped scope/);
-  assert.match(text, /Stale but not auto-tombstonable — complete each per-ticket on the protected-base path with `adlc ticket complete <id> --write --authorize --json` \(2\):/);
-  // rails-freeze blocker renders the frozen globs...
+
+  // rails-freeze: gets the per-ticket completion command.
+  assert.match(text, /Shipped but still freezing rails — complete each per-ticket .*adlc ticket complete <id> --write --authorize --json` \(1\):/);
   assert.match(text, /- T2: shipped scope \[freezes: test\/a\/\*\*, test\/b\/\*\*\]/);
-  // ...preexisting-completed-field blocker renders the field explanation, not "freezes:".
-  assert.match(text, /- T3: shipped scope \[already has a completed field\]/);
-  assert.doesNotMatch(text, /- T3:.*freezes:/);
-  // Active section still present.
+
+  // preexisting-completed-field: steered to a manual decision, explicitly NOT the command.
+  const manualIdx = text.indexOf('Already carry a `completed` field');
+  assert.ok(manualIdx !== -1, 'manual-decision section present');
+  assert.match(text.slice(manualIdx), /NOT `adlc ticket complete`/);
+  assert.match(text.slice(manualIdx), /- T3: shipped scope/);
+  // T3 must not sit under the "complete each" command heading.
+  const cmdIdx = text.indexOf('Shipped but still freezing rails');
+  assert.doesNotMatch(text.slice(cmdIdx, manualIdx), /T3/);
+
   assert.match(text, /Active tickets \(1\):/);
   assert.match(text, /- T9: still building/);
 });

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -661,5 +661,63 @@ test('bin: missing tickets file exits 1 (operational error)', () => {
     const { code, stderr } = runBin([], dir);
     assert.equal(code, 1);
     assert.match(stderr, /tickets file not found/);
+  });
+});
+
+// ---- #208: directory backend respects the ceremony boundary under --write ----
+//
+// A prior version archived EVERY stale ticket on the directory store with
+// authorized:true — including rail-freezing ones. Archiving removes a ticket from
+// the active store, so that silently unfroze its rails without the per-ticket
+// review the legacy path (and the contract) require. --write must archive only
+// tombstone-eligible tickets and report the rest under needsCeremony.
+import { ticketFilename } from '@adlc/tickets';
+
+function writeDirectoryStore(dir, tickets) {
+  const store = join(dir, '.adlc', 'tickets');
+  mkdirSync(store, { recursive: true });
+  writeFileSync(join(store, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+  for (const t of tickets) writeFileSync(join(store, ticketFilename(t.id)), JSON.stringify(t));
+}
+
+test('#208: directory --write archives only rails-less stale tickets; a rail-freezing one is reported, not archived', () => {
+  withScratchRepo((dir) => {
+    // withScratchRepo seeds a legacy tickets.json; remove it and use a directory store.
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    mkdirSync(join(dir, 'packages', 'util'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'util', 'b.mjs'), '// shipped\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-q', '-m', 'ship util'], dir);
+    writeDirectoryStore(dir, [
+      { id: 'RAILED', title: 'railed shipped', scope: ['plugins/adlc-widget/**'], rails: ['test/adlc-widget/**'] },
+      { id: 'RAILLESS', title: 'rails-less shipped', scope: ['packages/util/**'] },
+    ]);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
+    assert.deepEqual((result.needsCeremony ?? []).map((e) => e.id), ['RAILED']);
+    assert.equal(result.needsCeremony[0].blocker, 'rails-freeze');
+    // The rail-freezing ticket's shard must still exist — its rails are intact.
+    assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('RAILED'))),
+      'rail-freezing ticket must NOT be archived by --write');
+  });
+});
+
+test('#208: directory --write does not archive a deliberately completed:false ticket', () => {
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    writeDirectoryStore(dir, [
+      { id: 'KEEP', title: 'kept incomplete', scope: ['plugins/adlc-widget/**'], completed: false },
+    ]);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), []);
+    assert.deepEqual((result.needsCeremony ?? []).map((e) => e.id), ['KEEP']);
+    assert.equal(result.needsCeremony[0].blocker, 'preexisting-completed-field');
+    assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('KEEP'))));
   });
 });
