@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTicketPrune } from '../lib/run.mjs';
+import { renderReport, toJson } from '../lib/format.mjs';
 import { acquireLock } from '../lib/store.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -719,5 +720,48 @@ test('#208: directory --write does not archive a deliberately completed:false ti
     assert.deepEqual((result.needsCeremony ?? []).map((e) => e.id), ['KEEP']);
     assert.equal(result.needsCeremony[0].blocker, 'preexisting-completed-field');
     assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('KEEP'))));
+  });
+});
+
+test('#208: directory --write surfaces archived ids in the result (observability)', () => {
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    writeDirectoryStore(dir, [
+      { id: 'RAILLESS', title: 'rails-less shipped', scope: ['plugins/adlc-widget/**'] },
+    ]);
+    const result = runTicketPrune({ cwd: dir, write: true });
+    assert.equal(result.ok, true);
+    // The mutation must be visible in both the result and the public formatters.
+    assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
+    assert.deepEqual(toJson(result).archived.map((a) => a?.id ?? a), ['RAILLESS']);
+    assert.match(renderReport(result), /Archived 1 rails-less stale ticket\(s\) out of the active directory store:/);
+  });
+});
+
+test('#208: a directory batch that fails mid-way reports what already archived and which id failed', () => {
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    // A and B are both rails-less shipped (archivable). B is referenced by active
+    // ticket C via an edge, so archiveTicket rejects B with ARCHIVE_INBOUND_EDGE.
+    // A must archive first, then B fails — a partial batch.
+    mkdirSync(join(dir, 'packages', 'a2'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'a2', 'x.mjs'), '// a\n');
+    mkdirSync(join(dir, 'packages', 'b2'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'b2', 'x.mjs'), '// b\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-q', '-m', 'ship a2 b2'], dir);
+    writeDirectoryStore(dir, [
+      { id: 'AAA', title: 'rails-less shipped', scope: ['packages/a2/**'] },
+      { id: 'BBB', title: 'rails-less shipped', scope: ['packages/b2/**'] },
+      { id: 'CCC', title: 'still building', scope: ['packages/never-built/**'], edges: [{ to: 'BBB', kind: 'depends' }] },
+    ]);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /BBB|inbound|referenced/i);
+    // The already-committed archive of AAA is reported, not lost behind the error.
+    assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['AAA']);
+    assert.equal(result.failedId, 'BBB');
   });
 });

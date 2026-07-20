@@ -126,16 +126,25 @@ export function runTicketPrune(options = {}) {
     // `adlc ticket complete`, exactly as on the legacy backend.
     const archivedEntries = [];
     const needsCeremony = [];
-    try {
-      for (const item of stale) {
-        const ticket = ticketsById.get(item.id);
-        const disposition = ceremonyDisposition(ticket ?? { id: item.id }, item.reason);
+    for (const item of stale) {
+      try {
+        // Re-read and re-classify against the CURRENT snapshot, then pass THAT
+        // snapshot's hash to archiveTicket, so the disposition and the CAS come
+        // from the same view. Taking the disposition from the initial load but
+        // the hash from a later load would let a concurrent edit (rails added,
+        // status changed, completed:false set) slip a reclassified ticket through
+        // the CAS. This mirrors the legacy path's under-lock re-read.
+        const current = canonicalStore.load();
+        const ticket = current.get(item.id);
+        if (!ticket) continue; // vanished under us since the first pass
+        const reclassified = classifyTicket(ticket, trackedFiles);
+        if (!reclassified.stale) continue; // un-staled since the first pass
+        const disposition = ceremonyDisposition(ticket, reclassified.reason);
         if (disposition.disposition === 'done') continue;
         if (disposition.disposition === 'ceremony') {
           needsCeremony.push(disposition.entry); // rails-freeze / preexisting-completed-field → reported, not archived
           continue;
         }
-        const current = canonicalStore.load();
         const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), item.id, {
           root: cwd,
           expectedSnapshotHash: current.hash,
@@ -143,11 +152,15 @@ export function runTicketPrune(options = {}) {
           authorized: true,
         });
         archivedEntries.push(result.archived);
+      } catch (error) {
+        // Each archive is its own committed transaction. On failure mid-batch,
+        // report what ALREADY archived (and which id failed) alongside the error,
+        // so the caller can recover rather than see a bare {ok:false} after an
+        // in-place mutation already landed.
+        return { ok: false, error: error.message, archived: archivedEntries, needsCeremony, failedId: item.id };
       }
-      return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony };
-    } catch (error) {
-      return { ok: false, error: error.message };
     }
+    return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony };
   }
 
   const locked = acquireLock(cwd);

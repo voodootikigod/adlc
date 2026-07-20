@@ -1,7 +1,7 @@
 // format.mjs — human-readable + JSON rendering for a runTicketPrune() result.
 
 export function renderReport(result) {
-  const { baseRef, write, stale, active, tombstoned = [], needsCeremony = [] } = result;
+  const { baseRef, write, stale, active, tombstoned = [], archived = [], needsCeremony = [] } = result;
   const lines = [];
   // `--ceremony` is deprecated (#208) and returns before rendering, so the only
   // in-place write this tool reports is tombstoning under --write.
@@ -10,11 +10,20 @@ export function renderReport(result) {
   lines.push('');
 
   if (write) {
-    if (tombstoned.length === 0) {
-      lines.push('No stale tickets tombstoned.');
-    } else {
+    // Legacy stores tombstone (completed:true in place); directory stores archive
+    // (move the shard). Surface BOTH — an archived ticket is removed from the
+    // active store, so omitting it would let output claim "nothing changed" after
+    // a real mutation.
+    if (tombstoned.length === 0 && archived.length === 0) {
+      lines.push('No stale tickets tombstoned or archived.');
+    }
+    if (tombstoned.length > 0) {
       lines.push(`Tombstoned ${tombstoned.length} rails-less stale ticket(s) with completed:true in place:`);
       for (const t of tombstoned) lines.push(`  - ${t.id}: ${t.reason}`);
+    }
+    if (archived.length > 0) {
+      lines.push(`Archived ${archived.length} rails-less stale ticket(s) out of the active directory store:`);
+      for (const a of archived) lines.push(`  - ${a?.id ?? a}`);
     }
   } else if (stale.length === 0) {
     lines.push('No stale tickets found.');
@@ -59,6 +68,8 @@ export function renderReport(result) {
 }
 
 export function toJson(result) {
-  const { baseRef, write, ceremony = false, stale, active, tombstoned = [], ceremonyCompleted = [], needsCeremony = [] } = result;
-  return { baseRef, write, ceremony, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
+  const { baseRef, write, ceremony = false, stale, active, tombstoned = [], archived = [], ceremonyCompleted = [], needsCeremony = [] } = result;
+  // `archived` is the directory-store mutation (moved shards); omitting it would
+  // make `--json` under-report what --write actually changed on that backend.
+  return { baseRef, write, ceremony, stale, active, tombstoned, archived, ceremonyCompleted, needsCeremony };
 }

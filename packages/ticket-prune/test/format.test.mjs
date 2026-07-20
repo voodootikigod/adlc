@@ -50,7 +50,7 @@ test('renderReport (write): with nothing tombstoned and no ceremony items, it sa
     needsCeremony: [],
   });
 
-  assert.match(text, /No stale tickets tombstoned\./);
+  assert.match(text, /No stale tickets tombstoned or archived\./);
   assert.doesNotMatch(text, /completed:true/);
   assert.doesNotMatch(text, /admin ceremony/);
   assert.match(text, /Active tickets \(0\):/);
@@ -87,6 +87,7 @@ test('toJson projects exactly the machine-readable fields, defaulting the new ar
     stale: [],
     active: [],
     tombstoned: [{ id: 'T1', reason: 'x' }],
+    archived: [],
     ceremonyCompleted: [],
     needsCeremony: [],
   });
