@@ -337,7 +337,7 @@ const SPECIFIER_PATTERNS = [
   /\brequire\.resolve\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
-const SENTINEL = ' ';
+const SENTINEL = '\u0000';
 
 /**
  * A minimal single-pass lexer: removes comments and replaces every string /

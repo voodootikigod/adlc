@@ -407,6 +407,36 @@ test('a commented-out import is NOT reported', () => {
   }
 });
 
+test('no raw control characters in the release sources or this rail', () => {
+  // The lexer's placeholder sentinel was first written as a LITERAL U+0000 in
+  // the source instead of an escape sequence. Every test passed — but a raw
+  // control byte in a tracked text file breaks anything treating it as text, and
+  // it did: execFileSync refused the cross-model review prompt that embedded the
+  // diff (ERR_INVALID_ARG_VALUE: must be a string without null bytes), silently
+  // costing a mandatory gate. Green tests do not make a control character in
+  // source acceptable.
+  //
+  // This rail is checked TOO. The first version of this very guard covered only
+  // release.mjs while its own comment carried the byte it warns about — a guard
+  // that cannot see itself is half a guard.
+  const targets = [
+    join(REPO_ROOT, 'scripts', 'release.mjs'),
+    join(REPO_ROOT, 'scripts', 'claude-code-plugin-smoke.mjs'),
+    join(REPO_ROOT, 'scripts', 'test', 'release-artifact.test.mjs'),
+  ];
+  const offenders = [];
+  for (const file of targets) {
+    [...readFileSync(file, 'utf8')].forEach((c, i) => {
+      const code = c.charCodeAt(0);
+      // Tab and newline are the only control characters legitimate in source.
+      if (code < 0x20 && code !== 0x0a && code !== 0x09) {
+        offenders.push(`${file}@${i}: U+${code.toString(16).padStart(4, '0')}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, [], 'use \\uXXXX escapes, never a raw control byte');
+});
+
 // --- cross-model review findings (agy, needs-attention) --------------------
 // The first fix pass traded one hole for another. These four pin the trade shut.
 
