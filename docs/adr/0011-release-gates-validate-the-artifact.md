@@ -68,10 +68,26 @@ flat `plugins/<name>/plugin.json` — and `hostMarketplacePaths` covers
 `<root>/.<host>-plugin/marketplace.json`. A new integration is drift-protected
 the day its directory appears, with no edit to `release.mjs`.
 
-**2. The gate and the bumper share the same discovery functions.** This is the
-load-bearing part. The original bug was not a missing check; it was a gate that
-enumerated a *different set* than the bumper. Sharing the functions makes that
-divergence structurally impossible.
+**2. The gate and the bumper share the same discovery functions.** The original
+bug was not a missing check; it was a gate that enumerated a *different set* than
+the bumper. Sharing the functions eliminates **bumper/gate divergence**.
+
+It does **not** eliminate **discovery/reality divergence**, and an earlier draft
+of this ADR wrongly claimed it made divergence "structurally impossible". The
+shape regex is itself an enumeration: `.Codex-plugin`, `.claude_plugin`, and
+`.jetbrains.ai-plugin` match neither side, which reproduces Defect A exactly — a
+frozen manifest under a green gate. So `hostDiscoveryNearMisses` reports any
+depth-exact dotted directory holding a `plugin.json`/`marketplace.json` whose
+name does not match, and `findVersionDrift` surfaces those as drift. The silent
+class becomes a loud one; the regex is allowed to be wrong, but not quietly.
+
+**2b. The bumper and gate apply the same existence condition to every field.**
+Both write/check `metadata.version` and `plugins[].version` only where the key
+already exists. An earlier version had the bumper write conditionally while the
+gate demanded unconditionally, which made a metadata-less marketplace listing
+unreleasable: `releaseMain` mutated the whole tree, aborted, and did so
+identically on every re-run because no code path could satisfy the gate.
+`.agents/plugins/marketplace.json` is that shape today.
 
 **3. Discovery is depth-exact, never recursive.** Only direct children of the
 root and of each plugin directory are read. This repo carries 21 stale
@@ -84,9 +100,14 @@ create one: `claude-code-plugin-smoke.mjs` asserts the nested
 `plugins/adlc-claude-code/.claude-plugin/marketplace.json` does **not** exist,
 because a second copy causes a dual-resolution failure on live install.
 
-**5. Only `version` is bumped.** `plugins/adlc-antigravity/plugin.json` also
-carries `adlcContract`, a protocol number that is not a release version and must
-survive untouched.
+**5. Only an EXISTING `version` is bumped — never an invented one.**
+`plugins/adlc-antigravity/plugin.json` also carries `adlcContract`, a protocol
+number that is not a release version and must survive untouched. More
+importantly, a `plugins/<x>/plugin.json` that declares no `version` is not a
+versioned host manifest at all (it may be a tool config or a schema), and
+stamping one in is an install-time rejection under an
+`additionalProperties: false` host schema. "Only update what exists" governs
+fields, not just files.
 
 **6. Packaging completeness is asked of npm, not reimplemented.**
 `findPackagingProblems` shells out to `npm pack --dry-run --json` for the
@@ -95,12 +116,34 @@ every shipped `.mjs`/`.js`/`.cjs` file resolves to a path in that list. `files`
 interacts with `.npmignore`, always-included entries and always-excluded ones in
 ways a hand-rolled prefix match gets subtly wrong.
 
-**7. The packaging gate's coverage is stated, not implied.** Static `import` /
-`export … from` / side-effect `import` and *literal* `import()` are checked.
+**7. The packaging gate's coverage is stated, not implied.** Checked: static
+`import`, `export … from`, side-effect `import`, *literal* `import()`, and
+`require()` / `require.resolve()`. `require` is not optional — the file filter
+admits `.cjs`/`.js`, and a CommonJS `require('../scripts/gen-schema.js')` is
+Defect B in its other spelling; matching only ESM forms while claiming to scan
+`.cjs` would leave the original bug undetectable. Comments are stripped before
+scanning, so a refactor leftover like `// import … from './old-path.mjs'` cannot
+abort a release with a false diagnosis after the tree is already bumped.
+
 `node:` builtins and bare specifiers are ignored — they are dependency-resolved,
-not shipped. A **computed** `import()` specifier is undecidable by static
-analysis; the gate says so in its failure output rather than implying coverage
-it does not have.
+not shipped. A **computed** `import()`/`require()` specifier is undecidable by
+static analysis; the gate says so in its failure output rather than implying
+coverage it does not have. Every one of these forms has a fixture in the rail:
+an unexercised pattern is a promise with nothing behind it.
+
+**8. "No problems" is never reported without a denominator.**
+`findPackagingProblems` returns `{ problems, consulted, unconsultable }`, because
+an empty problem list is also what a scan that inspected *nothing* produces. The
+earlier version collapsed every npm failure into `null` and silently skipped the
+package — so an npm hiccup removed all coverage for exactly the package about to
+be published. `npm pack` returning no `files` array was quieter still: it yielded
+an empty set and passed as verified.
+
+**9. Unconsultable is fatal for `--publish`, a warning for a bare bump.** If
+`npm pack` fails in a directory, `npm publish` is about to run in that same
+directory — the failure is a signal about the very next command, so publishing
+refuses. A bare version bump ships nothing, so blocking it would add friction
+with no safety benefit and would make preparing a release offline impossible.
 
 ## Consequences
 
@@ -113,15 +156,42 @@ it does not have.
   (~0.16s each, ~5s for the suite). That is paid once per release and once per
   test run; it is worth it to never again publish a package that cannot import
   itself.
-- `findPackagingProblems` returns `[]` when npm cannot be consulted, so a tooling
-  hiccup does not fail a release on a signal it could not actually gather.
+- A package npm cannot be consulted about is reported, never treated as clean. A
+  bare bump warns and proceeds; `--publish` refuses. A broken local npm therefore
+  costs you the ability to publish, not the ability to prepare a release.
 - A computed dynamic import that escapes the allowlist would still ship broken.
   Accepted: no static analysis can decide it, and no such import exists in the
   suite today.
+- `releaseMain` takes an injectable `packImpl` alongside `regenerateLockfile` and
+  `publishImpl`, preserving release.test.mjs's "no real npm, offline, leaves no
+  trace" contract and making step 5's fail-closed behavior testable at all.
 
 ## Verification
 
 `scripts/test/release-artifact.test.mjs` is a **frozen rail** for this decision.
 It pins the bump across every manifest shape, the drift gate's coverage of each,
-the worktree-decoy exclusion, the packaging gate's true/false positives, and two
-assertions against the **real repo** rather than a fixture.
+the decoy exclusions, every declared specifier form, the three-state packaging
+result, and — critically — that **`releaseMain` itself aborts and publishes
+nothing** when the gate trips. Testing only the helper would let the entire
+fail-closed wiring be deleted with the suite still green.
+
+Two properties are asserted against the **real repo** rather than a fixture, and
+both carry a **denominator**: the packaging scan asserts it consulted every
+publish target before asserting zero problems, and the lockstep check asserts the
+Claude Code and antigravity manifests were actually discovered before asserting
+zero drift. An emptiness assertion against a scanner whose failure mode is also
+emptiness verifies nothing.
+
+`AC5 end-to-end` packs the real `@adlc/ticket-sync`, extracts it, and imports
+`lib/doctor.mjs` from the extracted tree — the only assertion in the suite that
+is independent of the analyzer being audited.
+
+## Provenance of this decision
+
+Sections 2, 2b, 5, 7, 8 and 9 exist because the first implementation was
+prosecuted (P5) and found wanting: the packaging gate failed open, the
+release-time wiring was untested, the real-repo assertions were vacuous, the
+bumper and gate disagreed about metadata, the flat-manifest branch stamped
+versions into non-manifests, `require()` was unscanned despite `.cjs` being in
+scope, and comments were not stripped. Recorded here so the reasoning is not
+rediscovered the hard way.

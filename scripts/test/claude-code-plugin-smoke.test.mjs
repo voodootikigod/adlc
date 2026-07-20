@@ -466,13 +466,34 @@ test('claude-code-plugin-smoke still rejects an extra plugin.json field after th
   // lockstep above it must not have widened the allowlist.
   const tmpRepo = copyRepoFast();
   try {
+    // The key must be one that CANNOT appear in the failure message's own
+    // boilerplate. An earlier version injected `commands`, but the guard's help
+    // text already contains "hooks/commands/agents/skills", so /commands/
+    // matched even when the offending key was never enumerated — an assertion
+    // that could not fail for the reason it claimed to check.
     editJson(join(tmpRepo, 'plugins/adlc-claude-code/.claude-plugin/plugin.json'), (j) => {
-      j.commands = './commands/';
+      j.zzUnexpectedKey = 1;
     });
     const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
     assert.notStrictEqual(result.status, 0, 'an extra plugin.json field must still fail');
     assert.match(result.stderr, /extra fields that will cause CC to reject the install/);
-    assert.match(result.stderr, /commands/);
+    assert.match(result.stderr, /invalid manifest": zzUnexpectedKey/,
+      'the offending key must be named in the enumerated list, not merely implied by boilerplate');
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+test('claude-code-plugin-smoke fails closed when the root package version is missing', () => {
+  // The lockstep comparison is only meaningful if rootVersion is real. These two
+  // guards are the only thing preventing a comparison against undefined, and
+  // nothing pinned them.
+  const tmpRepo = copyRepoFast();
+  try {
+    editJson(join(tmpRepo, 'package.json'), (j) => { delete j.version; });
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'a versionless root package must fail, not silently compare against undefined');
+    assert.match(result.stderr, /cannot verify version lockstep/);
   } finally {
     rmSync(tmpRepo, { recursive: true, force: true });
   }
