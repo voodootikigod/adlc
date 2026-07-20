@@ -337,31 +337,142 @@ const SPECIFIER_PATTERNS = [
   /\brequire\.resolve\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
+const SENTINEL = ' ';
+
 /**
- * Drop block and line comments before scanning. Without this, an ordinary
- * refactor leftover — `// import { x } from './old-path.mjs'` — resolves to a
- * path that is not in the tarball and hard-aborts the release with a message
- * claiming "the installed package would fail at import time" about a line that
- * never executes. Worse, the abort happens AFTER the whole tree is bumped, so
- * the operator is left with a mutated working tree and a false diagnosis.
- * scripts/claude-code-plugin-smoke.mjs strips comments before its equivalent
- * scan for exactly this reason.
+ * A minimal single-pass lexer: removes comments and replaces every string /
+ * template literal with an opaque `"\0<n>\0"` placeholder, returning the
+ * placeholder table alongside.
+ *
+ * Regex-only handling of this is not good enough, and both failure directions
+ * are real:
+ *   - stripping `/*…*\/` with a regex treats a `/*` that appears INSIDE a string
+ *     literal as a comment opener and deletes everything up to the next `*\/`,
+ *     silently removing real imports — the gate then fails OPEN;
+ *   - scanning raw text finds import-shaped text inside ordinary string literals
+ *     (codegen templates, fixtures, docs) and hard-aborts a valid release — a
+ *     false POSITIVE, after the tree has already been bumped.
+ *
+ * Replacing strings with placeholders fixes both: a specifier is still a quoted
+ * token the patterns can match, but the CONTENTS of unrelated strings can no
+ * longer look like code. An AST parser would be the textbook answer; this repo
+ * is zero-runtime-dependency by convention and Node ships no parser, so this is
+ * the honest middle ground. Its limits are stated in the gate's output.
  */
-function stripComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+function lexModule(source) {
+  const strings = [];
+  let code = '';
+  let prev = '';
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      i += 2;
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      let value = '';
+      while (j < source.length) {
+        if (source[j] === '\\') { value += source[j + 1] ?? ''; j += 2; continue; }
+        if (source[j] === c) break;
+        value += source[j];
+        j++;
+      }
+      strings.push(value);
+      code += `"${SENTINEL}${strings.length - 1}${SENTINEL}"`;
+      prev = '"';
+      i = j + 1;
+      continue;
+    }
+    // A regex literal can contain quotes and slashes; skipping it prevents those
+    // from desynchronising the string state above.
+    if (c === '/' && /[(,=:[!&|?{};+\-*%~^]/.test(prev)) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length) {
+        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        else if (source[j] === '\n') break;
+        else if (source[j] === '/' && !inClass) break;
+        j++;
+      }
+      prev = '/';
+      i = j + 1;
+      continue;
+    }
+    code += c;
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  return { code, strings };
 }
 
 function relativeSpecifiers(source) {
-  const code = stripComments(source);
+  const { code, strings } = lexModule(source);
+  const placeholder = new RegExp(`^${SENTINEL}(\\d+)${SENTINEL}$`);
   const found = new Set();
   for (const re of SPECIFIER_PATTERNS) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(code)) !== null) {
-      if (m[1].startsWith('.')) found.add(m[1]);
+      const hit = placeholder.exec(m[1]);
+      if (!hit) continue; // matched something that was never a string literal
+      const value = strings[Number(hit[1])];
+      if (typeof value === 'string' && value.startsWith('.')) found.add(value);
     }
   }
   return [...found];
+}
+
+const JS_EXTENSION = /\.(mjs|cjs|js|json|node)$/;
+
+/**
+ * Node does not require an extension for CommonJS: `require('../scripts/gen')`
+ * legitimately resolves to `gen.js`, `gen.cjs`, or `gen/index.js`. Comparing the
+ * literal specifier against the tarball's file list would therefore hard-abort
+ * every valid CJS package — a false positive in a release-blocking gate.
+ * An extension that IS present is matched exactly, so a genuine escape is still
+ * caught.
+ */
+function resolutionCandidates(resolved) {
+  if (JS_EXTENSION.test(resolved)) return [resolved];
+  return [
+    resolved,
+    `${resolved}.js`, `${resolved}.cjs`, `${resolved}.mjs`, `${resolved}.json`,
+    `${resolved}/index.js`, `${resolved}/index.cjs`, `${resolved}/index.mjs`,
+  ];
+}
+
+/**
+ * Which shipped files to scan. Extension alone is not enough: a package may
+ * declare an EXTENSIONLESS bin (`"bin": { "cli": "bin/cli" }`, an ordinary CLI
+ * pattern), and skipping it means the package's own entrypoint — the file most
+ * likely to be executed — is never checked. That is a fail-open on the most
+ * important file in the tarball.
+ */
+function scannableFiles(dir, packed) {
+  const files = new Set([...packed].filter((p) => /\.(mjs|js|cjs)$/.test(p)));
+  let bin;
+  try {
+    bin = readJson(join(dir, 'package.json')).bin;
+  } catch {
+    return files;
+  }
+  const declared = typeof bin === 'string' ? [bin] : (bin && typeof bin === 'object' ? Object.values(bin) : []);
+  for (const entry of declared) {
+    const rel = String(entry).replace(/^\.\//, '');
+    if (packed.has(rel)) files.add(rel);
+  }
+  return files;
 }
 
 /**
@@ -434,8 +545,7 @@ export function findPackagingProblems({ packagesDir = PKGS, pluginsDir = PLUGINS
       continue;
     }
     consulted.push(target.name);
-    for (const rel of packed.files) {
-      if (!/\.(mjs|js|cjs)$/.test(rel)) continue;
+    for (const rel of scannableFiles(target.dir, packed.files)) {
       let source;
       try {
         source = readFileSync(join(target.dir, rel), 'utf8');
@@ -445,9 +555,10 @@ export function findPackagingProblems({ packagesDir = PKGS, pluginsDir = PLUGINS
       for (const spec of relativeSpecifiers(source)) {
         // Resolve the specifier against the importing file's directory, then
         // express it back as a package-relative POSIX path to compare with npm's
-        // file list.
+        // file list — accepting any path Node itself would resolve the specifier
+        // to, so an extensionless CJS require is not reported as an escape.
         const resolved = join(dirname(rel), spec).split('\\').join('/');
-        if (packed.files.has(resolved)) continue;
+        if (resolutionCandidates(resolved).some((c) => packed.files.has(c))) continue;
         problems.push(
           `${target.name}: ${rel} imports ${spec} → ${resolved}, which the "files" allowlist does not publish ` +
             `(the installed package would fail at import time)`

@@ -407,6 +407,109 @@ test('a commented-out import is NOT reported', () => {
   }
 });
 
+// --- cross-model review findings (agy, needs-attention) --------------------
+// The first fix pass traded one hole for another. These four pin the trade shut.
+
+test('an extensionless CJS require is NOT reported — Node resolves it', () => {
+  // `require('../scripts/d')` legitimately resolves to d.cjs/d.js/d/index.js.
+  // Comparing the literal specifier against the tarball hard-aborts every valid
+  // CommonJS package: a FALSE POSITIVE in a release-blocking gate.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/', 'scripts/'],
+    "const d = require('../scripts/d');\nmodule.exports = { d };\n");
+  try {
+    const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(consulted.length, 1);
+    assert.deepEqual(problems, [], 'extensionless require must resolve against .cjs/.js/index.*');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an extensionless require to a file that is genuinely absent IS reported', () => {
+  // The leniency above must not become a fail-open: if no candidate exists, the
+  // escape is still an escape.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    "const gone = require('../scripts/not-there');\nmodule.exports = { gone };\n");
+  try {
+    const { problems } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.ok(problems.length > 0, 'a missing target must still be flagged');
+    assert.match(problems.join('\n'), /not-there/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an EXTENSIONLESS bin entrypoint is scanned, not skipped', () => {
+  // "bin": { "cli": "bin/cli" } is an ordinary CLI pattern. Filtering the scan
+  // set by extension skips the package's own entrypoint — a fail-open on the
+  // file most likely to be executed.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-bin-'));
+  const packagesDir = join(root, 'packages');
+  const pluginsDir = join(root, 'plugins');
+  mkdirSync(join(packagesDir, 'clier', 'bin'), { recursive: true });
+  mkdirSync(join(packagesDir, 'clier', 'internal'), { recursive: true });
+  mkdirSync(pluginsDir);
+  write(join(packagesDir, 'clier', 'package.json'), {
+    name: '@adlc/clier', version: '1.0.0', type: 'module', repository: REPOSITORY,
+    bin: { clier: './bin/clier' }, files: ['bin/'],
+  });
+  writeFileSync(join(packagesDir, 'clier', 'bin', 'clier'),
+    "#!/usr/bin/env node\nimport { go } from '../internal/run.mjs';\ngo();\n");
+  writeFileSync(join(packagesDir, 'clier', 'internal', 'run.mjs'), 'export const go = () => {};\n');
+  try {
+    const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(consulted.length, 1);
+    assert.ok(problems.length > 0, 'the extensionless bin must be scanned');
+    assert.match(problems.join('\n'), /internal[/\\]run\.mjs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a /* inside a string literal does not blind the scanner', () => {
+  // Naive comment stripping matches from a `/*` inside a string to the next
+  // `*/` anywhere later, DELETING the code between — including real imports.
+  // That is a fail-open, and it is how the previous comment fix broke things.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    "const glob = '/*.mjs';\n" +
+    "import { escaped } from '../scripts/a.mjs';\n" +
+    "const close = '*/';\n" +
+    "export { glob, escaped, close };\n");
+  try {
+    const { problems } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.ok(problems.length > 0, 'the real import between two string literals must still be seen');
+    assert.match(problems.join('\n'), /scripts[/\\]a\.mjs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('import-shaped text inside a string literal is NOT a specifier', () => {
+  // Codegen templates and fixtures legitimately contain import text. Extracting
+  // it aborts a valid release — and this very rail file is full of such strings.
+  //
+  // DENOMINATOR: this fixture also carries a REAL escaping import. Asserting
+  // only "no imaginary specifiers" would pass trivially if the scanner found
+  // nothing at all — the same vacuous-emptiness trap that produced a green rail
+  // earlier in this ticket. The real import proves the scanner was awake.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    "const template = \"import { x } from './totally-imaginary.mjs';\";\n" +
+    "const tpl = `require('../scripts/also-imaginary.cjs')`;\n" +
+    "import { real } from '../scripts/a.mjs';\n" +
+    "export { template, tpl, real };\n");
+  try {
+    const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(consulted.length, 1);
+    const blob = problems.join('\n');
+    assert.match(blob, /scripts[/\\]a\.mjs/, 'the REAL escaping import must be found (scanner is awake)');
+    assert.doesNotMatch(blob, /totally-imaginary/, 'string CONTENTS must not be scanned as code');
+    assert.doesNotMatch(blob, /also-imaginary/, 'template-literal CONTENTS must not be scanned as code');
+    assert.equal(problems.length, 1, 'exactly one real escape, no phantoms');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an unconsultable package is reported, never silently clean', () => {
   const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/']);
   try {
