@@ -597,3 +597,34 @@ test('an id at the length bound is still rendered', () => {
   const body = renderIssueBody([{ id: okId, reason: 'explicit status: "done"', rails: ['a/**'], blocker: 'rails-freeze' }]);
   assert.deepEqual(readyCommandIds(body), [okId]);
 });
+
+// ---- aggregate body size is bounded (round-20 finding) ----
+//
+// Per-field/per-id caps bound one entry, but the NUMBER of drifting tickets and
+// the NUMBER of rails per ticket are both unbounded. An over-limit body fails
+// every GitHub create/update and silently disables the reporter. Both are capped,
+// with visible "omitted"/"truncated" notices — never a silent cut.
+import { MAX_BODY } from '../ceremony-drift.mjs';
+
+test('a ticket with very many rails shows a bounded list with an omitted-count', () => {
+  const rails = Array.from({ length: 100 }, (_, i) => `packages/x${i}/**`);
+  const body = renderIssueBody([{ id: 'T7', reason: 'inferred: x', rails, blocker: 'rails-freeze' }]);
+  assert.match(body, /…and 75 more/, 'omitted rails are counted, not dropped silently');
+});
+
+test('a very large drift set clamps the body under the GitHub limit, marker preserved', () => {
+  const many = Array.from({ length: 5000 }, (_, i) => ({
+    id: `T${i}`, reason: 'inferred: x', rails: ['packages/core/**'], blocker: 'rails-freeze',
+  }));
+  const body = renderIssueBody(many);
+  assert.ok(body.length <= MAX_BODY, `body ${body.length} must be <= ${MAX_BODY}`);
+  assert.match(body, /was truncated/, 'truncation is visible, not silent');
+  assert.ok(body.includes(MARKER), 'the discovery marker survives truncation');
+});
+
+test('the clamp is deterministic (idempotence holds for over-limit bodies)', () => {
+  const many = Array.from({ length: 5000 }, (_, i) => ({
+    id: `T${i}`, reason: 'inferred: x', rails: ['a/**'], blocker: 'rails-freeze',
+  }));
+  assert.equal(renderIssueBody(many), renderIssueBody(many));
+});

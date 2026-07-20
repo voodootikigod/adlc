@@ -1,7 +1,8 @@
 // ceremony-command-safety.test.mjs — no shipped doc may advertise the combined
-// `--ceremony --write` invocation.
+// `--ceremony --write` invocation, and the completion command the reporter
+// renders must be non-interactive.
 //
-// WHY THIS IS A REPO-WIDE GUARD RATHER THAN FOUR EDITS
+// WHY THIS IS A REPO-WIDE GUARD RATHER THAN N EDITS
 //
 // `--ceremony --write` does not do only the ceremony. `--write` additionally
 // tombstones rails-less stale tickets, which the preceding dry-run report does
@@ -11,36 +12,28 @@
 //   --ceremony --write  ->  railed=COMPLETED   rails-less=COMPLETED
 //   --ceremony          ->  railed=COMPLETED   rails-less=untouched
 //
-// The instruction was duplicated across four shipped integrations plus the
-// package README, and two of those copies are currently frozen by ACTIVE tickets
-// (T51 owns plugins/adlc-claude-code/commands/**, T53 owns
-// plugins/adlc-opencode/**). rails-guard correctly denies editing them, and
-// ADLC_RAILS_BYPASS would mean overwriting files someone is building against
-// right now — the bypass is for stale rails, not live ones.
+// The instruction was duplicated across the four `/adlc:adlc-maintain` docs plus
+// the package README and the sweep runbook. This guard asserts none of them
+// advertise the unsafe form, and fails loudly if a new doc reintroduces it.
 //
-// So instead of forcing those edits, the invariant is asserted here, with the two
-// frozen files carried as EXPLICIT, TICKETED exceptions rather than silently
-// skipped. The guard is live for every other shipped doc immediately, and the
-// remaining debt is named, attributed, and visible in a test rather than living
-// only in a PR description nobody re-reads.
+// (History: two of those files were once frozen by active tickets T51/T53, and
+// this guard carried a self-cleaning `FROZEN_PENDING` exception for them. T51/T53
+// completed, the rails expired, the files were fixed — so the exception is gone
+// and the guard is now unconditional. If a future ticket ever freezes a doc that
+// carries the unsafe command, reinstate a named, self-cleaning exception rather
+// than a bare skip; see the git history of this file for the pattern.)
 //
-// The exception list is SELF-CLEANING: a second test asserts every entry is still
-// necessary, so the moment T51/T53 correct their file the exception itself starts
-// failing and must be deleted. It cannot quietly become permanent.
-//
-// If you are here because this test is red: fix the listed file(s) by removing
-// `--write` from the ceremony command. Add an exception ONLY if the path is
-// frozen by an active ticket, and name that ticket.
+// If you are here because this test is red: remove `--write` from the
+// `ticket-prune --ceremony` command in the listed file(s).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectTicketStore, shouldOfferLegacyMigration } from '../../packages/tickets/index.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { detectTicketStore, shouldOfferLegacyMigration } from '../../packages/tickets/index.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -69,37 +62,10 @@ const HISTORICAL = new Set([
   'docs/specs/ticket-completion-rail-cleanup.md', // AC3 records the verified invocation
 ]);
 
-// Known-bad files whose paths are frozen by an ACTIVE ticket, so the fix cannot
-// land here. Keyed by file → the ticket id whose rails freeze it. The exception
-// is valid ONLY while that ticket is genuinely active; the self-cleaning test
-// below verifies that against the live store, not just the file text.
-const FROZEN_PENDING = new Map([
-  ['plugins/adlc-claude-code/commands/adlc-maintain.md', 'T51'],
-  ['plugins/adlc-opencode/command/adlc-maintain.md', 'T53'],
-]);
-
-/**
- * Load the active ticket set through the canonical store detector, which handles
- * BOTH backends. Reading `.adlc/tickets.json` directly (as an earlier version
- * did) throws ENOENT the moment the repo migrates to the directory store
- * (`.adlc/tickets/`) — and the completion command this very branch advertises can
- * trigger that migration — which would turn this guard into a red wall on every
- * subsequent PR. Going through detectTicketStore keeps it backend-agnostic.
- */
-function loadTickets() {
-  return detectTicketStore({ root: REPO }).load().tickets ?? [];
-}
-
-/** A ticket is active iff it is present in the store and not `completed`. */
-function activeTicketIds() {
-  return new Set(loadTickets().filter((t) => t?.completed !== true).map((t) => t?.id));
-}
-
-const scanFor = (predicate) => {
+function offenders() {
   const hits = [];
   for (const file of trackedDocs()) {
     if (HISTORICAL.has(file)) continue;
-    if (!predicate(file)) continue;
     let text;
     try { text = readFileSync(join(REPO, file), 'utf8'); } catch { continue; }
     for (const [i, line] of text.split('\n').entries()) {
@@ -107,51 +73,15 @@ const scanFor = (predicate) => {
     }
   }
   return hits;
-};
+}
 
-test('no shipped doc advertises `ticket-prune --ceremony --write` (except the two rail-frozen files tracked in FROZEN_PENDING)', () => {
-  const offenders = scanFor((f) => !FROZEN_PENDING.has(f));
-  assert.deepEqual(offenders, [],
+// ---- the repo-wide guard (no exceptions) ----
+
+test('no shipped doc advertises `ticket-prune --ceremony --write`', () => {
+  assert.deepEqual(offenders(), [],
     'these files instruct an operator to run the ceremony with --write, which also ' +
-    'completes rails-less tickets outside the reviewed set:\n  ' + offenders.join('\n  '));
-});
-
-// SELF-CLEANING, on TWO independent conditions — either dissolves the exception:
-//
-//   (a) the file no longer carries the unsafe command (someone fixed it), or
-//   (b) the blocking ticket is no longer active (its rails expired, so the file
-//       is now editable and the exception has no justification left).
-//
-// A previous version checked only (a). That let the exception outlive its
-// blocker: once T51/T53 completed, the file stayed editable and unsafe, yet the
-// suite stayed green because the bad text was still there and still excused. An
-// exception that survives the removal of its own justification is not a temporary
-// allowance, it is a permanent hole. Failing on (b) forces the fix the moment the
-// rail unfreezes.
-test('every frozen-pending exception is still justified (file unfixed AND blocker active)', () => {
-  const active = activeTicketIds();
-  const invalid = [];
-  for (const [file, ticket] of FROZEN_PENDING) {
-    const stillUnsafe = scanFor((f) => f === file).length > 0;
-    if (!stillUnsafe) {
-      invalid.push(`${file}: fixed — remove its FROZEN_PENDING entry so the guard covers it again`);
-    } else if (!active.has(ticket)) {
-      invalid.push(`${file}: blocking ticket ${ticket} is no longer active — the rail has expired, ` +
-        `so fix the file (remove --write) and delete this exception`);
-    }
-  }
-  assert.deepEqual(invalid, [], 'stale FROZEN_PENDING exceptions:\n  ' + invalid.join('\n  '));
-});
-
-// The exception file names two ticket ids; if a typo or rename made them
-// unresolvable, `activeTicketIds()` would never contain them and (b) would fire —
-// but assert presence explicitly so the failure reads as "unknown ticket" rather
-// than "blocker completed".
-test('every frozen-pending blocker id exists in the ticket store', () => {
-  const known = new Set(loadTickets().map((t) => t?.id));
-  for (const ticket of FROZEN_PENDING.values()) {
-    assert.ok(known.has(ticket), `FROZEN_PENDING names ${ticket}, which is not in the ticket store`);
-  }
+    'completes rails-less tickets outside the reviewed set — remove --write:\n  ' +
+    offenders().join('\n  '));
 });
 
 // Guards the guard: if the pattern stops matching the shape it is meant to catch,
@@ -178,28 +108,11 @@ test('the detector does not flag the safe command, a usage synopsis, or lone --w
   }
 });
 
-
-// ---- F3: the guard loads through the canonical detector, so a directory-store
-// migration does not turn it into a red wall ----
-
-test('the ticket loader works on a directory-store fixture (no ENOENT after migration)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-guard-dir-'));
-  try {
-    mkdirSync(join(dir, '.adlc', 'tickets'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets', '.store.json'),
-      JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
-    // A directory store keyed by the canonical hashed shard name.
-    const store = detectTicketStore({ root: dir });
-    // Loading must not throw (the old readFileSync('.adlc/tickets.json') did).
-    assert.doesNotThrow(() => store.load());
-    assert.equal(store.constructor.name, 'DirectoryTicketStore');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// ---- F4: the advertised command carries --json, which suppresses the
-// interactive legacy->directory migration even in an administrator's TTY ----
+// ---- the reporter's completion command is non-interactive ----
+//
+// `adlc ticket complete <id> … --json`. The `--json` is load-bearing: on a legacy
+// store the CLI otherwise offers an interactive migration before mutating, and an
+// admin who accepted it would migrate the WHOLE store to complete one ticket.
 
 test('--json suppresses the legacy-migration offer even when both streams are a TTY', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-guard-legacy-'));
@@ -209,8 +122,6 @@ test('--json suppresses the legacy-migration offer even when both streams are a 
     const store = detectTicketStore({ root: dir });
     assert.equal(store.constructor.name, 'LegacyTicketStore');
     const tty = { input: { isTTY: true }, output: { isTTY: true } };
-    // The exact gate the advertised command relies on: with --json it does NOT
-    // offer migration; without it (the hazard) it would.
     assert.equal(shouldOfferLegacyMigration(store, { json: true }, tty), false,
       '--json must suppress the migration prompt, so the one-ticket command stays one-ticket');
     assert.equal(shouldOfferLegacyMigration(store, { json: false }, tty), true,

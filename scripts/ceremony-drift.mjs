@@ -95,6 +95,9 @@ const completeCmd = (id) => `adlc ticket complete ${id} --write --authorize --js
 // reporter. 128 is far above any real id (the longest here is a 26-char ULID
 // suffix) and far below any single-field body-size risk.
 const MAX_TICKET_ID = 128;
+// Per-ticket rail display cap (see rowsFor): bounds one ticket's contribution to
+// the body regardless of how many rails it declares.
+const MAX_RAILS_SHOWN = 25;
 const SAFE_TICKET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const isRenderableId = (id) =>
   typeof id === 'string' && id.length <= MAX_TICKET_ID && SAFE_TICKET_ID.test(id);
@@ -135,7 +138,15 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
     list.map((t) => {
       const rails = Array.isArray(t?.rails) ? t.rails : [];
       // Each field is sanitized: ids/rails/reasons are untrusted (see mdField).
-      const railList = rails.length ? rails.map((r) => `\`${mdField(r)}\``).join(', ') : '_(none)_';
+      // Rails are also COUNT-bounded: a ticket may declare arbitrarily many, and
+      // without a cap one ticket's rail list could bloat the body toward GitHub's
+      // size limit. Show the first MAX_RAILS_SHOWN, then say how many were omitted
+      // (never a silent truncation).
+      const shown = rails.slice(0, MAX_RAILS_SHOWN).map((r) => `\`${mdField(r)}\``);
+      const omitted = rails.length - shown.length;
+      const railList = rails.length
+        ? shown.join(', ') + (omitted > 0 ? `, _…and ${omitted} more_` : '')
+        : '_(none)_';
       return [
         `### ${t?.id != null ? mdField(t.id) : '(unknown id)'}`,
         '',
@@ -374,7 +385,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
           : []),
       ];
 
-  return [
+  const body = [
     MARKER,
     '',
     'Shipped tickets whose declared scope resolves to tracked files on `main`, but',
@@ -387,6 +398,27 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
     '_Maintained automatically by `.github/workflows/ceremony-drift.yml`. This issue',
     'closes on its own once the set is empty; edits to the body are overwritten._',
   ].join('\n');
+
+  return clampBody(body);
+}
+
+// FINAL BACKSTOP against GitHub's ~65_536-byte issue-body limit. Per-field and
+// per-rail caps bound each entry, but the NUMBER of drifting tickets is itself
+// unbounded, so a large enough set could still overflow — and an over-limit body
+// fails every create/update, silently disabling the reporter. If the assembled
+// body exceeds MAX_BODY, cut at a line boundary and append a visible notice. The
+// MARKER survives (it is at the top), so issue discovery still works, and the cut
+// is deterministic, so decideAction's idempotence holds.
+export const MAX_BODY = 60_000; // headroom under GitHub's limit for the notice
+function clampBody(body) {
+  if (body.length <= MAX_BODY) return body;
+  const notice =
+    '\n\n---\n\n> ⚠ This issue was truncated: the full drift set exceeds GitHub\'s ' +
+    'issue-body size limit. Run `adlc ticket-prune --base-ref origin/main` locally ' +
+    'to see every entry.';
+  const budget = MAX_BODY - notice.length;
+  const cut = body.lastIndexOf('\n', budget);
+  return body.slice(0, cut > 0 ? cut : budget) + notice;
 }
 
 /**
