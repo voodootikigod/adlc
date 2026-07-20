@@ -5,20 +5,22 @@
 // tombstoned by adding `completed: true` in place (never removed) — the exact
 // annotation the rails-guard CI gate accepts for a rails-less ticket, so the
 // pruned tickets.json merges through an ordinary PR. Stale tickets that still
-// freeze rails are reported as needing the protected-base admin ceremony (a
-// completion there also expires the rails, which the gate reserves for admins).
+// freeze rails (or already carry a `completed` field) are only REPORTED, under
+// needsCeremony — complete them individually with the canonical command below.
 //
-// Usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--ceremony] [--json]
+// Usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 //
 // This is advisory (like model-ratchet), not a pass/fail gate: stale tickets
 // are clutter, not a merge blocker. Exit codes: 0 = report/write succeeded
 // (regardless of how many stale tickets were found), 1 = operational error
-// (including --ceremony without ADLC_RAILS_BYPASS=1).
+// (including the deprecated --ceremony, see below).
 //
-// --ceremony is the protected-base admin action that completes rail-freezing
-// shipped tickets (expiring their rails, T36) — the one completion an ordinary
-// PR cannot make. It writes nothing unless ADLC_RAILS_BYPASS=1 is set, because
-// its output only lands via the protected-base/admin path.
+// --ceremony is DEPRECATED (#208). It was a bulk, evidence-less, legacy-store-only
+// completion of rail-freezing tickets; invoking it now fails closed and redirects
+// to the canonical per-ticket path:
+//   adlc ticket complete <id> --write --authorize --json
+// (per-ticket — no TOCTOU, records manifest evidence, works on both backends).
+// The flag is still accepted only so the redirect fires instead of "unknown flag".
 
 import { parseArgs, opError, printJson } from '@adlc/core';
 import { runTicketPrune } from '../lib/run.mjs';
