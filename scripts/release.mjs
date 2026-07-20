@@ -21,6 +21,10 @@ import { join, dirname } from 'node:path';
 
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
+// acorn is a devDependency of the PRIVATE root package, used only by repo
+// tooling. No published @adlc/* package gains a runtime dependency from it —
+// see the note on relativeSpecifiers for why a real parser is required here.
+import { parse } from 'acorn';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PKGS = join(ROOT, 'packages');
@@ -158,6 +162,11 @@ export function hostPluginManifestPaths(pluginsDir = PLUGINS) {
   if (!existsSync(pluginsDir)) return [];
   const paths = [];
   for (const name of readdirSync(pluginsDir).sort()) {
+    // The OUTER loop needs its own skip: `plugins/node_modules/.claude-plugin/
+    // plugin.json` and `plugins/node_modules/plugin.json` are both reachable at
+    // this depth and would otherwise be discovered and rewritten. (The inner
+    // loop's skip is redundant with HOST_PLUGIN_DIR, but harmless and explicit.)
+    if (name === 'node_modules') continue;
     const dir = join(pluginsDir, name);
     const flat = join(dir, 'plugin.json');
     if (existsSync(flat) && declaresVersion(flat)) paths.push(flat);
@@ -212,7 +221,30 @@ export function hostDiscoveryNearMisses({ root = ROOT, pluginsDir = PLUGINS } = 
   scan(root, 'marketplace.json', 'root marketplace');
   if (existsSync(pluginsDir)) {
     for (const name of readdirSync(pluginsDir).sort()) {
+      if (name === 'node_modules') continue;
       scan(join(pluginsDir, name), 'plugin.json', 'plugin manifest');
+      // A manifest INSIDE a directory that does match HOST_PLUGIN_DIR is
+      // unambiguously a host manifest. If it declares no string `version` (or
+      // does not parse), hostPluginManifestPaths drops it — so the bumper never
+      // writes it and the gate, sharing that discovery, never checks it. That is
+      // Defect A at field granularity, and near-miss scanning cannot see it
+      // because the DIRECTORY name is fine. Report it explicitly.
+      const dir = join(pluginsDir, name);
+      let entries;
+      try {
+        entries = readdirSync(dir).sort();
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!HOST_PLUGIN_DIR.test(entry)) continue;
+        const manifest = join(dir, entry, 'plugin.json');
+        if (!existsSync(manifest) || declaresVersion(manifest)) continue;
+        misses.push(
+          `${manifest}: host manifest has no string "version" field (or does not parse) — ` +
+            `it is invisible to BOTH the bump and the drift gate.`
+        );
+      }
     }
   }
   return misses;
@@ -279,9 +311,14 @@ export function findVersionDrift(version, { root = ROOT, packagesDir = PKGS, plu
     }
   }
 
-  // A host directory the shape regex misses is invisible to bumper AND gate —
-  // the Defect A shape. Surface it as drift so it aborts loudly.
-  problems.push(...hostDiscoveryNearMisses({ root, pluginsDir }));
+  // NOTE: near-miss host directories are deliberately NOT reported here.
+  // findVersionDrift runs AFTER the tree has been rewritten, and every entry it
+  // returns must describe something a re-run of the bumper can fix. A near miss
+  // names a DIRECTORY, which no bump can rename — reporting it here made
+  // releaseMain abort identically on every invocation with a fully mutated
+  // working tree, which is the exact failure this file already documents and
+  // fixed for the metadata-less marketplace case. It is a PRE-bump preflight
+  // instead; see releaseMain step 0.
   const rootV = readJson(join(root, 'package.json')).version;
   if (rootV !== version) problems.push(`${join(root, 'package.json')}: ${rootV} != ${version}`);
   const lockPath = join(root, 'package-lock.json');
@@ -315,122 +352,95 @@ export function findPublishMetadataProblems({ packagesDir = PKGS, pluginsDir = P
   return problems;
 }
 
-// Module specifiers in shipped source. Relative specifiers resolve to FILES that
-// must be inside the tarball; `node:` builtins and bare specifiers
-// (`@adlc/core`) are dependency-resolved and never shipped, so only relative
-// ones are checked.
-//
-// `require()` is included because the file filter admits .cjs/.js: a CommonJS
-// `require('../scripts/gen-schema.js')` is the EXACT shape of Defect B, and
-// matching only ESM forms while claiming to scan .cjs would leave the original
-// bug undetectable in its CommonJS spelling.
-//
-// A dynamic import (or require) with a COMPUTED specifier stays undecidable by
-// static analysis. That gap is stated in the failure output rather than implied
-// away.
-const SPECIFIER_PATTERNS = [
-  /\bimport\s+[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/g, // import x from '...'
-  /\bexport\s+[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/g, // export x from '...'
-  /\bimport\s*['"]([^'"]+)['"]/g,                  // import '...' (side effect)
-  /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,        // import('...') with a literal
-  /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,       // require('...')
-  /\brequire\.resolve\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-];
-
-const SENTINEL = '\u0000';
+const ACORN_OPTIONS = { ecmaVersion: 'latest', allowHashBang: true, allowReturnOutsideFunction: true };
 
 /**
- * A minimal single-pass lexer: removes comments and replaces every string /
- * template literal with an opaque `"\0<n>\0"` placeholder, returning the
- * placeholder table alongside.
+ * Extract every RELATIVE module specifier from a source file, using a real
+ * parser rather than pattern matching.
  *
- * Regex-only handling of this is not good enough, and both failure directions
- * are real:
- *   - stripping `/*…*\/` with a regex treats a `/*` that appears INSIDE a string
- *     literal as a comment opener and deletes everything up to the next `*\/`,
- *     silently removing real imports — the gate then fails OPEN;
- *   - scanning raw text finds import-shaped text inside ordinary string literals
- *     (codegen templates, fixtures, docs) and hard-aborts a valid release — a
- *     false POSITIVE, after the tree has already been bumped.
+ * Why a parser, and why a dependency in a repo that prizes having none: being
+ * correct here requires tracking JavaScript's LEXICAL STATE, and `/` is
+ * ambiguous in a way that is not decidable lexically — telling `a / b` from a
+ * regex literal requires knowing whether an operand or an operator is expected.
+ * A hand-rolled lexer shipped here first and was measurably fail-OPEN: given
+ * `return /[\`*?]/.test(t)` — the exact shape of packages/core/lib/shell.mjs:119,
+ * a file inside @adlc/core's published `files` — it walked into the regex body,
+ * opened a string on the backtick, and swallowed every subsequent import to EOF.
+ * A published file was invisible to this gate. Two independent reviewers reached
+ * that conclusion before it was accepted.
  *
- * Replacing strings with placeholders fixes both: a specifier is still a quoted
- * token the patterns can match, but the CONTENTS of unrelated strings can no
- * longer look like code. An AST parser would be the textbook answer; this repo
- * is zero-runtime-dependency by convention and Node ships no parser, so this is
- * the honest middle ground. Its limits are stated in the gate's output.
+ * The dependency cost is narrower than it looks: acorn is a devDependency of the
+ * PRIVATE root package, used only by repo tooling. No published @adlc/* package
+ * gains a runtime dependency, so the zero-runtime-dependency convention for
+ * shipped packages is untouched.
+ *
+ * Fail-closed contract: a file that cannot be parsed is NOT reported clean — it
+ * throws, and findPackagingProblems records the package as `unconsultable`, the
+ * same three-state discipline applied to an npm pack failure. "Could not check"
+ * must never render as "verified".
+ *
+ * Still undecidable, and stated rather than implied: a COMPUTED specifier
+ * (`import(someVar)`) cannot be resolved statically by any parser.
  */
-function lexModule(source) {
-  const strings = [];
-  let code = '';
-  let prev = '';
-  let i = 0;
-  while (i < source.length) {
-    const c = source[i];
-    const next = source[i + 1];
-    if (c === '/' && next === '/') {
-      while (i < source.length && source[i] !== '\n') i++;
-      continue;
-    }
-    if (c === '/' && next === '*') {
-      i += 2;
-      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') {
-      let j = i + 1;
-      let value = '';
-      while (j < source.length) {
-        if (source[j] === '\\') { value += source[j + 1] ?? ''; j += 2; continue; }
-        if (source[j] === c) break;
-        value += source[j];
-        j++;
+function relativeSpecifiers(source, { sourceType }) {
+  const ast = parse(source, { ...ACORN_OPTIONS, sourceType });
+  const found = new Set();
+
+  const literal = (node) => (node && node.type === 'Literal' && typeof node.value === 'string' ? node.value : null);
+  const add = (value) => {
+    if (typeof value === 'string' && value.startsWith('.')) found.add(value);
+  };
+
+  const visit = (node) => {
+    if (!node || typeof node.type !== 'string') return;
+    switch (node.type) {
+      case 'ImportDeclaration':
+      case 'ExportNamedDeclaration':
+      case 'ExportAllDeclaration':
+      case 'ImportExpression':
+        add(literal(node.source));
+        break;
+      case 'CallExpression': {
+        const c = node.callee;
+        const isRequire = c && c.type === 'Identifier' && c.name === 'require';
+        const isRequireResolve = c && c.type === 'MemberExpression' && !c.computed &&
+          c.object && c.object.type === 'Identifier' && c.object.name === 'require' &&
+          c.property && c.property.type === 'Identifier' && c.property.name === 'resolve';
+        if (isRequire || isRequireResolve) add(literal(node.arguments && node.arguments[0]));
+        break;
       }
-      strings.push(value);
-      code += `"${SENTINEL}${strings.length - 1}${SENTINEL}"`;
-      prev = '"';
-      i = j + 1;
-      continue;
+      default:
+        break;
     }
-    // A regex literal can contain quotes and slashes; skipping it prevents those
-    // from desynchronising the string state above.
-    if (c === '/' && /[(,=:[!&|?{};+\-*%~^]/.test(prev)) {
-      let j = i + 1;
-      let inClass = false;
-      while (j < source.length) {
-        if (source[j] === '\\') { j += 2; continue; }
-        if (source[j] === '[') inClass = true;
-        else if (source[j] === ']') inClass = false;
-        else if (source[j] === '\n') break;
-        else if (source[j] === '/' && !inClass) break;
-        j++;
-      }
-      prev = '/';
-      i = j + 1;
-      continue;
+    for (const key of Object.keys(node)) {
+      if (key === 'type' || key === 'loc' || key === 'range' || key === 'start' || key === 'end') continue;
+      const child = node[key];
+      if (Array.isArray(child)) child.forEach(visit);
+      else if (child && typeof child === 'object') visit(child);
     }
-    code += c;
-    if (!/\s/.test(c)) prev = c;
-    i++;
-  }
-  return { code, strings };
+  };
+
+  visit(ast);
+  return [...found];
 }
 
-function relativeSpecifiers(source) {
-  const { code, strings } = lexModule(source);
-  const placeholder = new RegExp(`^${SENTINEL}(\\d+)${SENTINEL}$`);
-  const found = new Set();
-  for (const re of SPECIFIER_PATTERNS) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(code)) !== null) {
-      const hit = placeholder.exec(m[1]);
-      if (!hit) continue; // matched something that was never a string literal
-      const value = strings[Number(hit[1])];
-      if (typeof value === 'string' && value.startsWith('.')) found.add(value);
+/**
+ * Parse as ESM first, falling back to script for genuine CommonJS: a `.cjs` file
+ * using top-level `require` parses only as script, and an ESM file with
+ * top-level await parses only as module. Both are attempted before a file is
+ * declared unparseable.
+ */
+function specifiersForFile(source, rel) {
+  const order = rel.endsWith('.cjs') ? ['script', 'module'] : ['module', 'script'];
+  let lastError;
+  for (const sourceType of order) {
+    try {
+      return relativeSpecifiers(source, { sourceType });
+    } catch (err) {
+      lastError = err;
     }
   }
-  return [...found];
+  throw lastError;
 }
 
 const JS_EXTENSION = /\.(mjs|cjs|js|json|node)$/;
@@ -443,13 +453,28 @@ const JS_EXTENSION = /\.(mjs|cjs|js|json|node)$/;
  * An extension that IS present is matched exactly, so a genuine escape is still
  * caught.
  */
-function resolutionCandidates(resolved) {
+function resolutionCandidates(resolved, mode) {
   if (JS_EXTENSION.test(resolved)) return [resolved];
+  // ESM appends NO extensions and resolves no directory index — a bare
+  // './helper' in an .mjs file is simply unresolvable. Applying the CommonJS
+  // fallbacks there would let a genuine ERR_MODULE_NOT_FOUND pass as clean,
+  // which is the very symptom this gate exists to catch.
+  if (mode === 'esm') return [resolved];
   return [
     resolved,
     `${resolved}.js`, `${resolved}.cjs`, `${resolved}.mjs`, `${resolved}.json`,
     `${resolved}/index.js`, `${resolved}/index.cjs`, `${resolved}/index.mjs`,
   ];
+}
+
+/**
+ * Which resolver Node will use for a shipped file: `.mjs` is always ESM, `.cjs`
+ * always CommonJS, and a bare `.js` follows the package's `type` field.
+ */
+function resolutionMode(rel, pkgType) {
+  if (rel.endsWith('.mjs')) return 'esm';
+  if (rel.endsWith('.cjs')) return 'cjs';
+  return pkgType === 'module' ? 'esm' : 'cjs';
 }
 
 /**
@@ -461,18 +486,32 @@ function resolutionCandidates(resolved) {
  */
 function scannableFiles(dir, packed) {
   const files = new Set([...packed].filter((p) => /\.(mjs|js|cjs)$/.test(p)));
-  let bin;
+  const missingBins = [];
+  let pkg;
   try {
-    bin = readJson(join(dir, 'package.json')).bin;
+    pkg = readJson(join(dir, 'package.json'));
   } catch {
-    return files;
+    return { files, missingBins, type: undefined };
   }
-  const declared = typeof bin === 'string' ? [bin] : (bin && typeof bin === 'object' ? Object.values(bin) : []);
-  for (const entry of declared) {
+  const bin = pkg.bin;
+  // Both shapes are real: `"bin": "./cli.mjs"` (the majority single-bin CLI
+  // shape) and `"bin": { "name": "./cli.mjs" }`.
+  const declared = typeof bin === 'string'
+    ? [['.', bin]]
+    : (bin && typeof bin === 'object' ? Object.entries(bin) : []);
+  for (const [name, entry] of declared) {
     const rel = String(entry).replace(/^\.\//, '');
-    if (packed.has(rel)) files.add(rel);
+    if (packed.has(rel)) {
+      files.add(rel);
+    } else {
+      // A declared bin missing from the tarball is WORSE than a broken import:
+      // `npm i -g` creates a shim pointing at a file that does not exist, so
+      // every invocation dies with ENOENT before any import is attempted.
+      // Dropping it silently reported such a package as verified clean.
+      missingBins.push({ name, rel });
+    }
   }
-  return files;
+  return { files, missingBins, type: pkg.type };
 }
 
 /**
@@ -544,21 +583,50 @@ export function findPackagingProblems({ packagesDir = PKGS, pluginsDir = PLUGINS
       unconsultable.push({ name: target.name, reason: packed.reason });
       continue;
     }
-    consulted.push(target.name);
-    for (const rel of scannableFiles(target.dir, packed.files)) {
+    const { files, missingBins, type } = scannableFiles(target.dir, packed.files);
+    for (const { name, rel } of missingBins) {
+      problems.push(
+        `${target.name}: package.json bin "${name}" points at ${rel}, which the "files" allowlist does not publish ` +
+          `(the installed CLI would not exist — every invocation fails with ENOENT)`
+      );
+    }
+
+    // A file we cannot PARSE is not a file we have checked. Marking the package
+    // unconsultable rather than consulted keeps "could not check" distinct from
+    // "verified clean" — the same discipline applied to an npm pack failure, and
+    // the property whose absence made the previous hand-rolled lexer fail OPEN.
+    let unparseable = null;
+    const specsByFile = new Map();
+    for (const rel of files) {
       let source;
       try {
         source = readFileSync(join(target.dir, rel), 'utf8');
       } catch {
         continue;
       }
-      for (const spec of relativeSpecifiers(source)) {
+      try {
+        specsByFile.set(rel, specifiersForFile(source, rel));
+      } catch (err) {
+        unparseable = `${rel} could not be parsed as ESM or CommonJS: ${err.message}`;
+        break;
+      }
+    }
+    if (unparseable) {
+      unconsultable.push({ name: target.name, reason: unparseable });
+      continue;
+    }
+
+    consulted.push(target.name);
+    for (const [rel, specs] of specsByFile) {
+      const mode = resolutionMode(rel, type);
+      for (const spec of specs) {
         // Resolve the specifier against the importing file's directory, then
         // express it back as a package-relative POSIX path to compare with npm's
-        // file list — accepting any path Node itself would resolve the specifier
-        // to, so an extensionless CJS require is not reported as an escape.
+        // file list — accepting any path Node's resolver for THIS file's mode
+        // would accept, so an extensionless CJS require is not a false positive
+        // while an unresolvable ESM specifier still is.
         const resolved = join(dirname(rel), spec).split('\\').join('/');
-        if (resolutionCandidates(resolved).some((c) => packed.files.has(c))) continue;
+        if (resolutionCandidates(resolved, mode).some((c) => packed.files.has(c))) continue;
         problems.push(
           `${target.name}: ${rel} imports ${spec} → ${resolved}, which the "files" allowlist does not publish ` +
             `(the installed package would fail at import time)`
@@ -592,6 +660,19 @@ export function releaseMain(
 
   if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
     console.error('usage: release.mjs <semver> [--publish]');
+    return 1;
+  }
+
+  // 0. PREFLIGHT — before a single file is written. A host directory whose name
+  // the shape regex misses is invisible to both the bump and the drift gate (the
+  // Defect A shape), and no re-run of the bumper can rename a directory. Checking
+  // it post-bump would abort forever with a mutated tree; checking it here aborts
+  // with the tree untouched and a fixable instruction.
+  const nearMisses = hostDiscoveryNearMisses({ root, pluginsDir });
+  if (nearMisses.length > 0) {
+    console.error(
+      `host discovery near miss — aborting before any file is modified:\n  ${nearMisses.join('\n  ')}`
+    );
     return 1;
   }
 

@@ -108,6 +108,16 @@ function makeRepo({ stranded = '0.2.0', current = '1.0.0' } = {}) {
   write(join(pluginsDir, 'node_modules', 'adlc-fake', '.claude-plugin', 'plugin.json'), {
     name: 'vendored-2', version: stranded,
   });
+  // The two decoys ABOVE sit below the depth-exact walk and so can never be
+  // returned regardless of implementation — they pin "discovery is not
+  // recursive", not "node_modules is skipped". These two are at the depth the
+  // walk ACTUALLY reaches (outer loop name='node_modules'), and are the only
+  // node_modules shapes the guard can be tested against.
+  write(join(pluginsDir, 'node_modules', 'plugin.json'), { name: 'vendored-flat', version: stranded });
+  mkdirSync(join(pluginsDir, 'node_modules', '.claude-plugin'), { recursive: true });
+  write(join(pluginsDir, 'node_modules', '.claude-plugin', 'plugin.json'), {
+    name: 'vendored-nested', version: stranded,
+  });
   // A stray FILE directly in plugins/ — exercises the readdir try/catch.
   writeFileSync(join(pluginsDir, 'NOTES.md'), '# not a plugin directory\n');
   // A flat plugin.json that is NOT a versioned host manifest. The bumper must
@@ -191,6 +201,11 @@ test('drift gate is clean once the generalized bump has run', () => {
   const { root, packagesDir, pluginsDir } = makeRepo();
   try {
     releaseMain(['9.9.9'], { root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: packNothing });
+    // DENOMINATOR: "clean" must mean "clean over N discovered surfaces", not
+    // "clean over an empty set". This was the last bare deepEqual([]) in the
+    // file, and it inherited its whole meaning from sibling tests.
+    assert.ok(hostPluginManifestPaths(pluginsDir).length >= 3, 'manifests must have been discovered');
+    assert.ok(hostMarketplacePaths(root).length >= 1, 'a marketplace must have been discovered');
     assert.deepEqual(findVersionDrift('9.9.9', { root, packagesDir, pluginsDir }), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -264,10 +279,46 @@ test('a near-miss host directory aborts loudly instead of passing green', () => 
     assert.ok(misses.length > 0, 'an uppercase host dir must be reported as a near miss');
     assert.match(misses.join('\n'), /\.Codex-plugin/);
 
-    releaseMain(['9.9.9'], { root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: packNothing });
-    const drift = findVersionDrift('9.9.9', { root, packagesDir, pluginsDir });
-    assert.ok(drift.some((d) => d.includes('.Codex-plugin')),
-      'the near miss must surface as drift so the release stops rather than silently skipping the host');
+    // WIRING, not just the helper: an earlier version of this test called
+    // releaseMain and discarded the return code, asserting only on the drift
+    // list — so the fail-closed gate could have been deleted with the suite
+    // green. Assert the abort, that nothing was published, and that the tree is
+    // UNTOUCHED: a near miss names a directory, which no re-run of the bumper
+    // can rename, so aborting after mutating would strand the tree forever.
+    const before = readFileSync(join(root, 'package.json'), 'utf8');
+    const claudeBefore = readFileSync(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json'), 'utf8');
+    let published = 0;
+    const rc = releaseMain(['9.9.9', '--publish'], {
+      root, packagesDir, pluginsDir,
+      regenerateLockfile: () => {},
+      publishImpl: () => { published++; },
+      packImpl: packNothing,
+    });
+    assert.equal(rc, 1, 'a near-miss host directory must abort the release');
+    assert.equal(published, 0, 'nothing may be published');
+    assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), before,
+      'the abort must happen BEFORE any file is rewritten');
+    assert.equal(readFileSync(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json'), 'utf8'),
+      claudeBefore, 'no manifest may be mutated by an aborted run');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a host manifest with no string version is reported, not silently skipped', () => {
+  // declaresVersion drops such a manifest from discovery, so the bumper never
+  // writes it and the gate — sharing that discovery — never checks it. That is
+  // Defect A at FIELD granularity, and near-miss directory scanning cannot see
+  // it because the directory name is perfectly fine.
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    write(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json'), { name: 'adlc' }); // no version
+    const misses = hostDiscoveryNearMisses({ root, pluginsDir });
+    assert.ok(misses.some((m) => m.includes('no string "version"')),
+      'a versionless host manifest must be reported as invisible to both sides');
+
+    const rc = releaseMain(['9.9.9'], { root, packagesDir, pluginsDir, regenerateLockfile: () => {}, packImpl: packNothing });
+    assert.equal(rc, 1, 'and it must abort the release rather than pass green');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -294,6 +345,14 @@ test('discovery never walks into .worktrees or node_modules', () => {
       'a vendored manifest inside a plugin must NOT be rewritten');
     assert.equal(ver(join(pluginsDir, 'node_modules', 'adlc-fake', '.claude-plugin', 'plugin.json')), '0.2.0',
       'a manifest under plugins/node_modules must NOT be rewritten');
+    // These two ARE reachable by the outer loop — they fail without the
+    // `name === 'node_modules'` skip, which the decoys above cannot detect.
+    assert.equal(ver(join(pluginsDir, 'node_modules', 'plugin.json')), '0.2.0',
+      'plugins/node_modules/plugin.json is reachable and must NOT be rewritten');
+    assert.equal(ver(join(pluginsDir, 'node_modules', '.claude-plugin', 'plugin.json')), '0.2.0',
+      'plugins/node_modules/.claude-plugin/plugin.json is reachable and must NOT be rewritten');
+    assert.ok(manifests.every((p) => !p.includes('node_modules')),
+      'and neither may appear in discovery');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -305,30 +364,25 @@ test('discovery never walks into .worktrees or node_modules', () => {
  * A package whose lib/ imports outward, with a controllable `files` allowlist.
  * `source` defaults to the exact shape of Defect B.
  */
-function makePackagingFixture(files, source) {
+function makePackagingFixture(files, source, { entry = 'lib/doctor.mjs', type = 'module' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-packing-'));
   const packagesDir = join(root, 'packages');
   const pluginsDir = join(root, 'plugins');
   mkdirSync(join(packagesDir, 'escaper', 'lib'), { recursive: true });
-  mkdirSync(join(packagesDir, 'escaper', 'scripts'), { recursive: true });
+  mkdirSync(join(packagesDir, 'escaper', 'scripts', 'dir'), { recursive: true });
   mkdirSync(pluginsDir);
-  write(join(packagesDir, 'escaper', 'package.json'), {
-    name: '@adlc/escaper', version: '1.0.0', type: 'module', repository: REPOSITORY, files,
-  });
-  // ORDER MATTERS — the escaping import sits at BYTE OFFSET 0. relativeSpecifiers
-  // resets `re.lastIndex = 0` before each scan because the patterns are
-  // module-level /g regexes shared across calls; if that reset regressed to any
-  // non-zero value a match at offset 0 would be skipped and a real escape missed
-  // — fail-OPEN in a release gate. Leading with a node: builtin leaves that case
-  // untested, since builtins are filtered out anyway.
-  writeFileSync(join(packagesDir, 'escaper', 'lib', 'doctor.mjs'), source ??
+  const pkg = { name: '@adlc/escaper', version: '1.0.0', repository: REPOSITORY, files };
+  if (type) pkg.type = type;
+  write(join(packagesDir, 'escaper', 'package.json'), pkg);
+  writeFileSync(join(packagesDir, 'escaper', entry), source ??
     "import { generateAll } from '../scripts/gen-schema.mjs';\n" +
     "import { readFileSync } from 'node:fs';\n" +
     "import { thing } from '@adlc/core';\n" +
     "export { generateAll, readFileSync, thing };\n");
-  for (const f of ['gen-schema.mjs', 'a.mjs', 'b.mjs', 'c.mjs', 'd.cjs']) {
-    writeFileSync(join(packagesDir, 'escaper', 'scripts', f), 'export const x = 1;\n');
+  for (const f of ['gen-schema.mjs', 'a.mjs', 'b.mjs', 'c.mjs', 'd.cjs', 'e.mjs', 'f.js']) {
+    writeFileSync(join(packagesDir, 'escaper', 'scripts', f), 'module.exports = { x: 1 };\n');
   }
+  writeFileSync(join(packagesDir, 'escaper', 'scripts', 'dir', 'index.js'), 'module.exports = {};\n');
   return { root, packagesDir, pluginsDir };
 }
 
@@ -441,15 +495,96 @@ test('no raw control characters in the release sources or this rail', () => {
 // The first fix pass traded one hole for another. These four pin the trade shut.
 
 test('an extensionless CJS require is NOT reported — Node resolves it', () => {
-  // `require('../scripts/d')` legitimately resolves to d.cjs/d.js/d/index.js.
+  // `require('../scripts/X')` legitimately resolves to X.js / X.cjs / X/index.js.
   // Comparing the literal specifier against the tarball hard-aborts every valid
   // CommonJS package: a FALSE POSITIVE in a release-blocking gate.
+  //
+  // The fixture must be genuinely CommonJS. An earlier version put `require()`
+  // in a .mjs file inside a type:module package — where `require` does not even
+  // exist — so it was asserting CJS leniency against a file Node resolves as ESM.
   const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/', 'scripts/'],
-    "const d = require('../scripts/d');\nmodule.exports = { d };\n");
+    "const d = require('../scripts/d');\n" +      // -> d.cjs
+    "const f = require('../scripts/f');\n" +      // -> f.js
+    "const g = require('../scripts/dir');\n" +    // -> dir/index.js
+    "module.exports = { d, f, g };\n",
+    { entry: 'lib/doctor.cjs', type: undefined });
   try {
     const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
     assert.equal(consulted.length, 1);
-    assert.deepEqual(problems, [], 'extensionless require must resolve against .cjs/.js/index.*');
+    assert.deepEqual(problems, [],
+      'each extensionless require must resolve against .cjs, .js and dir/index.js');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an extensionless ESM import IS reported — Node appends no extension', () => {
+  // The CJS leniency must not leak into ESM. `import './helper'` from a .mjs
+  // file is unresolvable even if helper.js ships, so treating it as fine would
+  // let a real ERR_MODULE_NOT_FOUND pass as verified — the exact symptom the
+  // gate exists to catch.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/', 'scripts/'],
+    "import { x } from '../scripts/f';\nexport { x };\n");
+  try {
+    const { problems } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(problems.length, 1, 'an extensionless ESM specifier must be reported');
+    assert.match(problems[0], /scripts[/\\]f/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('require.resolve() is detected', () => {
+  // The sixth specifier form had no fixture, so it could be deleted silently.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    "const p = require.resolve('../scripts/e.mjs');\nmodule.exports = { p };\n",
+    { entry: 'lib/doctor.cjs', type: undefined });
+  try {
+    const { problems } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(problems.length, 1, 'require.resolve must be scanned like require');
+    assert.match(problems[0], /scripts[/\\]e\.mjs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('regex literals and division do not blind the scanner', () => {
+  // The hand-rolled lexer this replaced was fail-OPEN here: `return /.../` and
+  // `=> /.../` were not recognised as regex starts, so it walked into the regex
+  // body, opened a string on a quote or backtick inside it, and swallowed every
+  // later import to EOF. packages/core/lib/shell.mjs:119 is exactly that shape,
+  // inside @adlc/core's published files — so a shipped file was invisible.
+  //
+  // DENOMINATOR: a real escaping import follows the hostile constructs.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    "export const quoted = (t) => /['\"]/.test(t);\n" +
+    "export function shellish(t) {\n" +
+    "  return /(?:\\$\\{?[A-Za-z_]\\}?|`|[*?])/.test(t);\n" +
+    "}\n" +
+    "const half = 10 / 2;\n" +
+    "import { real } from '../scripts/a.mjs';\n" +
+    "export { half, real };\n");
+  try {
+    const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.equal(consulted.length, 1);
+    assert.equal(problems.length, 1, 'the import after the regex literals must still be seen');
+    assert.match(problems[0], /scripts[/\\]a\.mjs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unparseable shipped file makes the package unconsultable, never clean', () => {
+  // "Could not parse" must not render as "verified". This is the property whose
+  // absence made the previous lexer fail open.
+  const { root, packagesDir, pluginsDir } = makePackagingFixture(['lib/'],
+    "this is not ( valid javascript ][ at all\n");
+  try {
+    const { problems, consulted, unconsultable } = findPackagingProblems({ packagesDir, pluginsDir });
+    assert.deepEqual(consulted, [], 'a package with an unparseable file is not consulted');
+    assert.equal(unconsultable.length, 1);
+    assert.match(unconsultable[0].reason, /could not be parsed/);
+    assert.deepEqual(problems, [], 'and it must not masquerade as a clean scan');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -466,6 +601,43 @@ test('an extensionless require to a file that is genuinely absent IS reported', 
     assert.match(problems.join('\n'), /not-there/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a declared bin absent from the tarball is reported, not silently dropped', () => {
+  // VERIFIED npm BEHAVIOUR, which corrects the obvious hypothesis: npm
+  // FORCE-INCLUDES declared bin files regardless of the `files` allowlist, so
+  // "bin excluded by files" cannot happen — packing a package with
+  // files:['lib/'] and bin './bin/clier' yields ['bin/clier','lib/x.mjs',
+  // 'package.json'].
+  //
+  // The reachable trigger is a bin pointing at a file that does not EXIST
+  // (a typo, or a build artifact that was never generated). npm packs happily
+  // and omits it, `npm i -g` then creates a shim to a missing file, and every
+  // invocation dies with ENOENT before any import is attempted. Dropping that
+  // silently reported the package as verified clean.
+  //
+  // Both bin shapes are covered — the string form is the majority CLI shape and
+  // had no test at all.
+  for (const bin of [{ clier: './bin/typo' }, './bin/typo']) {
+    const root = mkdtempSync(join(tmpdir(), 'adlc-binmiss-'));
+    const packagesDir = join(root, 'packages');
+    const pluginsDir = join(root, 'plugins');
+    mkdirSync(join(packagesDir, 'clier', 'lib'), { recursive: true });
+    mkdirSync(pluginsDir);
+    write(join(packagesDir, 'clier', 'package.json'), {
+      name: '@adlc/clier', version: '1.0.0', type: 'module', repository: REPOSITORY,
+      bin, files: ['lib/'],
+    });
+    writeFileSync(join(packagesDir, 'clier', 'lib', 'x.mjs'), 'export const x = 1;\n');
+    try {
+      const { problems, consulted } = findPackagingProblems({ packagesDir, pluginsDir });
+      assert.equal(consulted.length, 1);
+      assert.ok(problems.length > 0, `bin shape ${JSON.stringify(bin)}: an absent bin must be reported`);
+      assert.match(problems.join('\n'), /the installed CLI would not exist/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -555,6 +727,15 @@ test('an unconsultable package is reported, never silently clean', () => {
     const shapeless = findPackagingProblems({ packagesDir, pluginsDir, packImpl: () => JSON.stringify([{}]) });
     assert.equal(shapeless.unconsultable.length, 1, 'a missing files array is unconsultable, not "zero files"');
     assert.deepEqual(shapeless.consulted, []);
+
+    // npm interleaving warnings on stdout is a realistic shape. Without the
+    // JSON.parse guard this throws a raw SyntaxError out of releaseMain step 5,
+    // AFTER the tree is bumped and the lockfile regenerated — the same
+    // "mutated tree with no path to green" state fixed elsewhere in this file.
+    const garbage = findPackagingProblems({ packagesDir, pluginsDir, packImpl: () => 'npm WARN config\n' });
+    assert.equal(garbage.unconsultable.length, 1, 'non-JSON pack output is unconsultable');
+    assert.match(garbage.unconsultable[0].reason, /not parseable JSON/);
+    assert.deepEqual(garbage.consulted, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
