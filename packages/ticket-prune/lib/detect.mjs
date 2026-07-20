@@ -131,11 +131,19 @@ export function classifyTickets(tickets, trackedFiles) {
 export function ceremonyDisposition(ticket, reason) {
   if (ticket.completed === true) return { disposition: 'done' };
   const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
-  if (rails.length > 0) {
-    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'rails-freeze' } };
-  }
+  // A `completed` field that is PRESENT but not `true` (e.g. deliberately
+  // `false` to keep rails frozen during follow-up work) is a value someone set
+  // on purpose. It must route to manual review — 'preexisting-completed-field' —
+  // BEFORE the rails check, not after. Otherwise a railed `completed: false`
+  // ticket is classified 'rails-freeze', and the reporter would advertise a
+  // completion command that overwrites the deliberate value with `true` and
+  // expires its rails. The blocker carries the rails so the report still shows
+  // them; it is simply never presented as safe to bulk-complete.
   if (Object.prototype.hasOwnProperty.call(ticket, 'completed')) {
     return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'preexisting-completed-field' } };
+  }
+  if (rails.length > 0) {
+    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'rails-freeze' } };
   }
   return { disposition: 'tombstone' };
 }

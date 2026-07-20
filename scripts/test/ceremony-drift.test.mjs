@@ -628,3 +628,19 @@ test('the clamp is deterministic (idempotence holds for over-limit bodies)', () 
   }));
   assert.equal(renderIssueBody(many), renderIssueBody(many));
 });
+
+// ---- a railed completed:false ticket is never advertised for completion ----
+//
+// The producer routes a ticket with a deliberately-set `completed` value to
+// blocker 'preexisting-completed-field' (see detect.mjs), even when it freezes
+// rails. The reporter must then keep it OUT of the runnable-command path — a
+// command would overwrite the deliberate value and expire rails the author kept
+// on purpose. Round-21 finding.
+test('a railed preexisting-completed-field entry gets no runnable command', () => {
+  const body = renderIssueBody([
+    { id: 'SEC', reason: 'explicit status: "done"', rails: ['security/**'], blocker: 'preexisting-completed-field' },
+  ]);
+  assert.deepEqual(readyCommandIds(body), [], 'must not advertise completing a deliberate completed value');
+  assert.match(body, /## Needs a manual decision/);
+  assert.match(body, /will \*\*not\*\* clear/);
+});

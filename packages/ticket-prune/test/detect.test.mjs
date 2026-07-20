@@ -109,10 +109,22 @@ test('ceremonyDisposition: a rails-less pristine stale ticket is "tombstone" (or
   );
 });
 
-test('ceremonyDisposition: a rail-freezing stale ticket needs the ceremony (blocker rails-freeze; rails checked first)', () => {
+test('ceremonyDisposition: a railed ticket with NO completed field is rails-freeze', () => {
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', rails: ['test/a/**'] }, 'r'),
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: ['test/a/**'], blocker: 'rails-freeze' } },
+  );
+});
+
+test('ceremonyDisposition: a railed ticket with completed:false is preexisting-completed-field, NOT rails-freeze', () => {
+  // A deliberately-set `completed: false` (kept incomplete to hold rails during
+  // follow-up work) must route to manual review — completing it would overwrite
+  // the value and expire rails the author kept on purpose. The completed-field
+  // check runs BEFORE the rails check. The blocker still carries the rails so the
+  // report shows them; it is just never advertised as safe to bulk-complete.
   assert.deepEqual(
     ceremonyDisposition({ id: 'T1', rails: ['test/a/**'], completed: false }, 'r'),
-    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: ['test/a/**'], blocker: 'rails-freeze' } },
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: ['test/a/**'], blocker: 'preexisting-completed-field' } },
   );
 });
 
