@@ -234,10 +234,20 @@ function makePackagingFixture(files) {
     files,
   });
   // The exact shape of Defect B: a TOP-LEVEL import escaping the allowlist.
+  //
+  // ORDER MATTERS — the escaping import is deliberately at BYTE OFFSET 0.
+  // relativeSpecifiers() resets `re.lastIndex = 0` before each scan because the
+  // patterns are module-level /g regexes shared across calls; a stale lastIndex
+  // makes exec() start mid-file. If that reset regressed to any non-zero value,
+  // a match at offset 0 would be skipped and the gate would silently MISS a real
+  // escape — a fail-OPEN hole in a release gate. Putting a node: builtin first
+  // (as an earlier draft did) leaves that case untested, because builtins are
+  // filtered out anyway. Found by P5 mutation testing: `re.lastIndex = 1`
+  // survived the whole suite until this fixture was reordered.
   writeFileSync(join(packagesDir, 'escaper', 'lib', 'doctor.mjs'),
+    "import { generateAll } from '../scripts/gen-schema.mjs';\n" +
     "import { readFileSync } from 'node:fs';\n" +
     "import { thing } from '@adlc/core';\n" +
-    "import { generateAll } from '../scripts/gen-schema.mjs';\n" +
     "export { generateAll, readFileSync, thing };\n");
   writeFileSync(join(packagesDir, 'escaper', 'scripts', 'gen-schema.mjs'),
     'export const generateAll = () => ({});\n');
