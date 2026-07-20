@@ -389,3 +389,91 @@ test('claude-code-plugin-smoke follows a symlinked directory under the plugin gu
     rmSync(tmpRepo, { recursive: true, force: true });
   }
 });
+
+// --- version lockstep (T-01KY00D1KX0HDE3521KTFC9T26 / Defect A) -------------
+//
+// Until 1.5.1 this script only asserted `if (!plugin.version) fail(...)` — a
+// truthiness check that compared the version to nothing at all. 0.2.0 satisfied
+// it through 1.3.0, 1.4.0 and 1.5.0 while `/plugin` reported "already at the
+// latest version (0.2.0)" against a main branch carrying 1.5.0 content, because
+// the updater keys off the DECLARED version string. cursor-install-smoke.mjs had
+// this lockstep from day one and never drifted. These four tests are the ones
+// whose absence let the bug ship.
+//
+// The repo copy filters .worktrees/ and .claude/ as well as .git/node_modules:
+// this repo carries 8 worktrees, and copying them makes each case take minutes.
+function copyRepoFast() {
+  const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-lockstep-'));
+  const skip = ['.git', 'node_modules', '.worktrees', '.claude'].map((d) => resolve(REPO, d));
+  cpSync(REPO, tmpRepo, {
+    recursive: true,
+    filter: (src) => !skip.some((s) => src === s || src.startsWith(s + '/')),
+  });
+  return tmpRepo;
+}
+
+const editJson = (path, mutate) => {
+  const json = JSON.parse(readFileSync(path, 'utf8'));
+  mutate(json);
+  writeFileSync(path, JSON.stringify(json, null, 2) + '\n');
+};
+
+test('claude-code-plugin-smoke fails when plugin.json version diverges from the root package', () => {
+  const tmpRepo = copyRepoFast();
+  try {
+    editJson(join(tmpRepo, 'plugins/adlc-claude-code/.claude-plugin/plugin.json'), (j) => {
+      j.version = '0.2.0'; // the exact stranded value that shipped
+    });
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'a stranded plugin.json version must fail the smoke test');
+    assert.match(result.stderr, /plugin\.json version 0\.2\.0 != root package\.json version/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+test('claude-code-plugin-smoke fails when marketplace metadata.version diverges', () => {
+  const tmpRepo = copyRepoFast();
+  try {
+    editJson(join(tmpRepo, '.claude-plugin/marketplace.json'), (j) => {
+      j.metadata.version = '0.2.0';
+    });
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'a stranded marketplace metadata.version must fail');
+    assert.match(result.stderr, /marketplace\.json metadata\.version 0\.2\.0 !=/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+test('claude-code-plugin-smoke fails when a marketplace plugin entry version diverges', () => {
+  const tmpRepo = copyRepoFast();
+  try {
+    editJson(join(tmpRepo, '.claude-plugin/marketplace.json'), (j) => {
+      j.plugins[0].version = '0.2.0';
+    });
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'a stranded marketplace plugin entry must fail');
+    assert.match(result.stderr, /marketplace\.json plugin "adlc" version 0\.2\.0 !=/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
+
+test('claude-code-plugin-smoke still rejects an extra plugin.json field after the lockstep change', () => {
+  // The additionalProperties:false guard is load-bearing — CC rejects the whole
+  // install with "invalid manifest" on any unknown field. Adding version
+  // lockstep above it must not have widened the allowlist.
+  const tmpRepo = copyRepoFast();
+  try {
+    editJson(join(tmpRepo, 'plugins/adlc-claude-code/.claude-plugin/plugin.json'), (j) => {
+      j.commands = './commands/';
+    });
+    const result = spawnSync(process.execPath, [SCRIPT, tmpRepo], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'an extra plugin.json field must still fail');
+    assert.match(result.stderr, /extra fields that will cause CC to reject the install/);
+    assert.match(result.stderr, /commands/);
+  } finally {
+    rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});

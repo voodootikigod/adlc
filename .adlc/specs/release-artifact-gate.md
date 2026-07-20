@@ -1,0 +1,92 @@
+# Release gate must validate the shipped artifact, not just the source tree
+
+## Problem
+
+The release pipeline has a fail-closed drift gate (`findVersionDrift`, scripts/release.mjs:144) whose stated purpose is to make "the v1.1.0 drift can't happen again" machine-checkable. It validates the **source tree**. Nothing validates the **artifact a user actually installs**. Two live defects follow from that one gap.
+
+### Defect A — Claude Code plugin stranded at 0.2.0 across every release since 1.2.x
+
+`scripts/release.mjs` grew host-specific bump loops as integrations were added: `codexPluginManifestPaths` (line 112), `cursorPluginManifestPaths` (line 122), `cursorMarketplacePath` (line 132). Claude Code was the FIRST integration and never got one. Neither did antigravity's flat `plugin.json`.
+
+Observed state at 1.5.0:
+
+| manifest | bumped by release.mjs | version |
+| --- | --- | --- |
+| packages/*/package.json | yes | 1.5.0 |
+| plugins/*/package.json | yes | 1.5.0 |
+| plugins/*/.codex-plugin/plugin.json | yes | 1.5.0 |
+| plugins/*/.cursor-plugin/plugin.json | yes | 1.5.0 |
+| .cursor-plugin/marketplace.json | yes | 1.5.0 |
+| **.claude-plugin/marketplace.json** | **NO** | **0.2.0** |
+| **plugins/adlc-claude-code/.claude-plugin/plugin.json** | **NO** | **0.2.0** |
+| **plugins/adlc-antigravity/plugin.json** | **NO** | **0.2.0** (its package.json is 1.5.0) |
+
+`findVersionDrift` mirrors the exact same blind spots — it reads codex manifests (line 150), cursor manifests (line 154), and the cursor marketplace (line 158), and never opens anything under `.claude-plugin/`. So 1.3.0, 1.4.0 and 1.5.0 all passed a GREEN drift gate while Claude Code sat at 0.2.0.
+
+Why Cursor never drifted and Claude Code did — the smoke tests are asymmetric:
+- `scripts/cursor-install-smoke.mjs:145-157` asserts marketplace `entry.version`, marketplace `metadata.version`, AND `plugin.json` version are each in lockstep with the package version.
+- `scripts/claude-code-plugin-smoke.mjs:103` asserts only `if (!plugin.version) fail(...)` — pure truthiness, compared against nothing. `0.2.0` satisfies it forever.
+
+Root design gap: `plugins/adlc-claude-code/` ships NO package.json, so there was no per-package version to lockstep against, and the cursor pattern was never copied. The lockstep target must therefore be the root package.json version.
+
+User-visible harm: the Claude Code marketplace is git-sourced off the default branch, so pushing main IS publishing — but `/plugin` compares the declared `version` string to decide whether an update exists. Because that string never moved, every release since 1.2.x was invisible to the updater. `/plugin` reports "adlc is already at the latest version (0.2.0)" while main carries 1.5.0 content. Reproduced live 2026-07-20.
+
+### Defect B — @adlc/ticket-sync ships a tarball missing a file its own code imports
+
+`packages/ticket-sync/package.json` declares `files: [bin/, lib/, schemas/, README.md, LICENSE]`. `packages/ticket-sync/lib/doctor.mjs:13` has a TOP-LEVEL `import { generateAll } from '../scripts/gen-schema.mjs'`. `scripts/` is not in the allowlist, so the file is not published.
+
+Verified against the real published artifact, not inferred:
+
+    npm pack @adlc/ticket-sync@1.5.0 && tar tzf adlc-ticket-sync-1.5.0.tgz | grep -E 'scripts|doctor'
+    => package/lib/doctor.mjs        (present)
+    => (no scripts/gen-schema.mjs)   (absent)
+
+Consequence: `adlc ticket doctor` hard-crashes with ERR_MODULE_NOT_FOUND for EVERY npm-installed user of @adlc/cli@1.5.0. Reproduced live 2026-07-20 against the globally installed CLI.
+
+A survey of all 29 packages/* shows ticket-sync is the ONLY package whose shipped code reaches outside its `files` allowlist (every other package's relative imports stay within `../lib/`). So the defect is isolated — but it is live and it breaks a documented command.
+
+### Shared root cause
+
+Both defects are invisible to `npm test` because every test runs against the source tree, where the files exist and the versions are irrelevant. No gate ever asks "does the thing we are about to publish actually work when installed?"
+
+## Build
+
+1. **Generalize the bump, do not add a third hardcoded pair.** Replace `codexPluginManifestPaths`/`cursorPluginManifestPaths` with one glob-driven discovery in scripts/release.mjs covering `plugins/*/.*-plugin/plugin.json` (codex, cursor, claude-code, and any future host for free) and `plugins/*/plugin.json` (antigravity's flat layout). Replace `cursorMarketplacePath` with discovery of every root `.*-plugin/marketplace.json`, bumping `metadata.version` and every `plugins[].version`. Adding a new host directory must be drift-protected on day one, not the release after someone notices.
+
+2. **Close the same blind spots in `findVersionDrift`.** It must use the identical discovery functions as the bump, so the gate cannot structurally diverge from the bumper again. A manifest the bumper touches but the gate does not check is the exact shape of this bug.
+
+3. **Add artifact-completeness verification.** For every non-private publish target, resolve the static import graph reachable from its `bin/` and `lib/` entrypoints and assert every resolved relative specifier falls inside a path admitted by that package's `files` allowlist. Fail closed at bump time, before any tag or publish, in the same place the existing provenance/metadata gate lives (scripts/release.mjs:302).
+
+4. **Fix Defect B.** Either add `scripts/` to @adlc/ticket-sync's `files`, or move `gen-schema.mjs` into `lib/`. Prefer moving it into `lib/` — `scripts/` reads as build tooling and shipping it invites the same confusion later. Whichever is chosen, step 3's gate must fail on the pre-fix state.
+
+5. **Fix Defect A's stranded values.** Bring `.claude-plugin/marketplace.json` (metadata + entry), `plugins/adlc-claude-code/.claude-plugin/plugin.json`, and `plugins/adlc-antigravity/plugin.json` to the current version via the generalized bumper — not by hand-editing, so the fix proves the mechanism.
+
+6. **Harden the Claude Code smoke test to match Cursor's.** `scripts/claude-code-plugin-smoke.mjs:103` must lockstep plugin.json version, marketplace `metadata.version`, and marketplace `entry.version` against the ROOT package.json version (adlc-claude-code has no package.json of its own). Preserve the existing `additionalProperties:false` key guard at lines 118-129 — CC rejects unknown plugin.json fields, so the allowlist must not gain a field as a side effect.
+
+7. **Record the decision.** ADR documenting that release gates validate the published artifact, not the source tree, and that host-manifest discovery is glob-driven by design.
+
+## Out of scope
+
+- Migrating the legacy `.adlc/tickets.json` store to sharded tickets.
+- Any change to the publish ORDER or provenance/OIDC mechanism (working correctly).
+- Adding a package.json to plugins/adlc-claude-code — the root version is the lockstep target instead.
+
+## Acceptance criteria
+
+- **AC1 — claude-plugin manifests bump.** After `releaseMain('9.9.9')` runs against a fixture containing `.claude-plugin/marketplace.json` and `plugins/adlc-claude-code/.claude-plugin/plugin.json`, both are at 9.9.9 including marketplace `metadata.version` and every `plugins[].version`. VERIFY: `node --test scripts/test/release-artifact.test.mjs --test-name-pattern='claude-plugin bump'` exits 0.
+
+- **AC2 — drift gate catches the stranded state, and fails on the pre-fix code.** `findVersionDrift('9.9.9', fixture)` returns a non-empty list naming `.claude-plugin/marketplace.json` metadata.version, its plugin entry, `plugins/adlc-claude-code/.claude-plugin/plugin.json`, and a flat `plugins/*/plugin.json` when each is stranded at 0.2.0. This test must FAIL against the current implementation — a test that passes before the fix proves nothing. VERIFY: `node --test scripts/test/release-artifact.test.mjs --test-name-pattern='drift'` exits 0 after the fix, and `git stash`-ing scripts/release.mjs makes it exit non-zero.
+
+- **AC3 — discovery is glob-driven, not enumerated.** A fixture containing an invented host directory (`plugins/adlc-future/.future-plugin/plugin.json` and root `.future-plugin/marketplace.json`) at a stale version is both bumped and drift-flagged with NO change to release.mjs. This is the criterion that distinguishes the real fix from a third hardcoded pair. VERIFY: `node --test scripts/test/release-artifact.test.mjs --test-name-pattern='unknown host'` exits 0.
+
+- **AC4 — artifact completeness catches Defect B.** The new gate, run against a fixture package whose lib/ imports `../scripts/x.mjs` while `files` omits `scripts/`, reports that package as a problem; run against the same fixture with `scripts/` admitted, it reports nothing. VERIFY: `node --test scripts/test/release-artifact.test.mjs --test-name-pattern='files allowlist'` exits 0.
+
+- **AC5 — Defect B is actually fixed in the real repo.** `adlc ticket doctor` runs to completion against a real install built from this tree (no ERR_MODULE_NOT_FOUND), and the artifact-completeness gate reports zero problems across all packages/*. VERIFY: `npm pack` @adlc/ticket-sync from the working tree, extract to a temp dir, and `node -e "import('<tmp>/lib/doctor.mjs')"` resolves; asserted by `node --test scripts/test/release-artifact.test.mjs --test-name-pattern='ticket-sync doctor'`.
+
+- **AC6 — Claude Code smoke locksteps like Cursor's.** `scripts/claude-code-plugin-smoke.mjs` fails when plugin.json version, marketplace metadata.version, or marketplace entry.version diverges from the root package.json version, and the `additionalProperties:false` allowlist guard still rejects an extra plugin.json field. VERIFY: `node --test scripts/test/claude-code-plugin-smoke.test.mjs` exits 0 and includes a case for each of the three divergences plus the extra-field guard.
+
+- **AC7 — the real repo is in lockstep.** `findVersionDrift` against the actual working tree at the current root version returns an empty list, and `node scripts/claude-code-plugin-smoke.mjs .` exits 0. VERIFY: both commands run against the repo exit 0.
+
+- **AC8 — no regression.** VERIFY: `npm test` exits 0.
+
+- **AC9 — decision recorded.** An ADR under docs/adr/ states that release gates validate the published artifact and that host-manifest discovery is glob-driven. VERIFY: the ADR file exists and is referenced from scripts/release.mjs's header comment.

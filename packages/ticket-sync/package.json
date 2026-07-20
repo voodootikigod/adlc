@@ -28,6 +28,7 @@
     "bin/",
     "lib/",
     "schemas/",
+    "scripts/",
     "README.md",
     "LICENSE"
   ],

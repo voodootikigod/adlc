@@ -101,6 +101,43 @@ if (!existsSync(pluginPath)) fail('missing plugins/adlc-claude-code/.claude-plug
 const plugin = readJson(pluginPath);
 if (!plugin.name) fail('plugin.json missing "name" field');
 if (!plugin.version) fail('plugin.json missing "version" field');
+
+// --- version lockstep (the Defect A guard) ---
+// A truthiness check on plugin.version — which is all this file did until
+// 1.5.1 — passes forever at any stale value. That is precisely how 0.2.0
+// survived 1.3.0, 1.4.0 and 1.5.0: `/plugin` compares the DECLARED version
+// string to decide whether an update exists, so a frozen string makes every
+// release invisible to the updater even when main carries current content.
+// scripts/cursor-install-smoke.mjs had this lockstep from the start and never
+// drifted; this is the same check.
+//
+// adlc-claude-code ships no package.json of its own, so the ROOT package.json
+// version is the lockstep target.
+const rootPkgPath = join(repo, 'package.json');
+if (!existsSync(rootPkgPath)) fail('missing root package.json — cannot verify version lockstep');
+const rootVersion = readJson(rootPkgPath).version;
+if (!rootVersion) fail('root package.json has no "version" — cannot verify version lockstep');
+
+if (plugin.version !== rootVersion) {
+  fail(
+    `plugin.json version ${plugin.version} != root package.json version ${rootVersion}\n` +
+    `  Run: node scripts/release.mjs ${rootVersion}  (the bump is glob-driven and covers every host manifest)`
+  );
+}
+if (rootMarketplace.metadata?.version !== rootVersion) {
+  fail(
+    `root .claude-plugin/marketplace.json metadata.version ${rootMarketplace.metadata?.version} != root package.json version ${rootVersion}\n` +
+    `  Run: node scripts/release.mjs ${rootVersion}`
+  );
+}
+for (const entry of rootMarketplace.plugins ?? []) {
+  if (entry.version !== rootVersion) {
+    fail(
+      `root .claude-plugin/marketplace.json plugin "${entry.name}" version ${entry.version} != root package.json version ${rootVersion}\n` +
+      `  Run: node scripts/release.mjs ${rootVersion}`
+    );
+  }
+}
 if (!plugin.description) fail('plugin.json missing "description" field');
 if (!plugin.homepage) fail('plugin.json missing "homepage" field');
 // Positive assertion: homepage must point at the current integration guide
