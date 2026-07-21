@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import * as corePublic from '../index.mjs';
 import { extractJson } from '../lib/llm.mjs';
 import { appendEntry, canonicalJson, readEntries, sha256, hashFiles, withLedgerLock } from '../lib/ledger.mjs';
-import { resolveBase, refExists } from '../lib/git.mjs';
+import { resolveBase, refExists, changedFiles } from '../lib/git.mjs';
 import {
   validateTicket, loadTickets, topoSort, computeFloat,
   globMatch, inScope, scopesOverlap,
@@ -343,6 +343,70 @@ test('resolveBase: returns null when no trunk candidate exists (callers must fai
     g('branch', '-m', 'main', 'work'); // rename away from main/master
     assert.equal(refExists('main', dir), false);
     assert.equal(resolveBase(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('changedFiles: an ordinary unstaged working-tree edit is reported', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    const base = g('rev-parse', 'HEAD').trim();
+    writeFileSync(join(dir, 'a.txt'), 'two\n'); // edited, never staged
+    assert.deepEqual(changedFiles(base, dir), ['a.txt']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('changedFiles: a staged-then-reverted edit is still reported (#244 bypass)', () => {
+  // Stage a change, then restore the working-tree copy to baseline. base-vs-worktree
+  // diff sees nothing, but the index still holds the change and it is what a commit
+  // would record — so the changed-file SET must include it, or a rail check reading
+  // this set is deciding about a tree that is not the one being committed.
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    const base = g('rev-parse', 'HEAD').trim();
+    writeFileSync(join(dir, 'a.txt'), 'staged violation\n');
+    g('add', 'a.txt');            // change now lives in the index
+    writeFileSync(join(dir, 'a.txt'), 'one\n'); // working tree restored to baseline
+    // Sanity: the working-tree-only diff is empty, so the old contract missed this.
+    assert.equal(
+      g('diff', '--name-only', base, '--').trim(), '',
+      'fixture must have an empty base-vs-worktree diff to exercise the bypass'
+    );
+    assert.deepEqual(changedFiles(base, dir), ['a.txt']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('changedFiles: a file changed in BOTH index and worktree is reported once', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    const base = g('rev-parse', 'HEAD').trim();
+    writeFileSync(join(dir, 'a.txt'), 'staged\n');
+    g('add', 'a.txt');
+    writeFileSync(join(dir, 'a.txt'), 'staged then edited again\n'); // differs in both
+    assert.deepEqual(changedFiles(base, dir), ['a.txt'], 'union must de-duplicate');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('changedFiles: a clean tree at base reports nothing', () => {
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    const base = g('rev-parse', 'HEAD').trim();
+    assert.deepEqual(changedFiles(base, dir), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

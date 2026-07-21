@@ -130,10 +130,20 @@ export function changedFiles(base = 'HEAD', cwd = process.cwd()) {
   // string: decoding first collapses distinct invalid-byte paths to one U+FFFD
   // string BEFORE the split can tell them apart (#249). splitNulPaths fails closed
   // on any path that does not round-trip UTF-8.
-  const raw = git(['diff', '--name-only', '-z', base, '--'], { cwd, encoding: 'buffer' });
-  return splitNulPaths(raw);
+  //
+  // Union the base-vs-working-tree diff with the base-vs-index (`--cached`) diff. A
+  // two-dot `git diff <base>` alone never consults the index, so a rail edit STAGED
+  // and then reverted in the working tree diffs empty — yet `git commit` records the
+  // staged blob. A gate reading a working-tree-only set would then pass a tree that
+  // is not the one being committed (#244). A path differing from base in EITHER place
+  // is changed. `--cached` catches a purely-staged edit; the plain diff catches an
+  // unstaged one; a Set de-duplicates the overlap. Both invocations go through the
+  // same buffer-safe split, so the #249 fidelity guarantee applies to each half.
+  const raw = (args) => git(args, { cwd, encoding: 'buffer' });
+  const worktree = splitNulPaths(raw(['diff', '--name-only', '-z', base, '--']));
+  const staged = splitNulPaths(raw(['diff', '--cached', '--name-only', '-z', base, '--']));
+  return [...new Set([...worktree, ...staged])];
 }
-
 export function isDirty(cwd = process.cwd()) {
   return git(['status', '--porcelain'], { cwd }).trim().length > 0;
 }

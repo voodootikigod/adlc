@@ -1392,6 +1392,24 @@
         "packages/ticket-sync/test/github.test.mjs"
       ],
       "title": "Push + create: write-back, idempotent create, status outcomes"
+    },
+    {
+      "body": "Fixes voodootikigod/adlc#244. changedFiles(base) in packages/core/lib/git.mjs only diffs base-vs-working-tree, so staging a rail violation then reverting the working copy evades rails-guard. Union git diff <base> and git diff --cached <base> changed-file sets. Verification: node --test packages/core/test/*.test.mjs packages/rails-guard/test/*.test.mjs. allow-suppression: none",
+      "budget": "mid",
+      "category": "bug",
+      "duration": 1,
+      "edges": [],
+      "id": "T56",
+      "rails": [
+        "packages/rails-guard/test/version-only.test.mjs",
+        "packages/rails-guard/test/version-only-e2e.test.mjs"
+      ],
+      "scope": [
+        "packages/core/lib/git.mjs",
+        "packages/core/test/*.test.mjs",
+        "packages/rails-guard/**"
+      ],
+      "title": "rails-guard: union staged and working-tree diffs so a staged-then-reverted rail edit fails the gate"
     }
   ]
 }
