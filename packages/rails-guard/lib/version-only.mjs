@@ -95,6 +95,10 @@ function parseCanonical(text) {
   // re-encode to itself proves the decode lost nothing, which is what makes the
   // rest of this function an argument about the FILE rather than about a string
   // that merely resembles it.
+  // REDUNDANT, deliberately. Canonical equality below also rejects anything
+  // unencodable (JSON.stringify escapes a lone surrogate, so the round trip
+  // differs), which is why no test can distinguish this line's removal. Kept as
+  // an explicit statement of the contract at the point it is relied on.
   if (Buffer.from(text, 'utf8').toString('utf8') !== text) return null;
   let parsed;
   try {
@@ -120,6 +124,9 @@ function isVersion(value) {
   if (!VERSION_RE.test(value)) return false;
   const [core] = value.split(/[-+]/);
   for (const part of core.split('.')) {
+    // REDUNDANT with the MAX_SAFE_INTEGER check below — any component longer
+    // than 16 digits already exceeds it — but kept because it is npm's own
+    // stated limit and would still hold if the numeric check were relaxed.
     if (part.length > MAX_SAFE_COMPONENT_LENGTH) return false;
     if (Number(part) > Number.MAX_SAFE_INTEGER) return false;
   }
@@ -130,6 +137,10 @@ function isVersion(value) {
 function splitRange(value) {
   if (typeof value !== 'string') return null;
   const m = RANGE_RE.exec(value);
+  // The isVersion half is currently unreachable: lockstep forces a range's
+  // version to equal the manifest version, which is itself validated, so a range
+  // cannot be invalid while its manifest is valid. Kept because it makes
+  // splitRange correct standalone rather than only in its current caller.
   if (!m || !isVersion(m[2])) return null;
   return { operator: m[1], version: m[2] };
 }
@@ -293,7 +304,14 @@ export function isVersionOnlyChange(beforeText, afterText, file) {
     // lock so that weakening either one alone cannot open a redirect. No test
     // can distinguish its removal today, and that is expected — it is defence in
     // depth, not a distinct behaviour.
+    // REDUNDANT since the completeness pass landed: that pass already requires
+    // every baseline range to equal the OLD version and every result range the
+    // NEW one, so a repin cannot appear without the version having moved.
     if (!versionChanged || oldVersion === newVersion) return false;
+    // REDUNDANT with the completeness pass, which checks EVERY internal range on
+    // both sides rather than only the ones that changed. Kept as a second lock:
+    // if completeness were ever narrowed back to changed ranges, this still
+    // pins the endpoints of those.
     for (const { from, to } of repins) {
       if (from.version !== oldVersion || to.version !== newVersion) return false;
     }

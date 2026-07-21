@@ -134,21 +134,20 @@ failed **zero** of 110 tests. Every structural test passed incidentally via *lea
 differences and never exercised that path. The gap was empty containers: adding
 `"scripts": {}` changes no leaf at all.
 
-The suite is now calibrated by planting each defect and confirming it is caught:
-deleting the shape record fails 5 tests, restoring the `.sort()` fails 1,
-dropping the container-kind marker fails 2, and removing the symlink/mode guard
-fails 2. A fix that merely weakens the guard cannot pass.
+That suite has since been replaced twice over, so those specific counts no
+longer apply. What survived is the practice: every guard is planted-and-checked,
+and the current sweep is recorded below.
 
-### What CROSS-MODEL prosecution then changed — five rejections
+### What CROSS-MODEL prosecution then changed — six rejections
 
 Because this is an enforcement package, ADR-0007 also requires an adversarial
-approve from a **different provider**. That review rejected the change **five
+approve from a **different provider**. That review rejected the change **six
 times**, and the record is kept in full: it is the strongest available evidence
 that the cross-model tier is not ceremony. Every finding was independently
 reproduced before being acted on, and three of the five rounds found defects that
 the same-model pass had declared clean.
 
-**Round one** found five issues the same-model pass had missed entirely:
+**Round one** found six issues the same-model pass had missed entirely:
 
 | defect | why it mattered |
 |---|---|
@@ -271,7 +270,7 @@ repinned from the old version to the new one. Nothing that can execute, redirect
 a dependency elsewhere, or change a package's identity is eligible.
 
 The honest caveat is that this bound is only as good as the review it survived.
-It took three cross-model rejections to reach, and each round found something the
+It took six cross-model rejections to reach, and each round found something the
 previous one had not — including two rounds where the *approach* was wrong rather
 than the code. Anyone widening the eligible set should assume the same is true of
 their change and get it prosecuted cross-model before merging.
@@ -296,3 +295,35 @@ breaking change requiring migration of live tickets.
 
 **Leave it.** Rejected. Every release collides and is resolved ad hoc, and the
 resolution pressures the ticket store toward dishonesty.
+
+## Mutation calibration
+
+Every guard is planted-and-removed and the suite re-run. The current sweep runs
+28 mutants; 22 are killed. The six survivors are each redundant with a stronger
+check and are commented as such **at their definition**, because a surviving
+mutant that is not explained is indistinguishable from one that was never
+noticed:
+
+| survivor | shadowed by |
+|---|---|
+| string re-encode guard | canonical equality — `JSON.stringify` escapes a lone surrogate, so the round trip already differs |
+| component digit limit | the `MAX_SAFE_INTEGER` check — 17 digits already exceeds it |
+| range version validity | lockstep forces a range's version to equal the manifest version, which is itself validated |
+| container-shape early return | the path test — no container path is ever an eligible version or range path |
+| `versionChanged` guard | the completeness pass, which requires every baseline range to equal the old version |
+| repin from/to endpoints | the completeness pass, which checks every range rather than only changed ones |
+
+**Three separate rounds found hollow tests in this work**, each written
+specifically to pin the guard it named:
+
+- the container-shape record: deleting it failed **zero** of 110 tests, because
+  every structural case passed incidentally through leaf differences
+- the baseline-symlink fixture pointed at a non-JSON target, so the canonical
+  precondition rejected it whether or not the mode guard existed
+- the HEAD-symlink fixture used a dangling link, so the read threw before the
+  regular-file guard was reached; and every completeness fixture left the *after*
+  side wrong, so an implementation checking only `after` passed all of them
+
+The lesson is narrow and worth stating: **a test that asserts the right outcome
+for the wrong reason is invisible without mutation testing.** Assertions about
+what a test pins are claims, and claims about a security gate need evidence.

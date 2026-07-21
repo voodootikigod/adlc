@@ -118,14 +118,28 @@ test('deleting a railed manifest during a bump still FAILS', () => {
 // compared equal and was exempted — while git recorded a typechange. The link
 // target then lives outside the rail and can be swapped freely afterwards.
 test('replacing a railed manifest with a symlink still FAILS', { skip: process.platform === 'win32' }, () => {
-  const { dir, baseSha } = makeRepo();
+  // THE BASELINE MODE IS THE POINT. A symlink reports its executable bits set,
+  // so against an ordinary 0644 baseline the executable-bit parity check rejects
+  // this incidentally and the regular-file guard is never exercised — the test
+  // passed while pinning nothing.
+  //
+  // Committing the baseline as 100755 makes parity HOLD for a symlink, so only
+  // `lstatSync(file).isFile()` can deny. The symlink target is canonical bumped
+  // JSON so every content check would otherwise pass too.
+  const { dir, run } = makeRepo();
   try {
     const manifest = join(dir, 'packages', 'build-gate', 'package.json');
-    const decoy = join(dir, 'packages', 'build-gate', 'decoy.json');
-    writeFileSync(decoy, execFileSync('cat', [manifest], { encoding: 'utf8' }));
+    run('update-index', '--chmod=+x', 'packages/build-gate/package.json');
+    run('commit', '-q', '-m', 'executable baseline');
+    const newBase = run('rev-parse', 'HEAD').trim();
+    const bumped = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/tier.mjs',
+      dependencies: { '@adlc/core': '^1.5.1' } }, null, 2) + '\n';
+    // The link must RESOLVE to canonical bumped JSON. A dangling link would make
+    // the read throw, and the test would pass on that instead of on the guard.
+    writeFileSync(join(dir, 'packages', 'build-gate', 'target.json'), bumped);
     rmSync(manifest);
-    symlinkSync('decoy.json', manifest);
-    const res = guard(dir, baseSha, RAIL);
+    symlinkSync('target.json', manifest);
+    const res = guard(dir, newBase, RAIL);
     assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -220,6 +234,38 @@ test('a manifest that was a SYMLINK at the baseline still FAILS', { skip: proces
     const newBase = run('rev-parse', 'HEAD').trim();
     rmSync(manifest);
     writeFileSync(manifest, JSON.stringify({ version: '1.5.1' }, null, 2) + '\n');
+    const res = guard(dir, newBase, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a manifest under working-tree-encoding still FAILS', () => {
+  // Round-6 regression. `working-tree-encoding` re-encodes between the working
+  // tree and the index, so a value holding a non-ASCII character on disk is
+  // committed as different bytes — a real change to `main`, invisible to a
+  // comparator that only reads the working tree. The resolver checked `filter`
+  // and `ident` but not this.
+  const { dir, run } = makeRepo();
+  try {
+    const manifest = join(dir, 'packages', 'build-gate', 'package.json');
+    // Baseline committed WITHOUT the attribute, so the blob holds `é` as UTF-8.
+    writeFileSync(manifest,
+      JSON.stringify({ name: '@adlc/build-gate', version: '1.5.0', main: './safe-é.mjs',
+        dependencies: { '@adlc/core': '^1.5.0' } }, null, 2) + '\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'plain baseline');
+    const newBase = run('rev-parse', 'HEAD').trim();
+    // NOW add the attribute. Git will read the working tree as ISO-8859-1, so
+    // UTF-8 `é` (C3 A9) becomes two characters `Ã©` in the committed blob —
+    // a real change to `main`. Both forms are valid UTF-8, so the byte-fidelity
+    // check cannot catch this; only rejecting the attribute can.
+    writeFileSync(join(dir, '.gitattributes'),
+      'packages/build-gate/package.json working-tree-encoding=ISO-8859-1\n');
+    writeFileSync(manifest,
+      JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: './safe-é.mjs',
+        dependencies: { '@adlc/core': '^1.5.1' } }, null, 2) + '\n');
     const res = guard(dir, newBase, RAIL);
     assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
   } finally {

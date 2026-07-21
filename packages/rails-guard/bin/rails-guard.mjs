@@ -158,7 +158,13 @@ function resolveContents(file) {
     // index while this comparator sees only an innocent version edit — the diff
     // and the committed blob disagree. Refuse to reason about any path carrying a
     // content-altering attribute.
-    const attrs = git(['check-attr', 'filter', 'ident', '--', file], { stdio: ['ignore', 'pipe', 'ignore'] });
+    // `working-tree-encoding` belongs in this list. It re-encodes the file
+    // between the working tree and the index, so a manifest holding `é` in
+    // ISO-8859-1 on disk is committed as `Ã©` — a real change to a value like
+    // `main`, invisible to a comparator that only reads the working tree.
+    // Reproduced end-to-end at exit 0 before this was added.
+    const attrs = git(['check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file],
+      { stdio: ['ignore', 'pipe', 'ignore'] });
     for (const line of attrs.split('\n')) {
       if (!line.trim()) continue;
       const value = line.slice(line.lastIndexOf(': ') + 2).trim();

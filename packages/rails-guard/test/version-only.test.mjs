@@ -150,10 +150,11 @@ test('a repin that does not target the new version is NOT exempt', () => {
 });
 
 test('a repin to the manifest EXISTING version, with no bump, is NOT exempt', () => {
-  // Kills the mutant that drops the `versionChanged` guard. The repin target
-  // equals the manifest version, so the target comparison alone accepts it —
-  // only "a version actually moved" rejects it. Real effect: @adlc/core is
-  // redirected 0.9.0 -> 1.5.0 during a build that bumps nothing.
+  // NOTE what actually rejects this: the completeness pass, which requires every
+  // baseline range to equal the baseline version (^0.9.0 does not equal 1.5.0).
+  // This test previously claimed to kill the `versionChanged` mutant; it does
+  // not, and saying so was the same hollow-test failure in comment form. That
+  // guard is now redundant and is documented as such at its definition.
   const before = `{\n  "version": "1.5.0",\n  "dependencies": {\n    "@adlc/core": "^0.9.0"\n  }\n}\n`;
   const after  = `{\n  "version": "1.5.0",\n  "dependencies": {\n    "@adlc/core": "^1.5.0"\n  }\n}\n`;
   assert.equal(isVersionOnlyChange(before, after, PKG), false);
@@ -241,9 +242,11 @@ test('changing indentation on a version line is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(pkg('1.5.0'), pkg('1.5.1').replace('  "version"', '    "version"'), PKG), false);
 });
 
-test('with duplicate top-level version lines, the LAST one is the lockstep target', () => {
-  // npm honours the last duplicate member, so the guard must too — otherwise a
-  // repin could be validated against a dead version line.
+test('duplicate top-level version members are NOT exempt', () => {
+  // Duplicates cannot survive the canonical round trip, so this is rejected at
+  // the precondition and no target is ever selected. An earlier version of this
+  // test claimed the LAST duplicate is chosen as the lockstep target, which
+  // described the line-based design that no longer exists.
   const b = `{\n  "version": "9.9.9",\n  "version": "1.5.0",\n  "dependencies": {\n    "@adlc/core": "^1.5.0"\n  }\n}\n`;
   const a = `{\n  "version": "9.9.9",\n  "version": "1.5.1",\n  "dependencies": {\n    "@adlc/core": "^9.9.9"\n  }\n}\n`;
   assert.equal(isVersionOnlyChange(b, a, PKG), false);
@@ -451,12 +454,12 @@ test('plugins[i].version requires plugins to be a REAL array', () => {
 });
 
 test('a string that cannot re-encode to itself is NOT exempt', () => {
-  // A lone surrogate has no UTF-8 encoding, so it can never have come from a
-  // real file. NOTE the boundary: this catches unencodable STRINGS, but the
-  // lossy-decode problem itself is unfixable here — a string already containing
-  // U+FFFD re-encodes perfectly, and the information is gone. That case is
-  // handled at the byte boundary in bin/rails-guard.mjs and covered end-to-end
-  // in version-only-e2e.test.mjs.
+  // NOTE what actually rejects this: canonical equality. `JSON.stringify`
+  // escapes a lone surrogate, so the round trip differs from the input. The
+  // re-encode guard is therefore redundant here rather than pinned by this test.
+  // The real lossy-decode problem cannot be caught at this layer at all — a
+  // string already holding U+FFFD re-encodes perfectly — and is handled at the
+  // byte boundary in bin/rails-guard.mjs, covered in version-only-e2e.test.mjs.
   const withSurrogate = (v) => `{\n  "version": "${v}",\n  "d": "\uD800"\n}\n`;
   assert.equal(isVersionOnlyChange(withSurrogate('1.5.0'), withSurrogate('1.5.1'), PKG), false);
 });
@@ -527,4 +530,51 @@ test('a non-object dependency field is NOT exempt', () => {
   const b = JSON.stringify({ version: '1.5.0', dependencies: ['@adlc/core'] }, null, 2) + '\n';
   const a = JSON.stringify({ version: '1.5.1', dependencies: ['@adlc/core'] }, null, 2) + '\n';
   assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+// ------------------------------- round-6 coverage gaps, found by mutation
+
+test('EACH dependency field is covered by the completeness pass', () => {
+  // Removing any single field from DEP_FIELDS previously left the whole suite
+  // green. There are no internal ranges in the other three fields today, but the
+  // release tool and this ADR both promise to handle them, so each is pinned
+  // independently rather than relying on `dependencies` to stand for all four.
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    const mk = (v, dep) => JSON.stringify({ version: v, [field]: { '@adlc/core': dep } }, null, 2) + '\n';
+    assert.equal(isVersionOnlyChange(mk('1.5.0', '1.5.0'), mk('1.5.1', '1.5.1'), PKG), true,
+      `${field}: a genuine lockstep repin must stay exempt`);
+    assert.equal(isVersionOnlyChange(mk('1.5.0', '1.5.0'), mk('1.5.1', '1.5.0'), PKG), false,
+      `${field}: a range left behind must deny`);
+    assert.equal(isVersionOnlyChange(mk('1.5.0', '1.5.0'), mk('1.5.1', '9.9.9'), PKG), false,
+      `${field}: a redirected range must deny`);
+  }
+});
+
+test('a malformed MARKETPLACE version is rejected by value validation', () => {
+  // The package-manifest malformed-version fixtures are all rejected later by
+  // the completeness pass, so they do not pin the eligible-value check. A
+  // marketplace manifest has no dependency fields, so nothing else can reject
+  // this one.
+  const mk = (v) => JSON.stringify({ metadata: { version: v } }, null, 2) + '\n';
+  for (const bad of ['01.5.1', '1.5.1-', 'latest', '1.5']) {
+    assert.equal(isVersionOnlyChange(mk('1.5.0'), mk(bad), MKT), false, `marketplace version "${bad}"`);
+  }
+  assert.equal(isVersionOnlyChange(mk('1.5.0'), mk('1.5.1'), MKT), true);
+});
+
+test('a non-object JSON document is NOT exempt', () => {
+  // The exported predicate's contract, independent of the structural checks that
+  // shadow it for ordinary documents.
+  assert.equal(isVersionOnlyChange('[]\n', '[]\n', PKG), false);
+  assert.equal(isVersionOnlyChange('"s"\n', '"s"\n', PKG), false);
+  assert.equal(isVersionOnlyChange('null\n', 'null\n', PKG), false);
+  assert.equal(isVersionOnlyChange('1\n', '2\n', PKG), false);
+});
+
+test('a dependency RANGE beyond npm limits is NOT exempt', () => {
+  // The equivalent version-side fixtures are rejected by the completeness pass,
+  // so only a range exercises splitRange's own validity check.
+  const mk = (v, dep) => JSON.stringify({ version: v, dependencies: { '@adlc/core': dep } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(mk('1.5.0', '^1.5.0'), mk('9007199254740992.0.0', '^9007199254740992.0.0'), PKG), false);
+  assert.equal(isVersionOnlyChange(mk('1.5.0', '^1.5.0'), mk(`1.5.1-${'a'.repeat(266)}`, `^1.5.1-${'a'.repeat(266)}`), PKG), false);
 });
