@@ -117,3 +117,66 @@ test('an explicitly configured absolute legacy store remains writable during the
     assert.equal(JSON.parse(readFileSync(external, 'utf8')).tickets[0].completed, true);
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });
+
+test('#235 — planCreate rejects a rail that would freeze a manifest', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-235-create-'));
+  try {
+    // Give the root a real manifest so discoverManifests has something to match.
+    mkdirSync(join(root, 'packages', 'x'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'x', 'package.json'), '{"name":"x"}\n');
+    const path = writeDirectory(root, [ticket('A')]);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+
+    assert.throws(
+      () => service.planCreate(ticket('NEW', { rails: ['packages/x/**'] })),
+      (error) => error.code === 'RAIL_COVERS_MANIFEST' && /packages\/x\/lib/.test(error.message)
+    );
+    // The source-scoped form is accepted.
+    const ok = service.planCreate(ticket('NEW', { rails: ['packages/x/lib/**'] }));
+    assert.equal(ok.ticketId, 'NEW');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#235 — planUpdate grandfathers an EXISTING manifest rail but rejects a NEW one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-235-update-'));
+  try {
+    mkdirSync(join(root, 'packages', 'x'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'x', 'package.json'), '{"name":"x"}\n');
+    mkdirSync(join(root, 'packages', 'y'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'y', 'package.json'), '{"name":"y"}\n');
+    // A legacy ticket that ALREADY declares a manifest-covering rail.
+    const path = writeDirectory(root, [ticket('A', { rails: ['packages/x/**'] })]);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    const a = service.snapshot().get('A');
+
+    // An ordinary edit that keeps the existing rail must still work — the whole
+    // point of grandfathering. (rail-narrowing/none here, so no authorization.)
+    const ok = service.planUpdate('A', { ...a, title: 'Edited' },
+      { expect: service.snapshot().ticketHashes.A });
+    assert.equal(ok.ticketId, 'A');
+
+    // ADDING a second manifest-covering rail is rejected. authorized:true so this
+    // is not deflected by the scope/rail authorization path — the manifest check
+    // is independent of it.
+    assert.throws(
+      () => service.planUpdate('A', { ...a, rails: ['packages/x/**', 'packages/y/**'] },
+        { expect: service.snapshot().ticketHashes.A, authorized: true }),
+      (error) => error.code === 'RAIL_COVERS_MANIFEST' && /packages\/y/.test(error.message)
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#235 — completing a legacy ticket with a manifest rail is unaffected', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-235-complete-'));
+  try {
+    mkdirSync(join(root, 'packages', 'x'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'x', 'package.json'), '{"name":"x"}\n');
+    const path = writeDirectory(root, [ticket('A', { rails: ['packages/x/**'] })]);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    // planComplete routes through its own path, not planUpdate, so the manifest
+    // check never sees it — a shipped ticket can always be closed out.
+    const plan = service.planComplete('A', { authorized: true });
+    const after = service.apply(plan);
+    assert.equal(after.get('A').completed, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

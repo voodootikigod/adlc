@@ -68,3 +68,9 @@ export function asTicketResult<T>(fn: () => T): { ok: true; value: T; warnings: 
 export function exitCodeFor(error: { kind?: TicketErrorKind }): 1 | 2;
 export function shouldOfferLegacyMigration(store: unknown, flags?: Record<string, unknown>, io?: { input?: { isTTY?: boolean }; output?: { isTTY?: boolean } }): boolean;
 export function offerLegacyMigration(store: LegacyTicketStore, root: string, flags?: Record<string, unknown>, dependencies?: Record<string, unknown>): Promise<LegacyTicketStore | DirectoryTicketStore>;
+
+// #235 — manifest-rail hygiene
+export const MANIFEST_BASENAMES: readonly string[];
+export function discoverManifests(root?: string): string[];
+export function coversManifest(glob: unknown, manifestPaths: readonly string[]): boolean;
+export function manifestCoveringRails(rails: unknown, manifestPaths: readonly string[]): string[];

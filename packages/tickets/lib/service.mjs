@@ -10,6 +10,7 @@ import { DirectoryTicketStore } from './stores/directory.mjs';
 import { LegacyTicketStore } from './stores/legacy.mjs';
 import { applyDirectoryTransaction, applyLegacyTransaction } from './transaction.mjs';
 import { validateTickets } from './schema.mjs';
+import { coversManifest, discoverManifests } from './manifest-rails.mjs';
 
 const publicPlan = (plan) => Object.fromEntries(Object.entries(plan).filter(([key]) => !key.startsWith('_')));
 const planContent = (plan) => Object.fromEntries(Object.entries(publicPlan(plan)).filter(([key]) => key !== 'planHash'));
@@ -71,10 +72,31 @@ export class TicketService {
     if (parsed.tickets.some((ticket) => ticket?.id === id)) throw conflict('ARCHIVE_COLLISION', `archive already contains ${id}`);
   }
 
+  // #235 — a rail must not freeze a manifest a lockstep release rewrites, or the
+  // ticket blocks every release for its whole life (the #228 collision). Reject
+  // such rails at AUTHORING time; #234 handles the release edit itself.
+  //
+  // `newRails` is the set to police — every rail on create, but only the
+  // NEWLY-INTRODUCED rails on update, so a legacy ticket that already declares a
+  // manifest-covering rail is grandfathered and its ordinary edits keep working.
+  #assertNoManifestRails(newRails) {
+    if (!Array.isArray(newRails) || newRails.length === 0) return;
+    const manifests = discoverManifests(this.root);
+    if (manifests.length === 0) return; // outside a repo → hygiene check no-ops
+    const offenders = newRails.filter((rail) => coversManifest(rail, manifests));
+    if (offenders.length === 0) return;
+    throw policy(
+      'RAIL_COVERS_MANIFEST',
+      `rail(s) would freeze a manifest a release must rewrite: ${offenders.join(', ')}. ` +
+      `Rail the source subtree instead (e.g. "packages/x/lib/**"), not the package root. See #235.`
+    );
+  }
+
   planCreate(input = {}) {
     const ticket = deepClone(input);
     if (!ticket.id) ticket.id = generateTicketId();
     this.#assertIdNotArchived(ticket.id);
+    this.#assertNoManifestRails(ticket.rails);
     return this.#plan('create', (tickets) => {
       if (tickets.some((item) => item.id === ticket.id)) throw conflict('TICKET_EXISTS', `ticket already exists: ${ticket.id}`);
       tickets.push(ticket);
@@ -89,6 +111,11 @@ export class TicketService {
       if (input.id !== id) throw policy('IDENTITY_CHANGE_REQUIRES_REASSIGN', 'update input id must match; use reassign for identity changes');
       if (expect && snapshot.ticketHashes[id] !== expect) throw conflict('STALE_TICKET', `ticket ${id} hash changed`);
       const before = tickets[index];
+      // Grandfather rails already on the ticket: only police rails this update
+      // ADDS. A pre-existing manifest-covering rail keeps working; a new one is
+      // rejected, so the class cannot grow.
+      const beforeRails = new Set(before.rails ?? []);
+      this.#assertNoManifestRails((input.rails ?? []).filter((rail) => !beforeRails.has(rail)));
       const sensitive = [];
       if ((before.rails ?? []).some((rail) => !(input.rails ?? []).includes(rail))) sensitive.push('rail-narrowing');
       if ((input.scope ?? []).some((scope) => !(before.scope ?? []).includes(scope))) sensitive.push('scope-widening');
