@@ -32,6 +32,9 @@
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "@adlc/tickets": "1.5.1"
+  },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },

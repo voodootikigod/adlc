@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LegacyTicketStore, activeDirectoryStore, archiveDirectoryStore, initializeTicketStores } from '@adlc/tickets';
 import { ADLC_GITIGNORE_LINES } from './gitignore-defaults.mjs';
 
 function configForHarness(harness) {
@@ -284,6 +285,69 @@ function ensureGitignore(root, result) {
   record(result, existed ? 'updated' : 'created', relativePath);
 }
 
+function ensureTicketStore(root, result) {
+  const activeManifest = `${ACTIVE_DIRECTORY}/.store.json`;
+  const archiveManifest = `${ARCHIVE_DIRECTORY}/.store.json`;
+
+  // Reject an already-symlinked store path before provisioning (consistent with
+  // scaffold refusing a symlinked .adlc, and reinforced by the load() health
+  // check below, which also rejects a symlinked store dir). This is a preflight
+  // check, not the write-time O_NOFOLLOW protection the config/gitignore writes
+  // use — the manifest is written by @adlc/tickets' durability layer — so it does
+  // not close a concurrent check-then-write race; that would require O_NOFOLLOW in
+  // the shared durability primitive and is tracked separately.
+  rejectSymlinkComponents(root, activeManifest);
+  rejectSymlinkComponents(root, archiveManifest);
+
+  // Provision the store through the canonical @adlc/tickets initializer — the
+  // same one @adlc/core's scaffolder uses. It creates the directory + archive
+  // stores on a genuinely fresh repo, no-ops on an existing legacy store, and
+  // throws AMBIGUOUS_STORE when both backends already exist.
+  let outcome;
+  try {
+    outcome = initializeTicketStores(root);
+  } catch (error) {
+    // A pre-existing ambiguous dual store is an existing broken state to surface
+    // (warn and let the rest of scaffold proceed), not our failure. Any other
+    // error is a real failure to provision the store — fail loudly rather than
+    // swallow it, or we would silently recreate the STORE_NOT_FOUND this fixes.
+    if (error?.code === 'AMBIGUOUS_STORE') {
+      result.warnings.push(`ticket store left untouched: ${error.message}`);
+      return;
+    }
+    throw error;
+  }
+
+  if (outcome.backend === 'legacy') {
+    // The legacy store is what actually exists and is left untouched. Report the
+    // real path (not the absent directory manifest), and — symmetrically with the
+    // directory stores below — confirm it actually loads before calling it
+    // healthy, so a corrupt legacy file is surfaced, not reported 'unchanged'.
+    recordStoreHealth(result, LEGACY_FILE, false, () => new LegacyTicketStore(join(root, LEGACY_FILE)));
+    return;
+  }
+
+  // For each store: a freshly created one is trusted; a pre-existing one is
+  // confirmed to actually load() before being reported healthy, since a present
+  // .store.json is not proof of a valid manifest (a torn/partial write leaves
+  // corrupt JSON). Both stores are checked symmetrically.
+  recordStoreHealth(result, activeManifest, outcome.activeCreated, () => activeDirectoryStore(root));
+  recordStoreHealth(result, archiveManifest, outcome.archiveCreated, () => archiveDirectoryStore(root));
+}
+
+function recordStoreHealth(result, manifest, created, openStore) {
+  if (created) {
+    record(result, 'created', manifest);
+    return;
+  }
+  try {
+    openStore().load();
+    record(result, 'unchanged', manifest);
+  } catch (error) {
+    result.warnings.push(`${manifest} exists but is not a readable ticket store: ${error.message}`);
+  }
+}
+
 export function scaffold({ root = '.', codexAgents = true, harness = null } = {}) {
   const target = canonicalTarget(root);
   const result = { root: target, created: [], updated: [], unchanged: [], warnings: [] };
@@ -299,6 +363,7 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   mkdirSync(join(target, '.adlc/specs'), { recursive: true });
   rejectSymlinkComponents(target, '.adlc/specs');
   writeMissing(target, '.adlc/config.json', configForHarness(harness), result);
+  ensureTicketStore(target, result);
   ensureGitignore(target, result);
 
   if (codexAgents) {

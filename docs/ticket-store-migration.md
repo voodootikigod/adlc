@@ -1,12 +1,18 @@
 # Migrating ADLC tickets to shards
 
-ADLC 1.3 keeps existing `.adlc/tickets.json` repositories fully operational while
-making `.adlc/tickets/` the default for new repositories. Migration is explicit,
-representation-only, and never stages or commits files.
+ADLC keeps existing `.adlc/tickets.json` repositories fully operational while making
+`.adlc/tickets/` the default for new repositories: `adlc-init` initializes an empty
+`.adlc/tickets/` directory store on a genuinely fresh repo, so `adlc ticket create --write`
+succeeds immediately after init. When a legacy `.adlc/tickets.json` (or a directory store)
+already exists, `adlc-init` leaves the ticket store untouched — it never creates a second
+backend, which would leave the repo in the ambiguous dual-store state that gates refuse to
+resolve. Converting an existing legacy repo to the directory store is a separate, explicit
+step (`adlc ticket store migrate`, below); `adlc-init` does not migrate.
 
-Read-only commands warn when the legacy backend is active. An interactive writer or
-`adlc-init` shows a validated plan and asks `Apply migration? [y/N]`. Declining keeps
-the command on the legacy backend. JSON and non-interactive modes never prompt.
+Migration is explicit, representation-only, and never stages or commits files. Read-only
+commands warn when the legacy backend is active. An interactive writer shows a validated
+plan and asks `Apply migration? [y/N]`. Declining keeps the command on the legacy backend.
+JSON and non-interactive modes never prompt.
 
 Preview and apply deliberately:
 

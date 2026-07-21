@@ -38,13 +38,18 @@ try {
   if (options.help) usage();
   else {
     const result = scaffold(options);
-    if (options.json) console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    // Warnings mark a store left in a broken/ambiguous state — never report
+    // unqualified success for those, so automation keying off ok/exit notices.
+    const ok = result.warnings.length === 0;
+    if (options.json) console.log(JSON.stringify({ ok, ...result }, null, 2));
     else {
       console.log(`ADLC initialized at ${result.root}`);
       for (const path of result.created) console.log(`  created ${path}`);
       for (const path of result.updated) console.log(`  updated ${path}`);
-      if (result.created.length === 0 && result.updated.length === 0) console.log('  already current');
+      for (const warning of result.warnings) console.warn(`  warning: ${warning}`);
+      if (result.created.length === 0 && result.updated.length === 0 && result.warnings.length === 0) console.log('  already current');
     }
+    if (!ok) process.exitCode = 1;
   }
 } catch (error) {
   console.error(`adlc-init: ${error.message}`);
