@@ -84,9 +84,13 @@ describe('checkRailEdits', () => {
 // including that the exemption is OFF unless a resolver is supplied.
 describe('checkRailEdits — version-only exemption (#228)', () => {
   const PKG = 'packages/build-gate/package.json';
-  const before = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.0', main: 'lib/i.mjs' });
-  const bumped = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/i.mjs' });
-  const edited = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/evil.mjs' });
+  // Formatted as JSON.stringify(o, null, 2) writes it — the exemption is a
+  // line-level text check, so a minified fixture would not exercise it.
+  const mk = (version, main) =>
+    JSON.stringify({ name: '@adlc/build-gate', version, main }, null, 2) + '\n';
+  const before = mk('1.5.0', 'lib/i.mjs');
+  const bumped = mk('1.5.1', 'lib/i.mjs');
+  const edited = mk('1.5.1', 'lib/evil.mjs');
 
   const resolver = (after) => (file) => (file === PKG ? { before, after } : null);
 
