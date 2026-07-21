@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { git, changedFiles, gitDiff } from '../lib/git.mjs';
+import { git, changedFiles, gitDiff, splitNulPaths } from '../lib/git.mjs';
 
 const NON_ASCII = 'café.js'; // U+00E9 — git quotes this as "caf\303\251.js" by default
 
@@ -76,5 +76,60 @@ describe('git helpers return authoritative (unquoted) paths', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// #249 — the byte level below C-quoting. `-z` avoids quoting, but the OUTPUT was
+// then decoded as UTF-8 before splitting, and UTF-8 decoding is not injective:
+// every invalid byte becomes U+FFFD, so two distinct paths on disk collapse to
+// one string and a gate keyed on that string answers for the wrong file. The
+// split must happen on the BUFFER, and a path that cannot round-trip must fail
+// closed rather than alias another.
+describe('splitNulPaths — buffer-level split, fail closed on lossy decode (#249)', () => {
+  const enc = (s) => Buffer.from(s, 'utf8');
+
+  test('splits valid NUL-delimited paths', () => {
+    const buf = Buffer.concat([enc('a/x.json'), Buffer.from([0]), enc('b/y.json'), Buffer.from([0])]);
+    assert.deepEqual(splitNulPaths(buf), ['a/x.json', 'b/y.json']);
+  });
+
+  test('preserves valid non-ASCII paths exactly (no normalisation)', () => {
+    const buf = Buffer.concat([enc('café/π.json'), Buffer.from([0])]);
+    assert.deepEqual(splitNulPaths(buf), ['café/π.json']);
+  });
+
+  test('a trailing NUL does not yield an empty entry', () => {
+    assert.deepEqual(splitNulPaths(Buffer.concat([enc('only.json'), Buffer.from([0])])), ['only.json']);
+  });
+
+  test('two paths differing only in INVALID bytes do not collapse — they throw', () => {
+    // This is the whole point: bad-\x80/p.json and bad-\xEF\xBF\xBD/p.json both
+    // decode to bad-�/p.json. A tolerant splitter would return ONE entry for two
+    // files. splitNulPaths refuses the invalid one instead.
+    const invalid = Buffer.concat([enc('bad-'), Buffer.from([0x80]), enc('/p.json'), Buffer.from([0])]);
+    assert.throws(() => splitNulPaths(invalid), /not valid UTF-8|#249/);
+  });
+
+  test('a lone surrogate byte sequence fails closed', () => {
+    const loneSurrogate = Buffer.concat([enc('x-'), Buffer.from([0xED, 0xA0, 0x80]), enc('.json'), Buffer.from([0])]);
+    assert.throws(() => splitNulPaths(loneSurrogate), /not valid UTF-8|#249/);
+  });
+
+  test('one bad path fails the whole batch — no silent partial result', () => {
+    // A gate must not act on a partial changed-file set it believes is complete.
+    const buf = Buffer.concat([
+      enc('good.json'), Buffer.from([0]),
+      enc('bad-'), Buffer.from([0xC0]), enc('.json'), Buffer.from([0]),
+    ]);
+    assert.throws(() => splitNulPaths(buf), /not valid UTF-8|#249/);
+  });
+
+  test('empty input yields no paths', () => {
+    assert.deepEqual(splitNulPaths(Buffer.alloc(0)), []);
+    assert.deepEqual(splitNulPaths(enc('')), []);
+  });
+
+  test('accepts a string for already-decoded callers (documented weaker guarantee)', () => {
+    assert.deepEqual(splitNulPaths('a\0b\0'), ['a', 'b']);
   });
 });

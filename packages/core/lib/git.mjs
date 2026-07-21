@@ -11,6 +11,54 @@ export function git(args, opts = {}) {
   });
 }
 
+/**
+ * Split raw NUL-delimited `git ... -z` OUTPUT (a Buffer) into path strings, and
+ * PROVE each decode is lossless.
+ *
+ * UTF-8 decoding is not injective: every byte git cannot decode becomes U+FFFD.
+ * So two files whose names differ only in invalid bytes — `bad-\x80/p.json` and
+ * `bad-\xEF\xBF\xBD/p.json` — both decode to `bad-�/p.json` and collapse to
+ * ONE entry. A downstream gate keyed on that string then answers for the wrong
+ * file: a version bump on one path and a behaviour edit on the other resolve to a
+ * single cache entry, and the behaviour edit is exempted. This is the filename
+ * analogue of the content-level aliasing fixed in #228; see #249.
+ *
+ * Splitting the BUFFER on the NUL byte (not the decoded string) keeps the split
+ * itself immune to decoding, then each field is decoded and required to
+ * re-encode to its exact bytes. A field that does not is a path git is telling us
+ * about but that we cannot represent faithfully, so we FAIL CLOSED — a caller of
+ * this in a freeze gate must never receive a path that silently aliases another.
+ * A non-round-trip filename is already pathological in this repo; the trade is a
+ * hard error over a silent wrong answer.
+ *
+ * @param {Buffer|string} raw  git -z output. A string is accepted for callers
+ *        that already decoded, but note it cannot detect aliasing that the
+ *        decode already erased — prefer passing the Buffer.
+ * @returns {string[]}
+ */
+export function splitNulPaths(raw) {
+  const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw, 'utf8');
+  const out = [];
+  let start = 0;
+  for (let i = 0; i <= buf.length; i++) {
+    if (i === buf.length || buf[i] === 0) {
+      if (i > start) {
+        const field = buf.subarray(start, i);
+        const text = field.toString('utf8');
+        if (!Buffer.from(text, 'utf8').equals(field)) {
+          throw new Error(
+            `git returned a path that is not valid UTF-8 and cannot be handled ` +
+            `safely: ${JSON.stringify(text)}. Refusing to proceed — see #249.`
+          );
+        }
+        out.push(text);
+      }
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
 export function isGitRepo(cwd = process.cwd()) {
   try {
     git(['rev-parse', '--is-inside-work-tree'], { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -27,8 +75,10 @@ export function gitDiff(base = 'HEAD', cwd = process.cwd()) {
   // name list, patch text has no -z form, so this does NOT neutralize every special
   // character — a path with a space still gets a trailing TAB, and tab/quote/newline
   // names are still double-quoted. Those desync per-file HEADER attribution only;
-  // the security-critical changed-file SET goes through changedFiles() (-z, fully
-  // raw), and marker/content detection matches on line bodies, not header paths.
+  // the security-critical changed-file SET goes through changedFiles(), which
+  // splits raw -z bytes and FAILS CLOSED on any path it cannot decode faithfully
+  // (#249) — so that set is trustworthy where these header paths are not. Marker
+  // and content detection match on line bodies, not header paths.
   return git(['-c', 'core.quotepath=false', 'diff', base, '--'], { cwd });
 }
 
@@ -74,8 +124,14 @@ export function changedFiles(base = 'HEAD', cwd = process.cwd()) {
   // -z emits NUL-delimited raw paths, immune to git's C-quoting of non-ASCII/
   // special characters. Splitting on '\n' the quoted form would hand a downstream
   // matcher (e.g. rails-guard's checkRailEdits) a display string that never matches
-  // the real rail path — a silent freeze-gate bypass. Mirrors revision.mjs.
-  return git(['diff', '--name-only', '-z', base, '--'], { cwd }).split('\0').filter(Boolean);
+  // the real rail path — a silent freeze-gate bypass.
+  //
+  // Read as a BUFFER and split via splitNulPaths, not `.split('\0')` on a decoded
+  // string: decoding first collapses distinct invalid-byte paths to one U+FFFD
+  // string BEFORE the split can tell them apart (#249). splitNulPaths fails closed
+  // on any path that does not round-trip UTF-8.
+  const raw = git(['diff', '--name-only', '-z', base, '--'], { cwd, encoding: 'buffer' });
+  return splitNulPaths(raw);
 }
 
 export function isDirty(cwd = process.cwd()) {

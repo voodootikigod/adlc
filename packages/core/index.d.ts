@@ -76,6 +76,12 @@ export function git(args: readonly string[], opts?: {
 }): string;
 export function gitDiff(base?: string, cwd?: string): string;
 export function changedFiles(base?: string, cwd?: string): string[];
+/**
+ * Split raw NUL-delimited `git ... -z` output into path strings, failing closed
+ * on any path that does not round-trip UTF-8 (#249). Pass the Buffer, not a
+ * decoded string, so lossy-decode aliasing is detectable.
+ */
+export function splitNulPaths(raw: Buffer | string): string[];
 export function isDirty(cwd?: string): boolean;
 export function isGitRepo(cwd?: string): boolean;
 export function repoRoot(cwd?: string): string;

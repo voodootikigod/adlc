@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { splitNulPaths } from './git.mjs';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
@@ -41,8 +42,12 @@ function addWorkingTreeFile(hash, cwd, relative, object) {
   hash.add(Buffer.from(`git-blob:${mode}:${object}`));
 }
 
+// Delegate to the shared buffer-level splitter so a path git cannot decode
+// faithfully fails closed here too, instead of aliasing another path (#249). The
+// local `git()` above returns a Buffer (no encoding set), which is exactly what
+// splitNulPaths needs to split BEFORE decoding.
 function splitNull(raw) {
-  return raw.toString('utf8').split('\0').filter(Boolean);
+  return splitNulPaths(raw);
 }
 
 function trackedEntries(cwd) {
