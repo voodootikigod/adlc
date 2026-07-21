@@ -18,7 +18,7 @@ import {
 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, lstatSync } from 'node:fs';
 
 import { runChecks } from '../lib/check.mjs';
 import { formatViolations, buildResult } from '../lib/output.mjs';
@@ -145,6 +145,18 @@ function resolveContents(file) {
   if (contentCache.has(file)) return contentCache.get(file);
   let contents = null;
   try {
+    // MODE FIRST. `git show` returns the blob; readFileSync FOLLOWS SYMLINKS. A
+    // manifest replaced by a symlink to identical text therefore compared equal
+    // and was exempted, while git recorded a typechange (T) — the link target
+    // then lives outside the rail and can be swapped without touching the railed
+    // path again. Require a regular file at HEAD and an unchanged mode at base.
+    if (!lstatSync(file).isFile()) throw new Error('not a regular file');
+    const baseMode = git(['ls-tree', base, '--', file], { stdio: ['ignore', 'pipe', 'ignore'] })
+      .trim().split(/\s+/)[0];
+    if (baseMode !== '100644' && baseMode !== '100755') throw new Error('base is not a regular file');
+    const headExecutable = (lstatSync(file).mode & 0o111) !== 0;
+    if ((baseMode === '100755') !== headExecutable) throw new Error('file mode changed');
+
     const before = git(['show', `${base}:${file}`], { stdio: ['ignore', 'pipe', 'ignore'] });
     const after = readFileSync(file, 'utf8');
     contents = { before, after };

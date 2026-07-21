@@ -38,20 +38,37 @@ export function isManifestFile(file) {
   return MANIFEST_BASENAMES.has(basename);
 }
 
+// A manifest nested deeper than this is not a lockstep version bump. Capping the
+// walk keeps `collect` from exhausting the stack on hostile input; exceeding the
+// cap denies the exemption rather than throwing.
+const MAX_DEPTH = 100;
+
+class TooDeep extends Error {}
+
 /**
- * Walk `value`, recording every leaf under its full path AND the key set of every
- * container. Recording key sets is what makes additions, removals, and array
+ * Walk `value`, recording every leaf under its full path AND the shape of every
+ * container. Recording container shape is what makes additions, removals, and
  * reordering visible as differing paths rather than slipping through because each
  * surviving leaf happened to match.
+ *
+ * Two details are load-bearing and must not be "tidied":
+ *
+ *  - Keys are recorded in DECLARATION ORDER, never sorted. Object key order is
+ *    behaviour in a manifest: Node resolves conditional `exports` first-match-wins,
+ *    so reordering `{"node":…,"default":…}` changes which module loads while every
+ *    leaf value stays identical. Sorting here made that reorder invisible.
+ *  - The container KIND is recorded alongside the keys. Without it `[{…}]` and
+ *    `{"0":{…}}` produce identical records, so an array could be swapped for an
+ *    object (or vice versa) undetected.
  */
-function collect(value, path, out) {
+function collect(value, path, out, depth = 0) {
+  if (depth > MAX_DEPTH) throw new TooDeep();
   if (value !== null && typeof value === 'object') {
-    const keys = Array.isArray(value)
-      ? value.map((_, i) => String(i))
-      : Object.keys(value).sort();
-    out.set(`K${JSON.stringify(path)}`, JSON.stringify(keys));
+    const isArray = Array.isArray(value);
+    const keys = isArray ? value.map((_, i) => String(i)) : Object.keys(value);
+    out.set(`K${JSON.stringify(path)}`, JSON.stringify([isArray ? 'A' : 'O', keys]));
     for (const key of keys) {
-      collect(value[key], [...path, key], out);
+      collect(value[key], [...path, key], out, depth + 1);
     }
     return;
   }
@@ -116,8 +133,12 @@ export function isVersionOnlyChange(beforeText, afterText) {
 
   const beforeLeaves = new Map();
   const afterLeaves = new Map();
-  collect(before, [], beforeLeaves);
-  collect(after, [], afterLeaves);
+  try {
+    collect(before, [], beforeLeaves);
+    collect(after, [], afterLeaves);
+  } catch {
+    return false; // too deep, or any other walk failure → not exempt
+  }
 
   const allKeys = new Set([...beforeLeaves.keys(), ...afterLeaves.keys()]);
 

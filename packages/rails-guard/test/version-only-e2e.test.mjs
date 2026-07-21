@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,6 +104,42 @@ test('deleting a railed manifest during a bump still FAILS', () => {
   const { dir, baseSha } = makeRepo();
   try {
     rmSync(join(dir, 'packages', 'build-gate', 'package.json'));
+    const res = guard(dir, baseSha, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// P5 prosecution regression: readFileSync follows symlinks while `git show`
+// returns the blob, so a manifest replaced by a symlink to identical text
+// compared equal and was exempted — while git recorded a typechange. The link
+// target then lives outside the rail and can be swapped freely afterwards.
+test('replacing a railed manifest with a symlink still FAILS', { skip: process.platform === 'win32' }, () => {
+  const { dir, baseSha } = makeRepo();
+  try {
+    const manifest = join(dir, 'packages', 'build-gate', 'package.json');
+    const decoy = join(dir, 'packages', 'build-gate', 'decoy.json');
+    writeFileSync(decoy, execFileSync('cat', [manifest], { encoding: 'utf8' }));
+    rmSync(manifest);
+    symlinkSync('decoy.json', manifest);
+    const res = guard(dir, baseSha, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('flipping a railed manifest to executable still FAILS', { skip: process.platform === 'win32' }, () => {
+  const { dir, baseSha } = makeRepo();
+  try {
+    const manifest = join(dir, 'packages', 'build-gate', 'package.json');
+    writeFileSync(
+      manifest,
+      JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/tier.mjs',
+        dependencies: { '@adlc/core': '^1.5.1' } }, null, 2) + '\n'
+    );
+    chmodSync(manifest, 0o755);
     const res = guard(dir, baseSha, RAIL);
     assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
   } finally {

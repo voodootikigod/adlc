@@ -59,12 +59,14 @@ export function checkRailEdits(changedFiles, railGlobs, resolveContents = null) 
  * — yields false, so the edit is reported as an ordinary violation. Fails closed.
  */
 function isVersionOnlyEdit(file, resolveContents) {
-  let contents;
+  // The predicate call stays INSIDE the try. It was outside once: a hostile
+  // deeply-nested manifest threw out of the walk, escaped uncaught, and turned a
+  // gate decision (exit 2, violation) into an operational crash (exit 1).
   try {
-    contents = resolveContents(file);
+    const contents = resolveContents(file);
+    if (!contents) return false;
+    return isVersionOnlyChange(contents.before, contents.after);
   } catch {
     return false;
   }
-  if (!contents) return false;
-  return isVersionOnlyChange(contents.before, contents.after);
 }

@@ -60,6 +60,31 @@ Scope of the exemption, deliberately narrow:
 `package-lock.json` is **not** eligible. It is not a manifest whose diff can be
 reasoned about this cheaply, and no realistic rail targets it.
 
+### What P5 prosecution changed
+
+The first implementation was prosecuted before merge and **four confirmed defects
+were found**, two of them rail bypasses reproduced end-to-end through the real
+binary. They are recorded here because each is a trap the next person to touch
+this code could re-introduce:
+
+| defect | why it was exploitable |
+|---|---|
+| object keys were `.sort()`ed before recording | Node resolves conditional `exports` **first-match-wins**, so reordering `{"node":…,"default":…}` changes which module loads while every leaf value stays identical. Key order in a manifest is behaviour. |
+| container kind was not recorded | `[{…}]` and `{"0":{…}}` produced identical records, so an array could be swapped for an object undetected. |
+| the resolver used `readFileSync` | It follows symlinks; `git show` returns the blob. A manifest replaced by a symlink to identical text compared equal and was exempted, while git recorded a typechange — and the link target then lives outside the rail. |
+| the predicate call sat outside its `try` | A deeply-nested manifest threw out of the walk uncaught, turning a gate decision (exit 2) into an operational crash (exit 1). |
+
+The most instructive finding was not a bypass but a **hollow test**: deleting the
+single line that records container shape — the mechanism this design depends on —
+failed **zero** of 110 tests. Every structural test passed incidentally via *leaf*
+differences and never exercised that path. The gap was empty containers: adding
+`"scripts": {}` changes no leaf at all.
+
+The suite is now calibrated by planting each defect and confirming it is caught:
+deleting the shape record fails 5 tests, restoring the `.sort()` fails 1,
+dropping the container-kind marker fails 2, and removing the symlink/mode guard
+fails 2. A fix that merely weakens the guard cannot pass.
+
 ### Fails closed, everywhere
 
 The exemption is refused — and the edit reported as a violation — on any of:

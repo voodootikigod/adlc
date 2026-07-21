@@ -190,3 +190,72 @@ test('a prototype-pollution key is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(before, after), false);
   assert.equal({}.polluted, undefined);
 });
+
+// ---------------------------------------------- regressions from P5 prosecution
+// Each of these caught a CONFIRMED bypass that the original suite missed. The
+// mutation calibration is the point: deleting the container-shape record in
+// collect() previously failed ZERO of 110 tests.
+
+test('reordering object keys is NOT exempt — conditional exports are order-sensitive', () => {
+  // Node resolves `exports` first-match-wins, so this reorder changes which
+  // module loads while every leaf value stays identical.
+  const before = JSON.stringify({ version: '1.5.0', exports: { node: './node.js', default: './browser.js' } });
+  const after  = JSON.stringify({ version: '1.5.1', exports: { default: './browser.js', node: './node.js' } });
+  assert.equal(isVersionOnlyChange(before, after), false);
+});
+
+test('swapping an array for an object with numeric keys is NOT exempt', () => {
+  const before = JSON.stringify({ plugins: [{ name: 'a', source: './safe' }] });
+  const after  = JSON.stringify({ plugins: { 0: { name: 'a', source: './safe' } } });
+  assert.equal(isVersionOnlyChange(before, after), false);
+});
+
+test('swapping an object for an array is NOT exempt', () => {
+  const before = JSON.stringify({ version: '1.5.0', config: { 0: 'x' } });
+  const after  = JSON.stringify({ version: '1.5.1', config: ['x'] });
+  assert.equal(isVersionOnlyChange(before, after), false);
+});
+
+test('adding an EMPTY container is NOT exempt (no leaf differs — shape must catch it)', () => {
+  assert.equal(isVersionOnlyChange('{"version":"1.5.0"}', '{"version":"1.5.1","scripts":{}}'), false);
+  assert.equal(isVersionOnlyChange('{"version":"1.5.0"}', '{"version":"1.5.1","workspaces":[]}'), false);
+});
+
+test('removing an EMPTY container is NOT exempt', () => {
+  assert.equal(isVersionOnlyChange('{"version":"1.5.0","scripts":{}}', '{"version":"1.5.1"}'), false);
+});
+
+test('a prerelease containing 0 is handled on both sides', () => {
+  // Pins the `[0-9A-Za-z.-]` prerelease charclass: a mutant narrowing it to
+  // `[1-9…]` previously survived.
+  assert.equal(isVersionOnlyChange('{"version":"1.5.0-rc.0"}', '{"version":"1.5.1-rc.0"}'), true);
+  assert.equal(isVersionOnlyChange('{"version":"1.5.0"}', '{"version":"1.5.1-rc.0"}'), true);
+});
+
+test('isManifestFile guard clause rejects empty and non-string input', () => {
+  assert.equal(isManifestFile(''), false);
+  assert.equal(isManifestFile(null), false);
+  assert.equal(isManifestFile(undefined), false);
+  assert.equal(isManifestFile(42), false);
+});
+
+test('a pathologically nested manifest denies rather than exhausting the stack', () => {
+  let deep = '{"leaf":1}';
+  for (let i = 0; i < 5000; i++) deep = `{"n":${deep}}`;
+  const before = `{"version":"1.5.0","x":${deep}}`;
+  const after = `{"version":"1.5.1","x":${deep}}`;
+  assert.equal(isVersionOnlyChange(before, after), false);
+});
+
+test('no immutable trust root is eligible for the exemption', () => {
+  // scripts/rails-guard-ci.mjs passes these to rails-guard as rails. If one ever
+  // gained a manifest basename, the exemption would apply to a trust root.
+  for (const root of [
+    '.adlc/config.json', '.adlc/tickets/.store.json', '.adlc/admin.pub',
+    '.github/workflows/adlc-rails-guard.yml', 'CODEOWNERS', '.github/CODEOWNERS',
+    'docs/CODEOWNERS', 'docs/ci/rails-guard.yml', 'scripts/rails-guard-ci.mjs',
+    'scripts/test/rails-guard-workflow-hashes.json',
+  ]) {
+    assert.equal(isManifestFile(root), false, `${root} must not be exemptible`);
+  }
+});
