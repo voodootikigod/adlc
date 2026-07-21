@@ -179,8 +179,25 @@ function resolveContents(file) {
     const headExecutable = (lstatSync(file).mode & 0o111) !== 0;
     if ((baseMode === '100755') !== headExecutable) throw new Error('file mode changed');
 
-    const before = git(['show', `${base}:${file}`], { stdio: ['ignore', 'pipe', 'ignore'] });
-    const after = readFileSync(file, 'utf8');
+    // READ RAW BYTES AND PROVE THE DECODE IS LOSSLESS.
+    //
+    // UTF-8 decoding is NOT injective: every invalid byte becomes U+FFFD. Reading
+    // these as utf8 strings meant a baseline containing raw 0x80 and a working
+    // tree containing raw 0x81 arrived here as the SAME string, so a genuine
+    // byte-level difference compared equal and the edit was exempted. Reproduced
+    // end-to-end against this binary.
+    //
+    // Decoding and re-encoding must reproduce the original buffer exactly. This
+    // has to happen at the byte boundary — a string that already contains U+FFFD
+    // re-encodes to itself perfectly, so no downstream check can recover the
+    // information that was lost here.
+    const decode = (buf) => {
+      const text = buf.toString('utf8');
+      if (!Buffer.from(text, 'utf8').equals(buf)) throw new Error('not valid UTF-8');
+      return text;
+    };
+    const before = decode(git(['show', `${base}:${file}`], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'buffer' }));
+    const after = decode(readFileSync(file));
     contents = { before, after };
   } catch {
     contents = null;

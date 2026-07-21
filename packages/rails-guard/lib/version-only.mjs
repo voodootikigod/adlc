@@ -89,6 +89,13 @@ function manifestKind(file) {
  */
 function parseCanonical(text) {
   if (typeof text !== 'string') return null;
+  // UTF-8 DECODING IS NOT INJECTIVE. Every invalid byte decodes to U+FFFD, so
+  // two files whose bytes genuinely differ — 0x80 in one, 0x81 in the other —
+  // arrive here as the same string and compared equal. Requiring the text to
+  // re-encode to itself proves the decode lost nothing, which is what makes the
+  // rest of this function an argument about the FILE rather than about a string
+  // that merely resembles it.
+  if (Buffer.from(text, 'utf8').toString('utf8') !== text) return null;
   let parsed;
   try {
     parsed = JSON.parse(text);
@@ -151,10 +158,19 @@ function isPackageVersionPath(path) {
   return path.length === 1 && path[0] === 'version';
 }
 
-/** Marketplace manifests additionally version their metadata and each entry. */
-function isMarketplaceVersionPath(path) {
+/**
+ * Marketplace manifests additionally version their metadata and each entry.
+ *
+ * `plugins` must be a REAL ARRAY on both sides. A numeric-looking key is not an
+ * index: `{"plugins": {"0": {...}}}` produced the same path as `[{...}]`, and
+ * the container-kind record cannot help because the shape is unchanged between
+ * revisions — it is wrong in both.
+ */
+function isMarketplaceVersionPath(path, before, after) {
   if (path.length === 2 && path[0] === 'metadata' && path[1] === 'version') return true;
-  return path.length === 3 && path[0] === 'plugins' && /^\d+$/.test(path[1]) && path[2] === 'version';
+  if (path.length !== 3 || path[0] !== 'plugins' || path[2] !== 'version') return false;
+  if (!/^\d+$/.test(path[1])) return false;
+  return Array.isArray(before.plugins) && Array.isArray(after.plugins);
 }
 
 /**
@@ -217,7 +233,7 @@ export function isVersionOnlyChange(beforeText, afterText, file) {
     const to = valueAt(after, path);
 
     const versionPath = isPackageVersionPath(path)
-      || (kind === 'marketplace.json' && isMarketplaceVersionPath(path));
+      || (kind === 'marketplace.json' && isMarketplaceVersionPath(path, before, after));
 
     if (versionPath) {
       if (!isVersion(from) || !isVersion(to)) return false;
@@ -237,6 +253,30 @@ export function isVersionOnlyChange(beforeText, afterText, file) {
     }
 
     return false; // any other differing path
+  }
+
+  // LOCKSTEP MUST BE COMPLETE, NOT INCREMENTAL. Only inspecting ranges that
+  // CHANGED let a package finish a bump with mixed internal versions: leave one
+  // `@adlc/*` range at the old version and it is simply never consulted, so the
+  // manifest ends up declaring 1.5.1 while depending on 1.5.0 of a sibling. A
+  // release is all-or-nothing, so every internal range is checked, changed or
+  // not, on both sides.
+  if (versionChanged) {
+    const oldVersion = before.version;
+    const newVersion = after.version;
+    if (!isVersion(oldVersion) || !isVersion(newVersion)) return false;
+    for (const [root, expected] of [[before, oldVersion], [after, newVersion]]) {
+      for (const field of DEP_FIELDS) {
+        const deps = root[field];
+        if (deps === undefined) continue;
+        if (deps === null || typeof deps !== 'object' || Array.isArray(deps)) return false;
+        for (const [name, range] of Object.entries(deps)) {
+          if (!ADLC_PKG.test(name)) continue;
+          const split = splitRange(range);
+          if (!split || split.version !== expected) return false;
+        }
+      }
+    }
   }
 
   if (repins.length > 0) {

@@ -11,6 +11,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { isManifestFile, isVersionOnlyChange } from '../lib/version-only.mjs';
 
@@ -401,12 +404,85 @@ test('the precondition rejects every form JSON.parse would misrepresent', () => 
   }
 });
 
-test('every real manifest in this repo is already canonical', () => {
+// -------------------------------- regressions from cross-model round 4
+
+test('LOCKSTEP IS COMPLETE — an unchanged internal range still has to be right', () => {
+  // Only inspecting ranges that CHANGED let a package finish a bump declaring
+  // 1.5.1 while still depending on 1.5.0 of a sibling. Every internal range is
+  // checked now, changed or not.
+  const before = pkg('1.5.0', { '@adlc/core': '1.5.0', '@adlc/tickets': '1.5.0' });
+  // @adlc/tickets left behind at the old version.
+  const after = pkg('1.5.1', { '@adlc/core': '1.5.1', '@adlc/tickets': '1.5.0' });
+  assert.equal(isVersionOnlyChange(before, after, PKG), false);
+});
+
+test('a version bump that repins NOTHING is not a lockstep bump', () => {
+  const before = pkg('1.5.0', { '@adlc/core': '1.5.0' });
+  const after = pkg('1.5.1', { '@adlc/core': '1.5.0' });
+  assert.equal(isVersionOnlyChange(before, after, PKG), false);
+});
+
+test('a bump with no internal dependencies at all is still exempt', () => {
+  // The completeness check must not require ranges that do not exist.
+  assert.equal(isVersionOnlyChange(pkg('1.5.0', { chalk: '^5.0.0' }), pkg('1.5.1', { chalk: '^5.0.0' }), PKG), true);
+});
+
+test('plugins[i].version requires plugins to be a REAL array', () => {
+  // A numeric-looking key is not an index. The container-kind record cannot
+  // catch this because the shape is identical on both sides — wrong in both.
+  const b = JSON.stringify({ plugins: { 0: { version: '1.5.0' } } }, null, 2) + '\n';
+  const a = JSON.stringify({ plugins: { 0: { version: '1.5.1' } } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, MKT), false);
+  // The genuine array form is still exempt.
+  const bArr = JSON.stringify({ plugins: [{ version: '1.5.0' }] }, null, 2) + '\n';
+  const aArr = JSON.stringify({ plugins: [{ version: '1.5.1' }] }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(bArr, aArr, MKT), true);
+});
+
+test('a string that cannot re-encode to itself is NOT exempt', () => {
+  // A lone surrogate has no UTF-8 encoding, so it can never have come from a
+  // real file. NOTE the boundary: this catches unencodable STRINGS, but the
+  // lossy-decode problem itself is unfixable here — a string already containing
+  // U+FFFD re-encodes perfectly, and the information is gone. That case is
+  // handled at the byte boundary in bin/rails-guard.mjs and covered end-to-end
+  // in version-only-e2e.test.mjs.
+  const withSurrogate = (v) => `{\n  "version": "${v}",\n  "d": "\uD800"\n}\n`;
+  assert.equal(isVersionOnlyChange(withSurrogate('1.5.0'), withSurrogate('1.5.1'), PKG), false);
+});
+
+test('every REAL manifest in this repo is canonical', () => {
   // The precondition is only free because this holds. If release.mjs ever stops
-  // writing JSON.stringify(o, null, 2), every release starts failing the gate —
-  // this test says so loudly instead of leaving it to be discovered mid-release.
-  const canonical = pkg('1.5.0');
-  assert.equal(JSON.stringify(JSON.parse(canonical), null, 2) + '\n', canonical);
+  // writing JSON.stringify(o, null, 2) — or someone hand-edits a manifest — every
+  // release starts failing the gate, and this says so here rather than
+  // mid-release.
+  //
+  // An earlier version of this test asserted the property of a SYNTHETIC fixture
+  // built with JSON.stringify, which is a tautology: it would have stayed green
+  // while every real manifest went non-canonical. Cross-model review caught that
+  // the ADR's claim about it was therefore false. It now reads the real files.
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const manifests = [];
+  for (const dir of ['packages', 'plugins']) {
+    const base = join(root, dir);
+    if (!existsSync(base)) continue;
+    for (const entry of readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const p = join(base, entry.name, 'package.json');
+      if (existsSync(p)) manifests.push(p);
+    }
+  }
+  assert.ok(manifests.length >= 20, `expected to find the real manifests, found ${manifests.length}`);
+
+  const offenders = manifests.filter((p) => {
+    const text = readFileSync(p, 'utf8');
+    try {
+      return JSON.stringify(JSON.parse(text), null, 2) + '\n' !== text;
+    } catch {
+      return true;
+    }
+  });
+  assert.deepEqual(offenders.map((p) => p.slice(root.length + 1)), [],
+    'these manifests are not canonical and would fail the version-only exemption');
 });
 
 test('no immutable trust root is eligible for the exemption', () => {

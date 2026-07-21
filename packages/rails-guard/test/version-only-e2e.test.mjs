@@ -132,6 +132,31 @@ test('replacing a railed manifest with a symlink still FAILS', { skip: process.p
   }
 });
 
+// Cross-model round-4 regression, reproduced against the real binary. UTF-8
+// decoding is not injective, so a baseline holding raw byte 0x80 and a working
+// tree holding raw 0x81 both decoded to U+FFFD and compared equal — a genuine
+// byte-level difference, exempted. Must be caught at the byte boundary.
+test('a manifest differing only in INVALID UTF-8 bytes still FAILS', () => {
+  const { dir, run, baseSha } = makeRepo();
+  try {
+    const manifest = join(dir, 'packages', 'build-gate', 'package.json');
+    const body = (v, byte) => Buffer.concat([
+      Buffer.from(`{\n  "version": "${v}",\n  "description": "`, 'utf8'),
+      Buffer.from([byte]),
+      Buffer.from('"\n}\n', 'utf8'),
+    ]);
+    writeFileSync(manifest, body('1.5.0', 0x80));
+    run('add', '-A');
+    run('commit', '-q', '-m', 'invalid utf8 baseline');
+    const newBase = run('rev-parse', 'HEAD').trim();
+    writeFileSync(manifest, body('1.5.1', 0x81)); // different byte, same decode
+    const res = guard(dir, newBase, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('flipping a railed manifest to executable still FAILS', { skip: process.platform === 'win32' }, () => {
   const { dir, baseSha } = makeRepo();
   try {
