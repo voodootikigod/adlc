@@ -9,6 +9,48 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-07-21
+
+Two defects in this release had been shipping silently for weeks. Both were
+invisible to the test suite because every gate validated the source tree, never
+the artifact a user actually installs.
+
+### Fixed
+
+- **claude-code: the plugin now tracks releases again.** `.claude-plugin/marketplace.json`
+  and the plugin manifest had been frozen at `0.2.0` since 1.2.x, so `/plugin`
+  reported "already at the latest version (0.2.0)" while `main` carried current
+  content. `/plugin` compares the *declared version string* to decide whether an
+  update exists, so every release since was invisible to the updater. Manifest
+  discovery in `scripts/release.mjs` is now glob-driven by directory shape, and
+  the drift gate shares the same discovery — so Codex, Cursor, antigravity and
+  any future harness stay in lockstep without a per-host code change. (#214)
+
+- **ticket-sync: `adlc ticket doctor` no longer crashes on install.** The
+  published tarball omitted `scripts/gen-schema.mjs`, which `lib/doctor.mjs`
+  imports at module load, so the command died with `ERR_MODULE_NOT_FOUND` for
+  every npm-installed user of 1.5.0. (#214)
+
+- **release: the publish path now validates the artifact, not the source tree.**
+  A new gate asks npm which files a package will actually ship, parses each one
+  with a real JS parser, and fails the release closed if any shipped file
+  imports something the `files` allowlist excludes — covering `bin`, `main` and
+  every `exports` target. A package npm cannot be consulted about is reported as
+  *unverified* rather than passing as clean. See ADR-0011. (#214)
+
+- **codex: read-only searches are no longer denied.** The rails-guard split shell
+  payloads on `|` without respecting quoting, so `rg '"(a|b|c)"' .` was shredded
+  into fragments that failed the read-only allowlist — blocking legitimate
+  searches, including cross-model review runs. Splitting is now quote-aware and
+  fails closed on an unterminated quote. (#219)
+
+- **source hygiene: raw control bytes removed and guarded.** Literal `NUL` bytes
+  in `packages/core/lib/git.mjs` and `plugins/adlc-pi/lib/reactive-gate.mjs`
+  made git classify those files as *binary*, so no diff of them rendered as text
+  anywhere — including in pull requests. A new check rejects raw control
+  characters and Trojan-Source bidirectional overrides in tracked text files.
+  (#218)
+
 ## [1.5.0] - 2026-07-20
 
 ### Added

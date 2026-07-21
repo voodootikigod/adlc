@@ -1,6 +1,6 @@
 {
   "name": "@adlc/core",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Shared core for ADLC tools: LLM providers, git helpers, CLI conventions, ledgers, tickets, mutations.",
   "type": "module",
   "license": "MIT",
@@ -43,7 +43,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/tickets": "1.5.0"
+    "@adlc/tickets": "1.5.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

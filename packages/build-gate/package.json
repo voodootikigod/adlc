@@ -1,6 +1,6 @@
 {
   "name": "@adlc/build-gate",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Machine-checkable fitness-to-build gate — denies starting a high-risk P4 build in a degraded (context-rot) session unless an audited override is recorded (C13).",
   "type": "module",
   "license": "MIT",
@@ -31,9 +31,9 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.5.0",
-    "@adlc/gate-manifest": "1.5.0",
-    "@adlc/tickets": "1.5.0"
+    "@adlc/core": "1.5.1",
+    "@adlc/gate-manifest": "1.5.1",
+    "@adlc/tickets": "1.5.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

@@ -1,6 +1,6 @@
 {
   "name": "adlc-antigravity",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "adlcContract": 1,
   "description": "Embrace the ADLC inside Google Antigravity (agy): phase-router + doctrine skills and a PreToolUse rails-guard that freezes ADLC rails. Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli)."
 }

@@ -7,7 +7,7 @@ bumpCommand: node scripts/release.mjs {{version}}
 changelogCommand: node scripts/changelog.mjs {{version}}
 preconditions:
   - npm test
-landing: direct
+landing: pr
 publishTrigger: tag
 publishEnvironment: npm-publish
 publishWorkflow: .github/workflows/publish.yml
@@ -42,6 +42,14 @@ verify:
     done
     exit $fail
 ---
+
+**The bump lands via PR, never directly.** `main` carries an active ruleset requiring pull
+requests and 3 status checks. This profile said `landing: direct` until 1.5.1, which contradicted
+that rule — and because the maintainer has admin bypass, the contradiction was invisible: the
+1.5.0 bump pushed straight to `main`, silently skipping both the PR requirement and the status
+checks, and nothing complained. The version-bump commit is the worst possible one to skip checks
+on, because it is the exact tree that gets tagged and published irreversibly. Branch, PR, let the
+checks run, and let a human merge.
 
 **There is a human gate.** `publish.yml` binds the publish job to the protected `npm-publish`
 environment with required reviewers. Pushing the tag starts the run *waiting*, not running — the

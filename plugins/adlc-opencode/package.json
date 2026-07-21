@@ -1,6 +1,6 @@
 {
   "name": "@adlc/opencode",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "ADLC integration for the OpenCode terminal coding agent",
   "type": "module",
   "main": "index.mjs",
@@ -41,9 +41,9 @@
     }
   },
   "dependencies": {
-    "@adlc/build-gate": "^1.5.0",
-    "@adlc/core": "^1.5.0",
-    "@adlc/flail-detector": "^1.5.0"
+    "@adlc/build-gate": "^1.5.1",
+    "@adlc/core": "^1.5.1",
+    "@adlc/flail-detector": "^1.5.1"
   },
   "publishConfig": {
     "access": "public",

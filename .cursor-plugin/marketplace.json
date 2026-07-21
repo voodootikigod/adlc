@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "The Agentic Development Lifecycle toolkit, packaged for Cursor.",
-    "version": "1.5.0"
+    "version": "1.5.1"
   },
   "plugins": [
     {
       "name": "adlc-cursor",
       "source": "./plugins/adlc-cursor",
       "description": "ADLC gates, rails-guard hooks, skills, and /adlc-* commands for Cursor. Requires @adlc/cli (npm i -g @adlc/cli).",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "logo": "assets/logo.svg"
     }
   ]
