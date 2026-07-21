@@ -6,47 +6,52 @@
 // to genuinely in-flight tickets, which completing tickets cannot and should not
 // fix. See docs/adr/0012-version-only-rail-exemption.md.
 //
-// ── WHY THIS COMPARES TEXT AND NOT PARSED JSON ──────────────────────────────
+// ── WHY THE CANONICAL-FORM PRECONDITION EXISTS ──────────────────────────────
 //
-// The first two implementations walked `JSON.parse` output and compared values.
-// Cross-model prosecution rejected both, because `JSON.parse` is LOSSY BY
-// DESIGN and every loss is a place where two different documents compare equal:
+// Two earlier designs were built and both were rejected by cross-model
+// prosecution, in MIRROR-IMAGE ways:
 //
-//   duplicate keys      {"a":1,"a":2}      → last wins; the first is erased
-//   float precision     9007199254740993   → 9007199254740992
-//   -0 / Infinity       1e400              → Infinity, stringifies as "null"
-//   key order           behaviour for `exports`, invisible after sorting
-//   array vs object     [x] and {"0":x}    → identical after a naive walk
+//   Walking JSON.parse output   — the parser is LOSSY, so documents that differ
+//                                 compared equal: duplicate keys (last wins),
+//                                 float precision (…992 vs …993), -0, 1e400 →
+//                                 Infinity → "null", key order, [x] vs {"0":x}.
+//                                 PARSE CANNOT SEE FIDELITY.
 //
-// Patching them one at a time is unbounded: the tail is however lossy the parser
-// is, and the parser is not ours. So the security decision no longer depends on
-// parse fidelity at all.
+//   Comparing raw lines          — text has no idea which object encloses a
+//                                 line. `"version"` indented two spaces inside
+//                                 `scripts` is an npm LIFECYCLE COMMAND, not the
+//                                 package version, and read as top-level.
+//                                 TEXT CANNOT SEE STRUCTURE.
 //
-// Instead: a lockstep bump changes ONLY version LINES, and nothing else about
-// the file. Verified against this repo — bumping a package rewrites exactly its
-// `"version"` line and its `"@adlc/*"` dependency lines, nothing more. So the
-// rule is simply:
+// Neither can be patched into the other's strength. So require BOTH at once,
+// with one precondition:
 //
-//   same line count, and every line that differs must be a version line on BOTH
-//   sides, with identical indentation, key, quoting and trailing comma.
+//   *** each side must be byte-identical to JSON.stringify(parse(it), null, 2)
+//       plus a trailing newline — its own canonical re-serialisation. ***
 //
-// Anything else on a changed line — a smuggled field, a reformat, an inserted or
-// deleted line, a reordering — fails the positional comparison and denies. The
-// parser's losses become irrelevant because the parser is not consulted.
+// That single check collapses the entire first class. A duplicate key does not
+// survive a round trip, so the text differs and the file denies. So does a
+// precision-losing number, a reordered key, a `-0`, a non-finite value, and any
+// non-canonical formatting. What remains is a document whose PARSE IS PROVABLY
+// FAITHFUL to its bytes — and on such a document, comparing by structural PATH
+// is sound, which closes the second class.
+//
+// This costs nothing in practice: `scripts/release.mjs` writes manifests with
+// exactly `JSON.stringify(obj, null, 2)`, so every manifest in this repo is
+// already canonical. A manifest that is not simply fails closed.
 
 const MANIFEST_BASENAMES = new Set(['package.json', 'plugin.json', 'marketplace.json']);
 
-// NOTE: a line-level check cannot see which object encloses a member, so an
-// `@adlc/*` key is treated as a repin wherever it appears rather than only under
-// dependencies/devDependencies/peerDependencies/optionalDependencies. This is a
-// deliberate trade for not trusting the parser. It is not a widening in
-// practice: the value on such a line is still forced to be a valid range whose
-// version equals this manifest's own new version, so the only thing it can
-// become is the number every other line already moved to.
+const DEP_FIELDS = new Set([
+  'dependencies',
+  'devDependencies',
+  'peerDependencies',
+  'optionalDependencies',
+]);
 
-// npm's own limits (see node-semver): a string exceeding them is NOT parsed as a
-// version, it is classified as a dist-tag — which would resolve to whatever that
-// tag points at. Matching semver's grammar alone was not enough.
+// npm's own limits (node-semver). A string exceeding them is NOT parsed as a
+// version — npm classifies it as a dist-tag, which resolves to whatever that tag
+// points at. Matching semver's grammar alone was not enough.
 const MAX_LENGTH = 256;
 const MAX_SAFE_COMPONENT_LENGTH = 16;
 
@@ -59,12 +64,8 @@ const SEMVER = `(?:${NUM})\\.(?:${NUM})\\.(?:${NUM})${PRE}?${BUILD}?`;
 const VERSION_RE = new RegExp(`^${SEMVER}$`);
 const RANGE_RE = new RegExp(`^([\\^~]?)(${SEMVER})$`);
 
-// A valid npm scoped name in this workspace.
+/** A valid npm scoped name in this workspace. */
 const ADLC_PKG = /^@adlc\/[a-z0-9][a-z0-9._-]*$/;
-
-// A JSON object member on its own line, as JSON.stringify(o, null, 2) writes it.
-// Captures indent, key, value and trailing comma so all four can be compared.
-const MEMBER_LINE = /^(\s*)"((?:[^"\\]|\\.)*)": "((?:[^"\\]|\\.)*)"(,?)$/;
 
 /** True when `file`'s basename is a manifest the exemption can apply to. */
 export function isManifestFile(file) {
@@ -79,10 +80,34 @@ function manifestKind(file) {
 }
 
 /**
- * A version string npm would actually parse as a version — not merely one that
- * matches semver's grammar. Length and component-size limits are npm's, and a
- * string that violates them is treated as a dist-tag instead.
+ * Parse `text` ONLY if it is its own canonical re-serialisation.
+ *
+ * This is the load-bearing precondition. Returning the parsed value is a proof
+ * obligation discharged: every later step may rely on the parse being a faithful
+ * account of the bytes, because anything the parser would have silently dropped
+ * or coerced makes the round trip differ and lands here as null.
  */
+function parseCanonical(text) {
+  if (typeof text !== 'string') return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  // Only a plain object can be a manifest.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  let canonical;
+  try {
+    canonical = JSON.stringify(parsed, null, 2) + '\n';
+  } catch {
+    return null; // circular is impossible from JSON.parse, but never assume
+  }
+  if (canonical !== text) return null;
+  return parsed;
+}
+
+/** A version npm would actually parse as a version, not classify as a tag. */
 function isVersion(value) {
   if (typeof value !== 'string' || value.length > MAX_LENGTH) return false;
   if (!VERSION_RE.test(value)) return false;
@@ -94,99 +119,144 @@ function isVersion(value) {
   return true;
 }
 
-/** Split a dependency range into its operator and version, or null. */
+/** Split a dependency range into operator and version, or null. */
 function splitRange(value) {
-  if (typeof value !== 'string' || value.length > MAX_LENGTH) return null;
+  if (typeof value !== 'string') return null;
   const m = RANGE_RE.exec(value);
-  if (!m) return null;
-  if (!isVersion(m[2])) return null;
+  if (!m || !isVersion(m[2])) return null;
   return { operator: m[1], version: m[2] };
 }
 
-/** Parse a member line into its parts, or null if it is not a plain member. */
-function parseMember(line) {
-  const m = MEMBER_LINE.exec(line);
-  if (!m) return null;
-  return { indent: m[1], key: m[2], value: m[3], comma: m[4] };
+/**
+ * Every leaf path in a canonical object, as JSON-encoded path arrays mapped to
+ * their values. Containers are recorded too, so an added or removed key is a
+ * differing entry rather than something inferred from the leaves.
+ */
+function walk(value, path, out) {
+  if (value !== null && typeof value === 'object') {
+    const isArray = Array.isArray(value);
+    const keys = isArray ? value.map((_, i) => String(i)) : Object.keys(value);
+    out.set(`K${JSON.stringify(path)}`, JSON.stringify([isArray ? 'A' : 'O', keys]));
+    for (const key of keys) walk(value[key], [...path, key], out);
+    return;
+  }
+  out.set(`V${JSON.stringify(path)}`, JSON.stringify(value));
+}
+
+/**
+ * Is this the package's own version — the real top-level member, determined
+ * STRUCTURALLY rather than by indentation?
+ */
+function isPackageVersionPath(path) {
+  return path.length === 1 && path[0] === 'version';
+}
+
+/** Marketplace manifests additionally version their metadata and each entry. */
+function isMarketplaceVersionPath(path) {
+  if (path.length === 2 && path[0] === 'metadata' && path[1] === 'version') return true;
+  return path.length === 3 && path[0] === 'plugins' && /^\d+$/.test(path[1]) && path[2] === 'version';
+}
+
+/**
+ * Is this an internal dependency range? The enclosing field must be one of the
+ * four real dependency fields — `config["@adlc/core"]` is not a dependency, and
+ * a consumer can read it.
+ */
+function isAdlcRangePath(path) {
+  return path.length === 2 && DEP_FIELDS.has(path[0]) && ADLC_PKG.test(path[1]);
+}
+
+function valueAt(root, path) {
+  let node = root;
+  for (const key of path) {
+    if (node === null || typeof node !== 'object') return undefined;
+    if (!Object.prototype.hasOwnProperty.call(node, key)) return undefined;
+    node = node[key];
+  }
+  return node;
 }
 
 /**
  * True when the ONLY differences between two manifest revisions are version
- * lines and lockstep @adlc/* dependency repins.
+ * fields and lockstep @adlc/* dependency repins.
  *
  * @param {string|null|undefined} beforeText manifest at the freeze baseline
  * @param {string|null|undefined} afterText  manifest at HEAD
- * @param {string} [file] manifest path; scopes which version lines are legal
+ * @param {string} [file] manifest path; scopes which version paths are legal
  * @returns {boolean} exempt — false on any doubt whatsoever
  */
 export function isVersionOnlyChange(beforeText, afterText, file) {
-  if (typeof beforeText !== 'string' || typeof afterText !== 'string') return false;
   const kind = manifestKind(file);
   if (kind === null) return false;
 
-  const beforeLines = beforeText.split('\n');
-  const afterLines = afterText.split('\n');
+  // THE PRECONDITION. Everything below depends on it.
+  const before = parseCanonical(beforeText);
+  const after = parseCanonical(afterText);
+  if (before === null || after === null) return false;
 
-  // A lockstep bump never adds, removes, or moves a line. Differing line counts
-  // mean an insertion, deletion, or reformat — none of which is a version bump.
-  if (beforeLines.length !== afterLines.length) return false;
+  const beforeMap = new Map();
+  const afterMap = new Map();
+  walk(before, [], beforeMap);
+  walk(after, [], afterMap);
 
-  let newManifestVersion = null;   // the top-level "version" this file moved to
   let versionChanged = false;
-  const repins = [];               // {operator, version} for each changed range
+  const repins = [];
 
-  for (let i = 0; i < beforeLines.length; i++) {
-    const b = beforeLines[i];
-    const a = afterLines[i];
-    if (b === a) {
-      // Still need the top-level version even when it is on an unchanged line,
-      // so a dependency repin can be checked against it.
-      const m = parseMember(a);
-      if (m && m.key === 'version' && m.indent === '  ') newManifestVersion = m.value;
+  for (const key of new Set([...beforeMap.keys(), ...afterMap.keys()])) {
+    if (beforeMap.get(key) === afterMap.get(key)) continue;
+    // A container's shape changed — a key added, removed, or reordered. This is
+    // a second lock: a differing `K` entry would also fall through to the path
+    // test below and be denied there, since no container path is ever an
+    // eligible version or range path. Removing it therefore fails no test, which
+    // is expected. It is kept so that a future eligible-path change cannot
+    // accidentally make a structural edit exempt.
+    if (key.startsWith('K')) return false;
+
+    const path = JSON.parse(key.slice(1));
+    const from = valueAt(before, path);
+    const to = valueAt(after, path);
+
+    const versionPath = isPackageVersionPath(path)
+      || (kind === 'marketplace.json' && isMarketplaceVersionPath(path));
+
+    if (versionPath) {
+      if (!isVersion(from) || !isVersion(to)) return false;
+      if (isPackageVersionPath(path)) versionChanged = true;
       continue;
     }
 
-    const mb = parseMember(b);
-    const ma = parseMember(a);
-    // Both sides must be plain single-member lines. A changed line that is not
-    // one — a brace, an array element, anything multi-key — is never exempt.
-    if (!mb || !ma) return false;
-    // Structure around the value must be untouched: same nesting, same key, same
-    // trailing comma. Only the value itself may move.
-    if (mb.indent !== ma.indent || mb.key !== ma.key || mb.comma !== ma.comma) return false;
-
-    if (ma.key === 'version') {
-      // Nested `version` members are marketplace concepts (metadata.version,
-      // plugins[i].version). In any other manifest only the top-level one moves.
-      if (kind !== 'marketplace.json' && ma.indent !== '  ') return false;
-      if (!isVersion(mb.value) || !isVersion(ma.value)) return false;
-      versionChanged = true;
-      if (ma.indent === '  ') newManifestVersion = ma.value;
+    if (isAdlcRangePath(path)) {
+      const rFrom = splitRange(from);
+      const rTo = splitRange(to);
+      if (!rFrom || !rTo) return false;
+      // The release tool PRESERVES each range's operator; a style change widens
+      // or narrows what resolves and is not a repin.
+      if (rFrom.operator !== rTo.operator) return false;
+      repins.push({ from: rFrom, to: rTo });
       continue;
     }
 
-    if (ADLC_PKG.test(ma.key)) {
-      const rb = splitRange(mb.value);
-      const ra = splitRange(ma.value);
-      if (!rb || !ra) return false;
-      // The release tool PRESERVES each range's operator. A change of style —
-      // exact to caret, caret to tilde — widens or narrows what resolves and is
-      // not a repin.
-      if (rb.operator !== ra.operator) return false;
-      repins.push(ra);
-      continue;
-    }
-
-    return false; // a changed line that is neither a version nor an @adlc repin
+    return false; // any other differing path
   }
 
   if (repins.length > 0) {
-    // LOCKSTEP IS AN INVARIANT. Without it, `@adlc/core: ^1.0.0 → ^9.0.0` was
-    // exempt even with no version change — a dependency redirection through an
-    // allowed line. Every repin must target this manifest's OWN new version, and
-    // that version must genuinely have moved.
-    if (!versionChanged || newManifestVersion === null) return false;
-    if (repins.some((r) => r.version !== newManifestVersion)) return false;
+    // LOCKSTEP, on BOTH sides. Checking only the new target let a range cross a
+    // major boundary during a legitimate bump (^0.1.0 → ^1.5.1), and checking
+    // only that "a version changed" let a redirect ride along. A repin must move
+    // FROM the old version TO the new one, exactly as release.mjs writes it.
+    const oldVersion = before.version;
+    const newVersion = after.version;
+    if (!isVersion(oldVersion) || !isVersion(newVersion)) return false;
+    // Intentionally redundant with the from/to comparison below: if the version
+    // did not move then oldVersion === newVersion, so a range satisfying both
+    // ends did not move either and would not be in `repins`. Kept as a second
+    // lock so that weakening either one alone cannot open a redirect. No test
+    // can distinguish its removal today, and that is expected — it is defence in
+    // depth, not a distinct behaviour.
+    if (!versionChanged || oldVersion === newVersion) return false;
+    for (const { from, to } of repins) {
+      if (from.version !== oldVersion || to.version !== newVersion) return false;
+    }
   }
 
   return true;

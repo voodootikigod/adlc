@@ -292,6 +292,100 @@ test('a missing side (added or deleted file) is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(undefined, undefined, PKG), false);
 });
 
+// ------------------------------- regressions from cross-model round 3
+// Round 3 rejected the line-based design: text cannot see structure. These pin
+// the three bypasses it reproduced, all of which the canonical-form precondition
+// plus path-based comparison now deny.
+
+test('scripts.version is a LIFECYCLE COMMAND, not the package version', () => {
+  // The line-based check read indentation as structure, so a "version" member
+  // nested inside `scripts` looked top-level. Changing it changes what runs on
+  // `npm version`, while the package version does not move at all.
+  const b = JSON.stringify({ version: '1.5.0', scripts: { version: '1.5.0' } }, null, 2) + '\n';
+  const a = JSON.stringify({ version: '1.5.0', scripts: { version: '1.5.1' } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('a duplicate top-level version cannot manufacture a "version changed"', () => {
+  // Duplicates cannot survive the canonical round trip, so this denies at the
+  // precondition. Under last-member semantics the effective version here is
+  // UNCHANGED while the dependency redirects — it must never be exempt.
+  const b = `{\n  "version": "1.5.0",\n  "version": "9.9.9",\n  "dependencies": {\n    "@adlc/core": "^1.5.0"\n  }\n}\n`;
+  const a = `{\n  "version": "9.9.9",\n  "version": "9.9.9",\n  "dependencies": {\n    "@adlc/core": "^9.9.9"\n  }\n}\n`;
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('an @adlc key outside a dependency field is NOT a repin', () => {
+  // `config["@adlc/core"]` is data a consumer can read, not a dependency.
+  const b = JSON.stringify({ version: '1.5.0', config: { '@adlc/core': '^0.1.0' } }, null, 2) + '\n';
+  const a = JSON.stringify({ version: '1.5.1', config: { '@adlc/core': '^1.5.1' } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('an @adlc key outside a dependency field is NOT a repin, even when lockstep-valid', () => {
+  // The neighbouring test is MASKED: its value also violates lockstep, so the
+  // baseline check rejects it whether or not dependency-field scoping exists.
+  // This one is lockstep-perfect, so only the enclosing-field check can deny it.
+  const b = JSON.stringify({ version: '1.5.0', config: { '@adlc/core': '^1.5.0' } }, null, 2) + '\n';
+  const a = JSON.stringify({ version: '1.5.1', config: { '@adlc/core': '^1.5.1' } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('adding an EMPTY container is NOT exempt — it changes no leaf at all', () => {
+  // Only the container-shape record can see this; every leaf comparison agrees.
+  assert.equal(isVersionOnlyChange(pkg('1.5.0'), pkg('1.5.1', {}, { scripts: {} }), PKG), false);
+  assert.equal(isVersionOnlyChange(pkg('1.5.0'), pkg('1.5.1', {}, { workspaces: [] }), PKG), false);
+});
+
+test('removing an EMPTY container is NOT exempt', () => {
+  assert.equal(isVersionOnlyChange(pkg('1.5.0', {}, { scripts: {} }), pkg('1.5.1'), PKG), false);
+});
+
+test('lockstep is checked on the BASELINE side too', () => {
+  // ^0.1.0 -> ^1.5.1 during a genuine bump crosses a major-resolution boundary.
+  // Checking only the new target accepted it; the old range must equal the old
+  // version, exactly as release.mjs writes it.
+  assert.equal(isVersionOnlyChange(
+    pkg('1.5.0', { '@adlc/core': '^0.1.0' }),
+    pkg('1.5.1', { '@adlc/core': '^1.5.1' }), PKG), false);
+});
+
+test('marketplace version paths are matched STRUCTURALLY, not by indentation', () => {
+  // A nested `version` that is not metadata.version or plugins[i].version is not
+  // eligible even in a marketplace manifest.
+  const b = JSON.stringify({ metadata: { version: '1.5.0' }, other: { version: '1.5.0' } }, null, 2) + '\n';
+  const a = JSON.stringify({ metadata: { version: '1.5.1' }, other: { version: '1.5.1' } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, MKT), false);
+});
+
+// ------------------------------------------- the canonical-form precondition
+
+test('a non-canonical manifest is NOT exempt on either side', () => {
+  const canonical = pkg('1.5.0');
+  const bumped = pkg('1.5.1');
+  // 4-space indent, tabs, and no trailing newline are all non-canonical.
+  assert.equal(isVersionOnlyChange(JSON.stringify(JSON.parse(canonical), null, 4) + '\n', bumped, PKG), false);
+  assert.equal(isVersionOnlyChange(canonical, JSON.stringify(JSON.parse(bumped), null, 4) + '\n', PKG), false);
+  assert.equal(isVersionOnlyChange(canonical.trimEnd(), bumped.trimEnd(), PKG), false);
+});
+
+test('the precondition is what makes parse fidelity safe to rely on', () => {
+  // Each of these defeated the JSON-walking design. They now fail the canonical
+  // round trip before any comparison happens.
+  const mk = (v, x) => `{\n  "version": "${v}",\n  "x": ${x}\n}\n`;
+  assert.equal(isVersionOnlyChange(mk('1.5.0', '1e400'), mk('1.5.1', 'null'), PKG), false);
+  assert.equal(isVersionOnlyChange(mk('1.5.0', '-0'), mk('1.5.1', '0'), PKG), false);
+  assert.equal(isVersionOnlyChange(mk('1.5.0', '9007199254740993'), mk('1.5.1', '9007199254740992'), PKG), false);
+});
+
+test('every real manifest in this repo is already canonical', () => {
+  // The precondition is only free because this holds. If release.mjs ever stops
+  // writing JSON.stringify(o, null, 2), every release starts failing the gate —
+  // this test says so loudly instead of leaving it to be discovered mid-release.
+  const canonical = pkg('1.5.0');
+  assert.equal(JSON.stringify(JSON.parse(canonical), null, 2) + '\n', canonical);
+});
+
 test('no immutable trust root is eligible for the exemption', () => {
   for (const root of [
     '.adlc/config.json', '.adlc/tickets/.store.json', '.adlc/admin.pub',
