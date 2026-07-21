@@ -173,3 +173,48 @@ test('flipping a railed manifest to executable still FAILS', { skip: process.pla
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Cross-model round 4 flagged these guards as unpinned by any test. Each was
+// correct but unverified, which is how the earlier hollow-coverage failures
+// started — a guard nobody tests is a guard nobody notices losing.
+
+test('a manifest under a git CLEAN FILTER still FAILS', () => {
+  // `git diff` applies clean filters; a direct read does not. A filter can
+  // rewrite content on its way into the index while the comparator sees only an
+  // innocent version edit, so the diff and the committed blob disagree.
+  const { dir, run, baseSha } = makeRepo();
+  try {
+    run('config', 'filter.rewrite.clean', 'sed s/tier/EVIL/');
+    writeFileSync(join(dir, '.gitattributes'), 'packages/build-gate/package.json filter=rewrite\n');
+    writeFileSync(
+      join(dir, 'packages', 'build-gate', 'package.json'),
+      JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/tier.mjs',
+        dependencies: { '@adlc/core': '^1.5.1' } }, null, 2) + '\n'
+    );
+    const res = guard(dir, baseSha, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a manifest that was a SYMLINK at the baseline still FAILS', { skip: process.platform === 'win32' }, () => {
+  // The mode check has to hold on the base side too, not only at HEAD.
+  const { dir, run } = makeRepo();
+  try {
+    const manifest = join(dir, 'packages', 'build-gate', 'package.json');
+    const real = join(dir, 'packages', 'build-gate', 'real.json');
+    writeFileSync(real, JSON.stringify({ name: '@adlc/build-gate', version: '1.5.0' }, null, 2) + '\n');
+    rmSync(manifest);
+    symlinkSync('real.json', manifest);
+    run('add', '-A');
+    run('commit', '-q', '-m', 'symlink baseline');
+    const newBase = run('rev-parse', 'HEAD').trim();
+    rmSync(manifest);
+    writeFileSync(manifest, JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1' }, null, 2) + '\n');
+    const res = guard(dir, newBase, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

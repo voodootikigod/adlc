@@ -495,3 +495,25 @@ test('no immutable trust root is eligible for the exemption', () => {
     assert.equal(isManifestFile(root), false, `${root} must not be exemptible`);
   }
 });
+
+test('container KIND is part of the shape record', () => {
+  // An array and an object with numeric keys are different documents. Both are
+  // canonical, so only the recorded kind distinguishes them.
+  const b = JSON.stringify({ version: '1.5.0', x: ['a'] }, null, 2) + '\n';
+  const a = JSON.stringify({ version: '1.5.1', x: { 0: 'a' } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('an @adlc range NESTED below a dependency field is not a repin', () => {
+  // The path must be exactly [depField, name] — two levels. Anything deeper is
+  // some other structure that merely contains a matching key.
+  const b = JSON.stringify({ version: '1.5.0', dependencies: { nested: { '@adlc/core': '^1.5.0' } } }, null, 2) + '\n';
+  const a = JSON.stringify({ version: '1.5.1', dependencies: { nested: { '@adlc/core': '^1.5.1' } } }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('a non-object dependency field is NOT exempt', () => {
+  const b = JSON.stringify({ version: '1.5.0', dependencies: ['@adlc/core'] }, null, 2) + '\n';
+  const a = JSON.stringify({ version: '1.5.1', dependencies: ['@adlc/core'] }, null, 2) + '\n';
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
