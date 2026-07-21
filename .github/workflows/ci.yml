@@ -263,3 +263,48 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
+
+  mutation-gate:
+    # C4 hollow-test, diff-scoped. Catches a guard added without a test that
+    # notices it being removed — code that is correct but unverified.
+    #
+    # This exists because that failure recurred FIVE times inside a single ticket
+    # (#228 / #234): a structural check whose mechanism no test exercised, two
+    # symlink fixtures that passed for unrelated reasons, and completeness
+    # fixtures that all left the same side wrong. Three of the five were caught
+    # only by external review. Every one looks exactly like a surviving mutant.
+    #
+    # REQUIRED, not advisory. An optional coverage gate is one a refactor can
+    # quietly kill and still merge, which is the same reasoning the OpenCode
+    # live-deny proof is folded into the required test job for.
+    #
+    # PRs only: on a push to main the merge-base diff is empty and there is
+    # nothing to mutate.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history so the diff base resolves
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm install
+
+      - name: Fetch base ref
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Mutation coverage gate
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        # hollow-test mutates in place and restores, so the tree must be clean.
+        run: |
+          git diff --quiet || { echo "working tree dirty before mutation gate"; exit 1; }
+          node scripts/mutation-gate.mjs "origin/$BASE_REF" --max 12

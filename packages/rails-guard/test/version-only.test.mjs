@@ -582,3 +582,17 @@ test('a dependency RANGE beyond npm limits is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(mk('1.5.0', '^1.5.0'), mk('9007199254740992.0.0', '^9007199254740992.0.0'), PKG), false);
   assert.equal(isVersionOnlyChange(mk('1.5.0', '^1.5.0'), mk(`1.5.1-${'a'.repeat(266)}`, `^1.5.1-${'a'.repeat(266)}`), PKG), false);
 });
+
+test('npm MAX_LENGTH is an exact boundary, not an approximate one', () => {
+  // Found by the mutation gate: changing MAX_LENGTH from 256 to 257 survived the
+  // whole suite, because the nearest fixture used a 266-character version and
+  // could not tell the two limits apart. npm classifies anything over 256 as a
+  // dist-tag, so the boundary itself is load-bearing.
+  const mk = (v) => JSON.stringify({ metadata: { version: v } }, null, 2) + '\n';
+  const at256 = `1.5.1-${'a'.repeat(250)}`;   // exactly 256
+  const at257 = `1.5.1-${'a'.repeat(251)}`;   // one over
+  assert.equal(at256.length, 256);
+  assert.equal(at257.length, 257);
+  assert.equal(isVersionOnlyChange(mk('1.5.0'), mk(at256), MKT), true, '256 chars is a version');
+  assert.equal(isVersionOnlyChange(mk('1.5.0'), mk(at257), MKT), false, '257 chars is a dist-tag');
+});
