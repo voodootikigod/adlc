@@ -378,6 +378,29 @@ test('the precondition is what makes parse fidelity safe to rely on', () => {
   assert.equal(isVersionOnlyChange(mk('1.5.0', '9007199254740993'), mk('1.5.1', '9007199254740992'), PKG), false);
 });
 
+test('the precondition rejects every form JSON.parse would misrepresent', () => {
+  // This is the property the whole design rests on: if a document survives the
+  // canonical round trip, its parse is a faithful account of its bytes. Each
+  // input here is one the parser would silently alter, and each must be refused
+  // BEFORE any comparison — so pairing it with an ordinary version bump must
+  // still deny.
+  const bump = (body) => `{\n  "version": "1.5.1",\n${body}\n}\n`;
+  const base = (body) => `{\n  "version": "1.5.0",\n${body}\n}\n`;
+  const lossy = [
+    ['duplicate keys', '  "a": 1,\n  "a": 2'],
+    ['precision-losing integer', '  "a": 9007199254740993'],
+    ['negative zero', '  "a": -0'],
+    ['overflow to Infinity', '  "a": 1e400'],
+    ['exponent form', '  "a": 1e2'],
+    ['trailing-zero float', '  "a": 1.0'],
+    ['escaped key', '  "\\u0061": 1'],
+    ['escaped value character', '  "a": "\\u0062"'],
+  ];
+  for (const [label, body] of lossy) {
+    assert.equal(isVersionOnlyChange(base(body), bump(body), PKG), false, `${label} must not be exempt`);
+  }
+});
+
 test('every real manifest in this repo is already canonical', () => {
   // The precondition is only free because this holds. If release.mjs ever stops
   // writing JSON.stringify(o, null, 2), every release starts failing the gate —
