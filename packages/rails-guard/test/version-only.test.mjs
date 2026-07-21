@@ -62,7 +62,10 @@ test('marketplace.json metadata.version and plugins[].version are exempt', () =>
     metadata: { description: 'd', version: '1.5.1' },
     plugins: [{ name: 'adlc', version: '1.5.1', source: './plugins/adlc-claude-code' }],
   });
-  assert.equal(isVersionOnlyChange(before, after), true);
+  assert.equal(isVersionOnlyChange(before, after, '.claude-plugin/marketplace.json'), true);
+  // Without the manifest kind, only the universal top-level `version` is eligible,
+  // so these marketplace-specific paths are refused. Conservative by default.
+  assert.equal(isVersionOnlyChange(before, after), false);
 });
 
 test('an identical file is exempt (no differing paths at all)', () => {
@@ -258,4 +261,91 @@ test('no immutable trust root is eligible for the exemption', () => {
   ]) {
     assert.equal(isManifestFile(root), false, `${root} must not be exemptible`);
   }
+});
+
+// ------------------------------------- regressions from CROSS-MODEL prosecution
+// A second, independent provider rejected the first fix. These pin what it found:
+// the same-model pass had verified the mechanisms it knew about and missed these
+// entirely, which is the whole argument for the cross-model tier.
+
+test('a range npm reads as a dist-tag is NOT exempt', () => {
+  // `1.2.3-a..b` has an EMPTY prerelease identifier. It looked like semver to the
+  // old regex, but npm-package-arg classifies it as type=tag — so it resolves to
+  // whatever that tag points at. A dependency redirection wearing a version.
+  const before = '{"version":"1.0.0","dependencies":{"@adlc/core":"1.0.0"}}';
+  const after  = '{"version":"1.0.1","dependencies":{"@adlc/core":"1.2.3-a..b"}}';
+  assert.equal(isVersionOnlyChange(before, after, 'package.json'), false);
+});
+
+test('non-semver forms the loose regex accepted are NOT exempt', () => {
+  const mk = (range) => `{"version":"1.0.1","dependencies":{"@adlc/core":"${range}"}}`;
+  const before = '{"version":"1.0.0","dependencies":{"@adlc/core":"1.0.0"}}';
+  for (const bad of ['01.2.3', '1.02.3', '1.2.3-', '1.2.3+', '1.2.3-alpha..1', '1.2.3+build..1']) {
+    assert.equal(isVersionOnlyChange(before, mk(bad), 'package.json'), false, `${bad} must not be exempt`);
+  }
+});
+
+test('LOCKSTEP is enforced — a repin must target the manifest own new version', () => {
+  const mk = (v, dep) => `{"version":"${v}","dependencies":{"@adlc/core":"${dep}"}}`;
+  // The real release shape: both move together.
+  assert.equal(isVersionOnlyChange(mk('1.0.0', '^1.0.0'), mk('1.0.1', '^1.0.1'), 'package.json'), true);
+  // A dependency redirected to an unrelated major, with NO version change at all.
+  assert.equal(isVersionOnlyChange(mk('1.0.0', '^1.0.0'), mk('1.0.0', '^9.0.0'), 'package.json'), false);
+  // Version moves, but the repin targets something else entirely.
+  assert.equal(isVersionOnlyChange(mk('1.0.0', '^1.0.0'), mk('1.0.1', '^9.9.9'), 'package.json'), false);
+});
+
+test('EXACT pins repin in lockstep too — the release shape in this repo', () => {
+  // 68 internal deps here are exact pins, not carets. The e2e fixture used a
+  // caret, so a caret-only RANGE mutant survived the whole suite.
+  const mk = (v, dep) => `{"version":"${v}","dependencies":{"@adlc/core":"${dep}"}}`;
+  assert.equal(isVersionOnlyChange(mk('1.0.0', '1.0.0'), mk('1.0.1', '1.0.1'), 'package.json'), true);
+  assert.equal(isVersionOnlyChange(mk('1.0.0', '~1.0.0'), mk('1.0.1', '~1.0.1'), 'package.json'), true);
+  assert.equal(isVersionOnlyChange(mk('1.0.0', '1.0.0'), mk('1.0.1', '9.9.9'), 'package.json'), false);
+});
+
+test('every dependency field is covered, not just `dependencies`', () => {
+  // Deleting devDependencies/peerDependencies/optionalDependencies from DEP_FIELDS
+  // previously survived the entire suite.
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    const mk = (v) => `{"version":"${v}","${field}":{"@adlc/core":"^${v}"}}`;
+    assert.equal(isVersionOnlyChange(mk('1.0.0'), mk('1.0.1'), 'package.json'), true, `${field} lockstep`);
+    const bad = `{"version":"1.0.1","${field}":{"@adlc/core":"^9.0.0"}}`;
+    assert.equal(isVersionOnlyChange(mk('1.0.0'), bad, 'package.json'), false, `${field} redirect`);
+  }
+});
+
+test('the BASELINE side is validated too, not only the new value', () => {
+  // Removing baseline-side validation previously survived the suite.
+  const before = '{"version":"not-a-version"}';
+  const after  = '{"version":"1.0.1"}';
+  assert.equal(isVersionOnlyChange(before, after, 'package.json'), false);
+});
+
+test('an invalid @adlc/ key is NOT a lockstep repin', () => {
+  // `startsWith('@adlc/')` accepted names npm rejects outright.
+  const before = '{"version":"1.0.0","dependencies":{"@adlc/":"1.0.0"}}';
+  const after  = '{"version":"1.0.1","dependencies":{"@adlc/":"1.0.1"}}';
+  assert.equal(isVersionOnlyChange(before, after, 'package.json'), false);
+  const b2 = '{"version":"1.0.0","dependencies":{"@adlc/foo/bar":"1.0.0"}}';
+  const a2 = '{"version":"1.0.1","dependencies":{"@adlc/foo/bar":"1.0.1"}}';
+  assert.equal(isVersionOnlyChange(b2, a2, 'package.json'), false);
+});
+
+test('marketplace-only version paths are NOT accepted inside a package.json', () => {
+  const before = '{"version":"1.0.0","metadata":{"version":"1.0.0"}}';
+  const after  = '{"version":"1.0.1","metadata":{"version":"9.9.9"}}';
+  assert.equal(isVersionOnlyChange(before, after, 'package.json'), false);
+  // The same edit IS eligible in a marketplace manifest.
+  assert.equal(isVersionOnlyChange(before, after, '.claude-plugin/marketplace.json'), true);
+});
+
+test('leaf values that JSON.stringify collides on are NOT exempt', () => {
+  // JSON.parse('1e400') === Infinity, and JSON.stringify(Infinity) === 'null',
+  // so `1e400` and `null` encoded identically and compared equal.
+  assert.equal(isVersionOnlyChange('{"version":"1.0.0","x":1e400}', '{"version":"1.0.1","x":null}', 'package.json'), false);
+  // JSON.stringify(-0) === '0'
+  assert.equal(isVersionOnlyChange('{"version":"1.0.0","x":0}', '{"version":"1.0.1","x":-0}', 'package.json'), false);
+  // string "1" vs number 1 must not collide either
+  assert.equal(isVersionOnlyChange('{"version":"1.0.0","x":1}', '{"version":"1.0.1","x":"1"}', 'package.json'), false);
 });

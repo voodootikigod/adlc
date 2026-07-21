@@ -53,9 +53,22 @@ Scope of the exemption, deliberately narrow:
 | dimension | rule |
 |---|---|
 | eligible files | basename is `package.json`, `plugin.json`, or `marketplace.json` |
-| eligible paths | `version`, `metadata.version`, `plugins[i].version`, and `<depField>["@adlc/*"]` |
-| eligible values | both sides plain strings matching exact semver (versions) or `^`/`~`/exact semver (ranges) |
+| eligible paths | `version` in any of them; `metadata.version` and `plugins[i].version` **only in `marketplace.json`**; `<depField>["@adlc/<name>"]` where the name is a valid npm scoped name |
+| eligible values | both sides plain strings matching **strict** semver per semver.org's BNF (versions) or `^`/`~`/exact strict semver (ranges) |
+| **lockstep** | every changed range must target the manifest's **own new `version`** |
 | everything else | not exempt — reported as an ordinary rail violation |
+
+The lockstep row is an invariant, not a description. Without it, `@adlc/core:
+^1.0.0 → ^9.0.0` was exempt *even with no version change at all* — a dependency
+redirection through an allowed path, which is exactly what the value-shape checks
+were supposed to prevent. Verified against the repo: all 79 `@adlc/*` ranges
+across 34 manifests already satisfy it, because that is what `scripts/release.mjs`
+writes.
+
+"Strict semver" is load-bearing too. The looser first attempt accepted
+`1.2.3-a..b` — an empty prerelease identifier, which npm's `npm-package-arg`
+classifies as **type=tag**, so it resolves to whatever that dist-tag points at.
+A version-shaped string that is not a version.
 
 `package-lock.json` is **not** eligible. It is not a manifest whose diff can be
 reasoned about this cheaply, and no realistic rail targets it.
@@ -84,6 +97,38 @@ The suite is now calibrated by planting each defect and confirming it is caught:
 deleting the shape record fails 5 tests, restoring the `.sort()` fails 1,
 dropping the container-kind marker fails 2, and removing the symlink/mode guard
 fails 2. A fix that merely weakens the guard cannot pass.
+
+### What CROSS-MODEL prosecution then changed
+
+The above was the same-model pass. Because this is an enforcement package,
+ADR-0007 also requires an adversarial approve from a **different provider**. That
+review **rejected** the change and found five more issues the first pass had
+missed entirely — the strongest available argument that the cross-model tier is
+not ceremony:
+
+| defect | why it mattered |
+|---|---|
+| the range regex accepted `1.2.3-a..b` | an empty prerelease identifier makes npm classify it as a **dist-tag**, so an "exempt" edit could redirect a dependency to an arbitrary published version |
+| "lockstep" was never enforced | `^1.0.0 → ^9.0.0` was exempt with no version change at all |
+| `startsWith('@adlc/')` | accepted `@adlc/` and `@adlc/foo/bar`, names npm rejects outright |
+| `metadata.version` / `plugins[i].version` accepted anywhere | marketplace-only paths were eligible inside any `package.json` |
+| `JSON.stringify` leaf collisions | `JSON.parse('1e400')` is `Infinity` and `JSON.stringify(Infinity)` is `'null'`, so `1e400` and `null` compared equal; likewise `0` and `-0` |
+| git **clean filters** | `git diff` applies them, `readFileSync` does not — a `.gitattributes` filter rewrote `"main"` into the index while the comparator saw only a version edit |
+
+It also found three mutants the calibrated suite still failed to kill —
+caret-only ranges (the e2e fixture used a caret while the repo actually uses 68
+exact pins), dropping three of the four dependency fields, and removing
+baseline-side validation — plus a portability bug where the e2e fixtures
+inherited a global commit signer.
+
+**One reported finding was deliberately not fixed here.** The reviewer noted that
+a manifest staged as X but restored to Y in the working tree is committed as X
+while the comparator sees Y. That is real, but it is not specific to this
+exemption: `changedFiles(base)` is base-vs-worktree for *every* rail check, so it
+applies equally to ordinary rail edits. Requiring index and worktree to agree
+would reject the normal edit-then-stage flow — attempting it broke the primary
+regression test. It is recorded as a guard-wide issue instead of being patched at
+the wrong layer.
 
 ### Fails closed, everywhere
 

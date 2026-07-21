@@ -151,6 +151,28 @@ function resolveContents(file) {
     // then lives outside the rail and can be swapped without touching the railed
     // path again. Require a regular file at HEAD and an unchanged mode at base.
     if (!lstatSync(file).isFile()) throw new Error('not a regular file');
+
+    // CONTENT FILTERS DESYNC THE COMPARISON. `git diff <base>` applies clean
+    // filters and `ident` expansion; readFileSync returns raw working-tree bytes.
+    // A .gitattributes filter can therefore rewrite `"main"` on the way into the
+    // index while this comparator sees only an innocent version edit — the diff
+    // and the committed blob disagree. Refuse to reason about any path carrying a
+    // content-altering attribute.
+    const attrs = git(['check-attr', 'filter', 'ident', '--', file], { stdio: ['ignore', 'pipe', 'ignore'] });
+    for (const line of attrs.split('\n')) {
+      if (!line.trim()) continue;
+      const value = line.slice(line.lastIndexOf(': ') + 2).trim();
+      if (value !== 'unspecified' && value !== 'unset') throw new Error(`content filter on ${file}`);
+    }
+
+    // NOTE on the staged-vs-worktree split: cross-model review flagged that a
+    // manifest staged as X but restored to Y in the working tree is committed as
+    // X while this comparator sees Y. That is real, but it is NOT specific to the
+    // exemption — `changedFiles(base)` is base-vs-worktree for EVERY rail check,
+    // so the same gap already applies to ordinary rail edits. Requiring index and
+    // worktree to agree here would reject the normal flow (edit, run the gate,
+    // then stage) and is the wrong layer. Recorded as a guard-wide issue instead.
+
     const baseMode = git(['ls-tree', base, '--', file], { stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\s+/)[0];
     if (baseMode !== '100644' && baseMode !== '100755') throw new Error('base is not a regular file');

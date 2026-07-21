@@ -20,6 +20,8 @@ function makeRepo() {
   run('init', '-q', '-b', 'main');
   run('config', 'user.email', 'test@test.invalid');
   run('config', 'user.name', 'Test');
+  run('config', 'commit.gpgsign', 'false');
+  run('config', 'tag.gpgsign', 'false');
   mkdirSync(join(dir, 'packages', 'build-gate', 'lib'), { recursive: true });
   writeFileSync(
     join(dir, 'packages', 'build-gate', 'package.json'),

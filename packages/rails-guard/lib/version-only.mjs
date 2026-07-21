@@ -26,16 +26,40 @@ const DEP_FIELDS = new Set([
   'optionalDependencies',
 ]);
 
-// Exact semver. Deliberately strict: no ranges, no URLs, no paths, no empty.
-const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// STRICT semver, per semver.org's own BNF. The looser earlier form
+// `-[0-9A-Za-z.-]+` accepted values npm does NOT read as versions:
+// `1.2.3-a..b` (empty prerelease identifier) is classified by npm-package-arg as
+// type=TAG, so it resolves to whatever that dist-tag points at — a dependency
+// redirection wearing a version's clothes. Leading zeros are likewise invalid
+// semver but matched `\d+`. Each identifier is now spelled out.
+const NUM = '0|[1-9]\\d*';                                  // no leading zeros
+const PRE_ID = `(?:${NUM}|\\d*[A-Za-z-][0-9A-Za-z-]*)`;      // non-empty
+const PRE = `(?:-${PRE_ID}(?:\\.${PRE_ID})*)`;
+const BUILD = '(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)';   // non-empty
+const CORE = `(?:${NUM})\\.(?:${NUM})\\.(?:${NUM})`;
+const SEMVER = `${CORE}${PRE}?${BUILD}?`;
+
+const VERSION = new RegExp(`^${SEMVER}$`);
 // A dependency range as scripts/release.mjs writes it: caret, tilde, or exact.
-const RANGE = /^[\^~]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const RANGE = new RegExp(`^[\\^~]?${SEMVER}$`);
+
+// A valid scoped package name in this workspace. `startsWith('@adlc/')` also
+// accepted `@adlc/` and `@adlc/foo/bar`, which npm rejects outright — a key npm
+// cannot resolve is not a lockstep repin.
+const ADLC_PKG = /^@adlc\/[a-z0-9][a-z0-9._-]*$/;
 
 /** True when `file`'s basename is a manifest the exemption can apply to. */
 export function isManifestFile(file) {
   if (typeof file !== 'string' || file === '') return false;
   const basename = file.split('/').pop();
   return MANIFEST_BASENAMES.has(basename);
+}
+
+/** The manifest kind, used to scope which version paths are legal where. */
+function manifestKind(file) {
+  if (typeof file !== 'string') return null;
+  const basename = file.split('/').pop();
+  return MANIFEST_BASENAMES.has(basename) ? basename : null;
 }
 
 // A manifest nested deeper than this is not a lockstep version bump. Capping the
@@ -72,16 +96,45 @@ function collect(value, path, out, depth = 0) {
     }
     return;
   }
-  out.set(`V${JSON.stringify(path)}`, JSON.stringify(value));
+  out.set(`V${JSON.stringify(path)}`, encodeLeaf(value));
 }
 
-/** Is this leaf path one the exemption recognises? */
-function isVersionPath(path) {
-  // package.json / plugin.json: top-level version
+/**
+ * Encode a leaf so that DISTINCT values never share an encoding.
+ *
+ * `JSON.stringify` alone collides in ways JSON.parse creates for free:
+ *   JSON.parse('1e400')  → Infinity, and JSON.stringify(Infinity) === 'null'
+ *   so `1e400` and `null` both encoded as "null" and compared equal.
+ *   JSON.stringify(-0) === '0', so 0 and -0 compared equal.
+ * A collision here means a real difference is invisible and the change is
+ * exempted. Type-tagging plus a non-lossy numeric form closes both.
+ */
+function encodeLeaf(value) {
+  if (value === null) return 'null';
+  const type = typeof value;
+  if (type === 'number') {
+    if (Number.isNaN(value)) return 'n:NaN';
+    if (!Number.isFinite(value)) return value > 0 ? 'n:+Inf' : 'n:-Inf';
+    if (Object.is(value, -0)) return 'n:-0';
+    return `n:${value}`;
+  }
+  if (type === 'string') return `s:${value}`;
+  if (type === 'boolean') return `b:${value}`;
+  return `?:${String(value)}`; // unreachable for JSON, encoded rather than dropped
+}
+
+/**
+ * Is this leaf path one the exemption recognises, FOR THIS MANIFEST KIND?
+ *
+ * The kind matters. `metadata.version` and `plugins[i].version` are marketplace
+ * concepts; accepting them inside a `package.json` widened the exemption to paths
+ * that mean nothing there and that no release ever writes.
+ */
+function isVersionPath(path, kind) {
+  // package.json / plugin.json / marketplace.json: top-level version
   if (path.length === 1 && path[0] === 'version') return true;
-  // marketplace.json: metadata.version
+  if (kind !== 'marketplace.json') return false;
   if (path.length === 2 && path[0] === 'metadata' && path[1] === 'version') return true;
-  // marketplace.json: plugins[i].version
   if (path.length === 3 && path[0] === 'plugins' && /^\d+$/.test(path[1]) && path[2] === 'version') {
     return true;
   }
@@ -90,7 +143,12 @@ function isVersionPath(path) {
 
 /** Is this leaf path an @adlc/* dependency range the bump repins in lockstep? */
 function isAdlcRangePath(path) {
-  return path.length === 2 && DEP_FIELDS.has(path[0]) && path[1].startsWith('@adlc/');
+  return path.length === 2 && DEP_FIELDS.has(path[0]) && ADLC_PKG.test(path[1]);
+}
+
+/** Strip a leading ^ or ~ to compare a range's target against a version. */
+function rangeTarget(range) {
+  return range.replace(/^[\^~]/, '');
 }
 
 function valueAt(root, path) {
@@ -123,13 +181,18 @@ function parseObject(text) {
  *
  * @param {string|null|undefined} beforeText manifest at the freeze baseline
  * @param {string|null|undefined} afterText  manifest at HEAD
+ * @param {string} [file] manifest path, so version paths can be scoped to the
+ *        manifest KIND. Omitted → only the universal top-level `version` is
+ *        eligible, which is the conservative direction.
  * @returns {boolean} exempt — false on any doubt whatsoever
  */
-export function isVersionOnlyChange(beforeText, afterText) {
+export function isVersionOnlyChange(beforeText, afterText, file) {
   const before = parseObject(beforeText);
   const after = parseObject(afterText);
   // A missing side means the file was added or deleted. Neither is a version bump.
   if (before === null || after === null) return false;
+
+  const kind = manifestKind(file);
 
   const beforeLeaves = new Map();
   const afterLeaves = new Map();
@@ -141,6 +204,7 @@ export function isVersionOnlyChange(beforeText, afterText) {
   }
 
   const allKeys = new Set([...beforeLeaves.keys(), ...afterLeaves.keys()]);
+  const changedRanges = [];
 
   for (const key of allKeys) {
     if (beforeLeaves.get(key) === afterLeaves.get(key)) continue;
@@ -150,7 +214,7 @@ export function isVersionOnlyChange(beforeText, afterText) {
     if (key.startsWith('K')) return false;
 
     const path = JSON.parse(key.slice(1));
-    const isVersion = isVersionPath(path);
+    const isVersion = isVersionPath(path, kind);
     const isRange = isAdlcRangePath(path);
     if (!isVersion && !isRange) return false;
 
@@ -161,6 +225,18 @@ export function isVersionOnlyChange(beforeText, afterText) {
     if (typeof from !== 'string' || typeof to !== 'string') return false;
     const pattern = isVersion ? VERSION : RANGE;
     if (!pattern.test(from) || !pattern.test(to)) return false;
+    if (isRange) changedRanges.push(to);
+  }
+
+  // LOCKSTEP IS AN INVARIANT, NOT A LABEL. Without this, `@adlc/core: ^1.0.0` →
+  // `^9.0.0` was exempt even with no version change at all — a dependency
+  // redirection through an allowed path, which is precisely what the value-shape
+  // checks were meant to prevent. In a lockstep monorepo every repinned range
+  // targets the manifest's OWN new version, so require exactly that.
+  if (changedRanges.length > 0) {
+    const declared = after.version;
+    if (typeof declared !== 'string' || !VERSION.test(declared)) return false;
+    if (changedRanges.some((range) => rangeTarget(range) !== declared)) return false;
   }
 
   return true;

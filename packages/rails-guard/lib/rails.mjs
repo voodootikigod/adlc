@@ -65,7 +65,7 @@ function isVersionOnlyEdit(file, resolveContents) {
   try {
     const contents = resolveContents(file);
     if (!contents) return false;
-    return isVersionOnlyChange(contents.before, contents.after);
+    return isVersionOnlyChange(contents.before, contents.after, file);
   } catch {
     return false;
   }
