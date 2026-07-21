@@ -146,14 +146,23 @@ function resolveContents(file) {
   let contents = null;
   try {
     // A FILENAME IS NOT A PATHSPEC. `changedFiles` returns raw paths, but
-    // `ls-tree`/`check-attr` take PATHSPECS, and git reads leading `:(...)` as
-    // pathspec MAGIC. A file literally named `:(top)victim/package.json` made
-    // `ls-tree` report the mode of a completely different path — `victim/
-    // package.json`, a regular file — so a symlink passed the mode check and the
-    // edit was exempted. `--literal-pathspecs` (below) makes git take the name as
-    // written; this guard additionally refuses the shape outright, since no
-    // release ever produces such a name and the two defences fail independently.
-    if (file.startsWith(':')) throw new Error(`pathspec-magic filename: ${file}`);
+    // `ls-tree` takes a PATHSPEC, and git reads a leading `:(...)` as pathspec
+    // MAGIC. A file literally named `:(top)victim/package.json` made `ls-tree`
+    // report the mode of a completely different path, so a symlink passed the
+    // mode check. `--literal-pathspecs` on that call is the fix.
+    //
+    // A second guard refusing any leading `:` was tried and REMOVED: it and the
+    // literal flag shadowed each other, so no test could pin either one. One
+    // defence that is provably exercised beats two that are not. (`check-attr`
+    // takes pathNAMES, not pathspecs, so it needs no flag.)
+
+    // A FILENAME MUST ALSO SURVIVE ITS OWN DECODE. Paths arrive already decoded
+    // as UTF-8, and that decode is not injective, so two distinct paths on disk
+    // can arrive as one string — and the content cache would then answer for the
+    // wrong file. Refuse any name that does not re-encode to itself.
+    if (Buffer.from(file, 'utf8').toString('utf8') !== file) {
+      throw new Error(`filename is not round-trip UTF-8: ${file}`);
+    }
     // MODE FIRST. `git show` returns the blob; readFileSync FOLLOWS SYMLINKS. A
     // manifest replaced by a symlink to identical text therefore compared equal
     // and was exempted, while git recorded a typechange (T) — the link target
@@ -172,7 +181,7 @@ function resolveContents(file) {
     // ISO-8859-1 on disk is committed as `Ã©` — a real change to a value like
     // `main`, invisible to a comparator that only reads the working tree.
     // Reproduced end-to-end at exit 0 before this was added.
-    const attrs = git(['--literal-pathspecs', 'check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file],
+    const attrs = git(['check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file],
       { stdio: ['ignore', 'pipe', 'ignore'] });
     for (const line of attrs.split('\n')) {
       if (!line.trim()) continue;

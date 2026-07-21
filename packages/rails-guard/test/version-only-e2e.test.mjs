@@ -274,39 +274,62 @@ test('a manifest under working-tree-encoding still FAILS', () => {
 });
 
 test('a filename containing git PATHSPEC MAGIC still FAILS', { skip: process.platform === 'win32' }, () => {
-  // Round-7 scenario. `changedFiles` returns raw paths, but ls-tree/check-attr
-  // take PATHSPECS, and git reads a leading `:(...)` as magic — verified
+  // Round-7 scenario. `changedFiles` returns raw paths, but ls-tree takes a
+  // PATHSPEC, and git reads a leading `:(...)` as magic — verified
   // directly: `ls-tree <base> -- ':(top)victim/package.json'` reports the mode of
   // `victim/package.json`, a different file.
   //
-  // HONEST LIMITATION: this test does NOT pin the pathspec guards. It passes with
-  // both `--literal-pathspecs` and the leading-`:` check removed, because
-  // `git show <base>:<path>` throws for a path absent at base and the edit is
-  // denied there instead. The reviewer's own reproduction had the SAME blob at
-  // both the literal and interpreted paths, which is what makes the mode lookup
-  // consequential; that setup could not be reconstructed from its output, which
-  // was truncated mid-investigation.
-  //
-  // The guards are therefore UNPINNED hardening. Treat them as unverified until a
-  // fixture reproduces the reviewer's arrangement.
+  // Both baseline paths deliberately hold the SAME blob under different modes:
+  // the literal magic-looking path is a symlink (120000) whose target text is
+  // canonical JSON, while the interpreted path is a regular file (100644)
+  // containing that JSON. After the literal path becomes a canonical bumped
+  // regular file, every content check passes. Either production defence denies
+  // this; with both literal handling and the leading-colon refusal removed,
+  // ls-tree reads the decoy's 100644 mode and the typechange is exempted.
   const { dir, run } = makeRepo();
   try {
+    const baseline = JSON.stringify({ version: '1.5.0' }, null, 2) + '\n';
     mkdirSync(join(dir, 'victim'), { recursive: true });
-    const decoy = join(dir, 'victim', 'package.json');
-    writeFileSync(decoy, JSON.stringify({ version: '1.5.0' }, null, 2) + '\n');
-    run('add', '-A');
-    run('commit', '-q', '-m', 'decoy baseline');
-    const newBase = run('rev-parse', 'HEAD').trim();
-
+    writeFileSync(join(dir, 'victim', 'package.json'), baseline);
     mkdirSync(join(dir, ':(top)victim'), { recursive: true });
-    writeFileSync(join(dir, 'target.json'), JSON.stringify({ version: '1.5.1' }, null, 2) + '\n');
-    symlinkSync('../target.json', join(dir, ':(top)victim', 'package.json'));
-    run('add', '-A'); // untracked files never appear in git diff
+    const magicManifest = join(dir, ':(top)victim', 'package.json');
+    symlinkSync(baseline, magicManifest); // Git stores the target text as the blob.
+    run('add', '-A');
+    run('commit', '-q', '-m', 'same blob under regular and symlink modes');
+    const newBase = run('rev-parse', 'HEAD').trim();
+    const interpreted = run('ls-tree', newBase, '--', ':(top)victim/package.json');
+    assert.match(interpreted, /^100644 /,
+      'fixture must make non-literal ls-tree report the decoy mode');
+
+    rmSync(magicManifest);
+    writeFileSync(magicManifest, JSON.stringify({ version: '1.5.1' }, null, 2) + '\n');
 
     const res = spawnSync(process.execPath, [BIN, '--base', newBase, '--rails', '**/package.json'], {
       cwd: dir, encoding: 'utf8',
     });
-    assert.notEqual(res.status, 0, `expected a non-zero gate result, got 0: ${res.stdout}`);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a manifest under the ident attribute still FAILS', () => {
+  // Round-7 regression. `ident` expands $Id$ into $Id: <sha> $ in the working
+  // tree and collapses it back to $Id$ in the blob. So a baseline holding
+  // `main: "$Id: safe $"` commits as `main: "$Id$"` — a real change to `main`
+  // while the comparator sees the unchanged expanded text. The guard existed but
+  // no test pinned it; removing `ident` from the query left all 158 green.
+  const { dir, run } = makeRepo();
+  try {
+    const manifest = join(dir, 'packages', 'build-gate', 'package.json');
+    writeFileSync(manifest, JSON.stringify({ version: '1.5.0', main: '$Id: safe $' }, null, 2) + '\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'baseline with expanded ident');
+    const newBase = run('rev-parse', 'HEAD').trim();
+    writeFileSync(join(dir, '.gitattributes'), 'packages/build-gate/package.json ident\n');
+    writeFileSync(manifest, JSON.stringify({ version: '1.5.1', main: '$Id: safe $' }, null, 2) + '\n');
+    const res = guard(dir, newBase, RAIL);
+    assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

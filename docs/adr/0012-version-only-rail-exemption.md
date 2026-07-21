@@ -298,11 +298,16 @@ resolution pressures the ticket store toward dishonesty.
 
 ## Mutation calibration
 
-Every guard is planted-and-removed and the suite re-run. The current sweep runs
-28 mutants; 22 are killed. The six survivors are each redundant with a stronger
-check and are commented as such **at their definition**, because a surviving
-mutant that is not explained is indistinguishable from one that was never
-noticed:
+Every guard is planted-and-removed and the suite re-run. My own sweep runs 28
+mutants, of which 22 are killed. **That sweep is not exhaustive**: an independent
+review with a wider sweep found 11 further single removals that leave the suite
+green. Most are redundant, but one — the `ident` attribute — was a genuine gap
+with a reproduced exit-0 result, now pinned.
+
+The lesson is the sweep's own coverage: a mutation list I write is bounded by the
+guards I remember writing. The surviving six below are each redundant with a
+stronger check and commented as such **at their definition**, because a surviving
+mutant that is not explained is indistinguishable from one nobody noticed:
 
 | survivor | shadowed by |
 |---|---|
@@ -311,7 +316,7 @@ noticed:
 | range version validity | lockstep forces a range's version to equal the manifest version, which is itself validated |
 | container-shape early return | the path test — no container path is ever an eligible version or range path |
 | `versionChanged` guard | the completeness pass, which requires every baseline range to equal the old version |
-| repin from/to endpoints | the completeness pass, which checks every range rather than only changed ones |
+| repin from/to endpoints | **each other, not the completeness pass** — removing both together opens two dependency-redirect cases, so the pair is load-bearing even though neither half is individually |
 
 **Three separate rounds found hollow tests in this work**, each written
 specifically to pin the guard it named:
@@ -323,6 +328,11 @@ specifically to pin the guard it named:
 - the HEAD-symlink fixture used a dangling link, so the read threw before the
   regular-file guard was reached; and every completeness fixture left the *after*
   side wrong, so an implementation checking only `after` passed all of them
+- the pathspec fixture I wrote passed with **both** guards removed, because
+  `git show <base>:<path>` throws for a path absent at base. The working fixture
+  came from the reviewer: it stores the *same blob* at the literal path (as a
+  symlink) and the interpreted path (as a regular file), which is what makes the
+  mode lookup consequential
 
 The lesson is narrow and worth stating: **a test that asserts the right outcome
 for the wrong reason is invisible without mutation testing.** Assertions about
