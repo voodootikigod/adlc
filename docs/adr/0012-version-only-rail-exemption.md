@@ -48,14 +48,13 @@ bump changes no behaviour: it is a mechanical, tool-generated rewrite of one
 field, applied uniformly, and already gated by `scripts/release.mjs`'s own drift
 and publish-metadata gates plus the release skill's R4 re-read.
 
-### The check compares TEXT, not parsed JSON
+### The design: canonical form, then structural comparison
 
-This is the central design decision, and it was reached the hard way — two
-JSON-walking implementations were built and both were rejected by cross-model
-prosecution. See "What prosecution changed" below for the full record.
+This was reached the hard way — two implementations were built and both were
+rejected by cross-model prosecution, in **mirror-image** ways.
 
-`JSON.parse` is **lossy by design**, and every loss is a place where two
-different documents compare equal:
+**Walking `JSON.parse` output — parse cannot see fidelity.** The parser is lossy
+by design, and every loss is a place where two different documents compare equal:
 
 | what is lost | example |
 |---|---|
@@ -65,49 +64,45 @@ different documents compare equal:
 | key order | behaviour for conditional `exports`, invisible once sorted |
 | array vs object | `[x]` and `{"0":x}` walk identically |
 
-Closing those one at a time is unbounded: the tail is however lossy the parser
-is, and the parser is not ours. So the security decision does not depend on parse
-fidelity at all.
+**Comparing raw lines — text cannot see structure.** A `"version"` member
+indented two spaces inside `scripts` is an npm **lifecycle command**, not the
+package version, and a line-level check read it as top-level. Deriving structure
+by counting braces is just writing a JSON parser, worse.
 
-A lockstep bump changes only version **lines**. The rule is therefore:
+Neither approach can be patched into the other's strength. So the design requires
+both at once, through one precondition:
 
-> **Same line count, and every differing line must be a plain single-member line
-> on both sides — identical indentation, key, and trailing comma. Only the value
-> may move, and only to a valid version or a lockstep repin.**
+> **Each side must be byte-identical to `JSON.stringify(JSON.parse(it), null, 2)`
+> plus a trailing newline — its own canonical re-serialisation.**
+
+That single check collapses the entire first class: a duplicate key does not
+survive a round trip, and neither does a precision-losing number, a reordered
+key, a `-0`, or any non-canonical formatting. Each changes the text and denies
+before any comparison runs.
+
+What remains is a document whose **parse is provably faithful to its bytes**. On
+such a document, comparing by structural path is sound — which closes the second
+class. The proof obligation is discharged once, in `parseCanonical`, and every
+later step relies on it.
+
+It costs nothing here: all 34 manifests in this repo are already canonical,
+because `scripts/release.mjs` writes exactly `JSON.stringify(obj, null, 2)`. A
+test asserts this, so a change to the release writer fails in the test suite
+rather than mid-release.
 
 | dimension | rule |
 |---|---|
+| precondition | both sides byte-identical to their own canonical re-serialisation |
 | eligible files | basename `package.json`, `plugin.json`, `marketplace.json`. Not `package-lock.json` |
-| eligible lines | `"version"` at top level; `metadata.version` and `plugins[i].version` **only in `marketplace.json`**; `"@adlc/<name>"` where the name is a valid npm scoped name |
-| eligible values | a version npm would actually **parse as a version** — semver grammar *plus* npm's 256-char and `MAX_SAFE_INTEGER` limits |
-| operator style | must be **preserved**; exact → caret widens what resolves and is not a repin |
-| **lockstep** | a version must have actually changed, and every repin must target this manifest's **own new version** |
+| eligible paths | `version` at the structural top level; `metadata.version` and `plugins[i].version` **only in `marketplace.json`**; `<depField>["@adlc/<name>"]` where the enclosing field is one of the four real dependency fields |
+| eligible values | a version npm would actually **parse as a version** — semver grammar plus npm's 256-char and `MAX_SAFE_INTEGER` limits |
+| operator style | must be **preserved**; exact → caret widens what resolves |
+| **lockstep, both ends** | a repin must move **from the old version to the new one**, and the package version must actually have moved |
 | everything else | not exempt — an ordinary rail violation |
 
-Everything the JSON-walking versions were attacked through now fails for free,
-because the parser is never consulted. A smuggled field, a reformat, an inserted
-or deleted line, a reordering, a duplicate key, a precision collision — each
-changes the positional line comparison and denies.
-
-Two consequences worth stating plainly:
-
-- **A minified or reformatted manifest is never exempt.** It has no line
-  structure to reason about, so it denies. `scripts/release.mjs` writes
-  `JSON.stringify(o, null, 2)`, so this costs nothing in practice and fails in
-  the safe direction.
-- **A line-level check cannot see the enclosing object**, so an `@adlc/*` key is
-  treated as a repin wherever it appears rather than only under the four
-  dependency fields. This is a deliberate trade. It is not a widening in
-  practice: the value is still forced to be a valid range whose version equals
-  this manifest's own new version, so the only thing it can become is the number
-  every other line already moved to.
-
-Verified end to end on the real repository: a full 34-manifest lockstep bump to
-`1.6.0` produced **zero** rail violations across all 79 internal ranges, while a
-smuggled `postinstall` on the same bump still denies with exit 2.
-
-The implementation is also about 40% smaller than the JSON-walking version it
-replaced.
+**A non-canonical manifest is never exempt.** It fails the precondition and is
+reported as an ordinary rail edit. This is the safe direction, and in this repo
+it never triggers.
 
 ### What P5 prosecution changed
 
@@ -134,18 +129,15 @@ deleting the shape record fails 5 tests, restoring the `.sort()` fails 1,
 dropping the container-kind marker fails 2, and removing the symlink/mode guard
 fails 2. A fix that merely weakens the guard cannot pass.
 
-### What CROSS-MODEL prosecution then changed — twice
+### What CROSS-MODEL prosecution then changed — three rejections
 
 Because this is an enforcement package, ADR-0007 also requires an adversarial
-approve from a **different provider**. That review rejected the change **twice**,
-and the record is worth keeping in full: it is the strongest available evidence
-that the cross-model tier is not ceremony.
+approve from a **different provider**. That review rejected the change **three
+times**, and the record is kept in full: it is the strongest available evidence
+that the cross-model tier is not ceremony. Every finding was independently
+reproduced before being acted on.
 
-The above was the same-model pass. Because this is an enforcement package,
-ADR-0007 also requires an adversarial approve from a **different provider**. That
-review **rejected** the change and found five more issues the first pass had
-missed entirely — the strongest available argument that the cross-model tier is
-not ceremony:
+**Round one** found five issues the same-model pass had missed entirely:
 
 | defect | why it mattered |
 |---|---|
@@ -170,8 +162,20 @@ version change (operator style was never compared).
 
 That is the round that ended the JSON-walking design. Two rounds of fixes had
 each closed the specific cases found and left the *class* open, which is the
-signal that the approach — not the implementation — was wrong. The line-level
-comparison described above replaced it.
+signal that the approach — not the implementation — was wrong. It was replaced by
+a line-level text comparison.
+
+**Round three rejected that too**, and this is the rejection the final design
+came from. Text has no idea which object encloses a line, so `scripts.version` —
+an npm **lifecycle command** — was read as the package version; duplicate
+top-level `version` members manufactured a "version changed" while the effective
+version was unchanged and a dependency redirected; `config["@adlc/core"]` counted
+as a dependency repin; and lockstep was checked only on the new value, letting
+`^0.1.0 → ^1.5.1` cross a major boundary during a genuine bump.
+
+Seeing both failures side by side is what produced the canonical-form
+precondition described above: parse cannot see fidelity, text cannot see
+structure, and requiring canonical form makes both true at once.
 
 **One reported finding was deliberately not fixed here.** The reviewer noted that
 a manifest staged as X but restored to Y in the working tree is committed as X
@@ -184,15 +188,18 @@ the wrong layer.
 
 ### Fails closed, everywhere
 
-The exemption is refused — and the edit reported as a violation — on any of:
-unparseable JSON on either side; a missing side (file added or deleted); a
-non-object document; any container whose key set changed (an added, removed, or
-reordered key); any differing path not in the eligible set; any eligible path
-whose value is not a plain string of the expected shape.
+The exemption is refused — and the edit reported as an ordinary violation — on
+any of: a side that is not canonical (which covers unparseable JSON, duplicate
+keys, precision loss, reordered keys, and non-canonical formatting); a missing
+side, meaning the file was added or deleted; a non-object document; any container
+whose key set changed; any differing path outside the eligible set; any eligible
+path whose value is not a version npm would parse as a version; a repin whose
+operator style changed or whose ends do not move from the old version to the new.
 
-The key-set comparison is what makes the structural cases visible: without it, an
-appended `plugins[]` entry or an added `scripts` block could slip through because
-every surviving leaf still matched.
+At the resolver layer it also refuses a path that is not a regular file at HEAD
+and a regular blob at base, a changed file mode, and any path carrying a
+content-altering `.gitattributes` filter — because `git diff` applies those
+filters and a direct read does not, so the two would disagree.
 
 ### Off by default
 
@@ -214,15 +221,25 @@ a pressure that was quietly corrupting the ticket store's meaning.
 the CI gate. This matters because that script is an immutable trust root and
 editing it requires the protected-base admin ceremony.
 
-**Cost.** The guard now parses JSON for railed manifests instead of comparing
-paths alone, so a manifest is trusted to the extent its JSON is well-formed. The
-mitigation is the strictness above: a manifest that cannot be parsed is not
-exempt, so malformed input can only ever produce a *violation*, never a pass.
+**Cost.** The guard now reads the content of railed manifests instead of
+comparing paths alone, and it requires them to be in canonical form. A manifest
+that is not canonical — hand-formatted, minified, CRLF, or carrying a duplicate
+key — is never exempt. That is a real behavioural constraint, and it is stated
+here rather than discovered mid-release. It does not bite today: all 34 manifests
+in this repo are canonical because `release.mjs` writes them that way, and a test
+asserts it.
 
 **Residual risk, stated plainly.** A version bump can now land on a railed
 manifest without the ticket owner noticing. This is intended, and it is bounded:
-the only field that can move is a version string of a fixed shape. Nothing that
-can execute, redirect a dependency, or change a package's identity is eligible.
+the only values that can move are the package's own version and internal ranges
+repinned from the old version to the new one. Nothing that can execute, redirect
+a dependency elsewhere, or change a package's identity is eligible.
+
+The honest caveat is that this bound is only as good as the review it survived.
+It took three cross-model rejections to reach, and each round found something the
+previous one had not — including two rounds where the *approach* was wrong rather
+than the code. Anyone widening the eligible set should assume the same is true of
+their change and get it prosecuted cross-model before merging.
 
 **Not addressed here.** Whether rails *should* be allowed to cover manifest files
 at all (option 3 in #228 — reject such globs at ticket-authoring time) is a
