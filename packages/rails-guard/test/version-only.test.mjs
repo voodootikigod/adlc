@@ -422,6 +422,17 @@ test('a version bump that repins NOTHING is not a lockstep bump', () => {
   assert.equal(isVersionOnlyChange(before, after, PKG), false);
 });
 
+test('completeness is checked on the BASELINE side, not only the result', () => {
+  // The neighbouring tests all leave the AFTER side wrong, so an implementation
+  // that inspected only `after` would pass every one of them. Here the after
+  // side is internally consistent — version 1.6.0, dependency 1.6.0 — and the
+  // defect is entirely in the baseline: it was already declaring 1.5.0 while
+  // depending on 1.6.0. Only checking both halves rejects this.
+  const before = `{\n  "version": "1.5.0",\n  "dependencies": {\n    "@adlc/core": "1.6.0"\n  }\n}\n`;
+  const after  = `{\n  "version": "1.6.0",\n  "dependencies": {\n    "@adlc/core": "1.6.0"\n  }\n}\n`;
+  assert.equal(isVersionOnlyChange(before, after, PKG), false);
+});
+
 test('a bump with no internal dependencies at all is still exempt', () => {
   // The completeness check must not require ranges that do not exist.
   assert.equal(isVersionOnlyChange(pkg('1.5.0', { chalk: '^5.0.0' }), pkg('1.5.1', { chalk: '^5.0.0' }), PKG), true);

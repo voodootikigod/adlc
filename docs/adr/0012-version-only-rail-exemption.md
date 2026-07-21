@@ -75,12 +75,22 @@ both at once, through one precondition:
 > **Each side must be byte-identical to `JSON.stringify(JSON.parse(it), null, 2)`
 > plus a trailing newline — its own canonical re-serialisation.**
 
+This is checked in two places, and the split matters. **Byte** fidelity is proved
+at the read boundary in `bin/rails-guard.mjs`: file contents are read as raw
+buffers and the UTF-8 decode must reproduce the original bytes exactly. That
+cannot be done later — UTF-8 decoding is not injective, every invalid byte
+becomes U+FFFD, and a string already containing U+FFFD re-encodes to itself
+perfectly. By the time the predicate has a string, the information is gone.
+**Canonical** form is then proved in `parseCanonical`, on a string already known
+to represent its bytes faithfully.
+
 That single check collapses the entire first class: a duplicate key does not
 survive a round trip, and neither does a precision-losing number, a reordered
 key, a `-0`, or any non-canonical formatting. Each changes the text and denies
 before any comparison runs.
 
-What remains is a document whose **parse is provably faithful to its bytes**. On
+What remains — given the byte check above — is a document whose **parse is
+provably faithful to its bytes**. On
 such a document, comparing by structural path is sound — which closes the second
 class. The proof obligation is discharged once, in `parseCanonical`, and every
 later step relies on it.
@@ -129,13 +139,14 @@ deleting the shape record fails 5 tests, restoring the `.sort()` fails 1,
 dropping the container-kind marker fails 2, and removing the symlink/mode guard
 fails 2. A fix that merely weakens the guard cannot pass.
 
-### What CROSS-MODEL prosecution then changed — three rejections
+### What CROSS-MODEL prosecution then changed — five rejections
 
 Because this is an enforcement package, ADR-0007 also requires an adversarial
-approve from a **different provider**. That review rejected the change **three
+approve from a **different provider**. That review rejected the change **five
 times**, and the record is kept in full: it is the strongest available evidence
 that the cross-model tier is not ceremony. Every finding was independently
-reproduced before being acted on.
+reproduced before being acted on, and three of the five rounds found defects that
+the same-model pass had declared clean.
 
 **Round one** found five issues the same-model pass had missed entirely:
 
@@ -176,6 +187,30 @@ as a dependency repin; and lockstep was checked only on the new value, letting
 Seeing both failures side by side is what produced the canonical-form
 precondition described above: parse cannot see fidelity, text cannot see
 structure, and requiring canonical form makes both true at once.
+
+**Round four** found the deepest defect of the series, and the first that no
+amount of reasoning about JSON would have caught. UTF-8 decoding is not
+injective: a baseline holding raw byte `0x80` and a working tree holding raw
+`0x81` both decode to U+FFFD, so two genuinely different files compared equal and
+the edit was exempted — reproduced end-to-end at exit 0. The first fix attempt
+was wrong, adding a re-encode check inside the predicate where the information
+had already been lost; it had to move to the byte boundary. The same round found
+lockstep was *incremental* rather than complete (only ranges that CHANGED were
+inspected, so a package could finish declaring 1.5.1 while still depending on
+1.5.0 of a sibling), that `plugins[i]` did not require `plugins` to be an array,
+and that this ADR contained a false claim about its own regression test.
+
+**Round five found no production defect** — it confirmed the byte fix complete,
+lockstep correct, and the path comparison sound, with all 34 manifests and 79
+ranges exempt against the real release function. What it did find was two
+*hollow tests*: the baseline-symlink fixture pointed at a non-JSON target, so the
+canonical precondition rejected it whether or not the mode guard existed, and the
+completeness tests all left the *after* side wrong, so an implementation checking
+only `after` passed every one. Both are fixed and now kill their mutants.
+
+That progression — from bypasses, to a bypass class, to an encoding boundary, to
+nothing but test quality — is the argument for the tier, and for stopping when
+the findings run out rather than when patience does.
 
 **One reported finding was deliberately not fixed here.** The reviewer noted that
 a manifest staged as X but restored to Y in the working tree is committed as X

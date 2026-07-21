@@ -200,18 +200,26 @@ test('a manifest under a git CLEAN FILTER still FAILS', () => {
 
 test('a manifest that was a SYMLINK at the baseline still FAILS', { skip: process.platform === 'win32' }, () => {
   // The mode check has to hold on the base side too, not only at HEAD.
+  //
+  // THE FIXTURE IS THE POINT. An earlier version pointed the symlink at
+  // `real.json`, so the blob git stores is the literal string "real.json" —
+  // which is not JSON, and the canonical precondition rejected it no matter what
+  // the mode guard did. The test passed while pinning nothing.
+  //
+  // A symlink's blob content IS its target path, so the target is written as
+  // canonical JSON text. Now `git show base:<file>` yields a document that would
+  // sail through every content check, and ONLY the base-mode guard can deny.
   const { dir, run } = makeRepo();
   try {
     const manifest = join(dir, 'packages', 'build-gate', 'package.json');
-    const real = join(dir, 'packages', 'build-gate', 'real.json');
-    writeFileSync(real, JSON.stringify({ name: '@adlc/build-gate', version: '1.5.0' }, null, 2) + '\n');
+    const jsonAsPath = JSON.stringify({ version: '1.5.0' }, null, 2) + '\n';
     rmSync(manifest);
-    symlinkSync('real.json', manifest);
+    symlinkSync(jsonAsPath, manifest); // dangling by design; only the blob matters
     run('add', '-A');
     run('commit', '-q', '-m', 'symlink baseline');
     const newBase = run('rev-parse', 'HEAD').trim();
     rmSync(manifest);
-    writeFileSync(manifest, JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1' }, null, 2) + '\n');
+    writeFileSync(manifest, JSON.stringify({ version: '1.5.1' }, null, 2) + '\n');
     const res = guard(dir, newBase, RAIL);
     assert.equal(res.status, 2, `expected deny, got ${res.status}: ${res.stdout}`);
   } finally {
