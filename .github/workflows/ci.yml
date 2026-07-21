@@ -294,7 +294,11 @@ jobs:
           node-version: 20
 
       - name: Install
-        run: npm install
+        # `npm ci` installs from the lockfile WITHOUT rewriting it. `npm install`
+        # can update package-lock.json, and hollow-test refuses to run on a dirty
+        # tree (it mutates files in place and restores them), so a rewritten
+        # lockfile would fail the gate on an unrelated change.
+        run: npm ci
 
       - name: Fetch base ref
         env:
@@ -304,7 +308,13 @@ jobs:
       - name: Mutation coverage gate
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
-        # hollow-test mutates in place and restores, so the tree must be clean.
+        # hollow-test enforces a clean tree itself, with a clearer message than a
+        # pre-check here would give — so the tree must arrive clean, which is why
+        # Install uses `npm ci` above. Guard only against a stray TRACKED-source
+        # edit (never the lockfile or untracked build output).
         run: |
-          git diff --quiet || { echo "working tree dirty before mutation gate"; exit 1; }
+          dirty=$(git diff --name-only -- '*.mjs' '*.js' '*.cjs' 'packages/**' 'plugins/**')
+          if [ -n "$dirty" ]; then
+            echo "tracked source is dirty before the mutation gate:"; echo "$dirty"; exit 1
+          fi
           node scripts/mutation-gate.mjs "origin/$BASE_REF" --max 12
