@@ -48,30 +48,66 @@ bump changes no behaviour: it is a mechanical, tool-generated rewrite of one
 field, applied uniformly, and already gated by `scripts/release.mjs`'s own drift
 and publish-metadata gates plus the release skill's R4 re-read.
 
-Scope of the exemption, deliberately narrow:
+### The check compares TEXT, not parsed JSON
+
+This is the central design decision, and it was reached the hard way — two
+JSON-walking implementations were built and both were rejected by cross-model
+prosecution. See "What prosecution changed" below for the full record.
+
+`JSON.parse` is **lossy by design**, and every loss is a place where two
+different documents compare equal:
+
+| what is lost | example |
+|---|---|
+| duplicate keys | `{"a":1,"a":2}` — last wins, the first is erased |
+| float precision | `9007199254740993` → `9007199254740992` |
+| `-0`, `Infinity` | `1e400` → `Infinity`, which `JSON.stringify`s as `"null"` |
+| key order | behaviour for conditional `exports`, invisible once sorted |
+| array vs object | `[x]` and `{"0":x}` walk identically |
+
+Closing those one at a time is unbounded: the tail is however lossy the parser
+is, and the parser is not ours. So the security decision does not depend on parse
+fidelity at all.
+
+A lockstep bump changes only version **lines**. The rule is therefore:
+
+> **Same line count, and every differing line must be a plain single-member line
+> on both sides — identical indentation, key, and trailing comma. Only the value
+> may move, and only to a valid version or a lockstep repin.**
 
 | dimension | rule |
 |---|---|
-| eligible files | basename is `package.json`, `plugin.json`, or `marketplace.json` |
-| eligible paths | `version` in any of them; `metadata.version` and `plugins[i].version` **only in `marketplace.json`**; `<depField>["@adlc/<name>"]` where the name is a valid npm scoped name |
-| eligible values | both sides plain strings matching **strict** semver per semver.org's BNF (versions) or `^`/`~`/exact strict semver (ranges) |
-| **lockstep** | every changed range must target the manifest's **own new `version`** |
-| everything else | not exempt — reported as an ordinary rail violation |
+| eligible files | basename `package.json`, `plugin.json`, `marketplace.json`. Not `package-lock.json` |
+| eligible lines | `"version"` at top level; `metadata.version` and `plugins[i].version` **only in `marketplace.json`**; `"@adlc/<name>"` where the name is a valid npm scoped name |
+| eligible values | a version npm would actually **parse as a version** — semver grammar *plus* npm's 256-char and `MAX_SAFE_INTEGER` limits |
+| operator style | must be **preserved**; exact → caret widens what resolves and is not a repin |
+| **lockstep** | a version must have actually changed, and every repin must target this manifest's **own new version** |
+| everything else | not exempt — an ordinary rail violation |
 
-The lockstep row is an invariant, not a description. Without it, `@adlc/core:
-^1.0.0 → ^9.0.0` was exempt *even with no version change at all* — a dependency
-redirection through an allowed path, which is exactly what the value-shape checks
-were supposed to prevent. Verified against the repo: all 79 `@adlc/*` ranges
-across 34 manifests already satisfy it, because that is what `scripts/release.mjs`
-writes.
+Everything the JSON-walking versions were attacked through now fails for free,
+because the parser is never consulted. A smuggled field, a reformat, an inserted
+or deleted line, a reordering, a duplicate key, a precision collision — each
+changes the positional line comparison and denies.
 
-"Strict semver" is load-bearing too. The looser first attempt accepted
-`1.2.3-a..b` — an empty prerelease identifier, which npm's `npm-package-arg`
-classifies as **type=tag**, so it resolves to whatever that dist-tag points at.
-A version-shaped string that is not a version.
+Two consequences worth stating plainly:
 
-`package-lock.json` is **not** eligible. It is not a manifest whose diff can be
-reasoned about this cheaply, and no realistic rail targets it.
+- **A minified or reformatted manifest is never exempt.** It has no line
+  structure to reason about, so it denies. `scripts/release.mjs` writes
+  `JSON.stringify(o, null, 2)`, so this costs nothing in practice and fails in
+  the safe direction.
+- **A line-level check cannot see the enclosing object**, so an `@adlc/*` key is
+  treated as a repin wherever it appears rather than only under the four
+  dependency fields. This is a deliberate trade. It is not a widening in
+  practice: the value is still forced to be a valid range whose version equals
+  this manifest's own new version, so the only thing it can become is the number
+  every other line already moved to.
+
+Verified end to end on the real repository: a full 34-manifest lockstep bump to
+`1.6.0` produced **zero** rail violations across all 79 internal ranges, while a
+smuggled `postinstall` on the same bump still denies with exit 2.
+
+The implementation is also about 40% smaller than the JSON-walking version it
+replaced.
 
 ### What P5 prosecution changed
 
@@ -98,7 +134,12 @@ deleting the shape record fails 5 tests, restoring the `.sort()` fails 1,
 dropping the container-kind marker fails 2, and removing the symlink/mode guard
 fails 2. A fix that merely weakens the guard cannot pass.
 
-### What CROSS-MODEL prosecution then changed
+### What CROSS-MODEL prosecution then changed — twice
+
+Because this is an enforcement package, ADR-0007 also requires an adversarial
+approve from a **different provider**. That review rejected the change **twice**,
+and the record is worth keeping in full: it is the strongest available evidence
+that the cross-model tier is not ceremony.
 
 The above was the same-model pass. Because this is an enforcement package,
 ADR-0007 also requires an adversarial approve from a **different provider**. That
@@ -120,6 +161,17 @@ caret-only ranges (the e2e fixture used a caret while the repo actually uses 68
 exact pins), dropping three of the four dependency fields, and removing
 baseline-side validation — plus a portability bug where the e2e fixtures
 inherited a global commit signer.
+
+**Round two rejected the fixes.** Three more bypasses were reproduced through the
+real binary — `9007199254740992 → 9007199254740993` (same float after parsing), a
+duplicate key whose first occurrence changed behind an unchanged second,
+`9007199254740992.0.0` (npm reads it as a dist-tag), and `1.0.0 → ^1.0.0` with no
+version change (operator style was never compared).
+
+That is the round that ended the JSON-walking design. Two rounds of fixes had
+each closed the specific cases found and left the *class* open, which is the
+signal that the approach — not the implementation — was wrong. The line-level
+comparison described above replaced it.
 
 **One reported finding was deliberately not fixed here.** The reviewer noted that
 a manifest staged as X but restored to Y in the working tree is committed as X
