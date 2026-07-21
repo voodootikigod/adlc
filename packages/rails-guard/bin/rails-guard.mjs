@@ -145,6 +145,15 @@ function resolveContents(file) {
   if (contentCache.has(file)) return contentCache.get(file);
   let contents = null;
   try {
+    // A FILENAME IS NOT A PATHSPEC. `changedFiles` returns raw paths, but
+    // `ls-tree`/`check-attr` take PATHSPECS, and git reads leading `:(...)` as
+    // pathspec MAGIC. A file literally named `:(top)victim/package.json` made
+    // `ls-tree` report the mode of a completely different path — `victim/
+    // package.json`, a regular file — so a symlink passed the mode check and the
+    // edit was exempted. `--literal-pathspecs` (below) makes git take the name as
+    // written; this guard additionally refuses the shape outright, since no
+    // release ever produces such a name and the two defences fail independently.
+    if (file.startsWith(':')) throw new Error(`pathspec-magic filename: ${file}`);
     // MODE FIRST. `git show` returns the blob; readFileSync FOLLOWS SYMLINKS. A
     // manifest replaced by a symlink to identical text therefore compared equal
     // and was exempted, while git recorded a typechange (T) — the link target
@@ -163,7 +172,7 @@ function resolveContents(file) {
     // ISO-8859-1 on disk is committed as `Ã©` — a real change to a value like
     // `main`, invisible to a comparator that only reads the working tree.
     // Reproduced end-to-end at exit 0 before this was added.
-    const attrs = git(['check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file],
+    const attrs = git(['--literal-pathspecs', 'check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file],
       { stdio: ['ignore', 'pipe', 'ignore'] });
     for (const line of attrs.split('\n')) {
       if (!line.trim()) continue;
@@ -179,7 +188,7 @@ function resolveContents(file) {
     // worktree to agree here would reject the normal flow (edit, run the gate,
     // then stage) and is the wrong layer. Recorded as a guard-wide issue instead.
 
-    const baseMode = git(['ls-tree', base, '--', file], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const baseMode = git(['--literal-pathspecs', 'ls-tree', base, '--', file], { stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\s+/)[0];
     if (baseMode !== '100644' && baseMode !== '100755') throw new Error('base is not a regular file');
     const headExecutable = (lstatSync(file).mode & 0o111) !== 0;

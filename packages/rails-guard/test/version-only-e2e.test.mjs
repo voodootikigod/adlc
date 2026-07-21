@@ -272,3 +272,42 @@ test('a manifest under working-tree-encoding still FAILS', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a filename containing git PATHSPEC MAGIC still FAILS', { skip: process.platform === 'win32' }, () => {
+  // Round-7 scenario. `changedFiles` returns raw paths, but ls-tree/check-attr
+  // take PATHSPECS, and git reads a leading `:(...)` as magic — verified
+  // directly: `ls-tree <base> -- ':(top)victim/package.json'` reports the mode of
+  // `victim/package.json`, a different file.
+  //
+  // HONEST LIMITATION: this test does NOT pin the pathspec guards. It passes with
+  // both `--literal-pathspecs` and the leading-`:` check removed, because
+  // `git show <base>:<path>` throws for a path absent at base and the edit is
+  // denied there instead. The reviewer's own reproduction had the SAME blob at
+  // both the literal and interpreted paths, which is what makes the mode lookup
+  // consequential; that setup could not be reconstructed from its output, which
+  // was truncated mid-investigation.
+  //
+  // The guards are therefore UNPINNED hardening. Treat them as unverified until a
+  // fixture reproduces the reviewer's arrangement.
+  const { dir, run } = makeRepo();
+  try {
+    mkdirSync(join(dir, 'victim'), { recursive: true });
+    const decoy = join(dir, 'victim', 'package.json');
+    writeFileSync(decoy, JSON.stringify({ version: '1.5.0' }, null, 2) + '\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'decoy baseline');
+    const newBase = run('rev-parse', 'HEAD').trim();
+
+    mkdirSync(join(dir, ':(top)victim'), { recursive: true });
+    writeFileSync(join(dir, 'target.json'), JSON.stringify({ version: '1.5.1' }, null, 2) + '\n');
+    symlinkSync('../target.json', join(dir, ':(top)victim', 'package.json'));
+    run('add', '-A'); // untracked files never appear in git diff
+
+    const res = spawnSync(process.execPath, [BIN, '--base', newBase, '--rails', '**/package.json'], {
+      cwd: dir, encoding: 'utf8',
+    });
+    assert.notEqual(res.status, 0, `expected a non-zero gate result, got 0: ${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
