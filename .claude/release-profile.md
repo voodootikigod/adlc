@@ -93,6 +93,26 @@ Publish order is `@adlc/core` first, then the phase CLIs, then the `@adlc/cli` u
 
 **Pushing the tag publishes every public package immediately and is irreversible.**
 
+**Tag creation is restricted, and the push prints a refusal even when it succeeds.** `main`'s
+ruleset restricts ref creation, so `git push origin vX.Y.Z` emits:
+
+```
+remote: Bypassed rule violations for refs/tags/vX.Y.Z:
+remote: - Cannot create ref due to creations being restricted.
+ * [new tag]         vX.Y.Z -> vX.Y.Z
+```
+
+The tag **did** land, via the maintainer's admin bypass. This is expected here and is not a
+release failure — but do not take the `* [new tag]` line as proof on its own. Confirm with
+`git ls-remote --tags origin vX.Y.Z` and require the SHA to equal the commit you meant to tag
+(R9). A pre-existing tag would also print plausibly and point somewhere else entirely.
+
+Recorded because v1.5.1 hit this with nothing in the profile about it: the operator has to
+decide, mid-release and one step past the point of no return, whether an error that says
+`Cannot create ref` is fatal. Note this is a genuine bypass of a repo rule — tolerable only
+because it is the maintainer tagging their own reviewed commit, and because the human publish
+gate downstream is untouched by it. R1 still forbids bypassing the *approval* gate.
+
 **Conformant, with one declared exception.** `npm-publish` has a required reviewer, the publish
 job is bound to it, `id-token: write` is requested, and there is no repo- or org-scoped token.
 
