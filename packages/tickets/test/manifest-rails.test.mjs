@@ -13,6 +13,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { coversManifest, discoverManifests, MANIFEST_BASENAMES } from '../lib/manifest-rails.mjs';
 
@@ -94,14 +97,31 @@ test('coversManifest requires an explicit manifest corpus', () => {
   assert.throws(() => coversManifest('packages/x/**'), /explicit manifestPaths/);
 });
 
-test('discoverManifests finds the real repo manifests and excludes node_modules', () => {
-  const found = discoverManifests();
-  assert.ok(found.includes('package.json'), 'root manifest present');
-  assert.ok(found.some((p) => /^packages\/[^/]+\/package\.json$/.test(p)), 'a package manifest present');
-  assert.ok(!found.some((p) => p.includes('node_modules/')), 'node_modules excluded');
-  // The whole point: a real package directory rail covers a real manifest.
-  assert.equal(coversManifest('packages/build-gate/**', found), true);
-  assert.equal(coversManifest('packages/build-gate/lib/**', found), false);
+test('discoverManifests walks a tree, finds manifests, excludes node_modules', () => {
+  // Build a fixture and pass its root EXPLICITLY. An earlier version called
+  // discoverManifests() with no argument and asserted the real repo layout was
+  // below cwd — true under `run-tests.mjs` (cwd = repo root) but false under
+  // `npm test --workspace @adlc/tickets` (cwd = packages/tickets), where CI
+  // caught it. The function is correct; the test must not assume cwd.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-discover-'));
+  try {
+    mkdirSync(join(root, 'packages', 'build-gate', 'lib'), { recursive: true });
+    mkdirSync(join(root, 'plugins', 'x', '.claude-plugin'), { recursive: true });
+    mkdirSync(join(root, 'node_modules', 'dep'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), '{}\n');
+    writeFileSync(join(root, 'packages', 'build-gate', 'package.json'), '{}\n');
+    writeFileSync(join(root, 'plugins', 'x', '.claude-plugin', 'plugin.json'), '{}\n');
+    writeFileSync(join(root, 'node_modules', 'dep', 'package.json'), '{}\n');
+
+    const found = discoverManifests(root);
+    assert.ok(found.includes('package.json'), 'root manifest present');
+    assert.ok(found.includes('packages/build-gate/package.json'), 'package manifest present');
+    assert.ok(found.includes('plugins/x/.claude-plugin/plugin.json'), 'nested host manifest present');
+    assert.ok(!found.some((p) => p.includes('node_modules')), 'node_modules excluded');
+
+    assert.equal(coversManifest('packages/build-gate/**', found), true);
+    assert.equal(coversManifest('packages/build-gate/lib/**', found), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('the manifest basename set is exactly the three host manifests', () => {
