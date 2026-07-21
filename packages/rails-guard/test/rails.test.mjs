@@ -84,8 +84,8 @@ describe('checkRailEdits', () => {
 // including that the exemption is OFF unless a resolver is supplied.
 describe('checkRailEdits — version-only exemption (#228)', () => {
   const PKG = 'packages/build-gate/package.json';
-  // Formatted as JSON.stringify(o, null, 2) writes it — the exemption is a
-  // line-level text check, so a minified fixture would not exercise it.
+  // Formatted as JSON.stringify(o, null, 2) writes it — that is canonical form,
+  // which the exemption requires; a minified fixture would be refused outright.
   const mk = (version, main) =>
     JSON.stringify({ name: '@adlc/build-gate', version, main }, null, 2) + '\n';
   const before = mk('1.5.0', 'lib/i.mjs');

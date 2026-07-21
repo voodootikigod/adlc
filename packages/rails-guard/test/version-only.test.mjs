@@ -1,9 +1,10 @@
 // version-only.test.mjs — #228: a lockstep version bump must not read as a rail edit.
 //
-// The exemption compares TEXT, not parsed JSON — see the header of
-// lib/version-only.mjs for why. Fixtures are therefore written exactly as
-// JSON.stringify(obj, null, 2) produces them, because that is what
-// scripts/release.mjs writes and the check is line-structural.
+// The exemption requires each side to be its own canonical re-serialisation,
+// then compares by structural PATH — see the header of lib/version-only.mjs for
+// why neither parsing alone nor comparing text alone was sufficient. Fixtures
+// are therefore written exactly as JSON.stringify(obj, null, 2) produces them,
+// because that is canonical form and what scripts/release.mjs writes.
 //
 // Most tests below assert `false`. That is deliberate: a change which merely
 // weakened the guard would satisfy "the release is unblocked" while silently
@@ -572,8 +573,11 @@ test('a non-object JSON document is NOT exempt', () => {
 });
 
 test('a dependency RANGE beyond npm limits is NOT exempt', () => {
-  // The equivalent version-side fixtures are rejected by the completeness pass,
-  // so only a range exercises splitRange's own validity check.
+  // NOTE what rejects this: the top-level VERSION check, not splitRange. The
+  // fixture moves both together because lockstep requires a range to equal the
+  // manifest version, which makes splitRange's own isVersion call unreachable —
+  // documented as such at its definition. This test pins the outcome, not that
+  // guard.
   const mk = (v, dep) => JSON.stringify({ version: v, dependencies: { '@adlc/core': dep } }, null, 2) + '\n';
   assert.equal(isVersionOnlyChange(mk('1.5.0', '^1.5.0'), mk('9007199254740992.0.0', '^9007199254740992.0.0'), PKG), false);
   assert.equal(isVersionOnlyChange(mk('1.5.0', '^1.5.0'), mk(`1.5.1-${'a'.repeat(266)}`, `^1.5.1-${'a'.repeat(266)}`), PKG), false);
