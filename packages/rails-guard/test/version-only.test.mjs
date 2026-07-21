@@ -238,6 +238,26 @@ test('changing indentation on a version line is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(pkg('1.5.0'), pkg('1.5.1').replace('  "version"', '    "version"'), PKG), false);
 });
 
+test('with duplicate top-level version lines, the LAST one is the lockstep target', () => {
+  // npm honours the last duplicate member, so the guard must too — otherwise a
+  // repin could be validated against a dead version line.
+  const b = `{\n  "version": "9.9.9",\n  "version": "1.5.0",\n  "dependencies": {\n    "@adlc/core": "^1.5.0"\n  }\n}\n`;
+  const a = `{\n  "version": "9.9.9",\n  "version": "1.5.1",\n  "dependencies": {\n    "@adlc/core": "^9.9.9"\n  }\n}\n`;
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
+test('a CRLF manifest is NOT exempt', () => {
+  // \r survives the newline split, so no line parses as a plain member. Denying
+  // is the safe direction; the release tool writes LF.
+  assert.equal(isVersionOnlyChange('{\r\n  "version": "1.5.0"\r\n}\r\n', '{\r\n  "version": "1.5.1"\r\n}\r\n', PKG), false);
+});
+
+test('escaped quotes in a value cannot desync the member regex', () => {
+  const b = `{\n  "version": "1.5.0",\n  "x": "a\\": \\"b"\n}\n`;
+  const a = `{\n  "version": "1.5.1",\n  "x": "a\\": \\"EVIL"\n}\n`;
+  assert.equal(isVersionOnlyChange(b, a, PKG), false);
+});
+
 test('a minified manifest is NOT exempt (no line structure to reason about)', () => {
   assert.equal(isVersionOnlyChange('{"version":"1.5.0"}', '{"version":"1.5.1"}', PKG), false);
 });
