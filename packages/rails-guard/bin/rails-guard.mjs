@@ -136,9 +136,28 @@ function isFenced(file, lineNo) {
   return fenced.has(lineNo);
 }
 
+// --- manifest revision accessor for the #228 version-only exemption ---
+// `before` is the freeze baseline blob; `after` is the working tree, which is what
+// `git diff <base>` compared against. Any failure — file absent at base, deleted at
+// HEAD, unreadable — returns null and the edit stays a violation (fails closed).
+const contentCache = new Map();
+function resolveContents(file) {
+  if (contentCache.has(file)) return contentCache.get(file);
+  let contents = null;
+  try {
+    const before = git(['show', `${base}:${file}`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const after = readFileSync(file, 'utf8');
+    contents = { before, after };
+  } catch {
+    contents = null;
+  }
+  contentCache.set(file, contents);
+  return contents;
+}
+
 // --- run checks ---
 const { railGlobs, railGlobError, violations, railsDiffEmpty, suppressionsClean } =
-  runChecks({ changedFiles: files, diffText: diff, cliRails, ticket, isFenced });
+  runChecks({ changedFiles: files, diffText: diff, cliRails, ticket, isFenced, resolveContents });
 
 const result = buildResult({
   violations,

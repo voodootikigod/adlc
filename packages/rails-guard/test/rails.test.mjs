@@ -78,3 +78,56 @@ describe('checkRailEdits', () => {
     assert.equal(violations.length, 1);
   });
 });
+
+// #228 — the version-only exemption, exercised through checkRailEdits itself.
+// The pure predicate is covered in version-only.test.mjs; these assert the wiring,
+// including that the exemption is OFF unless a resolver is supplied.
+describe('checkRailEdits — version-only exemption (#228)', () => {
+  const PKG = 'packages/build-gate/package.json';
+  const before = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.0', main: 'lib/i.mjs' });
+  const bumped = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/i.mjs' });
+  const edited = JSON.stringify({ name: '@adlc/build-gate', version: '1.5.1', main: 'lib/evil.mjs' });
+
+  const resolver = (after) => (file) => (file === PKG ? { before, after } : null);
+
+  test('a version-only bump under a live rail does not violate', () => {
+    const violations = checkRailEdits([PKG], ['packages/build-gate/**'], resolver(bumped));
+    assert.equal(violations.length, 0);
+  });
+
+  test('a behaviour edit to the SAME file under the SAME rail still violates', () => {
+    const violations = checkRailEdits([PKG], ['packages/build-gate/**'], resolver(edited));
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].type, 'rail-edit');
+  });
+
+  test('a source file under the rail still violates even during a bump', () => {
+    const src = 'packages/build-gate/lib/tier.mjs';
+    const violations = checkRailEdits([src], ['packages/build-gate/**'], resolver(bumped));
+    assert.equal(violations.length, 1);
+  });
+
+  test('without a resolver the exemption is OFF (backwards compatible, fails closed)', () => {
+    const violations = checkRailEdits([PKG], ['packages/build-gate/**']);
+    assert.equal(violations.length, 1);
+  });
+
+  test('a resolver that throws fails closed', () => {
+    const boom = () => { throw new Error('git exploded'); };
+    const violations = checkRailEdits([PKG], ['packages/build-gate/**'], boom);
+    assert.equal(violations.length, 1);
+  });
+
+  test('a resolver returning null fails closed', () => {
+    const violations = checkRailEdits([PKG], ['packages/build-gate/**'], () => null);
+    assert.equal(violations.length, 1);
+  });
+
+  test('a non-manifest file is never sent to the resolver', () => {
+    let called = false;
+    const spy = () => { called = true; return { before, after: bumped }; };
+    const violations = checkRailEdits(['packages/build-gate/lib/x.mjs'], ['packages/build-gate/**'], spy);
+    assert.equal(called, false);
+    assert.equal(violations.length, 1);
+  });
+});

@@ -15,6 +15,9 @@ import { parseAddedLines, findSuppressions, isMarkerAllowed } from './suppressio
  * @param {(file: string, lineNo: number) => boolean} [opts.isFenced]
  *        Authoritative `.mdx` fenced-code predicate (see findSuppressions). Omitted
  *        in pure/unit contexts, where it fails closed.
+ * @param {(file: string) => {before: string, after: string} | null} [opts.resolveContents]
+ *        Manifest revision accessor for the #228 version-only rail exemption.
+ *        Omitted in pure/unit contexts, where the exemption is simply off.
  *
  * @returns {{
  *   railGlobs: string[],
@@ -28,14 +31,14 @@ import { parseAddedLines, findSuppressions, isMarkerAllowed } from './suppressio
  *   { file, type: 'rail-edit', globs }          — froze path was edited
  *   { file, type: 'suppression', marker, lineNo }  — unapproved marker added
  */
-export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced }) {
+export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced, resolveContents }) {
   const { globs: railGlobs, error: railGlobError } = resolveRailGlobs(cliRails, ticket);
 
   const violations = [];
 
   // CHECK 1: rail edits
   if (railGlobs.length > 0) {
-    const railEdits = checkRailEdits(changedFiles, railGlobs);
+    const railEdits = checkRailEdits(changedFiles, railGlobs, resolveContents);
     violations.push(...railEdits);
   }
 

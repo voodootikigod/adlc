@@ -2,6 +2,7 @@
 // Rails are declared as globs in ticket.rails or supplied via --rails flags.
 
 import { globMatch } from '@adlc/core/tickets';
+import { isManifestFile, isVersionOnlyChange } from './version-only.mjs';
 
 /**
  * Resolve the full set of rail globs to enforce.
@@ -29,14 +30,41 @@ export function resolveRailGlobs(cliRails, ticket) {
 /**
  * Check which changed files match any rail glob.
  * Returns [ { file, type: 'rail-edit', globs: [matched patterns] } ]
+ *
+ * @param {string[]} changedFiles
+ * @param {string[]} railGlobs
+ * @param {((file: string) => {before: string, after: string} | null) | null} [resolveContents]
+ *        Optional accessor for a manifest's baseline and HEAD text, used to apply
+ *        the #228 version-only exemption: a lockstep version bump is not a rail
+ *        edit. OMITTING IT DISABLES THE EXEMPTION ENTIRELY — every caller that
+ *        cannot supply real content keeps the original, stricter behaviour rather
+ *        than silently exempting anything.
  */
-export function checkRailEdits(changedFiles, railGlobs) {
+export function checkRailEdits(changedFiles, railGlobs, resolveContents = null) {
   const violations = [];
   for (const file of changedFiles) {
     const matched = railGlobs.filter((g) => globMatch(g, file));
-    if (matched.length > 0) {
-      violations.push({ file, type: 'rail-edit', globs: matched });
+    if (matched.length === 0) continue;
+    if (resolveContents && isManifestFile(file) && isVersionOnlyEdit(file, resolveContents)) {
+      continue; // #228 — mechanical version bump, not a behaviour edit
     }
+    violations.push({ file, type: 'rail-edit', globs: matched });
   }
   return violations;
+}
+
+/**
+ * Resolve a manifest's two revisions and ask whether the change is version-only.
+ * Any failure to resolve — a throwing resolver, a null result, unreadable content
+ * — yields false, so the edit is reported as an ordinary violation. Fails closed.
+ */
+function isVersionOnlyEdit(file, resolveContents) {
+  let contents;
+  try {
+    contents = resolveContents(file);
+  } catch {
+    return false;
+  }
+  if (!contents) return false;
+  return isVersionOnlyChange(contents.before, contents.after);
 }
