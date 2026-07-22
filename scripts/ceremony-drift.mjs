@@ -469,19 +469,33 @@ export function normalizeActorLogin(login) {
 const isBotFormLogin = (login) => /^app\//.test(String(login ?? '')) || /\[bot\]$/.test(String(login ?? ''));
 
 /**
- * Authorship check for the unlabeled sweep.
+ * Authorship check for the unlabeled sweep. Two acceptance routes, deliberately
+ * NOT equally strict, because they carry different risk.
  *
- * Name equality alone is NOT sufficient once the '[bot]' suffix is stripped: a
- * human account literally named `github-actions` would then normalize onto the
- * managed identity and could have its issue seized by a job holding
- * `issues: write`. The exact-match comparison this replaces did not have that
- * hole, so bot-ness is required alongside the name — a fix must not widen the
- * authorization it was meant to repair. `is_bot` absent means not provably a
- * bot, which fails closed.
+ * EXACT match against a configured entry is explicit operator intent. It accepts
+ * only what someone literally wrote into ADLC_DRIFT_AUTHORS, widens nothing, and
+ * so needs no further evidence. This route is load-bearing: the override is
+ * documented for "repos whose automation runs under a different identity", which
+ * in practice is usually a dedicated MACHINE USER — reported with
+ * `is_bot: false`. Demanding bot-ness here would reject that configured author
+ * and recreate #265 under the override.
+ *
+ * NORMALIZED match is the route that widens: it accepts logins nobody configured,
+ * on the strength of one login aliasing onto another. That is exactly where
+ * impersonation becomes possible — stripping '[bot]' means a human account named
+ * `github-actions` would alias onto the managed bot and could have its issue
+ * seized by a job holding `issues: write`. The exact-string comparison this
+ * replaces did not have that hole, and a fix must not widen the authorization it
+ * was meant to repair, so bot evidence is required on this route only. `is_bot`
+ * absent means not provably a bot, which fails closed.
  */
 function isManagedAuthor(author, authors) {
   const login = author?.login;
   if (!login) return false;
+
+  const lower = String(login).trim().toLowerCase();
+  if (authors.some((a) => String(a).trim().toLowerCase() === lower)) return true;
+
   const normalized = normalizeActorLogin(login);
   if (!authors.some((a) => normalizeActorLogin(a) === normalized)) return false;
   return author?.is_bot === true || isBotFormLogin(login);
