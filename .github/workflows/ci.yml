@@ -320,9 +320,6 @@ jobs:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
-      - name: TEMP DEBUG — stream run-tests baseline to surface the Linux/npm-ci failure
-        run: node scripts/run-tests.mjs
-
       - name: Mutation coverage gate
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
