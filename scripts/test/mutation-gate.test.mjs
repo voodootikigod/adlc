@@ -81,10 +81,17 @@ test('testTargetFor maps scripts/<name>.mjs to scripts/test/<name>.test.mjs when
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('testTargetFor falls back to scripts/test/*.test.mjs for a scripts/ file with no same-basename test when scripts/test exists', () => {
+test('testTargetFor maps scripts/<name>.mjs with pi in name to plugins/adlc-pi/test/*.test.mjs when no same-basename test exists', () => {
+  const root = fixtureRoot(['plugins/adlc-pi/test']);
+  try {
+    assert.equal(testTargetFor('scripts/pi-live-deny.mjs', root), 'plugins/adlc-pi/test/*.test.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor returns null for a scripts/ file with no matching test', () => {
   const root = fixtureRoot(['scripts/test'], ['scripts/test/unrelated.test.mjs']);
   try {
-    assert.equal(testTargetFor('scripts/no-test-for-this.mjs', root), 'scripts/test/*.test.mjs');
+    assert.equal(testTargetFor('scripts/no-test-for-this.mjs', root), null);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

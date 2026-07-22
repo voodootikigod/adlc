@@ -104,8 +104,8 @@ export function testTargetFor(file, root = ROOT) {
   if ((m = /^scripts\/([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
     const f = `scripts/test/${m[1]}.test.mjs`;
     if (existsSync(join(root, f))) return f;
-    const d = 'scripts/test';
-    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
+    if (m[1].includes('pi') && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
+    return null;
   }
   return null;
 }
