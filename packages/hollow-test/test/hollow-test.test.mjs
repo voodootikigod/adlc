@@ -756,16 +756,31 @@ describe('CLI: --test-glob reclassifies a source file as a test', () => {
   });
 });
 
-// --source-glob end to end. Two globs, deliberately: the flags are declared
-// `multiple: true`, and without that parseArgs hands back a bare string whose
-// `.some` does not exist. A single-glob test would not distinguish the two.
-describe('CLI: --source-glob rescues a production file named like a test', () => {
+// --source-glob end to end, through DIFF-DERIVED selection.
+//
+// The first version of this test passed --target for both halves, which made it
+// hollow: explicit targets deliberately bypass test-path classification and
+// enter the mutation set on extension alone, so both assertions stayed green
+// whether or not sourceGlobs ever reached filterTargetFiles. A refactor dropping
+// that forwarding — the exact regression this test exists to catch — would not
+// have failed it.
+//
+// No --target here. The file arrives through the diff, so the ONLY thing that
+// can make it mutable is the declaration.
+//
+// Two globs deliberately: the flag is `multiple: true`, and with
+// `multiple: false` parseArgs returns a bare string whose `.some` does not
+// exist. And the negative half asserts the SPECIFIC "nothing to mutate"
+// refusal — the option working and the option crashing are both non-zero, and
+// only the message distinguishes them.
+describe('CLI: --source-glob rescues a diff-derived file named like a test', () => {
   let dir;
 
   before(() => {
     dir = mkdtempSync(join(tmpdir(), 'hollow-sourceglob-'));
     createRailsAuthoringRepo(dir);
-    // Named like a node --test discovery match, but production code.
+    // Sole content of the final commit, so `--base HEAD~1` yields a diff whose
+    // only candidate is this file — nothing else can keep the run alive.
     writeFileSync(join(dir, 'src', 'widget-test.mjs'),
       'export const ok = (x) => x > 0;\n');
     git(['add', '-A'], dir);
@@ -776,36 +791,34 @@ describe('CLI: --source-glob rescues a production file named like a test', () =>
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('refuses it as a --target without the declaration', () => {
+  it('is excluded by naming convention without the declaration', () => {
     const result = runCli(
-      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
-       '--target', 'src/widget-test.mjs', '--max', '3'],
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '3'],
       dir
     );
     const out = result.stderr + result.stdout;
-    // Excluded by naming convention, so it is not a mutable target and the run
-    // has nothing to do — it must not silently report a pass.
-    assert.notEqual(result.status, 0,
-      `expected a non-zero exit with no declaration: ${out}`);
+    assert.match(out, /nothing to mutate/,
+      `a node --test-shaped name must not be mutated by default: ${out}`);
   });
 
-  it('mutates it when declared via --source-glob', () => {
+  it('becomes diff-derived mutable source once declared', () => {
     const result = runCli(
       ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
-       '--target', 'src/widget-test.mjs',
        '--source-glob', '**/nothing-matches-this.mjs',
        '--source-glob', '**/widget-test.mjs',
        '--max', '3', '--json'],
       dir
     );
     const out = result.stderr + result.stdout;
-    assert.doesNotMatch(out, /not a supported source language/,
-      `the declaration must make it a valid target: ${out}`);
+    assert.doesNotMatch(out, /nothing to mutate/,
+      `the declaration must make it eligible through diff selection: ${out}`);
+    assert.doesNotMatch(out, /TypeError/,
+      'a crash is not the same as the option working');
     let parsed;
     assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); },
       `stdout is not valid JSON: ${out}`);
-    assert.ok(parsed.summary.total > 0,
-      `expected mutants for the declared source file (total=${parsed.summary.total})`);
+    assert.ok(parsed.mutants.some((m) => m.file === 'src/widget-test.mjs'),
+      'the declared file must actually be mutated');
   });
 });
 
