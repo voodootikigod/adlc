@@ -4,6 +4,7 @@
 // (the /adlc-* command palette). Never clobbers a user's existing hooks — it
 // MERGES the ADLC entries into the hooks map.
 
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,7 @@ export { ensureGitignore, ensureFormatterIgnores, ensureTicketStore };
 // The installed @adlc/cursor root (this file lives at <root>/lib/scaffold.mjs).
 export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+const SESSION_START_REL = 'hooks/adlc-session-start.mjs';
 const PRETOOL_REL = 'hooks/adlc-pretool.mjs';
 const AUDIT_REL = 'hooks/adlc-audit.mjs';
 const SHELL_ADVISORY_REL = 'hooks/adlc-shell-advisory.mjs';
@@ -30,6 +32,9 @@ const SHELL_ADVISORY_REL = 'hooks/adlc-shell-advisory.mjs';
 // ADLC_CURSOR_WIRE_UNPINNED=0.
 const STOP_REL = 'hooks/adlc-stop.mjs';
 const PREFLIGHT_REL = 'hooks/adlc-preflight.mjs';
+const TICKET_CONTEXT_RULE = 'adlc-ticket-context.mdc';
+const TICKET_CONTEXT_SENTINEL_BEGIN = '<!-- BEGIN ADLC_TICKET_CONTEXT_V1 -->';
+const TICKET_CONTEXT_SENTINEL_END = '<!-- END ADLC_TICKET_CONTEXT_V1 -->';
 // Catch-all (".*"): every tool reaches the dispatcher so the classifier — not an
 // allowlist matcher — is the single decision point (see PRETOOL_MATCHER in the
 // checker). Imported, not duplicated, so the scaffold and template can't drift.
@@ -45,7 +50,17 @@ const PREFLIGHT_REL = 'hooks/adlc-preflight.mjs';
  * that user hooks are always preserved. */
 function isAdlcHook(entry) {
   return typeof entry?.command === 'string'
-    && /(^|[/\\"'\s])adlc-(rails-guard|pretool|audit|shell-advisory|stop|preflight)\.mjs/.test(entry.command);
+    && /(^|[/\\"'\s])adlc-(rails-guard|pretool|audit|shell-advisory|stop|preflight|session-start)\.mjs/.test(entry.command);
+}
+
+function sha256Hex(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** Stock hashes of shipped `adlc-ticket-context.mdc` bodies eligible for upgrade. */
+export function stockTicketContextHashes(pluginRoot = PLUGIN_ROOT) {
+  const stock = readFileSync(join(pluginRoot, 'rules', TICKET_CONTEXT_RULE), 'utf8');
+  return new Set([sha256Hex(stock)]);
 }
 
 /** Coerce a hooks.json event value to an array. A hand-edited file can carry a
@@ -69,6 +84,7 @@ export function buildHookCommands(pluginRoot = PLUGIN_ROOT, { projectRoot } = {}
   const useNm = Boolean(projectRoot) && existsSync(join(projectRoot, NM_PREFIX));
   const hook = (rel) => (useNm ? nmHook(rel) : absHook(pluginRoot, rel));
   return {
+    sessionStart: hook(SESSION_START_REL),
     pretool: hook(PRETOOL_REL),
     audit: hook(AUDIT_REL),
     shellAdvisory: hook(SHELL_ADVISORY_REL),
@@ -96,6 +112,9 @@ export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = 
   const base = existing && typeof existing === 'object' ? existing : {};
   const hooks = { ...(base.hooks ?? {}) };
 
+  const sessionStart = asHookList(hooks.sessionStart).filter((e) => !isAdlcHook(e));
+  sessionStart.push({ command: cmds.sessionStart, timeout: 10, failClosed: false });
+
   const preToolUse = asHookList(hooks.preToolUse).filter((e) => !isAdlcHook(e));
   preToolUse.push({ command: cmds.pretool, matcher: PRETOOL_MATCHER, timeout: 10, failClosed: false });
 
@@ -105,7 +124,7 @@ export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = 
   const beforeShellExecution = asHookList(hooks.beforeShellExecution).filter((e) => !isAdlcHook(e));
   beforeShellExecution.push({ command: cmds.shellAdvisory, timeout: 10, failClosed: false });
 
-  const merged = { ...hooks, preToolUse, afterFileEdit, beforeShellExecution };
+  const merged = { ...hooks, sessionStart, preToolUse, afterFileEdit, beforeShellExecution };
 
   // Unpinned events: strip our entries first (so turning the flag OFF restores
   // the default), then re-add only on explicit opt-in. A user's own entries on
@@ -165,13 +184,65 @@ export function ensureRule(projectRoot, { pluginRoot = PLUGIN_ROOT } = {}) {
 }
 
 /**
+ * Install/upgrade the always-apply ticket-context rule (AC17).
+ * - Missing → copy stock.
+ * - Byte-matches a known stock hash → upgrade to current stock.
+ * - Contains managed sentinel but user-edited → preserve + write `.adlc-proposed`.
+ * - Other user file without sentinel → leave untouched (no clobber).
+ */
+export function ensureTicketContextRule(projectRoot, { pluginRoot = PLUGIN_ROOT } = {}) {
+  const rulesDir = join(projectRoot, '.cursor', 'rules');
+  mkdirSync(rulesDir, { recursive: true });
+  const dest = join(rulesDir, TICKET_CONTEXT_RULE);
+  const stockPath = join(pluginRoot, 'rules', TICKET_CONTEXT_RULE);
+  const stock = readFileSync(stockPath, 'utf8');
+  const stockHashes = stockTicketContextHashes(pluginRoot);
+
+  if (!existsSync(dest)) {
+    writeFileSync(dest, stock);
+    return { path: dest, created: true, upgraded: false, preserved: false, warning: null };
+  }
+
+  const onDisk = readFileSync(dest, 'utf8');
+  if (onDisk === stock || stockHashes.has(sha256Hex(onDisk))) {
+    if (onDisk !== stock) writeFileSync(dest, stock);
+    return { path: dest, created: false, upgraded: onDisk !== stock, preserved: false, warning: null };
+  }
+
+  const hasSentinel = onDisk.includes(TICKET_CONTEXT_SENTINEL_BEGIN)
+    && onDisk.includes(TICKET_CONTEXT_SENTINEL_END);
+  if (hasSentinel) {
+    const proposed = `${dest}.adlc-proposed`;
+    writeFileSync(proposed, stock);
+    return {
+      path: dest,
+      created: false,
+      upgraded: false,
+      preserved: true,
+      warning: `user-modified ${TICKET_CONTEXT_RULE} preserved; wrote proposal ${proposed}`,
+      proposed,
+    };
+  }
+
+  // Unrelated user file with this name — do not clobber.
+  return {
+    path: dest,
+    created: false,
+    upgraded: false,
+    preserved: true,
+    warning: `${TICKET_CONTEXT_RULE} exists and is not a stock ADLC rule; left unchanged`,
+  };
+}
+
+/**
  * Register the Cursor integration in the user's repo: wire the hooks and install
  * the rule. Named to parallel the sibling scaffolds. Returns a summary.
  */
 export function ensurePluginRegistered(projectRoot, opts = {}) {
   const hooks = ensureCursorHooks(projectRoot, opts);
   const rule = ensureRule(projectRoot, opts);
-  return { hooks, rule };
+  const ticketContext = ensureTicketContextRule(projectRoot, opts);
+  return { hooks, rule, ticketContext };
 }
 
 /**
@@ -209,9 +280,9 @@ export function ensureConfig(projectRoot) {
 export function scaffold(projectRoot, opts = {}) {
   const ticketStore = ensureTicketStore(projectRoot);
   const config = ensureConfig(projectRoot);
-  const { hooks, rule } = ensurePluginRegistered(projectRoot, opts);
+  const { hooks, rule, ticketContext } = ensurePluginRegistered(projectRoot, opts);
   const commands = deployCommands(projectRoot, opts);
   const gitignore = ensureGitignore(projectRoot);
   const formatterIgnores = ensureFormatterIgnores(projectRoot);
-  return { ticketStore, config, hooks, rule, commands, gitignore, formatterIgnores };
+  return { ticketStore, config, hooks, rule, ticketContext, commands, gitignore, formatterIgnores };
 }

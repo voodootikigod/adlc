@@ -1,19 +1,29 @@
 {
-  "name": "adlc",
+  "name": "adlc-plugins",
   "owner": {
-    "name": "Chris Williams"
+    "name": "Chris Williams",
+    "email": "chris@voodootikigod.com"
   },
   "metadata": {
-    "description": "The Agentic Development Lifecycle toolkit, packaged for Cursor.",
-    "version": "1.6.0"
+    "description": "ADLC plugins for Cursor — Agentic Development Lifecycle gates, hooks, skills, and commands.",
+    "version": "1.6.0",
+    "pluginRoot": "plugins"
   },
   "plugins": [
     {
       "name": "adlc-cursor",
-      "source": "./plugins/adlc-cursor",
-      "description": "ADLC gates, rails-guard hooks, skills, and /adlc-* commands for Cursor. Requires @adlc/cli (npm i -g @adlc/cli).",
+      "source": "adlc-cursor",
+      "displayName": "ADLC for Cursor",
+      "description": "ADLC for Cursor: rails-guard hooks, phase skills, and /adlc-* commands. Requires @adlc/cli (npm i -g @adlc/cli).",
       "version": "1.6.0",
-      "logo": "assets/logo.svg"
+      "logo": "plugins/adlc-cursor/assets/logo.png",
+      "keywords": [
+        "adlc",
+        "cursor",
+        "rails",
+        "gates"
+      ],
+      "category": "developer-tools"
     }
   ]
 }

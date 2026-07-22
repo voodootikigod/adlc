@@ -1393,6 +1393,226 @@
       "title": "mutation-gate: classify source by an include-list, not by excluding known non-source extensions"
     },
     {
+      "body": "Close ADR-0006 / issue #241 follow-ons that unblock the rest of the Cursor deeper-native wave: author the binding umbrella P1 spec, pin real Cursor hook payload shapes (especially session_id), and ship a sessionStart hook that injects ADLC ticket/rails context so an installed plugin feels ambient rather than forgotten.\n\nContext: the Jul-2026 Cursor parity plan (issue #241 + plugins/adlc-cursor review) found Cursor underuses native plugin surfaces. T47 shipped marketplace distribution but deferred agents/MCP and left sessionStart unused. Current Cursor hooks docs pin sessionStart input `{ session_id, is_background_agent, composer_mode }` and output `{ env, additional_context }`. ADR-0006 still TODOs payload field pins and TTL-based buildgate depth because session id was unverified.\n\n=== CONTRACT (write then gate) ===\nAuthor `.adlc/specs/cursor-deeper-native.md` BEFORE coding. It is the binding umbrella for T62–T67 and must pin:\n1. Workstream map: T62 sessionStart/payload pin → T63 MCP → T64 agents+Task prosecute → T65 preCompact/subagent hooks → T66 live deny-proof → T67 marketplace publish + /adlc-init DX.\n2. Honesty: CI rails-guard remains the unbypassable control; in-session deny stays best-effort (failClosed:false).\n3. No invented hook events — only Cursor-documented events (sessionStart, preCompact, subagentStart/Stop, etc.).\n4. Agents/MCP previously out-of-scope in T47 are IN SCOPE for T63/T64; live deny-proof remains T66 (maintainer binary).\n5. Stale claim \"Cursor has no subagent fan-out\" in command/adlc-prosecute.md must be retired by T64, not this ticket.\n\n=== DELIVERABLES ===\n1. Spec file above.\n2. Capture/fixture of real or docs-pinned sessionStart + preToolUse field names; update defensive extractors and ADR-0006 \"Resolved Cursor hook facts\" / Unverified sections.\n3. New `hooks/adlc-session-start.mjs` wired in plugin `hooks/hooks.json` + root `hooks.json` + scaffolder merge path (`plugins/adlc-cursor/lib/scaffold.mjs` `mergeHooks`, in ticket scope): on sessionStart, resolve active ticket (reuse generated-active-ticket / existing helpers), return `additional_context` summarizing active ticket id, rails on/off, phase hint, and `env` including at least a session-scoped id derived from `session_id` for downstream hooks.\n4. Switch buildgate depth to **per-session counters** keyed by `ADLC_CURSOR_SESSION_ID` / `session_id` (not a single shared slot that resets on id change). Keep TTL cleanup of stale session entries + anonymous TTL singleton fallback when no id. Interleaving test required: calls A1,B1,A2,B2 → depths 1,1,2,2. Update constants/tests.\n5. Fix stale \"DISABLED BY DEFAULT\" header comments on stop/preflight hooks to match T47 default-on truth.\n6. Extend `scripts/cursor-install-smoke.mjs` + unit tests for sessionStart wiring and session_id scoping.\n7. Docs truth: ADR-0006, docs/integrations/cursor.md, matrix cell notes if the file is present on the branch; do not claim deny is proven (that is T66).\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: `.adlc/specs/cursor-deeper-native.md` exists and names T62–T67 with binding decisions above. VERIFY: file present + smoke/assert or packaging test that references it.\n- AC2: `sessionStart` is present in plugin hooks/hooks.json pointing at the new script with failClosed:false. VERIFY: `node scripts/cursor-install-smoke.mjs .`\n- AC3: Per-session depth counters: interleaved sessions A/B produce independent counts (A1,B1,A2,B2 → 1,1,2,2); TTL expires stale session entries; anonymous (no id) keeps TTL singleton fallback. VERIFY: `node --test plugins/adlc-cursor/test/*.test.mjs`\n- AC4: sessionStart returns additional_context mentioning the active ticket when `.adlc/current-ticket.json` resolves; returns a clear \"no active ticket\" context when absent. VERIFY: unit test with temp dirs.\n- AC5: ADR-0006 no longer lists session_id as unverified if pinned; stop/preflight comments no longer say DISABLED BY DEFAULT. VERIFY: ripgrep assertions in smoke or docs test.\n- AC6: `adlc rails-guard --base main --ticket T62` passes for this ticket's rails; root relevant tests pass.\n\n=== OUT OF SCOPE ===\n- MCP, agents, /adlc-prosecute rewrite (T63/T64).\n- preCompact / subagentStart (T65).\n- Live Cursor binary deny-proof (T66).\n- cursor.com/marketplace human publish (T67).\n- Changing @adlc/core rail decision semantics.\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (round 2) ===\n- sessionStart additional_context is best-effort; ship/extend rules/adlc.mdc fallback to read current-ticket pointer (AC17). Scope includes plugins/adlc-cursor/rules/**.\n- Resolve consumer workspace via CURSOR_PROJECT_DIR / workspace_roots (not plugin cwd); test 0/1/N ADLC roots with cwd=plugin dir.\n- Depth state: atomic per-session files or lock/CAS; concurrent multi-process bump test (no lost updates).\n- Checked-in preToolUse + sessionStart fixtures under test/fixtures; ADR unverified bullets retired (AC18).\n\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (round 3) ===\n- Depth increment: lock or CAS-with-retry (rename-only insufficient).\n- P5 marker must match sessionId; cross-session isolation required.\n- Workspace resolution: prefer active-ticket-bearing roots; validate CURSOR_PROJECT_DIR is ADLC-bearing; multi-active roots report ambiguity.\n\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (round 4) ===\n- Dedicated alwaysApply:true ticket-context rule + non-destructive scaffold upgrade (AC17).\n- Workspace candidates = workspace_roots ∪ ADLC-bearing CURSOR_PROJECT_DIR; active roots win; multi-active = ambiguity; env cannot hide another active root.\n\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (round 5) ===\n- Rule upgrade: stock-hash or managed-block only; sentinel+user-drift → keep + propose/backup.\n- Error-bearing roots (canonical pointer fail-closed) before active/inactive; never call those \"no active ticket\".\n- Normalize Cursor Windows /c:/ paths before ADLC checks.\n- Depth locks: ownership token, finally release, bounded acquire, stale-lease reclaim; crash-recovery test.\n\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (round 6) ===\n- AC2: marketplace vs scaffold/package-root sessionStart command paths may differ (T47 policy); assert semantic lockstep not identical strings.\n- P1 review boundary: missing T62 implementation is not a P1 no-ship for this spec.\n\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (round 7) ===\n- alwaysApply fallback must use canonical ticket resolution (not raw pointer/env).\n\nundefined\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\n- ADLC-bearing roots use canonical detectTicketStore semantics: directory\n  (.adlc/tickets/), legacy (.adlc/tickets.json), and override stores. Dual-store\n  / pending-transaction / conflict -> error-bearing (not \"no active ticket\").\n- Depth increments are idempotent on tool_use_id under the same CAS/leased lock.\n- sessionStart persists .adlc/cursor-session-workspace-<sessionId>.json for MCP.\n\n- MCP fallback uses user-scoped ~/.adlc/cursor-session-workspaces.json (not in-repo-only).\n\n=== P1 CONTRACT AMENDMENTS ===\n- Zero ADLC candidates => unresolved (never process.cwd() / plugin cwd).\n- T62 owns user-scoped session index upsert (AC19); T63 only consumes it.\n\n=== P1 ===\nsafeId = SHA-256 hex of session id; no sessionless MCP index fallback.\n\n=== P1 ===\nDepth lock fencing before commit; paused-holder race test required.\n\n=== P1 ===\nenv/payload session conflict => no named session state mutation.\n\n=== P1 ===\nFailed resolution must tombstone/clear session index (omit forbidden).\n\n=== P1 ===\nSession index: whole-file lock/CAS with fencing across sessions.\n\n=== P1 ===\nDepth state: one counter per session at sessionStart-resolved root or ~/.adlc.\n\n=== P1 ===\nSession index T62-only until handoff; P5 marker shares depth storage root.\n\n=== P1 ===\nMissing tool_use_id => per-delivery bump; P5 marker runId compare-and-delete.\n\n=== P1 ===\nVersioned session-resolution records/tombstones for AC17; enforcement === \"1\"; conflict no mutation.\n\n=== P1 ===\nStrict session_id/conversation_id only; reject generation/thread; alias disagreement = conflict.\n\n=== P1 ===\nallowLegacyPointer:true bridge; unresolved tombstones prior success; rails/sessionStart agreement fixtures.\n\n=== P1 ===\nrails-checker + rails-guard in T62 scope (not frozen) for canonical ticket reader agreement.\nUser-scoped control state; T62 owns fenced P5 marker helper.\n\n=== P1 ===\nEvery terminal resolution writes success or tombstone; nested-subagent lineage for P5.\n",
+      "budget": "mid",
+      "category": "feature",
+      "duration": 2,
+      "edges": [
+        {
+          "contract": "T62 before T65 (Cursor deeper-native DAG)",
+          "to": "T65"
+        },
+        {
+          "contract": "T62 before T66 (Cursor deeper-native DAG)",
+          "to": "T66"
+        },
+        {
+          "contract": "T62 before T63 (Cursor deeper-native DAG; MCP session mapping)",
+          "to": "T63",
+          "type": "before"
+        }
+      ],
+      "id": "T62",
+      "rails": [
+        "docs/ci/rails-guard.yml"
+      ],
+      "scope": [
+        ".adlc/specs/cursor-deeper-native.md",
+        "plugins/adlc-cursor/hooks/**",
+        "plugins/adlc-cursor/hooks.json",
+        "plugins/adlc-cursor/hooks/hooks.json",
+        "plugins/adlc-cursor/constants.mjs",
+        "plugins/adlc-cursor/test/**",
+        "scripts/cursor-install-smoke.mjs",
+        "docs/adr/0006-adlc-cursor-integration.md",
+        "docs/integrations/cursor.md",
+        "docs/integrations/harness-capability-matrix.md",
+        "apps/docs/content/docs/integrations/cursor.mdx",
+        "apps/docs/lib/integration-facts.mjs",
+        "plugins/adlc-cursor/lib/scaffold.mjs",
+        "plugins/adlc-cursor/lib/scaffold-cli.mjs",
+        "plugins/adlc-cursor/rules/**",
+        "plugins/adlc-cursor/test/fixtures/**",
+        "plugins/adlc-cursor/rails-checker.mjs",
+        "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs"
+      ],
+      "title": "Cursor deeper-native: pin hook payloads + ship sessionStart ticket context"
+    },
+    {
+      "body": "Port the Claude Code / Codex MCP surface into the Cursor marketplace plugin so agents get `adlc_gate` and `adlc_prosecute` as first-class MCP tools instead of shelling `adlc` only. This was explicit T47 out-of-scope and is workstream B of `.adlc/specs/cursor-deeper-native.md` / issue #241 Cursor deeper-native plan.\n\n=== CONTRACT ===\nFollow Cursor plugin MCP discovery: root `mcp.json` with `mcpServers` (or manifest `mcpServers` path). Mirror sibling shape:\n```json\n{ \"mcpServers\": { \"adlc\": { \"command\": \"adlc\", \"args\": [\"mcp-server\"] } } }\n```\nDo NOT fork packages/cli/lib/mcp-server.mjs — reuse the published CLI entrypoint. Soft-fail UX when `adlc` is missing must be documented (skills/README), not a new MCP server implementation.\n\n=== DELIVERABLES ===\n1. `plugins/adlc-cursor/mcp.json` (and plugin.json field if required for non-default discovery).\n2. Packaging allowlist (`files` in package.json) includes mcp.json.\n3. Skills/docs: note MCP tools + `npm i -g @adlc/cli` prerequisite; what happens if adlc is absent.\n4. Smoke/packaging tests assert mcp.json present and matches sibling command/args contract.\n5. Update harness-capability-matrix Cursor MCP cell to shipped (if matrix file is on branch); update cursor integration docs.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: mcp.json exists and declares adlc → `adlc mcp-server`. VERIFY: packaging test + smoke.\n- AC2: `files` allowlist packs mcp.json. VERIFY: packaging.test.mjs.\n- AC3: Docs/skills mention adlc_gate / adlc_prosecute via MCP. VERIFY: smoke string assert or docs test.\n- AC4: No changes to packages/cli/lib/mcp-server.mjs tool allowlist (rails). VERIFY: rails-guard / diff.\n- AC5: Sibling CC/Codex .mcp.json remain unchanged (rails).\n\n=== OUT OF SCOPE ===\n- Expanding ALLOWED_GATES in mcp-server.\n- Agents / Task prosecute (T64).\n- Plugin variables dashboard config (optional later).\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (MCP root) ===\n- MCP must evaluate the resolved consumer workspace, not plugin cwd. Prefer thin wrapper under plugins/adlc-cursor that sets cwd to sessionStart-resolved root; expand to mcp-server root passthrough only if required (do not widen ALLOWED_GATES).\n- AC7 includes e2e from non-consumer cwd against temp fixtures.\n\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\nConsumer-root via plugin wrapper only (mcp-server.mjs frozen). Production root\nchannel order: MCP roots/list -> host env (CURSOR_PROJECT_DIR etc.) ->\nsessionStart-persisted mapping. AC7 must exercise shipped mcp.json launch for\nzero/one/ambiguous roots - not test-only root inject.\n\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\nConsumer-root via plugin wrapper only (mcp-server.mjs frozen). Production root\nchannel order: MCP roots/list -> host env (CURSOR_PROJECT_DIR etc.) ->\nsessionStart-persisted mapping. AC7 must exercise shipped mcp.json launch for\nzero/one/ambiguous roots - not test-only root inject.\n\nUser-scoped session index (~/.adlc/cursor-session-workspaces.json) is the MCP fallback; in-repo mapping alone is insufficient. T62 before T63 is required.\n\n=== P1 CONTRACT AMENDMENTS ===\nmcp.json MUST launch plugin wrapper (not direct adlc mcp-server). Consume T62\nuser-scoped session index; do not own sessionStart writes.\n\n=== P1 ===\nSessionless MCP must fail closed; AC7 rejects unrelated sole index entry.\n\n=== P1 ===\nThin pre-spawn wrapper: host env + session index only; Roots require lifecycle proxy.\n\n=== P1 ===\nAC7 primary: host env/non-plugin cwd without session id; index secondary.\n\n=== P1 ===\nThin wrapper: host-env only; no cwd heuristics; no index MCP fallback until session-id handoff evidenced.\n\n=== P1 ===\nThin wrapper single-root host-env only; multi-root requires lifecycle proxy.\n\n=== P1 ===\nMCP not \"shipped\" until installed-Cursor host-env or Roots proof (AC7 ship gate).\n\n=== P1 ===\nLifecycle Roots proxy mandatory to claim MCP shipped; thin host-env alone insufficient.\n\n=== P1 ===\nRoots list_changed: fail-closed rebind; stale child must not mutate old root.\n\n=== P1 ===\nRoots proxy mandatory; file:// URI decode; listChanged/fail-closed; AC7 uses Root objects.\n",
+      "budget": "mid",
+      "category": "feature",
+      "duration": 1,
+      "edges": [
+        {
+          "contract": "T63 before T64 (Cursor deeper-native DAG)",
+          "to": "T64"
+        },
+        {
+          "contract": "T63 before T67 (Cursor deeper-native DAG)",
+          "to": "T67"
+        }
+      ],
+      "id": "T63",
+      "rails": [
+        "packages/cli/lib/mcp-server.mjs",
+        "packages/cli/bin/adlc.mjs",
+        "plugins/adlc-claude-code/.mcp.json",
+        "plugins/adlc-codex/.mcp.json"
+      ],
+      "scope": [
+        "plugins/adlc-cursor/mcp.json",
+        "plugins/adlc-cursor/.cursor-plugin/plugin.json",
+        "plugins/adlc-cursor/package.json",
+        "plugins/adlc-cursor/skills/**",
+        "plugins/adlc-cursor/README.md",
+        "plugins/adlc-cursor/test/**",
+        "scripts/cursor-install-smoke.mjs",
+        ".adlc/specs/cursor-deeper-native.md",
+        "docs/integrations/cursor.md",
+        "docs/integrations/harness-capability-matrix.md",
+        "apps/docs/content/docs/integrations/cursor.mdx",
+        "apps/docs/lib/integration-facts.mjs",
+        "plugins/adlc-cursor/lib/**",
+        "plugins/adlc-cursor/bin/**",
+        "plugins/adlc-cursor/test/fixtures/**"
+      ],
+      "title": "Cursor plugin: ship mcp.json wiring adlc mcp-server with missing-CLI soft-fail"
+    },
+    {
+      "body": "Close issue #241 Cursor P5 independence gap. T47 / ADR-0006 / cursor-native-parity assumed Cursor had no subagent fan-out; Cursor now documents plugin `agents/` and Agent Task/subagents. Ship a prosecutor agent roster and rewrite `/adlc-prosecute` to fan lenses across fresh contexts, keeping sequential fallback + cross-model `adversarial-review --providers`.\n\n=== CONTRACT ===\nPer `.adlc/specs/cursor-deeper-native.md` (must exist from T62 or be authored/updated here if missing): port Claude Code prosecutor agents into Cursor agent markdown frontmatter (`name`, `description`; Cursor-valid tools list — do not copy Claude-only tool IDs blindly). Register `agents` in plugin.json. `/adlc-prosecute` must instruct Task (or Cursor agent invocation) fan-out for the five lenses + verifier; must NOT claim \"Cursor has no subagent fan-out\". Independence caveat becomes: prefer fresh-context agents; sequential same-context is degraded fallback only.\n\n=== DELIVERABLES ===\nCURSOR AGENT FRONTMATTER: every lens + verifier agent MUST set `readonly: true` (Cursor subagent field; see cursor.com/docs/subagents). Do NOT copy Claude Code `tools:` frontmatter — it is not Cursor syntax and does not enforce read-only. Optional `prosecutor.md` orchestrator may use `readonly: false` only if it must run mechanical shell gates; document why. Packaging/smoke MUST reject lens/verifier agents missing `readonly: true`.\n1. `plugins/adlc-cursor/agents/` with at least the five lens agents + verifier (+ optional orchestrator prosecutor.md), adapted from plugins/adlc-claude-code/agents/.\n2. plugin.json `agents` path; package files allowlist.\n3. Rewrite command/adlc-prosecute.md for Task/agent fan-out; keep recording via gate-manifest / adlc_prosecute MCP when available.\n4. Update skills/adlc SKILL.md P5 section and smoke caveat assertions (replace old \"no subagent\" strings).\n5. Matrix + docs: Cursor P5 independence cell moves from sequential-only to agents-backed (still note cross-model providers for risk gate).\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: agents/ directory has ≥5 lens agents + verifier with valid frontmatter including `readonly: true` on every lens and verifier. VERIFY: packaging + smoke reject missing readonly.\n- AC2: `/adlc-prosecute` body describes Task/fresh-context fan-out and does NOT contain the exact stale claim that Cursor has no subagent fan-out. VERIFY: smoke string asserts.\n- AC3: Sequential fallback still documented for hosts without Task. VERIFY: command body + smoke.\n- AC4: Still recommends `npx adversarial-review --providers` for cross-model risk gate. VERIFY: smoke.\n- AC5: Does not modify packages/core/lib/prosecutor.mjs convergence semantics (rails) — orchestration only.\n- AC6: cursor-install-smoke + plugin tests pass.\n\n=== OUT OF SCOPE ===\n- subagentStart/Stop hook orchestration (T65).\n- Live deny-proof (T66).\n- Changing hollow-test / behavior-diff CLIs.\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\nAC9/AC10 require the exact five-lens + verifier roster packaged with\nreadonly:true; /adlc-prosecute must require fresh-context fan-out, fail-closed\nverifier, @adlc/core convergence, and ticket-/revision-bound prosecution\nevidence via adlc prosecute / adlc_prosecute. Prose-only Task mention fails.\n\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\nAC9/AC10 require the exact five-lens + verifier roster packaged with\nreadonly:true; /adlc-prosecute must require fresh-context fan-out, fail-closed\nverifier, @adlc/core convergence, and ticket-/revision-bound prosecution\nevidence via adlc prosecute / adlc_prosecute. Prose-only Task mention fails.\n\n=== P1 ===\nExtend prosecute recorder LENSES with contract+diff (or lossless map) and test packet through validateInput.\n\n=== P1 ===\nAgents-backed claim blocked on installed-Cursor fan-out proof (AC10 ship gate).\n",
+      "budget": "frontier",
+      "category": "feature",
+      "duration": 3,
+      "edges": [
+        {
+          "contract": "T64 before T65 (Cursor deeper-native DAG)",
+          "to": "T65"
+        },
+        {
+          "contract": "T64 before T67 (Cursor deeper-native DAG)",
+          "to": "T67"
+        }
+      ],
+      "id": "T64",
+      "rails": [
+        "packages/core/lib/prosecutor.mjs",
+        "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-cursor/rails-checker.mjs"
+      ],
+      "scope": [
+        "plugins/adlc-cursor/agents/**",
+        "plugins/adlc-cursor/.cursor-plugin/plugin.json",
+        "plugins/adlc-cursor/command/adlc-prosecute.md",
+        "plugins/adlc-cursor/skills/**",
+        "plugins/adlc-cursor/package.json",
+        "plugins/adlc-cursor/test/**",
+        "scripts/cursor-install-smoke.mjs",
+        ".adlc/specs/cursor-deeper-native.md",
+        "docs/integrations/cursor.md",
+        "docs/integrations/harness-capability-matrix.md",
+        "docs/adr/0006-adlc-cursor-integration.md",
+        "apps/docs/content/docs/integrations/cursor.mdx",
+        "apps/docs/lib/integration-facts.mjs",
+        "packages/prosecute/**",
+        "packages/prosecute/lib/schema.mjs"
+      ],
+      "title": "Cursor P5 independence: ship prosecutor agents/ + Task-based /adlc-prosecute fan-out"
+    },
+    {
+      "body": "Add Cursor-documented hook depth that siblings approximate via SessionStart/compaction defenses and subagent control: `preCompact` re-injects active-ticket/rails reminders; `subagentStart`/`subagentStop` coordinate ADLC P5 prosecutor agents shipped in T64.\n\nDepends on T64 agents existing (edge from T64). Prefer session_id scoping from T62 when present.\n\n=== DELIVERABLES ===\n1. `hooks/adlc-precompact.mjs` — observational; returns user_message reminding of active ticket + rails; never claims to block compaction.\n2. `hooks/adlc-subagent.mjs` (or split start/stop) — allow prosecutor agent types used by /adlc-prosecute; optional deny/ask for unrelated subagents only when an active P5 marker file is set by the prosecute command (document the marker; default permissive if marker absent).\n3. Wire events in hooks/hooks.json + scaffolder merge + smoke.\n4. Pin contracts in ADR-0006; update matrix hook-depth notes.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: preCompact + subagentStart + subagentStop present in default plugin hooks.json. VERIFY: smoke.\n- AC2: preCompact fixture test returns a message including ticket id when pointer present. VERIFY: unit test.\n- AC3: Without P5 marker, subagentStart allows explore/generalPurpose (no brick). VERIFY: unit test.\n- AC4: With P5 marker, start allows configured prosecutor agent names. VERIFY: unit test.\n- AC5: Rails guard scripts untouched (rails).\n\n=== OUT OF SCOPE ===\n- Implementing Cursor Task tool itself.\n- Fail-closed subagent policy as default (too brick-prone).\n- Tab hooks.\n=== P1 ===\nAC12: fresh marker + unrelated subagent => ask or deny (not always-allow).\n\n=== P1 ===\npreToolUse is authoritative Task allowlist; subagentStart defense-in-depth.\nT65 before T66 and T67.\n\n=== P1 ===\nChecked-in Task preToolUse + subagentStart fixtures; dispatcher cases required.\n\n=== P1 ===\nP5 marker write/delete under fenced lock; paused-cleanup barrier test.\n\n=== P1 ===\nAC12 nested Task canary under parent P5 marker.\n\n=== P1 ===\nNested Task P5 degraded/permissive until lineage channel proven; no shared anonymous marker.\n",
+      "budget": "mid",
+      "category": "feature",
+      "duration": 2,
+      "edges": [
+        {
+          "contract": "T65 before T66 (subagent hooks before live deny-proof)",
+          "to": "T66",
+          "type": "before"
+        },
+        {
+          "contract": "T65 before T67 (hooks before marketplace publish)",
+          "to": "T67",
+          "type": "before"
+        }
+      ],
+      "id": "T65",
+      "rails": [
+        "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-cursor/rails-checker.mjs"
+      ],
+      "scope": [
+        "plugins/adlc-cursor/hooks/**",
+        "plugins/adlc-cursor/hooks.json",
+        "plugins/adlc-cursor/hooks/hooks.json",
+        "plugins/adlc-cursor/lib/**",
+        "plugins/adlc-cursor/test/**",
+        "scripts/cursor-install-smoke.mjs",
+        ".adlc/specs/cursor-deeper-native.md",
+        "docs/adr/0006-adlc-cursor-integration.md",
+        "docs/integrations/cursor.md",
+        "docs/integrations/harness-capability-matrix.md"
+      ],
+      "title": "Cursor hooks: preCompact ticket re-injection + subagentStart/Stop P5 orchestration"
+    },
+    {
+      "body": "Issue #241 / ADR-0006 GA honesty gate: prove (or falsify with evidence) that Cursor honors `permission: \"deny\"` from preToolUse for a frozen-rail Write under ADLC_P4_ENFORCEMENT=1 on at least one maintainer platform. Record results in ADR + harness-capability-matrix. Prefer using pinned payload shapes from T62.\n\n=== DELIVERABLES ===\n1. Maintainer-run harness under `scripts/cursor-deny-proof/` (or single mjs) documenting steps: fixture repo with rails, enforcement on, attempt Write to rail, observe allow vs deny. Automate what can be automated; remainder is a checked-in runbook + results log template.\n2. If deny works: update ADR Unverified→Pinned with platform/version; matrix Cursor deny cell to proven-with-caveats.\n3. If deny slips: keep best-effort language; document failure mode; do NOT silently claim enforcement.\n4. Optional CI job that is manual/workflow_dispatch only (never flake required checks on headless Cursor).\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: Runbook + harness exist and are referenced from docs/integrations/cursor.md Gaps. VERIFY: file paths + docs link.\n- AC2: ADR-0006 Live deny proof section updated with dated evidence (pass or fail) and Cursor version. VERIFY: docs review.\n- AC3: Matrix Cursor deny cell updated in same PR (#241 rule). VERIFY: matrix diff.\n- AC4: No change that sets failClosed:true on preToolUse (still must not brick editor). VERIFY: hooks.json assert.\n- AC5: CI rails-guard template unchanged as the unbypassable control (rails).\n\n=== OUT OF SCOPE ===\n- Making in-session deny the security boundary.\n- Shell write gating.\n- cursor.com publish (T67).\n=== P1 ===\nDeny-proof requires sentinel + unchanged rail hashes + enforcement-off control.\n\n=== P1 ===\nT66 before T67. Live proof covers Task spawn rejection + deny-proof hashes.\n\n=== P1 ===\nDeny-proof: pristine→deny→unchanged→then off-control mutates; Task canary required.\n",
+      "budget": "mid",
+      "category": "test",
+      "duration": 2,
+      "edges": [
+        {
+          "contract": "T66 before T67 (live deny-proof before marketplace publish)",
+          "to": "T67",
+          "type": "before"
+        }
+      ],
+      "id": "T66",
+      "rails": [
+        "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-cursor/rails-checker.mjs",
+        "docs/ci/rails-guard.yml"
+      ],
+      "scope": [
+        "scripts/cursor-deny-proof/**",
+        "scripts/cursor-deny-proof.mjs",
+        "docs/adr/0006-adlc-cursor-integration.md",
+        "docs/integrations/cursor.md",
+        "docs/integrations/harness-capability-matrix.md",
+        ".adlc/specs/cursor-deeper-native.md",
+        "plugins/adlc-cursor/test/**",
+        "apps/docs/lib/integration-facts.mjs"
+      ],
+      "title": "Cursor GA honesty: live permission:deny proof + matrix/ADR update"
+    },
+    {
+      "body": "Collapse Cursor install mental model to: install marketplace plugin → run `/adlc-init` (detects CLI, runs `adlc init --harness cursor`, offers CI rails-guard wiring). Execute/document human cursor.com/marketplace publish checklist. Optional: thin alwaysApply rule + CLI statusLine snippet for live ticket. Depends on MCP (T63) and agents (T64) so the published listing is not misleading about missing surfaces.\n\n=== DELIVERABLES ===\n1. Rewrite `/adlc-init` + adlc-init skill as a single onboarding flow with explicit steps and failure messages when `adlc` missing.\n2. Docs: preferred install is marketplace (+ published cursor.com link once submitted); scaffolder demoted to contributor-only.\n3. Checklist file or docs section for cursor.com/marketplace/publish; record submission status in integration docs (submitted/pending/live URL).\n4. Optional niceties (in-scope if cheap): alwaysApply thin \"ADLC is installed\" rule; docs snippet for Cursor CLI `statusLine` reading `.adlc/current-ticket.json`.\n5. Matrix: installer/statusline cells updated honestly.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: `/adlc-init` instructs CLI detect → `adlc init --harness cursor` → CI template pointer without requiring `npx @adlc/cursor` for normal users. VERIFY: smoke string asserts + docs test.\n- AC2: Marketing/docs install facts are marketplace-first and mention agents+MCP if those tickets completed. VERIFY: integration-facts test.\n- AC3: Publish checklist exists; if not yet live on cursor.com, docs say so explicitly (no fake URL). VERIFY: docs review.\n- AC4: Does not remove npm scaffolder (legacy retained). VERIFY: package bin still present.\n\n=== OUT OF SCOPE ===\n- VS Code Extension UI / status bar webview.\n- Breaking removal of @adlc/cursor scaffolder.\n- Changing CI rails-guard security semantics (may document private-repo fallback only).\n=== P1 ===\nPublication blocked on AC7 installed-Cursor MCP channel proof.\n",
+      "budget": "mid",
+      "category": "feature",
+      "duration": 2,
+      "edges": [],
+      "id": "T67",
+      "rails": [
+        "docs/ci/rails-guard.yml"
+      ],
+      "scope": [
+        "plugins/adlc-cursor/command/adlc-init.md",
+        "plugins/adlc-cursor/skills/adlc-init/**",
+        "plugins/adlc-cursor/skills/adlc/**",
+        "plugins/adlc-cursor/rules/**",
+        "plugins/adlc-cursor/README.md",
+        "packages/init/**",
+        "scripts/cursor-install-smoke.mjs",
+        ".adlc/specs/cursor-deeper-native.md",
+        "docs/integrations/cursor.md",
+        "docs/integrations/harness-capability-matrix.md",
+        "apps/docs/content/docs/integrations/cursor.mdx",
+        "apps/docs/lib/integration-facts.mjs",
+        "docs/ci/rails-guard.yml"
+      ],
+      "title": "Cursor DX: /adlc-init one-flow onboarding + marketplace publish checklist execution"
+    },
+    {
       "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
       "category": "feature",
       "completed": true,

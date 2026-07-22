@@ -46,7 +46,7 @@ edit interception:  preToolUse   (fires before any tool, incl. Write/Edit)
   stdout:  { permission: "allow" | "deny" | "ask", user_message, agent_message }
 post-edit observe:  afterFileEdit   (fires AFTER the edit; OBSERVATIONAL — cannot block)
 shell:              beforeShellExecution   (Bash writes NOT rail-gated in-session)
-session:            stop, beforeSubmitPrompt (documented Cursor events; default-on since T47)
+session:            sessionStart (T62), stop, beforeSubmitPrompt (documented; default-on)
 rule host:          .cursor/rules/adlc.mdc   (frontmatter: description / globs / alwaysApply)
 plugin host:        .cursor-plugin/plugin.json + repo marketplace.json (T47)
 ```
@@ -171,28 +171,17 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
    the gate-manifest; risk/decide/depth/override logic imported from
    `@adlc/build-gate` deep lib subpaths — the package has no exports map, so
    `lib/*.mjs` subpaths are the sanctioned import form).
-3. **Depth session-scoping: TTL staleness, not a session id.** Cursor hook
-   payloads are **not pinned** to carry a conversation/session id (this ADR
-   pins `{ tool_name, tool_input, workspace_roots, ... }` only), and no live
-   install is available to verify one. The depth counter
-   (`.adlc/cursor-buildgate-depth.json`) is therefore scoped by **write
-   recency**: 30 minutes (`SESSION_TTL_MS`) of inactivity resets it, plus an
-   opportunistic reset when a conversation-id-shaped field IS present and
-   changes. A fresh session provably starts un-degraded (tested).
-   **TODO:** pin whether the real payload carries `conversation_id` against a
-   live install and switch to id-scoping if so.
-4. **Unpinned events ship DISABLED.** `stop` and `beforeSubmitPrompt` are NOT
-   verified against Cursor documentation, so the stop-audit
-   (`hooks/adlc-stop.mjs`: gate-manifest verify + the issue-#59 risk-gated
-   adversarial-review notice) and preflight (`hooks/adlc-preflight.mjs`:
-   once-per-session `adlc preflight` + ADLC precedence assertion) ship as
-   scripts the scaffolder does **not** wire. Opt-in: scaffold option
-   `wireUnpinned` default true; opt out with `--no-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=0` (T47);
-   re-scaffolding without the flag removes them again. `hooks.json` contains
-   only pinned events (`preToolUse`, `afterFileEdit`,
-   `beforeShellExecution`) — smoke-asserted. **TODO:** pin both events (name +
-   payload + stdout contract) against current Cursor docs / a live install,
-   then wire by default.
+3. **Depth session-scoping (T62):** per-session counters under the user-scoped
+   ADLC state dir (`~/.adlc/` or `ADLC_CURSOR_STATE_DIR`), keyed by SHA-256 of
+   the unified session id. Session identity accepts docs-pinned `session_id` /
+   `conversation_id` and env `ADLC_CURSOR_SESSION_ID` only (rejects
+   `thread_id` / `generation_id` as session keys). Env≠payload is conflict
+   (no named-state mutation). Increments are idempotent on `tool_use_id`.
+   TTL (`SESSION_TTL_MS`) still expires stale session files; anonymous (no id)
+   uses a TTL singleton fallback.
+4. **`stop` / `beforeSubmitPrompt` are default-on (T47).** They are documented
+   Cursor events; the scaffolder wires them unless opted out
+   (`wireUnpinned: false` / `--no-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=0`).
 5. **`beforeShellExecution` advisory never denies.** Shell is Turing-complete
    and intentionally not rail-gated in-session (threat model above);
    `hooks/adlc-shell-advisory.mjs` string-matches the command (field
@@ -210,18 +199,37 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
 
 ## Unverified / follow-on
 
-- **`preToolUse` payload field names** — Cursor's public docs pin the
-  `beforeShellExecution` / `beforeReadFile` contracts precisely but not the exact
-  `preToolUse` `tool_input` shape. The adapter extracts the tool name and edited
-  path **defensively** across the documented and sibling field names; pinning the
-  exact shape against a captured real payload is pending a live install.
-- **Session/conversation id in hook payloads** — unverified (see T18 decision 3);
-  TTL scoping stands in until pinned.
-- **`stop` / `beforeSubmitPrompt` events** — unverified (see T18 decision 4);
-  default-on since T47 after Cursor documented the events.
+- **`preToolUse` / `sessionStart` payload pins (T62):** ADLC pins
+  `session_id` / `conversation_id`, `ADLC_CURSOR_SESSION_ID`,
+  `workspace_roots`, `tool_name`, `tool_input`, and `tool_use_id` for the
+  Cursor hooks it ships. Checked-in fixtures under
+  `plugins/adlc-cursor/test/fixtures/` exercise those fields through the real
+  sessionStart / preToolUse dispatchers. Live Cursor binary confirmation of
+  deny delivery remains a follow-on (T66).
+- **`sessionStart` `additional_context` delivery** — best-effort only. Cursor
+  may accept the hook output and still drop context before the composer is
+  ready; durable fallback is `rules/adlc-ticket-context.mdc`
+  (`alwaysApply: true`).
 - **Live deny proof** — a maintainer-only end-to-end test against a real Cursor
   binary (does `permission: "deny"` actually abort the Write on the target
-  platform?) remains the GA gate.
+  platform?) remains the GA gate (T66).
+
+## T62: sessionStart + per-session control state
+
+Recorded with `.adlc/specs/cursor-deeper-native.md`.
+
+1. **`sessionStart` wiring** — marketplace `hooks/hooks.json` and package-root
+   `hooks.json` both declare `sessionStart` → `adlc-session-start.mjs` with
+   `failClosed: false` and `timeout: 10` (command path may differ by install).
+2. **Consumer workspace resolution** — host-supplied `workspace_roots` +
+   `CURSOR_PROJECT_DIR` only; never silent plugin-cwd fallback. Aligns
+   `rails-checker.mjs` with `detectTicketStore` +
+   `resolveActiveTicketAgainst(..., { allowLegacyPointer: true })`.
+3. **Env pin** — returns `env.ADLC_CURSOR_SESSION_ID` when the session id is
+   unambiguous; must **not** set or clear `ADLC_P4_ENFORCEMENT`.
+4. **Always-apply fallback** — `rules/adlc-ticket-context.mdc` with
+   `alwaysApply: true` for canonical ticket resolution when sessionStart
+   context is dropped.
 
 ## Consequences
 

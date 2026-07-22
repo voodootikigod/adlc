@@ -8,7 +8,7 @@ as a legacy/dev fallback that can still copy `.cursor/` config into a consumer
 repo.
 
 > Companion to [Claude Code](./claude-code.md), [OpenCode](./opencode.md), and
-> [Codex](./codex.md). Design rationale: [ADR 0006](../adr/0006-adlc-cursor-integration.md).
+> [Codex](./codex.md). Design rationale: [ADR 0006](../adr/0006-adlc-cursor-integration.md). Deeper-native wave: [.adlc/specs/cursor-deeper-native.md](../../.adlc/specs/cursor-deeper-native.md).
 
 ## Status
 
@@ -20,6 +20,11 @@ against a real Cursor binary remains the one GA honesty gate (see
 
 ## What you get
 
+- **`sessionStart` hook (T62)** — resolves the consumer workspace from host
+  roots, pins `ADLC_CURSOR_SESSION_ID`, and emits best-effort
+  `additional_context` (ticket id or `no active ticket`). Context injection is
+  **best-effort**; durable fallback is `rules/adlc-ticket-context.mdc`
+  (`alwaysApply: true`). Does **not** set or clear `ADLC_P4_ENFORCEMENT`.
 - **`preToolUse` dispatcher hook** — runs the rails decision **first** (a frozen-rail
   edit is denied) and, only when rails allow **and** `ADLC_BUILD_GATE_ENFORCEMENT=1`,
   consults the advisory buildgate. One entry, so a second hook can never mask a rails
@@ -41,7 +46,7 @@ against a real Cursor binary remains the one GA honesty gate (see
 The **buildgate is advisory, disabled by default** (opt in with
 `ADLC_BUILD_GATE_ENFORCEMENT=1`), and has **NO unbypassable backstop** — unlike
 the rails guard, nothing at commit time enforces its verdict (its depth signal is
-an agent-writable `.adlc/` file). It exists to slow a flailing session, not to gate
+an agent-writable file under `~/.adlc/` / `ADLC_CURSOR_STATE_DIR`). It exists to slow a flailing session, not to gate
 merges. The `stop`-audit and `preflight` hooks are **on by default** (Cursor-
 documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
 `ADLC_CURSOR_WIRE_UNPINNED=0`.
@@ -53,7 +58,9 @@ documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
 1. In Cursor: **Settings → Plugins → Add marketplace** and paste
    `https://github.com/voodootikigod/adlc`. The root
    [`.cursor-plugin/marketplace.json`](../../.cursor-plugin/marketplace.json)
-   lists `adlc-cursor` → `./plugins/adlc-cursor`.
+   marketplace is named `adlc-plugins` and lists **ADLC for Cursor**
+   (`adlc-cursor` → `plugins/adlc-cursor`). Install that plugin — not any
+   Claude Code–named `adlc` entry from this monorepo.
 2. Install the `adlc-cursor` plugin (see
    [Cursor plugins](https://cursor.com/docs/reference/plugins)).
 3. Install the gate toolkit and initialize only the `.adlc/` runtime:

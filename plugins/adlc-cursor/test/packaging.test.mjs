@@ -42,13 +42,17 @@ test('AC1: Cursor plugin manifest locksteps package version (T47)', () => {
   assert.ok(existsSync(manifestPath), '.cursor-plugin/plugin.json must exist');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(manifest.name, 'adlc-cursor');
+  assert.equal(manifest.displayName, 'ADLC for Cursor');
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.commands, './command/');
   assert.equal(manifest.hooks, './hooks/hooks.json');
   assert.equal(manifest.skills, './skills/');
   assert.equal(manifest.rules, './rules/');
-  assert.equal(manifest.logo, 'assets/logo.svg');
+  assert.equal(manifest.logo, 'assets/logo.png');
+  assert.ok(existsSync(join(pkgDir, 'assets', 'logo.png')), 'assets/logo.png must exist');
   assert.ok(existsSync(join(pkgDir, 'assets', 'logo.svg')), 'assets/logo.svg must exist');
+  assert.match(manifest.description, /Cursor/i);
+  assert.doesNotMatch(manifest.description, /Claude Code/i);
 });
 
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {

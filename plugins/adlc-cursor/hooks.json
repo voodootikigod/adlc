@@ -1,6 +1,13 @@
 {
   "version": 1,
   "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-session-start.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
     "preToolUse": [
       {
         "command": "node ./node_modules/@adlc/cursor/hooks/adlc-pretool.mjs",

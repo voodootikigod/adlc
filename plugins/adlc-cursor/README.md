@@ -12,8 +12,10 @@ From a clone of this repository (Cursor plugin marketplace):
 
 1. Add the repo as a Cursor plugin marketplace (see
    [Cursor plugins](https://cursor.com/docs/reference/plugins) — root
-   `.cursor-plugin/marketplace.json` lists `adlc-cursor`).
-2. Install the `adlc-cursor` plugin.
+   `.cursor-plugin/marketplace.json` is marketplace `adlc-plugins` and lists
+   **ADLC for Cursor** / `adlc-cursor`).
+2. Install **ADLC for Cursor** (`adlc-cursor`) — not a Claude Code–named `adlc`
+   entry from this monorepo.
 3. Install the gate toolkit and initialize the repo runtime:
 
 ```sh

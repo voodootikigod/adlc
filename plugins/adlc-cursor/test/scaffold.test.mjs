@@ -145,7 +145,7 @@ test('mergeHooks wires stop/preflight by default; wireUnpinned:false removes ADL
   );
   assert.deepEqual(
     Object.keys(base.hooks).sort(),
-    ['afterFileEdit', 'beforeShellExecution', 'beforeSubmitPrompt', 'preToolUse', 'stop'],
+    ['afterFileEdit', 'beforeShellExecution', 'beforeSubmitPrompt', 'preToolUse', 'sessionStart', 'stop'],
   );
 
   const optInTwice = mergeHooks(base, undefined, { wireUnpinned: true });

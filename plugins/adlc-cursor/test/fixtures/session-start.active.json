@@ -1,0 +1,6 @@
+{
+  "session_id": "sess-active-1",
+  "is_background_agent": false,
+  "composer_mode": "agent",
+  "workspace_roots": ["__ROOT__"]
+}
