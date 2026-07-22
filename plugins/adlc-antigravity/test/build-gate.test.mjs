@@ -148,6 +148,31 @@ test('runFromStdin: non-ADLC repo creates NO .adlc directory or session artifact
   }
 });
 
+test('runFromStdin same-root multi-path: dedupes tool call count to 1 per payload per root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dedupe-root-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
+    const file1 = join(root, 'src', 'a.mjs');
+    const file2 = join(root, 'src', 'b.mjs');
+
+    const payload = JSON.stringify({
+      conversationId: 'same-root-sess',
+      toolCall: { name: 'write_to_file', args: { TargetFile: file1, FilePath: file2, CodeContent: '// dedupe' } }
+    });
+
+    const res = runFromStdin(payload, {});
+    assert.equal(res.allow_tool, true);
+
+    const tracker = createPersistentTracker(root);
+    assert.equal(tracker.depth('same-root-sess'), 1, 'depth should increment by 1 for a single tool call touching multiple paths in the same root');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('runFromStdin end-to-end: denies high-risk ticket edits once context depth threshold is crossed', () => {
   const root = mkdtempSync(join(tmpdir(), 'e2e-gate-'));
   try {

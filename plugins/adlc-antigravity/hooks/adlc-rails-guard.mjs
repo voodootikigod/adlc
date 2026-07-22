@@ -169,18 +169,22 @@ export function runFromStdin(raw, env = process.env) {
     return trackerCache.get(r);
   };
 
+  const distinctRoots = new Set();
   if (paths.length > 0) {
     for (const p of paths) {
       const { abs } = anchorPath(p, payload);
       if (abs) {
         const root = findAdlcRoot(abs);
-        if (root) {
-          getTracker(root).recordToolCall(sessionID);
-        }
+        if (root) distinctRoots.add(root);
       }
     }
-  } else {
-    getTracker(process.cwd()).recordToolCall(sessionID);
+  }
+  if (distinctRoots.size === 0) {
+    distinctRoots.add(process.cwd());
+  }
+
+  for (const root of distinctRoots) {
+    getTracker(root).recordToolCall(sessionID);
   }
 
   return decide(payload, { env, trackerCache });

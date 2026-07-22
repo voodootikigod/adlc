@@ -1,7 +1,7 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-antigravity.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -80,28 +80,36 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 }
 
 /**
- * File-backed persistent session tracker with mutex locking and LRU pruning.
+ * File-backed persistent session tracker with owner-checked mutex locking and LRU pruning.
  * Fails closed (isLockFailed=true) on lock acquisition timeout.
  */
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
   const lockDir = join(adlcDir, 'sessions.lock');
+  const ownerPath = join(lockDir, 'owner.json');
 
   const lockFailures = new Set();
 
   function withLock(sessionID, fn, fallback = null) {
     let acquired = false;
+    const nonce = `${process.pid}-${Date.now()}-${Math.random()}`;
+
     for (let i = 0; i < 20; i++) {
       try {
         mkdirSync(lockDir);
+        try {
+          writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, nonce, time: Date.now() }));
+        } catch { /* owner write optional */ }
         acquired = true;
         break;
       } catch {
         try {
-          const stat = statSync(lockDir);
-          if (Date.now() - stat.mtimeMs > 3000) {
-            rmdirSync(lockDir, { recursive: true });
+          if (existsSync(ownerPath)) {
+            const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
+            if (Date.now() - (owner.time ?? 0) > 3000) {
+              try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* ignore */ }
+            }
           }
         } catch { /* ignore */ }
         const end = Date.now() + 5;
@@ -117,7 +125,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       return fn();
     } finally {
       if (acquired) {
-        try { rmdirSync(lockDir, { recursive: true }); } catch { /* ignore */ }
+        try {
+          if (existsSync(ownerPath)) {
+            const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
+            if (owner.nonce === nonce) {
+              rmSync(lockDir, { recursive: true, force: true });
+            }
+          } else {
+            rmSync(lockDir, { recursive: true, force: true });
+          }
+        } catch { /* ignore release errors */ }
       }
     }
   }
