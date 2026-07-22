@@ -26,13 +26,15 @@
 //     normalized into the internal `{ tool_name, tool_input }` shape by
 //     normalizeCopilotPayload() before the shared collectors run.
 //
-// KEEP IN SYNC — the shell classifier functions in this file (shellTokens,
-// shellHasMutation, shellHasOpaqueMutation, shellIsPositivelyReadOnly,
+// KEEP IN SYNC — the shell classifier + path-extraction functions in this file
+// (shellTokens, shellHasMutation, shellHasOpaqueMutation, shellIsPositivelyReadOnly,
 // shellHasWriteOption, shellChangesCwd, shellHasExpansion, collectShellPaths,
-// looksPathLike/looksBarePathLike/keyValuePath) are a verbatim inline copy of
-// the CANONICAL module packages/core/lib/shell.mjs (@adlc/core). This hook
-// script cannot resolve npm packages at runtime, hence the copy; a drift test
-// (packages/core/test/shell.test.mjs) pins the two together.
+// collectPatchPaths, looksPathLike, looksBarePathLike, keyValuePath) are a
+// verbatim inline copy of the CANONICAL module packages/core/lib/shell.mjs
+// (@adlc/core). This hook script cannot resolve npm packages at runtime, hence
+// the copy; a drift test (test/shell-drift.test.mjs) pins ALL of them against
+// @adlc/core so a fix to the canonical classifier that isn't mirrored here fails
+// CI instead of silently under-extracting rail paths on Copilot.
 import { readFileSync, realpathSync, writeSync } from 'node:fs';
 import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
@@ -191,7 +193,7 @@ function collectCommandText(value, out = []) {
 }
 
 function collectPatchPaths(text, out) {
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of String(text ?? '').split(/\r?\n/)) {
     for (const prefix of ['*** Add File: ', '*** Update File: ', '*** Delete File: ', '*** Move to: ']) {
       if (line.startsWith(prefix)) {
         const path = line.slice(prefix.length).trim();
