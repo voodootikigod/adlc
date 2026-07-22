@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import { buildPrompt, ticketToText, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
-import { buildCheckTicket } from '../lib/gate.mjs';
+import { buildCheckTicket, aggregateCheckAllUsage } from '../lib/gate.mjs';
 
 const CLI = fileURLToPath(new URL('../bin/coldstart.mjs', import.meta.url));
 
@@ -447,6 +447,109 @@ describe('gate checkTicket / checkAll (unit, no network)', () => {
     assert.equal(results[1].gaps.length, 1);
     assert.equal(results[1].gaps[0].what, 'MissingType');
   });
+
+  // ── usage threading (issue #272) ──────────────────────────────────────────
+
+  test('checkTicket reports usage when completeFn calls onUsage (the real completeFn does)', async () => {
+    const stubComplete = async (opts) => {
+      opts.onUsage({ inputTokens: 120, outputTokens: 20, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' });
+      return '{"gaps":[]}';
+    };
+    const stubExtractJson = (text) => JSON.parse(text);
+    const checkTicketWith = buildCheckTicket(stubComplete, stubExtractJson);
+
+    const result = await checkTicketWith({ id: 'T1', title: 't' });
+    assert.deepEqual(result.usage, { inputTokens: 120, outputTokens: 20, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' });
+  });
+
+  test('checkTicket usage is null when completeFn never calls onUsage (a stub that ignores it)', async () => {
+    const stubComplete = async () => '{"gaps":[]}';
+    const stubExtractJson = (text) => JSON.parse(text);
+    const checkTicketWith = buildCheckTicket(stubComplete, stubExtractJson);
+
+    const result = await checkTicketWith({ id: 'T1', title: 't' });
+    assert.equal(result.usage, null);
+  });
+
+  test('checkTicket (real, non-mock path): usage is null for the ADLC_GATE_MOCK_RESPONSE test seam (no real call was made)', async () => {
+    const origEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
+    const origNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    process.env.ADLC_GATE_MOCK_RESPONSE = JSON.stringify({ gaps: [] });
+    try {
+      const { checkTicket } = await import('../lib/gate.mjs');
+      const result = await checkTicket({ id: 'T1', title: 't' });
+      assert.equal(result.usage, null);
+    } finally {
+      process.env.ADLC_GATE_MOCK_RESPONSE = origEnv;
+      process.env.NODE_ENV = origNodeEnv;
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// aggregateCheckAllUsage + gate-manifest recording (issue #272)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('aggregateCheckAllUsage', () => {
+  test('returns null when no result reported usage (never fabricates an entry)', () => {
+    const results = [{ id: 'T1', gaps: [], usage: null }, { id: 'T2', gaps: [], usage: null }];
+    assert.equal(aggregateCheckAllUsage(results), null);
+  });
+
+  test('sums tokens across all tickets that DID report usage', () => {
+    const results = [
+      { id: 'T1', gaps: [], usage: { inputTokens: 100, outputTokens: 10, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' } },
+      { id: 'T2', gaps: [], usage: { inputTokens: 200, outputTokens: 20, cachedTokens: 5, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' } },
+    ];
+    const agg = aggregateCheckAllUsage(results);
+    assert.deepEqual(agg, {
+      inputTokens: 300,
+      outputTokens: 30,
+      cachedTokens: 5,
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
+      tier: 'cheap',
+    });
+  });
+
+  test('a mix of reporting and non-reporting tickets sums only the reporting ones', () => {
+    const results = [
+      { id: 'T1', gaps: [], usage: { inputTokens: 100, outputTokens: 10, cachedTokens: 0, provider: 'agy', model: 'x', tier: 'cheap' } },
+      { id: 'T2', gaps: [], usage: null }, // e.g. agy provider — no metered usage available
+    ];
+    const agg = aggregateCheckAllUsage(results);
+    assert.equal(agg.inputTokens, 100);
+  });
+});
+
+describe('coldstart → gate-manifest end-to-end usage recording (issue #272)', () => {
+  test('running checkAll then recording its aggregate usage populates inputTokens in the manifest ledger', async () => {
+    const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
+    const { loadFiltered } = await import('@adlc/gate-manifest/lib/show.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'coldstart-manifest-test-'));
+    try {
+      // Mock provider: completeFn simulates what core's real complete() does —
+      // calls onUsage, returns the completion text.
+      const stubComplete = async (opts) => {
+        opts.onUsage({ inputTokens: 350, outputTokens: 45, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' });
+        return '{"gaps":[]}';
+      };
+      const checkTicketWith = buildCheckTicket(stubComplete, (t) => JSON.parse(t));
+      const results = [await checkTicketWith({ id: 'T1', title: 'Ticket one' })];
+
+      const usage = aggregateCheckAllUsage(results);
+      assert.ok(usage, 'aggregate usage must be present for this mock run');
+      record({ gate: 'coldstart', ticket: 'T1', rawData: JSON.stringify({ usage, ticketIds: ['T1'], tier: 'cheap' }), dir });
+
+      const { entries } = loadFiltered({ dir });
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].gate, 'coldstart');
+      assert.equal(entries[0].data.usage.inputTokens, 350);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -523,6 +626,18 @@ describe('CLI integration — exit code 2 and --json (mock gate)', () => {
       0,
       `expected exit 0 (no gaps), got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
     );
+  });
+
+  test('the ADLC_GATE_MOCK_RESPONSE test seam writes no gate-manifest entry — no real call was made, so there is nothing real to report (issue #272)', () => {
+    const dir = makeTempDir();
+    try {
+      const ticketsPath = writeTickets(dir, [{ id: 'T-MOCK', title: 'Mocked ticket' }]);
+      const result = runCLIWithMockGate(['T-MOCK', '--tickets', ticketsPath], { gaps: [] }, { cwd: dir });
+      assert.equal(result.status, 0);
+      assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'mock seam must not fabricate a usage entry');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('exit 2 with --all when any ticket has gaps', () => {

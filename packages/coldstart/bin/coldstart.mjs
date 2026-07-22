@@ -12,12 +12,14 @@ import {
 } from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
-import { checkAll } from '../lib/gate.mjs';
+import { checkAll, aggregateCheckAllUsage } from '../lib/gate.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
-// so plain --prompt-only runs never pay for or depend on it.
+// so plain --prompt-only runs never pay for or depend on it. The real
+// (non-prompt-only) path below also imports gate-manifest lazily, for the
+// same reason: only pay for it on the path that has something to record.
 
 const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--record-verdict <file|->] [--json]';
 
@@ -131,6 +133,23 @@ try {
   results = await checkAll(targets, tier);
 } catch (err) {
   opError(`LLM call failed: ${err.message}`);
+}
+
+// ── Record usage evidence (issue #272) ───────────────────────────────────────
+// One aggregate entry per invocation (not per ticket) — a coldstart run over
+// --all is one gate execution with N model calls, not N gate executions.
+// Silently skipped when no result reported usage (agy provider, or the
+// ADLC_GATE_MOCK_RESPONSE test seam) — never a fabricated/zeroed entry.
+
+const usage = aggregateCheckAllUsage(results);
+if (usage) {
+  const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
+  const ticket = runAll ? undefined : targets[0].id;
+  record({
+    gate: 'coldstart',
+    ticket,
+    rawData: JSON.stringify({ usage, ticketIds: targets.map((t) => t.id), tier }),
+  });
 }
 
 // ── Output ───────────────────────────────────────────────────────────────────

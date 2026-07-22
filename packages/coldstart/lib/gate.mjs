@@ -14,15 +14,21 @@ import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
 export function buildCheckTicket(completeFn, extractJsonFn, tier = 'cheap') {
   return async function checkTicketWith(ticket) {
     const prompt = buildPrompt(ticket);
+    let usage = null;
     const raw = await completeFn({
       tier,
       system: SYSTEM_PROMPT,
       prompt,
       maxTokens: 1024,
+      // Real completeFn is core's complete(), which respects onUsage
+      // (issue #272). Injected test stubs simply won't call it — usage
+      // stays null, which the caller treats as "nothing to report", not
+      // an error.
+      onUsage: (u) => { usage = u; },
     });
     const parsed = extractJsonFn(raw);
     const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
-    return { id: ticket.id, gaps };
+    return { id: ticket.id, gaps, usage };
   };
 }
 
@@ -51,14 +57,18 @@ export async function checkTicket(ticket, tier = 'cheap') {
       // Ignored: fallback to {}
     }
     const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
-    return { id: ticket.id, gaps };
+    // No real LLM call was made — nothing to report (never fabricate usage).
+    return { id: ticket.id, gaps, usage: null };
   }
   return buildCheckTicket(coreComplete, coreExtractJson, tier)(ticket);
 }
 
 /**
  * Run cold-start checks for every ticket in the array.
- * Returns an array of { id, gaps } in the same order.
+ * Returns an array of { id, gaps, usage } in the same order. `usage` is
+ * `{inputTokens, outputTokens, cachedTokens, provider, model, tier}` when
+ * the provider reported it, else null (mock/agy paths, or a provider that
+ * didn't return a usage block).
  * Throws on the first LLM error (fail-fast for operational errors).
  */
 export async function checkAll(tickets, tier = 'cheap') {
@@ -67,4 +77,35 @@ export async function checkAll(tickets, tier = 'cheap') {
     results.push(await checkTicket(ticket, tier));
   }
   return results;
+}
+
+/**
+ * Sum per-ticket usage from checkAll's results into one manifest-shaped
+ * `data.usage` object (issue #272 — coldstart is the reference wiring for
+ * "a gate reports usage to gate-manifest"). Tickets with no reported usage
+ * (mock/agy) simply don't contribute; provider/model/tier are taken from
+ * the first ticket that DID report usage (a single coldstart invocation
+ * always uses one tier/provider across all its targets).
+ *
+ * Returns null when no result reported usage — callers should skip
+ * recording rather than write a zeroed/fabricated entry.
+ *
+ * @param {Array<{id:string, gaps:object[], usage:object|null}>} results
+ * @returns {{inputTokens:number, outputTokens:number, cachedTokens:number, provider:string, model:string, tier:string}|null}
+ */
+export function aggregateCheckAllUsage(results) {
+  const withUsage = results.filter((r) => r.usage);
+  if (withUsage.length === 0) return null;
+  const { provider, model, tier } = withUsage[0].usage;
+  return withUsage.reduce(
+    (acc, r) => ({
+      inputTokens: acc.inputTokens + (r.usage.inputTokens ?? 0),
+      outputTokens: acc.outputTokens + (r.usage.outputTokens ?? 0),
+      cachedTokens: acc.cachedTokens + (r.usage.cachedTokens ?? 0),
+      provider,
+      model,
+      tier,
+    }),
+    { inputTokens: 0, outputTokens: 0, cachedTokens: 0, provider, model, tier }
+  );
 }
