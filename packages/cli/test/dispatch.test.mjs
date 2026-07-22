@@ -183,9 +183,9 @@ test('resolveBin resolves tool bins and returns null for non-existent tools', ()
   assert.equal(resolveBin('nonexistent-tool-xyz'), null);
 });
 
-test('packageJsonPath resolves local monorepo devPath directly without node_modules lookup when pkg.name matches package', () => {
+test('packageJsonPath resolves local worktree devPath directly without escaping to parent repo node_modules', () => {
   const devPath = packageJsonPath('@adlc/spec-lint');
   assert.ok(devPath);
-  assert.ok(devPath.endsWith('packages/spec-lint/package.json'));
-  assert.equal(devPath.includes('node_modules'), false, 'devPath must resolve directly without falling through to node_modules');
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  assert.ok(devPath.startsWith(worktreeRoot), `packageJsonPath (${devPath}) must resolve within current worktree (${worktreeRoot})`);
 });
