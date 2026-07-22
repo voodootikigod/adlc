@@ -42,8 +42,8 @@ test('output concatenates stdout + stderr', () => {
 
 test('fixPrompt includes UNTRUSTED fence tags for dead ends', () => {
   const prompt = fixPrompt({ id: 'T1', title: 'T' }, {}, ['fail log']);
-  assert.match(prompt, /<<UNTRUSTED:PRIOR_ATTEMPT_1:PRIOR_ATTEMPT_1-8-[0-9a-f]+>>/);
-  assert.match(prompt, /<<END:PRIOR_ATTEMPT_1:PRIOR_ATTEMPT_1-8-[0-9a-f]+>>/);
+  assert.ok(prompt.includes('<<UNTRUSTED:PRIOR_ATTEMPT_1:PRIOR_ATTEMPT_1-8-a611b4f2>>'));
+  assert.ok(prompt.includes('<<END:PRIOR_ATTEMPT_1:PRIOR_ATTEMPT_1-8-a611b4f2>>'));
 });
 
 test('fence tag includes content hash neutralizing forged inner END markers', () => {
