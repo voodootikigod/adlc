@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
 import { checkRail, classifyTool, isShellTool } from '../rails-checker.mjs';
+import { checkBuildGate } from '../build-gate-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -80,7 +81,7 @@ const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: $
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
  */
-export function decide(payload, { env = process.env } = {}) {
+export function decide(payload, { env = process.env, tracker } = {}) {
   let enforcing = false;
   try {
     enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
@@ -115,6 +116,13 @@ export function decide(payload, { env = process.env } = {}) {
       if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
+
+      // Check build-gate backstop for structured mutators
+      if (cls === 'mutating' && enforcing) {
+        const sessionID = payload.conversationId ?? payload.conversation_id ?? 'session';
+        const gate = checkBuildGate({ sessionID, tracker, root, env });
+        if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
+      }
     }
     return allow();
   } catch (err) {

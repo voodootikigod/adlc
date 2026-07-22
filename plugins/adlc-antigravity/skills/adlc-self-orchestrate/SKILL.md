@@ -54,6 +54,10 @@ Single bounded tasks: just do them.
    Tier by escape cost, not prestige: cheap (Gemini Flash) where gates
    catch everything; mid (Claude Sonnet / Gemini Pro) default; frontier
    only for contracts/migrations with thin rails.
+   
+   Pool hint routing: `pool_hint` ∈ `gemini` | `claude` | `auto`. Pair builder
+   pool hints so prosecution runs cross-family (e.g. `gemini` builder + `claude`
+   prosecutor) for maximum refutation power.
 4. **Validate, then run:**
 
 ```
