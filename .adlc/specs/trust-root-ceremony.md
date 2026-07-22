@@ -59,8 +59,12 @@ otherwise-obvious design:
    from the PR head, so a PR can rewrite its own authorizer. This is why
    `docs/ci/rails-guard.yml` is hash-pinned in
    `scripts/test/rails-guard-workflow-hashes.json`.
-2. **Not self-applicable.** The PR author must not be able to authorize their own
-   trust-root change.
+2. **Not self-applicable — where that is achievable.** The PR author must not be
+   able to authorize their own trust-root change *whenever another eligible owner
+   exists*. On a single-owner repository this property is unreachable (see B1:
+   GitHub forbids self-approval outright), so it is enforced conditionally rather
+   than assumed. Writing it as an absolute is what made the first draft of this
+   spec authorize nothing.
 3. **Bound to a revision.** Approve → CI green → push must not stay authorized.
 4. **No signing key in PR CI.** Manifest-signature approaches were rejected for
    exactly this reason in the #104/T36 discussion; do not reintroduce them.
@@ -81,10 +85,13 @@ nothing else.
 It asserts all of:
 
 - the `trust-root-change` label is present;
-- the actor who applied it (issue timeline API, `labeled` event) has `write` or
-  `admin` permission **and is not the PR author** (property 2);
-- an `APPROVED` review exists from a user with `write`/`admin`, not the author,
-  whose `commit_id` equals the current head SHA (property 3);
+- the actor who applied it (issue timeline API, `labeled` event) is a CODEOWNER
+  for the changed trust-root path;
+- the label event's SHA is the current head SHA — re-applied on every push, so
+  authorization cannot survive a `synchronize` (property 3);
+- **in multi-owner mode only** (see B2): the applier is not the PR author, and an
+  `APPROVED` review exists from a CODEOWNER who is not the author, whose
+  `commit_id` equals the current head SHA (property 2).
 
 then publishes a check run `trust-root-authorized` against that head SHA —
 `success` when all hold, `failure` otherwise, with the reason in the summary.
@@ -111,19 +118,59 @@ Found and re-derived → record to the gate manifest and exit 0. Absent, failed,
 bound to a different SHA, or contradicted by re-derivation → deny exactly as
 today. Fail closed on any API error: an unreachable API is not authorization.
 
-**B0. There is no CODEOWNERS file yet — this is a prerequisite, and a human
-decision (coldstart gap).** `ls CODEOWNERS .github/CODEOWNERS` returns nothing in
-this repository today, so B2 below is unimplementable until one exists. Creating
-it is not a mechanical step: it declares *who is authorized to approve trust-root
-changes*, which is a governance choice the maintainer must make, not something a
-build agent can infer. The file must at minimum cover `scripts/rails-guard-ci.mjs`,
+**B0. CODEOWNERS defines the eligible set.** Added by this work, covering
+`scripts/rails-guard-ci.mjs`, `scripts/test/rails-guard-ci.test.mjs`,
 `docs/ci/rails-guard.yml`, `scripts/test/rails-guard-workflow-hashes.json`, and
-`.adlc/tickets.json`. Treat it as a blocking input to this ticket.
+`.adlc/tickets.json`. It documents the trust surface independently of whether the
+ceremony is built — an unowned trust root is a gap either way.
 
-**B2. Authorization is CODEOWNERS, not `write`.** `write` covers every
-contributor with push access; a trust root warrants the narrower bar #141 asked
-for. Both the label applier and the approving reviewer must match a CODEOWNERS
-entry covering the changed trust-root path, and must not be the PR author.
+**B1. Separation of duties is NOT available here, and the spec must not pretend
+otherwise.** This repository has exactly one collaborator
+(`gh api repos/voodootikigod/adlc/collaborators` → `voodootikigod`, admin; 192 of
+the last 200 commits by one author). Two clauses in the original draft of this
+spec were therefore unsatisfiable:
+
+- *"the label applier is not the PR author"* — there is nobody else to apply it.
+- *"an `APPROVED` review from a user who is not the author"* — **GitHub
+  structurally forbids approving your own pull request.** Not a policy toggle;
+  it cannot be done.
+
+As drafted, this ceremony would authorize nothing, leaving a red check with *no*
+path through it — strictly worse than the admin override it replaces. The
+requirement must scale with the size of the eligible set, not assume it.
+
+What separation of duties would have bought is genuinely unavailable, and no
+design recovers it; a second identity the same person controls is theatre, not a
+control. What remains available, and is the actual justification for building
+this:
+
+- the required check stays **green**, so operators are not trained to override a
+  red gate — the primary harm in #141;
+- authorization is **revision-bound** — it names a SHA, and pushing invalidates
+  it, which an admin click has no notion of;
+- it is **recorded** with actor, SHA and reason, rather than an opaque
+  "someone used `--admin`";
+- it is **narrowly scoped** to one trust-root change, not "bypass the gate".
+
+**B2. Authorization is CODEOWNERS, and its strictness is derived from the
+eligible-owner count.** `write` covers every contributor with push access; a trust
+root warrants the narrower bar #141 asked for. Beyond that, the gate computes the
+number of distinct CODEOWNERS eligible for the changed path and selects a mode:
+
+- **Single-owner mode (one eligible owner).** The owner may authorize their own
+  change by applying the label. No approving review is required, because none can
+  exist. The manifest entry MUST record `mode: single-owner` so the evidence never
+  overstates what was verified — this is the difference between an honest audit
+  trail and a misleading one.
+- **Multi-owner mode (two or more).** The full rule engages automatically: the
+  label applier and the approving reviewer must both be CODEOWNERS, and neither
+  may be the PR author.
+
+Mode is derived at evaluation time from the CODEOWNERS file, so adding a second
+owner turns separation of duties on with no code change, no config flag, and no
+migration. There is no way to select the weaker mode while a stronger one is
+available — which is the property that keeps this from becoming a permanent
+loophole.
 
 **B3. Same-repo branches only.** A fork PR's head SHA does not exist in the base
 repository, so a check run cannot bind to it and the review/label state cannot be
@@ -179,15 +226,32 @@ on a setting nobody re-checks.
   timing out, the gate denies rather than allowing. VERIFY:
   `--test-name-pattern='authorization lookup fails closed'`.
 
-- **AC6 — the author cannot authorize themselves.** Given a label applied by the
-  PR author, or an approval whose reviewer is the author, the authorizer emits
-  `failure`. Both variants needed — they are separate checks. VERIFY:
-  `node --test scripts/test/trust-root-auth.test.mjs
+- **AC6 — in multi-owner mode the author cannot authorize themselves.** With two
+  or more eligible CODEOWNERS, a label applied by the PR author, or an approval
+  whose reviewer is the author, emits `failure`. Both variants needed — they are
+  separate checks. VERIFY: `node --test scripts/test/trust-root-auth.test.mjs
   --test-name-pattern='self-authorization'` exits 0.
 
-- **AC7 — an unprivileged actor cannot authorize.** Label applied, or approval
-  given, by a user with only `read` permission → `failure`. VERIFY:
-  `--test-name-pattern='requires write permission'`.
+- **AC7 — an actor outside CODEOWNERS cannot authorize.** Label applied, or
+  approval given, by a user with `read` or even `write` permission who matches no
+  CODEOWNERS entry for the changed path → `failure`. VERIFY:
+  `--test-name-pattern='requires code ownership'`.
+
+- **AC18 — mode is derived from the eligible-owner count, and only ever
+  ratchets up.** With one eligible CODEOWNER the owner may self-authorize by
+  label and no review is required; with a second owner added to CODEOWNERS and
+  nothing else changed, the identical PR now requires a distinct applier and an
+  approving review. No flag, env var, or ticket field can select single-owner
+  mode while two or more owners are eligible — that would make the weaker mode a
+  permanent loophole. VERIFY: `node --test scripts/test/trust-root-auth.test.mjs
+  --test-name-pattern='owner-count mode'` exits 0, with a case per direction and
+  a case asserting the weaker mode is unselectable.
+
+- **AC19 — single-owner authorization is recorded as such.** The manifest entry
+  for an authorization granted in single-owner mode carries `mode: single-owner`
+  and no reviewer field, so the evidence never implies a second pair of eyes that
+  did not exist. An entry claiming a reviewer in single-owner mode is a defect.
+  VERIFY: `--test-name-pattern='single-owner evidence is honest'`.
 
 - **AC8 — the authorizer never executes PR code.** `trust-root-auth.yml`
   contains no `actions/checkout`, no `run:` step that executes anything from the
@@ -221,7 +285,7 @@ on a setting nobody re-checks.
   denies. Together these prove the check run is a cache and not the authority.
   VERIFY: `--test-name-pattern='authorization is re-derived'`.
 
-- **AC17 — CODEOWNERS exists and covers every trust root (prerequisite B0).** A
+- **AC17 — CODEOWNERS exists and covers every trust root (B0).** A
   `CODEOWNERS` file exists and every trust-root path this ceremony can authorize
   is matched by an entry; a trust root with no owner is a configuration error the
   gate reports rather than silently treating as unauthorizable. VERIFY:

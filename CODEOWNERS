@@ -1,0 +1,43 @@
+# Code owners for the ADLC trust roots.
+#
+# WHAT THIS FILE IS FOR. These paths are the trust roots: the gate that enforces
+# rails, the CI definition that runs it, the fixture that pins that definition's
+# integrity, and the ticket store the gate reads its rail set from. A change to
+# any of them can disable rail enforcement for every other change, which is why
+# `rails-guard-ci.mjs` denies its own modification and why landing a legitimate
+# change to one currently requires an admin override of a red required check
+# (issue #141, ticket T60).
+#
+# This file names who is authorized to approve such a change. It documents the
+# trust surface whether or not the T60 ceremony is built — an unowned trust root
+# is a gap regardless of what enforces ownership.
+#
+# SINGLE-OWNER REPOSITORY. There is exactly one eligible owner today. Two
+# consequences worth stating plainly, so nobody later mistakes this file for a
+# separation-of-duties control:
+#
+#   1. GitHub structurally forbids approving your own pull request. Any rule
+#      requiring "an approval from someone other than the author" is therefore
+#      unsatisfiable here — not disabled by policy, impossible.
+#   2. Separation of duties is consequently NOT available on this repository. The
+#      T60 ceremony buys auditability (revision-bound, recorded, narrowly scoped)
+#      and keeps the required check green so operators are not trained to
+#      override red gates. It does not buy a second pair of eyes.
+#
+# Adding a second owner below is what turns separation of duties on: T60 derives
+# its mode from the number of eligible owners for the changed path, so the
+# stricter rule engages automatically with no code change and no migration.
+
+# The rail gate itself, and the tests that hold it honest.
+/scripts/rails-guard-ci.mjs                        @voodootikigod
+/scripts/test/rails-guard-ci.test.mjs              @voodootikigod
+
+# The CI definition that runs the gate, and the fixture pinning its integrity.
+# A PR can rewrite workflow files it ships, so the hash fixture is what makes
+# the definition tamper-evident; the two must be owned together.
+/docs/ci/rails-guard.yml                           @voodootikigod
+/scripts/test/rails-guard-workflow-hashes.json     @voodootikigod
+
+# The ticket store. The gate reads its rail set from the BASE version of this
+# file, so a change here changes what is enforced everywhere.
+/.adlc/tickets.json                                @voodootikigod
