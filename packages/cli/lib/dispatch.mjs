@@ -11,7 +11,14 @@ function packageJsonPath(packageName) {
   if (packageName.startsWith('@adlc/')) {
     const name = packageName.slice('@adlc/'.length);
     const devPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', name, 'package.json');
-    if (existsSync(devPath)) return devPath;
+    if (existsSync(devPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(devPath, 'utf8'));
+        if (pkg?.name === packageName) return devPath;
+      } catch {
+        /* fall through to require.resolve */
+      }
+    }
   }
   try {
     return require.resolve(`${packageName}/package.json`);

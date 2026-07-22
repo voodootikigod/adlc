@@ -316,7 +316,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   }
   const ticket = tickets.find((t) => t.id === active.id);
   if (!ticket) {
-    return { decision: 'allow', reason: `active ticket ${active.id} not found` };
+    return { decision: 'deny', reason: `active ticket ${active.id} declared in current-ticket.json but not found in tickets.json` };
   }
 
   const { tier } = computeRiskTier(ticket);

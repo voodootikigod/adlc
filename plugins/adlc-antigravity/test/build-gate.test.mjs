@@ -149,6 +149,21 @@ test('CLI subcommand end-to-end: adlc-rails-guard.cjs status and doctor subcomma
   assert.ok(doctorOut.includes('ADLC Antigravity Doctor'));
 });
 
+test('checkBuildGate: denies when active ticket ID is absent from tickets.json under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'missing-ticket-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-GHOST' }));
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T-1', title: 'Real' }] }));
+
+    const res = checkBuildGate({ root, env: { ADLC_P4_ENFORCEMENT: '1' } });
+    assert.equal(res.decision, 'deny');
+    assert.ok(res.reason.includes('not found in tickets.json'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('createDepthTracker: tracks tool call count per session', () => {
   const tracker = createDepthTracker();
   assert.equal(tracker.depth('s1'), 0);
