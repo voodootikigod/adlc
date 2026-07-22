@@ -84,7 +84,7 @@ existing required job instead).
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Fleet worker adapter | ✅ | ✅ | ✅ | ✅ | ✅ (`cursor-agent -p`) | ✅ | ✅ `copilot -p` (text output only — no JSON mode; **defaults to explicit `--allow-tool write --allow-tool shell`, NOT `--allow-all-tools`**, so the rails-guard hook keeps enforcing; `allowAllTools:true` is an opt-in for CI-gate-only autonomy) |
-| Headless in-session enforcement verified | ❌ not exercised | ⚠️ hook execution proven from installed cache | ✅ headless live-deny in CI | ✅ `pi --mode rpc` live-deny in CI | ❌ | ✅ probed (`--print` blocked a rail write) | ✅ **live deny-proof DONE** (real `copilot -p` turns vs a frozen rail on 1.0.73 blocked the edit under the explicit allowlist; proceeded only under `--allow-all-tools`), re-runnable via `scripts/copilot-live-deny.mjs` — but **opt-in, not in default CI** (which proves deny-*shape* only); re-run after CLI upgrades |
+| Headless in-session enforcement verified | ❌ not exercised | ⚠️ hook execution proven from installed cache | ✅ headless live-deny in CI | ✅ `pi --mode rpc` live-deny in CI | ❌ | ✅ probed (`--print` blocked a rail write) | ✅ **live deny-proof DONE** (real `copilot -p` turns vs a frozen rail on 1.0.73 blocked the edit under the explicit allowlist; proceeded only under `--allow-all-tools`), re-runnable via `scripts/copilot-live-deny.mjs`, wired as a **daily scheduled drift canary** (`copilot-live-canary.yml`); default per-PR CI proves deny-*shape* only, so re-run after CLI upgrades |
 
 ## G. Governance
 

@@ -180,11 +180,15 @@ no competing CI workflow.
   future Copilot release that changed hook semantics could ship green while this ADR
   still claimed enforcement. The regression guard is `scripts/copilot-live-deny.mjs`
   (control run lands the edit under `--allow-all-tools`; treatment run blocks it under
-  an explicit allowlist), which drives the real binary — opt-in
-  (`ADLC_COPILOT_LIVE_INSTALL=1`; advisory `copilot-live-deny` CI job behind
-  `vars.COPILOT_LIVE_DENY`, needs an entitled login). Re-run after any Copilot CLI
-  upgrade. The marketplace install/uninstall convenience smoke is separately gated
-  on an unrestricted CI account.
+  an explicit allowlist; a third run proves `--deny-tool shell` beats `--allow-all-tools`),
+  which drives the real binary. It runs as a **daily scheduled drift canary**
+  (`.github/workflows/copilot-live-canary.yml`, cron + `workflow_dispatch`) that skips
+  cleanly until a `COPILOT_CLI_TOKEN` secret is configured, then fails loudly on
+  enforcement-semantics drift — deliberately NOT a required per-PR check, since an
+  entitled Copilot account can't gate every PR. Re-run locally after any Copilot CLI
+  upgrade: `ADLC_COPILOT_LIVE_INSTALL=1 node scripts/copilot-live-deny.mjs --require`.
+  The marketplace install/uninstall convenience smoke is separately gated on an
+  unrestricted CI account.
 - **VS Code Copilot hooks are Preview status** — the contract may shift; re-pin
   against the appendix if it does.
 - **Enterprise `policy.d` tier** — `strictKnownMarketplaces` is present in the

@@ -262,10 +262,14 @@ corrected contract; no overstatement, no understatement:
   Copilot release that changed hook semantics could ship green while these docs
   still claimed enforcement. The regression guard for that is
   `scripts/copilot-live-deny.mjs` (control run under `--allow-all-tools` lands the
-  edit; treatment run under an explicit allowlist blocks it), which drives the real
-  binary — but it needs an entitled login and AI credits, so it is **opt-in**
-  (`ADLC_COPILOT_LIVE_INSTALL=1`; wired as the advisory `copilot-live-deny` CI job
-  behind `vars.COPILOT_LIVE_DENY`). **Re-run it after any Copilot CLI upgrade.**
+  edit; treatment run under an explicit allowlist blocks it; a third run proves
+  `--deny-tool shell` beats `--allow-all-tools`), which drives the real binary. It
+  needs an entitled login and AI credits, so it runs as a **daily scheduled drift
+  canary** — `.github/workflows/copilot-live-canary.yml` (cron + `workflow_dispatch`),
+  which skips cleanly until a `COPILOT_CLI_TOKEN` secret is configured and then fails
+  loudly if Copilot's hook-enforcement semantics drift. It is deliberately **not** a
+  required per-PR check (an entitled account can't gate every PR). You can also run it
+  locally: `ADLC_COPILOT_LIVE_INSTALL=1 node scripts/copilot-live-deny.mjs --require`.
 
 ## Boundary
 
