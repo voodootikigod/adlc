@@ -8,6 +8,7 @@ import * as agy from './agy.mjs';
 import * as opencode from './opencode.mjs';
 import * as pi from './pi.mjs';
 import * as cursor from './cursor.mjs';
+import * as copilot from './copilot.mjs';
 
 const REGISTRY = new Map([
   [claudeCode.name, claudeCode],
@@ -16,6 +17,7 @@ const REGISTRY = new Map([
   [opencode.name, opencode],
   [pi.name, pi],
   [cursor.name, cursor],
+  [copilot.name, copilot],
 ]);
 
 /** Registered adapter names, for validation/help. */
