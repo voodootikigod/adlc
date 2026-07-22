@@ -1,7 +1,7 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-antigravity.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmdirSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -77,12 +77,38 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 }
 
 /**
- * File-backed persistent session tracker.
- * Persists depth, compaction, and edit log state to .adlc/sessions.json with atomic writes and LRU pruning.
+ * File-backed persistent session tracker with mutex locking and LRU pruning.
+ * Only writes to disk when ticketStoreExists(root) is true.
  */
-export function createPersistentTracker(root = process.cwd()) {
+export function createPersistentTracker(root = process.cwd(), env = process.env) {
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
+  const lockDir = join(adlcDir, 'sessions.lock');
+
+  function withLock(fn) {
+    let acquired = false;
+    for (let i = 0; i < 5; i++) {
+      try {
+        mkdirSync(lockDir);
+        acquired = true;
+        break;
+      } catch {
+        try {
+          const stat = statSync(lockDir);
+          if (Date.now() - stat.mtimeMs > 5000) {
+            rmdirSync(lockDir, { recursive: true });
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      if (acquired) {
+        try { rmdirSync(lockDir, { recursive: true }); } catch { /* ignore */ }
+      }
+    }
+  }
 
   function readStore() {
     try {
@@ -96,10 +122,10 @@ export function createPersistentTracker(root = process.cwd()) {
   }
 
   function writeStore(data) {
+    if (!ticketStoreExists(root, env)) return;
     try {
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
 
-      // LRU Pruning: limit stored sessions to MAX_TRACKED_SESSIONS
       const keys = Object.keys(data);
       if (keys.length > MAX_TRACKED_SESSIONS) {
         const sorted = keys.sort((a, b) => (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0));
@@ -117,40 +143,46 @@ export function createPersistentTracker(root = process.cwd()) {
 
   return {
     recordToolCall(sessionID) {
-      if (!sessionID) return;
-      const store = readStore();
-      const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
-      s.depth = (s.depth ?? 0) + 1;
-      s.updatedAt = Date.now();
-      store[sessionID] = s;
-      writeStore(store);
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(() => {
+        const store = readStore();
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        s.depth = (s.depth ?? 0) + 1;
+        s.updatedAt = Date.now();
+        store[sessionID] = s;
+        writeStore(store);
+      });
     },
     markCompacted(sessionID) {
-      if (!sessionID) return;
-      const store = readStore();
-      const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
-      s.compacted = true;
-      s.updatedAt = Date.now();
-      store[sessionID] = s;
-      writeStore(store);
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(() => {
+        const store = readStore();
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        s.compacted = true;
+        s.updatedAt = Date.now();
+        store[sessionID] = s;
+        writeStore(store);
+      });
     },
     recordEdit(sessionID, filePath) {
-      if (!sessionID || !filePath) return { churning: [] };
-      const store = readStore();
-      const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
-      s.edits = s.edits ?? [];
-      s.warned = s.warned ?? [];
-      s.edits.push(`Editing ${filePath}`);
-      if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+      if (!sessionID || !filePath || !ticketStoreExists(root, env)) return { churning: [] };
+      return withLock(() => {
+        const store = readStore();
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
+        s.edits = s.edits ?? [];
+        s.warned = s.warned ?? [];
+        s.edits.push(`Editing ${filePath}`);
+        if (s.edits.length > 200) s.edits = s.edits.slice(-200);
 
-      const churns = detectEditChurn(s.edits, 3);
-      const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
-      for (const c of newlyChurning) s.warned.push(c.path);
+        const churns = detectEditChurn(s.edits, 3);
+        const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
+        for (const c of newlyChurning) s.warned.push(c.path);
 
-      s.updatedAt = Date.now();
-      store[sessionID] = s;
-      writeStore(store);
-      return { churning: newlyChurning };
+        s.updatedAt = Date.now();
+        store[sessionID] = s;
+        writeStore(store);
+        return { churning: newlyChurning };
+      });
     },
     depth(sessionID) {
       if (!sessionID) return 0;
@@ -165,12 +197,15 @@ export function createPersistentTracker(root = process.cwd()) {
   };
 }
 
-export function decideBuildGate({ riskTier, degraded, bypass } = {}) {
+export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) {
   if (riskTier !== 'high') {
     return { decision: 'allow', reason: `ticket risk tier is '${riskTier ?? 'normal'}' — gate only guards high-risk tickets` };
   }
   if (!degraded) {
     return { decision: 'allow', reason: 'high-risk ticket, but context-fitness is not degraded' };
+  }
+  if (sessionID === 'default_session') {
+    return { decision: 'allow', reason: 'high-risk ticket in degraded context, but session ID was unresolvable (default_session); advisory warning issued' };
   }
   if (bypass) {
     return { decision: 'allow', reason: 'high-risk build in a degraded session, but ADLC_BUILD_GATE_BYPASS=1 was set', overridden: true };
@@ -202,13 +237,15 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
 
   const { tier } = computeRiskTier(ticket);
   const depth = tracker?.depth?.(sessionID) ?? 0;
-  const depthThreshold = Number.parseInt(env.ADLC_BUILD_GATE_DEPTH_THRESHOLD ?? '', 10) || DEFAULT_DEPTH_THRESHOLD;
+  const parsedThreshold = Number.parseInt(env.ADLC_BUILD_GATE_DEPTH_THRESHOLD ?? '', 10);
+  const depthThreshold = Number.isNaN(parsedThreshold) ? DEFAULT_DEPTH_THRESHOLD : parsedThreshold;
   const degraded = depth >= depthThreshold || Boolean(tracker?.isCompacted?.(sessionID));
 
   const verdict = decideBuildGate({
     riskTier: tier,
     degraded,
     bypass: env.ADLC_BUILD_GATE_BYPASS === '1',
+    sessionID,
   });
 
   if (verdict.decision === 'deny') {

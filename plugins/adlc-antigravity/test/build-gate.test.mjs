@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -34,20 +34,44 @@ test('computeRiskTier: normal risk for standard ticket', () => {
 });
 
 test('decideBuildGate: denies high risk ticket in degraded context', () => {
-  const verdict = decideBuildGate({ riskTier: 'high', degraded: true, bypass: false });
+  const verdict = decideBuildGate({ riskTier: 'high', degraded: true, bypass: false, sessionID: 'real-sess' });
   assert.equal(verdict.decision, 'deny');
   assert.match(verdict.reason, /high-risk ticket build denied/);
 });
 
 test('decideBuildGate: allows high risk ticket in degraded context when bypass=true', () => {
-  const verdict = decideBuildGate({ riskTier: 'high', degraded: true, bypass: true });
+  const verdict = decideBuildGate({ riskTier: 'high', degraded: true, bypass: true, sessionID: 'real-sess' });
   assert.equal(verdict.decision, 'allow');
   assert.equal(verdict.overridden, true);
+});
+
+test('decideBuildGate: allows high risk ticket when session ID is unresolvable default_session', () => {
+  const verdict = decideBuildGate({ riskTier: 'high', degraded: true, bypass: false, sessionID: 'default_session' });
+  assert.equal(verdict.decision, 'allow');
+  assert.match(verdict.reason, /default_session/);
 });
 
 test('decideBuildGate: allows normal risk ticket even if degraded', () => {
   const verdict = decideBuildGate({ riskTier: 'normal', degraded: true, bypass: false });
   assert.equal(verdict.decision, 'allow');
+});
+
+test('checkBuildGate: threshold 0 is respected and not discarded as default 50', () => {
+  const root = mkdtempSync(join(tmpdir(), 'thresh-0-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    const ticket = { id: 'T-ZERO', title: 'Zero threshold', risk: 'high', scope: ['src/**'] };
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-ZERO' }));
+
+    const env = { ADLC_P4_ENFORCEMENT: '1', ADLC_BUILD_GATE_DEPTH_THRESHOLD: '0' };
+    const tracker = createPersistentTracker(root, env);
+    const gate = checkBuildGate({ sessionID: 's-zero', tracker, root, env });
+    assert.equal(gate.decision, 'deny');
+    assert.match(gate.reason, /depth 0 >= 0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('createDepthTracker: tracks tool call count per session', () => {
@@ -61,21 +85,40 @@ test('createDepthTracker: tracks tool call count per session', () => {
   assert.equal(tracker.isCompacted('s1'), true);
 });
 
-test('createPersistentTracker: persists depth across calls to .adlc/sessions.json', () => {
+test('createPersistentTracker: persists depth across calls to .adlc/sessions.json when ADLC repo exists', () => {
   const root = mkdtempSync(join(tmpdir(), 'persist-test-'));
   try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
     const t1 = createPersistentTracker(root);
     t1.recordToolCall('sess-100');
     t1.recordToolCall('sess-100');
     assert.equal(t1.depth('sess-100'), 2);
 
-    // Re-create tracker from same root — verifies state persisted on disk
     const t2 = createPersistentTracker(root);
     assert.equal(t2.depth('sess-100'), 2);
     t2.markCompacted('sess-100');
 
     const t3 = createPersistentTracker(root);
     assert.equal(t3.isCompacted('sess-100'), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runFromStdin: non-ADLC repo creates NO .adlc directory or session artifacts on disk', () => {
+  const root = mkdtempSync(join(tmpdir(), 'non-adlc-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    const targetFile = join(root, 'src', 'app.mjs');
+    const payload = JSON.stringify({
+      conversationId: 'sess-clean',
+      toolCall: { name: 'write_to_file', args: { TargetFile: targetFile, CodeContent: '// test' } }
+    });
+    const res = runFromStdin(payload, {});
+    assert.equal(res.allow_tool, true);
+    assert.equal(existsSync(join(root, '.adlc')), false, '.adlc directory must not be created on non-ADLC repo');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -158,7 +158,7 @@ export function runFromStdin(raw, env = process.env) {
       if (found) root = found;
     }
   }
-  const tracker = createPersistentTracker(root);
+  const tracker = createPersistentTracker(root, env);
   const sessionID = resolveSessionId({ payload, env });
   tracker.recordToolCall(sessionID);
 
