@@ -13,7 +13,7 @@ import {
   checkBuildGate,
 } from '../build-gate-inline.mjs';
 import { createFlailTracker, detectEditChurn, flailMessage } from '../flail-inline.mjs';
-import { runFromStdin } from '../hooks/adlc-rails-guard.mjs';
+import { runFromStdin, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
 
 test('computeRiskTier: derives high risk for ticket declaring risk: high', () => {
   const { tier, signals } = computeRiskTier({ id: 'T1', title: 'test', risk: 'high' });
@@ -45,9 +45,9 @@ test('decideBuildGate: allows high risk ticket in degraded context when bypass=t
   assert.equal(verdict.overridden, true);
 });
 
-test('decideBuildGate: allows high risk ticket when session ID is unresolvable default_session', () => {
+test('decideBuildGate: denies high risk ticket when session ID is unresolvable default_session', () => {
   const verdict = decideBuildGate({ riskTier: 'high', degraded: true, bypass: false, sessionID: 'default_session' });
-  assert.equal(verdict.decision, 'allow');
+  assert.equal(verdict.decision, 'deny');
   assert.match(verdict.reason, /default_session/);
 });
 
@@ -69,6 +69,31 @@ test('checkBuildGate: threshold 0 is respected and not discarded as default 50',
     const gate = checkBuildGate({ sessionID: 's-zero', tracker, root, env });
     assert.equal(gate.decision, 'deny');
     assert.match(gate.reason, /depth 0 >= 0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('printStatus & printDoctor: execute subcommand displays without crashing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cmd-test-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
+    // Intercept console.log to verify output
+    let logs = [];
+    const origLog = console.log;
+    console.log = (msg) => logs.push(msg);
+    try {
+      printStatus(root, { ADLC_P4_ENFORCEMENT: '1' });
+      assert.ok(logs.some((l) => String(l).includes('ADLC Antigravity Status')));
+
+      logs = [];
+      printDoctor(root, {});
+      assert.ok(logs.some((l) => String(l).includes('ADLC Antigravity Doctor')));
+    } finally {
+      console.log = origLog;
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

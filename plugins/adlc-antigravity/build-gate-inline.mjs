@@ -85,9 +85,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   const storePath = join(adlcDir, 'sessions.json');
   const lockDir = join(adlcDir, 'sessions.lock');
 
-  function withLock(fn) {
+  function withLock(fn, fallback = null) {
     let acquired = false;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       try {
         mkdirSync(lockDir);
         acquired = true;
@@ -104,14 +104,13 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       }
     }
     if (!acquired) {
-      console.error(`[adlc-rails-guard] Warning: could not acquire session lock ${lockDir}`);
+      console.error(`[adlc-rails-guard] Warning: session lock acquisition timed out at ${lockDir}`);
+      return fallback;
     }
     try {
       return fn();
     } finally {
-      if (acquired) {
-        try { rmdirSync(lockDir, { recursive: true }); } catch { /* ignore */ }
-      }
+      try { rmdirSync(lockDir, { recursive: true }); } catch { /* ignore */ }
     }
   }
 
@@ -187,7 +186,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         store[sessionID] = s;
         writeStore(store);
         return { churning: newlyChurning };
-      });
+      }, { churning: [] });
     },
     depth(sessionID) {
       if (!sessionID) return 0;
@@ -209,11 +208,14 @@ export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) 
   if (!degraded) {
     return { decision: 'allow', reason: 'high-risk ticket, but context-fitness is not degraded' };
   }
-  if (sessionID === 'default_session') {
-    return { decision: 'allow', reason: 'high-risk ticket in degraded context, but session ID was unresolvable (default_session)' };
-  }
   if (bypass) {
     return { decision: 'allow', reason: 'high-risk build in a degraded session, but ADLC_BUILD_GATE_BYPASS=1 was set', overridden: true };
+  }
+  if (sessionID === 'default_session') {
+    return {
+      decision: 'deny',
+      reason: 'high-risk ticket build denied: context depth threshold exceeded in a session with unresolvable session ID (default_session). Resume in a fresh session or set ADLC_BUILD_GATE_BYPASS=1.',
+    };
   }
   return {
     decision: 'deny',
