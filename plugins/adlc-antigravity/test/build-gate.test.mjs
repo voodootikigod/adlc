@@ -80,7 +80,6 @@ test('printStatus & printDoctor: execute subcommand displays without crashing', 
     mkdirSync(join(root, '.adlc'), { recursive: true });
     writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
 
-    // Intercept console.log to verify output
     let logs = [];
     const origLog = console.log;
     console.log = (msg) => logs.push(msg);
@@ -179,6 +178,40 @@ test('runFromStdin end-to-end: denies high-risk ticket edits once context depth 
     assert.match(res.deny_reason, /tool-call depth 3 >= 3/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runFromStdin multi-root: routes session tracking to respective ADLC roots', () => {
+  const rootA = mkdtempSync(join(tmpdir(), 'multi-a-'));
+  const rootB = mkdtempSync(join(tmpdir(), 'multi-b-'));
+  try {
+    mkdirSync(join(rootA, '.adlc'), { recursive: true });
+    mkdirSync(join(rootB, '.adlc'), { recursive: true });
+    mkdirSync(join(rootA, 'src'), { recursive: true });
+    mkdirSync(join(rootB, 'src'), { recursive: true });
+
+    writeFileSync(join(rootA, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+    writeFileSync(join(rootB, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
+    const fileA = join(rootA, 'src', 'a.mjs');
+    const fileB = join(rootB, 'src', 'b.mjs');
+
+    const payload = JSON.stringify({
+      conversationId: 'multi-sess',
+      toolCall: { name: 'write_to_file', args: { TargetFile: fileA, FilePath: fileB, CodeContent: '// multi' } }
+    });
+
+    const res = runFromStdin(payload, {});
+    assert.equal(res.allow_tool, true);
+
+    const tA = createPersistentTracker(rootA);
+    const tB = createPersistentTracker(rootB);
+
+    assert.equal(tA.depth('multi-sess'), 1);
+    assert.equal(tB.depth('multi-sess'), 1);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
   }
 });
 

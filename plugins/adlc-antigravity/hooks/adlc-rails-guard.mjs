@@ -82,7 +82,7 @@ const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: $
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
  */
-export function decide(payload, { env = process.env, tracker } = {}) {
+export function decide(payload, { env = process.env, trackerCache } = {}) {
   let enforcing = false;
   try {
     enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
@@ -105,6 +105,12 @@ export function decide(payload, { env = process.env, tracker } = {}) {
         : allow();
     }
 
+    const localCache = trackerCache ?? new Map();
+    const getTracker = (r) => {
+      if (!localCache.has(r)) localCache.set(r, createPersistentTracker(r, env));
+      return localCache.get(r);
+    };
+
     // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
     // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
     for (const raw of paths) {
@@ -118,7 +124,7 @@ export function decide(payload, { env = process.env, tracker } = {}) {
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
-      const pathTracker = tracker ?? createPersistentTracker(root, env);
+      const pathTracker = getTracker(root);
 
       // Record edit for flail tracking
       const sessionID = resolveSessionId({ payload, env });
@@ -155,19 +161,29 @@ export function runFromStdin(raw, env = process.env) {
     catch { return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow(); }
   }
   const paths = extractFilePaths(payload);
-  let root = process.cwd();
-  if (paths.length > 0) {
-    const { abs } = anchorPath(paths[0], payload);
-    if (abs) {
-      const found = findAdlcRoot(abs);
-      if (found) root = found;
-    }
-  }
-  const tracker = createPersistentTracker(root, env);
   const sessionID = resolveSessionId({ payload, env });
-  tracker.recordToolCall(sessionID);
+  const trackerCache = new Map();
 
-  return decide(payload, { env, tracker });
+  const getTracker = (r) => {
+    if (!trackerCache.has(r)) trackerCache.set(r, createPersistentTracker(r, env));
+    return trackerCache.get(r);
+  };
+
+  if (paths.length > 0) {
+    for (const p of paths) {
+      const { abs } = anchorPath(p, payload);
+      if (abs) {
+        const root = findAdlcRoot(abs);
+        if (root) {
+          getTracker(root).recordToolCall(sessionID);
+        }
+      }
+    }
+  } else {
+    getTracker(process.cwd()).recordToolCall(sessionID);
+  }
+
+  return decide(payload, { env, trackerCache });
 }
 
 async function readStdin() {
