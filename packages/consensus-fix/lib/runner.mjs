@@ -5,7 +5,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { takeSnapshot, restoreSnapshot, applyChanges } from './snapshot.mjs';
-import { totalChangedLines } from './diff.mjs';
+import { totalHunkChangedLines } from './hunks.mjs';
 import { groupByChangeset, selectWinner, isAllDivergent } from './agreement.mjs';
 import { buildPrompt } from './prompt.mjs';
 import { extractJson } from '@adlc/core';
@@ -28,7 +28,22 @@ export function runCommand(cmd) {
 }
 
 /**
- * Validate a parsed LLM response.
+ * Validate one hunk's shape (bounds/content are checked later, against the
+ * real file, by applyHunks — this only checks the JSON shape is sane enough
+ * to attempt applying).
+ */
+function isWellFormedHunk(hunk) {
+  return (
+    hunk && typeof hunk === 'object' &&
+    Number.isInteger(hunk.startLine) &&
+    Number.isInteger(hunk.endLine) &&
+    typeof hunk.replacement === 'string'
+  );
+}
+
+/**
+ * Validate a parsed LLM response (issue #279: hunk-based changes, not full
+ * file content).
  * Returns { valid: true, changes } or { valid: false, reason }.
  */
 export function validateCandidate(parsed, allowedPaths) {
@@ -40,11 +55,17 @@ export function validateCandidate(parsed, allowedPaths) {
   }
   const allowedSet = new Set(allowedPaths);
   for (const change of parsed.changes) {
-    if (typeof change.file !== 'string' || typeof change.content !== 'string') {
-      return { valid: false, reason: 'each change must have string "file" and "content"' };
+    if (typeof change.file !== 'string' || !Array.isArray(change.hunks)) {
+      return { valid: false, reason: 'each change must have a string "file" and an array "hunks"' };
     }
     if (!allowedSet.has(change.file)) {
       return { valid: false, reason: `file "${change.file}" is not in the provided list` };
+    }
+    if (change.hunks.length === 0) {
+      return { valid: false, reason: `file "${change.file}" has an empty "hunks" array` };
+    }
+    if (!change.hunks.every(isWellFormedHunk)) {
+      return { valid: false, reason: `file "${change.file}" has a malformed hunk (need integer startLine/endLine and string replacement)` };
     }
   }
   return { valid: true, changes: parsed.changes };
@@ -183,32 +204,56 @@ export async function runConsensusFix({
     // C7: a candidate "survives" only when BOTH gates pass. A fix that makes
     // the repro pass by deleting an assertion, weakening a sibling test, or
     // breaking other tests reddens the rails and is REJECTED, not ranked.
+    //
+    // A hunk that fails to apply (issue #279: coordinates don't match the
+    // real file — an off-by-one, a stale line reference from an excerpt)
+    // disqualifies only THIS candidate, same as any other discard reason —
+    // it never aborts the run. restoreSnapshot always runs in `finally`:
+    // applyChanges writes files one at a time, so a failure partway through
+    // a multi-file candidate can leave an earlier file mutated even though
+    // the candidate as a whole is being discarded.
     let testPassed = false;
     let railsPassed = false;
     let testRunOutput = '';
     let railsRunOutput = '';
+    let applyError = null;
     try {
-      applyChanges(changes, snapshot);
-      const testRun = runCommand(testCmd);
-      testPassed = testRun.exitCode === 0;
-      testRunOutput = testRun.output;
+      const applyResult = applyChanges(changes, snapshot);
+      if (!applyResult.ok) {
+        applyError = applyResult.error;
+      } else {
+        const testRun = runCommand(testCmd);
+        testPassed = testRun.exitCode === 0;
+        testRunOutput = testRun.output;
 
-      if (!railsChecked) {
-        // No rails gate configured — do not block on regressions, but the
-        // survivor is only as trustworthy as the repro gate.
-        railsPassed = true;
-      } else if (testPassed) {
-        // Only spend the rails run when the repro already passed; a candidate
-        // that fails the repro can never survive regardless of the rails.
-        const railsRun = runCommand(railsCmd);
-        railsPassed = railsRun.exitCode === 0;
-        railsRunOutput = railsRun.output;
+        if (!railsChecked) {
+          // No rails gate configured — do not block on regressions, but the
+          // survivor is only as trustworthy as the repro gate.
+          railsPassed = true;
+        } else if (testPassed) {
+          // Only spend the rails run when the repro already passed; a candidate
+          // that fails the repro can never survive regardless of the rails.
+          const railsRun = runCommand(railsCmd);
+          railsPassed = railsRun.exitCode === 0;
+          railsRunOutput = railsRun.output;
+        }
       }
     } finally {
       restoreSnapshot(snapshot);
     }
 
-    const changedLines = totalChangedLines(changes, snapshot);
+    if (applyError) {
+      results.push({
+        index: i,
+        discarded: true,
+        reason: `hunk apply failed: ${applyError}`,
+        provider,
+      });
+      onProgress(`  Candidate ${i + 1}: DISCARDED (hunk apply failed: ${applyError})`);
+      continue;
+    }
+
+    const changedLines = totalHunkChangedLines(changes);
     const passed = testPassed && railsPassed;
 
     results.push({

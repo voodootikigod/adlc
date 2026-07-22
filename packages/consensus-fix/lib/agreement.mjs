@@ -15,14 +15,35 @@ export function normalizeContent(str) {
 }
 
 /**
+ * Stable string key for one hunk: its line range plus normalized
+ * replacement text. Two hunks that differ only in incidental whitespace
+ * (indentation style, trailing spaces) key identically — the agreement
+ * comparison is about whether candidates propose the SAME edit, not
+ * byte-identical text (issue #279).
+ */
+function hunkKey(hunk) {
+  return `${hunk.startLine}-${hunk.endLine}::${normalizeContent(hunk.replacement)}`;
+}
+
+/**
  * Produce a stable string key for a candidate's changeset, for grouping.
- * @param {Array<{file: string, content: string}>} changes
+ * Operates on hunks (issue #279) — deliberately cheaper than the old
+ * whole-file comparison it replaces: the key is built from just the
+ * replacement text each hunk proposes, not the entire file each hunk lives
+ * in, so agreement comparison stays cheap even as file size grows.
+ *
+ * @param {Array<{file: string, hunks: Array<{startLine, endLine, replacement}>}>} changes
  * @returns {string}
  */
 export function changesetKey(changes) {
   // Sort by file path so order doesn't matter.
   const sorted = [...changes].sort((a, b) => a.file.localeCompare(b.file));
-  return sorted.map(({ file, content }) => `${file}::${normalizeContent(content)}`).join('\x00');
+  return sorted
+    .map(({ file, hunks }) => {
+      const sortedHunks = [...hunks].sort((a, b) => a.startLine - b.startLine);
+      return `${file}::${sortedHunks.map(hunkKey).join('|')}`;
+    })
+    .join('\x00');
 }
 
 /**

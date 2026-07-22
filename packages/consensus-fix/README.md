@@ -49,13 +49,13 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 
 1. **Pre-flight**: run `--test-cmd` once. If it exits 0, the test already passes — `opError`.
 2. **Snapshot**: capture the full content of every `--files` path.
-3. **Fan**: send N independent, stateless LLM completions in parallel with the prompt: failing command + last 4000 chars of test output + all source file contents. Request JSON `{changes: [{file, content}]}`.
+3. **Fan**: send N independent, stateless LLM completions in parallel with the prompt: failing command + last 4000 chars of test output + a windowed **excerpt** of each source file (the region around whatever lines the test output references it at, or a length-capped tail when no reference is found — never the whole file for anything past a small size). Request JSON `{changes: [{file, hunks: [{startLine, endLine, replacement}]}]}` — a line-range edit, not full-file content.
 4. **Evaluate sequentially**: for each candidate:
    - Parse and validate JSON. Discard if invalid or if any `file` is not in `--files`.
-   - Apply changes, run `--test-cmd` (the **repro gate**). If it passes and `--rails` was supplied, run `--rails` (the **regression gate**) against the same applied changes. A candidate survives only if BOTH exit 0. A candidate that passes the repro but reddens the rails is rejected (lands in `failed`, not `survivors`).
-   - Record pass/fail and changed-line count.
+   - Apply hunks, run `--test-cmd` (the **repro gate**). A hunk whose `startLine`/`endLine` doesn't cleanly apply against the real file (out of bounds, overlapping another hunk) discards just that candidate — never the run. If the repro passes and `--rails` was supplied, run `--rails` (the **regression gate**) against the same applied changes. A candidate survives only if BOTH exit 0. A candidate that passes the repro but reddens the rails is rejected (lands in `failed`, not `survivors`).
+   - Record pass/fail and changed-line count (computed directly from the hunks' own line ranges — no separate diff step needed).
    - Restore snapshot (`finally`) regardless of outcome.
-5. **Agreement grouping**: normalize each surviving changeset (collapse whitespace per line) and group identical sets.
+5. **Agreement grouping**: normalize each surviving changeset's hunks (collapse whitespace per line, key on line range + normalized replacement) and group identical sets.
 6. **Winner selection**: among candidates that passed BOTH gates, pick the member of the largest agreement group with the fewest changed lines (ties broken by candidate index). The smallest-diff tiebreaker never sees a candidate that failed the rails, so it cannot reward a gaming fix.
 7. **Output**: dry-run report by default; `--apply` writes the winner.
 
@@ -137,7 +137,7 @@ consensus-fix --test-cmd "node --test test/math.test.mjs" \
     "index": 0,
     "changedLines": 1,
     "largestGroupSize": 2,
-    "changes": [{ "file": "src/math.mjs", "content": "..." }],
+    "changes": [{ "file": "src/math.mjs", "hunks": [{ "startLine": 12, "endLine": 12, "replacement": "..." }] }],
     "applied": false
   },
   "discardedDetails": []

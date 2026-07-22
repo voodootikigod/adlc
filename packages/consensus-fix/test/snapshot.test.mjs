@@ -75,17 +75,38 @@ test('restoreSnapshot handles multiple files', () => {
   }
 });
 
-test('applyChanges writes only files in snapshot', () => {
+test('applyChanges applies a hunk and writes only files in snapshot', () => {
   const dir = makeTmp();
   try {
     const f1 = join(dir, 'a.mjs');
     writeFileSync(f1, 'original');
     const snap = { [f1]: 'original' };
 
-    const changes = [{ file: f1, content: 'updated' }];
-    applyChanges(changes, snap);
+    const changes = [{ file: f1, hunks: [{ startLine: 1, endLine: 1, replacement: 'updated' }] }];
+    const result = applyChanges(changes, snap);
 
+    assert.equal(result.ok, true);
     assert.equal(readFileSync(f1, 'utf8'), 'updated');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('applyChanges returns ok:false (does not throw) when a hunk fails to apply cleanly', () => {
+  const dir = makeTmp();
+  try {
+    const f1 = join(dir, 'a.mjs');
+    writeFileSync(f1, 'one line only');
+    const snap = { [f1]: 'one line only' };
+
+    // endLine 5 is out of bounds for a 1-line file.
+    const changes = [{ file: f1, hunks: [{ startLine: 1, endLine: 5, replacement: 'x' }] }];
+    const result = applyChanges(changes, snap);
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /exceeds file length/);
+    // The original file must be untouched — apply failed before any write.
+    assert.equal(readFileSync(f1, 'utf8'), 'one line only');
   } finally {
     cleanup(dir);
   }
@@ -99,7 +120,7 @@ test('applyChanges throws when file not in snapshot', () => {
     const snap = { [f1]: 'original' };
 
     const outsideFile = join(dir, 'outside.mjs');
-    const changes = [{ file: outsideFile, content: 'injected' }];
+    const changes = [{ file: outsideFile, hunks: [{ startLine: 1, endLine: 1, replacement: 'injected' }] }];
 
     assert.throws(
       () => applyChanges(changes, snap),
