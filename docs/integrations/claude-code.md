@@ -92,6 +92,41 @@ logic is unit-tested at `plugins/adlc-claude-code/lib/prosecutor.mjs`
 complementary: `prosecutor` supplies mechanical evidence, `/adlc:adlc-prosecute`
 supplies independent model judgment with cross-lens verification.
 
+**Context hygiene of the lens agents** (issue #276): each of the five
+`agents/prosecutor-{correctness,security,contract,diff,tests}.md` files
+declares only what makes it different — its lens focus. The refute charter,
+output schema, and tool-access constraints those five (plus the verifier)
+share are defined once, in `commands/adlc-prosecute.md` step 1, and included
+in every Task prompt from there, rather than duplicated in each agent file.
+This is a maintainability property (one place to update the schema) more than
+a runtime token saving — fresh-context subagents (E4) still each need the
+full contract, whether it arrives via their fixed system prompt or the
+per-call task prompt; moving it doesn't eliminate it, it just stops five
+files from drifting independently.
+
+Similarly, the trust-root tier explanation (when a same-model P5 pass isn't
+enough — cross-model gating, ADR-0007/T39) is canonical in
+`skills/adlc/references/trust-root.md`, loaded on demand. `agents/prosecutor.md`
+points there instead of restating it. `skills/adlc/SKILL.md` keeps its own full
+copy: that file is generated from a template shared across all six harness
+ports (`scripts/router/router-model.mjs`), so it can't assume a
+claude-code-only `references/` file exists — the other five harnesses have no
+such directory. Progressive-disclosure restructuring of SKILL.md's body itself
+(splitting per-phase detail into `references/p0-p7.md`-style files) would need
+to happen at that generator layer to stay in sync across all six harnesses,
+and is deliberately out of scope here (see issue #277) rather than attempted
+as a same-session, higher-risk change.
+
+Six of the seven prosecution agents (`prosecutor-{correctness,security,contract,
+diff,tests,verifier}`) carry a one-line `description` in their frontmatter
+("P5 … lens subagent; invoked by /adlc:adlc-prosecute — do not invoke
+directly.") rather than the fuller prose the same field had before — they are
+only ever invoked programmatically, by exact name, from `/adlc:adlc-prosecute`,
+never model-selected by description matching, so a longer description was pure
+always-loaded-session cost with no discovery benefit. `prosecutor` (the
+user-facing one, model-selected by intent — "prosecute this", "is this safe to
+merge") keeps its full descriptive text.
+
 ### Hooks (automatic)
 
 | Hook | Event | Behavior |

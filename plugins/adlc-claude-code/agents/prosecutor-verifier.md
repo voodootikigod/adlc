@@ -1,6 +1,6 @@
 ---
 name: prosecutor-verifier
-description: P5 verifier/reproducer — invoked independently by /adlc:adlc-prosecute, once per deduped finding, to adversarially confirm or refute it. Read-only; never invoke to edit code.
+description: P5 verifier subagent; invoked by /adlc:adlc-prosecute — do not invoke directly.
 tools: Read, Grep, Glob
 ---
 

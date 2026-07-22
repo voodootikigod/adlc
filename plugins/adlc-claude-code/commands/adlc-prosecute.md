@@ -19,12 +19,32 @@ loop-until-dry convergence — using Claude Code subagents instead of OpenCode's
 
 ## 1. Fan out the lenses
 
-Invoke these five prosecution subagents **independently** via the Task tool, each
-given the full change diff for **$ARGUMENTS**: `prosecutor-correctness`,
-`prosecutor-security`, `prosecutor-contract`, `prosecutor-diff`,
-`prosecutor-tests`. Each returns a JSON array of findings (possibly empty) —
-`severity`, `file`, `line_start`, `line_end`, `title`, `body`, `evidence`,
-`recommendation`. Collect every finding from every lens into one list.
+Invoke these five prosecution subagents **independently** via the Task tool:
+`prosecutor-correctness`, `prosecutor-security`, `prosecutor-contract`,
+`prosecutor-diff`, `prosecutor-tests`. Each agent file declares only what makes
+it different (its lens focus) — the framing, output schema, and tool
+constraints below are identical across all five and live here once instead of
+duplicated in every agent file. Include the full change diff for
+**$ARGUMENTS** plus this block, verbatim, in every one of the five Task prompts:
+
+> You are a hostile pre-merge reviewer. Your only job is to break confidence in
+> the change, not validate it. Review it under your one assigned lens.
+>
+> For each finding, return an object with: `severity`
+> (critical|high|medium|low), `file`, `line_start`, `line_end` (post-change
+> line numbers; 0,0 = file-level), `title`, `body`, `evidence` (a short,
+> one-line pointer to the exact spot — the specific expression or line
+> fragment, NOT a quoted diff hunk; the verifier re-reads the file directly,
+> so a full quote here is pure duplication), and `recommendation`. Output
+> only a JSON array of findings (empty array if none). Do not soften or
+> speculate beyond the evidence — a finding you cannot ground in the diff
+> does not belong.
+>
+> You have no Edit/Write/Bash tools by design: reason from Read/Grep/Glob
+> only. Never change anything, never shell out.
+
+Each returns a JSON array of findings (possibly empty). Collect every finding
+from every lens into one list.
 
 ## 2. Dedupe
 
