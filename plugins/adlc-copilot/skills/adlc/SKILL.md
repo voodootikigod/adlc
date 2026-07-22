@@ -83,10 +83,12 @@ downstream reads the logical store.
   **unbypassable commit-time backstop** (`rails-guard-ci`); run it in CI and make
   it a required check. The plugin's **preToolUse rails-guard hook** is the
   in-session layer: it denies edits to declared rail paths and freezes the active
-  ticket store itself once rails exist — but **Copilot hooks fail open** on a
-  crashed or timed-out hook process, so the in-session hook is **advisory-tier,
-  not a boundary**. Rail mutations the hook misses — including any shell-driven
-  edit — are caught by the CI diff gate (any spelling), not the hook. Wire that
+  ticket store itself once rails exist. The deny is a permission ask that
+  **enforces headless** (defaults to deny, overrides `--allow-tool`) — **unless
+  the session runs with `--allow-all-tools`**, which auto-approves the ask, or the
+  hook crashes/times out; in those two fail-open windows it is **not a boundary**.
+  Rail mutations the hook misses — those windows, plus any change on another
+  branch — are caught by the CI diff gate (any spelling), not the hook. Wire that
   gate with the template at `docs/ci/rails-guard.yml`. Override deliberately with
   `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
 - Rail-set adequacy review — is every invariant covered and unbypassable — is

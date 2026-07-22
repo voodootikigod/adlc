@@ -140,10 +140,26 @@ From the live example `~/.copilot/hooks/superterm.json`:
 
 ### 2.1 Stdin field names — CORRECTED
 
-The `pre/postToolUse` hook receives JSON on stdin with **camelCase** fields:
-`toolName` (string), `toolArgs` (a **JSON string** that must be parsed), `cwd`,
-and for post, `toolResult`. Not the Claude-Code `{tool_name, tool_input,
-tool_use_id}` snake_case shape the plan carried over from VS Code.
+The `pre/postToolUse` hook receives JSON on stdin with **camelCase** fields.
+Live-captured `preToolUse` payload (verified in the #240 deny-proof):
+
+```json
+{ "sessionId": "…", "timestamp": 0, "cwd": "/abs/repo",
+  "toolName": "edit", "toolArgs": "{\"path\":\"…\",\"old_str\":\"…\",\"new_str\":\"…\"}" }
+```
+
+So the fields are `sessionId`, `timestamp`, `cwd`, `toolName` (string),
+`toolArgs` (a **JSON string** that must be parsed), and for post, `toolResult`.
+Not the Claude-Code `{tool_name, tool_input, tool_use_id}` snake_case shape the
+plan carried over from VS Code.
+
+**Consequence — the build-gate is inert on Copilot.** There is **no
+transcript/log field** in this payload. `adlc-build-gate.mjs`'s context-fitness
+check needs a session transcript (as `transcript_path` on Claude Code / Codex),
+so on Copilot it always early-exits to advisory-allow and **never denies**. It
+ships wired for forward-compat only; the inertness is disclosed in
+`docs/integrations/copilot.md` Gaps (e) and the capability matrix. If a future
+Copilot build adds a session-log field, the gate engages automatically.
 
 ## 3. Supported hook events (authoritative)
 

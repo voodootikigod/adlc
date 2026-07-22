@@ -22,5 +22,6 @@ The initializer is idempotent and preserves project-owned files. `adlc init` may
 write a **local** `.adlc/config.json`; do **not** commit it into a repo that
 already has frozen rails on the base branch — CI treats `.adlc/config.json` as a
 trust root once any base ticket declares rails. Then wire the unbypassable CI
-rail-freeze gate (`rails-guard-ci`) as a required check; the in-session hooks are
-advisory-tier.
+rail-freeze gate (`rails-guard-ci`) as a required check — the unbypassable tier.
+The in-session rails hook enforces headless (its deny-ask defaults to deny) unless
+the session runs with `--allow-all-tools`, which auto-approves it.

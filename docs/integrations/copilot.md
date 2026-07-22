@@ -35,7 +35,7 @@ and fails open only on a crashed/timed-out hook or `--allow-all-tools`**.
 | Primitive | Copilot surface | Notes |
 | --- | --- | --- |
 | Rail protection | `preToolUse` hook (`adlc-rails-guard.mjs`) | Denies edits to a frozen ticket's rails via a `{reason}` deny-ask. Enforces headless (defaults to deny, overrides `--allow-tool`) unless `--allow-all-tools`. |
-| Build-gate context fitness | `preToolUse` hook (`adlc-build-gate.mjs`) | Runs after rails-guard; opt-in, advisory. |
+| Build-gate context fitness | `preToolUse` hook (`adlc-build-gate.mjs`) | Runs after rails-guard, but **currently inert on Copilot** — the CLI exposes no session transcript to measure context-fitness. See Gaps (e). |
 | Ticket / gate context | `sessionStart`, `preCompact`, `subagentStart`, `subagentStop` | Advisory narration via `adlc-lifecycle.mjs context`. |
 | Flail detection | `postToolUse` hook | Advisory repeated-failure notice. |
 | Gate evidence + review trigger | `agentStop` hooks (`verify`, `review`) | Advisory. |
@@ -234,6 +234,17 @@ corrected contract; no overstatement, no understatement:
   of how the edit was made. The in-session hook enforces headless unless
   `--allow-all-tools`; the CI gate is the tier that is never bypassable. Make it
   a required check.
+- **(e) The build-gate is currently INERT on Copilot.** `adlc-build-gate.mjs`'s
+  context-fitness check (deny a high-risk build when the session's tool-call
+  depth / transcript size is degraded) needs a session transcript. Copilot 1.0.73's
+  `preToolUse` stdin exposes **none** — only `{ sessionId, timestamp, cwd, toolName,
+  toolArgs }` (appendix §2.1) — so `transcriptPath` is always undefined, the hook
+  always takes the advisory-allow early-exit, and it **never denies on Copilot**. It
+  ships wired (harmless, zero-cost) so it activates automatically if Copilot ever
+  exposes a transcript/log field. Until then, Copilot context-rot protection is
+  **not** provided by this gate — it rests on operator discipline and the P4 flail
+  advisory. (On Claude Code / Codex, whose stdin carries `transcript_path`, this
+  gate is fully active; this gap is Copilot-specific.)
 - **(c) VS Code Copilot hooks are Preview.** The hook surface this integration
   targets is documented by GitHub as **Preview** status in the VS Code Copilot
   path; its contract may shift, and this doc will be re-pinned against the

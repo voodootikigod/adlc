@@ -5,9 +5,19 @@
 // docs/integrations/copilot-probe-appendix.md): DENY = a non-empty
 // `{"reason":…}` object on STDOUT + exit 0 (not exit 2, not permissionDecision);
 // this adapter never throws to the OS (Copilot fails OPEN on a crashed hook), so
-// internal errors deny. Copilot preToolUse stdin carries no `transcript_path`, so
-// when no session transcript is offered the gate allows-with-advisory instead of
-// failing closed (see main()).
+// internal errors deny.
+//
+// !!! CURRENTLY INERT ON COPILOT !!! The context-fitness signal needs a session
+// transcript, but Copilot 1.0.73's preToolUse stdin exposes NONE — it carries
+// only `{ sessionId, timestamp, cwd, toolName, toolArgs }` (verified live in the
+// #240 deny-proof; see docs/integrations/copilot-probe-appendix.md §2.1). So
+// `transcriptPath` is always undefined, main() always takes the advisory-allow
+// early-exit, and decide() (the only branch that can deny) is never reached: this
+// gate NEVER denies on Copilot. It is kept wired — harmless (always allows) and
+// zero-cost — so it activates automatically if Copilot ever exposes a session
+// transcript/log field. Until then, Copilot context-rot protection relies on
+// operator discipline + the P4 flail advisory, NOT this gate. This inertness is
+// disclosed in docs/integrations/copilot.md (Gaps / Caveats) and the matrix.
 //
 // KEEP IN SYNC — deriveRiskSignals/computeRiskTier are a verbatim inline copy
 // of packages/build-gate/lib/risk.mjs, and countToolCalls/computeDepthSignal/
@@ -265,14 +275,14 @@ async function main() {
   if (!ticket) fail(`active ticket ${active.id} not found in the ticket store — failing closed`);
 
   const bypassRequested = process.env.ADLC_BUILD_GATE_BYPASS === '1';
-  // Copilot preToolUse stdin does not carry Claude Code's `transcript_path`.
-  // If the harness offered no session transcript at all, the context-fitness
-  // signal is unmeasurable (not broken) — allow with an advisory rather than
-  // deny every high-risk edit. When a transcript IS provided but unreadable,
-  // decide() still fails closed on it (consistent with codex intent).
+  // Copilot 1.0.73 preToolUse stdin exposes no session transcript field, so this
+  // branch is the ONLY one taken on Copilot today (the gate is inert — see the
+  // file header). The lookup is kept forward-compatible: if a future Copilot
+  // build exposes a transcript/log field, decide() engages automatically; a
+  // transcript that IS provided but unreadable still fails closed there.
   const transcriptPath = payload.transcriptPath ?? payload.transcript_path ?? payload.logPath;
   if (transcriptPath === undefined) {
-    console.error('adlc-build-gate: no session transcript provided by the harness — context-fitness cannot be measured; allowing (advisory).');
+    console.error('adlc-build-gate: no session transcript exposed by Copilot (1.0.73) — context-fitness cannot be measured, so this gate is inert; allowing.');
     process.exit(0);
   }
   const result = decide({ ticket, transcriptPath, bypassRequested });
