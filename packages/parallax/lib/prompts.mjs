@@ -1,6 +1,11 @@
 // Prompt construction for the three parallax modes.
 // Pure functions — no I/O, testable offline.
 
+import { tail } from '@adlc/core';
+
+/** Default per-file cap for --route mode context (issue #280). */
+export const DEFAULT_CONTEXT_CAP = 6000;
+
 /**
  * Build the spec-reader prompt for one cheap-tier fan agent.
  * Each agent commits to ONE reading and outputs JSON.
@@ -84,13 +89,30 @@ ${ticketB.body ?? '(no body)'}`;
 /**
  * Build the route-answer prompts for cheap fan agents.
  * Each agent answers the question given context file contents.
+ *
+ * Context files are length-capped (issue #280) — the route-mode question
+ * ("did the builder hit confusion or real ambiguity?") rarely needs whole
+ * files, and this prompt is sent to N=3 fan agents, multiplying the cost of
+ * an uncapped embed. Each block states the file's real line/char count and
+ * marks a truncated file so the model knows it may not be seeing everything.
+ *
  * @param {string} question - The routing question.
  * @param {Array<{path: string, content: string}>} contextFiles - Context files.
+ * @param {object} [opts]
+ * @param {number} [opts.contextCap] - max chars embedded per file (tail-biased)
  * @returns {string}
  */
-export function buildRouteAnswerPrompt(question, contextFiles) {
+export function buildRouteAnswerPrompt(question, contextFiles, { contextCap = DEFAULT_CONTEXT_CAP } = {}) {
   const ctxSection = contextFiles.length > 0
-    ? '\n\n' + contextFiles.map(f => `=== ${f.path} ===\n${f.content}`).join('\n\n')
+    ? '\n\n' + contextFiles.map((f) => {
+      const lineCount = f.content.split('\n').length;
+      const capped = tail(f.content, contextCap);
+      const truncated = capped.length < f.content.length;
+      const note = truncated
+        ? ` (${f.content.length} chars, ${lineCount} lines — showing last ${contextCap} chars only)`
+        : ` (${f.content.length} chars, ${lineCount} lines)`;
+      return `=== ${f.path}${note} ===\n${capped}`;
+    }).join('\n\n')
     : '';
 
   return `You are a technical analyst. Answer the following question as precisely and concisely as possible.

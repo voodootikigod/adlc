@@ -1,0 +1,54 @@
+name: Copilot live-deny drift canary
+
+# Catches upstream GitHub Copilot CLI drift in preToolUse hook ENFORCEMENT
+# semantics on a cadence, so the "rails enforce headless unless --allow-all-tools"
+# claim — proven once, live, in the #240 deny-proof against CLI 1.0.73 — does not
+# go silently stale between Copilot releases. The required `test` job's offline
+# copilot-install-smoke only replays synthetic stdin against the local hook (deny
+# SHAPE), not the real binary's decision; this canary drives real `copilot -p`
+# turns against a frozen rail and asserts the edit is blocked.
+#
+# Advisory by nature: it needs an ENTITLED Copilot login (secrets.COPILOT_CLI_TOKEN,
+# real model turns → AI credits). When that secret is not configured it skips
+# cleanly (exit 0 with a message) so the scheduled run is not perpetually red;
+# once configured it fails loudly if the enforcement contract has drifted.
+on:
+  schedule:
+    - cron: '37 8 * * *' # daily; off-hour to dodge peak contention
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  copilot-live-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      # Install with NO secret in scope (keeps the token out of npm lifecycle scripts).
+      - name: Install copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Copilot live rail-deny drift proof
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          ADLC_COPILOT_LIVE_INSTALL: '1'
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "COPILOT_CLI_TOKEN is not configured — skipping the live drift canary (no entitled account)."
+            exit 0
+          fi
+          copilot --version
+          node scripts/copilot-live-deny.mjs --require
