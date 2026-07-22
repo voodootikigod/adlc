@@ -12,14 +12,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildLiveDeps, fleetLogPath } from '../lib/live-deps.mjs';
+import { buildLiveDeps, fleetLogPath, defaultIo } from '../lib/live-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADLC_BIN = resolve(HERE, '../../cli/bin/adlc.mjs');
+
+/** Write a log file into `dir` and return its path. */
+function makeLogAt(dir, content) {
+  const p = join(dir, 'session.log');
+  writeFileSync(p, content);
+  return p;
+}
 
 const sandboxSpec = { mode: 'sandbox', backend: { name: 'bubblewrap' } };
 const config = { gate: { build: 'npm run build', test: 'npm test' }, timeoutMinutes: 1, modelAuthKey: 'ANTHROPIC_API_KEY' };
@@ -72,9 +79,35 @@ test('the transcript ACCUMULATES across strikes rather than being overwritten', 
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 2, deadEnds: [] });
 
   const body = readFileSync(fleetLogPath(statusDir, '/repo', 'T1'), 'utf8');
-  assert.match(body, /strike 1/);
-  assert.match(body, /strike 2/, 'checkFlail runs over the accumulated log — strike 1 must survive');
+  assert.match(body, /^=== T1 strike 1 ===$/m);
+  assert.match(body, /^=== T1 strike 2 ===$/m, 'checkFlail runs over the accumulated log — strike 1 must survive');
   assert.equal(body.match(/error: boom/g).length, 2, 'both strikes contribute to the repeated-error signal');
+});
+
+// ---------------------------------------------------------------------------
+// defaultIo() is the wiring production actually gets. Every other test injects
+// its own io, so these primitives had no coverage at all — a null-returning
+// `adlc` or a non-recursive mkdir would have shipped green.
+// ---------------------------------------------------------------------------
+
+test('defaultIo().adlc spawns the given bin and returns a real spawnSync result', async () => {
+  const log = makeLogAt(mkdtempSync(join(tmpdir(), 'fleet-e2e-')), 'Writing /etc/passwd\n');
+
+  const r = defaultIo().adlc(['flail-detector', '--json', '--scope=src/**', '--', log], { bin: ADLC_BIN });
+
+  assert.ok(r, 'must return the spawn result, not null');
+  assert.equal(r.status, 2, 'the configured bin ran and reported the flail verdict');
+  assert.equal(JSON.parse(r.stdout).verdict, 'flail');
+});
+
+test('defaultIo().appendLog creates missing parent directories and appends', async () => {
+  const p = join(mkdtempSync(join(tmpdir(), 'fleet-e2e-')), 'deep', 'nested', 'T1.log');
+  const io = defaultIo();
+
+  io.appendLog(p, 'first\n');
+  io.appendLog(p, 'second\n');
+
+  assert.equal(readFileSync(p, 'utf8'), 'first\nsecond\n', 'nested dirs created, writes appended not clobbered');
 });
 
 test('deps.flail() detects a REAL flail after a real dispatch (the whole point of #284)', async () => {
