@@ -1353,6 +1353,27 @@
       "title": "Schema bedrock: definition-driven validator + generated JSON Schemas"
     },
     {
+      "body": "Implements .adlc/specs/trust-root-ceremony.md as the contract; closes voodootikigod/adlc#141. isCompletionAnnotationOnly (scripts/rails-guard-ci.mjs:147) bails when baseRails.length > 0, so completing a RAILED ticket — the one operation that clears rail drift — is structurally impossible on the normal path and has now been admin-merged four times (#199, #221, #227, #285). Add a CODEOWNERS-gated, revision-bound authorization the gate re-derives itself. BLOCKING constraint from premortem: a same-repo PR's GITHUB_TOKEN carries checks:write by default, so a check run named trust-root-authorized is forgeable on its own head SHA — the check run must be a cache, never the authority, and rails-guard-ci must re-query the label applier and approving reviewer and re-derive the decision. Authorization bar is CODEOWNERS (not write), same-repo branches only, fail closed on any API error. The authorizer runs on pull_request_target and must take no PR code. No signing key in PR CI (T36 rationale). UNBLOCKED: CODEOWNERS now exists covering the five trust-root paths. The coldstart gap turned out to be deeper than a missing file - this repo has ONE collaborator, and GitHub structurally forbids approving your own PR, so the original two-person rule was unsatisfiable and would have authorized nothing (a red check with no path through it, strictly worse than the admin override it replaces). Authorization strictness is now DERIVED from the eligible-CODEOWNER count: single-owner mode permits self-authorization by label with no review and records mode:single-owner so the evidence never implies a second reviewer; multi-owner mode auto-engages full separation of duties when a second owner is added, with no flag able to select the weaker mode while a stronger one is available. Solo, this ceremony buys auditability and keeps the required check green - NOT separation of duties, which is unavailable here. Acceptance is AC1-AC19 in the spec.",
+      "budget": "frontier",
+      "category": "feature",
+      "duration": 3,
+      "edges": [],
+      "id": "T60",
+      "rails": [],
+      "scope": [
+        "scripts/rails-guard-ci.mjs",
+        "scripts/test/rails-guard-ci.test.mjs",
+        "scripts/test/trust-root-auth.test.mjs",
+        ".github/workflows/trust-root-auth.yml",
+        "docs/ci/**",
+        "packages/gate-manifest/**",
+        "docs/adr/**",
+        ".adlc/specs/trust-root-ceremony.md",
+        "CODEOWNERS"
+      ],
+      "title": "Trust-root change ceremony: an authorized path CI recognizes, not an admin override"
+    },
+    {
       "body": "hollowTestWouldMutate (scripts/mutation-gate.mjs:117) decides what counts as mutable source by EXCLUDING a fixed set of non-source extensions (md|json|yml|yaml|lock|txt|toml|snap). Any path with no extension therefore falls through and is treated as source: CODEOWNERS, LICENSE, Dockerfile, Makefile, .gitignore, .nvmrc all return true. A PR touching any of them has no fast test target, so the gate falls back to the FULL suite on the slow path. Observed on PR #287: adding CODEOWNERS produced 'mutation-gate: 1 file(s) have no known fast test target - falling back to the FULL suite: CODEOWNERS'. hollow-test can only mutate JS-family source, and the gate's own workflow step already filters '*.mjs' '*.js' '*.cjs' 'packages/**' 'plugins/**' - so the script and the workflow disagree about what source is. Invert to an include-list of JS-family extensions. Verification: node --test scripts/test/mutation-gate.test.mjs. allow-suppression: none ADVERSARIAL-REVIEW (HIGH, test-integrity): the first fix narrowed to mjs|cjs|js only, which SILENTLY SKIPPED the repo's 49 tracked non-test .ts/.tsx source files — hollow-test's own filterTargetFiles accepts them, so classify() returned kind:'nothing' and the required gate exited 0 without running. That trades a false positive for a false negative, strictly the worse direction. Root cause of BOTH bugs is the same predicate duplicated in packages/hollow-test/lib/targets.mjs:10 and scripts/mutation-gate.mjs — they drifted. Fix is one exported predicate shared by both, include-listing the JS and TS families, with a cross-contract test proving the two selectors agree.",
       "budget": "mid",
       "category": "bug",
@@ -1475,6 +1496,32 @@
         "packages/ticket-sync/test/github.test.mjs"
       ],
       "title": "Push + create: write-back, idempotent create, status outcomes"
+    },
+    {
+      "body": "Implements .adlc/specs/rails-start-lifecycle.md as the contract; closes voodootikigod/adlc#159. Rails currently freeze from the moment a ticket exists: the union in scripts/rails-guard-ci.mjs skips only completed tickets (T36/#130 gave rails an END, nothing gives them a START). Two harms: a ticket cannot author its own rails (observed three narrow/re-freeze cycles building T58), and the documented workaround is to declare rails:[] (T39/T40). Add a `started` field gating the union, self-service via a narrow isStartAnnotationOnly exemption and irreversible because un-starting is already denied by assertBaseTicketContractsPreserved. BLOCKING constraint from premortem: grandfather tickets predating the field via a formatVersion bump — absent `started` must not mean never-started, or merging expires all 30 currently-frozen paths at once. Also required: decide start+complete recovery explicitly, never emit `started` at authoring, and drive the transition from P3 rather than a remembered step. Coldstart gaps folded in: packages/build-gate/** added to scope because the automatic P3 transition lives there, and the formatVersion grandfather mechanism collides with the existing 0->1 migration gate (rails-guard-ci.mjs:348,377) so the spec now prefers a per-ticket provenance signal. Acceptance is AC1-AC17 in the spec. Suppressions are denied. Backfilling started onto shipped tickets, manifest-derived start, and diff-derived start are out of scope (rationale in the spec).",
+      "budget": "frontier",
+      "category": "feature",
+      "duration": 3,
+      "edges": [
+        {
+          "contract": "T59 owns the START half of the rail lifecycle; T60 owns the authorized-ceremony mechanism. Independently grabbable — but if T59 lands first its grandfather clause must keep T60's motivating drift frozen, and if T60 lands first the union is already empty. Neither may depend on the other's merge order.",
+          "to": "T60"
+        }
+      ],
+      "id": "T59",
+      "rails": [],
+      "scope": [
+        "scripts/rails-guard-ci.mjs",
+        "scripts/test/rails-guard-ci.test.mjs",
+        "packages/tickets/**",
+        "packages/rails-guard/**",
+        "packages/build-gate/**",
+        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+        "plugins/adlc-claude-code/test/**",
+        "docs/adr/**",
+        ".adlc/specs/rails-start-lifecycle.md"
+      ],
+      "title": "Rails START lifecycle: freeze from build-start, not from authoring"
     }
   ]
 }
