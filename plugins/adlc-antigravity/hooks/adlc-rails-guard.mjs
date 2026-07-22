@@ -180,11 +180,6 @@ export function runFromStdin(raw, env = process.env) {
       }
     }
   }
-  if (distinctRoots.size === 0) {
-    const cwdRoot = findAdlcRoot(process.cwd());
-    if (cwdRoot) distinctRoots.add(cwdRoot);
-    else distinctRoots.add(process.cwd());
-  }
 
   for (const root of distinctRoots) {
     getTracker(root).recordToolCall(sessionID);
