@@ -18,6 +18,7 @@ const ARTIFACTS = [
       'plugins/adlc-codex/hooks/generated-ticket-reader.mjs',
       'plugins/adlc-claude-code/hooks/generated-ticket-reader.mjs',
       'plugins/adlc-antigravity/generated-ticket-reader.mjs',
+      'plugins/adlc-copilot/hooks/generated-ticket-reader.mjs',
     ],
   },
   {
@@ -30,6 +31,7 @@ const ARTIFACTS = [
       'plugins/adlc-opencode/generated-active-ticket.mjs',
       'plugins/adlc-cursor/generated-active-ticket.mjs',
       'plugins/adlc-pi/lib/generated-active-ticket.mjs',
+      'plugins/adlc-copilot/hooks/generated-active-ticket.mjs',
     ],
   },
 ];

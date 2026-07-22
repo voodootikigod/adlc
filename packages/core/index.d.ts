@@ -262,6 +262,7 @@ export function shellTokens(text: string): string[];
 export function looksPathLike(value: string): boolean;
 export function looksBarePathLike(value: string): boolean;
 export function keyValuePath(value: string): string | null;
+export function hasUnquotedFileRedirect(text: string): boolean;
 export function shellHasMutation(text: string): boolean;
 export function shellHasOpaqueMutation(text: string): boolean;
 export function shellIsPositivelyReadOnly(text: string): boolean;

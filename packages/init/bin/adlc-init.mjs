@@ -2,12 +2,14 @@
 import { scaffold } from '../lib/scaffold.mjs';
 
 function usage() {
-  console.log(`adlc init [--root <path>] [--json] [--no-codex-agents] [--harness <codex|cursor>]
+  console.log(`adlc init [--root <path>] [--json] [--no-codex-agents] [--harness <codex|cursor|copilot>]
 
 Idempotently creates the committable .adlc runtime and optional project-scoped
-Codex agents. --harness cursor implies --no-codex-agents and records
-harnesses.cursor in a fresh config. Writes are confined to --root; never edits
-user-global Codex/Cursor configuration implicitly.`);
+Codex agents. --harness cursor and --harness copilot each imply --no-codex-agents
+and record harnesses.<name> in a fresh config; --harness copilot also scaffolds a
+.github/copilot-instructions.md block and a copilot-setup-steps.yml snippet.
+Writes are confined to --root; never edits user-global harness configuration
+implicitly.`);
 }
 
 function parse(argv) {
@@ -20,11 +22,11 @@ function parse(argv) {
     else if (arg === '--harness') {
       if (index + 1 >= argv.length) throw new Error('--harness requires a value');
       const value = argv[++index];
-      if (value !== 'codex' && value !== 'cursor') {
-        throw new Error(`--harness must be codex or cursor (got ${value})`);
+      if (value !== 'codex' && value !== 'cursor' && value !== 'copilot') {
+        throw new Error(`--harness must be codex, cursor, or copilot (got ${value})`);
       }
       options.harness = value;
-      if (value === 'cursor') options.codexAgents = false;
+      if (value === 'cursor' || value === 'copilot') options.codexAgents = false;
     } else if (arg === '--root') {
       if (index + 1 >= argv.length) throw new Error('--root requires a path');
       options.root = argv[++index];

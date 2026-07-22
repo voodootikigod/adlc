@@ -62,10 +62,42 @@ export function keyValuePath(value) {
   return looksPathLike(path) ? path : null;
 }
 
+/**
+ * Does the command contain an UNQUOTED file-writing redirect — `>`/`>>`,
+ * optionally fd-prefixed (`2>`) — regardless of whitespace before the operator?
+ * Quote- and escape-aware: a `>` inside quotes (`grep '>' f`) or escaped
+ * (`cat a\>b`) is not a redirect, and fd-duplication (`2>&1`, `>&2`) is not a
+ * file write. This closes the `cat a>b` (no space before `>`) rail-enforcement
+ * bypass that shellHasMutation's whitespace-anchored redirect regex missed —
+ * such a command was misclassified "positively read-only" and its target never
+ * checked against the rails. KEEP IN SYNC across the inline hook copies.
+ */
+export function hasUnquotedFileRedirect(text) {
+  const s = String(text ?? '');
+  let quote = null;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (quote === null && c === '\\') { i += 1; continue; }
+    if (quote === null && (c === "'" || c === '"')) { quote = c; continue; }
+    if (quote !== null) {
+      if (quote === '"' && c === '\\') { i += 1; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '>') {
+      let j = s[i + 1] === '>' ? i + 2 : i + 1;
+      while (s[j] === ' ' || s[j] === '\t') j += 1;
+      if (s[j] !== undefined && s[j] !== '&') return true;
+    }
+  }
+  return false;
+}
+
 /** Does the command contain a recognized file-mutation form? */
 export function shellHasMutation(text) {
   return (
     /(^|[\s;&|])(?:>>?|[0-9]>>?|[0-9]>)\s*\S+/.test(text) ||
+    hasUnquotedFileRedirect(text) ||
     /\b(?:tee|touch|rm|mv|cp|install|dd|truncate|rsync|chmod|chown|ln|mkdir|mktemp|shred)\b/.test(text) ||
     /\bcurl\b[^;&|]*(?:\s-[oO]\b|\s--output\b|\s--remote-name\b)/.test(text) ||
     /\bwget\b[^;&|]*(?:\s-O\b|\s--output-document\b)/.test(text) ||
@@ -187,7 +219,7 @@ export function shellHasExpansion(text) {
 
 /** Collect literal path candidates (redirect targets, quoted paths, sed w-files, tokens). */
 export function collectShellPaths(text, out) {
-  const redirectPattern = /(?:^|[\s])(?:>>?|[0-9]>>?|[0-9]>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
+  const redirectPattern = /(?:[0-9])?>>?\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/g;
   let redirect;
   while ((redirect = redirectPattern.exec(text)) !== null) {
     out.add(redirect[1] ?? redirect[2] ?? redirect[3]);
