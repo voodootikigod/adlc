@@ -12,7 +12,7 @@ import * as worktrees from './worktrees.mjs';
 import { Sandbox } from './sandbox.mjs';
 import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
-import { runGates, checkFlail } from './gates.mjs';
+import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
 import { getAdapter } from './adapters/index.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
 import { makeReviewRunner } from './review-runner.mjs';
@@ -21,14 +21,25 @@ import { PROTECTED_PREFIXES, isUnderProtectedPrefix } from './protected-paths.mj
 import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { spawnAsync } from './spawn-async.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
 // ignore file — the fleet never writes base history.
 function ensureLocalExclude(repoDir) {
-  const p = join(repoDir, '.git', 'info', 'exclude');
+  // In a LINKED git worktree `<repo>/.git` is a FILE, not a directory, so the
+  // naive join silently failed into the catch below. That was harmless while
+  // nothing created `.adlc/fleet-logs/` — but dispatch now does, and an
+  // unexcluded untracked dir makes every subsequent run abort at preflight
+  // with "main checkout has uncommitted changes", blaming the operator for a
+  // file the fleet itself wrote.
+  let gitDir;
+  try {
+    gitDir = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: repoDir, encoding: 'utf8' }).trim();
+  } catch { return; }
+  if (!gitDir) return;
+  const p = join(isAbsolute(gitDir) ? gitDir : join(repoDir, gitDir), 'info', 'exclude');
   const want = ['.worktrees/', '.adlc/fleet-status.json', '.adlc/fleet-logs/', '.adlc/fleet.lock/'];
   let cur = '';
   try { cur = existsSync(p) ? readFileSync(p, 'utf8') : ''; } catch { return; }
@@ -55,7 +66,7 @@ function ensureLocalExclude(repoDir) {
  */
 export function flailExec(io) {
   return (bin, args) => {
-    const r = io.adlc(args, { bin });
+    const r = io.adlc(args, { bin, maxBuffer: MAX_OUTPUT_BYTES });
     // Could not spawn at all, or no exit status to trust → unverifiable (§12).
     if (r?.error) throw r.error;
     if (typeof r?.status !== 'number') throw new Error('flail-detector did not run');
@@ -97,9 +108,12 @@ export function defaultIo() {
     writeJson: (p, obj) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(obj, null, 2) + '\n'); },
     // Best-effort: losing a transcript line must never fail a build. A missing
     // log degrades the flail check to its documented fail-open, nothing worse.
-    appendLog: (p, text) => {
-      try { mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, text); }
-      catch { /* best effort */ }
+    // `reset` truncates instead of appending — see the strike-1 call site.
+    appendLog: (p, text, { reset = false } = {}) => {
+      try {
+        mkdirSync(dirname(p), { recursive: true });
+        if (reset) writeFileSync(p, text); else appendFileSync(p, text);
+      } catch { /* best effort */ }
     },
     ensureGitignore: (repoDir) => ensureLocalExclude(repoDir),
     env: process.env,
@@ -202,16 +216,31 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // Persist the transcript BEFORE anything can return early, so the flail
       // consultation between strikes has something to analyze. Without this the
       // detector is handed a nonexistent path, exits 1, and every consultation
-      // fails open — #284's fix is inert without it. Appended, not overwritten:
-      // checkFlail runs over the ACCUMULATED log across strikes.
-      io.appendLog?.(
-        fleetLogPath(statusDir, repo, ticket.id),
-        `=== ${ticket.id} strike ${strike} ===\n${res.output ?? ''}\n`,
-      );
+      // fails open — #284's fix is inert without it.
+      //
+      // Strike 1 TRUNCATES; later strikes append. The log accumulates across
+      // the strikes of one run (checkFlail is documented to analyze the
+      // accumulated log) but must never carry across runs: the file is
+      // git-excluded and listed in INERT_GLOBS, so nothing else ever deletes
+      // it, and the detector's repeated-error threshold is only 2. A ticket
+      // re-run or resumed after a failure would otherwise be judged on the
+      // PREVIOUS run's errors and killed on the first strike it has taken —
+      // a fail-closed misfire caused purely by stale state.
+      const logPath = fleetLogPath(statusDir, repo, ticket.id);
+      let reset = strike === 1; // only the first write of strike 1 truncates
+      const write = (text) => { io.appendLog(logPath, text, { reset }); reset = false; };
+      write(`=== ${ticket.id} strike ${strike} ===\n${res.output ?? ''}\n`);
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {
         try { worktrees.commitWorker(worktree, ticket.id, io.git(worktree)); }
-        catch (e) { return { exitCode: 1, output: `${res.output}\ncommit failed: ${e.message}`, timedOut: false }; }
+        catch (e) {
+          // This IS the failure the scheduler will act on, so it belongs in the
+          // transcript the flail check analyzes — otherwise a commit failure
+          // repeating across strikes can never reach the repeated-error signal.
+          const output = `${res.output}\ncommit failed: ${e.message}`;
+          write(`commit failed: ${e.message}\n`);
+          return { exitCode: 1, output, timedOut: false };
+        }
       }
       return { ...res, blocked: /TICKET-BLOCKED/.test(res.output) };
     },

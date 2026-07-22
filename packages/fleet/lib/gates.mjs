@@ -135,7 +135,7 @@ export function checkFlail(logFile, scope, { adlcBin = 'adlc', exec = defaultExe
 // and the session log is written by the very agent this gate supervises. On
 // Node's default 1 MiB maxBuffer, the noisiest sessions — exactly the ones the
 // size and edit-churn signals exist to catch — would overflow and fail open.
-const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 function defaultExec(bin, args) {
   return execFileSync(bin, args, { encoding: 'utf8', maxBuffer: MAX_OUTPUT_BYTES });

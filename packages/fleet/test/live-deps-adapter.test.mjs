@@ -14,6 +14,7 @@ function fakeIo(rec, env) {
   return {
     git: fakeGit(),
     adlc: () => ({ status: 0, stdout: '{}' }),
+    appendLog: () => {},
     adlcAsync: async () => ({ status: 0, stdout: '' }),
     spawnWorker: async (cmd, args, opts) => { rec.push({ cmd, args, env: opts?.env, input: opts?.input }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
     readFile: () => undefined, exists: () => false, mkdirp: () => {}, writeJson: () => {}, ensureGitignore: () => {},

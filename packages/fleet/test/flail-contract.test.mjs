@@ -15,7 +15,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkFlail } from '../lib/gates.mjs';
+import { checkFlail, MAX_OUTPUT_BYTES } from '../lib/gates.mjs';
 import { flailExec } from '../lib/live-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +50,15 @@ function assertDetectorExits(expected, logFile, scope) {
     probe.status, expected,
     `precondition: detector must exit ${expected} here, got ${probe.status} (stderr: ${probe.stderr})`,
   );
+  if (expected === 1) {
+    // An UNINSTALLED @adlc/flail-detector also exits 1 (cli/lib/dispatch.mjs),
+    // which would satisfy the check above while the detector never ran — the
+    // precise ambiguity this helper exists to remove.
+    assert.doesNotMatch(
+      probe.stderr ?? '', /tool not installed|unknown tool/,
+      'precondition: exit 1 must be the detector own operational error, not a missing detector',
+    );
+  }
   return probe;
 }
 
@@ -230,13 +239,27 @@ test('the production flailExec adapter fails open on a real operational error', 
   assert.equal(r.failedOpen, true);
 });
 
-test('flailExec honors the bin it is handed, so config.adlcBin is effective', async () => {
+test('flailExec honors the bin it is handed rather than discarding it', async () => {
   const seen = [];
   const exec = flailExec({ adlc: (args, opts) => { seen.push(opts?.bin); return { status: 0, stdout: '{"verdict":"clean","signals":[]}' }; } });
 
   checkFlail('/log', [], { adlcBin: '/custom/path/adlc', exec });
 
   assert.deepEqual(seen, ['/custom/path/adlc'], 'the configured bin must not be discarded');
+  // NB: `config.adlcBin` is not currently surfaced by resolveRunConfig, so no
+  // operator can set this today — flail-e2e.test.mjs proves the plumbing works
+  // end to end through buildLiveDeps, but the config key remains unwired.
+});
+
+test('flailExec applies the same output cap as defaultExec', async () => {
+  // Production runs through flailExec, NOT defaultExec, so a cap set only on
+  // the latter would be inert exactly where the noisiest sessions are.
+  let seen;
+  const exec = flailExec({ adlc: (args, opts) => { seen = opts; return { status: 0, stdout: '{"verdict":"clean","signals":[]}' }; } });
+
+  checkFlail('/log', [], { exec });
+
+  assert.equal(seen.maxBuffer, MAX_OUTPUT_BYTES, 'both runners must share one limit');
 });
 
 test('flailExec turns exit 1 into a fail-open even when it printed a flail document', async () => {

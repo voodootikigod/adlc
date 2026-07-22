@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,10 @@ function makeLogAt(dir, content) {
 }
 
 const sandboxSpec = { mode: 'sandbox', backend: { name: 'bubblewrap' } };
-const config = { gate: { build: 'npm run build', test: 'npm test' }, timeoutMinutes: 1, modelAuthKey: 'ANTHROPIC_API_KEY' };
+// adlcBin MUST be set: buildLiveDeps resolves `config.adlcBin ?? 'adlc'` and
+// passes it down, so without it these tests would spawn whatever `adlc` the
+// developer happens to have on PATH instead of the binary under review.
+const config = { gate: { build: 'npm run build', test: 'npm test' }, timeoutMinutes: 1, modelAuthKey: 'ANTHROPIC_API_KEY', adlcBin: ADLC_BIN };
 const ticket = { id: 'T1', title: 'T1', scope: ['src/**'], body: 'do it', edges: [] };
 
 /**
@@ -37,27 +40,30 @@ const ticket = { id: 'T1', title: 'T1', scope: ['src/**'], body: 'do it', edges:
  * over the actual adlc binary — only the worker itself is faked, since we are
  * testing what the fleet does with the worker's transcript.
  */
-function makeIo(workerOutput) {
+function makeIo(workerOutput, workerResult = {}) {
   return {
     git: () => (...args) => (args[0] === 'rev-parse' ? 'SHA' : ''),
-    adlc: (args, opts = {}) => spawnSync(opts.bin ?? ADLC_BIN, args, { encoding: 'utf8' }),
+    // No `?? ADLC_BIN` fallback: the bin must arrive from config, or these
+    // tests would quietly exercise an ambient install instead of this worktree.
+    adlc: (args, opts = {}) => spawnSync(opts.bin, args, { encoding: 'utf8', maxBuffer: opts.maxBuffer }),
     adlcAsync: async () => ({ status: 0, stdout: '' }),
-    spawnWorker: async () => ({ status: 0, stdout: workerOutput, stderr: '' }),
+    spawnWorker: async () => ({ status: 0, stdout: workerOutput, stderr: '', ...workerResult }),
     readFile: () => undefined,
     exists: () => false,
     mkdirp: () => {},
     writeJson: () => {},
-    appendLog: (p, text) => { mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, text); },
+    // The REAL primitive, not a lookalike — a copy could not catch drift in it.
+    appendLog: defaultIo().appendLog,
     ensureGitignore: () => {},
     env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-x' },
     hasGh: () => false,
   };
 }
 
-const makeDeps = (statusDir, workerOutput) => buildLiveDeps({
+const makeDeps = (statusDir, workerOutput, workerResult) => buildLiveDeps({
   repo: '/repo', config, statusDir, sandboxSpec,
   reviewRunner: () => ({ ok: true, findings: [] }),
-  io: makeIo(workerOutput),
+  io: makeIo(workerOutput, workerResult),
 });
 
 test('dispatch persists the worker transcript to the log flail-detector reads', async () => {
@@ -139,11 +145,97 @@ test('deps.flail() reports clean for a well-behaved session', async () => {
 
 test('deps.flail() fails OPEN when no transcript exists (§12 backstop intact)', async () => {
   const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
-  const deps = makeDeps(statusDir, 'irrelevant');
+  const deps = makeDeps(statusDir, 'Writing /etc/passwd\n');
 
-  // No dispatch → no log. This is the state production was permanently stuck in.
+  // Discriminating: prove a REAL verdict is obtainable in this environment
+  // first, so the fail-open below is pinned to the missing log rather than to
+  // a broken binary — every unverifiable outcome yields the same shape.
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  assert.notEqual((await deps.flail({ ticket })).failedOpen, true, 'precondition: a real verdict is reachable here');
+
+  rmSync(fleetLogPath(statusDir, '/repo', 'T1'));
   const r = await deps.flail({ ticket });
 
   assert.equal(r.flail, false);
   assert.equal(r.failedOpen, true, 'a missing log is unverifiable, never a flail');
+});
+
+// ---------------------------------------------------------------------------
+// The scheduler consults flail ONLY after a FAILED strike (scheduler.mjs:72-76,
+// 82-86). Every test above drives a successful worker, so without these the
+// transcript write could be moved inside dispatch's success-only branch and the
+// whole suite would stay green while production reproduced #284 exactly.
+// ---------------------------------------------------------------------------
+
+test('the transcript is written when the worker strike FAILS', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'Writing /etc/passwd\n', { status: 1 });
+
+  const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  assert.notEqual(res.exitCode, 0, 'precondition: this strike must have failed');
+
+  const r = await deps.flail({ ticket });
+  assert.equal(r.flail, true, 'the failed strike is exactly when the scheduler asks');
+  assert.notEqual(r.failedOpen, true);
+});
+
+test('the transcript is written when the worker TIMES OUT', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'Writing /etc/passwd\n', { status: null, signal: 'SIGTERM' });
+
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+
+  assert.equal((await deps.flail({ ticket })).flail, true);
+});
+
+test('the transcript is written when the worker emits TICKET-BLOCKED', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'TICKET-BLOCKED\nWriting /etc/passwd\n');
+
+  const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  assert.equal(res.blocked, true, 'precondition: blocked');
+
+  assert.ok(existsSync(fleetLogPath(statusDir, '/repo', 'T1')), 'a blocked run still leaves a transcript');
+});
+
+// ---------------------------------------------------------------------------
+// Run isolation. The log is git-excluded and INERT, so nothing else ever
+// deletes it; the detector's repeated-error threshold is 2. Without a reset a
+// re-run would be judged on the PREVIOUS run's errors and killed on the first
+// strike it ever took — a fail-CLOSED misfire from stale state.
+// ---------------------------------------------------------------------------
+
+test('strike 1 TRUNCATES, so a re-run is not judged on the previous run errors', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const first = makeDeps(statusDir, 'error: boom\n', { status: 1 });
+
+  // Run 1: two strikes, so 'error: boom' appears twice — enough on its own to
+  // trip the detector's repeated-error signal (--max-repeat defaults to 2).
+  await first.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  await first.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 2, deadEnds: [] });
+  assert.equal((await first.flail({ ticket })).flail, true, 'precondition: run 1 really did flail');
+
+  // Run 2, first strike: a single clean-ish failure must NOT inherit run 1.
+  const second = makeDeps(statusDir, 'error: boom\n', { status: 1 });
+  await second.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+
+  const body = readFileSync(fleetLogPath(statusDir, '/repo', 'T1'), 'utf8');
+  assert.equal(body.match(/error: boom/g).length, 1, 'run 2 strike 1 must start from a clean transcript');
+  assert.equal((await second.flail({ ticket })).flail, false, 'a fresh run must not be killed by stale state');
+});
+
+test('a commit failure reaches the transcript the flail check analyzes', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const io = makeIo('worker ok\n');
+  io.git = () => (...args) => {
+    if (args[0] === 'rev-parse') return 'SHA';
+    if (args[0] === 'commit') throw new Error('nothing to commit');
+    return '';
+  };
+  const deps = buildLiveDeps({ repo: '/repo', config, statusDir, sandboxSpec, reviewRunner: () => ({ ok: true, findings: [] }), io });
+
+  const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+
+  assert.equal(res.exitCode, 1, 'precondition: the commit failed');
+  assert.match(readFileSync(fleetLogPath(statusDir, '/repo', 'T1'), 'utf8'), /commit failed: nothing to commit/);
 });
