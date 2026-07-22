@@ -218,6 +218,62 @@ test('assign: float > 0 + low-mid density → mid/ladder', () => {
   assert.equal(a.mode, 'ladder');
 });
 
+// ── budget (issue #272: D1 says model-router emits {model, mode, budget}) ────
+
+test('assign: emits a budget on every assignment (D1 promise)', () => {
+  const t = { id: 'T1', title: 't', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] };
+  const a = assignTicket(t, 0, emptyPriors, 0.2);
+  assert.equal(typeof a.budget, 'number');
+  assert.ok(a.budget > 0);
+});
+
+test('assign: an explicit ticket.budget always wins over the tier default', () => {
+  const t = { id: 'T1', title: 't', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'], budget: 12_345 };
+  const a = assignTicket(t, 0, emptyPriors, 0.2);
+  assert.equal(a.budget, 12_345);
+});
+
+test('assign: a non-positive or non-numeric ticket.budget is ignored, falls back to the tier default', () => {
+  const withZero = { id: 'T1', title: 't', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'], budget: 0 };
+  const withNegative = { ...withZero, budget: -5 };
+  const withString = { ...withZero, budget: 'lots' };
+  const a1 = assignTicket(withZero, 0, emptyPriors, 0.2);
+  const a2 = assignTicket(withNegative, 0, emptyPriors, 0.2);
+  const a3 = assignTicket(withString, 0, emptyPriors, 0.2);
+  assert.equal(a1.budget, a2.budget);
+  assert.equal(a1.budget, a3.budget);
+  assert.ok(a1.budget > 0);
+});
+
+test('assign: direct mode budget scales with tier (frontier > mid > cheap)', () => {
+  const contract = { id: 'T1', title: 't', category: 'contract', rails: ['a'], scope: ['b'] };
+  const frontierAssign = assignTicket(contract, 5, emptyPriors, 0.2);
+  const midTicket = { id: 'T2', title: 't', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] };
+  const midAssign = assignTicket(midTicket, 0, emptyPriors, 0.2); // no priors → 'mid' default
+  assert.equal(frontierAssign.tier, 'frontier');
+  assert.equal(midAssign.tier, 'mid');
+  assert.ok(frontierAssign.budget > midAssign.budget, 'frontier budget must exceed mid budget');
+});
+
+test('assign: ladder mode budget covers the starting tier PLUS a frontier regeneration (worst-case escalation)', () => {
+  // density = 1.0 >= 0.5 → cheap/ladder
+  const t = { id: 'T1', title: 't', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] };
+  const ladderAssign = assignTicket(t, 3, emptyPriors, 0.2);
+  assert.equal(ladderAssign.mode, 'ladder');
+  assert.equal(ladderAssign.tier, 'cheap');
+
+  // A direct/cheap assignment (float=0, cheap prior) for comparison — the
+  // ladder's budget must be strictly larger than just the starting tier,
+  // because escalation is a full regeneration, not a cheap top-up.
+  const entries = Array(5).fill({ type: 'build', model: 'cheap', firstPass: true });
+  const priors = buildPriors(entries);
+  const directCheap = assignTicket({ ...t, id: 'T2' }, 0, priors, 0.2);
+  assert.equal(directCheap.tier, 'cheap');
+  assert.equal(directCheap.mode, 'direct');
+
+  assert.ok(ladderAssign.budget > directCheap.budget, 'ladder budget must exceed a direct-cheap budget alone');
+});
+
 // ── integration: router + CPM float effect ────────────────────────────────────
 
 import { runRouter } from '../lib/router.mjs';
