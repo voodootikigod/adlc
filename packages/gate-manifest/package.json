@@ -23,7 +23,8 @@
     "gate"
   ],
   "bin": {
-    "gate-manifest": "./bin/gate-manifest.mjs"
+    "gate-manifest": "./bin/gate-manifest.mjs",
+    "adlc-spend": "./bin/spend.mjs"
   },
   "files": [
     "index.mjs",
