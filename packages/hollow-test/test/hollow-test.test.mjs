@@ -575,6 +575,253 @@ describe('CLI: test-only diff has nothing to mutate', () => {
   });
 });
 
+// ── explicit targets must respect the source allow-list ────────────────────
+//
+// The allow-list was applied only to DIFF-derived files; --target and --rails
+// paths were unioned into the mutation set unchecked. So a caller could point
+// JS-shaped operators at a .py or .css file, and the result is not merely
+// useless — it is actively misleading. runner.mjs scores
+// `killed = timedOut || status !== 0`, so a mutant that renders the file
+// syntactically invalid makes the test command fail and is recorded as KILLED.
+// A characterization ticket naming src/app.py would report every mutant killed
+// without ever proving a behavioural assertion: a false green on the gate whose
+// entire purpose is detecting false greens.
+//
+// Refusing loudly is the fail-closed behaviour this CLI already uses elsewhere
+// (see the --max starvation check): the caller named the file deliberately, so
+// silently dropping it would be its own silent-green bug.
+
+describe('CLI: an explicit --target outside the source allow-list is refused', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-badtarget-'));
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'src', 'app.py'), 'def f():\n    return 1\n');
+    writeFileSync(join(dir, 'src', 'style.css'), '.a { opacity: 0; }\n');
+    // Committed: hollow-test refuses to run on a dirty tree (it mutates in
+    // place and restores), so leaving these uncommitted would fail the run for
+    // an unrelated reason and mask what this case is actually asserting.
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add unsupported-language fixtures'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  for (const target of ['src/app.py', 'src/style.css']) {
+    it(`refuses --target ${target} instead of mutating it`, () => {
+      const result = runCli(
+        ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+         '--target', target, '--max', '10'],
+        dir
+      );
+      // Assert the SPECIFIC refusal, not merely "non-zero and mentions the
+      // file". Without the guard hollow-test happily mutates the .py, every
+      // mutant survives, and it exits 2 with the filename in the report — so a
+      // looser assertion passes for entirely the wrong reason. (Caught by
+      // mutating the guard away: the first version of this test stayed green.)
+      const out = result.stderr + result.stdout;
+      assert.match(out, /not a supported source language/,
+        `Expected the unsupported-target refusal, got: ${out}`);
+      assert.match(out, new RegExp(target.replace('.', '\\.')),
+        'the refusal must name the offending target');
+      assert.equal(result.status, 1,
+        `Expected exit 1 (operational refusal), not a gate failure — got ${result.status}: ${out}`);
+      assert.doesNotMatch(out, /SURVIVED|KILLED/,
+        'the run must refuse before generating any mutant');
+    });
+  }
+});
+
+// The language guard must NOT re-import test-path exclusion. Explicit targets
+// deliberately bypass it — rails ARE test files, which is the entire point of
+// the P3 rails-authoring workflow. An earlier revision of this guard used the
+// combined predicate and rejected every rail under a test/ directory, breaking
+// the documented contract while looking like a safety improvement.
+describe('CLI: explicit targets still bypass test-path exclusion', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-testtarget-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates a --target under test/ rather than refusing it', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'test/guarded.test.mjs', '--max', '3', '--json'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.doesNotMatch(out, /not a supported source language/,
+      `a test-path target must not be rejected by the language guard: ${out}`);
+    assert.notEqual(result.status, 1,
+      `expected the run to proceed, not an operational refusal: ${out}`);
+  });
+});
+
+// A rails glob legitimately matches non-source: schemas/**, JSON, fixtures.
+// Those are filtered from the mutation set — but an earlier revision still fed
+// the ORIGINAL rail list to the post-run zero-mutant verifier, so a mixed
+// expansion did all the mutation work and THEN failed, claiming the JSON file
+// produced no mutants. Filtering something out and then demanding results for it
+// is the kind of bug that only shows up on a real mixed ticket.
+describe('CLI: --rails matching a mix of source and non-source', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-mixedrails-'));
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'schema.json'), '{"a":1}\n');
+    writeFileSync(join(dir, 'ticket.json'), JSON.stringify({
+      id: 'T1', rails: ['src/guarded.mjs', 'schema.json'],
+    }));
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'mixed rails fixture'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates the source rail and does not fail over the dropped JSON', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--rails', 'ticket.json', '--max', '10', '--json'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.notEqual(result.status, 1,
+      `expected the run to complete, not an operational failure: ${out}`);
+    assert.match(result.stderr, /schema\.json/,
+      'the dropped non-source rail must be reported, not silently ignored');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); },
+      `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'),
+      'only the supported rail should be mutated');
+  });
+});
+
+// --test-glob end to end, the mirror of --source-glob below. Same two-glob
+// reasoning: the flag is `multiple: true`, and with `multiple: false` parseArgs
+// hands back a bare string whose `.some` does not exist, so the option would
+// throw the moment anyone used it. Asserting the specific "nothing to mutate"
+// refusal (rather than merely a non-zero exit) is what distinguishes the option
+// WORKING from the option CRASHING — both are non-zero.
+describe('CLI: --test-glob reclassifies a source file as a test', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-testglob-'));
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'src', 'alpha.mjs'), 'export const a = (x) => x > 0;\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add alpha'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates the file normally without the declaration', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--max', '3', '--json'],
+      dir
+    );
+    assert.doesNotMatch(result.stderr, /nothing to mutate/,
+      `expected alpha.mjs to be mutable by default: ${result.stderr}`);
+  });
+
+  it('refuses to mutate it once declared a test', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--test-glob', '**/nothing-matches-this.mjs',
+       '--test-glob', '**/alpha.mjs',
+       '--max', '3'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.match(out, /nothing to mutate/,
+      `expected the declared test file to leave nothing mutable: ${out}`);
+    assert.doesNotMatch(out, /TypeError/,
+      'a crash is not the same as the option working');
+  });
+});
+
+// --source-glob end to end, through DIFF-DERIVED selection.
+//
+// The first version of this test passed --target for both halves, which made it
+// hollow: explicit targets deliberately bypass test-path classification and
+// enter the mutation set on extension alone, so both assertions stayed green
+// whether or not sourceGlobs ever reached filterTargetFiles. A refactor dropping
+// that forwarding — the exact regression this test exists to catch — would not
+// have failed it.
+//
+// No --target here. The file arrives through the diff, so the ONLY thing that
+// can make it mutable is the declaration.
+//
+// Two globs deliberately: the flag is `multiple: true`, and with
+// `multiple: false` parseArgs returns a bare string whose `.some` does not
+// exist. And the negative half asserts the SPECIFIC "nothing to mutate"
+// refusal — the option working and the option crashing are both non-zero, and
+// only the message distinguishes them.
+describe('CLI: --source-glob rescues a diff-derived file named like a test', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-sourceglob-'));
+    createRailsAuthoringRepo(dir);
+    // Sole content of the final commit, so `--base HEAD~1` yields a diff whose
+    // only candidate is this file — nothing else can keep the run alive.
+    writeFileSync(join(dir, 'src', 'widget-test.mjs'),
+      'export const ok = (x) => x > 0;\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add hyphen-named production file'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is excluded by naming convention without the declaration', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '3'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.match(out, /nothing to mutate/,
+      `a node --test-shaped name must not be mutated by default: ${out}`);
+  });
+
+  it('becomes diff-derived mutable source once declared', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--source-glob', '**/nothing-matches-this.mjs',
+       '--source-glob', '**/widget-test.mjs',
+       '--max', '3', '--json'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.doesNotMatch(out, /nothing to mutate/,
+      `the declaration must make it eligible through diff selection: ${out}`);
+    assert.doesNotMatch(out, /TypeError/,
+      'a crash is not the same as the option working');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); },
+      `stdout is not valid JSON: ${out}`);
+    assert.ok(parsed.mutants.some((m) => m.file === 'src/widget-test.mjs'),
+      'the declared file must actually be mutated');
+  });
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {

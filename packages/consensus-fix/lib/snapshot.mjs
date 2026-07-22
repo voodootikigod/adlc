@@ -4,6 +4,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { applyHunks } from './hunks.mjs';
 
 /**
  * Capture the current content of each path.
@@ -36,15 +37,29 @@ export function restoreSnapshot(snapshot) {
 }
 
 /**
- * Apply a set of changes from an LLM candidate.
- * changes: [{ file, content }]
- * Only writes files whose paths are in the snapshot.
+ * Apply a set of hunk-based changes from an LLM candidate (issue #279).
+ * changes: [{ file, hunks: [{startLine, endLine, replacement}] }]
+ *
+ * Only writes files whose paths are in the snapshot — a candidate
+ * referencing an unlisted file is a validation bug upstream (validateCandidate
+ * should have caught it already) and throws, unlike a hunk that fails to
+ * apply cleanly, which is an EXPECTED per-candidate outcome (a candidate's
+ * hunk coordinates don't match reality, e.g. an off-by-one or a reference to
+ * an excerpt-omitted line) and is reported back via the return value instead
+ * of thrown, so the caller can disqualify just that one candidate.
+ *
+ * @param {Array<{file:string, hunks:Array}>} changes
+ * @param {{[path]: string}} snapshot
+ * @returns {{ok:true} | {ok:false, error:string}}
  */
 export function applyChanges(changes, snapshot) {
-  for (const { file, content } of changes) {
+  for (const { file, hunks } of changes) {
     if (!(file in snapshot)) {
       throw new Error(`candidate referenced file not in provided list: ${file}`);
     }
-    writeFileSync(file, content, 'utf8');
+    const result = applyHunks(snapshot[file], hunks);
+    if (!result.ok) return { ok: false, error: `${file}: ${result.error}` };
+    writeFileSync(file, result.content, 'utf8');
   }
+  return { ok: true };
 }

@@ -9,7 +9,7 @@ import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
   filterTargetFiles, buildFileTargets, readFileSafe,
-  readRailsFromTicketFile, expandRailsToFiles,
+  readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
 } from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
@@ -24,6 +24,16 @@ const { values } = parseArgs({
     'timeout-ms': { type: 'string', default: '120000' },
     target:       { type: 'string', multiple: true },
     rails:        { type: 'string', multiple: true },
+    // Extra globs to treat as tests, for projects whose convention this tool
+    // cannot infer. The built-in rules cover directory segments and the dotted,
+    // exact and snake basename forms; HYPHENATED names (foo-test.js, spec-foo.js)
+    // are deliberately excluded from the defaults because a hyphen cannot
+    // distinguish a test convention from a product name — `hollow-test.mjs` and
+    // `spec-lint.mjs` are production files in this very repo. Rather than guess,
+    // let a caller whose project uses that convention declare it:
+    //   --test-glob '**/*-test.js'
+    'test-glob':  { type: 'string', multiple: true },
+    'source-glob':{ type: 'string', multiple: true },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -63,6 +73,10 @@ Exit codes:
 }
 
 const testCmd   = values['test-cmd'];
+const testGlobs = values['test-glob'] ?? [];
+// Rescues production files whose names match a test convention — `hollow-test.mjs`,
+// `spec-lint.mjs`. Convention alone cannot resolve that ambiguity; the project must.
+const sourceGlobs = values['source-glob'] ?? [];
 const maxMutants = parseInt(values.max, 10);
 const timeoutMs  = parseInt(values['timeout-ms'], 10);
 const useJson    = values.json;
@@ -146,7 +160,7 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const diffEligibleFiles = filterTargetFiles(changedLines);
+const diffEligibleFiles = filterTargetFiles(changedLines, { testGlobs, sourceGlobs });
 
 // ── explicit --target / --rails resolution ──────────────────────────────────
 // These bypass EXCLUDE_PATH_RE deliberately: the caller is asking, by name,
@@ -260,6 +274,17 @@ if (railsGlobs.length > 0) {
 }
 
 const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
+// The MUTABLE explicit set — computed once and used everywhere a decision
+// depends on what will actually be mutated (budget allocation, starvation
+// checks, post-run zero-mutant verification). `explicitFiles` above keeps every
+// caller-named path and is for readability checks and reporting only.
+//
+// Getting this wrong is subtle: dropped non-source rails were removed from the
+// mutation set but still checked by the post-run verifier, so a mixed
+// source+JSON rails expansion did all the mutation work and THEN failed,
+// claiming the JSON file produced zero mutants — exactly the behaviour the
+// filtering was added to avoid.
+const mutableExplicitFiles = [...new Set([...explicitTargets, ...railsFiles.filter(isSupportedSourceExtension)])];
 
 // ── fail closed: every explicit --target/--rails file must be readable ─────
 // Unlike diff-derived files (which came from a real git diff and should
@@ -299,11 +324,54 @@ if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
 const effectiveChangedLines = { ...changedLines };
 for (const f of explicitFiles) delete effectiveChangedLines[f];
 
-const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
+// FAIL CLOSED on explicit targets in an UNSUPPORTED LANGUAGE — but only the
+// language half of the predicate. Explicit --target/--rails paths deliberately
+// bypass test-path exclusion: rails ARE test files, which is the entire point of
+// the P3 rails-authoring workflow. Using the full isMutableSource here rejected
+// every rail under a test/ directory and broke that documented contract.
+//
+// The language guard still matters. Operators are JS/TS-shaped, and runner.mjs
+// scores `killed = timedOut || status !== 0`, so a mutant that renders a .py or
+// .css file syntactically invalid makes the test command fail and is recorded as
+// KILLED — a false green on the gate built to detect false greens.
+//
+// --target and --rails are treated differently on purpose:
+//   --target  the caller typed ONE path. Refuse loudly; silently dropping it
+//             would be its own silent-pass bug.
+//   --rails   a glob EXPANSION legitimately matches non-source (schemas/**,
+//             JSON, fixtures). Filter those out, say which were dropped, and
+//             fail only if nothing mutable remains.
+const unsupportedTargets = explicitTargets.filter((f) => !isSupportedSourceExtension(f));
+if (unsupportedTargets.length > 0) {
+  opError(
+    `--target ${unsupportedTargets.join(', ')} is not a supported source language — ` +
+    `mutation operators are JS/TS-shaped, and mutating another language yields ` +
+    `syntactically invalid code that is scored as "killed" rather than testing ` +
+    `anything.`
+  );
+}
+
+const droppedRails = railsFiles.filter((f) => !isSupportedSourceExtension(f));
+if (droppedRails.length > 0) {
+  console.warn(
+    `hollow-test: ${droppedRails.length} --rails match(es) are not a supported source ` +
+    `language and will not be mutated: ${droppedRails.join(', ')}`
+  );
+}
+const mutableRails = railsFiles.filter(isSupportedSourceExtension);
+if (railsFiles.length > 0 && mutableRails.length === 0) {
+  opError(
+    `--rails matched ${railsFiles.length} file(s), none of which are a supported ` +
+    `source language (${[...new Set(railsFiles.map((f) => f.replace(/^.*(\.[^.]*)$/, '$1')))].join(', ')}) — ` +
+    `nothing could be mutated, which would otherwise report a vacuous pass.`
+  );
+}
+
+const allTargetFiles = [...new Set([...diffEligibleFiles, ...mutableExplicitFiles])];
 // explicitFiles are passed as a priority list so the --max budget can't
 // starve them to quota 0 when diff-derived files alone would consume it —
 // see buildFileTargets() in lib/targets.mjs.
-const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, explicitFiles);
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, mutableExplicitFiles);
 
 // ── fail closed: --max too small to cover every explicit target ────────────
 // buildFileTargets() reserves 1 quota per explicit file when the budget
@@ -311,13 +379,13 @@ const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxM
 // of them still can't be guaranteed a slot — refuse to run rather than
 // silently mutating a subset and reporting a full pass.
 const starvedByBudget = fileTargets.filter(
-  (t) => explicitFiles.includes(t.file) && t.quota === 0
+  (t) => mutableExplicitFiles.includes(t.file) && t.quota === 0
 );
 if (starvedByBudget.length > 0) {
   opError(
     `--max ${maxMutants} is too small to allocate mutation budget to explicit ` +
     `target(s): ${starvedByBudget.map((t) => t.file).join(', ')} — increase ` +
-    `--max to at least ${explicitFiles.length}, or reduce the number of ` +
+    `--max to at least ${mutableExplicitFiles.length}, or reduce the number of ` +
     'explicit --target/--rails files'
   );
 }
@@ -410,12 +478,12 @@ for (const target of fileTargets) {
 // prosecute — exactly the vacuous-pass class issues #70/#41/#35 exist to
 // close. Distinguish this from the legitimate "every mutant was killed" case
 // by checking per-file counts rather than results.length overall.
-if (explicitFiles.length > 0) {
+if (mutableExplicitFiles.length > 0) {
   const mutantCountByFile = {};
   for (const r of results) {
     mutantCountByFile[r.file] = (mutantCountByFile[r.file] ?? 0) + 1;
   }
-  const starvedExplicitFiles = explicitFiles.filter((f) => !mutantCountByFile[f]);
+  const starvedExplicitFiles = mutableExplicitFiles.filter((f) => !mutantCountByFile[f]);
   if (starvedExplicitFiles.length > 0) {
     opError(
       'explicit --target/--rails file(s) produced zero mutants — ' +

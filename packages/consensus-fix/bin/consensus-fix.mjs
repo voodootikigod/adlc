@@ -39,6 +39,7 @@ import {
 import { runConsensusFix } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
 import { takeSnapshot, restoreSnapshot } from '../lib/snapshot.mjs';
+import { applyHunks } from '../lib/hunks.mjs';
 import { formatReport, formatJson } from '../lib/format.mjs';
 
 const { values } = parseArgs({
@@ -221,11 +222,17 @@ const {
 // --apply: write winner changes if present, but only when not all-divergent.
 // If allDivergent=true the spec mandates we refuse to apply and escalate;
 // writing any change before exit 2 would silently mutate the source files.
+// The winner already survived this exact apply during evaluation (issue
+// #279's hunk apply is deterministic against unchanged original content),
+// so a failure here would mean the tree changed under us mid-run — treat it
+// as the operational error it would be, not a silent partial write.
 let applied = false;
 if (values['apply'] && selectionResult && !allDivergent) {
   const { winner } = selectionResult;
-  for (const { file, content } of winner.changes) {
-    writeFileSync(file, content, 'utf8');
+  for (const { file, hunks } of winner.changes) {
+    const result = applyHunks(outerSnapshot[file], hunks);
+    if (!result.ok) opError(`failed to apply winning candidate to ${file}: ${result.error}`);
+    writeFileSync(file, result.content, 'utf8');
   }
   applied = true;
 }
