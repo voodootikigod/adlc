@@ -28,7 +28,8 @@ test('two non-overlapping tickets dispatch CONCURRENTLY through buildLiveDeps (#
 
   const io = {
     git: fakeGit(),
-    adlc: () => ({ status: 0, stdout: '{"detected":false}' }),
+    adlc: () => ({ status: 0, stdout: '{"verdict":"clean","signals":[]}' }),
+    appendLog: () => {},
     adlcAsync: async () => ({ status: 0, stdout: '' }),
     // The claude worker blocks (async, non-blocking to the event loop) until we
     // release it; the gate (bwrap) resolves immediately.

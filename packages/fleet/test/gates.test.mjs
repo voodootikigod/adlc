@@ -37,9 +37,14 @@ test('runGates runs build then test through the sandbox and stops at first failu
 });
 
 test('checkFlail returns the detector verdict', async () => {
-  const r = checkFlail('/log', ['src/**'], { exec: () => JSON.stringify({ detected: true, signals: ['repeated-error'] }) });
+  // The detector's real document shape — see flail-contract.test.mjs, which
+  // pins this against the actual binary rather than a mock.
+  const doc = JSON.stringify({ verdict: 'flail', signals: [{ type: 'repeated-error' }], bytes: 20 });
+  const r = checkFlail('/log', ['src/**'], {
+    exec: () => { const e = new Error('Command failed'); e.status = 2; e.stdout = doc; throw e; },
+  });
   assert.equal(r.flail, true);
-  assert.deepEqual(r.signals, ['repeated-error']);
+  assert.deepEqual(r.signals, [{ type: 'repeated-error' }]);
 });
 
 test('checkFlail FAILS OPEN on any error (§12 backstop)', async () => {

@@ -1329,6 +1329,32 @@
       "title": "ceremony-drift: recognize the bot author gh actually reports, so the tracker updates instead of duplicating"
     },
     {
+      "body": "Implements .adlc/specs/rails-start-lifecycle.md as the contract; closes voodootikigod/adlc#159. Rails currently freeze from the moment a ticket exists: the union in scripts/rails-guard-ci.mjs skips only completed tickets (T36/#130 gave rails an END, nothing gives them a START). Two harms: a ticket cannot author its own rails (observed three narrow/re-freeze cycles building T58), and the documented workaround is to declare rails:[] (T39/T40). Add a `started` field gating the union, self-service via a narrow isStartAnnotationOnly exemption and irreversible because un-starting is already denied by assertBaseTicketContractsPreserved. BLOCKING constraint from premortem: grandfather tickets predating the field via a formatVersion bump — absent `started` must not mean never-started, or merging expires all 30 currently-frozen paths at once. Also required: decide start+complete recovery explicitly, never emit `started` at authoring, and drive the transition from P3 rather than a remembered step. Coldstart gaps folded in: packages/build-gate/** added to scope because the automatic P3 transition lives there, and the formatVersion grandfather mechanism collides with the existing 0->1 migration gate (rails-guard-ci.mjs:348,377) so the spec now prefers a per-ticket provenance signal. Acceptance is AC1-AC17 in the spec. Suppressions are denied. Backfilling started onto shipped tickets, manifest-derived start, and diff-derived start are out of scope (rationale in the spec).",
+      "budget": "frontier",
+      "category": "feature",
+      "duration": 3,
+      "edges": [
+        {
+          "contract": "T59 owns the START half of the rail lifecycle; T60 owns the authorized-ceremony mechanism. Independently grabbable — but if T59 lands first its grandfather clause must keep T60's motivating drift frozen, and if T60 lands first the union is already empty. Neither may depend on the other's merge order.",
+          "to": "T60"
+        }
+      ],
+      "id": "T59",
+      "rails": [],
+      "scope": [
+        "scripts/rails-guard-ci.mjs",
+        "scripts/test/rails-guard-ci.test.mjs",
+        "packages/tickets/**",
+        "packages/rails-guard/**",
+        "packages/build-gate/**",
+        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+        "plugins/adlc-claude-code/test/**",
+        "docs/adr/**",
+        ".adlc/specs/rails-start-lifecycle.md"
+      ],
+      "title": "Rails START lifecycle: freeze from build-start, not from authoring"
+    },
+    {
       "body": "Build the foundation of @adlc/ticket-sync per docs/superpowers/specs/2026-06-27-external-ticketing-sync-design.md (sections 'Schema bedrock', 'Hard constraints', field-definition table). Create packages/ticket-sync as a zero-runtime-dependency package (CONVENTIONS rule 1; Node 18+ built-ins only) WITHOUT editing packages/core (CONVENTIONS rule 2 — core is frozen). Deliver: lib/schema.mjs (single declarative field definition = source of truth), lib/validate.mjs (definition-driven validator over the rich schema), lib/canonical.mjs (canonical JSON: sorted keys, LF, stable number formatting, CRLF-insensitive equality), scripts/gen-schema.mjs (emits schemas/adlc-ticket.schema.json, adlc-block.schema.json, adlc-config.schema.json, adlc-sync-state.schema.json from the definition), and the committed schema files.\n\nAcceptance criteria (each verifiable):\n1. `npm test` green for packages/ticket-sync/test/{schema,validate,canonical}.test.mjs.\n2. Drift gate: test regenerates schemas in-memory and asserts byte-equality with the committed schemas/*.json; editing the definition without regenerating fails the test (verify by mutating the definition in a scratch run).\n3. Cross-validator agreement: a corpus of tickets core's validateTicket accepts is also accepted by the rich validator on shared fields (asymmetric subset direction).\n4. No file under packages/core is modified (verify: `git diff --name-only main...HEAD -- packages/core` is empty).\n5. Package declares zero runtime dependencies (verify: no 'dependencies' beyond @adlc/* in package.json).",
       "category": "contract",
       "duration": 2,
@@ -1391,6 +1417,23 @@
         "docs/tools/hollow-test.md"
       ],
       "title": "mutation-gate: classify source by an include-list, not by excluding known non-source extensions"
+    },
+    {
+      "body": "GitHub issue #284.\n\n## Problem\n\n`packages/fleet/lib/gates.mjs` `checkFlail()` consults the `flail-detector` CLI between build strikes (ADLC C6 two-strike regeneration rule, spec §12) and is a silent no-op in production. It never reports a flail. There are TWO independent defects, and fixing either one alone leaves the consultation broken:\n\n1. **Wrong field name.** `checkFlail` reads `parsed.detected === true`. flail-detector has never emitted a `detected` field. Its real `--json` document is `{ verdict: 'flail' | 'clean', signals: [...], bytes, recommendation? }` (produced by `packages/flail-detector/lib/analyze.mjs`, printed by `packages/flail-detector/bin/flail-detector.mjs`). `parsed.detected` is always `undefined`, so `flail` is always `false`.\n\n2. **Exit code 2 throws before the JSON is ever read.** flail-detector is an ADLC gate: it exits `0` = clean, `1` = operational error, `2` = flail detected (gate fails). `defaultExec` uses `execFileSync`, which THROWS on any non-zero exit. So on the exact input that matters — a real flail — the call throws, `checkFlail` hits its catch, and returns the fail-open `{ flail: false, failedOpen: true }`. Correcting only the field name (as GitHub issue #284 proposes) does NOT fix the bug: the flail branch still never executes.\n\nVerified by direct repro against the real CLI:\n\n```\n$ printf 'Writing /etc/passwd\\n' > log.txt\n$ node packages/flail-detector/bin/flail-detector.mjs log.txt --scope 'src/**' --json\n{ \"verdict\": \"flail\", \"signals\": [ { \"type\": \"scope-violation\", ... } ], \"bytes\": 20, \"recommendation\": \"...\" }\n$ echo $?\n2\n```\n\nfleet's own tests never caught this because all three fixtures mock `exec` with the same wrong shape the bug assumes — `{ detected: true|false, signals: [...] }` — and mock a plain return rather than the throw a real exit-2 produces. The tests are internally consistent with the bug, not with the tool.\n\n## Required behavior\n\n`checkFlail(logFile, scope, { adlcBin, exec })` must:\n\n- Return `{ flail: true, signals }` when the detector reports `verdict === 'flail'` — INCLUDING when the detector signalled that verdict via process exit code 2.\n- Return `{ flail: false, signals }` when the detector reports `verdict === 'clean'` (exit 0).\n- PRESERVE the §12 fail-open backstop for genuinely unverifiable outcomes: a thrown exec, an operational error (exit 1), or unparseable/malformed JSON must still return `{ flail: false, signals: [], failedOpen: true }`. An unverifiable signal must never cut a build's normal retry short; the two-strike cap remains the backstop.\n- Distinguish exit 2 (a valid gate verdict, parse its stdout) from exit 1 (operational error, fail open). Do not blanket-swallow all non-zero exits as success.\n- Keep `exec` injectable. Because a real exit-2 surfaces as a thrown error carrying `stdout`/`status`, the injected-exec contract must be able to represent that; document whatever contract is chosen in the function's JSDoc so a future mock cannot drift back into fiction.\n\n## Files to change\n\n- `packages/fleet/lib/gates.mjs` — `checkFlail` and `defaultExec`.\n- `packages/fleet/test/gates.test.mjs:40`, `packages/fleet/test/live-deps.test.mjs:22`, `packages/fleet/test/live-concurrency.test.mjs:31` — replace the fictional `{detected:...}` fixtures with the detector's real output shape.\n\n## Acceptance criteria\n\n1. **Real-CLI integration test (the anti-drift guard).** A test in `packages/fleet/test/` invokes the ACTUAL `flail-detector` bin (via the real `defaultExec` path, not an injected mock) against a fixture log that triggers a scope-violation signal, and asserts `checkFlail(...).flail === true`. Verify: `node --test packages/fleet/test/<file>.test.mjs` passes; and it FAILS if `gates.mjs` is reverted to `parsed.detected === true` OR if the exit-2 handling is removed. This criterion exists because a mock-only test is what let this bug ship — it must be able to catch field-name and exit-code drift on its own.\n2. **Clean verdict.** Same real-CLI path against a benign log returns `{ flail: false }` and NOT `failedOpen: true` (exit 0 is a real verdict, not a fallback).\n3. **Fail-open preserved — thrown exec.** `checkFlail` with an injected `exec` that throws a generic error returns `{ flail: false, signals: [], failedOpen: true }`. Verify by unit test.\n4. **Fail-open preserved — malformed JSON.** An injected `exec` returning non-JSON returns `{ flail: false, signals: [], failedOpen: true }`. Verify by unit test.\n5. **Fail-open preserved — operational error (exit 1).** A detector operational failure (e.g. log file not found) returns `failedOpen: true` and NOT `flail: true`. Verify by a test driving the real bin with a nonexistent log path.\n6. **Signals propagate.** On a flail verdict, the returned `signals` array is the detector's real signal objects (each with a `type`), not dropped or stringified.\n7. **No fixture fiction remains.** `grep -rn 'detected' packages/fleet/test packages/fleet/lib` returns no occurrence referring to flail-detector JSON output.\n8. **Suite green.** `node --test packages/fleet/test/*.test.mjs` exits 0.\n\n## Constraints\n\n- Do NOT change flail-detector to satisfy fleet. Its `verdict`/exit-code contract is the rail; fleet is the side that is wrong. `packages/flail-detector/lib/**` and `packages/flail-detector/bin/**` are declared frozen for this ticket.\n- Preserve the existing exported signature of `checkFlail` and the `{ adlcBin, exec }` options object — other fleet call sites depend on it.\n- fleet is ESM (`.mjs`), Node's built-in `node:test` runner, no external test deps.\n\n## AMENDMENT (post-P5 prosecution) — the gate was still dead\n\nFive prosecution lenses confirmed the fix above is necessary but NOT sufficient.\nTwo further defects keep the consultation a no-op in production:\n\n9. **Nothing ever writes the log checkFlail reads.** The production call site\n   analyzes `.adlc/fleet-logs/<ticket.id>.log`. A repo-wide search finds that\n   path only in git-exclude lists, the INERT_GLOBS entry, test fixtures, and\n   the read itself — no writer exists. `dispatch` keeps the worker transcript\n   purely in memory. So the detector is handed a nonexistent file, exits 1, and\n   checkFlail fails open on EVERY consultation regardless of the field-name and\n   exit-code fixes.\n\n10. **The production exec adapter discards the detector's exit code.** It\n    returns `r.stdout` whenever stdout is non-empty and otherwise throws a bare\n    Error carrying neither `status` nor `stdout`. So exit 1 and exit 2 are\n    indistinguishable on the path fleet actually runs, and the \"only exit 2 is a\n    verdict\" rule holds only for `defaultExec`. It also ignores its `bin`\n    argument, so `config.adlcBin` is silently inert on the flail path.\n\n### Additional acceptance criteria\n\n9. The worker transcript is persisted per strike to\n   `.adlc/fleet-logs/<ticket.id>.log`, ACCUMULATED across strikes (checkFlail is\n   documented as running over the accumulated log). Verify by a test that drives\n   `dispatch` and asserts the file exists and contains both strikes' output.\n10. The flail exec adapter is EXPORTED from live-deps.mjs and driven directly by\n    a test against the real detector binary — not re-implemented in the test\n    file. A copy cannot catch drift in the thing it copies.\n11. The adapter honors the `bin` it is handed, so `config.adlcBin` is effective\n    on the flail path. Verify by asserting the adapter spawns the given bin.\n12. The adapter converts a non-zero exit into an execFileSync-shaped throw\n    carrying `status` and `stdout`, so BOTH exec paths route through checkFlail's\n    single exit-code trust rule. Verify: exit 1 with a well-formed flail document\n    fails open through the real adapter, and exit 2 reports flail:true.\n13. An end-to-end test drives `buildLiveDeps(...).flail({ ticket })` after a real\n    `dispatch`, so a missing log surfaces as a test failure rather than a silent\n    fail-open.\n\n### Scope amendment\n\n`packages/fleet/lib/live-deps.mjs` is added to scope. The flail-detector rails\nare unchanged and remain frozen.",
+      "category": "bugfix",
+      "duration": 1,
+      "edges": [],
+      "id": "T62",
+      "rails": [
+        "packages/flail-detector/lib/**",
+        "packages/flail-detector/bin/**"
+      ],
+      "scope": [
+        "packages/fleet/lib/gates.mjs",
+        "packages/fleet/lib/live-deps.mjs",
+        "packages/fleet/test/**"
+      ],
+      "title": "fleet: make checkFlail actually read flail-detector's real contract (verdict + exit 2)"
     },
     {
       "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
@@ -1496,32 +1539,6 @@
         "packages/ticket-sync/test/github.test.mjs"
       ],
       "title": "Push + create: write-back, idempotent create, status outcomes"
-    },
-    {
-      "body": "Implements .adlc/specs/rails-start-lifecycle.md as the contract; closes voodootikigod/adlc#159. Rails currently freeze from the moment a ticket exists: the union in scripts/rails-guard-ci.mjs skips only completed tickets (T36/#130 gave rails an END, nothing gives them a START). Two harms: a ticket cannot author its own rails (observed three narrow/re-freeze cycles building T58), and the documented workaround is to declare rails:[] (T39/T40). Add a `started` field gating the union, self-service via a narrow isStartAnnotationOnly exemption and irreversible because un-starting is already denied by assertBaseTicketContractsPreserved. BLOCKING constraint from premortem: grandfather tickets predating the field via a formatVersion bump — absent `started` must not mean never-started, or merging expires all 30 currently-frozen paths at once. Also required: decide start+complete recovery explicitly, never emit `started` at authoring, and drive the transition from P3 rather than a remembered step. Coldstart gaps folded in: packages/build-gate/** added to scope because the automatic P3 transition lives there, and the formatVersion grandfather mechanism collides with the existing 0->1 migration gate (rails-guard-ci.mjs:348,377) so the spec now prefers a per-ticket provenance signal. Acceptance is AC1-AC17 in the spec. Suppressions are denied. Backfilling started onto shipped tickets, manifest-derived start, and diff-derived start are out of scope (rationale in the spec).",
-      "budget": "frontier",
-      "category": "feature",
-      "duration": 3,
-      "edges": [
-        {
-          "contract": "T59 owns the START half of the rail lifecycle; T60 owns the authorized-ceremony mechanism. Independently grabbable — but if T59 lands first its grandfather clause must keep T60's motivating drift frozen, and if T60 lands first the union is already empty. Neither may depend on the other's merge order.",
-          "to": "T60"
-        }
-      ],
-      "id": "T59",
-      "rails": [],
-      "scope": [
-        "scripts/rails-guard-ci.mjs",
-        "scripts/test/rails-guard-ci.test.mjs",
-        "packages/tickets/**",
-        "packages/rails-guard/**",
-        "packages/build-gate/**",
-        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
-        "plugins/adlc-claude-code/test/**",
-        "docs/adr/**",
-        ".adlc/specs/rails-start-lifecycle.md"
-      ],
-      "title": "Rails START lifecycle: freeze from build-start, not from authoring"
     }
   ]
 }
