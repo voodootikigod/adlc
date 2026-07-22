@@ -19,7 +19,7 @@ function fakeGit(rec) {
 function fakeIo(rec, env) {
   return {
     git: fakeGit(rec),
-    adlc: (args) => { rec.adlc.push(args); return { status: 0, stdout: '{"detected":false}' }; },
+    adlc: (args) => { rec.adlc.push(args); return { status: 0, stdout: '{"verdict":"clean","signals":[]}' }; },
     adlcAsync: async (args) => { rec.adlc.push(args); return { status: 0, stdout: '' }; },
     spawnWorker: (cmd, args, opts) => {
       rec.spawn.push({ cmd, args, env: opts?.env });

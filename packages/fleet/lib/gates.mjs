@@ -54,23 +54,58 @@ export function scopeViolations(changedPaths, ticket) {
   return changedPaths.filter((p) => !inScope(ticket, p));
 }
 
+/** flail-detector's gate exit code for "I ran fine and the verdict is flail". */
+const EXIT_FLAIL = 2;
+
+/** The §12 backstop: an unverifiable signal must not cut a build's retry short. */
+const failOpen = () => ({ flail: false, signals: [], failedOpen: true });
+
 /**
  * Consult flail-detector on the accumulated worker log between strikes.
- * Returns { flail:boolean, signals:[] }. FAILS OPEN: any error → not-flail, so
- * the two-strike cap remains the backstop (§12).
+ * Returns { flail:boolean, signals:[] }, or the fail-open shape.
  *
- * @param exec  injectable runner: (bin, args) => stdout string
+ * Two things about the detector's real contract are easy to get wrong, and
+ * getting either one wrong makes this consultation a silent no-op (#284):
+ *
+ *  - Its JSON document is `{ verdict: 'flail'|'clean', signals, bytes, ... }`.
+ *    There is no `detected` field and never has been.
+ *  - It is an ADLC gate, so it signals its verdict through the EXIT CODE too:
+ *    0 = clean, 1 = operational error, 2 = flail. Exit 2 is a successful run
+ *    reporting a positive finding — not a failure — but execFileSync throws on
+ *    any non-zero exit, so that document arrives on the thrown error.
+ *
+ * Only genuinely unverifiable outcomes fail open (§12): a spawn failure, an
+ * operational error (exit 1), or a document whose verdict we do not recognize.
+ * That last case is deliberate — if the detector's schema drifts again, this
+ * fails open loudly rather than silently reporting every session as clean.
+ *
+ * @param exec  injectable runner: (bin, args) => stdout string. Mirrors
+ *              execFileSync: a non-zero exit THROWS, and the thrown error
+ *              carries `status` (the exit code) and `stdout` (the document).
+ *              A mock that cannot represent that cannot represent a flail.
  */
 export function checkFlail(logFile, scope, { adlcBin = 'adlc', exec = defaultExec } = {}) {
+  const args = ['flail-detector', logFile, '--json'];
+  for (const g of scope ?? []) args.push('--scope', g);
+
+  let out;
   try {
-    const args = ['flail-detector', logFile, '--json'];
-    for (const g of scope ?? []) args.push('--scope', g);
-    const out = exec(adlcBin, args);
-    const parsed = JSON.parse(out);
-    return { flail: parsed.detected === true, signals: parsed.signals ?? [] };
-  } catch {
-    return { flail: false, signals: [], failedOpen: true };
+    out = exec(adlcBin, args);
+  } catch (e) {
+    // Exit 2 is a verdict, not an error — recover the document it printed.
+    if (e?.status !== EXIT_FLAIL || typeof e.stdout !== 'string') return failOpen();
+    out = e.stdout;
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(out);
+  } catch {
+    return failOpen();
+  }
+
+  if (parsed?.verdict !== 'flail' && parsed?.verdict !== 'clean') return failOpen();
+  return { flail: parsed.verdict === 'flail', signals: parsed.signals ?? [] };
 }
 
 function defaultExec(bin, args) {
