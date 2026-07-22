@@ -39,4 +39,7 @@ supply credentials. When evaluating reports, keep in mind:
 - Test suites run fully offline.
 
 Reports about command injection, path traversal, unsafe handling of untrusted ticket/spec
-input, or accidental credential/secret leakage are especially valued.
+input, accidental credential/secret leakage, or **prompt injection of the lifecycle itself**
+(untrusted ticket/PR/diff content steering an agent's gate verdict, rather than attacking the
+product under review) are especially valued. See `docs/lifecycle-threat-model.md` for the
+actors, targets, and defenses ADLC currently has in place for that class.
