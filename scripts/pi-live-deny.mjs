@@ -15,7 +15,7 @@
 // manually on \n.
 
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,9 @@ function findPiBin(root) {
   for (let i = 0; i < 5; i++) {
     const candidate = join(curr, 'node_modules', '.bin', 'pi');
     if (existsSync(candidate)) return candidate;
+    // Stop ascending once we reach the main git repository root (.git directory)
+    const gitPath = join(curr, '.git');
+    if (existsSync(gitPath) && lstatSync(gitPath).isDirectory()) break;
     const parent = dirname(curr);
     if (parent === curr) break;
     curr = parent;

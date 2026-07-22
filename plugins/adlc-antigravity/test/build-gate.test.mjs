@@ -17,6 +17,7 @@ import {
 } from '../build-gate-inline.mjs';
 import { createFlailTracker, detectEditChurn, flailMessage, DEFAULT_FLAIL_THRESHOLD } from '../flail-inline.mjs';
 import { runFromStdin, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
+import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 test('DEFAULT_DEPTH_THRESHOLD and DEFAULT_FLAIL_THRESHOLD pin exact boundary constants', () => {
   assert.equal(DEFAULT_DEPTH_THRESHOLD, 50);
@@ -159,6 +160,23 @@ test('checkBuildGate: denies when active ticket ID is absent from tickets.json u
     const res = checkBuildGate({ root, env: { ADLC_P4_ENFORCEMENT: '1' } });
     assert.equal(res.decision, 'deny');
     assert.ok(res.reason.includes('not found in tickets.json'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('checkBuildGate: correctly loads active ticket from sharded .adlc/tickets/.store.json', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sharded-ticket-'));
+  try {
+    mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-1' }));
+    writeFileSync(join(root, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+    const shard = { id: 'T-1', title: 'Normal Ticket', risk: 'normal' };
+    writeFileSync(join(root, '.adlc', 'tickets', ticketFilename('T-1')), JSON.stringify(shard));
+
+    const res = checkBuildGate({ root, env: { ADLC_P4_ENFORCEMENT: '1' } });
+    assert.equal(res.decision, 'allow');
+    assert.ok(res.reason.includes("ticket risk tier is 'normal'"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

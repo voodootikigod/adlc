@@ -37,10 +37,27 @@ function isPidAlive(pid) {
 }
 
 export function deriveRiskSignals(ticket) {
+  const t = ticket ?? {};
   const signals = [];
-  if (ticket.risk === 'high') signals.push('declared-risk-high');
-  if (HIGH_RISK_CATEGORIES.has(ticket.category)) signals.push(`category-${ticket.category}`);
-  if (touchesAny(ticket.rails, TRUST_ROOT_PATHS)) signals.push('touches-trust-roots');
+  if (t.risk === 'high') signals.push('declared-risk-high');
+  if (t.external === true) signals.push('external-system-effect');
+  if (t.mutatesIdentity === true) signals.push('mutates-identity');
+
+  if (t.scope !== undefined && !Array.isArray(t.scope)) signals.push('malformed-scope');
+  if (t.rails !== undefined && !Array.isArray(t.rails)) signals.push('malformed-rails');
+
+  const combinedGlobs = [
+    ...(Array.isArray(t.scope) ? t.scope : []),
+    ...(Array.isArray(t.rails) ? t.rails : []),
+  ];
+
+  if (touchesAny(combinedGlobs, [MANIFEST_PATH])) signals.push('mutates-manifest');
+  if (touchesAny(combinedGlobs, TRUST_ROOT_PATHS)) {
+    signals.push('touches-trust-root');
+    signals.push('touches-trust-roots');
+  }
+  if (t.category && HIGH_RISK_CATEGORIES.has(t.category)) signals.push(`high-risk-category:${t.category}`);
+
   return signals;
 }
 
@@ -177,7 +194,12 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   function readStore() {
     try {
       if (existsSync(storePath)) {
-        return JSON.parse(readFileSync(storePath, 'utf8'));
+        const store = JSON.parse(readFileSync(storePath, 'utf8'));
+        // TTL check for default_session (1 hour) to avoid stale lockouts across days
+        if (store.default_session && store.default_session.updatedAt && Date.now() - store.default_session.updatedAt > 3600000) {
+          delete store.default_session;
+        }
+        return store;
       }
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to parse session store: ${err.message}`);
@@ -278,7 +300,7 @@ export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) 
   if (sessionID === 'default_session') {
     return {
       decision: 'deny',
-      reason: 'high-risk ticket build denied: context depth threshold exceeded in a session with unresolvable session ID (default_session). Resume in a fresh session or set ADLC_BUILD_GATE_BYPASS=1.',
+      reason: 'high-risk ticket build denied: context depth threshold exceeded in a session with unresolvable session ID (default_session). Delete .adlc/sessions.json or set ADLC_BUILD_GATE_BYPASS=1.',
     };
   }
   return {
