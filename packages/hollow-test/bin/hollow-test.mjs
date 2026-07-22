@@ -539,17 +539,42 @@ if (results.length === 0) {
 // produced a kill. That is most acute for an explicit --target/--rails file: the
 // caller named it deliberately, and the run would report success without a
 // single test having exercised it.
-const validByFile = new Map();
+// Seeded from the SELECTED TARGETS, not from results: a file that produced no
+// result at all (no recognised mutant, or everything skipped before push) is
+// exactly the case that must not slip through as "no news is good news".
+const validByFile = new Map(fileTargets.map((t) => [t.file, 0]));
 for (const r of results) {
   const prev = validByFile.get(r.file) ?? 0;
-  validByFile.set(r.file, prev + (r.invalid ? 0 : 1));
+  validByFile.set(r.file, prev + (r.invalid || r.undetermined ? 0 : 1));
 }
 // EVERY file in the run, not only explicit targets. Restricting this to
 // --target/--rails left the same hole one step over: a diff-derived file whose
 // mutants were all invalid is equally unchecked, and any other file's kill hides
 // it. Whether the caller named the file or the diff did, zero valid mutants
 // means zero evidence about it.
-const unchecked = [...validByFile.entries()].filter(([, valid]) => valid === 0).map(([f]) => f);
+// Two different zero-valid cases, and conflating them is wrong in both
+// directions:
+//
+//   ATTEMPTED but every mutant invalid/undetermined -> hard failure. A trial ran
+//   and produced no evidence, which is the #293 false-green.
+//
+//   NEVER ATTEMPTED (quota 0 from budget distribution) -> reported, not fatal.
+//   Reserving budget for explicit targets while diff-derived files share what is
+//   left is the documented design (#70/#41/#35); refusing outright would break
+//   it. But it must not be SILENT — a file the gate never looked at is exactly
+//   the place to hide an untested change.
+const attempted = new Set(results.map((r) => r.file));
+const notAttempted = [...validByFile.keys()].filter((f) => !attempted.has(f));
+if (notAttempted.length > 0) {
+  console.warn(
+    `hollow-test: ${notAttempted.length} selected file(s) received no mutation budget and were ` +
+    `NOT prosecuted: ${notAttempted.join(', ')} — raise --max to cover them.`
+  );
+}
+
+const unchecked = [...validByFile.entries()]
+  .filter(([f, valid]) => valid === 0 && attempted.has(f))
+  .map(([f]) => f);
 if (unchecked.length > 0) {
   const named = unchecked.filter((f) => mutableExplicitFiles.includes(f));
   opError(
