@@ -5,6 +5,7 @@ import {
   detectScopeViolations,
   detectEditChurn,
   detectSizeExceeded,
+  detectBudgetExceeded,
 } from './signals.mjs';
 
 /**
@@ -16,19 +17,23 @@ import {
  * @param {string[]} opts.scopes - glob patterns (empty = no scope check)
  * @param {number} opts.maxRepeat - threshold for repeated-error signal
  * @param {number|null} opts.maxBytes - size threshold, or null
+ * @param {number|null} [opts.spentTokens] - measured token spend for this ticket, or null
+ * @param {number|null} [opts.budget] - the ticket's declared token budget, or null
  * @returns {AnalysisResult}
  */
-export function analyze({ lines, bytes, scopes, maxRepeat, maxBytes }) {
+export function analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens = null, budget = null }) {
   const repeatedErrors = detectRepeatedErrors(lines, maxRepeat);
   const scopeViolations = detectScopeViolations(lines, scopes);
   const editChurn = detectEditChurn(lines);
   const sizeExceeded = detectSizeExceeded(bytes, maxBytes);
+  const budgetExceeded = detectBudgetExceeded(spentTokens, budget);
 
   const isFlail =
     repeatedErrors.length > 0 ||
     scopeViolations.length > 0 ||
     editChurn.length > 0 ||
-    sizeExceeded;
+    sizeExceeded ||
+    budgetExceeded;
 
   const signals = [];
 
@@ -58,6 +63,14 @@ export function analyze({ lines, bytes, scopes, maxRepeat, maxBytes }) {
       type: 'size',
       bytes,
       maxBytes,
+    });
+  }
+
+  if (budgetExceeded) {
+    signals.push({
+      type: 'budget',
+      spentTokens,
+      budget,
     });
   }
 

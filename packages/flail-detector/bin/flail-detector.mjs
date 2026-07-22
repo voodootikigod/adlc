@@ -17,6 +17,8 @@ const { values, positionals } = parseArgs({
     scope:      { type: 'string',  multiple: true },
     'max-repeat': { type: 'string',  default: '2' },
     'max-bytes':  { type: 'string' },
+    'spent-tokens': { type: 'string' },
+    budget:       { type: 'string' },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -37,6 +39,13 @@ Options:
   --max-repeat <n>  Trigger repeated-error signal when a normalized error
                     signature appears >= n times (default: 2).
   --max-bytes <n>   Trigger size signal when log exceeds n bytes (default: no limit).
+  --spent-tokens <n> Measured token spend for this ticket (e.g. from
+                    'adlc spend --ticket <id> --json'). Paired with --budget.
+  --budget <n>      The ticket's declared token budget (ticket.budget, or
+                    model-router's emitted per-ticket budget). Triggers the
+                    budget signal when --spent-tokens exceeds it. Both flags
+                    must be given together — with either omitted, the budget
+                    signal stays silent rather than guessing (ADLC C6).
   --json            Machine-readable JSON output.
   --help            Show this help.
 
@@ -45,6 +54,7 @@ Signals detected:
   scope-violation File paths in tool-log lines that fall outside --scope (only when given)
   edit-churn      Same file path appearing in >= 3 write/edit lines
   size            Log file byte count > --max-bytes (only when --max-bytes given)
+  budget          --spent-tokens > --budget (only when both given)
 
 Output:
   verdict: 'flail' | 'clean'
@@ -92,6 +102,25 @@ if (values['max-bytes'] !== undefined) {
 
 const scopes = values.scope ?? [];
 
+const hasSpentTokens = values['spent-tokens'] !== undefined;
+const hasBudget = values.budget !== undefined;
+if (hasSpentTokens !== hasBudget) {
+  opError('--spent-tokens and --budget must be given together (or neither)');
+}
+
+let spentTokens = null;
+let budget = null;
+if (hasSpentTokens) {
+  spentTokens = parseInt(values['spent-tokens'], 10);
+  if (!Number.isInteger(spentTokens) || spentTokens < 0) {
+    opError('--spent-tokens must be a non-negative integer');
+  }
+  budget = parseInt(values.budget, 10);
+  if (!Number.isInteger(budget) || budget < 0) {
+    opError('--budget must be a non-negative integer');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Read and analyze
 // ---------------------------------------------------------------------------
@@ -104,7 +133,7 @@ try {
 }
 
 const { lines, bytes } = parseLog(raw);
-const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes });
+const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens, budget });
 
 // ---------------------------------------------------------------------------
 // Output

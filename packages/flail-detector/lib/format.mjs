@@ -38,6 +38,9 @@ export function formatResult(result) {
         case 'size':
           lines.push(`    size: ${sig.bytes} bytes exceeds limit of ${sig.maxBytes} bytes`);
           break;
+        case 'budget':
+          lines.push(`    budget: ${sig.spentTokens} tokens spent exceeds budget of ${sig.budget} tokens`);
+          break;
         default:
           lines.push(`    ${sig.type}`);
       }

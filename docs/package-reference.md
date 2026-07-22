@@ -13,9 +13,10 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`docs/tools/coldstart.md`](./tools/coldstart.md) |
 | `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`docs/tools/consensus-fix.md`](./tools/consensus-fix.md) |
 | `@adlc/core` | none | Shared LLM, git, CLI, ledger, ticket, and mutation primitives. | [`docs/tools/core.md`](./tools/core.md) |
-| `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, and oversized session logs. | [`docs/tools/flail-detector.md`](./tools/flail-detector.md) |
+| `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, oversized session logs, and token spend past the ticket budget. | [`docs/tools/flail-detector.md`](./tools/flail-detector.md) |
 | `@adlc/gate-fuzzing` | `gate-fuzzing` | Runs hostile candidates against gate suites to find defeats and calibration gaps. | [`docs/tools/gate-fuzzing.md`](./tools/gate-fuzzing.md) |
 | `@adlc/gate-manifest` | `gate-manifest` | Records, verifies, shows, and attests append-only gate evidence. | [`docs/tools/gate-manifest.md`](./tools/gate-manifest.md) |
+| `@adlc/gate-manifest` | `adlc-spend` | Aggregates recorded token usage into per-phase spend, the barbell shape, and the §6 diagnostics. Invoke as `adlc spend`. | [`docs/tools/spend.md`](./tools/spend.md) |
 | `@adlc/hollow-test` | `hollow-test` | Mutates changed code to find tests that pass without testing the intended behavior. | [`docs/tools/hollow-test.md`](./tools/hollow-test.md) |
 | `@adlc/lesson-foundry` | `lesson-foundry` | Mines repeated findings into deterministic defenses such as lint checks or skills. | [`docs/tools/lesson-foundry.md`](./tools/lesson-foundry.md) |
 | `@adlc/merge-forecast` | `merge-forecast` | Estimates fan-out width, dependency pressure, and merge backpressure. | [`docs/tools/merge-forecast.md`](./tools/merge-forecast.md) |
@@ -41,7 +42,7 @@ adlc behavior-diff compare before.json after.json [--json]
 adlc coldstart <ticket-id> [options]
 adlc coldstart --all [options]
 adlc consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
-adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--json]
+adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--json]
 adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--json]
 adlc gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c] [--dir path] [--json]
 adlc gate-manifest verify [--json] [--dir path]
@@ -65,6 +66,7 @@ adlc run <p1|p2|p3|p4|p5|p6|p7> [--ticket id for p3-p6] [--revision rev for p5-p
 adlc accept --ticket id --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--revision rev] [--dir .adlc] [--json]
 adlc skill-rot [path ...] [--write] [--json]
 adlc spec-lint <spec.md> [--llm] [--json] [--prompt-only]
+adlc spend [--ticket id] [--dir path] [--json]
 adlc ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
 ```
 
@@ -94,6 +96,7 @@ Review evidence and calibration:
 
 - `behavior-diff`
 - `gate-manifest`
+- `spend`
 - `hollow-test`
 - `prosecute`
 - `review-calibration`
