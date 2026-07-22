@@ -183,8 +183,9 @@ test('resolveBin resolves tool bins and returns null for non-existent tools', ()
   assert.equal(resolveBin('nonexistent-tool-xyz'), null);
 });
 
-test('packageJsonPath resolves local monorepo devPath when pkg.name matches package', () => {
+test('packageJsonPath resolves local monorepo devPath directly without node_modules lookup when pkg.name matches package', () => {
   const devPath = packageJsonPath('@adlc/spec-lint');
   assert.ok(devPath);
   assert.ok(devPath.endsWith('packages/spec-lint/package.json'));
+  assert.equal(devPath.includes('node_modules'), false, 'devPath must resolve directly without falling through to node_modules');
 });
