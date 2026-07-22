@@ -16,5 +16,5 @@ adlc doctor || npx @adlc/cli doctor
 2. **Antigravity CLI:** Asserts `agy` is present on `$PATH` and authenticated.
 3. **ADLC Workspace:** Validates `.adlc/` ticket store structure and `.gitignore` exclusions.
 4. **Active Ticket Pointer:** Validates `.adlc/current-ticket.json` and checks for conflicting `ADLC_TICKET` env settings.
-5. **Plugin Manifest:** Asserts `@adlc/antigravity` plugin is installed in `~/.gemini/config/plugins/adlc-antigravity` with valid `plugin.json` `adlcContract`.
+5. **Plugin Manifest:** Asserts `@adlc/antigravity` plugin is installed with valid `plugin.json` `adlcContract`.
 6. **CI Rail-Guard:** Verifies `.github/workflows/adlc-rails-guard.yml` (or equivalent CI gate) is configured.

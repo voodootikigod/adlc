@@ -9,8 +9,7 @@ import { detectEditChurn } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
-
-export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json'];
+export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**'];
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
 export const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
 
@@ -38,45 +37,35 @@ function isPidAlive(pid) {
 }
 
 export function deriveRiskSignals(ticket) {
-  const t = ticket ?? {};
   const signals = [];
-  if (t.risk === 'high') signals.push('declared-risk-high');
-  if (t.external === true) signals.push('external-system-effect');
-  if (t.mutatesIdentity === true) signals.push('mutates-identity');
-
-  if (t.scope !== undefined && !Array.isArray(t.scope)) signals.push('malformed-scope');
-  if (t.rails !== undefined && !Array.isArray(t.rails)) signals.push('malformed-rails');
-
-  const combinedGlobs = [
-    ...(Array.isArray(t.scope) ? t.scope : []),
-    ...(Array.isArray(t.rails) ? t.rails : []),
-  ];
-
-  if (touchesAny(combinedGlobs, [MANIFEST_PATH])) signals.push('mutates-manifest');
-  if (touchesAny(combinedGlobs, TRUST_ROOT_PATHS)) signals.push('touches-trust-root');
-  if (HIGH_RISK_CATEGORIES.has(t.category)) signals.push(`high-risk-category:${t.category}`);
-
+  if (ticket.risk === 'high') signals.push('declared-risk-high');
+  if (HIGH_RISK_CATEGORIES.has(ticket.category)) signals.push(`category-${ticket.category}`);
+  if (touchesAny(ticket.rails, TRUST_ROOT_PATHS)) signals.push('touches-trust-roots');
   return signals;
 }
 
 export function computeRiskTier(ticket) {
+  if (!ticket || typeof ticket !== 'object') {
+    return { tier: 'normal', signals: [] };
+  }
   const signals = deriveRiskSignals(ticket);
   return { tier: signals.length > 0 ? 'high' : 'normal', signals };
 }
 
 export function createDepthTracker() {
-  const depth = new Map();
+  const counts = new Map();
   const compacted = new Set();
   return {
     recordToolCall(sessionID) {
       if (!sessionID) return;
-      depth.set(sessionID, (depth.get(sessionID) ?? 0) + 1);
+      counts.set(sessionID, (counts.get(sessionID) ?? 0) + 1);
     },
     markCompacted(sessionID) {
-      if (sessionID) compacted.add(sessionID);
+      if (!sessionID) return;
+      compacted.add(sessionID);
     },
     depth(sessionID) {
-      return depth.get(sessionID) ?? 0;
+      return counts.get(sessionID) ?? 0;
     },
     isCompacted(sessionID) {
       return compacted.has(sessionID);
@@ -114,9 +103,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   function writeOwnerFile(payload) {
     try {
-      const tmpPath = join(lockDir, `owner.tmp.${process.pid}.${Date.now()}.${Math.floor(Math.random() * 10000)}`);
-      writeFileSync(tmpPath, JSON.stringify(payload));
-      renameSync(tmpPath, ownerPath);
+      const tmpOwner = `${ownerPath}.tmp.${process.pid}.${Date.now()}`;
+      writeFileSync(tmpOwner, JSON.stringify(payload));
+      renameSync(tmpOwner, ownerPath);
     } catch {
       try { writeFileSync(ownerPath, JSON.stringify(payload)); } catch { /* ignore fallback write failure */ }
     }
@@ -150,7 +139,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
                 isDead = true; // missing owner.json after >3s stale window → treat as dead
               }
               if (isDead) {
-                try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* ignore */ }
+                try {
+                  const tombstone = `${lockDir}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                  renameSync(lockDir, tombstone);
+                  rmSync(tombstone, { recursive: true, force: true });
+                } catch { /* another contender won the atomic rename race */ }
               }
             }
           }

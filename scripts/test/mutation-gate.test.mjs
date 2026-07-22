@@ -331,6 +331,14 @@ test('testTargetFor maps apps/<x>/ source to its test directory glob', () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('testTargetFor maps plugins/<x>/hooks|lib|agents|mcp to their own test dir when it exists', () => {
+  const root = fixtureRoot(['plugins/adlc-codex/hooks/test', 'plugins/adlc-codex/lib/test']);
+  try {
+    assert.equal(testTargetFor('plugins/adlc-codex/hooks/x.mjs', root), 'plugins/adlc-codex/hooks/test/*.test.mjs');
+    assert.equal(testTargetFor('plugins/adlc-codex/lib/x.mjs', root), 'plugins/adlc-codex/lib/test/*.test.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('testTargetFor maps plugins/<x>/ source to its test directory glob', () => {
   const root = fixtureRoot(['plugins/adlc-cursor/test']);
   try {
