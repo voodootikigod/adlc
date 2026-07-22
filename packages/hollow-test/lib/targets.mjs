@@ -83,7 +83,7 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {})
   // Explicit source declaration wins over every heuristic below. Names like
   // `hollow-test.mjs` are indistinguishable from a test by convention alone, so
   // the only correct answer is to let the project say which it is.
-  if (sourceGlobs.length > 0 && sourceGlobs.some((g) => globMatch(g, file))) {
+  if (sourceGlobs.some((g) => globMatch(g, file))) {
     return SOURCE_EXT_RE.test(file);
   }
   if (EXCLUDE_DIR_RE.test(file)) return false;
@@ -93,7 +93,7 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {})
   // (see EXCLUDE_FILE_RE). Rather than guess wrong in either direction, a
   // consumer whose tests are named `foo-test.js` declares it:
   //   hollow-test --test-glob '**/*-test.js'
-  if (testGlobs.length > 0 && testGlobs.some((g) => globMatch(g, file))) return false;
+  if (testGlobs.some((g) => globMatch(g, file))) return false;
   return SOURCE_EXT_RE.test(file);
 }
 

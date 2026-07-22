@@ -709,6 +709,59 @@ describe('CLI: --rails matching a mix of source and non-source', () => {
   });
 });
 
+// --source-glob end to end. Two globs, deliberately: the flags are declared
+// `multiple: true`, and without that parseArgs hands back a bare string whose
+// `.some` does not exist. A single-glob test would not distinguish the two.
+describe('CLI: --source-glob rescues a production file named like a test', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-sourceglob-'));
+    createRailsAuthoringRepo(dir);
+    // Named like a node --test discovery match, but production code.
+    writeFileSync(join(dir, 'src', 'widget-test.mjs'),
+      'export const ok = (x) => x > 0;\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add hyphen-named production file'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses it as a --target without the declaration', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/widget-test.mjs', '--max', '3'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    // Excluded by naming convention, so it is not a mutable target and the run
+    // has nothing to do — it must not silently report a pass.
+    assert.notEqual(result.status, 0,
+      `expected a non-zero exit with no declaration: ${out}`);
+  });
+
+  it('mutates it when declared via --source-glob', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/widget-test.mjs',
+       '--source-glob', '**/nothing-matches-this.mjs',
+       '--source-glob', '**/widget-test.mjs',
+       '--max', '3', '--json'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.doesNotMatch(out, /not a supported source language/,
+      `the declaration must make it a valid target: ${out}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); },
+      `stdout is not valid JSON: ${out}`);
+    assert.ok(parsed.summary.total > 0,
+      `expected mutants for the declared source file (total=${parsed.summary.total})`);
+  });
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {
