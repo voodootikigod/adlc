@@ -289,10 +289,16 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
     return { decision: 'allow', reason: 'repo not ADLC-initialized' };
   }
   const active = resolveActiveTicketId(root, env);
-  if (active.conflict || !active.id) {
+  if (active.conflict) {
+    return { decision: 'deny', reason: 'ticket pointer conflict between ADLC_TICKET env and .adlc/current-ticket.json' };
+  }
+  if (!active.id) {
     return { decision: 'allow', reason: 'no unambiguous active ticket' };
   }
-  const { tickets } = loadTickets(ticketsPath);
+  const { tickets, errors } = loadTickets(ticketsPath);
+  if (errors && errors.length > 0) {
+    return { decision: 'deny', reason: `corrupt or unparseable ticket store: ${errors.join('; ')}` };
+  }
   const ticket = tickets.find((t) => t.id === active.id);
   if (!ticket) {
     return { decision: 'allow', reason: `active ticket ${active.id} not found` };

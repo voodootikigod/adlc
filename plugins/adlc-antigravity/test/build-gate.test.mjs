@@ -75,6 +75,38 @@ test('checkBuildGate: threshold 0 is respected and not discarded as default 50',
   }
 });
 
+test('checkBuildGate: fails closed on active ticket pointer conflict', () => {
+  const root = mkdtempSync(join(tmpdir(), 'conflict-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-FILE' }));
+
+    const env = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T-ENV' };
+    const gate = checkBuildGate({ sessionID: 's-conflict', root, env });
+    assert.equal(gate.decision, 'deny');
+    assert.match(gate.reason, /ticket pointer conflict/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('checkBuildGate: fails closed on corrupt tickets.json store', () => {
+  const root = mkdtempSync(join(tmpdir(), 'corrupt-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), '{ invalid json ');
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-1' }));
+
+    const env = { ADLC_P4_ENFORCEMENT: '1' };
+    const gate = checkBuildGate({ sessionID: 's-corrupt', root, env });
+    assert.equal(gate.decision, 'deny');
+    assert.match(gate.reason, /corrupt or unparseable ticket store/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('printStatus & printDoctor: execute subcommand displays without crashing and resolves subdirectories', () => {
   const root = mkdtempSync(join(tmpdir(), 'cmd-test-'));
   const subDir = join(root, 'src', 'nested');
