@@ -173,12 +173,18 @@ jobs:
       - name: Install
         run: npm install
 
+      # Install with NO secret in scope, so the entitled token is never visible
+      # to @github/copilot's (or its deps') npm install-time lifecycle scripts —
+      # matching the token-free `npm install -g` of every other CLI in this file.
+      - name: Install copilot CLI
+        run: npm install -g @github/copilot
+
+      # Scope GH_TOKEN only to the commands that actually need it.
       - name: Copilot live rail-deny proof (entitled account required)
         env:
           GH_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
           ADLC_COPILOT_LIVE_INSTALL: '1'
         run: |
-          npm install -g @github/copilot
           copilot --version
           node scripts/copilot-live-deny.mjs --require
 
