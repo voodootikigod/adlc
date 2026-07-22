@@ -175,6 +175,28 @@ describe('renderReport', () => {
     const t2Pos = report.indexOf('T2');
     assert.ok(t1Pos < t2Pos, 'T1 should appear before T2');
   });
+
+  // ── cached marker (issue #278) ──────────────────────────────────────────
+
+  test('a cached PASS result is marked "(cached)"', () => {
+    const report = renderReport([{ id: 'T1', gaps: [], cached: true }]);
+    assert.ok(report.includes('(cached)'), 'cached result must be marked');
+  });
+
+  test('a cached FAIL result is marked "(cached)"', () => {
+    const report = renderReport([{ id: 'T1', gaps: [{ what: 'X', why_blocking: 'Y' }], cached: true }]);
+    assert.ok(report.includes('(cached)'), 'cached result must be marked');
+  });
+
+  test('a freshly-audited result (cached: false) is NOT marked "(cached)"', () => {
+    const report = renderReport([{ id: 'T1', gaps: [], cached: false }]);
+    assert.ok(!report.includes('(cached)'), 'fresh result must not be marked cached');
+  });
+
+  test('a result with no cached field at all (legacy shape) renders without the marker', () => {
+    const report = renderReport([{ id: 'T1', gaps: [] }]);
+    assert.ok(!report.includes('(cached)'));
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

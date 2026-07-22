@@ -13,31 +13,18 @@ import {
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll, resolveExpectedModel } from '../lib/gate.mjs';
-import { buildCacheData } from '../lib/cache.mjs';
+import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
-import { ticketHash } from '@adlc/tickets';
+import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
+
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
 // so plain --prompt-only runs never pay for or depend on it. The real
 // (non-prompt-only) path below also imports gate-manifest lazily, for the
 // same reason: only pay for it on the path that has something to record.
 
-const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--force] [--max-age <days>] [--prompt-only] [--record-verdict <file|->] [--json]';
-
-const { values, positionals } = parseArgs({
-  usage: USAGE,
-  options: {
-    tickets: { type: 'string', default: '.adlc/tickets.json' },
-    all: { type: 'boolean', default: false },
-    tier: { type: 'string', default: 'cheap' },
-    force: { type: 'boolean', default: false },
-    'max-age': { type: 'string', default: '30' },
-    'prompt-only': { type: 'boolean', default: false },
-    'record-verdict': { type: 'string' },
-    json: { type: 'boolean', default: false },
-  },
-});
+const { values, positionals } = parseArgs({ usage: USAGE, options: OPTIONS });
 
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
 if (!VALID_TIERS.includes(values.tier)) {
@@ -48,15 +35,11 @@ if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
 
-const maxAgeDays = Number(values['max-age']);
-if (!Number.isFinite(maxAgeDays) || maxAgeDays < 0) {
-  opError(`--max-age must be a non-negative number of days, got: ${values['max-age']}`);
+const maxAgeResult = parseMaxAgeDays(values['max-age']);
+if (!maxAgeResult.ok) {
+  opError(maxAgeResult.error);
 }
-// 0 means "treat every cache entry as stale" (issue #278), not "no limit" —
-// distinguish that from the sentinel `null` findCachedVerdict/checkAll use
-// for "no age limit", which nothing here ever produces (a numeric flag with
-// a numeric default always yields a finite ms value, never null).
-const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+const maxAgeMs = maxAgeResult.maxAgeMs;
 
 const promptOnlyMode = values['prompt-only'];
 const jsonMode = values['json'];
@@ -158,20 +141,14 @@ try {
 // prior evidence rather than manufacturing a duplicate entry for the same
 // verification, and a cache hit is what makes a later run's lookup possible
 // in the first place, so recording must be per-ticket, not aggregated across
-// the whole --all run the way the pre-#278 design did.
+// the whole --all run the way the pre-#278 design did. buildRecordPlan
+// returns [] when there's nothing to record (every result cached/mocked);
+// looping over that is already a no-op, so there is no separate "is there
+// anything to record?" branch here to leave untested.
 
-const auditedResults = results.filter((r) => !r.cached && !r.mocked);
-if (auditedResults.length > 0) {
-  const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
-  const model = resolveExpectedModel(tier);
-  for (const result of auditedResults) {
-    const ticket = targets.find((t) => t.id === result.id);
-    const data = { tier };
-    if (model) data.cache = buildCacheData({ ticketHash: ticketHash(ticket), model, gaps: result.gaps });
-    if (result.usage) data.usage = result.usage;
-    record({ gate: 'coldstart', ticket: result.id, rawData: JSON.stringify(data) });
-  }
-}
+const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
+const recordPlan = buildRecordPlan(results, targets, { model: resolveExpectedModel(tier), tier });
+for (const entry of recordPlan) record(entry);
 
 // ── Output ───────────────────────────────────────────────────────────────────
 
