@@ -11,7 +11,7 @@ import {
   filterTargetFiles, buildFileTargets,
   readRailsFromTicketFile, expandRailsToFiles,
 } from '../lib/targets.mjs';
-import { buildJsonReport } from '../lib/report.mjs';
+import { buildJsonReport, printTable } from '../lib/report.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
 
@@ -246,5 +246,73 @@ describe('buildJsonReport', () => {
     ];
     const report = buildJsonReport(results);
     assert.equal(report.mutants[0].timedOut, true);
+  });
+});
+
+// ── invalid mutants in the report surfaces (#293) ────────────────────────────
+//
+// An unparseable mutant belongs to NEITHER bucket. Counting it killed fakes
+// coverage; counting it survived blames the tests for code that was never
+// valid. Both report surfaces have to agree on that, and the human-readable
+// table is the one a person actually reads when a gate fails.
+
+const MIXED = [
+  { file: 'a.mjs', line: 1, operator: 'null-return', killed: false, invalid: true,  timedOut: false, original: 'return {', mutated: 'return null;' },
+  { file: 'a.mjs', line: 2, operator: 'off-by-one',  killed: true,  invalid: false, timedOut: false, original: 'a: 1,',    mutated: 'a: 2,' },
+  { file: 'a.mjs', line: 3, operator: 'bool-flip',   killed: false, invalid: false, timedOut: false, original: 'x = true', mutated: 'x = false' },
+];
+
+describe('buildJsonReport with invalid mutants', () => {
+  it('counts invalid separately from killed and survived', () => {
+    const r = buildJsonReport(MIXED);
+    assert.deepEqual(r.summary, { total: 3, killed: 1, survived: 1, invalid: 1 });
+  });
+
+  it('labels each mutant with its own status', () => {
+    const r = buildJsonReport(MIXED);
+    assert.deepEqual(r.mutants.map((m) => m.status), ['invalid', 'killed', 'survived']);
+  });
+
+  it('never lets an invalid mutant inflate the killed count', () => {
+    const allInvalid = MIXED.map((m) => ({ ...m, killed: true, invalid: true }));
+    const r = buildJsonReport(allInvalid);
+    assert.equal(r.summary.killed, 0, 'invalid wins over a stale killed flag');
+    assert.equal(r.summary.invalid, 3);
+  });
+});
+
+describe('printTable with invalid mutants', () => {
+  function capture(results) {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(' '));
+    try { printTable(results); } finally { console.log = original; }
+    return lines.join('\n');
+  }
+
+  it('shows INVALID rather than SURVIVED, and explains why', () => {
+    const out = capture(MIXED);
+    assert.match(out, /INVALID\s+a\.mjs:1/);
+    assert.match(out, /did not parse/);
+    // The invalid row must not be presented as a survivor — that would read as
+    // "your tests failed to catch this" for code that never compiled.
+    assert.doesNotMatch(out, /SURVIVED\s+a\.mjs:1/);
+  });
+
+  it('totals exclude invalid from both buckets and report it separately', () => {
+    const out = capture(MIXED);
+    assert.match(out, /Total: 3\s+Killed: 1\s+Survived: 1\s+Invalid: 1/);
+  });
+
+  it('omits the Invalid column entirely when there are none', () => {
+    const out = capture(MIXED.filter((m) => !m.invalid));
+    assert.match(out, /Total: 2\s+Killed: 1\s+Survived: 1/);
+    assert.doesNotMatch(out, /Invalid:/);
+  });
+
+  it('prints the diff for survivors and invalids, since both need inspecting', () => {
+    const out = capture(MIXED);
+    assert.match(out, /original: return \{/);   // invalid
+    assert.match(out, /original: x = true/);     // survivor
   });
 });

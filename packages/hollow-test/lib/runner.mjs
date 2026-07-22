@@ -56,7 +56,9 @@ export function runTest(testCmd, timeoutMs, cwd) {
  */
 export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) {
   let trial;
-  let invalid = false;
+  // No initialiser: it is assigned unconditionally below, so a literal here is
+  // dead weight the mutation gate would flag forever.
+  let invalid;
   try {
     writeFileSync(filePath, mutated, 'utf8');
     // SYNTAX GATE, before the test command (#293).
