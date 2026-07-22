@@ -12,11 +12,12 @@
  */
 export function renderReport(results) {
   const lines = [];
-  for (const { id, gaps } of results) {
+  for (const { id, gaps, cached } of results) {
+    const suffix = cached ? ' (cached)' : '';
     if (gaps.length === 0) {
-      lines.push(`[PASS] ${id}: ticket is fully executable`);
+      lines.push(`[PASS] ${id}: ticket is fully executable${suffix}`);
     } else {
-      lines.push(`[FAIL] ${id}: ${gaps.length} gap(s)`);
+      lines.push(`[FAIL] ${id}: ${gaps.length} gap(s)${suffix}`);
       for (const gap of gaps) {
         lines.push(`  - ${gap.what}: ${gap.why_blocking}`);
       }
@@ -33,10 +34,11 @@ export function buildJsonOutput(results) {
   const allPass = results.every((r) => r.gaps.length === 0);
   return {
     ok: allPass,
-    results: results.map(({ id, gaps }) => ({
+    results: results.map(({ id, gaps, cached }) => ({
       id,
       pass: gaps.length === 0,
       gaps,
+      cached: Boolean(cached),
     })),
   };
 }

@@ -42,8 +42,20 @@ coldstart --all     [options]
 |------|---------|-------------|
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
 | `--all` | off | Run the gate on every ticket in the file |
+| `--force` | off | Bypass the cache entirely and re-audit every target ticket |
+| `--max-age <days>` | `30` | Treat a cached verdict older than this as stale; `0` treats every cache entry as stale |
 | `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made |
 | `--json` | off | Machine-readable JSON output for orchestrators |
+
+### Caching
+
+A real (non-`--prompt-only`) audit records `{ticketHash, model, gaps}` into
+`.adlc/manifest.jsonl`. A later run for the SAME ticket skips the LLM call
+when it finds a matching entry: same content hash AND same *resolved* model
+id — switching `ADLC_MODEL_CHEAP` invalidates the cache even though `--tier`
+stays the same. `--force` bypasses the cache; `--max-age <days>` (default 30)
+bounds how old a cache entry may be before it's treated as stale. Caching
+never applies to `--prompt-only` or the `ADLC_GATE_MOCK_RESPONSE` test seam.
 
 ---
 
