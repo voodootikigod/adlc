@@ -180,3 +180,20 @@ test('a thrown exec with status 1 is an operational error, not a verdict', async
   assert.equal(r.flail, false);
   assert.equal(r.failedOpen, true);
 });
+
+test('exit 1 fails open even when it printed a well-formed flail document', async () => {
+  // The exit code is what says "this run is trustworthy", not the document.
+  // Only exit 2 means "I ran fine and the verdict is flail" — a status-1 run
+  // that happens to emit parseable output must not be promoted to a verdict.
+  const r = checkFlail('/log', [], {
+    exec: () => {
+      const e = new Error('Command failed');
+      e.status = 1;
+      e.stdout = JSON.stringify({ verdict: 'flail', signals: [{ type: 'size' }] });
+      throw e;
+    },
+  });
+
+  assert.equal(r.flail, false, 'an operational error is never a flail verdict');
+  assert.equal(r.failedOpen, true);
+});
