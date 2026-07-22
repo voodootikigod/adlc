@@ -17,11 +17,21 @@ import {
 } from '../build-gate-inline.mjs';
 import { createFlailTracker, detectEditChurn, flailMessage, DEFAULT_FLAIL_THRESHOLD } from '../flail-inline.mjs';
 import { runFromStdin, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
+import { TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 test('DEFAULT_DEPTH_THRESHOLD and DEFAULT_FLAIL_THRESHOLD pin exact boundary constants', () => {
   assert.equal(DEFAULT_DEPTH_THRESHOLD, 50);
   assert.equal(DEFAULT_FLAIL_THRESHOLD, 3);
+});
+
+test('TRUST_ROOT_RAILS contains all 6 required session and ticket trust roots', () => {
+  assert.ok(TRUST_ROOT_RAILS.includes('.adlc/tickets.json'));
+  assert.ok(TRUST_ROOT_RAILS.includes('.adlc/tickets/.store.json'));
+  assert.ok(TRUST_ROOT_RAILS.includes('.adlc/tickets/**'));
+  assert.ok(TRUST_ROOT_RAILS.includes('.adlc/current-ticket.json'));
+  assert.ok(TRUST_ROOT_RAILS.includes('.adlc/sessions.json'));
+  assert.ok(TRUST_ROOT_RAILS.includes('.adlc/sessions.lock/**'));
 });
 
 test('computeRiskTier: derives high risk for ticket declaring risk: high', () => {
