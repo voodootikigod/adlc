@@ -1364,7 +1364,10 @@
         "scripts/mutation-gate.mjs",
         "scripts/test/mutation-gate.test.mjs",
         "packages/hollow-test/lib/targets.mjs",
-        "packages/hollow-test/test/**"
+        "packages/hollow-test/test/**",
+        "packages/hollow-test/bin/hollow-test.mjs",
+        "packages/hollow-test/README.md",
+        "docs/tools/hollow-test.md"
       ],
       "title": "mutation-gate: classify source by an include-list, not by excluding known non-source extensions"
     },

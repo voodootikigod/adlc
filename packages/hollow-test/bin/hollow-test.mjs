@@ -9,7 +9,7 @@ import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
   filterTargetFiles, buildFileTargets, readFileSafe,
-  readRailsFromTicketFile, expandRailsToFiles,
+  readRailsFromTicketFile, expandRailsToFiles, isMutableSource,
 } from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
@@ -24,6 +24,15 @@ const { values } = parseArgs({
     'timeout-ms': { type: 'string', default: '120000' },
     target:       { type: 'string', multiple: true },
     rails:        { type: 'string', multiple: true },
+    // Extra globs to treat as tests, for projects whose convention this tool
+    // cannot infer. The built-in rules cover directory segments and the dotted,
+    // exact and snake basename forms; HYPHENATED names (foo-test.js, spec-foo.js)
+    // are deliberately excluded from the defaults because a hyphen cannot
+    // distinguish a test convention from a product name — `hollow-test.mjs` and
+    // `spec-lint.mjs` are production files in this very repo. Rather than guess,
+    // let a caller whose project uses that convention declare it:
+    //   --test-glob '**/*-test.js'
+    'test-glob':  { type: 'string', multiple: true },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -63,6 +72,7 @@ Exit codes:
 }
 
 const testCmd   = values['test-cmd'];
+const testGlobs = values['test-glob'] ?? [];
 const maxMutants = parseInt(values.max, 10);
 const timeoutMs  = parseInt(values['timeout-ms'], 10);
 const useJson    = values.json;
@@ -146,7 +156,7 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const diffEligibleFiles = filterTargetFiles(changedLines);
+const diffEligibleFiles = filterTargetFiles(changedLines, { testGlobs });
 
 // ── explicit --target / --rails resolution ──────────────────────────────────
 // These bypass EXCLUDE_PATH_RE deliberately: the caller is asking, by name,
@@ -298,6 +308,27 @@ if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
 // lines — drop any diff line-restriction for files the caller named directly.
 const effectiveChangedLines = { ...changedLines };
 for (const f of explicitFiles) delete effectiveChangedLines[f];
+
+// FAIL CLOSED on explicit targets outside the source allow-list. The allow-list
+// was applied only to diff-derived files, so --target/--rails could aim
+// JS-shaped operators at a .py or .css file. That is not merely useless: a
+// mutant which renders the file syntactically invalid makes the test command
+// exit non-zero, and runner.mjs scores `killed = timedOut || status !== 0` — so
+// it is recorded KILLED. The gate whose purpose is catching false greens would
+// itself report a false green.
+//
+// Refused rather than silently filtered: the caller named these files
+// deliberately, so dropping them quietly would be its own silent-pass bug —
+// mirrors the --max starvation check below.
+const unsupportedTargets = explicitFiles.filter((f) => !isMutableSource(f, { testGlobs }));
+if (unsupportedTargets.length > 0) {
+  opError(
+    `explicit target(s) are not mutable source: ${unsupportedTargets.join(', ')} — ` +
+    `mutation operators are JS/TS-shaped, and mutating another language yields ` +
+    `syntactically invalid code that is scored as "killed" rather than testing ` +
+    `anything. Remove these target(s), or convert them to a supported extension.`
+  );
+}
 
 const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
 // explicitFiles are passed as a priority list so the --max budget can't

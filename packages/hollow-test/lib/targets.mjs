@@ -81,9 +81,15 @@ const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
  * "source" for both hollow-test and the mutation-gate wrapper.
  * @param {string} file repo-relative path
  */
-export function isMutableSource(file) {
+export function isMutableSource(file, { testGlobs = [] } = {}) {
   if (EXCLUDE_DIR_RE.test(file)) return false;
   if (EXCLUDE_FILE_RE.test(file)) return false;
+  // Caller-declared test paths. The built-in rules cannot infer every project's
+  // convention, and the hyphenated forms in particular are genuinely ambiguous
+  // (see EXCLUDE_FILE_RE). Rather than guess wrong in either direction, a
+  // consumer whose tests are named `foo-test.js` declares it:
+  //   hollow-test --test-glob '**/*-test.js'
+  if (testGlobs.length > 0 && testGlobs.some((g) => globMatch(g, file))) return false;
   return SOURCE_EXT_RE.test(file);
 }
 
@@ -94,8 +100,8 @@ export function isMutableSource(file) {
  * @param {{ [file: string]: Set<number> }} changedLines - From mutate.changedLinesFromDiff()
  * @returns {string[]} Array of file paths eligible for mutation.
  */
-export function filterTargetFiles(changedLines) {
-  return Object.keys(changedLines).filter(isMutableSource);
+export function filterTargetFiles(changedLines, { testGlobs = [] } = {}) {
+  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs }));
 }
 
 /**

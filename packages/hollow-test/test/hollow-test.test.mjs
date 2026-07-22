@@ -575,6 +575,66 @@ describe('CLI: test-only diff has nothing to mutate', () => {
   });
 });
 
+// ── explicit targets must respect the source allow-list ────────────────────
+//
+// The allow-list was applied only to DIFF-derived files; --target and --rails
+// paths were unioned into the mutation set unchecked. So a caller could point
+// JS-shaped operators at a .py or .css file, and the result is not merely
+// useless — it is actively misleading. runner.mjs scores
+// `killed = timedOut || status !== 0`, so a mutant that renders the file
+// syntactically invalid makes the test command fail and is recorded as KILLED.
+// A characterization ticket naming src/app.py would report every mutant killed
+// without ever proving a behavioural assertion: a false green on the gate whose
+// entire purpose is detecting false greens.
+//
+// Refusing loudly is the fail-closed behaviour this CLI already uses elsewhere
+// (see the --max starvation check): the caller named the file deliberately, so
+// silently dropping it would be its own silent-green bug.
+
+describe('CLI: an explicit --target outside the source allow-list is refused', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-badtarget-'));
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'src', 'app.py'), 'def f():\n    return 1\n');
+    writeFileSync(join(dir, 'src', 'style.css'), '.a { opacity: 0; }\n');
+    // Committed: hollow-test refuses to run on a dirty tree (it mutates in
+    // place and restores), so leaving these uncommitted would fail the run for
+    // an unrelated reason and mask what this case is actually asserting.
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add unsupported-language fixtures'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  for (const target of ['src/app.py', 'src/style.css']) {
+    it(`refuses --target ${target} instead of mutating it`, () => {
+      const result = runCli(
+        ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+         '--target', target, '--max', '10'],
+        dir
+      );
+      // Assert the SPECIFIC refusal, not merely "non-zero and mentions the
+      // file". Without the guard hollow-test happily mutates the .py, every
+      // mutant survives, and it exits 2 with the filename in the report — so a
+      // looser assertion passes for entirely the wrong reason. (Caught by
+      // mutating the guard away: the first version of this test stayed green.)
+      const out = result.stderr + result.stdout;
+      assert.match(out, /not mutable source/,
+        `Expected the unsupported-target refusal, got: ${out}`);
+      assert.match(out, new RegExp(target.replace('.', '\\.')),
+        'the refusal must name the offending target');
+      assert.equal(result.status, 1,
+        `Expected exit 1 (operational refusal), not a gate failure — got ${result.status}: ${out}`);
+      assert.doesNotMatch(out, /SURVIVED|KILLED/,
+        'the run must refuse before generating any mutant');
+    });
+  }
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {
