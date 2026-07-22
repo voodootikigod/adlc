@@ -71,6 +71,19 @@ test('applyHunks rejects a non-array hunks argument', () => {
   assert.equal(result.ok, false);
 });
 
+test('applyHunks rejects a null entry within an otherwise well-formed hunks array', () => {
+  // typeof null === 'object' in JS — a hunk-shape check that only tests
+  // `typeof hunk !== 'object'` (without also checking truthiness) would
+  // silently accept null here and crash on hunk.startLine instead.
+  const result = applyHunks(FILE, [null]);
+  assert.equal(result.ok, false);
+});
+
+test('applyHunks rejects a non-object (e.g. string) entry within the hunks array', () => {
+  const result = applyHunks(FILE, ['not a hunk']);
+  assert.equal(result.ok, false);
+});
+
 test('applyHunks rejects startLine < 1', () => {
   const result = applyHunks(FILE, [{ startLine: 0, endLine: 1, replacement: 'x' }]);
   assert.equal(result.ok, false);
