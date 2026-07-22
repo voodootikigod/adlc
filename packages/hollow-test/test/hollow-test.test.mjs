@@ -709,6 +709,53 @@ describe('CLI: --rails matching a mix of source and non-source', () => {
   });
 });
 
+// --test-glob end to end, the mirror of --source-glob below. Same two-glob
+// reasoning: the flag is `multiple: true`, and with `multiple: false` parseArgs
+// hands back a bare string whose `.some` does not exist, so the option would
+// throw the moment anyone used it. Asserting the specific "nothing to mutate"
+// refusal (rather than merely a non-zero exit) is what distinguishes the option
+// WORKING from the option CRASHING — both are non-zero.
+describe('CLI: --test-glob reclassifies a source file as a test', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-testglob-'));
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'src', 'alpha.mjs'), 'export const a = (x) => x > 0;\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add alpha'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates the file normally without the declaration', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--max', '3', '--json'],
+      dir
+    );
+    assert.doesNotMatch(result.stderr, /nothing to mutate/,
+      `expected alpha.mjs to be mutable by default: ${result.stderr}`);
+  });
+
+  it('refuses to mutate it once declared a test', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--test-glob', '**/nothing-matches-this.mjs',
+       '--test-glob', '**/alpha.mjs',
+       '--max', '3'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.match(out, /nothing to mutate/,
+      `expected the declared test file to leave nothing mutable: ${out}`);
+    assert.doesNotMatch(out, /TypeError/,
+      'a crash is not the same as the option working');
+  });
+});
+
 // --source-glob end to end. Two globs, deliberately: the flags are declared
 // `multiple: true`, and without that parseArgs hands back a bare string whose
 // `.some` does not exist. A single-glob test would not distinguish the two.
