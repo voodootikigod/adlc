@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkFlail } from '../lib/gates.mjs';
+import { flailExec } from '../lib/live-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // packages/fleet/test → repo root
@@ -199,40 +200,73 @@ test('injected exec may signal the flail verdict the way execFileSync does (thro
 });
 
 // ---------------------------------------------------------------------------
-// The production wiring in live-deps.mjs does NOT use defaultExec: it injects
-// an adapter over `spawnSync`, which does not throw on a non-zero exit. That is
-// the path that actually runs between build strikes, so it is pinned here
-// against the real binary too — mirroring live-deps.mjs's adapter exactly.
+// The production wiring does NOT use defaultExec: live-deps.mjs injects an
+// adapter over `spawnSync`, which does not throw on a non-zero exit. That is
+// the path that actually runs between build strikes, so it is driven here as
+// the REAL exported function — importing it, not re-implementing it. A copy
+// could not catch drift in the thing it copies, which is how #284 shipped.
 // ---------------------------------------------------------------------------
 
-test('the live-deps spawnSync adapter reports a REAL flail verdict', async () => {
+/** io shim whose `adlc` is spawnSync over the real binary, as production's is. */
+const realIo = { adlc: (args, opts = {}) => spawnSync(opts.bin ?? 'adlc', args, { encoding: 'utf8' }) };
+
+test('the production flailExec adapter reports a REAL flail verdict', async () => {
   const log = makeLog('Writing /etc/passwd\n');
   assertDetectorExits(2, log, ['src/**']);
-  // Verbatim shape of the adapter at packages/fleet/lib/live-deps.mjs.
-  const exec = (_bin, args) => {
-    const r = spawnSync(ADLC_BIN, args, { encoding: 'utf8' });
-    if (r.status !== 0 && !r.stdout) throw new Error('flail-detector failed');
-    return r.stdout;
-  };
 
-  const r = checkFlail(log, ['src/**'], { exec });
+  const r = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN, exec: flailExec(realIo) });
 
   assert.equal(r.flail, true, 'the path fleet actually runs must see the flail');
   assert.notEqual(r.failedOpen, true);
 });
 
-test('the live-deps spawnSync adapter fails open on an operational error', async () => {
+test('the production flailExec adapter fails open on a real operational error', async () => {
   const missing = join(mkdtempSync(join(tmpdir(), 'fleet-flail-')), 'nope.log');
   assertDetectorExits(1, missing, ['src/**']);
-  const exec = (_bin, args) => {
-    const r = spawnSync(ADLC_BIN, args, { encoding: 'utf8' });
-    if (r.status !== 0 && !r.stdout) throw new Error('flail-detector failed');
-    return r.stdout;
-  };
 
-  const r = checkFlail(missing, ['src/**'], { exec });
+  const r = checkFlail(missing, ['src/**'], { adlcBin: ADLC_BIN, exec: flailExec(realIo) });
 
   assert.equal(r.flail, false);
+  assert.equal(r.failedOpen, true);
+});
+
+test('flailExec honors the bin it is handed, so config.adlcBin is effective', async () => {
+  const seen = [];
+  const exec = flailExec({ adlc: (args, opts) => { seen.push(opts?.bin); return { status: 0, stdout: '{"verdict":"clean","signals":[]}' }; } });
+
+  checkFlail('/log', [], { adlcBin: '/custom/path/adlc', exec });
+
+  assert.deepEqual(seen, ['/custom/path/adlc'], 'the configured bin must not be discarded');
+});
+
+test('flailExec turns exit 1 into a fail-open even when it printed a flail document', async () => {
+  // The whole point of routing both paths through one trust rule: spawnSync
+  // does not throw, so without this conversion the exit code would be dropped
+  // and an operational error would be promoted to a verdict.
+  const exec = flailExec({
+    adlc: () => ({ status: 1, stdout: JSON.stringify({ verdict: 'flail', signals: [{ type: 'size' }] }) }),
+  });
+
+  const r = checkFlail('/log', [], { exec });
+
+  assert.equal(r.flail, false, 'exit 1 is an operational error, not a verdict');
+  assert.equal(r.failedOpen, true);
+});
+
+test('flailExec fails open when the detector could not be spawned at all', async () => {
+  const exec = flailExec({ adlc: () => ({ error: new Error('ENOENT'), status: null, stdout: '' }) });
+
+  const r = checkFlail('/log', [], { exec });
+
+  assert.equal(r.failedOpen, true);
+});
+
+test('flailExec fails open when there is no exit status to trust', async () => {
+  const exec = flailExec({ adlc: () => ({ status: null, stdout: '{"verdict":"flail","signals":[]}' }) });
+
+  const r = checkFlail('/log', [], { exec });
+
+  assert.equal(r.flail, false, 'a run with no exit status is unverifiable, not a verdict');
   assert.equal(r.failedOpen, true);
 });
 

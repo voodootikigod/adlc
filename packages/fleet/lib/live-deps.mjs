@@ -39,13 +39,54 @@ function ensureLocalExclude(repoDir) {
   }
 }
 
+/**
+ * The `exec` runner `checkFlail` uses in production (#284).
+ *
+ * EXPORTED so the contract tests can drive this exact function against the real
+ * detector. A test that re-implements it inline would be a copy, and a copy
+ * cannot catch drift in the thing it copies — which is the failure mode that
+ * let #284 ship in the first place.
+ *
+ * `io.adlc` is spawnSync-shaped and does NOT throw on a non-zero exit, so the
+ * exit code would otherwise be discarded and exit 1 (operational error) would
+ * be indistinguishable from exit 2 (flail verdict). Converting a non-zero exit
+ * into an execFileSync-shaped throw carrying `status` + `stdout` routes both
+ * this path and `defaultExec` through checkFlail's single exit-code trust rule.
+ */
+export function flailExec(io) {
+  return (bin, args) => {
+    const r = io.adlc(args, { bin });
+    // Could not spawn at all, or no exit status to trust → unverifiable (§12).
+    if (r?.error) throw r.error;
+    if (typeof r?.status !== 'number') throw new Error('flail-detector did not run');
+    if (r.status !== 0) {
+      const e = new Error(`flail-detector exited ${r.status}`);
+      e.status = r.status;
+      e.stdout = r.stdout ?? '';
+      throw e;
+    }
+    return r.stdout ?? '';
+  };
+}
+
+/** Path of the accumulated worker transcript flail-detector analyzes. */
+export function fleetLogPath(statusDir, repo, ticketId) {
+  return join(statusDir ?? join(repo, '.adlc'), 'fleet-logs', `${ticketId}.log`);
+}
+
 export function defaultIo() {
   return {
     git: (dir) => defaultGit(dir),
     // Sync adlc for the quick, off-hot-path calls (flail between strikes;
     // best-effort gate-manifest recording). The per-ticket rails-guard on the
     // gate path uses adlcAsync so it does not block the event loop (#164).
-    adlc: (args, opts = {}) => spawnSync('adlc', args, { encoding: 'utf8', ...opts }),
+    // `bin` lets a caller honor an operator-configured `config.adlcBin` instead
+    // of always resolving the bare name from PATH; it is stripped before the
+    // rest of the options reach spawnSync.
+    adlc: (args, opts = {}) => {
+      const { bin = 'adlc', ...rest } = opts;
+      return spawnSync(bin, args, { encoding: 'utf8', ...rest });
+    },
     adlcAsync: (args, opts = {}) => spawnAsync('adlc', args, { encoding: 'utf8', ...opts }),
     // Async (non-blocking) worker/gate/review execution so the concurrent
     // scheduler is not serialized by a blocking spawn (#164).
@@ -54,6 +95,12 @@ export function defaultIo() {
     exists: (p) => existsSync(p),
     mkdirp: (p) => mkdirSync(p, { recursive: true }),
     writeJson: (p, obj) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(obj, null, 2) + '\n'); },
+    // Best-effort: losing a transcript line must never fail a build. A missing
+    // log degrades the flail check to its documented fail-open, nothing worse.
+    appendLog: (p, text) => {
+      try { mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, text); }
+      catch { /* best effort */ }
+    },
     ensureGitignore: (repoDir) => ensureLocalExclude(repoDir),
     env: process.env,
     hasGh: () => { try { execFileSync('gh', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } },
@@ -152,6 +199,15 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         model: config.model ?? undefined,
         useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
       });
+      // Persist the transcript BEFORE anything can return early, so the flail
+      // consultation between strikes has something to analyze. Without this the
+      // detector is handed a nonexistent path, exits 1, and every consultation
+      // fails open — #284's fix is inert without it. Appended, not overwritten:
+      // checkFlail runs over the ACCUMULATED log across strikes.
+      io.appendLog?.(
+        fleetLogPath(statusDir, repo, ticket.id),
+        `=== ${ticket.id} strike ${strike} ===\n${res.output ?? ''}\n`,
+      );
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {
         try { worktrees.commitWorker(worktree, ticket.id, io.git(worktree)); }
@@ -193,9 +249,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       prosecuteGate({ worktree, startSha, ticket }, { runReview: review, failOn: config.prosecuteFailOn }),
 
     flail: ({ ticket }) => checkFlail(
-      join(statusDir ?? join(repo, '.adlc'), 'fleet-logs', `${ticket.id}.log`),
+      fleetLogPath(statusDir, repo, ticket.id),
       ticket.scope,
-      { adlcBin, exec: (_bin, args) => { const r = io.adlc(args, {}); if (r.status !== 0 && !r.stdout) throw new Error('flail-detector failed'); return r.stdout; } },
+      { adlcBin, exec: flailExec(io) },
     ),
 
     mergeToIntegration: ({ branch, integrationBranch }) => worktrees.mergeToIntegration(repo, branch, integrationBranch, repoGit),

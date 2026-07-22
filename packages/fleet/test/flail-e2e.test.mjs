@@ -1,0 +1,116 @@
+// End-to-end: the log flail-detector analyzes must actually get written (T62).
+//
+// #284's field-name fix was necessary but not sufficient. `checkFlail` analyzes
+// `.adlc/fleet-logs/<ticket>.log`, and nothing in the fleet ever wrote that
+// file — `dispatch` kept the worker transcript purely in memory. So the
+// detector was handed a nonexistent path, exited 1, and every between-strike
+// consultation fail-opened no matter how correctly the document was parsed.
+//
+// These tests drive the REAL `buildLiveDeps` effects, so a regression that
+// stops writing the log surfaces here instead of as a silent no-op in prod.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildLiveDeps, fleetLogPath } from '../lib/live-deps.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ADLC_BIN = resolve(HERE, '../../cli/bin/adlc.mjs');
+
+const sandboxSpec = { mode: 'sandbox', backend: { name: 'bubblewrap' } };
+const config = { gate: { build: 'npm run build', test: 'npm test' }, timeoutMinutes: 1, modelAuthKey: 'ANTHROPIC_API_KEY' };
+const ticket = { id: 'T1', title: 'T1', scope: ['src/**'], body: 'do it', edges: [] };
+
+/**
+ * io wired to a real temp statusDir with a real appendLog and a real spawnSync
+ * over the actual adlc binary — only the worker itself is faked, since we are
+ * testing what the fleet does with the worker's transcript.
+ */
+function makeIo(workerOutput) {
+  return {
+    git: () => (...args) => (args[0] === 'rev-parse' ? 'SHA' : ''),
+    adlc: (args, opts = {}) => spawnSync(opts.bin ?? ADLC_BIN, args, { encoding: 'utf8' }),
+    adlcAsync: async () => ({ status: 0, stdout: '' }),
+    spawnWorker: async () => ({ status: 0, stdout: workerOutput, stderr: '' }),
+    readFile: () => undefined,
+    exists: () => false,
+    mkdirp: () => {},
+    writeJson: () => {},
+    appendLog: (p, text) => { mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, text); },
+    ensureGitignore: () => {},
+    env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-x' },
+    hasGh: () => false,
+  };
+}
+
+const makeDeps = (statusDir, workerOutput) => buildLiveDeps({
+  repo: '/repo', config, statusDir, sandboxSpec,
+  reviewRunner: () => ({ ok: true, findings: [] }),
+  io: makeIo(workerOutput),
+});
+
+test('dispatch persists the worker transcript to the log flail-detector reads', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'Writing /etc/passwd\n');
+
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+
+  const p = fleetLogPath(statusDir, '/repo', 'T1');
+  assert.ok(existsSync(p), `dispatch must write ${p} — checkFlail has nothing to analyze otherwise`);
+  assert.match(readFileSync(p, 'utf8'), /Writing \/etc\/passwd/);
+});
+
+test('the transcript ACCUMULATES across strikes rather than being overwritten', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'error: boom\n');
+
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 2, deadEnds: [] });
+
+  const body = readFileSync(fleetLogPath(statusDir, '/repo', 'T1'), 'utf8');
+  assert.match(body, /strike 1/);
+  assert.match(body, /strike 2/, 'checkFlail runs over the accumulated log — strike 1 must survive');
+  assert.equal(body.match(/error: boom/g).length, 2, 'both strikes contribute to the repeated-error signal');
+});
+
+test('deps.flail() detects a REAL flail after a real dispatch (the whole point of #284)', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  // A worker that wrote outside its declared scope (ticket.scope is ['src/**']).
+  const deps = makeDeps(statusDir, 'Writing /etc/passwd\n');
+
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  const r = await deps.flail({ ticket });
+
+  assert.equal(r.flail, true, 'a scope-violating session must be diagnosed as a flail end to end');
+  assert.notEqual(r.failedOpen, true, 'this is a real verdict, not the §12 fallback');
+  assert.ok(
+    r.signals.some((s) => s?.type === 'scope-violation'),
+    `expected a scope-violation signal, got ${JSON.stringify(r.signals)}`,
+  );
+});
+
+test('deps.flail() reports clean for a well-behaved session', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'all good\n');
+
+  await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  const r = await deps.flail({ ticket });
+
+  assert.equal(r.flail, false);
+  assert.notEqual(r.failedOpen, true, 'a clean verdict is a verdict, not a fail-open');
+});
+
+test('deps.flail() fails OPEN when no transcript exists (§12 backstop intact)', async () => {
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+  const deps = makeDeps(statusDir, 'irrelevant');
+
+  // No dispatch → no log. This is the state production was permanently stuck in.
+  const r = await deps.flail({ ticket });
+
+  assert.equal(r.flail, false);
+  assert.equal(r.failedOpen, true, 'a missing log is unverifiable, never a flail');
+});
