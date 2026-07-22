@@ -109,7 +109,7 @@ export function testTargetFor(file, root = ROOT) {
   if ((m = /^scripts\/([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
     const f = `scripts/test/${m[1]}.test.mjs`;
     if (existsSync(join(root, f))) return f;
-    if ((m[1] === 'pi-live-deny' || m[1].startsWith('pi-')) && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
+    if (m[1] === 'pi-live-deny' && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
     return null;
   }
   return null;

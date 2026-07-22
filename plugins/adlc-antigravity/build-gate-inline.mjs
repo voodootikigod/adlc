@@ -97,7 +97,7 @@ export function createDepthTracker() {
  * Universal session ID resolution for hooks and status display.
  */
 export function resolveSessionId({ payload, env = process.env } = {}) {
-  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? env?.ANTIGRAVITY_CONVERSATION_ID;
+  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id ?? env?.ANTIGRAVITY_CONVERSATION_ID ?? env?.CONVERSATION_ID;
   if (typeof candidate === 'string' && candidate.trim().length > 0) {
     return candidate.trim();
   }
@@ -108,7 +108,7 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
  * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
  * Reclaims orphaned lock directories even if owner.json is missing when mtime > 3s.
  * Writes owner.json atomically via temp file to prevent torn reads under contention.
- * Fails closed (isLockFailed=true) on lock acquisition timeout.
+ * Self-healing lock failures and nonce-gated lock release.
  */
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
   const adlcDir = join(root, '.adlc');
@@ -132,11 +132,12 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     let acquired = false;
     const nonce = `${process.pid}-${Date.now()}-${Math.random()}`;
 
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 100; i++) {
       try {
         mkdirSync(lockDir);
         writeOwnerFile({ pid: process.pid, nonce, time: Date.now() });
         acquired = true;
+        if (sessionID) lockFailures.delete(sessionID);
         break;
       } catch {
         try {
@@ -165,7 +166,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             }
           }
         } catch { /* ignore */ }
-        sleepSyncWithJitter(5);
+        sleepSyncWithJitter(30);
       }
     }
     if (!acquired) {
@@ -183,8 +184,6 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             if (owner.nonce === nonce) {
               rmSync(lockDir, { recursive: true, force: true });
             }
-          } else {
-            rmSync(lockDir, { recursive: true, force: true });
           }
         } catch { /* ignore release errors */ }
       }

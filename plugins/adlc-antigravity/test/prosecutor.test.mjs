@@ -19,12 +19,19 @@ const PROSECTOR_ROSTER = [
   'prosecutor-verifier.md',
 ];
 
-test('P5 prosecutor roster: all 5 lenses, main prosecutor, and verifier exist', () => {
+test('P5 prosecutor roster: all 5 lenses, main prosecutor, and verifier exist and have matching unique names', () => {
+  const names = new Set();
   for (const file of PROSECTOR_ROSTER) {
     const fullPath = join(agentsDir, file);
     assert.ok(existsSync(fullPath), `Agent file missing: ${file}`);
     const content = readFileSync(fullPath, 'utf8');
-    assert.match(content, /^---\nname:\s*prosecutor(-[a-z]+)?$/m, `Frontmatter name missing or invalid in ${file}`);
+    const expectedName = file.replace(/\.md$/, '');
+    const nameMatch = content.match(/^name:\s*(.+)$/m);
+    assert.ok(nameMatch, `Frontmatter name missing in ${file}`);
+    const actualName = nameMatch[1].trim();
+    assert.equal(actualName, expectedName, `Frontmatter name '${actualName}' in ${file} does not match expected '${expectedName}'`);
+    assert.equal(names.has(actualName), false, `Duplicate frontmatter name '${actualName}' in ${file}`);
+    names.add(actualName);
     assert.match(content, /description:/m, `Description missing in ${file}`);
   }
 });
