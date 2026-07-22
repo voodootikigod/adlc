@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -175,4 +175,16 @@ test('mcp-server is a stable hidden entrypoint that initializes and lists ADLC t
   const responses = stdout.trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(responses[0].result.serverInfo.name, 'adlc-codex');
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ['adlc_gate', 'adlc_prosecute']);
+});
+
+test('resolveBin resolves tool bins and returns null for non-existent tools', () => {
+  const bin = resolveBin('spec-lint');
+  assert.ok(bin && bin.includes('spec-lint'));
+  assert.equal(resolveBin('nonexistent-tool-xyz'), null);
+});
+
+test('packageJsonPath resolves local monorepo devPath when pkg.name matches package', () => {
+  const devPath = packageJsonPath('@adlc/spec-lint');
+  assert.ok(devPath);
+  assert.ok(devPath.endsWith('packages/spec-lint/package.json'));
 });

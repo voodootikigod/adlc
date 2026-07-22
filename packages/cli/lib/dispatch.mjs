@@ -7,7 +7,7 @@ import { getTool } from './registry.mjs';
 
 const require = createRequire(import.meta.url);
 
-function packageJsonPath(packageName) {
+export function packageJsonPath(packageName) {
   if (packageName.startsWith('@adlc/')) {
     const name = packageName.slice('@adlc/'.length);
     const devPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', name, 'package.json');
