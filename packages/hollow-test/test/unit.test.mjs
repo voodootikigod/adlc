@@ -266,7 +266,7 @@ const MIXED = [
 describe('buildJsonReport with invalid mutants', () => {
   it('counts invalid separately from killed and survived', () => {
     const r = buildJsonReport(MIXED);
-    assert.deepEqual(r.summary, { total: 3, killed: 1, survived: 1, invalid: 1 });
+    assert.deepEqual(r.summary, { total: 3, killed: 1, survived: 1, invalid: 1, checkFailed: 0 });
   });
 
   it('labels each mutant with its own status', () => {
@@ -349,5 +349,32 @@ describe('checkSyntax', () => {
       'unknown',
       'a checker that cannot run proves nothing about the file'
     );
+  });
+});
+
+// A checker failure is NOT a survivor. Mapping it to `survived` asserts a test
+// outcome for a test that never ran, and points remediation at the test suite
+// when the real problem is the execution environment.
+describe('report surfaces distinguish a checker failure from a survivor', () => {
+  const WITH_CHECK_FAILURE = [
+    { file: 'a.mjs', line: 1, operator: 'null-return', killed: false, invalid: false, checkFailed: true,  timedOut: false, original: 'return {', mutated: 'return null;' },
+    { file: 'a.mjs', line: 2, operator: 'bool-flip',   killed: false, invalid: false, checkFailed: false, timedOut: false, original: 'x = true', mutated: 'x = false' },
+  ];
+
+  it('JSON gives it its own status and keeps it out of survived', () => {
+    const r = buildJsonReport(WITH_CHECK_FAILURE);
+    assert.equal(r.summary.survived, 1, 'only the genuine survivor counts');
+    assert.equal(r.summary.checkFailed, 1);
+    assert.deepEqual(r.mutants.map((m) => m.status), ['check-failed', 'survived']);
+  });
+
+  it('the table does not label it SURVIVED', () => {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(' '));
+    try { printTable(WITH_CHECK_FAILURE); } finally { console.log = original; }
+    const out = lines.join('\n');
+    assert.doesNotMatch(out, /SURVIVED\s+a\.mjs:1/);
+    assert.match(out, /CHECK-FAIL\s+a\.mjs:1/);
   });
 });

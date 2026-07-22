@@ -496,6 +496,19 @@ if (mutableExplicitFiles.length > 0) {
   }
 }
 
+// Could not determine validity for some mutant — refuse to report a verdict.
+// Scoring it either way is a guess, and the guess that reopens #293 is the
+// convenient one.
+const undetermined = results.filter((r) => r.checkFailed);
+if (undetermined.length > 0) {
+  const where = undetermined.map((r) => `${r.file}:${r.line}`).join(', ');
+  opError(
+    `could not syntax-check ${undetermined.length} mutant(s) (${where}) — the checker did ` +
+    `not run to completion, so whether they were valid is unknown. Refusing to score them: ` +
+    `treating an unknown as valid is how an unparseable mutant gets credited as a kill (#293).`
+  );
+}
+
 // ── reporting ────────────────────────────────────────────────────────────────
 
 const survivors = results.filter((r) => !r.killed && !r.invalid);
@@ -520,19 +533,6 @@ if (results.length === 0) {
 // nothing — passing here is the false green this check exists to prevent.
 // Reported as an OPERATIONAL failure, not a gate failure: the tests are not at
 // fault, the mutations were.
-// Could not determine validity for some mutant — refuse to report a verdict.
-// Scoring it either way is a guess, and the guess that reopens #293 is the
-// convenient one.
-const undetermined = results.filter((r) => r.checkFailed);
-if (undetermined.length > 0) {
-  const where = undetermined.map((r) => `${r.file}:${r.line}`).join(', ');
-  opError(
-    `could not syntax-check ${undetermined.length} mutant(s) (${where}) — the checker did ` +
-    `not run to completion, so whether they were valid is unknown. Refusing to score them: ` +
-    `treating an unknown as valid is how an unparseable mutant gets credited as a kill (#293).`
-  );
-}
-
 // PER-FILE, not just globally. A file whose every mutant was invalid received no
 // coverage check at all — and a global test hides that whenever some OTHER file
 // produced a kill. That is most acute for an explicit --target/--rails file: the
@@ -543,12 +543,19 @@ for (const r of results) {
   const prev = validByFile.get(r.file) ?? 0;
   validByFile.set(r.file, prev + (r.invalid ? 0 : 1));
 }
-const uncheckedExplicit = mutableExplicitFiles.filter((f) => (validByFile.get(f) ?? 0) === 0 && validByFile.has(f));
-if (uncheckedExplicit.length > 0) {
+// EVERY file in the run, not only explicit targets. Restricting this to
+// --target/--rails left the same hole one step over: a diff-derived file whose
+// mutants were all invalid is equally unchecked, and any other file's kill hides
+// it. Whether the caller named the file or the diff did, zero valid mutants
+// means zero evidence about it.
+const unchecked = [...validByFile.entries()].filter(([, valid]) => valid === 0).map(([f]) => f);
+if (unchecked.length > 0) {
+  const named = unchecked.filter((f) => mutableExplicitFiles.includes(f));
   opError(
-    `every mutant generated for explicitly named target(s) was syntactically invalid: ` +
-    `${uncheckedExplicit.join(', ')} — no test ran against them, so this run says nothing ` +
-    `about the file you asked to prosecute. Raise --max so a valid mutant is reached (see #293).`
+    `every mutant generated for ${unchecked.join(', ')} was syntactically invalid — no test ` +
+    `ran against ${unchecked.length === 1 ? 'it' : 'them'}, so this run says nothing about ` +
+    `${named.length > 0 ? 'the file(s) you asked to prosecute' : 'those changed file(s)'}. ` +
+    `Raise --max so a valid mutant is reached (see #293).`
   );
 }
 

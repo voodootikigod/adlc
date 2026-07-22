@@ -945,6 +945,19 @@ describe('CLI: an explicit target with only invalid mutants is not masked', () =
   before(() => {
     dir = mkdtempSync(join(tmpdir(), 'hollow-perfile-'));
     createMultilineReturnRepo(dir);
+    // Touch shape.mjs's RETURN line so it is diff-derived, and so the only
+    // changed line there is the one whose mutation cannot parse. (Mutation is
+    // diff-scoped: changing `a: 1` instead would give it a perfectly valid
+    // off-by-one mutant and the case would not reproduce.)
+    writeFileSync(join(dir, 'src', 'shape.mjs'), [
+      'export function shape() {',
+      '  return { // the shape',
+      '    a: 1,',
+      '    b: 3,',
+      '  };',
+      '}',
+      '',
+    ].join('\n'));
     // A second file with an ordinary, killable single-line mutant.
     writeFileSync(join(dir, 'src', 'plain.mjs'), 'export const twice = (n) => n * 2;\n');
     writeFileSync(join(dir, 'test', 'plain.test.mjs'), [
@@ -962,7 +975,7 @@ describe('CLI: an explicit target with only invalid mutants is not masked', () =
   });
 
   it('fails even though the other file produced a killed mutant', () => {
-    // --max 1 on the multiline-return target: its single allocated mutant is the
+    // --max 2: one mutant each. shape.mjs's single allocated mutant is the
     // invalid null-return. Without per-file accounting the run exits 0 on the
     // strength of plain.mjs.
     const result = runCli(
@@ -975,6 +988,20 @@ describe('CLI: an explicit target with only invalid mutants is not masked', () =
       `an explicit target with no valid mutant must not pass: ${out}`);
     assert.match(out, /src\/shape\.mjs/,
       'the refusal must name the target that went unchecked');
+  });
+
+  // Same hole one step over: the file arrives via the DIFF rather than --target.
+  // Restricting the guard to explicit targets left this case passing.
+  it('fails for a diff-derived file with no valid mutant, with no --target at all', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '2'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.notEqual(result.status, 0,
+      `a diff-derived file with no valid mutant must not pass: ${out}`);
+    assert.match(out, /src\/shape\.mjs/,
+      'the refusal must name the unchecked file');
   });
 });
 
