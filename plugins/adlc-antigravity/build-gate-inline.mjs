@@ -99,6 +99,7 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 /**
  * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
+ * Reclaims orphaned lock directories even if owner.json is missing when mtime > 3s.
  * Fails closed (isLockFailed=true) on lock acquisition timeout.
  */
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
@@ -123,10 +124,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         break;
       } catch {
         try {
-          if (existsSync(ownerPath)) {
-            const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-            const isStale = Date.now() - (owner.time ?? 0) > 3000;
-            const isDead = !isPidAlive(owner.pid);
+          if (existsSync(lockDir)) {
+            const stat = statSync(lockDir);
+            const isStale = Date.now() - stat.mtimeMs > 3000;
+            let isDead = true;
+            if (existsSync(ownerPath)) {
+              try {
+                const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
+                isDead = !isPidAlive(owner.pid);
+              } catch { /* ignore parse error */ }
+            }
             if (isStale && isDead) {
               try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* ignore */ }
             }

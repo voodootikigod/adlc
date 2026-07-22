@@ -55,9 +55,8 @@ const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', '
 
 /** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null. */
 export function findAdlcRoot(absPath) {
-  let cur = dirname(absPath);
+  let cur = isAbsolute(absPath) ? absPath : join(process.cwd(), absPath);
   const { root: fsRoot } = parse(cur);
-  // Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir).
   while (true) {
     if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
     if (cur === fsRoot) return null;
@@ -180,7 +179,9 @@ export function runFromStdin(raw, env = process.env) {
     }
   }
   if (distinctRoots.size === 0) {
-    distinctRoots.add(process.cwd());
+    const cwdRoot = findAdlcRoot(process.cwd());
+    if (cwdRoot) distinctRoots.add(cwdRoot);
+    else distinctRoots.add(process.cwd());
   }
 
   for (const root of distinctRoots) {
@@ -197,12 +198,13 @@ async function readStdin() {
 }
 
 export function printStatus(root = process.cwd(), env = process.env, payload = {}) {
-  const active = resolveActiveTicketId(root, env);
-  const tracker = createPersistentTracker(root, env);
+  const resolvedRoot = findAdlcRoot(root) ?? root;
+  const active = resolveActiveTicketId(resolvedRoot, env);
+  const tracker = createPersistentTracker(resolvedRoot, env);
   const sessionID = resolveSessionId({ payload, env });
 
   console.log(`--- ADLC Antigravity Status ---`);
-  console.log(`Root: ${root}`);
+  console.log(`Root: ${resolvedRoot}`);
   console.log(`Active Ticket: ${active.id ?? (active.conflict ? 'CONFLICT' : 'NONE')}`);
   console.log(`Enforcement (ADLC_P4_ENFORCEMENT): ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE'}`);
   console.log(`Resolved Session ID: ${sessionID}`);
@@ -211,14 +213,15 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
 }
 
 export function printDoctor(root = process.cwd(), env = process.env) {
-  const active = resolveActiveTicketId(root, env);
+  const resolvedRoot = findAdlcRoot(root) ?? root;
+  const active = resolveActiveTicketId(resolvedRoot, env);
 
   console.log(`--- ADLC Antigravity Doctor ---`);
   console.log(`Node Version: ${process.version}`);
-  console.log(`Root Directory: ${root}`);
-  console.log(`ADLC Ticket Store Present: ${existsSync(join(root, '.adlc/tickets.json')) || existsSync(join(root, '.adlc/tickets/.store.json'))}`);
+  console.log(`Root Directory: ${resolvedRoot}`);
+  console.log(`ADLC Ticket Store Present: ${existsSync(join(resolvedRoot, '.adlc/tickets.json')) || existsSync(join(resolvedRoot, '.adlc/tickets/.store.json'))}`);
   console.log(`Active Ticket: ${active.id ?? 'NONE'}`);
-  console.log(`CI Rail Guard Workflow: ${existsSync(join(root, '.github/workflows/adlc-rails-guard.yml')) ? 'PRESENT' : 'MISSING'}`);
+  console.log(`CI Rail Guard Workflow: ${existsSync(join(resolvedRoot, '.github/workflows/adlc-rails-guard.yml')) ? 'PRESENT' : 'MISSING'}`);
 }
 
 export async function main() {

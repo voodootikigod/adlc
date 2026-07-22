@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -75,22 +75,24 @@ test('checkBuildGate: threshold 0 is respected and not discarded as default 50',
   }
 });
 
-test('printStatus & printDoctor: execute subcommand displays without crashing', () => {
+test('printStatus & printDoctor: execute subcommand displays without crashing and resolves subdirectories', () => {
   const root = mkdtempSync(join(tmpdir(), 'cmd-test-'));
+  const subDir = join(root, 'src', 'nested');
   try {
     mkdirSync(join(root, '.adlc'), { recursive: true });
+    mkdirSync(subDir, { recursive: true });
     writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
 
     let logs = [];
     const origLog = console.log;
     console.log = (msg) => logs.push(msg);
     try {
-      printStatus(root, { ADLC_P4_ENFORCEMENT: '1' });
-      assert.ok(logs.some((l) => String(l).includes('ADLC Antigravity Status')));
+      printStatus(subDir, { ADLC_P4_ENFORCEMENT: '1' });
+      assert.ok(logs.some((l) => String(l).includes(`Root: ${root}`)), 'printStatus must resolve parent ADLC root from subdirectory');
 
       logs = [];
-      printDoctor(root, {});
-      assert.ok(logs.some((l) => String(l).includes('ADLC Antigravity Doctor')));
+      printDoctor(subDir, {});
+      assert.ok(logs.some((l) => String(l).includes(`Root Directory: ${root}`)), 'printDoctor must resolve parent ADLC root from subdirectory');
     } finally {
       console.log = origLog;
     }
@@ -117,6 +119,24 @@ test('createDepthTracker: tracks tool call count per session', () => {
   assert.equal(tracker.isCompacted('s1'), false);
   tracker.markCompacted('s1');
   assert.equal(tracker.isCompacted('s1'), true);
+});
+
+test('createPersistentTracker: reclaims orphaned stale lock directory even if owner.json is missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'orphan-lock-'));
+  try {
+    mkdirSync(join(root, '.adlc', 'sessions.lock'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
+    // Set mtime of orphaned lock dir to 5 seconds ago
+    const oldTime = (Date.now() - 5000) / 1000;
+    utimesSync(join(root, '.adlc', 'sessions.lock'), oldTime, oldTime);
+
+    const tracker = createPersistentTracker(root);
+    tracker.recordToolCall('sess-orphan');
+    assert.equal(tracker.depth('sess-orphan'), 1, 'stale orphaned lock without owner.json must be reclaimed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('createPersistentTracker: persists depth across calls to .adlc/sessions.json when ADLC repo exists', () => {
