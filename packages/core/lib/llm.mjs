@@ -51,9 +51,48 @@ function agySend({ apiKey, model, system, prompt }, env = process.env) {
       if (isAgyTimeout(out)) {
         return reject(new Error('agy: timed out waiting for response'));
       }
-      resolve(out.replace(/\s+$/, ''));
+      // agy is a subprocess CLI, not a metered API call — it never reports
+      // real token counts. usage stays null rather than a fabricated
+      // estimate; callers that need a number fall back to chars/4 themselves.
+      resolve({ text: out.replace(/\s+$/, ''), usage: null });
     });
   });
+}
+
+/**
+ * Normalize a provider's raw usage block to { inputTokens, outputTokens,
+ * cachedTokens }. Each provider reports usage differently (or not at all);
+ * missing/malformed fields default to 0 rather than throwing — usage is
+ * observability, not something a completion should fail over.
+ */
+function usageFromAnthropic(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    inputTokens: raw.input_tokens ?? 0,
+    outputTokens: raw.output_tokens ?? 0,
+    // Anthropic splits cache reads and cache writes; both count as "cached"
+    // for our purposes (cheaper-than-fresh-input), tracked separately isn't
+    // needed at this granularity.
+    cachedTokens: (raw.cache_read_input_tokens ?? 0) + (raw.cache_creation_input_tokens ?? 0),
+  };
+}
+
+function usageFromOpenAI(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    inputTokens: raw.prompt_tokens ?? 0,
+    outputTokens: raw.completion_tokens ?? 0,
+    cachedTokens: raw.prompt_tokens_details?.cached_tokens ?? 0,
+  };
+}
+
+function usageFromGemini(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    inputTokens: raw.promptTokenCount ?? 0,
+    outputTokens: raw.candidatesTokenCount ?? 0,
+    cachedTokens: raw.cachedContentTokenCount ?? 0,
+  };
 }
 
 const PROVIDERS = [
@@ -65,7 +104,19 @@ const PROVIDERS = [
       mid: 'claude-sonnet-4-6',
       frontier: 'claude-opus-4-8',
     },
-    async send({ apiKey, model, system, prompt, maxTokens }) {
+    async send({ apiKey, model, system, prompt, maxTokens, cacheable }) {
+      // Prompt caching (issue #273): only worth marking when the SAME
+      // {system, prompt} pair will be sent again — a cache write costs more
+      // than a plain input token, and only pays off on a later read. fan()
+      // is the caller that resamples one prompt N times against the SAME
+      // provider and sets this; complete() defaults to false (a one-off
+      // call has no reuse to amortize the write cost against), and
+      // fanProviders() also leaves it false (each provider gets exactly one
+      // call — no repetition to hit a cache with).
+      //
+      // Below Anthropic's per-model minimum cacheable length, the API
+      // silently ignores cache_control on a block rather than erroring, so
+      // there is no need to size-check the prompt here.
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -76,13 +127,19 @@ const PROVIDERS = [
         body: JSON.stringify({
           model,
           max_tokens: maxTokens,
-          ...(system ? { system } : {}),
-          messages: [{ role: 'user', content: prompt }],
+          ...(system
+            ? { system: cacheable ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : system }
+            : {}),
+          messages: [{
+            role: 'user',
+            content: cacheable ? [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }] : prompt,
+          }],
         }),
       });
       if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
       const data = await res.json();
-      return (data.content ?? []).map((b) => b.text ?? '').join('');
+      const text = (data.content ?? []).map((b) => b.text ?? '').join('');
+      return { text, usage: usageFromAnthropic(data.usage) };
     },
   },
   {
@@ -111,7 +168,8 @@ const PROVIDERS = [
       });
       if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
       const data = await res.json();
-      return data.choices?.[0]?.message?.content ?? '';
+      const text = data.choices?.[0]?.message?.content ?? '';
+      return { text, usage: usageFromOpenAI(data.usage) };
     },
   },
   {
@@ -135,7 +193,8 @@ const PROVIDERS = [
       });
       if (!res.ok) throw new Error(`gemini ${res.status}: ${await res.text()}`);
       const data = await res.json();
-      return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('');
+      const text = (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('');
+      return { text, usage: usageFromGemini(data.usageMetadata) };
     },
   },
   {
@@ -195,12 +254,32 @@ export function resolveModel(provider, { tier = 'mid', model } = {}, env = proce
 }
 
 /**
- * Single completion. Throws on missing provider or HTTP error.
- * opts: { tier, model, system, prompt, maxTokens, provider }
+ * Single completion. Throws on missing provider or HTTP error. Returns the
+ * completion text as a plain string (unchanged contract — every caller in
+ * the toolkit does `const text = await complete(...)`).
+ *
+ * opts: { tier, model, system, prompt, maxTokens, provider, onUsage }
  *   opts.provider — optional per-invocation override (e.g. a CLI `--provider`
  *   flag), mirroring ADLC_PROVIDER but scoped to this one call; takes
  *   precedence over ADLC_PROVIDER. Omit it and single-provider auto-detect
  *   remains the default (cost/latency per ADR-0007) — additive only.
+ *   opts.onUsage — optional `(usage) => void` side-channel, fired
+ *   synchronously right before `complete` returns, with
+ *   `{ inputTokens, outputTokens, cachedTokens, provider, model, tier }`.
+ *   Additive: omit it and behavior is byte-identical to before usage
+ *   accounting existed. agy has no metered usage — `onUsage` is not called
+ *   for it (there is nothing real to report; a fabricated estimate would be
+ *   worse than silence). Callers that need a number for agy should fall
+ *   back to their own chars/4 estimate.
+ *   opts.cacheable — optional, default false (issue #273). Marks the
+ *   system/prompt as a prompt-cache candidate on providers that support
+ *   explicit cache breakpoints (currently: anthropic). Only set this when
+ *   the SAME {system, prompt} pair will genuinely be sent again — a cache
+ *   write costs more than a plain input token and only pays off on a later
+ *   read. `fan()` sets it automatically (that is exactly what it does:
+ *   resample one prompt N times against one provider); a bare `complete()`
+ *   call or `fanProviders()` (one call per DISTINCT provider, no repeat)
+ *   leave it false unless the caller knows better.
  * env — defaults to process.env; overridable for tests.
  */
 export async function complete(opts, env = process.env) {
@@ -214,16 +293,21 @@ export async function complete(opts, env = process.env) {
     );
   }
   const model = resolveModel(provider, opts, env);
-  return provider.send(
+  const { text, usage } = await provider.send(
     {
       apiKey: provider.apiKey,
       model,
       system: opts.system,
       prompt: opts.prompt,
       maxTokens: opts.maxTokens ?? 4096,
+      cacheable: opts.cacheable ?? false,
     },
     env
   );
+  if (typeof opts.onUsage === 'function' && usage) {
+    opts.onUsage({ ...usage, provider: provider.name, model, tier: opts.tier });
+  }
+  return text;
 }
 
 /**
@@ -233,10 +317,21 @@ export async function complete(opts, env = process.env) {
  *
  * This samples the SAME (auto-detected or opts.provider-forced) provider N
  * times. For N distinct provider families instead, use `fanProviders`.
+ *
+ * opts.onUsage, if present, is forwarded to every one of the N `complete`
+ * calls and so fires once per resample (each with that resample's own
+ * usage) — no separate wiring needed here.
+ *
+ * opts.cacheable defaults to true here (issue #273) — unlike a bare
+ * complete() call, fan() exists specifically to resend one identical prompt
+ * N times against one provider, which is exactly the shape a prompt-cache
+ * write pays for itself on: the first call writes the cache, the remaining
+ * N-1 read it. Pass `cacheable: false` explicitly to opt out.
  */
 export async function fan(opts, n, env = process.env) {
+  const fanOpts = { cacheable: true, ...opts };
   const results = await Promise.allSettled(
-    Array.from({ length: n }, () => complete(opts, env))
+    Array.from({ length: n }, () => complete(fanOpts, env))
   );
   return results.map((r) =>
     r.status === 'fulfilled' ? { ok: true, value: r.value } : { ok: false, error: String(r.reason) }

@@ -23,6 +23,14 @@ export type Provider = {
   readonly models: Record<string, string>;
   readonly send?: (options: CompletionRequest) => Promise<string>;
 };
+export type Usage = {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedTokens: number;
+  readonly provider: string;
+  readonly model: string;
+  readonly tier?: ModelTier | string;
+};
 export type CompletionOptions = {
   readonly tier?: ModelTier | string;
   readonly model?: string;
@@ -36,6 +44,22 @@ export type CompletionOptions = {
    * default (cost/latency per ADR-0007).
    */
   readonly provider?: string;
+  /**
+   * Optional side-channel fired synchronously right before `complete`
+   * returns, with the normalized usage the provider reported (agy never
+   * calls it — there is no metered usage to report there). Additive: omit
+   * it and behavior is unchanged.
+   */
+  readonly onUsage?: (usage: Usage) => void;
+  /**
+   * Marks the system/prompt as a prompt-cache candidate on providers that
+   * support explicit cache breakpoints (currently anthropic only). Only set
+   * this when the SAME {system, prompt} pair will genuinely be sent again —
+   * a cache write costs more than a plain input token and only pays off on
+   * a later read. `complete()` defaults this to `false`; `fan()` defaults
+   * it to `true` (it exists specifically to resend one prompt N times).
+   */
+  readonly cacheable?: boolean;
 };
 export type CompletionRequest = CompletionOptions & {
   readonly apiKey: string;
