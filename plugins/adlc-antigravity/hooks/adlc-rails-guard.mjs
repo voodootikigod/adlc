@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId } from '../rails-checker.mjs';
-import { checkBuildGate, createPersistentTracker } from '../build-gate-inline.mjs';
+import { checkBuildGate, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
 import { flailMessage } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -119,7 +119,7 @@ export function decide(payload, { env = process.env, tracker } = {}) {
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
       // Record edit for flail tracking
-      const sessionID = payload.conversationId ?? payload.conversation_id ?? payload.conversationID ?? 'session';
+      const sessionID = resolveSessionId({ payload, env });
       if (cls === 'mutating' && tracker?.recordEdit) {
         const { churning } = tracker.recordEdit(sessionID, abs);
         if (churning.length > 0) {
@@ -159,7 +159,7 @@ export function runFromStdin(raw, env = process.env) {
     }
   }
   const tracker = createPersistentTracker(root);
-  const sessionID = payload.conversationId ?? payload.conversation_id ?? payload.conversationID ?? 'session';
+  const sessionID = resolveSessionId({ payload, env });
   tracker.recordToolCall(sessionID);
 
   return decide(payload, { env, tracker });
@@ -171,15 +171,16 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export function printStatus(root = process.cwd(), env = process.env) {
+export function printStatus(root = process.cwd(), env = process.env, payload = {}) {
   const active = resolveActiveTicketId(root, env);
   const tracker = createPersistentTracker(root);
-  const sessionID = env.ANTIGRAVITY_CONVERSATION_ID ?? 'session';
+  const sessionID = resolveSessionId({ payload, env });
 
   console.log(`--- ADLC Antigravity Status ---`);
   console.log(`Root: ${root}`);
   console.log(`Active Ticket: ${active.id ?? (active.conflict ? 'CONFLICT' : 'NONE')}`);
   console.log(`Enforcement (ADLC_P4_ENFORCEMENT): ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE'}`);
+  console.log(`Resolved Session ID: ${sessionID}`);
   console.log(`Context Depth (Tool Calls): ${tracker.depth(sessionID)}`);
   console.log(`Session Compacted: ${tracker.isCompacted(sessionID)}`);
 }

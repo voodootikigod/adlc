@@ -1,13 +1,14 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-antigravity.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
 import { detectEditChurn } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
+export const MAX_TRACKED_SESSIONS = 100;
 
 export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json'];
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
@@ -65,8 +66,19 @@ export function createDepthTracker() {
 }
 
 /**
+ * Universal session ID resolution for hooks and status display.
+ */
+export function resolveSessionId({ payload, env = process.env } = {}) {
+  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? env?.ANTIGRAVITY_CONVERSATION_ID;
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    return candidate.trim();
+  }
+  return 'default_session';
+}
+
+/**
  * File-backed persistent session tracker.
- * Persists depth, compaction, and edit log state to .adlc/sessions.json across process calls.
+ * Persists depth, compaction, and edit log state to .adlc/sessions.json with atomic writes and LRU pruning.
  */
 export function createPersistentTracker(root = process.cwd()) {
   const adlcDir = join(root, '.adlc');
@@ -77,15 +89,30 @@ export function createPersistentTracker(root = process.cwd()) {
       if (existsSync(storePath)) {
         return JSON.parse(readFileSync(storePath, 'utf8'));
       }
-    } catch { /* ignore corrupted store */ }
+    } catch (err) {
+      console.error(`[adlc-rails-guard] Warning: failed to parse session store: ${err.message}`);
+    }
     return {};
   }
 
   function writeStore(data) {
     try {
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
-      writeFileSync(storePath, JSON.stringify(data, null, 2));
-    } catch { /* ignore write errors */ }
+
+      // LRU Pruning: limit stored sessions to MAX_TRACKED_SESSIONS
+      const keys = Object.keys(data);
+      if (keys.length > MAX_TRACKED_SESSIONS) {
+        const sorted = keys.sort((a, b) => (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0));
+        const toRemove = sorted.slice(0, keys.length - MAX_TRACKED_SESSIONS);
+        for (const k of toRemove) delete data[k];
+      }
+
+      const tmpPath = `${storePath}.tmp.${process.pid}.${Date.now()}`;
+      writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+      renameSync(tmpPath, storePath);
+    } catch (err) {
+      console.error(`[adlc-rails-guard] Warning: failed to write session store: ${err.message}`);
+    }
   }
 
   return {
@@ -94,6 +121,7 @@ export function createPersistentTracker(root = process.cwd()) {
       const store = readStore();
       const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
       s.depth = (s.depth ?? 0) + 1;
+      s.updatedAt = Date.now();
       store[sessionID] = s;
       writeStore(store);
     },
@@ -102,6 +130,7 @@ export function createPersistentTracker(root = process.cwd()) {
       const store = readStore();
       const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
       s.compacted = true;
+      s.updatedAt = Date.now();
       store[sessionID] = s;
       writeStore(store);
     },
@@ -118,6 +147,7 @@ export function createPersistentTracker(root = process.cwd()) {
       const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
       for (const c of newlyChurning) s.warned.push(c.path);
 
+      s.updatedAt = Date.now();
       store[sessionID] = s;
       writeStore(store);
       return { churning: newlyChurning };
