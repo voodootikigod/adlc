@@ -1456,6 +1456,20 @@
         "packages/ticket-sync/test/github.test.mjs"
       ],
       "title": "Push + create: write-back, idempotent create, status outcomes"
+    },
+    {
+      "body": "hollowTestWouldMutate (scripts/mutation-gate.mjs:117) decides what counts as mutable source by EXCLUDING a fixed set of non-source extensions (md|json|yml|yaml|lock|txt|toml|snap). Any path with no extension therefore falls through and is treated as source: CODEOWNERS, LICENSE, Dockerfile, Makefile, .gitignore, .nvmrc all return true. A PR touching any of them has no fast test target, so the gate falls back to the FULL suite on the slow path. Observed on PR #287: adding CODEOWNERS produced 'mutation-gate: 1 file(s) have no known fast test target - falling back to the FULL suite: CODEOWNERS'. hollow-test can only mutate JS-family source, and the gate's own workflow step already filters '*.mjs' '*.js' '*.cjs' 'packages/**' 'plugins/**' - so the script and the workflow disagree about what source is. Invert to an include-list of JS-family extensions. Verification: node --test scripts/test/mutation-gate.test.mjs. allow-suppression: none",
+      "budget": "mid",
+      "category": "bug",
+      "duration": 1,
+      "edges": [],
+      "id": "T61",
+      "rails": [],
+      "scope": [
+        "scripts/mutation-gate.mjs",
+        "scripts/test/mutation-gate.test.mjs"
+      ],
+      "title": "mutation-gate: classify source by an include-list, not by excluding known non-source extensions"
     }
   ]
 }

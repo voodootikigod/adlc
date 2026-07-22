@@ -113,11 +113,24 @@ export function testTargetFor(file, root = ROOT) {
 // safe to ignore for test-cmd coverage purposes regardless of which directory
 // it lives in. Mirrors hollow-test/lib/targets.mjs EXCLUDE_PATH_RE/EXCLUDE_EXT_RE.
 const HOLLOW_TEST_EXCLUDE_PATH = /(?:test|spec)/i;
-const HOLLOW_TEST_EXCLUDE_EXT = /\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/i;
+// SOURCE IS AN INCLUDE-LIST, NOT AN EXCLUDE-LIST.
+//
+// This was `/\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/` applied as an
+// exclusion, which answered the wrong question: "is this one of the non-source
+// extensions I happened to think of?" Anything with no extension at all matched
+// nothing and fell through as mutable code — CODEOWNERS, LICENSE, Dockerfile,
+// Makefile, .gitignore, .nvmrc. Adding CODEOWNERS was enough to strand the gate
+// on the FULL-suite slow path (PR #287).
+//
+// An exclusion list is unbounded by construction: every extensionless file
+// anyone adds later is a fresh false positive, and each one is discovered the
+// same expensive way — a red gate on an unrelated PR. hollow-test can only
+// mutate JS-family source, so enumerate that instead. This also makes the script
+// agree with its own workflow step, which already filters '*.mjs' '*.js' '*.cjs'.
+const HOLLOW_TEST_SOURCE_EXT = /\.(?:mjs|cjs|js)$/i;
 export function hollowTestWouldMutate(file) {
   if (HOLLOW_TEST_EXCLUDE_PATH.test(file)) return false;
-  if (HOLLOW_TEST_EXCLUDE_EXT.test(file)) return false;
-  return true;
+  return HOLLOW_TEST_SOURCE_EXT.test(file);
 }
 
 /**

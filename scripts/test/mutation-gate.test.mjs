@@ -35,6 +35,40 @@ test('hollowTestWouldMutate excludes test/spec paths, case-insensitively', () =>
   assert.equal(hollowTestWouldMutate('packages/foo/spec/x.mjs'), false);
 });
 
+// REGRESSION (PR #287). The classifier decided what was source by EXCLUDING a
+// fixed list of non-source extensions, so anything with no extension fell
+// through and was treated as mutable code. Adding a CODEOWNERS file was enough
+// to push the gate onto the FULL-suite slow path:
+//
+//   mutation-gate: 1 file(s) have no known fast test target —
+//   falling back to the FULL suite:
+//     CODEOWNERS
+//
+// hollow-test can only mutate JS-family source, and the gate's own workflow step
+// already filters '*.mjs' '*.js' '*.cjs' — the script and the workflow disagreed
+// about what source is. An exclusion list is unbounded by construction: every
+// extensionless file anyone ever adds is a new false positive.
+test('hollowTestWouldMutate does not treat extensionless files as source', () => {
+  for (const f of ['CODEOWNERS', 'LICENSE', 'Dockerfile', 'Makefile', 'NOTICE', 'Procfile']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is not mutable source`);
+  }
+});
+
+test('hollowTestWouldMutate does not treat dotfiles as source', () => {
+  for (const f of ['.gitignore', '.nvmrc', '.npmrc', '.editorconfig', '.gitattributes']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is not mutable source`);
+  }
+});
+
+// The include-list must still admit everything hollow-test genuinely mutates,
+// or the fix trades false positives for the far worse failure: source silently
+// skipped by the coverage gate.
+test('hollowTestWouldMutate admits every JS-family source extension', () => {
+  for (const f of ['a.mjs', 'a.cjs', 'a.js', 'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs']) {
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is mutable source`);
+  }
+});
+
 test('hollowTestWouldMutate excludes non-code extensions', () => {
   for (const f of ['a.md', 'a.json', 'a.yml', 'a.yaml', 'a.lock', 'a.txt', 'a.toml', 'a.snap']) {
     assert.equal(hollowTestWouldMutate(`packages/foo/${f}`), false, f);
