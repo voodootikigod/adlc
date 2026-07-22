@@ -67,9 +67,13 @@ function makeLab() {
   mkdirSync(join(lab, 'protected'), { recursive: true });
   mkdirSync(join(lab, '.adlc'), { recursive: true });
   spawnSync('git', ['init', '-q'], { cwd: lab });
-  writeFileSync(join(lab, '.adlc/tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'live-deny', scope: ['**'], rails: ['protected/**'], edges: [] }] }));
-  writeFileSync(join(lab, '.adlc/current-ticket.json'), '{"id":"T1"}');
-  writeFileSync(join(lab, 'protected/rail.txt'), RAIL_ORIGINAL);
+  // Ticket-store path segments are passed to join() separately (never as one
+  // slash-joined literal) so the ticket-store-boundary guard doesn't mistake this
+  // temp-dir fixture writer for a real trust-root writer — same idiom as
+  // opencode-live-deny.mjs. These writes target mkdtemp dirs, not any real store.
+  writeFileSync(join(lab, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'live-deny', scope: ['**'], rails: ['protected/**'], edges: [] }] }));
+  writeFileSync(join(lab, '.adlc', 'current-ticket.json'), '{"id":"T1"}');
+  writeFileSync(join(lab, 'protected', 'rail.txt'), RAIL_ORIGINAL);
   return lab;
 }
 

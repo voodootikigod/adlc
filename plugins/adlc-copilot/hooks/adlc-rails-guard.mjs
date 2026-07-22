@@ -27,10 +27,10 @@
 //     normalizeCopilotPayload() before the shared collectors run.
 //
 // KEEP IN SYNC — the shell classifier + path-extraction functions in this file
-// (shellTokens, shellHasMutation, shellHasOpaqueMutation, shellIsPositivelyReadOnly,
-// shellHasWriteOption, shellChangesCwd, shellHasExpansion, collectShellPaths,
-// collectPatchPaths, looksPathLike, looksBarePathLike, keyValuePath) are a
-// verbatim inline copy of the CANONICAL module packages/core/lib/shell.mjs
+// (shellTokens, shellHasMutation, hasUnquotedFileRedirect, shellHasOpaqueMutation,
+// shellIsPositivelyReadOnly, shellHasWriteOption, shellChangesCwd, shellHasExpansion,
+// collectShellPaths, collectPatchPaths, looksPathLike, looksBarePathLike,
+// keyValuePath) are a verbatim inline copy of the CANONICAL module packages/core/lib/shell.mjs
 // (@adlc/core). This hook script cannot resolve npm packages at runtime, hence
 // the copy; a drift test (test/shell-drift.test.mjs) pins ALL of them against
 // @adlc/core so a fix to the canonical classifier that isn't mirrored here fails
@@ -233,9 +233,31 @@ function keyValuePath(value) {
   return looksPathLike(path) ? path : null;
 }
 
+function hasUnquotedFileRedirect(text) {
+  const s = String(text ?? '');
+  let quote = null;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (quote === null && c === '\\') { i += 1; continue; }
+    if (quote === null && (c === "'" || c === '"')) { quote = c; continue; }
+    if (quote !== null) {
+      if (quote === '"' && c === '\\') { i += 1; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '>') {
+      let j = s[i + 1] === '>' ? i + 2 : i + 1;
+      while (s[j] === ' ' || s[j] === '\t') j += 1;
+      if (s[j] !== undefined && s[j] !== '&') return true;
+    }
+  }
+  return false;
+}
+
 function shellHasMutation(text) {
   return (
     /(^|[\s;&|])(?:>>?|[0-9]>>?|[0-9]>)\s*\S+/.test(text) ||
+    hasUnquotedFileRedirect(text) ||
     /\b(?:tee|touch|rm|mv|cp|install|dd|truncate|rsync|chmod|chown|ln|mkdir|mktemp|shred)\b/.test(text) ||
     /\bcurl\b[^;&|]*(?:\s-[oO]\b|\s--output\b|\s--remote-name\b)/.test(text) ||
     /\bwget\b[^;&|]*(?:\s-O\b|\s--output-document\b)/.test(text) ||
@@ -369,7 +391,7 @@ function shellHasExpansion(text) {
 }
 
 function collectShellPaths(text, out) {
-  const redirectPattern = /(?:^|[\s])(?:>>?|[0-9]>>?|[0-9]>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
+  const redirectPattern = /(?:[0-9])?>>?\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/g;
   let redirect;
   while ((redirect = redirectPattern.exec(text)) !== null) {
     out.add(redirect[1] ?? redirect[2] ?? redirect[3]);

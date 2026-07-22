@@ -68,6 +68,22 @@ test('mutating shell to a rail path → deny via {reason}', () => {
   });
 });
 
+// Regression: a no-space redirect (`cat a>rail`) must NOT slip past as read-only.
+for (const command of [
+  'cat payload.txt>test/frozen.test.mjs',
+  'grep x foo>test/frozen.test.mjs',
+  'echo hi>>test/frozen.test.mjs',
+]) {
+  test(`no-space shell redirect to a rail → deny (bypass closed) — ${command}`, () => {
+    fixture((root) => {
+      const result = runCopilot(root, { toolName: 'shell', toolArgs: { command } });
+      assert.equal(result.status, 0);
+      const out = parseStdout(result);
+      assert.ok(out && out.reason && /blocked rail edit for T1/.test(out.reason), `expected a rail deny, got: ${result.stdout || '(empty=ALLOW)'}`);
+    });
+  });
+}
+
 test('non-rail edit → allow (empty stdout, exit 0)', () => {
   fixture((root) => {
     const result = runCopilot(root, { toolName: 'write', toolArgs: { path: 'src/app.mjs' } });

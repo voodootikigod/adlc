@@ -25,6 +25,7 @@ const CORE = join(here, '..', '..', '..', 'packages', 'core', 'lib', 'shell.mjs'
 const CLASSIFIERS = [
   // boolean classifiers — signature (text)
   'shellHasMutation',
+  'hasUnquotedFileRedirect',
   'shellHasOpaqueMutation',
   'shellIsPositivelyReadOnly',
   'shellHasWriteOption',
