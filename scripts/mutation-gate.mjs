@@ -69,6 +69,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isMutableSource } from '../packages/hollow-test/lib/targets.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -108,29 +109,15 @@ export function testTargetFor(file, root = ROOT) {
   return null;
 }
 
-// hollow-test's own exclusion: test/spec paths and non-code extensions. A file
-// matching this is one hollow-test would NEVER independently select, so it is
-// safe to ignore for test-cmd coverage purposes regardless of which directory
-// it lives in. Mirrors hollow-test/lib/targets.mjs EXCLUDE_PATH_RE/EXCLUDE_EXT_RE.
-const HOLLOW_TEST_EXCLUDE_PATH = /(?:test|spec)/i;
-// SOURCE IS AN INCLUDE-LIST, NOT AN EXCLUDE-LIST.
-//
-// This was `/\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/` applied as an
-// exclusion, which answered the wrong question: "is this one of the non-source
-// extensions I happened to think of?" Anything with no extension at all matched
-// nothing and fell through as mutable code — CODEOWNERS, LICENSE, Dockerfile,
-// Makefile, .gitignore, .nvmrc. Adding CODEOWNERS was enough to strand the gate
-// on the FULL-suite slow path (PR #287).
-//
-// An exclusion list is unbounded by construction: every extensionless file
-// anyone adds later is a fresh false positive, and each one is discovered the
-// same expensive way — a red gate on an unrelated PR. hollow-test can only
-// mutate JS-family source, so enumerate that instead. This also makes the script
-// agree with its own workflow step, which already filters '*.mjs' '*.js' '*.cjs'.
-const HOLLOW_TEST_SOURCE_EXT = /\.(?:mjs|cjs|js)$/i;
+// Source classification lives in ONE place — packages/hollow-test/lib/targets.mjs
+// — and is imported, not re-stated. This wrapper previously kept its own copy of
+// hollow-test's extension regex, and the two drifted. Drift is silent in the
+// dangerous direction: if the wrapper decides a file is not source, hollow-test
+// is never invoked for it, so the required gate goes green without testing the
+// change. Re-declaring the predicate here, however carefully, recreates that.
+// scripts/test/mutation-gate.test.mjs asserts the two agree.
 export function hollowTestWouldMutate(file) {
-  if (HOLLOW_TEST_EXCLUDE_PATH.test(file)) return false;
-  return HOLLOW_TEST_SOURCE_EXT.test(file);
+  return isMutableSource(file);
 }
 
 /**

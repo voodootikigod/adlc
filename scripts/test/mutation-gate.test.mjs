@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { testTargetFor, hollowTestWouldMutate, classify } from '../mutation-gate.mjs';
+import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
 
 function fixtureRoot(dirs = [], files = []) {
   const root = mkdtempSync(join(tmpdir(), 'mutation-gate-fixture-'));
@@ -63,10 +64,56 @@ test('hollowTestWouldMutate does not treat dotfiles as source', () => {
 // The include-list must still admit everything hollow-test genuinely mutates,
 // or the fix trades false positives for the far worse failure: source silently
 // skipped by the coverage gate.
-test('hollowTestWouldMutate admits every JS-family source extension', () => {
-  for (const f of ['a.mjs', 'a.cjs', 'a.js', 'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs']) {
+//
+// This is not hypothetical — the first attempt at this fix narrowed to
+// mjs|cjs|js and silently dropped the repository's 49 tracked non-test .ts/.tsx
+// source files. hollow-test's own filterTargetFiles accepts them, so classify()
+// returned kind:'nothing' and the required gate exited 0 without running.
+// Caught by adversarial review, not by the tests written alongside that fix,
+// because those tests only asserted the extensions the fix happened to allow.
+test('hollowTestWouldMutate admits every source extension hollow-test mutates', () => {
+  for (const f of [
+    'a.mjs', 'a.cjs', 'a.js', 'a.jsx',
+    'a.ts', 'a.mts', 'a.cts', 'a.tsx',
+    'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs', 'apps/docs/app/page.tsx',
+  ]) {
     assert.equal(hollowTestWouldMutate(f), true, `${f} is mutable source`);
   }
+});
+
+// THE CONTRACT TEST. Both bugs in this file came from the same predicate living
+// in two places — packages/hollow-test/lib/targets.mjs and here — and drifting.
+// The wrapper deciding a file is not source means hollow-test is never invoked
+// for it, so any file the two disagree about is silently unmutated. Assert
+// agreement directly rather than trusting two lists to be maintained in step.
+test('the wrapper and hollow-test agree on what source is', () => {
+  const cases = [
+    'a.mjs', 'a.cjs', 'a.js', 'a.jsx', 'a.ts', 'a.mts', 'a.cts', 'a.tsx',
+    'packages/x/lib/y.mjs', 'apps/docs/app/page.tsx', 'plugins/p/index.ts',
+    'CODEOWNERS', 'LICENSE', 'Dockerfile', 'Makefile', '.gitignore', '.nvmrc',
+    'README.md', 'package.json', 'a.yml', 'a.lock', 'a.snap',
+    'packages/x/test/y.test.mjs', 'spec/z.mjs',
+  ];
+  for (const f of cases) {
+    assert.equal(
+      hollowTestWouldMutate(f),
+      isMutableSource(f),
+      `wrapper and hollow-test disagree about '${f}' — a disagreement means the ` +
+        `gate silently skips it`
+    );
+  }
+});
+
+// End to end at the classify() level: the unit above proves the predicate, this
+// proves the predicate is actually what gates the run. A TypeScript-only diff
+// must NOT short-circuit to 'nothing'.
+test('a TypeScript-only diff still reaches the mutation gate', () => {
+  const decision = classify(['plugins/adlc-pi/index.ts'], 12);
+  assert.notEqual(
+    decision.kind,
+    'nothing',
+    'a TS-only change must be mutated, not silently passed'
+  );
 });
 
 test('hollowTestWouldMutate excludes non-code extensions', () => {

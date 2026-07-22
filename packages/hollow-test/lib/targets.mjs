@@ -5,9 +5,35 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { globMatch } from '@adlc/core';
 
-// Patterns to exclude from mutation: test/spec files and non-code files.
+// SOURCE IS AN INCLUDE-LIST, NOT AN EXCLUDE-LIST, AND THIS IS THE ONLY COPY.
+//
+// This was `EXCLUDE_EXT_RE = /\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/`,
+// applied as an exclusion. That answers the wrong question — "is this one of the
+// non-source extensions I happened to think of?" — so anything with NO extension
+// matched nothing and fell through as mutable code: CODEOWNERS, LICENSE,
+// Dockerfile, Makefile, .gitignore, .nvmrc. An exclusion list is unbounded by
+// construction: every extensionless file anyone adds later is a fresh false
+// positive, each discovered the same expensive way, as a red required gate on an
+// unrelated PR.
+//
+// The predicate is EXPORTED and shared with scripts/mutation-gate.mjs, which
+// previously kept its own copy of the same regex. The two drifted, and drift here
+// is silent in the dangerous direction: if the wrapper decides a file is not
+// source, hollow-test is never invoked for it at all, so the required coverage
+// gate goes green without testing the change. A TypeScript-only diff did exactly
+// that. One predicate, one contract, asserted by a cross-contract test.
 const EXCLUDE_PATH_RE = /(?:test|spec)/i;
-const EXCLUDE_EXT_RE = /\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/i;
+const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
+
+/**
+ * True when a path is source this tool can mutate. The single definition of
+ * "source" for both hollow-test and the mutation-gate wrapper.
+ * @param {string} file repo-relative path
+ */
+export function isMutableSource(file) {
+  if (EXCLUDE_PATH_RE.test(file)) return false;
+  return SOURCE_EXT_RE.test(file);
+}
 
 /**
  * Determine which files from the diff should be mutated.
@@ -17,11 +43,7 @@ const EXCLUDE_EXT_RE = /\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/i;
  * @returns {string[]} Array of file paths eligible for mutation.
  */
 export function filterTargetFiles(changedLines) {
-  return Object.keys(changedLines).filter((f) => {
-    if (EXCLUDE_PATH_RE.test(f)) return false;
-    if (EXCLUDE_EXT_RE.test(f)) return false;
-    return true;
-  });
+  return Object.keys(changedLines).filter(isMutableSource);
 }
 
 /**
