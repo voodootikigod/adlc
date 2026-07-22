@@ -3,7 +3,7 @@ name: adlc-prosecute
 description: Run the multi-lens P5 adversarial prosecution fan-out and record ADLC P5 review evidence and P6 acceptance packet workflows in the GitHub Copilot CLI. Fans out five independent read-only lenses, dedupes findings, verifies each independently, and loops until dry before recording evidence.
 ---
 
-ADLC_COPILOT_SENTINEL_PROSECUTE_V1
+<!-- ADLC_COPILOT_SENTINEL_PROSECUTE_V1 -->
 
 # ADLC Prosecute
 

@@ -3,7 +3,7 @@ name: adlc-distill
 description: Run ADLC P7 distillation in the GitHub Copilot CLI — lesson-foundry, rejection-mining, and review-calibration — turning repeated review findings and PR rejections into permanent, deterministic defenses. Decay-driven maintenance lives in the adlc-maintain skill.
 ---
 
-ADLC_COPILOT_SENTINEL_DISTILL_V1
+<!-- ADLC_COPILOT_SENTINEL_DISTILL_V1 -->
 
 # ADLC Distill
 
