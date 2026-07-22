@@ -564,11 +564,22 @@ for (const r of results) {
 //   it. But it must not be SILENT — a file the gate never looked at is exactly
 //   the place to hide an untested change.
 const attempted = new Set(results.map((r) => r.file));
-const notAttempted = [...validByFile.keys()].filter((f) => !attempted.has(f));
-if (notAttempted.length > 0) {
+const quotaByFile = new Map(fileTargets.map((t) => [t.file, t.quota]));
+// Two reasons a selected file produced nothing, and only one is a budget
+// problem. Saying "no budget" for a file whose changed lines were all comments
+// is a false alarm, and false alarms are how real warnings stop being read.
+const starved = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) === 0);
+const noMutableLines = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) > 0);
+if (starved.length > 0) {
   console.warn(
-    `hollow-test: ${notAttempted.length} selected file(s) received no mutation budget and were ` +
-    `NOT prosecuted: ${notAttempted.join(', ')} — raise --max to cover them.`
+    `hollow-test: ${starved.length} selected file(s) received no mutation budget and were ` +
+    `NOT prosecuted: ${starved.join(', ')} — raise --max to cover them.`
+  );
+}
+if (noMutableLines.length > 0) {
+  console.warn(
+    `hollow-test: ${noMutableLines.length} selected file(s) had budget but no mutable lines ` +
+    `(comments, imports, blank): ${noMutableLines.join(', ')}`
   );
 }
 
