@@ -16,7 +16,7 @@ import { checkAll, resolveExpectedModel } from '../lib/gate.mjs';
 import { buildCacheData } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
-import { USAGE, OPTIONS } from '../lib/cli-options.mjs';
+import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
 import { ticketHash } from '@adlc/tickets';
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
@@ -35,15 +35,11 @@ if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
 
-const maxAgeDays = Number(values['max-age']);
-if (!Number.isFinite(maxAgeDays) || maxAgeDays < 0) {
-  opError(`--max-age must be a non-negative number of days, got: ${values['max-age']}`);
+const maxAgeResult = parseMaxAgeDays(values['max-age']);
+if (!maxAgeResult.ok) {
+  opError(maxAgeResult.error);
 }
-// 0 means "treat every cache entry as stale" (issue #278), not "no limit" —
-// distinguish that from the sentinel `null` findCachedVerdict/checkAll use
-// for "no age limit", which nothing here ever produces (a numeric flag with
-// a numeric default always yields a finite ms value, never null).
-const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+const maxAgeMs = maxAgeResult.maxAgeMs;
 
 const promptOnlyMode = values['prompt-only'];
 const jsonMode = values['json'];

@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs } from '@adlc/core';
-import { USAGE, OPTIONS } from '../lib/cli-options.mjs';
+import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
 
 test('--force defaults to false when omitted (caching stays ON by default)', () => {
   const { values } = parseArgs({ options: OPTIONS, args: ['T1'] });
@@ -45,4 +45,45 @@ test('USAGE documents every flag the options config actually declares', () => {
   }
   assert.match(USAGE, /--force/);
   assert.match(USAGE, /--max-age <days>/);
+});
+
+// ── parseMaxAgeDays ─────────────────────────────────────────────────────────
+
+test('parseMaxAgeDays: "0" is VALID — "treat every cache entry as stale", not an error', () => {
+  const result = parseMaxAgeDays('0');
+  assert.equal(result.ok, true);
+  assert.equal(result.maxAgeMs, 0);
+});
+
+test('parseMaxAgeDays: "30" (the default) converts to 30 days in ms', () => {
+  const result = parseMaxAgeDays('30');
+  assert.equal(result.ok, true);
+  assert.equal(result.maxAgeMs, 30 * 24 * 60 * 60 * 1000);
+});
+
+test('parseMaxAgeDays: "1" converts to exactly one day in ms (boundary against an off-by-one)', () => {
+  const result = parseMaxAgeDays('1');
+  assert.equal(result.ok, true);
+  assert.equal(result.maxAgeMs, 24 * 60 * 60 * 1000);
+});
+
+test('parseMaxAgeDays: a negative number is rejected', () => {
+  const result = parseMaxAgeDays('-1');
+  assert.equal(result.ok, false);
+  assert.match(result.error, /--max-age must be a non-negative number of days/);
+});
+
+test('parseMaxAgeDays: a non-numeric string is rejected', () => {
+  const result = parseMaxAgeDays('abc');
+  assert.equal(result.ok, false);
+  assert.match(result.error, /--max-age must be a non-negative number of days/);
+});
+
+test('parseMaxAgeDays: "Infinity" is rejected, not silently treated as "no limit"', () => {
+  assert.equal(parseMaxAgeDays('Infinity').ok, false);
+});
+
+test('parseMaxAgeDays: "NaN" and other unparseable text are rejected', () => {
+  assert.equal(parseMaxAgeDays('NaN').ok, false);
+  assert.equal(parseMaxAgeDays('thirty').ok, false);
 });

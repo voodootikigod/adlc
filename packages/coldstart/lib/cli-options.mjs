@@ -16,3 +16,21 @@ export const OPTIONS = {
   'record-verdict': { type: 'string' },
   json: { type: 'boolean', default: false },
 };
+
+/**
+ * Validate and convert the `--max-age` flag (days) to milliseconds.
+ * 0 is valid and means "treat every cache entry as stale" (issue #278) — a
+ * DIFFERENT thing than the `null` sentinel checkAll/findCachedVerdict use
+ * for "no age limit"; this function never returns null, only a finite ms
+ * value or an error.
+ *
+ * @param {string} raw - the raw --max-age flag value
+ * @returns {{ok: true, maxAgeMs: number} | {ok: false, error: string}}
+ */
+export function parseMaxAgeDays(raw) {
+  const days = Number(raw);
+  if (!Number.isFinite(days) || days < 0) {
+    return { ok: false, error: `--max-age must be a non-negative number of days, got: ${raw}` };
+  }
+  return { ok: true, maxAgeMs: days * 24 * 60 * 60 * 1000 };
+}
