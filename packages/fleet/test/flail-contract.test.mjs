@@ -29,12 +29,36 @@ function makeLog(content) {
   return p;
 }
 
+/**
+ * Assert the detector really produced `expected` for these inputs before
+ * asserting what checkFlail made of it.
+ *
+ * Without this, every real-CLI test below is satisfiable by a totally broken
+ * ADLC_BIN: a spawn failure, an unresolvable @adlc/flail-detector, and a
+ * genuine exit 1 all collapse into the same failOpen() shape. A test that
+ * passes when the binary never ran would be the same fiction this file exists
+ * to eliminate, so the exit code is pinned first and separately.
+ */
+function assertDetectorExits(expected, logFile, scope) {
+  const args = ['flail-detector', '--json'];
+  for (const g of scope ?? []) args.push(`--scope=${g}`);
+  args.push('--', logFile);
+  const probe = spawnSync(ADLC_BIN, args, { encoding: 'utf8' });
+  assert.equal(probe.error, undefined, `precondition: ${ADLC_BIN} must be spawnable`);
+  assert.equal(
+    probe.status, expected,
+    `precondition: detector must exit ${expected} here, got ${probe.status} (stderr: ${probe.stderr})`,
+  );
+  return probe;
+}
+
 // ---------------------------------------------------------------------------
 // AC1 — a real flail verdict (detector exits 2) must be reported as flail:true
 // ---------------------------------------------------------------------------
 
 test('checkFlail reports flail:true for a REAL detector flail verdict (exit 2)', async () => {
   const log = makeLog('Writing /etc/passwd\n');
+  assertDetectorExits(2, log, ['src/**']);
 
   const r = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN });
 
@@ -48,6 +72,7 @@ test('checkFlail reports flail:true for a REAL detector flail verdict (exit 2)',
 
 test('checkFlail propagates the detector real signal objects', async () => {
   const log = makeLog('Writing /etc/passwd\n');
+  assertDetectorExits(2, log, ['src/**']);
 
   const { signals } = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN });
 
@@ -64,6 +89,7 @@ test('checkFlail propagates the detector real signal objects', async () => {
 
 test('checkFlail reports flail:false for a REAL detector clean verdict (exit 0)', async () => {
   const log = makeLog('all good\nbuild succeeded\n');
+  assertDetectorExits(0, log, ['src/**']);
 
   const r = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN });
 
@@ -77,6 +103,8 @@ test('checkFlail reports flail:false for a REAL detector clean verdict (exit 0)'
 
 test('checkFlail FAILS OPEN on a real detector operational error (exit 1)', async () => {
   const missing = join(mkdtempSync(join(tmpdir(), 'fleet-flail-')), 'does-not-exist.log');
+  // Pin that this is a real exit-1 operational error and not a dead binary.
+  assertDetectorExits(1, missing, ['src/**']);
 
   const r = checkFlail(missing, ['src/**'], { adlcBin: ADLC_BIN });
 
@@ -101,12 +129,51 @@ test('checkFlail FAILS OPEN on malformed JSON (§12)', async () => {
 });
 
 test('checkFlail FAILS OPEN on a JSON document with no recognized verdict (§12)', async () => {
-  // Field-name drift guard: if the detector ever renames `verdict`, checkFlail
-  // must fail OPEN and stay loud, not silently report every session as clean.
-  const r = checkFlail('/log', [], { exec: () => JSON.stringify({ detected: true, signals: [] }) });
+  // Schema-drift guard: if the detector ever renames or revalues `verdict`,
+  // checkFlail must fail open rather than silently reporting sessions clean.
+  // Deliberately NOT spelled with the old fictional field name — AC7 requires
+  // that no fixture in this tree presents a `detected` key as detector output.
+  const r = checkFlail('/log', [], { exec: () => JSON.stringify({ verdict: 'inconclusive', signals: [] }) });
 
   assert.equal(r.flail, false);
   assert.equal(r.failedOpen, true, 'an unrecognized document is unverifiable, not clean');
+});
+
+test('checkFlail FAILS OPEN when signals drifted to a non-array (§12)', async () => {
+  // `signals` gets the same strictness as `verdict` — the documented return
+  // shape is an array, so a drifted scalar must not escape into consumers.
+  const r = checkFlail('/log', [], { exec: () => JSON.stringify({ verdict: 'flail', signals: 'scope-violation' }) });
+
+  assert.equal(r.flail, false);
+  assert.equal(r.failedOpen, true);
+});
+
+// ---------------------------------------------------------------------------
+// A ticket's own scope globs must not be able to switch its supervision off.
+// The detector parses with node:util.parseArgs in STRICT mode, where a bare
+// `--scope -weird/**` is a parse error (exit 1) that checkFlail would then fail
+// open on — so the args are built with `--opt=value` and a `--` terminator.
+// ---------------------------------------------------------------------------
+
+test('a scope glob beginning with "-" does not disable the gate', async () => {
+  const log = makeLog('Writing /etc/passwd\n');
+  assertDetectorExits(2, log, ['-weird/**']);
+
+  const r = checkFlail(log, ['-weird/**'], { adlcBin: ADLC_BIN });
+
+  assert.equal(r.flail, true, 'a dash-leading glob must not collapse into a fail-open');
+  assert.notEqual(r.failedOpen, true);
+});
+
+test('a log path beginning with "-" is passed as a path, not parsed as a flag', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-flail-'));
+  const p = join(dir, '-dash.log');
+  writeFileSync(p, 'Writing /etc/passwd\n');
+  assertDetectorExits(2, p, ['src/**']);
+
+  const r = checkFlail(p, ['src/**'], { adlcBin: ADLC_BIN });
+
+  assert.equal(r.flail, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -140,6 +207,7 @@ test('injected exec may signal the flail verdict the way execFileSync does (thro
 
 test('the live-deps spawnSync adapter reports a REAL flail verdict', async () => {
   const log = makeLog('Writing /etc/passwd\n');
+  assertDetectorExits(2, log, ['src/**']);
   // Verbatim shape of the adapter at packages/fleet/lib/live-deps.mjs.
   const exec = (_bin, args) => {
     const r = spawnSync(ADLC_BIN, args, { encoding: 'utf8' });
@@ -155,6 +223,7 @@ test('the live-deps spawnSync adapter reports a REAL flail verdict', async () =>
 
 test('the live-deps spawnSync adapter fails open on an operational error', async () => {
   const missing = join(mkdtempSync(join(tmpdir(), 'fleet-flail-')), 'nope.log');
+  assertDetectorExits(1, missing, ['src/**']);
   const exec = (_bin, args) => {
     const r = spawnSync(ADLC_BIN, args, { encoding: 'utf8' });
     if (r.status !== 0 && !r.stdout) throw new Error('flail-detector failed');
