@@ -13,9 +13,15 @@ import {
   createPersistentTracker,
   decideBuildGate,
   checkBuildGate,
+  DEFAULT_DEPTH_THRESHOLD,
 } from '../build-gate-inline.mjs';
-import { createFlailTracker, detectEditChurn, flailMessage } from '../flail-inline.mjs';
+import { createFlailTracker, detectEditChurn, flailMessage, DEFAULT_FLAIL_THRESHOLD } from '../flail-inline.mjs';
 import { runFromStdin, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
+
+test('DEFAULT_DEPTH_THRESHOLD and DEFAULT_FLAIL_THRESHOLD pin exact boundary constants', () => {
+  assert.equal(DEFAULT_DEPTH_THRESHOLD, 50);
+  assert.equal(DEFAULT_FLAIL_THRESHOLD, 3);
+});
 
 test('computeRiskTier: derives high risk for ticket declaring risk: high', () => {
   const { tier, signals } = computeRiskTier({ id: 'T1', title: 'test', risk: 'high' });

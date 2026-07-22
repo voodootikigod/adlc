@@ -12,6 +12,11 @@ import {
   selectWinner,
   isAllDivergent,
 } from '../lib/agreement.mjs';
+import { countChangedLines } from '../lib/diff.mjs';
+
+test('countChangedLines returns 0 for identical content', () => {
+  assert.equal(countChangedLines('hello\nworld', 'hello\nworld'), 0);
+});
 
 test('normalizeContent collapses whitespace', () => {
   assert.equal(normalizeContent('  hello   world  '), 'hello world');
