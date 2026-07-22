@@ -26,6 +26,7 @@ test('fresh scaffold creates ADLC config, ignores, and current Codex agent files
     const result = scaffold({ root });
     assert.equal(result.root, realpathSync(root));
     const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json')));
+    assert.equal(cfg.version, 1);
     assert.equal(cfg.securityMode, 'unsigned-fallback');
     assert.equal(cfg.harnesses.codex.railEnforcement, 'auto');
     assert.match(readFileSync(join(root, '.gitignore'), 'utf8'), /!\.adlc\/specs\//);
@@ -59,6 +60,15 @@ test('CLI confines writes to --root and returns machine-readable results', () =>
     assert.equal(result.ok, true);
     assert.equal(result.root, realpathSync(root));
     assert.equal(readFileSync(sentinel, 'utf8'), 'unchanged');
+  });
+});
+
+test('CLI without --no-codex-agents defaults to writing Codex agent files', () => {
+  fixture((root) => {
+    execFileSync(process.execPath, [BIN, '--root', root, '--json'], { encoding: 'utf8' });
+    for (const name of Object.keys(CODEX_AGENT_TEMPLATES)) {
+      assert.ok(existsSync(join(root, '.codex/agents', name)), `expected ${name} to exist`);
+    }
   });
 });
 
@@ -96,6 +106,17 @@ test('scaffold repairs a whole-directory ADLC ignore so committed state can be r
     assert.match(ignore, /^\.adlc\/\*$/m);
     assert.match(ignore, /^!\.adlc\/config\.json$/m);
     assert.match(ignore, /^!\.adlc\/specs\/$/m);
+  });
+});
+
+test('scaffold repairs the rooted "/.adlc/" ignore form too', () => {
+  fixture((root) => {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, '.gitignore'), 'node_modules/\n/.adlc/\n');
+    scaffold({ root, codexAgents: false });
+    const ignore = readFileSync(join(root, '.gitignore'), 'utf8');
+    assert.doesNotMatch(ignore, /^\/\.adlc\/$/m);
+    assert.match(ignore, /^\.adlc\/\*$/m);
   });
 });
 
