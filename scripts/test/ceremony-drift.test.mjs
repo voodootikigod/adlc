@@ -302,6 +302,30 @@ test('an exact configured match is case-insensitive and needs no is_bot field', 
   assert.equal(selectTrackingIssue(issues, { authors: ['release-machine'] })?.number, 9);
 });
 
+// `is_bot` is not guaranteed to be present on every API surface, so the login
+// SHAPE is the fallback bot evidence: GitHub emits the `app/` prefix and the
+// `[bot]` suffix only for App actors. Each form must qualify on its own.
+//
+// Caught as a surviving `logic-swap` mutant (`||` → `&&`) on isBotFormLogin:
+// every other fixture here sets `is_bot: true`, which short-circuits the check
+// before it is ever reached, so the function was entirely unexercised. Each case
+// below matches only through NORMALIZATION and omits `is_bot`, which is the one
+// path where the shape is load-bearing.
+test('each bot-login form is sufficient evidence on its own, without is_bot', () => {
+  // 'app/' prefix arm: configured as the [bot] form, reported as the app/ form.
+  assert.equal(
+    selectTrackingIssue([{ number: 9, body: `${MARKER} real`, author: { login: 'app/github-actions' } }],
+      { authors: ['github-actions[bot]'] })?.number,
+    9
+  );
+  // '[bot]' suffix arm: configured as the app/ form, reported as the [bot] form.
+  assert.equal(
+    selectTrackingIssue([{ number: 9, body: `${MARKER} real`, author: { login: 'github-actions[bot]' } }],
+      { authors: ['app/github-actions'] })?.number,
+    9
+  );
+});
+
 // The author object is API-shaped data, not a guaranteed contract — the same
 // reason bodies are tolerated below. An issue with no author (or an author with
 // no login) carries NO authorization evidence at all, so under an active filter
