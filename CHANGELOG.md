@@ -9,6 +9,70 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-07-22
+
+A lockstep release rewrites the `version` field in every one of the suite's 34
+`package.json` files at once. Any ticket railing a package path — ordinary
+practice here — therefore failed rails-guard on *every* release, whether or not
+the rail had anything to do with that release. Three consecutive releases hit
+this and were unblocked by completing stale tickets, which fixed the symptom
+(drift) but not the collision. This release fixes the collision.
+
+### Changed
+
+- **rails-guard: a version-only manifest edit is no longer a rail edit.** The
+  guard now requires each side of a changed manifest to be its own canonical
+  re-serialisation, then compares by structural path rather than raw text or a
+  parsed-JSON walk — the first two approaches were each independently rejected
+  under adversarial review for classes of bypass the other didn't cover (parsed
+  JSON can't see byte-level or encoding tampering; raw text can't see structure,
+  e.g. an npm lifecycle field masquerading as a version bump). A lockstep bump
+  now passes cleanly; a real behaviour change hidden inside the same edit still
+  fails. (#228, #234)
+
+- **tickets: a rail that would freeze a manifest is now rejected at authoring
+  time**, not just exempted at release time. `rails: ["packages/x/**"]` is
+  refused with a pointer to the intended form, `packages/x/lib/**` — the
+  complementary fix to the above: #234 stops a lockstep bump from tripping an
+  existing over-broad rail; this stops the next one from being written.
+  (#235, #253)
+
+### Added
+
+- **ci: a diff-scoped mutation-coverage gate.** Runs on every PR touching
+  `packages/**` or `plugins/**`; mutates only the changed lines and fails if
+  no test notices. Exists because the same failure mode — a guard added
+  without a test that would catch its own removal — recurred five times
+  across the two fixes above alone, three of which were caught only by an
+  external reviewer rather than the test suite. (#251)
+
+### Fixed
+
+- **rails-guard: a rail edit could be staged, then reverted in the working
+  tree, and evade the freeze gate entirely.** The changed-file set was
+  computed from a working-tree-only diff, so a violation that made it into the
+  index — which is what `git commit` actually records — was invisible to the
+  gate if the working copy was restored to baseline afterward. The changed-file
+  set is now the union of the working-tree and staged diffs. (#244, #255)
+
+- **core: two files whose names or contents differed only in invalid UTF-8
+  bytes could be treated as the same file**, because the byte stream was
+  decoded before being split on the raw delimiter — every byte a diff cannot
+  decode collapses to the same replacement character. Changed-file discovery
+  now fails closed on any path or content it cannot represent losslessly,
+  rather than silently aliasing two different files together. (#249, #252)
+
+- **init: `adlc-init` now creates a working ticket store on a fresh repository.**
+  Previously the bootstrap command could leave a repo without a ticket store at
+  all, so the very first ticket a new user tried to create had nowhere to go.
+  (#258)
+
+- **ci: the mutation-coverage gate above was mutating entire touched files
+  instead of just the changed lines**, so a PR could be blocked by
+  pre-existing gaps in code it never touched. Fixed to hunk-scope from the
+  diff directly, with a bounded, environment-safe fallback for files outside
+  the fast path. (#251, #260)
+
 ## [1.5.1] - 2026-07-21
 
 Two defects in this release had been shipping silently for weeks. Both were

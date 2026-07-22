@@ -1,6 +1,6 @@
 {
   "name": "@adlc/init",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Idempotent ADLC repository bootstrap, including Codex project agents.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/tickets": "1.5.1"
+    "@adlc/tickets": "1.6.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

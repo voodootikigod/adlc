@@ -1,6 +1,6 @@
 {
   "name": "@adlc/runner",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Artifact-asserting ADLC phase runner for deterministic gate completion checks.",
   "type": "module",
   "license": "MIT",
@@ -31,9 +31,9 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.5.1",
-    "@adlc/gate-manifest": "1.5.1",
-    "@adlc/tickets": "1.5.1"
+    "@adlc/core": "1.6.0",
+    "@adlc/gate-manifest": "1.6.0",
+    "@adlc/tickets": "1.6.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

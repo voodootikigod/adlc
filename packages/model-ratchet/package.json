@@ -1,6 +1,6 @@
 {
   "name": "@adlc/model-ratchet",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Scheduled re-prosecution of hot paths — every frontier model release as a free re-audit (C12).",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.5.1"
+    "@adlc/core": "1.6.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
