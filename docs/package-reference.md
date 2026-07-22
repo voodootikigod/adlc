@@ -12,6 +12,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`docs/tools/cli.md`](./tools/cli.md) |
 | `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`docs/tools/coldstart.md`](./tools/coldstart.md) |
 | `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`docs/tools/consensus-fix.md`](./tools/consensus-fix.md) |
+| `@adlc/copilot` | none (Copilot plugin) | Native ADLC plugin for the GitHub Copilot CLI (`plugins/adlc-copilot`): skills, `preToolUse` rails/build-gate hooks, allowlisted MCP gate tools, and read-only prosecution agents. Rail decision delegated to `@adlc/core`; the in-session hook **enforces headless** (deny-ask defaults to deny, overrides `--allow-tool`) unless `--allow-all-tools` is used, and CI `rails-guard-ci` is the unbypassable backstop. | [`docs/integrations/copilot.md`](./integrations/copilot.md) |
 | `@adlc/core` | none | Shared LLM, git, CLI, ledger, ticket, and mutation primitives. | [`docs/tools/core.md`](./tools/core.md) |
 | `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, oversized session logs, and token spend past the ticket budget. | [`docs/tools/flail-detector.md`](./tools/flail-detector.md) |
 | `@adlc/gate-fuzzing` | `gate-fuzzing` | Runs hostile candidates against gate suites to find defeats and calibration gaps. | [`docs/tools/gate-fuzzing.md`](./tools/gate-fuzzing.md) |
@@ -113,3 +114,9 @@ Shared foundation:
 
 - `@adlc/core`
 - `@adlc/cli`
+
+Harness plugins (native integrations under `plugins/`, not `packages/` — they
+wire the gate toolkit into a specific agentic harness and delegate all rail /
+ticket / prosecution logic to `@adlc/core`):
+
+- `@adlc/copilot` — GitHub Copilot CLI (see [`docs/integrations/copilot.md`](./integrations/copilot.md))

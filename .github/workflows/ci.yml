@@ -33,6 +33,15 @@ jobs:
       - name: Test
         run: npm test
 
+      # AC2 — the adlc-copilot offline contract + deny-shape proof runs on EVERY
+      # test matrix leg (no binary needed). It behaviorally pins the verified
+      # Copilot deny shape ({reason} on stdout + exit 0), so a refactor that
+      # reverts to an exit-2/permissionDecision shape — which fails OPEN on the
+      # real CLI — fails CI here. The live install leg is opt-in
+      # (ADLC_COPILOT_LIVE_INSTALL=1 with a `copilot` binary; see the job below).
+      - name: Copilot native plugin offline contract proof (AC2)
+        run: node scripts/copilot-install-smoke.mjs .
+
       # Required proof against the Codex release this integration is developed
       # against. Keep the pin deliberate so upstream drift cannot make the
       # required job non-deterministic; the advisory job below tracks latest.
@@ -139,6 +148,12 @@ jobs:
           opencode --version
           node scripts/opencode-live-deny.mjs --require
           node scripts/opencode-live-tool.mjs --require
+
+  # NOTE: the Copilot live rail-deny proof (scripts/copilot-live-deny.mjs) runs as
+  # a scheduled drift canary in .github/workflows/copilot-live-canary.yml (daily
+  # cron + workflow_dispatch), not here — it needs an entitled Copilot login and
+  # real model turns, so it can't be a required per-PR check. The required `test`
+  # job's offline copilot-install-smoke (deny-SHAPE) stays authoritative on every PR.
 
   # Advisory drift canary. The pinned proof in the required test matrix remains
   # authoritative while this job exposes changes in the newest Codex release.

@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+        "timeoutSec": 20
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-rails-guard.mjs\"",
+        "timeoutSec": 30
+      },
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-build-gate.mjs\"",
+        "timeoutSec": 30
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" flail",
+        "timeoutSec": 20
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+        "timeoutSec": 20
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+        "timeoutSec": 20
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" context",
+        "timeoutSec": 20
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" verify",
+        "timeoutSec": 45
+      },
+      {
+        "type": "command",
+        "bash": "node \"${COPILOT_PLUGIN_ROOT}/hooks/adlc-lifecycle.mjs\" review",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

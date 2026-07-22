@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getAdapter, ADAPTERS } from '../lib/adapters/index.mjs';
 
-test('registry exposes all six harness adapters (AC1)', () => {
-  assert.deepEqual([...ADAPTERS].sort(), ['agy', 'claude-code', 'codex', 'cursor', 'opencode', 'pi']);
+test('registry exposes all seven harness adapters (AC1)', () => {
+  assert.deepEqual([...ADAPTERS].sort(), ['agy', 'claude-code', 'codex', 'copilot', 'cursor', 'opencode', 'pi']);
 });
 
 test('getAdapter returns a shaped adapter for each name', () => {

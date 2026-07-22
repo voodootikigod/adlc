@@ -11,6 +11,7 @@ const APPROVED = new Set([
   'packages/ticket-sync/lib/store.mjs', // 1.x legacy compatibility adapter
   'plugins/adlc-claude-code/hooks/adlc-hook.mjs',
   'plugins/adlc-codex/hooks/adlc-rails-guard.mjs',
+  'plugins/adlc-copilot/hooks/adlc-rails-guard.mjs',
   'plugins/adlc-cursor/hooks/adlc-pretool.mjs',
   'plugins/adlc-pi/lib/commands.mjs',
   // Reader, not a writer: fleet loads the plan (read-only) and reports the
