@@ -15,10 +15,19 @@ process.on('unhandledRejection', function (e) { failSafe('rejection ' + (e && e.
 var mod = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
 (async function () {
   try {
+    var subcmd = process.argv[2];
+    var adapter = await import(require('node:url').pathToFileURL(mod).href);
+    if (subcmd === 'status') {
+      adapter.printStatus();
+      process.exit(0);
+    }
+    if (subcmd === 'doctor') {
+      adapter.printDoctor();
+      process.exit(0);
+    }
     var chunks = [];
     for await (var c of process.stdin) chunks.push(c);
     var raw = Buffer.concat(chunks).toString('utf8');
-    var adapter = await import(require('node:url').pathToFileURL(mod).href);
     emit(adapter.runFromStdin(raw, process.env));
   } catch (e) { failSafe('load/exec ' + (e && e.message)); }
 })();

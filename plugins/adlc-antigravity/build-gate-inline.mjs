@@ -18,6 +18,24 @@ function touchesAny(globs, paths) {
   return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch(g, p)));
 }
 
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { /* fallback */ }
+  }
+}
+
+function isPidAlive(pid) {
+  if (!pid || typeof pid !== 'number') return false;
+  try {
+    return process.kill(pid, 0);
+  } catch (err) {
+    return err.code !== 'ESRCH';
+  }
+}
+
 export function deriveRiskSignals(ticket) {
   const t = ticket ?? {};
   const signals = [];
@@ -80,7 +98,7 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 }
 
 /**
- * File-backed persistent session tracker with owner-checked mutex locking and LRU pruning.
+ * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
  * Fails closed (isLockFailed=true) on lock acquisition timeout.
  */
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
@@ -107,13 +125,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         try {
           if (existsSync(ownerPath)) {
             const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-            if (Date.now() - (owner.time ?? 0) > 3000) {
+            const isStale = Date.now() - (owner.time ?? 0) > 3000;
+            const isDead = !isPidAlive(owner.pid);
+            if (isStale && isDead) {
               try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* ignore */ }
             }
           }
         } catch { /* ignore */ }
-        const end = Date.now() + 5;
-        while (Date.now() < end) { /* synchronous spin delay */ }
+        sleepSync(5);
       }
     }
     if (!acquired) {

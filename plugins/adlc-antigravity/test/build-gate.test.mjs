@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execSync } from 'node:child_process';
 import {
   computeRiskTier,
   createDepthTracker,
@@ -96,6 +97,15 @@ test('printStatus & printDoctor: execute subcommand displays without crashing', 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('CLI subcommand end-to-end: adlc-rails-guard.cjs status and doctor subcommands execute via subprocess', () => {
+  const cjsPath = join(process.cwd(), 'hooks', 'adlc-rails-guard.cjs');
+  const statusOut = execSync(`node "${cjsPath}" status`, { encoding: 'utf8' });
+  assert.ok(statusOut.includes('ADLC Antigravity Status'));
+
+  const doctorOut = execSync(`node "${cjsPath}" doctor`, { encoding: 'utf8' });
+  assert.ok(doctorOut.includes('ADLC Antigravity Doctor'));
 });
 
 test('createDepthTracker: tracks tool call count per session', () => {
