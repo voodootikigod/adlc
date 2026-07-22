@@ -16,6 +16,7 @@ import { checkAll, resolveExpectedModel } from '../lib/gate.mjs';
 import { buildCacheData } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
+import { USAGE, OPTIONS } from '../lib/cli-options.mjs';
 import { ticketHash } from '@adlc/tickets';
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
@@ -23,21 +24,7 @@ import { ticketHash } from '@adlc/tickets';
 // (non-prompt-only) path below also imports gate-manifest lazily, for the
 // same reason: only pay for it on the path that has something to record.
 
-const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--force] [--max-age <days>] [--prompt-only] [--record-verdict <file|->] [--json]';
-
-const { values, positionals } = parseArgs({
-  usage: USAGE,
-  options: {
-    tickets: { type: 'string', default: '.adlc/tickets.json' },
-    all: { type: 'boolean', default: false },
-    tier: { type: 'string', default: 'cheap' },
-    force: { type: 'boolean', default: false },
-    'max-age': { type: 'string', default: '30' },
-    'prompt-only': { type: 'boolean', default: false },
-    'record-verdict': { type: 'string' },
-    json: { type: 'boolean', default: false },
-  },
-});
+const { values, positionals } = parseArgs({ usage: USAGE, options: OPTIONS });
 
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
 if (!VALID_TIERS.includes(values.tier)) {

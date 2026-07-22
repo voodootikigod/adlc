@@ -1,0 +1,18 @@
+// cli-options.mjs — the coldstart CLI's usage string and parseArgs option
+// config, extracted from bin/coldstart.mjs so their DEFAULT VALUES are
+// directly unit-testable (the bin itself is not importable — it runs on
+// load). This is what a mutation gate exercises against: flip `force`'s
+// default to true and a test importing this file must fail.
+
+export const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--force] [--max-age <days>] [--prompt-only] [--record-verdict <file|->] [--json]';
+
+export const OPTIONS = {
+  tickets: { type: 'string', default: '.adlc/tickets.json' },
+  all: { type: 'boolean', default: false },
+  tier: { type: 'string', default: 'cheap' },
+  force: { type: 'boolean', default: false },
+  'max-age': { type: 'string', default: '30' },
+  'prompt-only': { type: 'boolean', default: false },
+  'record-verdict': { type: 'string' },
+  json: { type: 'boolean', default: false },
+};
