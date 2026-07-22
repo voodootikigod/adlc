@@ -16,20 +16,25 @@ repo's plugin marketplace.
 
 ## Status
 
-**Native plugin built to the verified contract (CLI 1.0.73).** Skills, hooks,
-allowlisted MCP gate tools, and read-only prosecution agents are wired to the
-deny/config/stdin shapes read from the shipped Copilot binary. **One honesty
-gate remains:** the end-to-end live install/deny smoke has **not** been run —
-the probe account was blocked by an org Copilot policy (`Access denied by policy
-settings`), so the agent loop never fired a tool call. It must run behind
-`ADLC_COPILOT_LIVE_INSTALL=1` in an unrestricted subscription (see
-[Gaps / Caveats](#gaps--caveats)).
+**Native plugin built to — and live-verified against — the corrected contract
+(CLI 1.0.73).** Skills, hooks, allowlisted MCP gate tools, and read-only
+prosecution agents are wired to the deny/config/stdin shapes read from the
+shipped Copilot binary, and the **end-to-end live deny-proof is DONE**: real
+`copilot -p` model turns against a frozen rail confirmed that the in-session
+rails-guard hook **enforces headless** — the deny is a permission *ask* that
+defaults to DENY and overrides the `--allow-tool` allowlist — **unless the
+session is run with `--allow-all-tools`**, which auto-approves the ask. The live
+run *corrected* the earlier static-only read (see
+[appendix §1.1/§1.2](./copilot-probe-appendix.md)): the hook is neither
+"fail-closed / strongest" (the pre-probe plan) nor "advisory-only / fails open"
+(the static over-correction) — it **enforces headless unless `--allow-all-tools`,
+and fails open only on a crashed/timed-out hook or `--allow-all-tools`**.
 
 ## What it wires
 
 | Primitive | Copilot surface | Notes |
 | --- | --- | --- |
-| Rail protection | `preToolUse` hook (`adlc-rails-guard.mjs`) | Denies edits to a frozen ticket's rails. Advisory-tier (fail-open host). |
+| Rail protection | `preToolUse` hook (`adlc-rails-guard.mjs`) | Denies edits to a frozen ticket's rails via a `{reason}` deny-ask. Enforces headless (defaults to deny, overrides `--allow-tool`) unless `--allow-all-tools`. |
 | Build-gate context fitness | `preToolUse` hook (`adlc-build-gate.mjs`) | Runs after rails-guard; opt-in, advisory. |
 | Ticket / gate context | `sessionStart`, `preCompact`, `subagentStart`, `subagentStop` | Advisory narration via `adlc-lifecycle.mjs context`. |
 | Flail detection | `postToolUse` hook | Advisory repeated-failure notice. |
@@ -66,12 +71,16 @@ check — it is the actual enforcement tier (see below).
 
 ## Rail enforcement — two layers
 
-Copilot's in-session hook is a **best-effort, advisory** layer, **not** the
-control. This is a corrected posture: the pre-probe plan claimed Copilot hooks
-were "fail-closed on crash, stronger than agy/Cursor" — the probe proved that
-**false**. See [appendix §1.2](./copilot-probe-appendix.md).
+Copilot's in-session hook **enforces rails headless** — but through a permission
+*ask*, not a hard block, so a single flag (`--allow-all-tools`) neutralizes it.
+This is a **doubly-corrected** posture: the pre-probe plan claimed Copilot hooks
+were "fail-closed on crash, stronger than agy/Cursor"; a static-only read then
+over-corrected to "fail-open, advisory-only." The **live deny-proof** (real
+`copilot -p` turns against a frozen rail) settled it precisely — the hook
+enforces headless unless `--allow-all-tools`. See
+[appendix §1.1/§1.2](./copilot-probe-appendix.md).
 
-### 1. In-session (advisory, fail-open)
+### 1. In-session (enforces headless unless `--allow-all-tools`)
 
 The `preToolUse` rails-guard hook denies a frozen-rail edit using the **verified
 deny contract**:
@@ -88,19 +97,39 @@ restored:
 - Deny is **NOT** signalled by **exit 2** — the exit code is **not consulted**
   for the decision. A non-empty stdout object at exit 0 is the whole contract.
 
-**Copilot hooks fail _open_.** On hook `success === false` — a crash, non-zero
-exit, timeout, or unparseable stdout — the decision is `undefined`, so **no deny
-is applied and the tool proceeds**. This is the same weakness as Antigravity and
-Cursor, not a strength over them. (The `failClosed` code paths in the binary
-belong to *enterprise managed-settings* determination, a separate mechanism
-unrelated to hook execution errors.)
+**The deny is a permission _ask_, and it enforces headless.** The reason becomes
+the ask message; whether the tool is blocked depends on the permission mode
+(live-verified against 1.0.73, [appendix §1.1](./copilot-probe-appendix.md)):
 
-The adapter mitigates this within the process: it is zero-dependency, defensive,
-and wrapped so that any **internal** error is converted into a deny object
-rather than throwing (application-level fail-safe). But an **OS-level kill or a
-blown `timeoutSec` budget** kills the process before it can print — a genuine
-fail-open window the adapter cannot close. Treat the in-session hook as an
-honesty nudge for a cooperating agent, never as a boundary.
+- **Default OR an explicit `--allow-tool <tool>` allowlist** (even
+  `--allow-tool edit`): headless, the ask cannot be answered by a human, so it
+  **defaults to DENY → the tool is BLOCKED, overriding the tool allowlist**.
+  Rails ARE enforced headless. In the live proof the rail file stayed unchanged,
+  Copilot reported *"the edit was blocked… cannot request confirmation in
+  non-interactive mode,"* and the hook's shell classifier also blocked a
+  `printf > file` Bash workaround.
+- **`--allow-all-tools` / `--yolo`**: installs `allowAllPermissionOverride`,
+  which **auto-approves the hook's ask → the edit PROCEEDS → the hook is
+  NEUTERED**. In the live proof the rail was changed despite a correct
+  `{reason}` deny.
+- **Interactive**: the human sees the reason (`hookMessage`) and can decline.
+
+**Fail-open windows are only two:** (a) a crashed / timed-out / non-zero /
+unparseable hook — `success === false` → decision `undefined` → no ask is
+raised, so the tool proceeds under whatever the mode already allows; and (b)
+`--allow-all-tools`. Otherwise the hook enforces. (The `failClosed` code paths
+in the binary belong to *enterprise managed-settings* determination, a separate
+mechanism unrelated to hook execution errors.)
+
+The adapter narrows window (a) within the process: it is zero-dependency,
+defensive, and wrapped so that any **internal** error is converted into a deny
+object rather than throwing (application-level fail-safe). An **OS-level kill or
+a blown `timeoutSec` budget** still kills the process before it can print — a
+genuine fail-open window the adapter cannot close, which is why the CI gate is
+the hard backstop. **Consequently the fleet adapter defaults to an explicit
+`--allow-tool write --allow-tool shell` allowlist (never `--allow-all-tools`)**,
+so non-rail edits run unattended while rail edits are blocked by the hook;
+`allowAllTools: true` is an opt-in for CI-gate-only autonomy.
 
 ### 2. Commit-time (unbypassable)
 
@@ -153,7 +182,7 @@ not re-implemented here):
 | P0 Triage | `adlc-ticket` skill | authors a ticket into `.adlc/tickets.json` (shared runtime) |
 | P1 Interrogate | `adlc` skill routing | `adlc spec-lint` / `premortem` (`--prompt-only` in-session) + the human approval gate |
 | P2 Decompose | `adlc` skill routing | `adlc coldstart` / `merge-forecast` |
-| **P3 Rail** | **`preToolUse` hooks** | **rails-guard (advisory) + CI `rails-guard-ci` (enforcing) + the advisory build-gate** |
+| **P3 Rail** | **`preToolUse` hooks** | **rails-guard (enforces headless via deny-ask unless `--allow-all-tools`) + CI `rails-guard-ci` (unbypassable hard tier) + the advisory build-gate** |
 | P4 Build | `agentStop` verify hook | targeted tests + `adlc flail-detector` |
 | P5 Prosecute | `adlc-prosecute` skill + `agents/*.agent.md` | six-lens fan-out → dedupe → verifier → loop-until-dry + cross-model `adversarial-review` (see below) |
 | P6 Integrate | `adlc gate-manifest` (MCP `adlc_gate`) | human gate |
@@ -178,49 +207,59 @@ re-export shim — a reintroduced local copy fails CI):
    `shouldContinue`) from `@adlc/core`.
 
 **Fallback:** where a live in-session subagent fan-out cannot be exercised (the
-`copilot -p` headless path is text-output only — no JSON mode, and the live
-in-session hook/agent path is unproven pending the smoke, see Gaps), run the
+`copilot -p` headless path is text-output only — no JSON mode), run the
 cross-model gate `npx adversarial-review --providers` as the independence
 backstop. This is the same cross-model P5 fallback the Cursor integration
 documents.
 
 ## Gaps / Caveats
 
-These are the real residual gaps after building to the verified contract — no
-overstatement:
+These are the real residual gaps after building to — and live-verifying — the
+corrected contract; no overstatement, no understatement:
 
-- **(a) In-session hook fails open on a crashed / timed-out hook process.**
-  Verified in [appendix §1.2](./copilot-probe-appendix.md): a Copilot hook whose
-  process reports `success === false` yields **no decision**, so the tool
-  proceeds. The adapter mitigates by converting any **internal** error into a
-  deny object (never throwing to the OS), but an **OS-level kill or a blown
-  `timeoutSec` budget** is a genuine fail-open window that no adapter code can
-  close. This is a Copilot infrastructure limitation, not an ADLC choice.
-- **(b) The CI diff gate is the unbypassable enforcement tier.** Because (a)
-  makes the in-session hook advisory, `rails-guard-ci` — the commit-time
-  rail-freeze diff gate — is the only tier that actually enforces rail
-  immutability. The in-session `preToolUse` hook is **advisory-tier**; the CI
-  gate is **enforcement-tier**. Make it a required check.
+- **(a) Two fail-open windows, and only two.** Verified in
+  [appendix §1.2](./copilot-probe-appendix.md): the in-session hook fails open
+  **only** when (i) the hook process reports `success === false` (crash, non-zero
+  exit, timeout, or unparseable stdout) so no ask is raised and the tool
+  proceeds, or (ii) the session is run with `--allow-all-tools` / `--yolo`, which
+  auto-approves the deny-ask. In every other headless posture — default or an
+  explicit `--allow-tool` allowlist — the deny-ask **defaults to deny and blocks
+  the tool, overriding the allowlist**. The adapter narrows window (i) by
+  converting any **internal** error into a deny object (never throwing to the
+  OS), but an **OS-level kill or a blown `timeoutSec` budget** cannot be closed
+  in-process; that is a Copilot infrastructure limitation, not an ADLC choice.
+- **(b) The CI diff gate is the unbypassable hard tier.** `rails-guard-ci` — the
+  commit-time rail-freeze diff gate — covers **both** fail-open windows in (a)
+  (hook crash and `--allow-all-tools`) and enforces rail immutability regardless
+  of how the edit was made. The in-session hook enforces headless unless
+  `--allow-all-tools`; the CI gate is the tier that is never bypassable. Make it
+  a required check.
 - **(c) VS Code Copilot hooks are Preview.** The hook surface this integration
   targets is documented by GitHub as **Preview** status in the VS Code Copilot
   path; its contract may shift, and this doc will be re-pinned against the
   appendix if it does.
-- **(d) Live install / deny smoke has NOT been run.** In the probe environment an
-  org Copilot policy returned `Access denied by policy settings`, so the agent
-  loop never ran, no tool call fired, and the hooks could not be exercised
-  end-to-end. All "verified" facts here are read statically from the shipped
-  1.0.73 binary (authoritative for contract *shape*); the **end-to-end deny
-  behavior** must still be proven behind `ADLC_COPILOT_LIVE_INSTALL=1` in an
-  environment with an **unrestricted** Copilot subscription. Until that runs, do
-  not claim the live deny-proof has passed.
+- **(d) Live deny-proof is DONE.** The end-to-end deny behavior was proven with
+  real `copilot -p` model turns against a frozen rail on CLI 1.0.73 using an
+  entitled personal account
+  ([appendix §1.1](./copilot-probe-appendix.md)) — the rail edit was blocked
+  under the explicit-allowlist posture and proceeded only under
+  `--allow-all-tools`. (An earlier attempt hit a feature-entitlement `403`
+  initially mis-surfaced as an org-policy denial; it was resolved with an
+  entitled account, not a contract change.) The `ADLC_COPILOT_LIVE_INSTALL=1`
+  marketplace install/uninstall smoke remains the only convenience-CI item still
+  gated on an unrestricted CI account; the deny mechanism itself is verified.
 
 ## Boundary
 
-The in-session hook is a convenience that **fails open**, not a security
-boundary. The frozen-rail guarantee is the CI gate `rails-guard-ci` — for rails
-already frozen on the base branch. Treat the two as designed: the hook keeps a
-cooperating agent on the rails during a build, and CI stops a dishonest or buggy
-one at the door — provided the rail was frozen in a merged commit first.
+The in-session hook **enforces rails headless** (the deny-ask defaults to deny
+and overrides `--allow-tool`) — but it is neutered by `--allow-all-tools` and by
+a crashed/timed-out hook, so it is not the unbypassable boundary. The
+frozen-rail guarantee is the CI gate `rails-guard-ci` — for rails already frozen
+on the base branch — which covers both fail-open windows. Treat the two as
+designed: the hook blocks rail edits during a headless build (as long as the
+fleet adapter's default allowlist is used, not `--allow-all-tools`), and CI
+stops a dishonest, buggy, or allow-all'd one at the door — provided the rail was
+frozen in a merged commit first.
 
 ## Verification
 
@@ -228,12 +267,15 @@ one at the door — provided the rail was frozen in a merged commit first.
 # Offline manifest, hook, skill, agent, and MCP contract (built to appendix shapes)
 node --test plugins/adlc-copilot/test/*.test.mjs plugins/adlc-copilot/hooks/test/*.test.mjs
 
-# Real marketplace add/install + end-to-end deny — REQUIRES an unrestricted account
+# Real marketplace add/install smoke — REQUIRES an unrestricted CI account
 ADLC_COPILOT_LIVE_INSTALL=1 node scripts/copilot-install-smoke.mjs .
 ```
 
-The live proof is the one outstanding GA honesty gate (Gap (d)). See
-[ADR 0013](../adr/0013-adlc-copilot-integration.md) for the decision to build to
-the verified contract, the [probe appendix](./copilot-probe-appendix.md) for the
-pinned contract facts, and [ticket authoring](../ticket-authoring.md) for the
-shared ticket contract.
+The end-to-end **deny-proof is DONE** — real `copilot -p` turns against a frozen
+rail on CLI 1.0.73 confirmed the hook enforces headless unless `--allow-all-tools`
+([appendix §1.1](./copilot-probe-appendix.md)); only the marketplace
+install/uninstall convenience smoke stays gated on an unrestricted CI account
+(Gap (d)). See [ADR 0013](../adr/0013-adlc-copilot-integration.md) for the
+decision to build to the verified contract, the
+[probe appendix](./copilot-probe-appendix.md) for the pinned contract facts, and
+[ticket authoring](../ticket-authoring.md) for the shared ticket contract.

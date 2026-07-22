@@ -8,14 +8,17 @@ for Copilot — the probed contract in
 **1.0.73**, #240), which **overrides** the earlier pre-probe plan.
 
 **Columns:** CC = Claude Code · Codex · OC = OpenCode · Pi · Cursor · agy =
-Antigravity · Copilot = **built to the verified contract** (`plugins/adlc-copilot`;
-one live end-to-end smoke still outstanding).
+Antigravity · Copilot = **built to, and live-verified against, the corrected
+contract** (`plugins/adlc-copilot`; in-session deny-proof DONE, only the
+marketplace install convenience smoke still gated on an unrestricted CI account).
 
 **Legend:** ✅ native/enforcing · ⚠️ partial, advisory, or unproven · ❌ absent
-· 🧪 planned/unverified. The Copilot column is now read from a real binary; the
-only remaining 🧪 is the end-to-end live install/deny smoke, which an org
-Copilot policy blocked in the probe environment (must run behind
-`ADLC_COPILOT_LIVE_INSTALL=1` in an unrestricted account).
+· 🧪 planned/unverified. The Copilot column is read from a real binary **and a
+live end-to-end deny-proof**; the in-session rail enforcement is verified to work
+headless (the deny-ask defaults to deny, overriding `--allow-tool`) except under
+`--allow-all-tools`. The only remaining gated item is the marketplace
+install/uninstall convenience smoke (`ADLC_COPILOT_LIVE_INSTALL=1`, needs an
+unrestricted CI account).
 
 Shared invariants are not repeated per row: every integration delegates
 rail/glob/ticket/shell primitives to `@adlc/core` (nothing re-implemented),
@@ -33,7 +36,7 @@ existing required job instead).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Native plugin install | ✅ marketplace | ✅ git marketplace | ⚠️ npm pkg registered in `opencode.json` by scaffolder (no marketplace) | ✅ `pi install npm:@adlc/pi` | ✅ marketplace (publish step pending) | ⚠️ local-path only (3rd-party marketplace rejected by CLI) | ✅ `copilot plugin marketplace add voodootikigod/adlc` + `copilot plugin install adlc-copilot@adlc` (marketplace shape verified; live install smoke pending) |
 | `npx plugins add` universal-installer target | ✅ | ✅¹ | ❌ | ❌ | ✅ | ❌ (planned) | ✅ (target exists) |
-| Install smoke script in CI | ✅ offline | ✅ offline + live | ✅ offline + live matrix | ✅ live + weekly version matrix | ✅ offline | ✅ offline | ⚠️ offline built; live gated on `ADLC_COPILOT_LIVE_INSTALL=1` (org policy blocked the probe) |
+| Install smoke script in CI | ✅ offline | ✅ offline + live | ✅ offline + live matrix | ✅ live + weekly version matrix | ✅ offline | ✅ offline | ⚠️ offline built; marketplace install smoke gated on `ADLC_COPILOT_LIVE_INSTALL=1` (unrestricted CI account); in-session deny-proof DONE |
 
 ¹ A `plugins`-installer Codex target exists, but the adlc docs recommend the native Codex marketplace path.
 
@@ -41,9 +44,9 @@ existing required job instead).
 
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Structured-edit deny (Write/Edit) | ✅ enforcing | ✅ enforcing | ✅ enforcing by default | ✅ enforcing | ⚠️ deny emitted; host reliability unproven (the GA gate) | ⚠️ advisory (host fails open) | ⚠️ deny emitted via non-empty `{reason}` stdout + exit 0 (verified 1.0.73; **not** `permissionDecision`/exit 2); host fails open — advisory |
-| Hook-crash failure mode | ⚠️ fail-open (only exit 2 blocks) | ⚠️ same convention² | ✅ fail-closed (throw aborts; unknown mutating tool denied) | ⚠️ n/d² | ⚠️ fail-open by config (`failClosed:false`) | ⚠️ fail-open (verified: non-zero exit ⇒ tool proceeds) | ⚠️ fail-open (verified: `success===false` ⇒ undefined ⇒ tool proceeds); adapter converts internal errors → deny, but OS-kill / `timeoutSec` remain open |
-| Shell (Bash) gating in-session | ❌ intentional (CI catches) | ✅ shell classifier (vendored core copy, sync-pinned) | ✅ classifier + chained-command splitting | ✅ codex-parity ladder | ⚠️ advisory string-match, never denies | ❌ | ❌ in-session (CI catches); verified fleet option `--deny-tool shell` removes shell entirely |
+| Structured-edit deny (Write/Edit) | ✅ enforcing | ✅ enforcing | ✅ enforcing by default | ✅ enforcing | ⚠️ deny emitted; host reliability unproven (the GA gate) | ⚠️ advisory (host fails open) | ✅ **enforces headless** — live-verified 1.0.73: non-empty `{reason}` stdout + exit 0 raises a permission ask that defaults to DENY and overrides `--allow-tool` (**not** `permissionDecision`/exit 2). **Except** `--allow-all-tools`/`--yolo` auto-approves the ask (neuters the hook) |
+| Hook-crash failure mode | ⚠️ fail-open (only exit 2 blocks) | ⚠️ same convention² | ✅ fail-closed (throw aborts; unknown mutating tool denied) | ⚠️ n/d² | ⚠️ fail-open by config (`failClosed:false`) | ⚠️ fail-open (verified: non-zero exit ⇒ tool proceeds) | ⚠️ fail-open on crash only (verified: `success===false` ⇒ no ask raised ⇒ tool proceeds); adapter converts internal errors → deny, but OS-kill / `timeoutSec` remain open. (`--allow-all-tools` is the other fail-open window — see row above) |
+| Shell (Bash) gating in-session | ❌ intentional (CI catches) | ✅ shell classifier (vendored core copy, sync-pinned) | ✅ classifier + chained-command splitting | ✅ codex-parity ladder | ⚠️ advisory string-match, never denies | ❌ | ⚠️ rails-guard hook's shell classifier blocks shell writes to rails (live-verified: a `printf > railfile` workaround was blocked); no general shell gating (CI catches); fleet option `--deny-tool shell` removes shell entirely |
 | Reactive write-restore backstop (tool-independent) | ❌ | ❌ | ✅ `file.edited` quarantine-restore | ✅ pre-tool snapshot restore (never `HEAD`) | ⚠️ `afterFileEdit` audit only, no restore | ❌ | ❌ (no equivalent event known) |
 | Build-gate (context-rot backstop) | ✅ enforcing | ✅ hook shipped | ✅ + disables post-compaction autocontinue | ✅ | ⚠️ advisory, default-off | ❌ | ⚠️ advisory hook shipped (fail-open host) |
 
@@ -66,7 +69,7 @@ existing required job instead).
 | Deterministic first-party P5 runner (code loop, not prose) | ⚠️ model-driven command; helpers unit-tested | ⚠️ MCP `adlc_prosecute` workflow | ✅ native tool (most deterministic of the six) | ✅ native tool | ❌ | ❌ | ⚠️ MCP `adlc_prosecute` + `@adlc/core` helpers (reference-equal shim) |
 | Read-only enforcement on lenses | ✅ read-only tool lists | ✅ read-only TOMLs | ✅ wildcard-deny-first tools map | ✅ write-disabled children | ❌ | ⚠️ | ✅ read-only agent allowlists |
 | Formal `adlc run p5` provenance | ⚠️ CLI runner path, not wired e2e | ✅ authoritative fixture | ⚠️ runner path | ⚠️ runner path | ⚠️ runner path | ⚠️ runner path | ⚠️ runner path |
-| P5 live proof in CI | ❌ | ⚠️ (install/hook/MCP live proof; not a deny/convergence proof) | ✅ seeded-defect convergence + write-disable, required | ✅ required (Node 22 leg) | ❌ | ❌ | ❌ (live smoke pending — Gap d) |
+| P5 live proof in CI | ❌ | ⚠️ (install/hook/MCP live proof; not a deny/convergence proof) | ✅ seeded-defect convergence + write-disable, required | ✅ required (Node 22 leg) | ❌ | ❌ | ❌ (no seeded-defect P5 convergence proof in CI; the rail deny-proof is DONE) |
 
 ## E. Gate access
 
@@ -80,14 +83,14 @@ existing required job instead).
 
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Fleet worker adapter | ✅ | ✅ | ✅ | ✅ | ✅ (`cursor-agent -p`) | ✅ | ✅ `copilot -p` (text output only — no JSON mode; requires `--allow-all-tools`) |
-| Headless in-session enforcement verified | ❌ not exercised | ⚠️ hook execution proven from installed cache | ✅ headless live-deny in CI | ✅ `pi --mode rpc` live-deny in CI | ❌ | ✅ probed (`--print` blocked a rail write) | ❌ not exercised (live smoke pending — Gap d) |
+| Fleet worker adapter | ✅ | ✅ | ✅ | ✅ | ✅ (`cursor-agent -p`) | ✅ | ✅ `copilot -p` (text output only — no JSON mode; **defaults to explicit `--allow-tool write --allow-tool shell`, NOT `--allow-all-tools`**, so the rails-guard hook keeps enforcing; `allowAllTools:true` is an opt-in for CI-gate-only autonomy) |
+| Headless in-session enforcement verified | ❌ not exercised | ⚠️ hook execution proven from installed cache | ✅ headless live-deny in CI | ✅ `pi --mode rpc` live-deny in CI | ❌ | ✅ probed (`--print` blocked a rail write) | ✅ **live deny-proof DONE** — real `copilot -p` turns against a frozen rail on 1.0.73 blocked the rail edit under the explicit allowlist; proceeded only under `--allow-all-tools` |
 
 ## G. Governance
 
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Unbypassable commit-time CI gate | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ the **enforcement tier** for Copilot (`rails-guard-ci`); the in-session hook is advisory only |
+| Unbypassable commit-time CI gate | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ the **unbypassable hard tier** for Copilot (`rails-guard-ci`), covering both fail-open windows (hook crash and `--allow-all-tools`); the in-session hook otherwise enforces headless |
 | Admin/org-level in-session enforcement | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ `strictKnownMarketplaces` present in 1.0.73; `policy.d` machine-hook tier **not found** in this build — deferred/unverified |
 
 ## Reading the matrix — tiers
@@ -101,29 +104,38 @@ existing required job instead).
    MCP coverage; Codex adds shell gating and the only formal `adlc run p5`
    fixture. CC's gaps: no shell gating (intentional), no live deny proof in CI,
    fail-open hook crashes.
-3. **Cursor, Antigravity & Copilot — advisory in-session tier, CI-gate as the
-   real control.** All three have a **fail-open** in-session host contract, so
-   the commit-time CI gate is the enforcement tier:
+3. **Cursor & Antigravity — advisory in-session tier, CI-gate as the real
+   control.** Both have a **fail-open** in-session host contract, so the
+   commit-time CI gate is the enforcement tier:
    - **Cursor** — full command suite, but the deny's host reliability is the open
      GA gate and P5 runs in one context.
    - **Antigravity** — fail-open host, single-lens P5, no build-gate or context
      defense; leans hardest on the CI gate (by design).
-   - **Copilot** — **built to the verified 1.0.73 contract, not the pre-probe
-     plan.** The in-session hook is **fail-open** (a crashed / killed / timed-out
-     hook applies no deny — appendix §1.2), the **same tier as Cursor/agy, not
-     "stronger."** Deny is a non-empty `{reason}` object on stdout at exit 0
-     (**not** `permissionDecision`, **not** exit 2). Full context/skill/MCP/agent
-     surface is wired and the adapter converts internal errors to denies, but an
-     OS-kill or `timeoutSec` timeout is a genuine fail-open window, and the
-     end-to-end live deny smoke is still outstanding (blocked by org policy in the
-     probe). Distinctive-but-unconfirmed: the `--deny-tool shell` fleet option
-     (verified) removes shell entirely, and a machine `policy.d` tier is
-     **deferred** (`policy.d` not found in 1.0.73).
+
+4. **Copilot — enforces headless (live-verified), CI-gate as the unbypassable
+   hard tier.** **Built to, and live-verified against, the corrected 1.0.73
+   contract — not the pre-probe plan.** The in-session `preToolUse` hook's
+   `{reason}` deny (non-empty object on stdout at exit 0 — **not**
+   `permissionDecision`, **not** exit 2) is a permission **ask** that, headless,
+   **defaults to DENY and blocks the tool, overriding the `--allow-tool`
+   allowlist** (proven live: real `copilot -p` turns left the rail file
+   unchanged). So it is **stronger than Cursor/agy's advisory tier — but not
+   "strongest of the seven,"** because it has exactly two fail-open windows:
+   `--allow-all-tools`/`--yolo` (auto-approves the ask, neutering the hook) and a
+   crashed/killed/timed-out hook (no ask raised — appendix §1.1/§1.2). The fleet
+   adapter therefore defaults to an explicit `--allow-tool` allowlist, never
+   `--allow-all-tools`, and the CI diff gate (`rails-guard-ci`) is the
+   unbypassable hard tier covering both windows. Full context/skill/MCP/agent
+   surface is wired; the live deny-proof is DONE and only the marketplace install
+   convenience smoke stays gated on an unrestricted CI account. Distinctive: the
+   `--deny-tool shell` fleet option (verified) removes shell entirely, and a
+   machine `policy.d` tier is **deferred** (`policy.d` not found in 1.0.73).
 
 ## Maintenance note
 
 Update this file when an integration ships a capability change (the same PR
 that changes `plugins/<harness>/` or its integration doc). The Copilot column is
-pinned to [`./copilot-probe-appendix.md`](./copilot-probe-appendix.md); flip the
-outstanding 🧪/⚠️ live-smoke cells to ✅ only after the end-to-end
-`ADLC_COPILOT_LIVE_INSTALL=1` proof runs in an unrestricted account.
+pinned to [`./copilot-probe-appendix.md`](./copilot-probe-appendix.md); the
+in-session deny-proof is DONE, so the remaining ⚠️ cell is the marketplace
+install/uninstall convenience smoke — flip it to ✅ only after the
+`ADLC_COPILOT_LIVE_INSTALL=1` proof runs in an unrestricted CI account.

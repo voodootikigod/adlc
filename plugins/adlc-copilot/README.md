@@ -30,17 +30,27 @@ copilot plugin install adlc-copilot@adlc
 ## Enforcement posture (read this)
 
 The `preToolUse` rails-guard hook denies a frozen-rail edit by emitting
-`{"reason":"…"}` on stdout (the deny shape verified against Copilot CLI 1.0.73 —
-see [`docs/integrations/copilot-probe-appendix.md`](../../docs/integrations/copilot-probe-appendix.md)).
+`{"reason":"…"}` on stdout — the deny shape verified end-to-end against Copilot
+CLI 1.0.73 (the #240 live deny-proof; see
+[`docs/integrations/copilot-probe-appendix.md`](../../docs/integrations/copilot-probe-appendix.md)).
 
-**Copilot hooks fail _open_ on a crashed/timed-out hook process** (a failed hook
-yields no decision, so the tool proceeds). This adapter mitigates that by never
-throwing to the OS — any internal error is converted into a deny
-(application-level fail-safe) — but an OS-level kill or a blown `timeoutSec`
-budget is a genuine fail-open window. **Therefore the in-session hook is
-advisory-tier; the unbypassable rail guarantee is the CI diff gate**
-(`rails-guard-ci`), the same backstop ADLC uses for shell-driven edits. Do not
-treat the in-session hook as the enforcement boundary.
+**The deny is a permission _ask_, not a hard block — and that ask enforces the
+rail unless you run with `--allow-all-tools`.** Verified live:
+
+- **Default / explicit `--allow-tool <tool>`** (even `--allow-tool edit`): the
+  ask can't be answered headless, so it **defaults to deny and blocks the tool**,
+  overriding the tool allowlist. The rail is protected.
+- **`--allow-all-tools` / `--yolo`**: an allow-all override auto-approves the
+  hook's ask, so the edit **proceeds** — the hook is neutered. **Do not run
+  Copilot with `--allow-all-tools` if you want in-session rail protection** (the
+  fleet adapter defaults to an explicit `--allow-tool` allowlist for this reason).
+- **Crash / timeout**: no ask is raised → **fail-open**. The adapter never throws
+  (internal errors convert to a deny, written synchronously to fd 1), so the only
+  crash window is an OS-level kill or a blown `timeoutSec`.
+
+**The unbypassable guarantee is the CI diff gate (`rails-guard-ci`)**, which
+covers the `--allow-all-tools` and crash fail-open windows — treat it, not the
+in-session hook, as the hard enforcement boundary.
 
 The rail-decision logic is a verbatim port of the canonical `@adlc/core`
 classifier; `test/shell-drift.test.mjs` pins it so there is no divergent

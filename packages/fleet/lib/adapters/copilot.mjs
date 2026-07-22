@@ -1,21 +1,33 @@
 // WorkerAdapter: GitHub Copilot CLI (`copilot -p`, non-interactive). Model plane (K2).
 //
-// DEFAULT invocation: `copilot -p <prompt> --allow-all-tools` — Copilot's
-// non-interactive mode REQUIRES an allow-all-tools posture to run without
-// approval prompts (verified against Copilot CLI 1.0.73; text output only, no
-// JSON mode — see docs/integrations/copilot-probe-appendix.md).
+// PERMISSION POSTURE — verified end-to-end against Copilot CLI 1.0.73 (the
+// #240 live deny-proof; see docs/integrations/copilot-probe-appendix.md):
 //
-// Permission posture is tunable. Denial always beats allow (even
-// --allow-all-tools), so a fleet worker can strip capabilities:
-//   * denyShell: true     → appends `--deny-tool shell` (removes the whole shell
-//                           tool category — a read/write-only worker).
-//   * allowTools/denyTools → extra `--allow-tool`/`--deny-tool` patterns
-//                           (kind(argument): shell/write/url/<mcp-server>).
-// Overridable wholesale via `command`/`args` (a CLI change is a config fix).
+// A `preToolUse` rails-guard hook denies a rail edit by raising a permission
+// *ask* (its `{reason}` becomes the ask message). Headless, that ask cannot be
+// answered by a human, so it defaults to DENY and BLOCKS the tool — and it
+// overrides an explicit `--allow-tool`. The ONE thing that neuters it is
+// `--allow-all-tools`/`--yolo`, which installs an allow-all override that
+// auto-approves the hook's ask. So a fleet worker must NOT run with
+// `--allow-all-tools` if in-session rail protection is wanted.
+//
+// DEFAULT invocation therefore uses an explicit tool ALLOWLIST
+// (`--allow-tool write --allow-tool shell`; reads are auto-allowed), which lets
+// non-rail edits run unattended while the rails-guard hook still blocks rail
+// edits. Set `allowAllTools: true` only for a CI-gate-only worker that
+// deliberately forgoes in-session rail enforcement.
+//
+// Denial always beats allow, so `denyShell`/`denyTools` still strip capability.
+// Overridable wholesale via `command`/`args`. Text output only (no JSON mode).
 import { defaultExec, mapResult } from './_shared.mjs';
 
 export const name = 'copilot';
 export const pool = 'default';
+
+// Tools a worker needs to make progress unattended. Reads are auto-allowed by
+// the CLI; `write` covers edit/create, `shell` covers command execution. The
+// rails-guard hook still gates rail PATHS within these tools.
+const DEFAULT_ALLOW_TOOLS = Object.freeze(['write', 'shell']);
 
 export async function dispatch({
   worktree,
@@ -25,14 +37,22 @@ export async function dispatch({
   exec = defaultExec,
   command = 'copilot',
   args,
-  denyShell = false,
+  allowAllTools = false,
   allowTools,
   denyTools,
+  denyShell = false,
 }) {
   let argv = args;
   if (!argv) {
-    argv = ['-p', prompt, '--allow-all-tools'];
-    for (const tool of allowTools ?? []) argv.push('--allow-tool', tool);
+    argv = ['-p', prompt];
+    if (allowAllTools) {
+      // Opt-in autonomy: neuters the in-session rails-guard hook (the hook's
+      // deny-ask is auto-approved). Rail enforcement then relies solely on the
+      // rails-guard-ci diff gate.
+      argv.push('--allow-all-tools');
+    } else {
+      for (const tool of allowTools ?? DEFAULT_ALLOW_TOOLS) argv.push('--allow-tool', tool);
+    }
     for (const tool of denyTools ?? []) argv.push('--deny-tool', tool);
     if (denyShell) argv.push('--deny-tool', 'shell');
   }

@@ -12,12 +12,13 @@
 | Binary | `@github/copilot` (GitHub Copilot CLI) |
 | Version | **1.0.73** |
 | Platform | `darwin-arm64` |
-| Evidence source | Bundled `app.js` (the shipped application) + a live example hook (`~/.copilot/hooks/superterm.json`) |
-| Live model leg | **BLOCKED** on this account — org Copilot policy returns `Access denied by policy settings`; the agent loop never runs, so no tool call fires and hooks cannot be exercised end-to-end here. The live deny-proof must run in an environment with an unrestricted subscription (CI, behind `ADLC_COPILOT_LIVE_INSTALL=1`). |
+| Evidence source | Bundled `app.js` (the shipped application) + a live example hook (`~/.copilot/hooks/superterm.json`) + **a live end-to-end deny-proof** (a real `copilot -p` model turn against a frozen rail) |
+| Live model leg | **DONE.** Ran against 1.0.73 on an entitled personal Copilot account. The live proof CORRECTED the static read of the deny mechanism — see §1.1/§1.2. (First attempts were blocked by a feature-entitlement `403 "not authorized to use this Copilot feature"`, initially mis-surfaced as an "organization policy" denial; resolved by using an entitled account.) |
 
-All "verified" facts below are read from the shipped implementation (static),
-which is authoritative for the contract shape. Only the *end-to-end* deny
-behavior remains gated on the live leg.
+Most facts below are read from the shipped implementation (static). The
+**enforcement** facts (§1.1–§1.2) were additionally proven end-to-end with a
+live model turn — and the live run overturned the static-only conclusion, which
+is exactly why the live leg was indispensable.
 
 ## 1. Hook decision function (authoritative)
 
@@ -44,38 +45,66 @@ function decision(hookType, e) {
 }
 ```
 
-And the invocation site (`hook.end`):
+> **`Y3t` is the TELEMETRY classifier, not the enforcement path.** It labels a
+> hook result `allow`/`deny`/`modify` for the `hook_end` event log. The live
+> deny-proof (below) proved that emitting a non-empty object does **not** by
+> itself block a tool — the real enforcement routes a "deny" through the
+> permission system. Static reading alone got this wrong; the live run corrected it.
+
+### 1.1 preToolUse deny contract — the deny is a permission *ask* (LIVE-VERIFIED)
+
+The output **shape** is confirmed: a `preToolUse` hook signals a deny by printing
+a **non-empty JSON object** whose `reason` field carries the message. `permissionDecision`
+does not exist in the bundle; the exit code is not consulted. **Canonical deny for
+a frozen-rail edit:** print `{"reason":"…"}` to stdout, exit 0; print nothing (or `{}`) to allow.
+
+But the *mechanism* is a permission **ask**, not a hard block. The enforcement
+site is:
 
 ```js
-// r is the decision; on hook failure it is undefined (no deny is applied)
-let r = n.success ? decision(n.hookType, n.output) : void 0;
+// the hook "deny" raises a permission request; reason → the ask message
+requestHookPermission({ kind: "hook", toolCallId, toolName, toolArgs, hookMessage: a.reason });
+hookProcessorResolveToolAsk(toolCallId, reason, decision?.kind, …);
 ```
 
-### 1.1 preToolUse deny contract — CORRECTED
+**Live deny-proof result (real `copilot -p` turns against a frozen rail):**
 
-| Plan 🧪 assumption | Verified fact (1.0.73) |
+| Permission mode | Rail edit via a hook `{reason}` deny |
 | --- | --- |
-| Deny via stdout `{"permissionDecision":"deny","permissionDecisionReason":"…"}` **or** exit 2 | Deny via emitting a **non-empty JSON object** on stdout. The string `permissionDecision` **does not appear anywhere in the CLI bundle.** Exit code is **not** consulted for the decision. |
-| Reason field `permissionDecisionReason` | The deny reason is the `reason` field of the output object; it is surfaced downstream as `hookMessage` (`{toolCallId, toolName, toolArgs, hookMessage: a.reason}`). |
+| Default / explicit `--allow-tool <tool>` (even `--allow-tool edit`) | **BLOCKED.** Headless, the ask cannot be answered by a human, so it defaults to DENY — and it **overrides the tool allowlist.** The rail file was unchanged; Copilot reported *"the edit was blocked… cannot request confirmation in non-interactive mode."* The hook's shell classifier also blocked a `printf > file` Bash workaround. |
+| `--allow-all-tools` / `--yolo` | **PROCEEDS (not blocked).** The allow-all path installs `allowAllPermissionOverride`, which auto-approves the hook's ask. The rail edit went through despite the hook emitting the correct `{reason}`. |
+| Interactive | The human sees `hookMessage` (the reason) and can decline. |
 
-**Canonical deny for a frozen-rail edit:** print `{"reason":"ADLC rail frozen: <path>"}`
-to stdout and exit 0. Print nothing (or `{}`) to allow.
+**So the rails-guard hook DOES enforce rails headless — unless `--allow-all-tools`
+is passed.** That single flag is the neutralizer, which is why the fleet adapter
+defaults to an explicit `--allow-tool` allowlist instead of `--allow-all-tools`.
 
-### 1.2 Fail-open on hook error — CORRECTED (this is the big one)
+### 1.2 Fail-open only on crash or `--allow-all-tools` — CORRECTED (twice)
 
-| Plan 🧪 assumption | Verified fact (1.0.73) |
+The original plan claimed fail-**closed** on crash ("stronger than agy/Cursor").
+The static read then over-corrected to "fail-**open**, advisory-only." The live
+truth is in between and precise:
+
+| Condition | Outcome |
 | --- | --- |
-| "Fail-closed on hook crash — a crashed rails-guard hook **denies** instead of letting the write through; **stronger than agy/Cursor** (both fail open)." | **FALSE.** On `success === false` (crash, non-zero exit, timeout, or unparseable stdout) the decision is `undefined`, so **no deny is applied and the tool proceeds** — i.e. Copilot hooks **fail OPEN**, the same weakness as agy and Cursor. The `failClosed` code paths in the binary belong to *enterprise managed-settings* determination, a separate mechanism unrelated to hook execution errors. |
+| Working hook deny, no `--allow-all-tools` | **Enforced** — tool blocked (overrides `--allow-tool`). |
+| Working hook deny, `--allow-all-tools`/`--yolo` | **Not enforced** — ask auto-approved. |
+| Hook **crashes / times out / non-zero / unparseable** | **Fail-OPEN** — no ask is raised (`hook.end` `success:false` → `decision=undefined`), so the tool proceeds under whatever the permission mode already allows. |
 
-**Design consequence for `plugins/adlc-copilot`:**
-- The in-session `preToolUse` rails-guard hook is **best-effort**: it must emit a
-  deny object when it intends to deny and must **never crash** (a crash = silent
-  allow). Zero-dependency, defensive, wrapped so any internal error still prints
-  a deny object rather than throwing.
-- The **unbypassable** rail guarantee is the CI diff gate (`rails-guard-ci`) — the
-  same backstop ADLC already relies on for Bash-based edits. The integration doc
-  and capability matrix must state Copilot's in-session hook as **fail-open
-  (advisory-tier), CI-gate as the enforcement tier** — not "stronger than agy."
+(The `failClosed` code paths in the binary are *enterprise managed-settings*
+determination — unrelated to hook execution.)
+
+**Design consequences for `plugins/adlc-copilot`:**
+- The `preToolUse` rails-guard hook emits `{"reason":…}` and must **never crash**
+  (a crash raises no ask → fail-open); internal errors are converted to a deny and
+  written synchronously to fd 1 so `process.exit` can't truncate it.
+- **Fleet workers must NOT use `--allow-all-tools`** (it auto-approves the deny-ask).
+  The adapter defaults to `--allow-tool write --allow-tool shell` so non-rail edits
+  run unattended while rail edits are blocked by the hook.
+- The **unbypassable** guarantee remains the CI diff gate (`rails-guard-ci`) — it
+  covers the crash and `--allow-all-tools` fail-open windows. Rate the in-session
+  hook as **enforcing-when-not-allow-all, best-effort (fails open on crash)**, with
+  CI as the hard tier.
 
 ### 1.3 postToolUse / permissionRequest
 
@@ -144,8 +173,11 @@ From `copilot help permissions`:
 - `--deny-tool shell` (bare kind) denies **all** shell commands → confirms the
   fleet "shell category removal" worker option.
 - `--available-tools` / `--excluded-tools` filter which tools the model can see.
-- Non-interactive `copilot -p "<prompt>"` requires `--allow-all-tools` (or
-  `--allow-all` / `--yolo`); **no JSON output mode** — text output only.
+- Non-interactive `copilot -p "<prompt>"` needs a headless permission posture —
+  **either** `--allow-all-tools`/`--yolo` (auto-approves everything, incl. hook
+  deny-asks) **or** an explicit `--allow-tool <tool>` allowlist (live-verified: the
+  session runs, listed tools proceed, and any unlisted tool's ask — including a
+  hook's deny-ask — defaults to deny). **no JSON output mode** — text output only.
 
 ## 6. Net effect on #242
 
@@ -154,14 +186,17 @@ From `copilot help permissions`:
 | Top-tier integrable (skills/agents/MCP/plugins/hooks all present) | ✅ Confirmed |
 | Reads `.claude/skills` (byte-share skills) | ✅ Confirmed |
 | Plugin bundles hooks/agents/skills/MCP/LSP | ✅ Confirmed |
-| Deny via `permissionDecision` / exit 2 | ❌ Wrong — it's a non-empty `{reason}` object |
-| Fail-closed on hook crash (stronger than agy/Cursor) | ❌ Wrong — **fail-open**, same tier as agy/Cursor |
+| Deny via `permissionDecision` / exit 2 | ❌ Wrong — it's a non-empty `{reason}` object that raises a permission **ask** |
+| Fail-closed on hook crash (stronger than agy/Cursor) | ❌ Wrong — but so was "fail-open advisory-only": **live-verified**, the hook deny **enforces** (blocks the tool, overrides `--allow-tool`) UNLESS `--allow-all-tools` is passed; it fails open only on hook crash or `--allow-all-tools` |
 | Hook entry `command`/`timeout` (CC shape) | ❌ Wrong — `bash`/`timeoutSec` |
 | stdin `{tool_name, tool_input}` | ❌ Wrong — `{toolName, toolArgs(JSON string)}` |
 | Three-tier enterprise enforcement (`policy.d`, managed plugins, `strictKnownMarketplaces`) | ⏳ `strictKnownMarketplaces` present in bundle; `policy.d` string not found in this build — **defer/verify** before claiming |
 
-**Bottom line:** Copilot is still a top-tier integration, but its in-session
-hook enforcement is **advisory (fail-open)**, not the "strongest of the seven"
-the plan advertised. `plugins/adlc-copilot` must be built to that corrected
-contract: deny via `{reason}`, never crash, and lean on the CI diff gate as the
-real enforcement backstop.
+**Bottom line:** Copilot is a top-tier integration whose in-session `preToolUse`
+hook **does enforce rails headless** (the deny-ask defaults to deny and overrides
+`--allow-tool`) — as long as the session is not run with `--allow-all-tools`,
+which auto-approves the ask. `plugins/adlc-copilot` is built to that verified
+contract: deny via `{reason}`, never crash (a crash fails open), the fleet adapter
+uses an explicit `--allow-tool` allowlist (never `--allow-all-tools`), and the
+`rails-guard-ci` diff gate is the hard backstop covering the crash / allow-all
+fail-open windows.
