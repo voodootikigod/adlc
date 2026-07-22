@@ -131,6 +131,9 @@ export function decide(payload, { env = process.env, tracker } = {}) {
       if (cls === 'mutating' && enforcing) {
         const gate = checkBuildGate({ sessionID, tracker, root, env });
         if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
+        if (gate.reason && gate.reason.includes('default_session')) {
+          console.error(`[adlc-rails-guard] Advisory: ${gate.reason}`);
+        }
       }
     }
     return allow();

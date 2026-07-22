@@ -87,7 +87,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   function withLock(fn) {
     let acquired = false;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       try {
         mkdirSync(lockDir);
         acquired = true;
@@ -95,11 +95,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       } catch {
         try {
           const stat = statSync(lockDir);
-          if (Date.now() - stat.mtimeMs > 5000) {
+          if (Date.now() - stat.mtimeMs > 3000) {
             rmdirSync(lockDir, { recursive: true });
           }
         } catch { /* ignore */ }
+        const end = Date.now() + 5;
+        while (Date.now() < end) { /* synchronous spin delay */ }
       }
+    }
+    if (!acquired) {
+      console.error(`[adlc-rails-guard] Warning: could not acquire session lock ${lockDir}`);
     }
     try {
       return fn();
@@ -205,7 +210,7 @@ export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) 
     return { decision: 'allow', reason: 'high-risk ticket, but context-fitness is not degraded' };
   }
   if (sessionID === 'default_session') {
-    return { decision: 'allow', reason: 'high-risk ticket in degraded context, but session ID was unresolvable (default_session); advisory warning issued' };
+    return { decision: 'allow', reason: 'high-risk ticket in degraded context, but session ID was unresolvable (default_session)' };
   }
   if (bypass) {
     return { decision: 'allow', reason: 'high-risk build in a degraded session, but ADLC_BUILD_GATE_BYPASS=1 was set', overridden: true };
