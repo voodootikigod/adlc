@@ -141,6 +141,30 @@ test('a diff touching only the predicate file still reaches the mutation gate', 
   );
 });
 
+// A green gate must never be a SILENT green. Adversarial review flagged that a
+// CSS-only diff now yields kind:'nothing' and exit 0, exempting a production
+// change from the required gate without saying so.
+//
+// The answer is NOT to add .css to the source set. The shared mutator is
+// regex-based with JS-shaped operators, and on CSS it emits both nonsense
+// (`html > body` → `html <= body`) and one genuinely behavioural mutant
+// (`opacity: 0` → `opacity: 1`) that NO test in this repository could kill —
+// there are no CSS tests. Admitting CSS would make the required gate
+// permanently red on any stylesheet change, which is worse than not covering it.
+//
+// What was wrong is the silence. classify() now reports what it skipped, so
+// "this gate does not cover that file type" is a visible decision rather than
+// an invisible hole.
+test('classify reports files it skipped rather than silently passing', () => {
+  const decision = classify(['apps/docs/app/global.css'], 12);
+  assert.equal(decision.kind, 'nothing');
+  assert.deepEqual(decision.skipped, ['apps/docs/app/global.css']);
+});
+
+test('classify reports nothing skipped when the diff is genuinely empty', () => {
+  assert.deepEqual(classify([], 12).skipped, []);
+});
+
 // THE CONTRACT TEST. Both bugs in this file came from the same predicate living
 // in two places — packages/hollow-test/lib/targets.mjs and here — and drifting.
 // The wrapper deciding a file is not source means hollow-test is never invoked
@@ -255,7 +279,12 @@ test('testTargetFor returns null for an unrecognised top-level path', () => {
 test('classify: no eligible files reports "nothing"', () => {
   const root = fixtureRoot([]);
   try {
-    assert.deepEqual(classify(['README.md', 'packages/foo/test/x.test.mjs'], 12, root), { kind: 'nothing' });
+    // `skipped` names what was passed over, so a green gate is never a silent
+    // one — see 'classify reports files it skipped rather than silently passing'.
+    assert.deepEqual(classify(['README.md', 'packages/foo/test/x.test.mjs'], 12, root), {
+      kind: 'nothing',
+      skipped: ['README.md', 'packages/foo/test/x.test.mjs'],
+    });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -135,7 +135,17 @@ export function hollowTestWouldMutate(file) {
  */
 export function classify(changed, requestedMax, root = ROOT) {
   const eligible = changed.filter(hollowTestWouldMutate);
-  if (eligible.length === 0) return { kind: 'nothing' };
+  // Report what was skipped. A green gate must not be a SILENT green: a diff of
+  // files this tool does not mutate (CSS, MDX, docs) exits 0, and without naming
+  // them "the gate passed" is indistinguishable from "the gate looked".
+  //
+  // Deliberately NOT solved by widening the source set. The shared mutator is
+  // regex-based with JS-shaped operators; on CSS it emits nonsense
+  // (`html > body` -> `html <= body`) alongside one real behavioural mutant
+  // (`opacity: 0` -> `opacity: 1`) that no test here could kill, since there are
+  // no CSS tests. Admitting it would pin the required gate permanently red on
+  // any stylesheet change — worse than declaring the type uncovered out loud.
+  if (eligible.length === 0) return { kind: 'nothing', skipped: changed.filter((f) => !hollowTestWouldMutate(f)) };
 
   const covered = [];   // [file, testTarget]
   const uncovered = [];
@@ -216,6 +226,10 @@ export function main() {
 
   if (decision.kind === 'nothing') {
     console.log('mutation-gate: no source files changed — nothing to mutate.');
+    if (decision.skipped?.length) {
+      console.log(`mutation-gate: ${decision.skipped.length} changed file(s) are not a mutable source type, so this gate does not cover them:`);
+      for (const f of decision.skipped) console.log(`  ${f}`);
+    }
     process.exit(0);
   }
 
