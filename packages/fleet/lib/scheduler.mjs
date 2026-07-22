@@ -5,7 +5,14 @@
 // (dispatch, gate, prosecute, merge, flail, git) is injected, so the real state
 // machine below is exercised directly in tests with deterministic stubs.
 
+import { fence } from '@adlc/core';
 import { computeReady, selectDispatchable, unsatisfiableInSubset } from './plan.mjs';
+
+// issue #280: same cap as charters.mjs's re-fencing of these same deadEnds —
+// capping here (where the raw log first enters a deadEnd) is what actually
+// bounds worst-case size; charters.mjs's later re-fence of an
+// already-capped string is then a no-op truncation in the common case.
+const DEAD_END_MAX_CHARS = 12_000;
 
 /**
  * Plan one dispatch round: given the full ticket set and current run status,
@@ -63,7 +70,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', deadEnds };
     }
     if (build.exitCode !== 0 || build.timedOut) {
-      deadEnds.push(fence('BUILD', build.output));
+      deadEnds.push(fence('BUILD', build.output, DEAD_END_MAX_CHARS));
       if (canRetry() && (await effects.flail({ ticket })).flail) {
         return fail('flail-detector diagnosed a genuine flail — skipping the second strike');
       }
@@ -73,7 +80,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     log(`${ticket.id} strike ${strikes}: gating`);
     const gate = await effects.gate({ ticket });
     if (!gate.ok) {
-      deadEnds.push(fence('GATE', gate.output));
+      deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
       if (canRetry() && (await effects.flail({ ticket })).flail) {
         return fail('flail-detector diagnosed a genuine flail — skipping the second strike');
       }
@@ -92,7 +99,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
       return fail(`prosecution unavailable (fail closed): ${pros.reason}`);
     }
     if (pros.verdict === 'block') {
-      deadEnds.push(fence('PROSECUTION', pros.reason));
+      deadEnds.push(fence('PROSECUTION', pros.reason, DEAD_END_MAX_CHARS));
       if (canRetry()) continue; // fix strike
       effects.record?.('p5', false);
       return fail('prosecution blocking after strikes exhausted');
@@ -102,7 +109,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     log(`${ticket.id} strike ${strikes}: merging`);
     const merge = await effects.merge({ ticket });
     if (!merge.ok) {
-      deadEnds.push(fence('POST_MERGE', merge.output ?? 'post-merge gate failed'));
+      deadEnds.push(fence('POST_MERGE', merge.output ?? 'post-merge gate failed', DEAD_END_MAX_CHARS));
       if (canRetry()) continue;
       return fail('post-merge gate failed after strikes exhausted');
     }
@@ -134,10 +141,4 @@ export function reconcileResume(_all, status, { isAncestor, integrationBranch })
     }
   }
   return { ...status, tickets };
-}
-
-function fence(label, content) {
-  // Untrusted content (gate logs, findings) fenced as inert data (spec §5).
-  const tag = `${label}-${(content ?? '').length}`;
-  return `<<UNTRUSTED:${label}:${tag}>>\n${content ?? ''}\n<<END:${label}:${tag}>>`;
 }

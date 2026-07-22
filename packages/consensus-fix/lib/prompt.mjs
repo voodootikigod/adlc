@@ -4,12 +4,13 @@
  */
 
 import { buildFileExcerpt } from './region.mjs';
+import { tail } from '@adlc/core';
 
-/** Tail the last `maxChars` characters of a string. */
-export function tail(str, maxChars = 4000) {
-  if (str.length <= maxChars) return str;
-  return str.slice(str.length - maxChars);
-}
+// Re-exported for backward compatibility — packages/consensus-fix/test and
+// lib/region.mjs both import `tail` from this file. The implementation now
+// lives in @adlc/core (issue #280: hoisted so parallax and fleet can share
+// the same length-capping helper instead of each growing their own copy).
+export { tail };
 
 /**
  * Build the user prompt for asking the LLM to produce a minimal fix.

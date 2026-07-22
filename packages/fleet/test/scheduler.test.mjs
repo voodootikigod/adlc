@@ -86,6 +86,19 @@ test('two-strike: first build fails with dead-end context, second passes (AC3e)'
   assert.ok(seen[1].deadEnds.length > 0 && /UNTRUSTED:BUILD/.test(seen[1].deadEnds[0]), 'strike 2 receives fenced failure context');
 });
 
+test('two-strike: a pathologically large build failure output is capped in the dead-end (issue #280)', async () => {
+  const hugeOutput = 'z'.repeat(500_000);
+  let n = 0;
+  const seen = [];
+  const r = await advanceTicket(T('T1'), {
+    dispatch: ({ deadEnds }) => { seen.push([...deadEnds]); return ++n === 1 ? { exitCode: 1, output: hugeOutput } : okBuild(); },
+    gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail,
+  });
+  assert.equal(r.state, 'merged');
+  assert.ok(r.deadEnds[0].length < 100_000, `expected the fenced dead-end to be capped well under the raw 500,000-char output, got ${r.deadEnds[0].length}`);
+  assert.match(r.deadEnds[0], /truncated/);
+});
+
 test('two-strike: second failure marks the ticket failed (AC3e)', async () => {
   const r = await advanceTicket(T('T1'), {
     dispatch: () => ({ exitCode: 1, output: 'always fails' }), gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail,

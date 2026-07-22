@@ -281,3 +281,7 @@ export function classifyShellCommand(text: string): {
 
 // lib/railpath.mjs
 export function resolveRailPath(filePath: string, root: string): string;
+
+// lib/text.mjs — shared text-shaping helpers for capping prompt payloads
+export function tail(str: string, maxChars?: number): string;
+export function fence(label: string, content: string, maxChars: number): string;

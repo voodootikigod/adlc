@@ -117,13 +117,14 @@ export async function runEdgeMode(ticketA, ticketB, opts = {}) {
  * ROUTE MODE: fan N cheap agents to answer the question, then judge equivalence.
  * @param {string} question
  * @param {Array<{path: string, content: string}>} contextFiles
- * @param {object} opts - { n, tier }
+ * @param {object} opts - { n, tier, contextCap }
  * @returns {Promise<{ equivalent, answer, variants, rawAnswers }>}
  */
 export async function runRouteMode(question, contextFiles = [], opts = {}) {
   const { n = 3, tier = 'cheap' } = opts;
+  const { contextCap } = opts;
 
-  const answerPrompt = buildRouteAnswerPrompt(question, contextFiles);
+  const answerPrompt = buildRouteAnswerPrompt(question, contextFiles, { contextCap });
   const fanResults = await fan({ prompt: answerPrompt, tier }, n);
 
   const { rawAnswers, errors } = parseFanAnswers(fanResults);

@@ -47,6 +47,7 @@ parallax --route "question" --context spec.md --context arch.md
 | `--edge` | false | Edge mode: follow with two ticket IDs as positionals |
 | `--route <text>` | — | Route mode: question to route |
 | `--context <file>` | — | Route mode: context file (repeatable) |
+| `--context-cap <n>` | 6000 | Route mode: max chars embedded per `--context` file (tail-biased). A file over the cap is marked truncated in-prompt. |
 | `--tickets <path>` | `.adlc/tickets.json` | Tickets file for edge mode |
 | `--n <int>` | 3 | Fan width (number of independent readings) |
 | `--threshold <0-1>` | 0.25 | Ambiguity score gate threshold |

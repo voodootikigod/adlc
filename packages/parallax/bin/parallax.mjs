@@ -43,6 +43,7 @@ Flags:
                       .adlc/manifest.jsonl via gate-manifest
   --tickets <path>    tickets file (default .adlc/tickets.json)
   --context <file>    context file(s) for --route mode (repeatable)
+  --context-cap <n>   max chars embedded per --context file (default 6000)
 
 Exit codes: 0 = gate passes, 1 = operational error, 2 = gate fails`;
 
@@ -58,6 +59,7 @@ const { values, positionals } = parseArgs({
     // ROUTE MODE
     route: { type: 'string' },
     context: { type: 'string', multiple: true },
+    'context-cap': { type: 'string' },
     // COMMON
     n: { type: 'string', default: '3' },
     threshold: { type: 'string', default: '0.25' },
@@ -86,6 +88,14 @@ if (values['record-verdict'] !== undefined && !values['prompt-only']) {
 }
 
 const tierOverride = values.tier ?? undefined;
+
+let contextCap;
+if (values['context-cap'] !== undefined) {
+  contextCap = parseInt(values['context-cap'], 10);
+  if (!Number.isInteger(contextCap) || contextCap < 0) {
+    opError(`--context-cap must be a non-negative integer, got: ${values['context-cap']}`);
+  }
+}
 
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used, so plain
@@ -184,7 +194,7 @@ if (values.route) {
   }
 
   if (values['prompt-only']) {
-    const answerPrompt = buildRouteAnswerPrompt(question, contextFiles);
+    const answerPrompt = buildRouteAnswerPrompt(question, contextFiles, { contextCap });
     const placeholderAnswers = Array.from({ length: n }, (_, i) => `<answer ${i + 1}>`);
     const judgePrompt = buildRouteJudgePrompt(question, placeholderAnswers);
 
@@ -200,6 +210,7 @@ if (values.route) {
     result = await runRouteMode(question, contextFiles, {
       n,
       tier: tierOverride ?? 'cheap',
+      contextCap,
     });
   } catch (err) {
     opError(err.message);
