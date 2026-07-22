@@ -441,6 +441,52 @@ export function renderIssueTitle(needsCeremony) {
  * not guaranteed) rather than throwing mid-run.
  * @param {{number: number, title?: string, body?: unknown}[]} issues
  */
+/**
+ * Reduce every rendering of one actor to a single identity (#265).
+ *
+ * GitHub names the same App actor three ways, and which one you get depends on
+ * the API you asked and the gh version that formatted it:
+ *
+ *   github-actions[bot]   REST, and older gh
+ *   app/github-actions    GraphQL via `gh issue list --json author` (current)
+ *   github-actions        the bare GraphQL Bot `login`
+ *
+ * Comparing raw strings therefore matched a name nothing in this job actually
+ * receives: the author filter rejected the tracker gh reports, findExistingIssue
+ * returned null on BOTH paths, and decideAction opened a duplicate on every push
+ * to main. Normalizing at the comparison — rather than correcting the constant to
+ * today's rendering — is what makes the next gh formatting change a non-event.
+ */
+export function normalizeActorLogin(login) {
+  return String(login ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^app\//, '')
+    .replace(/\[bot\]$/, '');
+}
+
+/** True when a login is written in one of GitHub's bot-actor forms. */
+const isBotFormLogin = (login) => /^app\//.test(String(login ?? '')) || /\[bot\]$/.test(String(login ?? ''));
+
+/**
+ * Authorship check for the unlabeled sweep.
+ *
+ * Name equality alone is NOT sufficient once the '[bot]' suffix is stripped: a
+ * human account literally named `github-actions` would then normalize onto the
+ * managed identity and could have its issue seized by a job holding
+ * `issues: write`. The exact-match comparison this replaces did not have that
+ * hole, so bot-ness is required alongside the name — a fix must not widen the
+ * authorization it was meant to repair. `is_bot` absent means not provably a
+ * bot, which fails closed.
+ */
+function isManagedAuthor(author, authors) {
+  const login = author?.login;
+  if (!login) return false;
+  const normalized = normalizeActorLogin(login);
+  if (!authors.some((a) => normalizeActorLogin(a) === normalized)) return false;
+  return author?.is_bot === true || isBotFormLogin(login);
+}
+
 export function selectTrackingIssue(issues, { authors = null, requireMarker = true } = {}) {
   // The marker is the identity on the UNLABELED sweep, where nothing else
   // distinguishes this job's issue. On the labeled path it must NOT be required:
@@ -459,7 +505,10 @@ export function selectTrackingIssue(issues, { authors = null, requireMarker = tr
   // closed by a job holding `issues: write`, and would let a forged issue divert
   // management away from the real tracker. So on the unlabeled sweep the author
   // must also be one this job could plausibly have created the issue as.
-  if (authors) candidates = candidates.filter((i) => authors.includes(i?.author?.login));
+  // Compared through normalizeActorLogin, never as raw strings — see #265, where
+  // an exact-string match against a name gh does not emit made this filter reject
+  // the job's own tracker and open a duplicate on every run.
+  if (authors) candidates = candidates.filter((i) => isManagedAuthor(i?.author, authors));
 
   // Ambiguity fails closed rather than picking one. Two marked issues means
   // something is wrong (a forgery, or a genuine duplicate); guessing could
@@ -527,7 +576,7 @@ const GH_MAX_BUFFER = 128 * 1024 * 1024;
 // authorization signal. The unlabeled sweep has no such signal and must verify
 // authorship instead — see selectTrackingIssue. Overridable for tests and for
 // repos whose automation runs under a different identity.
-const MANAGED_AUTHORS = (process.env.ADLC_DRIFT_AUTHORS ?? 'github-actions[bot]')
+export const MANAGED_AUTHORS = (process.env.ADLC_DRIFT_AUTHORS ?? 'github-actions[bot]')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);

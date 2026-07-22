@@ -17,6 +17,7 @@ import {
   decideAction,
   selectTrackingIssue,
   MARKER,
+  MANAGED_AUTHORS,
 } from '../ceremony-drift.mjs';
 
 // Heuristic evidence: scope globs already resolve. Indistinguishable from an
@@ -218,8 +219,74 @@ test('an authors filter rejects a forged marker from another author', () => {
 });
 
 test('an authors filter accepts the managed author', () => {
-  const issues = [{ number: 9, body: `${MARKER} real`, author: { login: 'github-actions[bot]' } }];
+  const issues = [{ number: 9, body: `${MARKER} real`, author: { is_bot: true, login: 'github-actions[bot]' } }];
   assert.equal(selectTrackingIssue(issues, { authors: ['github-actions[bot]'] }).number, 9);
+});
+
+// REGRESSION (#265). Every fixture above hand-writes 'github-actions[bot]', the
+// same string the production default hard-coded — so they agreed with each other
+// while both disagreed with reality. `gh issue list --json author` returns the
+// GraphQL actor, which gh renders 'app/github-actions'; recorded verbatim:
+//
+//   $ gh issue view 264 --json author
+//   {"author":{"is_bot":true,"login":"app/github-actions"}}
+//
+// The filter therefore rejected the job's OWN tracker on both lookup paths, and
+// ceremony-drift opened a duplicate on every push to main (12 in two days).
+// These assert against the recorded payload AND the shipped default, so a future
+// edit cannot leave the constant wrong about the outside world unnoticed.
+const GH_RECORDED_BOT_AUTHOR = { is_bot: true, login: 'app/github-actions' };
+
+test('the default managed-author set accepts the author gh actually reports', () => {
+  const issues = [{ number: 9, body: `${MARKER} real`, author: GH_RECORDED_BOT_AUTHOR }];
+  assert.equal(selectTrackingIssue(issues, { authors: MANAGED_AUTHORS })?.number, 9);
+});
+
+// One bot, several renderings across gh versions and the REST/GraphQL split. All
+// must resolve to the same identity, so the tracker survives gh changing how it
+// formats an App actor — the exact class of change that caused #265.
+test('every rendering of the same bot actor is one identity', () => {
+  for (const login of ['app/github-actions', 'github-actions[bot]', 'github-actions', 'GitHub-Actions[bot]']) {
+    const issues = [{ number: 9, body: `${MARKER} real`, author: { is_bot: true, login } }];
+    assert.equal(
+      selectTrackingIssue(issues, { authors: MANAGED_AUTHORS })?.number,
+      9,
+      `login '${login}' should resolve to the managed bot`
+    );
+  }
+});
+
+// Normalization strips the '[bot]' suffix, which ALONE would let a human account
+// literally named 'github-actions' seize the tracker — a privilege escalation the
+// pre-#265 exact-match comparison did not have. Bot-ness is required alongside
+// the name so this fix cannot widen the authorization it was meant to repair.
+test('a human account whose name normalizes to the bot is still rejected', () => {
+  for (const author of [
+    { is_bot: false, login: 'github-actions' },
+    { login: 'github-actions' }, // is_bot absent → not provably a bot → reject
+  ]) {
+    const issues = [{ number: 9, body: `${MARKER} forged`, author }];
+    assert.equal(
+      selectTrackingIssue(issues, { authors: MANAGED_AUTHORS }),
+      null,
+      `author ${JSON.stringify(author)} must not be accepted as the managed bot`
+    );
+  }
+});
+
+// The whole point of the fix: with a tracker present, the job must UPDATE it.
+// #265 was not a lookup curiosity — it changed decideAction's branch from
+// 'update' to 'open' on every run, which is what produced the duplicates.
+test('a recognized tracker updates in place instead of opening a duplicate', () => {
+  const drift = [{ id: 'T1', blocker: 'rails-freeze', rails: ['a.test.mjs'], reason: 'shipped' }];
+  const existing = selectTrackingIssue(
+    [{ number: 230, title: 'stale title', body: `${MARKER} stale`, author: GH_RECORDED_BOT_AUTHOR }],
+    { authors: MANAGED_AUTHORS }
+  );
+  assert.ok(existing, 'the tracker gh reports must be found');
+  const decision = decideAction({ drift, existingIssue: existing });
+  assert.equal(decision.action, 'update');
+  assert.equal(decision.number, 230);
 });
 
 // Guessing between two marked issues risks overwriting or closing the wrong one,
