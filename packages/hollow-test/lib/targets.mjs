@@ -22,7 +22,25 @@ import { globMatch } from '@adlc/core';
 // source, hollow-test is never invoked for it at all, so the required coverage
 // gate goes green without testing the change. A TypeScript-only diff did exactly
 // that. One predicate, one contract, asserted by a cross-contract test.
-const EXCLUDE_PATH_RE = /(?:test|spec)/i;
+// The test exclusion needs BOUNDARIES. It was `/(?:test|spec)/i` — a substring
+// match over the whole path — so any production file whose path merely contained
+// those letters was classified as non-source and silently never mutated. Eleven
+// tracked files at the time this was found, including the entire hollow-test
+// package (this one — the mutation tool exempting itself from mutation), the
+// entire spec-lint package, and gate-manifest's attestation module:
+//
+//   packages/hollow-test/lib/targets.mjs     "hollow-test"
+//   packages/gate-manifest/lib/attest.mjs    "attest"
+//   packages/spec-lint/lib/parse.mjs         "spec-lint"
+//   scripts/run-tests.mjs                    "run-tests"
+//   apps/.../latest/...                      "latest"
+//
+// A coverage gate that reports green by not looking is worse than no gate, and
+// this one hid itself: the predicate defining what gets mutated was exempt from
+// the gate that uses it. Match a whole path SEGMENT, or a `.test.`/`.spec.`
+// filename, and nothing else.
+const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
+const EXCLUDE_FILE_RE = /(?:^|\/)[^/]*\.(?:test|spec)\.[^/]+$/i;
 const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
 
 /**
@@ -31,7 +49,8 @@ const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
  * @param {string} file repo-relative path
  */
 export function isMutableSource(file) {
-  if (EXCLUDE_PATH_RE.test(file)) return false;
+  if (EXCLUDE_DIR_RE.test(file)) return false;
+  if (EXCLUDE_FILE_RE.test(file)) return false;
   return SOURCE_EXT_RE.test(file);
 }
 

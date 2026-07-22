@@ -81,6 +81,66 @@ test('hollowTestWouldMutate admits every source extension hollow-test mutates', 
   }
 });
 
+// REGRESSION: the test/spec exclusion was a SUBSTRING match over the whole path
+// (`/(?:test|spec)/i`), with no segment or filename boundary. Real production
+// source whose path merely contains those letters was therefore classified as
+// non-source and silently never mutated — 11 tracked files at the time this was
+// found, including the ENTIRE hollow-test package (the mutation tool itself),
+// the entire spec-lint package, and gate-manifest's attestation module:
+//
+//   packages/hollow-test/lib/targets.mjs     "hollow-test"
+//   packages/gate-manifest/lib/attest.mjs    "attest"
+//   packages/spec-lint/lib/parse.mjs         "spec-lint"
+//   scripts/run-tests.mjs                    "run-tests"
+//
+// This is the worst direction of failure: the coverage gate reports green by
+// not looking. It also hid itself — a change to targets.mjs could not be
+// mutated, so the predicate defining what gets mutated was exempt from the gate
+// that uses it.
+test('production source is not excluded merely for containing "test"/"spec"', () => {
+  for (const f of [
+    'packages/hollow-test/lib/targets.mjs',
+    'packages/hollow-test/lib/runner.mjs',
+    'packages/hollow-test/bin/hollow-test.mjs',
+    'packages/gate-manifest/lib/attest.mjs',
+    'packages/spec-lint/lib/parse.mjs',
+    'packages/spec-lint/bin/spec-lint.mjs',
+    'scripts/run-tests.mjs',
+    'apps/docs/app/latest/page.tsx', // "latest" contains "test"
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is production source`);
+  }
+});
+
+// The boundary must still exclude genuine tests, or the fix swaps one silent
+// failure for mutating test files themselves.
+test('genuine test and spec paths are still excluded', () => {
+  for (const f of [
+    'packages/foo/test/x.mjs',
+    'packages/foo/tests/x.mjs',
+    'packages/foo/TEST/x.mjs',
+    'spec/z.mjs',
+    'packages/foo/specs/z.mjs',
+    'packages/foo/__tests__/z.mjs',
+    'packages/foo/lib/x.test.mjs',
+    'packages/foo/lib/x.spec.ts',
+    'x.test.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is a test path`);
+  }
+});
+
+// classify()-level proof, and the self-referential one that matters most: a diff
+// touching only the predicate's own file must reach the gate.
+test('a diff touching only the predicate file still reaches the mutation gate', () => {
+  const decision = classify(['packages/hollow-test/lib/targets.mjs'], 12);
+  assert.notEqual(
+    decision.kind,
+    'nothing',
+    'the file defining what gets mutated must not be exempt from mutation'
+  );
+});
+
 // THE CONTRACT TEST. Both bugs in this file came from the same predicate living
 // in two places — packages/hollow-test/lib/targets.mjs and here — and drifting.
 // The wrapper deciding a file is not source means hollow-test is never invoked
