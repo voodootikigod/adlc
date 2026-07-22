@@ -101,6 +101,7 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 /**
  * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
  * Reclaims orphaned lock directories even if owner.json is missing when mtime > 3s.
+ * Writes owner.json atomically via temp file to prevent torn reads under contention.
  * Fails closed (isLockFailed=true) on lock acquisition timeout.
  */
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
@@ -111,6 +112,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   const lockFailures = new Set();
 
+  function writeOwnerFile(payload) {
+    try {
+      const tmpPath = join(lockDir, `owner.tmp.${process.pid}.${Date.now()}.${Math.floor(Math.random() * 10000)}`);
+      writeFileSync(tmpPath, JSON.stringify(payload));
+      renameSync(tmpPath, ownerPath);
+    } catch {
+      try { writeFileSync(ownerPath, JSON.stringify(payload)); } catch { /* ignore fallback write failure */ }
+    }
+  }
+
   function withLock(sessionID, fn, fallback = null) {
     let acquired = false;
     const nonce = `${process.pid}-${Date.now()}-${Math.random()}`;
@@ -118,9 +129,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     for (let i = 0; i < 40; i++) {
       try {
         mkdirSync(lockDir);
-        try {
-          writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, nonce, time: Date.now() }));
-        } catch { /* owner write optional */ }
+        writeOwnerFile({ pid: process.pid, nonce, time: Date.now() });
         acquired = true;
         break;
       } catch {
@@ -128,15 +137,21 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (existsSync(lockDir)) {
             const stat = statSync(lockDir);
             const isStale = Date.now() - stat.mtimeMs > 3000;
-            let isDead = true;
-            if (existsSync(ownerPath)) {
-              try {
-                const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-                isDead = !isPidAlive(owner.pid);
-              } catch { /* ignore parse error */ }
-            }
-            if (isStale && isDead) {
-              try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* ignore */ }
+            if (isStale) {
+              let isDead = false;
+              if (existsSync(ownerPath)) {
+                try {
+                  const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
+                  isDead = !isPidAlive(owner.pid);
+                } catch {
+                  isDead = true; // unreadable after >3s stale window → treat as dead
+                }
+              } else {
+                isDead = true; // missing owner.json after >3s stale window → treat as dead
+              }
+              if (isDead) {
+                try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* ignore */ }
+              }
             }
           }
         } catch { /* ignore */ }
