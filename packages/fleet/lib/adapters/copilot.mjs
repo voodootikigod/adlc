@@ -17,7 +17,9 @@
 // edits. Set `allowAllTools: true` only for a CI-gate-only worker that
 // deliberately forgoes in-session rail enforcement.
 //
-// Denial always beats allow, so `denyShell`/`denyTools` still strip capability.
+// Denial always beats allow, so `denyShell`/`denyTools` still strip capability
+// even under `--allow-all-tools` — live-verified in scripts/copilot-live-deny.mjs
+// (`--deny-tool shell` blocked the shell tool while `--allow-all-tools` was set).
 // Overridable wholesale via `command`/`args`. Text output only (no JSON mode).
 import { defaultExec, mapResult } from './_shared.mjs';
 

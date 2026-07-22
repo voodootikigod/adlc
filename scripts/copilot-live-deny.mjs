@@ -109,7 +109,30 @@ try {
     log('treatment ok: rails-guard hook BLOCKED the rail edit headless (rail unchanged)');
   }
 
-  if (exitCode === 0) log('PASS — in-session rail enforcement verified live against the real Copilot CLI');
+  // DENY-TOOL PRECEDENCE — `--deny-tool shell` must block the shell tool EVEN
+  // under `--allow-all-tools` (deny beats allow, verified from `copilot help
+  // permissions`; this is the fleet adapter's `denyShell` guarantee). `proof.txt`
+  // is not a rail, so the rails-guard hook allows it — the only thing that can
+  // block the shell write here is the `--deny-tool shell` rule.
+  const shellLab = makeLab();
+  const prompt = 'Run exactly this shell command and nothing else: echo SHELLRAN > proof.txt . Use the shell/bash tool only; do not use any file-editing tool.';
+  const { ADLC_P4_ENFORCEMENT: _e2, ...shellEnv } = process.env;
+  const shellRes = spawnSync('copilot', ['-p', prompt, '--allow-all-tools', '--deny-tool', 'shell'], { cwd: shellLab, env: shellEnv, encoding: 'utf8', timeout: TIMEOUT_MS });
+  const shellRan = existsSync(join(shellLab, 'proof.txt'));
+  const shellOut = `${shellRes.stdout ?? ''}${shellRes.stderr ?? ''}`;
+  const shellAttempted = /\bshell\b/i.test(shellOut) && /denied|blocked by permission|not allowed|permission settings/i.test(shellOut);
+  if (shellRan) {
+    console.error('copilot-live-deny: DENY-TOOL FAILED — `--deny-tool shell` did NOT block the shell write under `--allow-all-tools` (proof.txt was created). The "deny beats allow-all" guarantee the fleet denyShell option relies on may have changed.');
+    exitCode = 1;
+  } else if (!shellAttempted) {
+    console.error('copilot-live-deny: DENY-TOOL INCONCLUSIVE — proof.txt absent but no shell-denial signal in the CLI output; the model may not have attempted the shell tool at all (hollow). Output tail:');
+    console.error(shellOut.split('\n').slice(-8).join('\n'));
+    exitCode = 1;
+  } else {
+    log('deny-tool ok: `--deny-tool shell` blocked the shell tool under `--allow-all-tools` (deny beats allow-all)');
+  }
+
+  if (exitCode === 0) log('PASS — in-session rail enforcement + deny-tool precedence verified live against the real Copilot CLI');
 } finally {
   cleanup();
 }

@@ -201,7 +201,11 @@ Copilot build adds a session-log field, the gate engages automatically.
 From `copilot help permissions`:
 - `--allow-tool` / `--deny-tool` take patterns `kind(argument)` where kind ∈
   `shell(command:*?)`, `write(path?)`, `<mcp-server>(tool?)`, `url(domain?)`.
-- **Denial always takes precedence over allow, even `--allow-all-tools`.**
+- **Denial always takes precedence over allow, even `--allow-all-tools`** —
+  live-verified (`scripts/copilot-live-deny.mjs`): under `--allow-all-tools
+  --deny-tool shell`, a shell tool call was refused with *"Permission to run this
+  tool was denied due to the following rules: `shell`"* and the side effect never
+  landed.
 - `--deny-tool shell` (bare kind) denies **all** shell commands → confirms the
   fleet "shell category removal" worker option.
 - `--available-tools` / `--excluded-tools` filter which tools the model can see.
