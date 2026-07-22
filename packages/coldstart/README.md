@@ -23,6 +23,8 @@ coldstart --all     [options]
 |------|---------|-------------|
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
 | `--all` | off | Run the gate on every ticket in the file |
+| `--force` | off | Bypass the cache entirely and re-audit every target ticket |
+| `--max-age <days>` | `30` | Treat a cached verdict older than this as stale; `0` treats every cache entry as stale |
 | `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made |
 | `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` — see below |
 | `--json` | off | Machine-readable JSON output for orchestrators |
@@ -54,6 +56,38 @@ coldstart T1 --prompt-only
 # Use a custom tickets file
 coldstart T3 --tickets path/to/tickets.json
 ```
+
+---
+
+## Caching
+
+A real (non-`--prompt-only`) audit records `{ticketHash, model, gaps}` into
+`.adlc/manifest.jsonl` after it runs. The NEXT run, for the SAME ticket, skips
+the LLM call entirely when it finds a matching entry: same `ticketHash` (the
+ticket's content is unchanged — editing anything about it produces a
+different hash) and same *resolved* model id (not just the same `--tier` —
+switching `ADLC_MODEL_CHEAP` invalidates the cache even though `--tier cheap`
+stays the same flag). A cached run reports `"cached": true` in `--json`
+output and `(cached)` in the human-readable report.
+
+```sh
+# First run audits for real and records the verdict
+coldstart --all
+
+# Second run, nothing changed: instant, no LLM calls
+coldstart --all
+
+# Force a fresh audit regardless of any cache entry
+coldstart --all --force
+
+# Don't trust anything cached more than a week ago
+coldstart --all --max-age 7
+```
+
+Caching only applies to the real LLM path — `--prompt-only` (with or without
+`--record-verdict`) is unaffected, and the `ADLC_GATE_MOCK_RESPONSE` test
+seam never reads or writes the cache (a mocked verdict must never be able to
+shadow, or be shadowed by, a real one).
 
 ---
 

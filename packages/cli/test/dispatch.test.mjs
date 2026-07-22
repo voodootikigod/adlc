@@ -41,9 +41,9 @@ function withTempSpec(contents, fn) {
 }
 
 test('registry exposes the suite tools and omits internal packages', () => {
-  // 24 as of build-gate's registration (issue #48) — bump deliberately when a
+  // 27 as of spend's registration (issue #272) — bump deliberately when a
   // tool is intentionally added/removed from the registry.
-  assert.equal(TOOLS.length, 26);
+  assert.equal(TOOLS.length, 27);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
@@ -52,6 +52,7 @@ test('registry exposes the suite tools and omits internal packages', () => {
   assert.equal(isTool('build-gate'), true);
   assert.equal(isTool('fleet'), true);
   assert.equal(isTool('init'), true);
+  assert.equal(isTool('spend'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });
@@ -68,7 +69,31 @@ test('resolves package-local tool bins without PATH lookup', () => {
   assert.match(resolveBin('ticket') ?? '', /packages\/tickets\/bin\/adlc-tickets\.mjs$/);
   assert.match(resolveBin('ticket-prune') ?? '', /packages\/ticket-prune\/bin\/ticket-prune\.mjs$/);
   assert.match(resolveBin('init') ?? '', /packages\/init\/bin\/adlc-init\.mjs$/);
+  // spend shares the gate-manifest package but resolves to its OWN bin entry
+  // (binName: 'adlc-spend'), not gate-manifest's default 'gate-manifest' bin —
+  // proves multi-bin resolution picks the requested binName, not the first key.
+  assert.match(resolveBin('spend') ?? '', /packages\/gate-manifest\/bin\/spend\.mjs$/);
   assert.equal(resolveBin('definitely-not-real'), null);
+});
+
+test('adlc spend end-to-end: records usage via gate-manifest, then aggregates it by phase', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-cli-spend-'));
+  try {
+    const recorded = runAdlc([
+      'gate-manifest', 'record', 'coldstart',
+      '--dir', dir,
+      '--data', JSON.stringify({ usage: { inputTokens: 500, outputTokens: 100, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' } }),
+    ]);
+    assert.equal(recorded.code, 0, recorded.stderr);
+
+    const spend = runAdlc(['spend', '--dir', dir, '--json']);
+    assert.equal(spend.code, 0, spend.stderr);
+    const parsed = JSON.parse(spend.stdout);
+    assert.equal(parsed.entriesWithUsage, 1);
+    assert.equal(parsed.byPhase.P2.inputTokens, 500);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('umbrella package declares both local ticket and external-sync dispatch targets', () => {

@@ -155,3 +155,23 @@ export function detectSizeExceeded(bytes, maxBytes) {
   if (maxBytes == null) return false;
   return bytes > maxBytes;
 }
+
+/**
+ * Signal 5: budget
+ * Token spend for this ticket exceeds its declared budget (ADLC.md C6:
+ * "token spend past the ticket budget" — one of the two-strike regeneration
+ * triggers). Neither figure comes from the log itself: `spentTokens` is
+ * measured spend (e.g. from `adlc spend --ticket <id>`) and `budget` is the
+ * ticket's declared ceiling (from `ticket.budget`, or model-router's emitted
+ * per-ticket budget) — the caller supplies both. Either one absent means
+ * there is nothing to compare, so this signal stays silent rather than
+ * guessing (issue #275).
+ *
+ * @param {number|null} spentTokens
+ * @param {number|null} budget
+ * @returns {boolean}
+ */
+export function detectBudgetExceeded(spentTokens, budget) {
+  if (spentTokens == null || budget == null) return false;
+  return spentTokens > budget;
+}

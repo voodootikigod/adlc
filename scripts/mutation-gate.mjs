@@ -69,6 +69,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isMutableSource } from '../packages/hollow-test/lib/targets.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -108,16 +109,21 @@ export function testTargetFor(file, root = ROOT) {
   return null;
 }
 
-// hollow-test's own exclusion: test/spec paths and non-code extensions. A file
-// matching this is one hollow-test would NEVER independently select, so it is
-// safe to ignore for test-cmd coverage purposes regardless of which directory
-// it lives in. Mirrors hollow-test/lib/targets.mjs EXCLUDE_PATH_RE/EXCLUDE_EXT_RE.
-const HOLLOW_TEST_EXCLUDE_PATH = /(?:test|spec)/i;
-const HOLLOW_TEST_EXCLUDE_EXT = /\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/i;
+// Source classification lives in ONE place — packages/hollow-test/lib/targets.mjs
+// — and is imported, not re-stated. This wrapper previously kept its own copy of
+// hollow-test's extension regex, and the two drifted. Drift is silent in the
+// dangerous direction: if the wrapper decides a file is not source, hollow-test
+// is never invoked for it, so the required gate goes green without testing the
+// change. Re-declaring the predicate here, however carefully, recreates that.
+// scripts/test/mutation-gate.test.mjs asserts the two agree.
+// This repository owns two production files whose names match a test convention
+// (`node --test` discovers `*-test.*`). Convention cannot resolve the ambiguity,
+// so the project declares it — mirrored into the hollow-test invocation below as
+// --source-glob, so the wrapper and the tool agree.
+export const SOURCE_GLOBS = ['**/hollow-test.mjs', '**/spec-lint.mjs'];
+
 export function hollowTestWouldMutate(file) {
-  if (HOLLOW_TEST_EXCLUDE_PATH.test(file)) return false;
-  if (HOLLOW_TEST_EXCLUDE_EXT.test(file)) return false;
-  return true;
+  return isMutableSource(file, { sourceGlobs: SOURCE_GLOBS });
 }
 
 /**
@@ -135,7 +141,22 @@ export function hollowTestWouldMutate(file) {
  */
 export function classify(changed, requestedMax, root = ROOT) {
   const eligible = changed.filter(hollowTestWouldMutate);
-  if (eligible.length === 0) return { kind: 'nothing' };
+  // Carried by EVERY classification, not just the empty one. Populating it only
+  // on the 'nothing' branch left the mixed case silent — one tested source file
+  // plus a stylesheet takes the fast path, and the stylesheet vanishes from the
+  // report. That run is green AND busy, so nothing hints a file went uncovered.
+  const skipped = changed.filter((f) => !hollowTestWouldMutate(f));
+  // Report what was skipped. A green gate must not be a SILENT green: a diff of
+  // files this tool does not mutate (CSS, MDX, docs) exits 0, and without naming
+  // them "the gate passed" is indistinguishable from "the gate looked".
+  //
+  // Deliberately NOT solved by widening the source set. The shared mutator is
+  // regex-based with JS-shaped operators; on CSS it emits nonsense
+  // (`html > body` -> `html <= body`) alongside one real behavioural mutant
+  // (`opacity: 0` -> `opacity: 1`) that no test here could kill, since there are
+  // no CSS tests. Admitting it would pin the required gate permanently red on
+  // any stylesheet change — worse than declaring the type uncovered out loud.
+  if (eligible.length === 0) return { kind: 'nothing', skipped };
 
   const covered = [];   // [file, testTarget]
   const uncovered = [];
@@ -155,6 +176,7 @@ export function classify(changed, requestedMax, root = ROOT) {
       testCmd: targets.map((t) => `node --test ${t}`).join(' && '),
       max: requestedMax,
       files: eligible,
+      skipped,
     };
   }
 
@@ -175,6 +197,7 @@ export function classify(changed, requestedMax, root = ROOT) {
     // finishes in bounded CI time rather than silently taking hours.
     max: Math.min(requestedMax, 3),
     uncovered,
+    skipped,
   };
 }
 
@@ -214,6 +237,13 @@ export function main() {
 
   const decision = classify(changed, requestedMax, ROOT);
 
+  // Printed for EVERY outcome. A green run must never leave a reader unable to
+  // tell "the gate looked and found nothing" from "the gate did not look".
+  if (decision.skipped?.length) {
+    console.log(`mutation-gate: ${decision.skipped.length} changed file(s) are not a mutable source type, so this gate does not cover them:`);
+    for (const f of decision.skipped) console.log(`  ${f}`);
+  }
+
   if (decision.kind === 'nothing') {
     console.log('mutation-gate: no source files changed — nothing to mutate.');
     process.exit(0);
@@ -236,6 +266,9 @@ export function main() {
     '--test-cmd', decision.testCmd,
     '--max', String(decision.max),
     '--timeout-ms', decision.kind === 'fast' ? '180000' : '600000',
+    // Mirror the wrapper's own source declaration into the tool, so the two
+    // cannot disagree about the ambiguous product names (see SOURCE_GLOBS).
+    ...SOURCE_GLOBS.flatMap((g) => ['--source-glob', g]),
   ], { stdio: 'inherit', cwd: ROOT, timeout: 1800000 });
 
   if (result.error) fail(`could not run hollow-test: ${result.error.message}`);

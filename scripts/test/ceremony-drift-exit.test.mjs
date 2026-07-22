@@ -27,7 +27,18 @@ import { spawnSync, execFileSync } from 'node:child_process';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'ceremony-drift.mjs');
-const BOT = 'github-actions[bot]';
+// The login `gh` ACTUALLY reports for the Actions bot, recorded from this repo:
+//
+//   $ gh issue view 264 --json author
+//   {"author":{"is_bot":true,"login":"app/github-actions"}}
+//
+// This was 'github-actions[bot]' — the REST actor name, which `gh issue list
+// --json author` never emits. Every stub here therefore fed the reporter an
+// author it does not receive in production, and the end-to-end "never a
+// duplicate" assertions below passed while the real job opened a duplicate on
+// every push to main (#265). A stub is only evidence if it lies the way the
+// outside world does; hard-code the recorded payload, not a plausible one.
+const BOT = 'app/github-actions';
 
 /**
  * Build a throwaway git repo whose drift state is exactly what the test wants.
@@ -111,7 +122,7 @@ esac
 exit 0`;
 
 const marked = (extra) =>
-  `[{"number":42,"title":"stale","body":"<!-- adlc:ceremony-drift --> old","author":{"login":"${extra}"}}]`;
+  `[{"number":42,"title":"stale","body":"<!-- adlc:ceremony-drift --> old","author":{"is_bot":true,"login":"${extra}"}}]`;
 
 // ---- operational failure must be LOUD ----
 
@@ -237,8 +248,8 @@ test('a FORGED marker from another author is not adopted', () => {
 test('two marked issues fail closed rather than guessing which to overwrite', () => {
   withRepo({ drift: true }, (repo) => {
     const two =
-      `[{"number":42,"title":"a","body":"<!-- adlc:ceremony-drift --> a","author":{"login":"${BOT}"}},` +
-      `{"number":43,"title":"b","body":"<!-- adlc:ceremony-drift --> b","author":{"login":"${BOT}"}}]`;
+      `[{"number":42,"title":"a","body":"<!-- adlc:ceremony-drift --> a","author":{"is_bot":true,"login":"${BOT}"}},` +
+      `{"number":43,"title":"b","body":"<!-- adlc:ceremony-drift --> b","author":{"is_bot":true,"login":"${BOT}"}}]`;
     const r = runWith(stubUnlabeled(two), { repo });
     assert.notEqual(r.status, 0, 'ambiguous match must not silently pick one');
     assert.match(r.stderr, /ambiguous tracking issue/);

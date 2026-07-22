@@ -35,6 +35,18 @@ Threats and defenses:
   representation.
 - Legacy and directory backends coexist to create split-brain state. Detection requires
   exactly one active backend; both-present and incomplete-journal states fail closed.
+- A stale or fabricated coldstart cache entry suppresses a real P2 audit. Cache lookups
+  (`packages/coldstart/lib/cache.mjs`) bind to `ticketHash` (the same domain-separated hash
+  this store computes) AND the resolved model id — a hit requires an exact content+model
+  match, so editing a ticket or switching `ADLC_MODEL_CHEAP` is itself sufficient to
+  invalidate a stale entry; there is no separate expiry mechanism to bypass for that case.
+  Entries deliberately do NOT bind to `storeHash`: a coldstart verdict is a property of one
+  ticket's own content, not of the store as a whole, so an unrelated ticket's addition must
+  not invalidate an already-computed executability result. Residual risk: an attacker with
+  write access to `.adlc/manifest.jsonl` could inject a fabricated PASS entry with a matching
+  hash+model to suppress a real gap — this is the same tamper surface every unsigned manifest
+  entry carries, closed the same way (HMAC signing via `ADLC_MANIFEST_KEY`), with `--force`
+  and `--max-age 0` as an operator escape hatch when a cache entry is suspect.
 
 Residual risks are explicit: same-shard Git conflicts remain real; filesystem writes are
 recoverable rather than truly atomic; out-of-band shell mutation is ultimately caught by

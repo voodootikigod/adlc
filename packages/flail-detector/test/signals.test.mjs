@@ -8,6 +8,7 @@ import {
   detectScopeViolations,
   detectEditChurn,
   detectSizeExceeded,
+  detectBudgetExceeded,
 } from '../lib/signals.mjs';
 
 // ---------------------------------------------------------------------------
@@ -206,4 +207,29 @@ test('detectSizeExceeded: returns false when bytes <= maxBytes', () => {
 
 test('detectSizeExceeded: returns true when bytes > maxBytes', () => {
   assert.equal(detectSizeExceeded(201, 200), true);
+});
+
+// ---------------------------------------------------------------------------
+// detectBudgetExceeded (issue #275)
+// ---------------------------------------------------------------------------
+
+test('detectBudgetExceeded: returns false when spentTokens is null', () => {
+  assert.equal(detectBudgetExceeded(null, 1000), false);
+});
+
+test('detectBudgetExceeded: returns false when budget is null', () => {
+  assert.equal(detectBudgetExceeded(5000, null), false);
+});
+
+test('detectBudgetExceeded: returns false when both are null (nothing to compare)', () => {
+  assert.equal(detectBudgetExceeded(null, null), false);
+});
+
+test('detectBudgetExceeded: returns false when spentTokens <= budget', () => {
+  assert.equal(detectBudgetExceeded(100, 200), false);
+  assert.equal(detectBudgetExceeded(200, 200), false);
+});
+
+test('detectBudgetExceeded: returns true when spentTokens > budget', () => {
+  assert.equal(detectBudgetExceeded(201, 200), true);
 });

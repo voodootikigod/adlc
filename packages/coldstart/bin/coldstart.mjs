@@ -12,26 +12,18 @@ import {
 } from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
-import { checkAll } from '../lib/gate.mjs';
+import { checkAll, resolveExpectedModel } from '../lib/gate.mjs';
+import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
+import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
-// so plain --prompt-only runs never pay for or depend on it.
+// so plain --prompt-only runs never pay for or depend on it. The real
+// (non-prompt-only) path below also imports gate-manifest lazily, for the
+// same reason: only pay for it on the path that has something to record.
 
-const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--record-verdict <file|->] [--json]';
-
-const { values, positionals } = parseArgs({
-  usage: USAGE,
-  options: {
-    tickets: { type: 'string', default: '.adlc/tickets.json' },
-    all: { type: 'boolean', default: false },
-    tier: { type: 'string', default: 'cheap' },
-    'prompt-only': { type: 'boolean', default: false },
-    'record-verdict': { type: 'string' },
-    json: { type: 'boolean', default: false },
-  },
-});
+const { values, positionals } = parseArgs({ usage: USAGE, options: OPTIONS });
 
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
 if (!VALID_TIERS.includes(values.tier)) {
@@ -42,11 +34,18 @@ if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
 
+const maxAgeResult = parseMaxAgeDays(values['max-age']);
+if (!maxAgeResult.ok) {
+  opError(maxAgeResult.error);
+}
+const maxAgeMs = maxAgeResult.maxAgeMs;
+
 const promptOnlyMode = values['prompt-only'];
 const jsonMode = values['json'];
 const ticketsPath = values['tickets'];
 const runAll = values['all'];
 const tier = values['tier'];
+const force = values['force'];
 
 // ── Load tickets ─────────────────────────────────────────────────────────────
 
@@ -125,13 +124,30 @@ if (!provider) {
 }
 
 // ── Execute gate ─────────────────────────────────────────────────────────────
+// Content-addressed caching (issue #278): a ticket whose hash matches a
+// prior gate-manifest entry for the SAME resolved model, recorded within
+// --max-age days, is served from that entry — no LLM call. --force bypasses.
 
 let results;
 try {
-  results = await checkAll(targets, tier);
+  results = await checkAll(targets, tier, { force, maxAgeMs, dir: undefined });
 } catch (err) {
   opError(`LLM call failed: ${err.message}`);
 }
+
+// ── Record usage + cache evidence (issues #272, #278) ───────────────────────
+// One gate-manifest entry PER TICKET actually audited — a cache HIT reuses
+// prior evidence rather than manufacturing a duplicate entry for the same
+// verification, and a cache hit is what makes a later run's lookup possible
+// in the first place, so recording must be per-ticket, not aggregated across
+// the whole --all run the way the pre-#278 design did. buildRecordPlan
+// returns [] when there's nothing to record (every result cached/mocked);
+// looping over that is already a no-op, so there is no separate "is there
+// anything to record?" branch here to leave untested.
+
+const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
+const recordPlan = buildRecordPlan(results, targets, { model: resolveExpectedModel(tier), tier });
+for (const entry of recordPlan) record(entry);
 
 // ── Output ───────────────────────────────────────────────────────────────────
 

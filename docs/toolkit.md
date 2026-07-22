@@ -20,6 +20,7 @@ through the stable `adlc <tool>` dispatcher.
 | C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md), [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md) |
 | P7 | Which repeated findings should become deterministic defenses? | [`adlc lesson-foundry`](./tools/lesson-foundry.md), [`adlc rejection-mining`](./tools/rejection-mining.md) |
 | Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) |
+| Continuous / §6 | What is the recorded token spend shape, and does it match the barbell? | [`adlc spend`](./tools/spend.md) |
 
 ## P5: recorder vs. reviewer seam
 

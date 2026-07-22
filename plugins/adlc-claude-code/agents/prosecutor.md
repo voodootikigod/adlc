@@ -117,33 +117,12 @@ adlc gate-manifest record prosecution --files <changed files>
 ## Trust-root tier — a same-model SHIP is NOT the end
 
 You are a **same-model** prosecutor by default: you validate the author's own
-tests, which encode the author's blind spot. For the **trust-root tier** that is
-not enough. If the change under prosecution touches any of —
-
-- an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
-- a gated-artifact producer (`packages/ticket-prune|ticket-sync/`),
-- a declared rails deny-path of any ticket, or
-- a trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
-  `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`)
-
-— then **after you reach a CLEAR verdict you MUST SURFACE**: *"same-model P5
-passed; this tier REQUIRES a cross-model adversarial approve from a DISTINCT
-provider before `adlc prosecute --base <ref>` will exit 0."* Do not present the
-same-model SHIP as sufficient. Run the cross-model pass (shell to the local
-`codex` CLI, or `npx adversarial-review --base <ref>`), and once it approves,
-record the attestation so the gate clears:
-
-```
-adlc prosecute record-cross-model --ticket <id> \
-  --provider codex --author-provider claude --verdict approve \
-  --input <passes.json>
-```
-
-The recorded `revision` is resolved the same way the gate resolves it (pass the
-same `--input`/`--revision` you use for the gate run), so the attestation binds
-to the revision the gate checks. `--provider` MUST differ from `--author-provider`
-— a same-model "review" is refused at record time and rejected by the gate. See
-ADR-0007 (gated for the trust-root tier) and `packages/prosecute/lib/tier.mjs`.
+tests, which encode the author's blind spot. That is not enough for the
+**trust-root tier** — enforcement packages, gated-artifact producers, rails
+deny-paths, and a handful of trust-root files. See
+`../skills/adlc/references/trust-root.md` for the exact trigger list, the
+required surfacing language, and the `record-cross-model` mechanics (T39) —
+load it when the change you're prosecuting might hit this tier.
 
 **Note:** this subagent's own `gate-manifest record prosecution` entry carries
 `gate: "prosecution"`, which alone does not satisfy `adlc run p5` — that requires
@@ -153,11 +132,7 @@ prosecute` → `adlc run p5`), not exclusive to any one CLI or agent tool.
 
 For the full adversarial engine — independent fan-out across lenses, cross-lens
 dedupe, and independent verifier refutation with loop-until-dry convergence — use
-`/adlc:adlc-prosecute`, which invokes the `prosecutor-{correctness,security,contract,
-diff,tests,verifier}` subagents. That command replicates the same fan-out →
-dedupe → independent-verify → repeat-until-two-dry-rounds shape as the OpenCode
-integration's own `adlc-prosecute` command (invoked bare there, since OpenCode
-has no plugin-namespace convention), so Claude Code no longer needs to punt to a
-different harness to run the multi-lens loop; it can additionally feed its
-surviving findings to the `adlc prosecute` runner path for formal `adlc run p5`
-phase assertion when that is required.
+`/adlc:adlc-prosecute` instead, which invokes the
+`prosecutor-{correctness,security,contract,diff,tests,verifier}` subagents; it
+can additionally feed its surviving findings to the `adlc prosecute` runner
+path for formal `adlc run p5` phase assertion when that is required.

@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { testTargetFor, hollowTestWouldMutate, classify } from '../mutation-gate.mjs';
+import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
 
 function fixtureRoot(dirs = [], files = []) {
   const root = mkdtempSync(join(tmpdir(), 'mutation-gate-fixture-'));
@@ -33,6 +34,269 @@ test('hollowTestWouldMutate excludes test/spec paths, case-insensitively', () =>
   assert.equal(hollowTestWouldMutate('packages/foo/test/x.test.mjs'), false);
   assert.equal(hollowTestWouldMutate('packages/foo/TEST/x.mjs'), false);
   assert.equal(hollowTestWouldMutate('packages/foo/spec/x.mjs'), false);
+});
+
+// REGRESSION (PR #287). The classifier decided what was source by EXCLUDING a
+// fixed list of non-source extensions, so anything with no extension fell
+// through and was treated as mutable code. Adding a CODEOWNERS file was enough
+// to push the gate onto the FULL-suite slow path:
+//
+//   mutation-gate: 1 file(s) have no known fast test target —
+//   falling back to the FULL suite:
+//     CODEOWNERS
+//
+// hollow-test can only mutate JS-family source, and the gate's own workflow step
+// already filters '*.mjs' '*.js' '*.cjs' — the script and the workflow disagreed
+// about what source is. An exclusion list is unbounded by construction: every
+// extensionless file anyone ever adds is a new false positive.
+test('hollowTestWouldMutate does not treat extensionless files as source', () => {
+  for (const f of ['CODEOWNERS', 'LICENSE', 'Dockerfile', 'Makefile', 'NOTICE', 'Procfile']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is not mutable source`);
+  }
+});
+
+test('hollowTestWouldMutate does not treat dotfiles as source', () => {
+  for (const f of ['.gitignore', '.nvmrc', '.npmrc', '.editorconfig', '.gitattributes']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is not mutable source`);
+  }
+});
+
+// The include-list must still admit everything hollow-test genuinely mutates,
+// or the fix trades false positives for the far worse failure: source silently
+// skipped by the coverage gate.
+//
+// This is not hypothetical — the first attempt at this fix narrowed to
+// mjs|cjs|js and silently dropped the repository's 49 tracked non-test .ts/.tsx
+// source files. hollow-test's own filterTargetFiles accepts them, so classify()
+// returned kind:'nothing' and the required gate exited 0 without running.
+// Caught by adversarial review, not by the tests written alongside that fix,
+// because those tests only asserted the extensions the fix happened to allow.
+// It must ALSO admit nothing more. An extension the operators cannot handle
+// produces INVALID mutants, and runner.mjs scores `killed = timedOut ||
+// status !== 0` — so a parse failure is credited as a kill. `invert-comparison`
+// rewrites `Promise<unknown>` to `Promise>=unknown>` and `<Button>` to
+// `>=Button>`; with the common per-file quota of one, that single invalid mutant
+// satisfies the entire gate having exercised no assertion.
+//
+// Both directions were learned the hard way here: narrowing to mjs|cjs|js first
+// dropped 49 .ts/.tsx files while hollow-test still accepted them, then adding
+// TS back admitted the invalid-mutant path. Plain JavaScript only — and the
+// exclusion is REPORTED (see the skipped-files tests), which is the difference
+// between a documented coverage boundary and a hole. Tracked in #293.
+test('the allow-list admits plain JavaScript and nothing the operators cannot handle', () => {
+  for (const f of ['a.mjs', 'a.cjs', 'a.js', 'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs']) {
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is mutable source`);
+  }
+  for (const f of ['a.ts', 'a.mts', 'a.cts', 'a.tsx', 'a.jsx', 'a.py', 'apps/docs/app/page.tsx']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} needs syntax-aware mutation (#293)`);
+  }
+});
+
+// REGRESSION: the test/spec exclusion was a SUBSTRING match over the whole path
+// (`/(?:test|spec)/i`), with no segment or filename boundary. Real production
+// source whose path merely contains those letters was therefore classified as
+// non-source and silently never mutated — 11 tracked files at the time this was
+// found, including the ENTIRE hollow-test package (the mutation tool itself),
+// the entire spec-lint package, and gate-manifest's attestation module:
+//
+//   packages/hollow-test/lib/targets.mjs     "hollow-test"
+//   packages/gate-manifest/lib/attest.mjs    "attest"
+//   packages/spec-lint/lib/parse.mjs         "spec-lint"
+//   scripts/run-tests.mjs                    "run-tests"
+//
+// This is the worst direction of failure: the coverage gate reports green by
+// not looking. It also hid itself — a change to targets.mjs could not be
+// mutated, so the predicate defining what gets mutated was exempt from the gate
+// that uses it.
+test('production source is not excluded merely for containing "test"/"spec"', () => {
+  for (const f of [
+    'packages/hollow-test/lib/targets.mjs',
+    'packages/hollow-test/lib/runner.mjs',
+    'packages/hollow-test/bin/hollow-test.mjs',
+    'packages/gate-manifest/lib/attest.mjs',
+    'packages/spec-lint/lib/parse.mjs',
+    'packages/spec-lint/bin/spec-lint.mjs',
+    'scripts/run-tests.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is production source`);
+  }
+});
+
+// The boundary must still exclude genuine tests, or the fix swaps one silent
+// failure for mutating test files themselves.
+test('genuine test and spec paths are still excluded', () => {
+  for (const f of [
+    'packages/foo/test/x.mjs',
+    'packages/foo/tests/x.mjs',
+    'packages/foo/TEST/x.mjs',
+    'spec/z.mjs',
+    'packages/foo/specs/z.mjs',
+    'packages/foo/__tests__/z.mjs',
+    'packages/foo/lib/x.test.mjs',
+    'packages/foo/lib/x.spec.ts',
+    'x.test.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is a test path`);
+  }
+});
+
+// Replacing the substring match with directory + dotted-filename rules alone
+// admitted common JS test basenames — `test.js`, `spec.js`, `test_foo.js`,
+// `foo_test.js`. Mutating an assertion inside a test makes that test fail, which
+// scores the mutant KILLED: a test-only diff satisfies the gate vacuously.
+test('conventional test basenames are excluded even outside a test/ directory', () => {
+  for (const f of [
+    'test.js', 'spec.js', 'test.mjs', 'spec.ts',
+    'lib/test.js', 'lib/spec.js',
+    'test_foo.js', 'spec_foo.js',
+    'foo_test.js', 'foo_spec.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is a test file`);
+  }
+});
+
+// Hyphenated names ARE test conventions: `node --test` discovers `*-test.js` and
+// `test-*.js` by default, and this tool's own examples use that runner. An
+// earlier revision on this branch treated them as merely stylistic and admitted
+// them as source, which let a test-only diff pass by mutating its OWN
+// assertions — flipping `true` to `false` fails the changed test, and that
+// failure is credited as a killed production mutant.
+test('node --test naming conventions are excluded by default', () => {
+  for (const f of ['foo-test.js', 'test-foo.js', 'foo_test.mjs', 'test.js', 'spec-foo.js']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} matches a node --test convention`);
+  }
+});
+
+// The genuine ambiguity is with PRODUCT names — `hollow-test.mjs` and
+// `spec-lint.mjs` are production source here. No convention can resolve that, so
+// the project declares it rather than the tool guessing. The second assertion is
+// the load-bearing one: it proves the declaration is doing the work, not a
+// lenient default.
+test('declared source globs rescue production files that look like tests', () => {
+  for (const f of [
+    'packages/hollow-test/bin/hollow-test.mjs',
+    'packages/spec-lint/bin/spec-lint.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is declared production source`);
+    assert.equal(isMutableSource(f), false, `${f} is ambiguous without a declaration`);
+  }
+});
+
+// classify()-level proof, and the self-referential one that matters most: a diff
+// touching only the predicate's own file must reach the gate.
+test('a diff touching only the predicate file still reaches the mutation gate', () => {
+  const decision = classify(['packages/hollow-test/lib/targets.mjs'], 12);
+  assert.notEqual(
+    decision.kind,
+    'nothing',
+    'the file defining what gets mutated must not be exempt from mutation'
+  );
+});
+
+// A green gate must never be a SILENT green. Adversarial review flagged that a
+// CSS-only diff now yields kind:'nothing' and exit 0, exempting a production
+// change from the required gate without saying so.
+//
+// The answer is NOT to add .css to the source set. The shared mutator is
+// regex-based with JS-shaped operators, and on CSS it emits both nonsense
+// (`html > body` → `html <= body`) and one genuinely behavioural mutant
+// (`opacity: 0` → `opacity: 1`) that NO test in this repository could kill —
+// there are no CSS tests. Admitting CSS would make the required gate
+// permanently red on any stylesheet change, which is worse than not covering it.
+//
+// What was wrong is the silence. classify() now reports what it skipped, so
+// "this gate does not cover that file type" is a visible decision rather than
+// an invisible hole.
+test('classify reports files it skipped rather than silently passing', () => {
+  const decision = classify(['apps/docs/app/global.css'], 12);
+  assert.equal(decision.kind, 'nothing');
+  assert.deepEqual(decision.skipped, ['apps/docs/app/global.css']);
+});
+
+test('classify reports nothing skipped when the diff is genuinely empty', () => {
+  assert.deepEqual(classify([], 12).skipped, []);
+});
+
+// The first attempt at visibility only populated `skipped` on the 'nothing'
+// branch, so a MIXED diff — one tested source file plus a stylesheet — took the
+// fast path and dropped the stylesheet from the report entirely. That is the
+// same silent gap, just harder to notice: the run is green AND busy, so nothing
+// suggests a file went uncovered. Every classification must carry it.
+test('skipped files are reported on the fast path too', () => {
+  const root = fixtureRoot(['packages/foo/test'], []);
+  try {
+    const decision = classify(['packages/foo/lib/x.mjs', 'apps/docs/app/global.css'], 12, root);
+    assert.equal(decision.kind, 'fast');
+    assert.deepEqual(decision.skipped, ['apps/docs/app/global.css']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('skipped files are reported on the slow path too', () => {
+  const root = fixtureRoot([], []);
+  try {
+    const decision = classify(['some/unmapped/x.mjs', 'README.md'], 12, root);
+    assert.equal(decision.kind, 'slow');
+    assert.deepEqual(decision.skipped, ['README.md']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// PYTHON IS DELIBERATELY NOT SOURCE, and this test records why rather than
+// leaving it to be "fixed" later by someone reading the mutator's docstring.
+//
+// The shared mutator calls itself suitable for "JS/TS/Python-style code", and an
+// earlier revision of this branch admitted `.py` on that basis. That was wrong
+// twice over:
+//
+//   1. packages/core/lib/mutate.mjs has ZERO Python-aware operators — no
+//      `return None`, no `True`/`False`, no `elif`. Its operators are JS-shaped.
+//   2. The test exclusion recognizes the dotted JS convention (`*.test.*`,
+//      `*.spec.*`) but not Python's, where `test_*.py` / `*_test.py` /
+//      `conftest.py` ARE the test files. Admitting `.py` therefore classified
+//      pytest modules as production source, so mutating an assertion would make
+//      the test fail and be scored "killed" — a vacuously green gate.
+//
+// Claiming support the operators do not implement is worse than declining it.
+// Python support needs Python operators AND Python test discovery; until both
+// exist, `.py` is out. See the tracking issue referenced in targets.mjs.
+test('Python is not treated as mutable source while operators are JS-shaped', () => {
+  for (const f of ['src/app.py', 'src/test_app.py', 'src/app_test.py', 'conftest.py']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} must not be mutated`);
+  }
+});
+
+// THE CONTRACT TEST. Both bugs in this file came from the same predicate living
+// in two places — packages/hollow-test/lib/targets.mjs and here — and drifting.
+// The wrapper deciding a file is not source means hollow-test is never invoked
+// for it, so any file the two disagree about is silently unmutated. Assert
+// agreement directly rather than trusting two lists to be maintained in step.
+test('the wrapper and hollow-test agree on what source is', () => {
+  const cases = [
+    'a.mjs', 'a.cjs', 'a.js', 'a.jsx', 'a.ts', 'a.mts', 'a.cts', 'a.tsx',
+    'packages/x/lib/y.mjs', 'apps/docs/app/page.tsx', 'plugins/p/index.ts',
+    'CODEOWNERS', 'LICENSE', 'Dockerfile', 'Makefile', '.gitignore', '.nvmrc',
+    'README.md', 'package.json', 'a.yml', 'a.lock', 'a.snap',
+    'packages/x/test/y.test.mjs', 'spec/z.mjs',
+  ];
+  for (const f of cases) {
+    assert.equal(
+      hollowTestWouldMutate(f),
+      isMutableSource(f),
+      `wrapper and hollow-test disagree about '${f}' — a disagreement means the ` +
+        `gate silently skips it`
+    );
+  }
+});
+
+// End to end at the classify() level: the unit above proves the predicate, this
+// proves the predicate is actually what gates the run. A TypeScript-only diff
+// must NOT short-circuit to 'nothing'.
+// TypeScript is excluded deliberately (#293 — invalid mutants score as kills),
+// so the requirement is not that it be mutated but that its exclusion is
+// REPORTED. Silence is the failure mode; a declared skip is a coverage boundary.
+test('a TypeScript-only diff is reported as skipped, not silently passed', () => {
+  const decision = classify(['plugins/adlc-pi/index.ts'], 12);
+  assert.equal(decision.kind, 'nothing');
+  assert.deepEqual(decision.skipped, ['plugins/adlc-pi/index.ts']);
 });
 
 test('hollowTestWouldMutate excludes non-code extensions', () => {
@@ -114,7 +378,12 @@ test('testTargetFor returns null for an unrecognised top-level path', () => {
 test('classify: no eligible files reports "nothing"', () => {
   const root = fixtureRoot([]);
   try {
-    assert.deepEqual(classify(['README.md', 'packages/foo/test/x.test.mjs'], 12, root), { kind: 'nothing' });
+    // `skipped` names what was passed over, so a green gate is never a silent
+    // one — see 'classify reports files it skipped rather than silently passing'.
+    assert.deepEqual(classify(['README.md', 'packages/foo/test/x.test.mjs'], 12, root), {
+      kind: 'nothing',
+      skipped: ['README.md', 'packages/foo/test/x.test.mjs'],
+    });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

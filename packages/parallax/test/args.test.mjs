@@ -24,6 +24,11 @@ test('no args → exit 1 (operational error / usage)', () => {
   assert.ok(r.stderr.includes('parallax'));
 });
 
+test('usage text documents --context-cap with its default', () => {
+  const r = run([]);
+  assert.match(r.stderr, /--context-cap <n>.*max chars embedded per --context file \(default 6000\)/);
+});
+
 test('--prompt-only with --request → prints prompt and exits 0', () => {
   const r = run(['--request', 'Add a login page', '--prompt-only']);
   assert.equal(r.status, 0);
@@ -117,6 +122,48 @@ test('--route --context with existing file → prompt includes file content', ()
   } finally {
     rmSync(dir, { recursive: true });
   }
+});
+
+// ── --context-cap (issue #280) ──────────────────────────────────────────────
+
+test('--route --context with an oversized file → --prompt-only prompt is capped, not the whole file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parallax-test-'));
+  try {
+    const ctxFile = join(dir, 'big.md');
+    const bigContent = 'x'.repeat(20_000);
+    writeFileSync(ctxFile, bigContent);
+    const r = run(['--route', 'question', '--context', ctxFile, '--prompt-only']);
+    assert.equal(r.status, 0);
+    assert.ok(!r.stdout.includes(bigContent), 'the full 20,000-char file must not appear verbatim');
+    assert.match(r.stdout, /showing last 6000 chars only/);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test('--context-cap overrides the default cap', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parallax-test-'));
+  try {
+    const ctxFile = join(dir, 'f.md');
+    writeFileSync(ctxFile, 'y'.repeat(1000));
+    const r = run(['--route', 'question', '--context', ctxFile, '--context-cap', '50', '--prompt-only']);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /showing last 50 chars only/);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test('--context-cap rejects a negative value', () => {
+  const r = run(['--route', 'question', '--context-cap=-5', '--prompt-only']);
+  assert.equal(r.status, 1);
+  assert.ok(r.stderr.includes('--context-cap must be a non-negative integer'));
+});
+
+test('--context-cap rejects a non-numeric value', () => {
+  const r = run(['--route', 'question', '--context-cap', 'abc', '--prompt-only']);
+  assert.equal(r.status, 1);
+  assert.ok(r.stderr.includes('--context-cap must be a non-negative integer'));
 });
 
 test('invalid --n → exit 1', () => {

@@ -38,6 +38,7 @@ export const GROUPS = [
     tools: [
       { name: 'behavior-diff', packageName: '@adlc/behavior-diff', summary: 'Capture and compare HTTP/API behavior snapshots for the P6 human gate.' },
       { name: 'gate-manifest', packageName: '@adlc/gate-manifest', summary: 'Record, verify, show, and attest append-only gate evidence.' },
+      { name: 'spend', packageName: '@adlc/gate-manifest', binName: 'adlc-spend', summary: 'Aggregate recorded token usage into per-phase spend, the barbell shape, and the §6 diagnostics.' },
       { name: 'hollow-test', packageName: '@adlc/hollow-test', summary: 'Mutate changed code to find tests that pass without testing behavior.' },
       { name: 'prosecute', packageName: '@adlc/prosecute', binName: 'adlc-prosecute', summary: 'Record ticket- and revision-bound P5 prosecution evidence.' },
       { name: 'review-calibration', packageName: '@adlc/review-calibration', summary: 'Measure reviewer recall by scoring whether review catches mutants.' },

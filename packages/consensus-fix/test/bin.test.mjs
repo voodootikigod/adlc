@@ -38,6 +38,55 @@ function runCli(args, { cwd, env } = {}) {
   return { stdout: result.stdout, stderr: result.stderr, code: result.status };
 }
 
+// ─── --prompt-only emits the compact (windowed/capped) prompt (issue #279) ────
+
+test('--prompt-only does not dump a large file whole into the printed prompt', () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'big.mjs');
+    const content = Array.from({ length: 600 }, (_, i) => `function helper${i}() { return ${i}; }`).join('\n');
+    writeFileSync(f, content);
+
+    const { code, stdout } = runCli([
+      '--test-cmd', 'exit 1',
+      '--files', f,
+      '--n', '1',
+      '--prompt-only',
+    ], { cwd: dir });
+
+    assert.equal(code, 0);
+    // The whole 600-line file must not appear verbatim in the printed prompt
+    // — --prompt-only has no real test output yet (a placeholder), so every
+    // file falls through to the length-capped fallback rather than being
+    // embedded whole.
+    assert.ok(!stdout.includes(content), 'the full file content must not appear in the prompt');
+    assert.ok(stdout.length < content.length, 'the whole prompt should be smaller than the raw file it is about');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--prompt-only requests the hunk-based output schema, not full-file content', () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'a.mjs');
+    writeFileSync(f, 'export const x = 1;\n');
+    const { code, stdout } = runCli([
+      '--test-cmd', 'exit 1',
+      '--files', f,
+      '--n', '1',
+      '--prompt-only',
+    ], { cwd: dir });
+
+    assert.equal(code, 0);
+    assert.ok(stdout.includes('"hunks"'));
+    assert.ok(stdout.includes('startLine'));
+    assert.ok(!stdout.includes('"content"'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('--provider and --providers are mutually exclusive', () => {
   const dir = makeTmp();
   try {

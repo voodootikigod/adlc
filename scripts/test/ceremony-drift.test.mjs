@@ -17,6 +17,7 @@ import {
   decideAction,
   selectTrackingIssue,
   MARKER,
+  MANAGED_AUTHORS,
 } from '../ceremony-drift.mjs';
 
 // Heuristic evidence: scope globs already resolve. Indistinguishable from an
@@ -218,8 +219,165 @@ test('an authors filter rejects a forged marker from another author', () => {
 });
 
 test('an authors filter accepts the managed author', () => {
-  const issues = [{ number: 9, body: `${MARKER} real`, author: { login: 'github-actions[bot]' } }];
+  const issues = [{ number: 9, body: `${MARKER} real`, author: { is_bot: true, login: 'github-actions[bot]' } }];
   assert.equal(selectTrackingIssue(issues, { authors: ['github-actions[bot]'] }).number, 9);
+});
+
+// REGRESSION (#265). Every fixture above hand-writes 'github-actions[bot]', the
+// same string the production default hard-coded — so they agreed with each other
+// while both disagreed with reality. `gh issue list --json author` returns the
+// GraphQL actor, which gh renders 'app/github-actions'; recorded verbatim:
+//
+//   $ gh issue view 264 --json author
+//   {"author":{"is_bot":true,"login":"app/github-actions"}}
+//
+// The filter therefore rejected the job's OWN tracker on both lookup paths, and
+// ceremony-drift opened a duplicate on every push to main (12 in two days).
+// These assert against the recorded payload AND the shipped default, so a future
+// edit cannot leave the constant wrong about the outside world unnoticed.
+const GH_RECORDED_BOT_AUTHOR = { is_bot: true, login: 'app/github-actions' };
+
+test('the default managed-author set accepts the author gh actually reports', () => {
+  const issues = [{ number: 9, body: `${MARKER} real`, author: GH_RECORDED_BOT_AUTHOR }];
+  assert.equal(selectTrackingIssue(issues, { authors: MANAGED_AUTHORS })?.number, 9);
+});
+
+// One bot, several renderings across gh versions and the REST/GraphQL split. All
+// must resolve to the same identity, so the tracker survives gh changing how it
+// formats an App actor — the exact class of change that caused #265.
+test('every rendering of the same bot actor is one identity', () => {
+  for (const login of ['app/github-actions', 'github-actions[bot]', 'github-actions', 'GitHub-Actions[bot]']) {
+    const issues = [{ number: 9, body: `${MARKER} real`, author: { is_bot: true, login } }];
+    assert.equal(
+      selectTrackingIssue(issues, { authors: MANAGED_AUTHORS })?.number,
+      9,
+      `login '${login}' should resolve to the managed bot`
+    );
+  }
+});
+
+// Normalization strips the '[bot]' suffix, which ALONE would let a human account
+// literally named 'github-actions' seize the tracker — a privilege escalation the
+// pre-#265 exact-match comparison did not have. Bot-ness is required alongside
+// the name so this fix cannot widen the authorization it was meant to repair.
+test('a human account whose name normalizes to the bot is still rejected', () => {
+  for (const author of [
+    { is_bot: false, login: 'github-actions' },
+    { login: 'github-actions' }, // is_bot absent → not provably a bot → reject
+  ]) {
+    const issues = [{ number: 9, body: `${MARKER} forged`, author }];
+    assert.equal(
+      selectTrackingIssue(issues, { authors: MANAGED_AUTHORS }),
+      null,
+      `author ${JSON.stringify(author)} must not be accepted as the managed bot`
+    );
+  }
+});
+
+// ADLC_DRIFT_AUTHORS is documented as overridable "for repos whose automation
+// runs under a different identity" — commonly a dedicated MACHINE USER, which
+// GitHub reports with `is_bot: false`. Requiring bot-ness unconditionally would
+// reject that configured author and recreate #265 under the override: duplicate
+// opens while drift exists, and a stale tracker left open once it clears.
+//
+// So the two acceptance routes are deliberately not equally strict. An EXACT
+// match against a configured entry is explicit operator intent and needs no
+// further evidence. Only the NORMALIZED route widens the match beyond what was
+// configured, and only there can one login alias onto another — so only there is
+// bot evidence required.
+test('an exactly-configured non-bot author is accepted (the machine-user override)', () => {
+  const issues = [{ number: 9, body: `${MARKER} real`, author: { is_bot: false, login: 'release-machine' } }];
+  assert.equal(selectTrackingIssue(issues, { authors: ['release-machine'] })?.number, 9);
+  // ...and still closes the loop end-to-end: found means updated, not duplicated.
+  const decision = decideAction({
+    drift: [{ id: 'T1', blocker: 'rails-freeze', rails: ['a.test.mjs'], reason: 'shipped' }],
+    existingIssue: selectTrackingIssue(issues, { authors: ['release-machine'] }),
+  });
+  assert.equal(decision.action, 'update');
+  assert.equal(decision.number, 9);
+});
+
+test('an exact configured match is case-insensitive and needs no is_bot field', () => {
+  const issues = [{ number: 9, body: `${MARKER} real`, author: { login: 'Release-Machine' } }];
+  assert.equal(selectTrackingIssue(issues, { authors: ['release-machine'] })?.number, 9);
+});
+
+// `is_bot` is not guaranteed to be present on every API surface, so the login
+// SHAPE is the fallback bot evidence: GitHub emits the `app/` prefix and the
+// `[bot]` suffix only for App actors. Each form must qualify on its own.
+//
+// Caught as a surviving `logic-swap` mutant (`||` → `&&`) on isBotFormLogin:
+// every other fixture here sets `is_bot: true`, which short-circuits the check
+// before it is ever reached, so the function was entirely unexercised. Each case
+// below matches only through NORMALIZATION and omits `is_bot`, which is the one
+// path where the shape is load-bearing.
+test('each bot-login form is sufficient evidence on its own, without is_bot', () => {
+  // 'app/' prefix arm: configured as the [bot] form, reported as the app/ form.
+  assert.equal(
+    selectTrackingIssue([{ number: 9, body: `${MARKER} real`, author: { login: 'app/github-actions' } }],
+      { authors: ['github-actions[bot]'] })?.number,
+    9
+  );
+  // '[bot]' suffix arm: configured as the app/ form, reported as the [bot] form.
+  assert.equal(
+    selectTrackingIssue([{ number: 9, body: `${MARKER} real`, author: { login: 'github-actions[bot]' } }],
+      { authors: ['app/github-actions'] })?.number,
+    9
+  );
+});
+
+// The author object is API-shaped data, not a guaranteed contract — the same
+// reason bodies are tolerated below. An issue with no author (or an author with
+// no login) carries NO authorization evidence at all, so under an active filter
+// it must be rejected rather than treated as anonymous-and-therefore-fine.
+// Caught as a surviving `bool-flip` mutant on the `if (!login) return false`
+// guard: the guard was correct but nothing noticed when it stopped being.
+test('an author with no usable login is rejected under an authors filter', () => {
+  for (const author of [undefined, null, {}, { login: '' }, { login: '   ' }, { is_bot: true }]) {
+    const issues = [{ number: 9, body: `${MARKER} real`, author }];
+    assert.equal(
+      selectTrackingIssue(issues, { authors: MANAGED_AUTHORS }),
+      null,
+      `author ${JSON.stringify(author)} carries no authorization and must be rejected`
+    );
+  }
+});
+
+// An empty/whitespace ADLC_DRIFT_AUTHORS entry must not become a wildcard that
+// matches the empty-login case above. The production constant already filters
+// blanks; this pins the comparison itself so both halves cannot fail together.
+test('a blank configured author never matches a blank login', () => {
+  const issues = [{ number: 9, body: `${MARKER} forged`, author: { login: '' } }];
+  assert.equal(selectTrackingIssue(issues, { authors: ['', '  '] }), null);
+});
+
+// The exact-match route must not become a backdoor: it accepts only logins that
+// are literally configured, so an unconfigured account is still rejected even
+// when it is a bot.
+test('an unconfigured author is rejected however it is shaped', () => {
+  for (const author of [
+    { is_bot: true, login: 'app/some-other-bot' },
+    { is_bot: true, login: 'attacker[bot]' },
+    { is_bot: false, login: 'untrusted-user' },
+  ]) {
+    const issues = [{ number: 9, body: `${MARKER} forged`, author }];
+    assert.equal(selectTrackingIssue(issues, { authors: ['release-machine'] }), null);
+  }
+});
+
+// The whole point of the fix: with a tracker present, the job must UPDATE it.
+// #265 was not a lookup curiosity — it changed decideAction's branch from
+// 'update' to 'open' on every run, which is what produced the duplicates.
+test('a recognized tracker updates in place instead of opening a duplicate', () => {
+  const drift = [{ id: 'T1', blocker: 'rails-freeze', rails: ['a.test.mjs'], reason: 'shipped' }];
+  const existing = selectTrackingIssue(
+    [{ number: 230, title: 'stale title', body: `${MARKER} stale`, author: GH_RECORDED_BOT_AUTHOR }],
+    { authors: MANAGED_AUTHORS }
+  );
+  assert.ok(existing, 'the tracker gh reports must be found');
+  const decision = decideAction({ drift, existingIssue: existing });
+  assert.equal(decision.action, 'update');
+  assert.equal(decision.number, 230);
 });
 
 // Guessing between two marked issues risks overwriting or closing the wrong one,

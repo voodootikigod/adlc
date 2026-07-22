@@ -237,6 +237,64 @@ test('CLI: size exceeded exits 2', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Budget signal (issue #275) — exit 2
+// ---------------------------------------------------------------------------
+
+test('CLI: --spent-tokens over --budget exits 2 with a budget signal', () => {
+  const f = join(tmpDir, 'clean.log');
+  writeFileSync(f, 'Build started\nDone in 2.3s\n');
+
+  const r = run([f, '--spent-tokens', '50000', '--budget', '20000']);
+  assert.equal(r.status, 2, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  assert.match(r.stdout, /budget/);
+  assert.match(r.stdout, /50000/);
+  assert.match(r.stdout, /20000/);
+});
+
+test('CLI: --spent-tokens within --budget stays clean (exit 0)', () => {
+  const f = join(tmpDir, 'clean2.log');
+  writeFileSync(f, 'Build started\nDone in 2.3s\n');
+
+  const r = run([f, '--spent-tokens', '5000', '--budget', '20000']);
+  assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+});
+
+test('CLI: omitting both --spent-tokens and --budget is fine — no budget check performed', () => {
+  const f = join(tmpDir, 'clean3.log');
+  writeFileSync(f, 'Build started\nDone in 2.3s\n');
+
+  const r = run([f]);
+  assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+});
+
+test('CLI: --spent-tokens without --budget errors (must be given together)', () => {
+  const f = join(tmpDir, 'clean4.log');
+  writeFileSync(f, 'Build started\n');
+
+  const r = run([f, '--spent-tokens', '5000']);
+  assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  assert.match(r.stderr, /--spent-tokens and --budget must be given together/);
+});
+
+test('CLI: --budget without --spent-tokens errors (must be given together)', () => {
+  const f = join(tmpDir, 'clean5.log');
+  writeFileSync(f, 'Build started\n');
+
+  const r = run([f, '--budget', '5000']);
+  assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  assert.match(r.stderr, /--spent-tokens and --budget must be given together/);
+});
+
+test('CLI: --spent-tokens must be a non-negative integer', () => {
+  const f = join(tmpDir, 'clean6.log');
+  writeFileSync(f, 'Build started\n');
+
+  const r = run([f, '--spent-tokens', 'not-a-number', '--budget', '1000']);
+  assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  assert.match(r.stderr, /--spent-tokens must be/);
+});
+
+// ---------------------------------------------------------------------------
 // --json flag
 // ---------------------------------------------------------------------------
 

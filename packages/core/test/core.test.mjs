@@ -721,7 +721,7 @@ test('complete: injected env reaches the agy provider send() (timeout/sandbox ho
 
 // --- per-invocation provider selection (issue #63) ---
 
-import { fanProviders, PROVIDER_NAMES } from '../lib/llm.mjs';
+import { fan, fanProviders, PROVIDER_NAMES } from '../lib/llm.mjs';
 
 test('detectProvider: explicit override wins over ADLC_PROVIDER env and auto-detect order', () => {
   const env = {
@@ -860,6 +860,286 @@ test('fanProviders: a provider missing its API key surfaces as a per-provider fa
     assert.equal(results[1].provider, 'openai');
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+// ─── usage accounting (issue #272) ────────────────────────────────────────
+// complete() must keep returning a plain string (every existing caller in
+// the toolkit does `const text = await complete(...)`) — usage is an
+// additive opt-in side-channel via opts.onUsage, never a change to the
+// return shape.
+
+test('complete: anthropic usage is parsed and reported via onUsage, return value is still a plain string', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      content: [{ text: 'from-anthropic' }],
+      usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 40, cache_creation_input_tokens: 5 },
+    }),
+  });
+  let captured = null;
+  try {
+    const out = await complete({ tier: 'mid', prompt: 'hi', onUsage: (u) => { captured = u; } }, env);
+    assert.equal(typeof out, 'string');
+    assert.equal(out, 'from-anthropic');
+    assert.deepEqual(captured, {
+      inputTokens: 120,
+      outputTokens: 30,
+      cachedTokens: 45, // cache_read + cache_creation
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tier: 'mid',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: openai usage is parsed (prompt_tokens/completion_tokens/cached_tokens)', async () => {
+  const env = { OPENAI_API_KEY: 'k-openai' };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      choices: [{ message: { content: 'from-openai' } }],
+      usage: { prompt_tokens: 200, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 80 } },
+    }),
+  });
+  let captured = null;
+  try {
+    await complete({ tier: 'mid', prompt: 'hi', provider: 'openai', onUsage: (u) => { captured = u; } }, env);
+    assert.deepEqual(captured, {
+      inputTokens: 200,
+      outputTokens: 50,
+      cachedTokens: 80,
+      provider: 'openai',
+      model: 'gpt-5.1',
+      tier: 'mid',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: gemini usage is parsed (usageMetadata)', async () => {
+  const env = { GEMINI_API_KEY: 'k-gemini' };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      candidates: [{ content: { parts: [{ text: 'from-gemini' }] } }],
+      usageMetadata: { promptTokenCount: 90, candidatesTokenCount: 15, cachedContentTokenCount: 10 },
+    }),
+  });
+  let captured = null;
+  try {
+    await complete({ tier: 'mid', prompt: 'hi', provider: 'gemini', onUsage: (u) => { captured = u; } }, env);
+    assert.deepEqual(captured, {
+      inputTokens: 90,
+      outputTokens: 15,
+      cachedTokens: 10,
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+      tier: 'mid',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: a provider response with no usage block does not throw and does not call onUsage', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'no-usage-here' }] }) });
+  let called = false;
+  try {
+    const out = await complete({ tier: 'mid', prompt: 'hi', onUsage: () => { called = true; } }, env);
+    assert.equal(out, 'no-usage-here');
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: without opts.onUsage, behavior is byte-identical to before usage accounting existed', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ content: [{ text: 'unchanged' }], usage: { input_tokens: 10, output_tokens: 2 } }),
+  });
+  try {
+    const out = await complete({ tier: 'mid', prompt: 'hi' }, env);
+    assert.equal(out, 'unchanged');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fan: opts.onUsage fires once per resample, each with that resample\'s own usage', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = async () => {
+    // Capture the invocation index NOW — the 3 fan calls run concurrently,
+    // so `call` would already be 3 by the time a lazily-evaluated json()
+    // closure read it below.
+    const n = ++call;
+    return {
+      ok: true,
+      json: async () => ({
+        content: [{ text: `out-${n}` }],
+        usage: { input_tokens: 100 * n, output_tokens: n },
+      }),
+    };
+  };
+  const seen = [];
+  try {
+    const results = await fan({ tier: 'cheap', prompt: 'x', onUsage: (u) => seen.push(u) }, 3, env);
+    assert.equal(results.length, 3);
+    assert.equal(seen.length, 3, 'onUsage must fire once per fan resample');
+    assert.deepEqual(seen.map((u) => u.inputTokens).sort((a, b) => a - b), [100, 200, 300]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ─── prompt caching (issue #273) ──────────────────────────────────────────
+
+test('complete: without cacheable, anthropic sends plain string system/content (unchanged from before caching existed)', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  let capturedBody;
+  globalThis.fetch = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
+  };
+  try {
+    await complete({ tier: 'mid', system: 'sys', prompt: 'hi' }, env);
+    assert.equal(capturedBody.system, 'sys');
+    assert.equal(capturedBody.messages[0].content, 'hi');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: cacheable:true wraps system and the user message in cache_control blocks (anthropic)', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  let capturedBody;
+  globalThis.fetch = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
+  };
+  try {
+    await complete({ tier: 'mid', system: 'sys', prompt: 'hi', cacheable: true }, env);
+    assert.deepEqual(capturedBody.system, [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }]);
+    assert.deepEqual(capturedBody.messages[0].content, [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: cacheable:true with no system still caches the user message, and sends no system field', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  let capturedBody;
+  globalThis.fetch = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
+  };
+  try {
+    await complete({ tier: 'mid', prompt: 'hi', cacheable: true }, env);
+    assert.equal('system' in capturedBody, false);
+    assert.deepEqual(capturedBody.messages[0].content, [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fan: defaults to cacheable:true — every resample sends cache_control blocks', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
+  };
+  try {
+    await fan({ tier: 'cheap', system: 'sys', prompt: 'x' }, 3, env);
+    assert.equal(bodies.length, 3);
+    for (const body of bodies) {
+      assert.deepEqual(body.system, [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fan: cacheable:false explicitly opts out of caching', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
+  const originalFetch = globalThis.fetch;
+  let capturedBody;
+  globalThis.fetch = async (_url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
+  };
+  try {
+    await fan({ tier: 'cheap', system: 'sys', prompt: 'x', cacheable: false }, 1, env);
+    assert.equal(capturedBody.system, 'sys');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fanProviders: does NOT default to cacheable (one call per provider — no repeat to amortize a cache write against)', async () => {
+  const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
+  const originalFetch = globalThis.fetch;
+  let anthropicBody;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('anthropic.com')) anthropicBody = JSON.parse(init.body);
+    if (String(url).includes('openai.com')) {
+      return { ok: true, json: async () => ({ choices: [{ message: { content: 'openai-out' } }] }) };
+    }
+    return { ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) };
+  };
+  try {
+    await fanProviders({ tier: 'mid', system: 'sys', prompt: 'x' }, ['anthropic', 'openai'], env);
+    assert.equal(anthropicBody.system, 'sys', 'fanProviders must not force cache_control by default');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('complete: openai/gemini providers ignore the cacheable flag without erroring (no explicit cache_control support wired for them yet)', async () => {
+  const env = { OPENAI_API_KEY: 'k-openai' };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+  try {
+    const out = await complete({ tier: 'mid', system: 'sys', prompt: 'hi', provider: 'openai', cacheable: true }, env);
+    assert.equal(out, 'ok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('agy provider: onUsage is never called (no metered usage available) — text still returned normally', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-agy-usage-'));
+  const stubPath = join(dir, 'fake-agy.sh');
+  writeFileSync(stubPath, '#!/bin/sh\ncat >/dev/null\necho "stub output"\n');
+  chmodSync(stubPath, 0o755);
+  let called = false;
+  try {
+    const out = await complete(
+      { tier: 'cheap', prompt: 'hi', provider: 'agy', onUsage: () => { called = true; } },
+      { ADLC_AGY: stubPath }
+    );
+    assert.match(out, /stub output/);
+    assert.equal(called, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

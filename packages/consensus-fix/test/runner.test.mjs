@@ -2,6 +2,11 @@
  * Tests for runner.mjs logic — candidate validation, command running,
  * and end-to-end engine with injectable completeFn.
  * No network calls. Uses tmp dirs for file fixtures.
+ *
+ * Issue #279: candidates return hunks, not full file content. Every fixture
+ * file here is a single line, so `{startLine: 1, endLine: 1, replacement: X}`
+ * is the hunk-based equivalent of the old `{content: X}` full replace —
+ * same semantics, same test intent, new wire shape.
  */
 
 import { test } from 'node:test';
@@ -16,6 +21,16 @@ function makeTmp() {
 }
 function cleanup(dir) {
   rmSync(dir, { recursive: true, force: true });
+}
+
+/** One full-line-replace hunk, for single-line fixture files. */
+function replaceLine1(replacement) {
+  return [{ startLine: 1, endLine: 1, replacement }];
+}
+
+/** JSON body for a single-file, single-hunk candidate response. */
+function fixResponse(file, replacement) {
+  return JSON.stringify({ changes: [{ file, hunks: replaceLine1(replacement) }] });
 }
 
 // ─── runCommand ──────────────────────────────────────────────────────────────
@@ -39,7 +54,7 @@ test('runCommand captures stdout output', () => {
 
 test('validateCandidate accepts valid candidate', () => {
   const result = validateCandidate(
-    { changes: [{ file: 'src/a.mjs', content: 'new content' }] },
+    { changes: [{ file: 'src/a.mjs', hunks: replaceLine1('new content') }] },
     ['src/a.mjs']
   );
   assert.equal(result.valid, true);
@@ -60,19 +75,46 @@ test('validateCandidate rejects missing changes array', () => {
 
 test('validateCandidate rejects file not in allowed list', () => {
   const r = validateCandidate(
-    { changes: [{ file: 'evil.mjs', content: 'x' }] },
+    { changes: [{ file: 'evil.mjs', hunks: replaceLine1('x') }] },
     ['allowed.mjs']
   );
   assert.equal(r.valid, false);
   assert.ok(r.reason.includes('not in the provided list'));
 });
 
-test('validateCandidate rejects change missing content', () => {
+test('validateCandidate rejects change missing hunks', () => {
   const r = validateCandidate(
     { changes: [{ file: 'a.mjs' }] },
     ['a.mjs']
   );
   assert.equal(r.valid, false);
+});
+
+test('validateCandidate rejects a change with an empty hunks array', () => {
+  const r = validateCandidate(
+    { changes: [{ file: 'a.mjs', hunks: [] }] },
+    ['a.mjs']
+  );
+  assert.equal(r.valid, false);
+  assert.match(r.reason, /empty "hunks"/);
+});
+
+test('validateCandidate rejects a malformed hunk (non-integer startLine)', () => {
+  const r = validateCandidate(
+    { changes: [{ file: 'a.mjs', hunks: [{ startLine: 'one', endLine: 1, replacement: 'x' }] }] },
+    ['a.mjs']
+  );
+  assert.equal(r.valid, false);
+  assert.match(r.reason, /malformed hunk/);
+});
+
+test('validateCandidate rejects a malformed hunk (non-string replacement)', () => {
+  const r = validateCandidate(
+    { changes: [{ file: 'a.mjs', hunks: [{ startLine: 1, endLine: 1, replacement: 42 }] }] },
+    ['a.mjs']
+  );
+  assert.equal(r.valid, false);
+  assert.match(r.reason, /malformed hunk/);
 });
 
 test('validateCandidate accepts empty changes array', () => {
@@ -145,12 +187,44 @@ test('runConsensusFix discards candidate referencing file outside list', async (
       files: [f],
       n: 1,
       tier: 'mid',
-      completeFn: async () =>
-        JSON.stringify({ changes: [{ file: '/etc/passwd', content: 'bad' }] }),
+      completeFn: async () => fixResponse('/etc/passwd', 'bad'),
     });
 
     assert.equal(result.discarded.length, 1);
     assert.ok(result.discarded[0].reason.includes('not in the provided list'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix discards a candidate whose hunk fails to apply cleanly — only that candidate, not the run', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original'); // 1 line
+
+    let call = 0;
+    const completeFn = async () => {
+      call++;
+      if (call === 1) {
+        // endLine 9 is out of bounds for a 1-line file — must fail to apply.
+        return JSON.stringify({ changes: [{ file: f, hunks: [{ startLine: 1, endLine: 9, replacement: 'x' }] }] });
+      }
+      return fixResponse(f, 'good fix');
+    };
+
+    const testCmd = `test "$(cat '${f}')" != "original"`;
+    const result = await runConsensusFix({ testCmd, files: [f], n: 2, tier: 'mid', completeFn });
+
+    assert.equal(result.discarded.length, 1);
+    assert.match(result.discarded[0].reason, /hunk apply failed/);
+    assert.equal(result.discarded[0].index, 0);
+    // The OTHER candidate still ran normally and survived — one bad hunk
+    // must not abort the whole run.
+    assert.equal(result.survivors.length, 1);
+    assert.equal(result.survivors[0].index, 1);
+
+    assert.equal(readFileSync(f, 'utf8'), 'original', 'a failed apply must never leave the file mutated');
   } finally {
     cleanup(dir);
   }
@@ -179,7 +253,7 @@ test('runConsensusFix: surviving candidate passes test, files restored after', a
         // but we can't do that from changes (changes only affect listed files).
         // Instead: make the test always pass by writing the sentinel outside changes.
         writeFileSync(sentinelFile, 'yes');
-        return JSON.stringify({ changes: [{ file: f, content: 'FIXED' }] });
+        return fixResponse(f, 'FIXED');
       },
     });
 
@@ -206,8 +280,7 @@ test('runConsensusFix restores files even when candidate test fails', async () =
       files: [f],
       n: 1,
       tier: 'mid',
-      completeFn: async () =>
-        JSON.stringify({ changes: [{ file: f, content: 'attempted fix' }] }),
+      completeFn: async () => fixResponse(f, 'attempted fix'),
     });
 
     // File should be restored to original.
@@ -230,9 +303,9 @@ test('runConsensusFix groups and selects winner across multiple candidates', asy
       call++;
       // Candidates 1 and 3 return the same fix; candidate 2 returns different.
       if (call === 2) {
-        return JSON.stringify({ changes: [{ file: f, content: 'minority fix' }] });
+        return fixResponse(f, 'minority fix');
       }
-      return JSON.stringify({ changes: [{ file: f, content: 'majority fix' }] });
+      return fixResponse(f, 'majority fix');
     };
 
     // We need the test to pass.  We'll use a test that checks what's in the file.
@@ -272,7 +345,7 @@ test('runConsensusFix all-divergent flag set correctly', async () => {
     const completeFn = async () => {
       call++;
       // Every candidate returns a unique fix.
-      return JSON.stringify({ changes: [{ file: f, content: `fix${call}` }] });
+      return fixResponse(f, `fix${call}`);
     };
 
     const testCmd = `test "$(cat '${f}')" != "original"`;
@@ -311,10 +384,10 @@ test('runConsensusFix: candidate passing test-cmd but failing rails is NOT a sur
       call++;
       // Candidate 1: gaming fix — passes repro, fails rails.
       if (call === 1) {
-        return JSON.stringify({ changes: [{ file: f, content: 'gaming fix' }] });
+        return fixResponse(f, 'gaming fix');
       }
       // Candidates 2 and 3: honest fix — passes both gates.
-      return JSON.stringify({ changes: [{ file: f, content: 'good fix' }] });
+      return fixResponse(f, 'good fix');
     };
 
     const result = await runConsensusFix({
@@ -363,10 +436,10 @@ test('runConsensusFix: competing candidate that passes both gates wins over a sm
       call++;
       // Candidate 1: tiny diff that games the repro but lacks the rails token.
       if (call === 1) {
-        return JSON.stringify({ changes: [{ file: f, content: 'x' }] });
+        return fixResponse(f, 'x');
       }
       // Candidate 2: larger diff that satisfies the rails gate.
-      return JSON.stringify({ changes: [{ file: f, content: 'RAILS_OK fix line one' }] });
+      return fixResponse(f, 'RAILS_OK fix line one');
     };
 
     const result = await runConsensusFix({
@@ -403,9 +476,9 @@ test('runConsensusFix: providerNames issues exactly one completeFn call per name
     const testCmd = `test "$(cat '${f}')" != "original"`;
 
     const seenProviders = [];
-    const completeFn = async (prompt, providerName) => {
+    const completeFn = async (_prompt, providerName) => {
       seenProviders.push(providerName);
-      return JSON.stringify({ changes: [{ file: f, content: `fix-from-${providerName}` }] });
+      return fixResponse(f, `fix-from-${providerName}`);
     };
 
     const result = await runConsensusFix({
@@ -433,8 +506,7 @@ test('runConsensusFix: providerNames results record which provider produced whic
     writeFileSync(f, 'original');
     const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const completeFn = async (prompt, providerName) =>
-      JSON.stringify({ changes: [{ file: f, content: `fix-from-${providerName}` }] });
+    const completeFn = async (_prompt, providerName) => fixResponse(f, `fix-from-${providerName}`);
 
     const result = await runConsensusFix({
       testCmd,
@@ -460,9 +532,9 @@ test('runConsensusFix: providerNames + a failing provider surfaces as a discarde
     writeFileSync(f, 'original');
     const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const completeFn = async (prompt, providerName) => {
+    const completeFn = async (_prompt, providerName) => {
       if (providerName === 'openai') throw new Error('provider "openai" is not available');
-      return JSON.stringify({ changes: [{ file: f, content: `fix-from-${providerName}` }] });
+      return fixResponse(f, `fix-from-${providerName}`);
     };
 
     const result = await runConsensusFix({
@@ -490,10 +562,10 @@ test('runConsensusFix: without providerNames, behavior is unchanged (n resamples
     const testCmd = `test "$(cat '${f}')" != "original"`;
 
     let callCount = 0;
-    const completeFn = async (prompt, providerName) => {
+    const completeFn = async (_prompt, providerName) => {
       callCount++;
       assert.equal(providerName, undefined, 'no per-invocation provider override by default');
-      return JSON.stringify({ changes: [{ file: f, content: 'same fix' }] });
+      return fixResponse(f, 'same fix');
     };
 
     const result = await runConsensusFix({
@@ -527,8 +599,7 @@ test('runConsensusFix: without --rails, emits a warning and survivors are repro-
       files: [f],
       n: 1,
       tier: 'mid',
-      completeFn: async () =>
-        JSON.stringify({ changes: [{ file: f, content: 'any fix' }] }),
+      completeFn: async () => fixResponse(f, 'any fix'),
       onProgress: (m) => messages.push(m),
     });
 

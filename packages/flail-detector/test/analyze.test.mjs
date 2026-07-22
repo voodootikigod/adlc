@@ -85,6 +85,42 @@ test('analyze: size not exceeded stays clean', () => {
   assert.equal(result.verdict, 'clean');
 });
 
+// ── budget signal (issue #275) ────────────────────────────────────────────
+
+test('analyze: without spentTokens/budget, no budget signal fires (default null/null)', () => {
+  const lines = ['Build started'];
+  const result = analyze({ lines, bytes: 100, ...DEFAULT_OPTS });
+  assert.equal(result.verdict, 'clean');
+  assert.ok(!result.signals.some((s) => s.type === 'budget'));
+});
+
+test('analyze: token spend past the declared budget triggers flail', () => {
+  const lines = ['Build started'];
+  const result = analyze({
+    lines, bytes: 100,
+    ...DEFAULT_OPTS,
+    spentTokens: 50_000,
+    budget: 20_000,
+  });
+  assert.equal(result.verdict, 'flail');
+  const sig = result.signals.find((s) => s.type === 'budget');
+  assert.ok(sig, 'expected a budget signal');
+  assert.equal(sig.spentTokens, 50_000);
+  assert.equal(sig.budget, 20_000);
+  assert.match(result.recommendation, /Kill the session/);
+});
+
+test('analyze: token spend within the declared budget stays clean', () => {
+  const lines = ['Build started'];
+  const result = analyze({
+    lines, bytes: 100,
+    ...DEFAULT_OPTS,
+    spentTokens: 10_000,
+    budget: 20_000,
+  });
+  assert.equal(result.verdict, 'clean');
+});
+
 test('analyze: multiple signals reported together', () => {
   const lines = [
     'Error: cannot connect to database',
