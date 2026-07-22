@@ -2,29 +2,6 @@
 // personas. Untrusted content (prior failure logs, prosecution findings) enters
 // only inside an unguessable fence and is declared inert data.
 
-<<<<<<< HEAD
-function fenceNonce(label, content) {
-  let hash = 0;
-  const str = `${label}:${content ?? ''}`;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
-  }
-  const hex = (hash >>> 0).toString(16);
-  return `${label}-${(content ?? '').length}-${hex}`;
-}
-
-function sanitizeFencedContent(content) {
-  if (!content) return '';
-  return content.replaceAll('<<END:', '<<ESCAPED_END:').replaceAll('<<UNTRUSTED:', '<<ESCAPED_UNTRUSTED:');
-}
-
-function fence(label, content) {
-  const safeContent = sanitizeFencedContent(content);
-  const tag = fenceNonce(label, safeContent);
-  return `<<UNTRUSTED:${label}:${tag}>>\n${safeContent}\n<<END:${label}:${tag}>>`;
-}
-=======
 import { fence } from '@adlc/core';
 
 // issue #280: fence() previously had no length cap here — a single
@@ -40,7 +17,6 @@ const DEAD_END_MAX_CHARS = 12_000;
 // scope/rails constraint below, which the surrounding prose declares
 // authoritative over anything the fenced spec says.
 const TICKET_SPEC_MAX_CHARS = 8000;
->>>>>>> origin/main
 
 /** The builder prompt for a fresh (strike-1) dispatch. */
 export function builderPrompt(ticket, gate) {
