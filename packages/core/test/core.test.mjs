@@ -412,6 +412,30 @@ test('changedFiles: a clean tree at base reports nothing', () => {
   }
 });
 
+test('changedFiles: does not throw when a tracked path collides with the base ref name', () => {
+  // Both the worktree AND staged `git diff` calls must keep their trailing `--`.
+  // Without it, `git diff <base>` is genuinely AMBIGUOUS the moment a tracked
+  // path shares a name with the ref — git refuses outright:
+  //   fatal: ambiguous argument 'main': both revision and filename
+  // `resolveBase()` in this same file defaults to trying the literal ref name
+  // 'main', so a repo with a top-level file or directory named `main` is not a
+  // contrived edge case. Mutation-tested: dropping either `--` survived the rest
+  // of this suite with zero failures before this test existed.
+  const { dir, g } = gitRepo();
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    g('add', '-A'); g('commit', '-qm', 'init');
+    mkdirSync(join(dir, 'main'));
+    writeFileSync(join(dir, 'main', 'file.txt'), 'colliding path\n'); // unstaged
+    writeFileSync(join(dir, 'a.txt'), 'two\n');
+    g('add', 'main/file.txt'); // staged, so the --cached half is exercised too
+    assert.doesNotThrow(() => changedFiles('main', dir));
+    assert.deepEqual(changedFiles('main', dir).sort(), ['a.txt', 'main/file.txt']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('resolveRevision: handles large tracked diffs without exec buffer failure', () => {
   const { dir, g } = gitRepo();
   try {
