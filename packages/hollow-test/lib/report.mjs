@@ -24,33 +24,33 @@ export function printTable(results) {
   // Invalid mutants belong to neither bucket (#293) — showing an unparseable
   // mutation as SURVIVED blames the tests for code that was never valid.
   const invalid = results.filter((r) => r.invalid);
-  const checkFailed = results.filter((r) => r.checkFailed);
-  const survivors = results.filter((r) => !r.killed && !r.invalid && !r.checkFailed);
-  const killed = results.filter((r) => r.killed && !r.invalid && !r.checkFailed);
+  const undetermined = results.filter((r) => r.undetermined);
+  const survivors = results.filter((r) => !r.killed && !r.invalid && !r.undetermined);
+  const killed = results.filter((r) => r.killed && !r.invalid && !r.undetermined);
 
   console.log('');
   console.log('Mutation Results');
   console.log('='.repeat(72));
 
   for (const r of results) {
-    const status = r.checkFailed ? 'CHECK-FAIL' : r.invalid ? 'INVALID ' : r.killed ? 'KILLED  ' : 'SURVIVED';
+    const status = r.undetermined ? 'UNDETERMINED' : r.invalid ? 'INVALID ' : r.killed ? 'KILLED  ' : 'SURVIVED';
     const loc = `${r.file}:${r.line}`;
     console.log(`${status}  ${loc}  [${r.operator}]`);
-    if (!r.killed || r.invalid || r.checkFailed) {
+    if (!r.killed || r.invalid || r.undetermined) {
       console.log(`         original: ${r.original.trim()}`);
       console.log(`         mutated:  ${r.mutated.trim()}`);
     }
     if (r.invalid) {
       console.log('         (did not parse — discarded, not counted as a kill)');
     }
-    if (r.checkFailed) {
+    if (r.undetermined) {
       console.log('         (syntax check did not run — validity unknown, nothing was scored)');
     }
   }
 
   console.log('');
   const invalidNote = invalid.length > 0 ? `  Invalid: ${invalid.length}` : '';
-  const checkNote = checkFailed.length > 0 ? `  Check-failed: ${checkFailed.length}` : '';
+  const checkNote = undetermined.length > 0 ? `  Undetermined: ${undetermined.length}` : '';
   console.log(`Total: ${results.length}  Killed: ${killed.length}  Survived: ${survivors.length}${invalidNote}${checkNote}`);
   console.log('');
 }
@@ -66,9 +66,9 @@ export function buildJsonReport(results) {
   // "killed" would fake coverage and "survived" would blame the tests for a
   // mutation that was never valid code.
   const invalid = results.filter((r) => r.invalid);
-  const checkFailed = results.filter((r) => r.checkFailed);
-  const survivors = results.filter((r) => !r.killed && !r.invalid && !r.checkFailed);
-  const killed = results.filter((r) => r.killed && !r.invalid && !r.checkFailed);
+  const undetermined = results.filter((r) => r.undetermined);
+  const survivors = results.filter((r) => !r.killed && !r.invalid && !r.undetermined);
+  const killed = results.filter((r) => r.killed && !r.invalid && !r.undetermined);
 
   return {
     tool: 'hollow-test',
@@ -77,13 +77,13 @@ export function buildJsonReport(results) {
       killed: killed.length,
       survived: survivors.length,
       invalid: invalid.length,
-      checkFailed: checkFailed.length,
+      undetermined: undetermined.length,
     },
     mutants: results.map((r) => ({
       file: r.file,
       line: r.line,
       operator: r.operator,
-      status: r.checkFailed ? 'check-failed' : r.invalid ? 'invalid' : r.killed ? 'killed' : 'survived',
+      status: r.undetermined ? 'undetermined' : r.invalid ? 'invalid' : r.killed ? 'killed' : 'survived',
       timedOut: r.timedOut,
       original: r.original,
       mutated: r.mutated,

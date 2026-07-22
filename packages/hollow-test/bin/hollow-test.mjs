@@ -462,7 +462,7 @@ for (const target of fileTargets) {
       operator: mutant.operator,
       killed: trial.killed,
       invalid: trial.invalid === true,
-      checkFailed: trial.checkFailed === true,
+      undetermined: trial.undetermined === true,
       timedOut: trial.timedOut,
       original: mutant.original,
       mutated: mutant.mutated,
@@ -499,7 +499,7 @@ if (mutableExplicitFiles.length > 0) {
 // Could not determine validity for some mutant — refuse to report a verdict.
 // Scoring it either way is a guess, and the guess that reopens #293 is the
 // convenient one.
-const undetermined = results.filter((r) => r.checkFailed);
+const undetermined = results.filter((r) => r.undetermined);
 if (undetermined.length > 0) {
   const where = undetermined.map((r) => `${r.file}:${r.line}`).join(', ');
   opError(

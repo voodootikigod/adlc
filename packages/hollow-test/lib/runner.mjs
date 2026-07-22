@@ -25,7 +25,7 @@ function childEnv() {
  * @param {string} testCmd   - Shell command to run the test suite.
  * @param {number} timeoutMs - Maximum time in ms to wait for the test command.
  * @param {string} cwd       - Working directory for the test command.
- * @returns {{ status: number | null, timedOut: boolean }}
+ * @returns {{ status: number | null, timedOut: boolean, spawnFailed: boolean, reason: string | null }}
  */
 export function runTest(testCmd, timeoutMs, cwd) {
   const result = spawnSync(testCmd, {
@@ -36,10 +36,41 @@ export function runTest(testCmd, timeoutMs, cwd) {
     stdio: 'pipe',
     env: childEnv(),
   });
+  return classifyTestResult(result);
+}
 
-  const timedOut = result.signal === 'SIGTERM' || result.status === null;
-
-  return { status: result.status, timedOut };
+/**
+ * Classify a spawnSync result into a runnable outcome.
+ *
+ * Split out and exported so every branch is testable with a synthetic result —
+ * the failure that matters here (EAGAIN / ENOMEM under process pressure) cannot
+ * be provoked reliably in a test, and "cannot be provoked" is exactly how it
+ * stayed unnoticed.
+ *
+ * A KILL MUST MEAN THE TESTS RAN AND FAILED. This previously read
+ * `timedOut = signal === 'SIGTERM' || status === null`, which folded spawn
+ * failures into "timed out" — and runMutant counts a timeout as a kill. So a
+ * transient inability to LAUNCH the test command became coverage evidence:
+ * the same false-kill shape as an unparseable mutant (#293), one layer down.
+ *
+ * @param {{status: number|null, signal: string|null, error?: Error & {code?: string}}} result
+ */
+export function classifyTestResult(result) {
+  if (result.error) {
+    // Node reports an expired `timeout` as an ETIMEDOUT error on some versions
+    // and as a plain SIGTERM on others — both are genuine timeouts.
+    const code = result.error.code;
+    if (code === 'ETIMEDOUT') return { status: null, timedOut: true, spawnFailed: false, reason: null };
+    return { status: null, timedOut: false, spawnFailed: true, reason: code ?? result.error.message };
+  }
+  if (result.signal === 'SIGTERM') return { status: null, timedOut: true, spawnFailed: false, reason: null };
+  if (result.signal) {
+    return { status: null, timedOut: false, spawnFailed: true, reason: `unexpected signal ${result.signal}` };
+  }
+  if (typeof result.status !== 'number') {
+    return { status: null, timedOut: false, spawnFailed: true, reason: 'no exit status' };
+  }
+  return { status: result.status, timedOut: false, spawnFailed: false, reason: null };
 }
 
 /**
@@ -90,11 +121,24 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   // Could not determine validity — refuse to score it either way. The caller
   // turns this into an operational failure; guessing is what reopens #293.
   if (syntax === 'unknown') {
-    return { killed: false, invalid: false, checkFailed: true, timedOut: false, exitCode: null };
+    return {
+      killed: false, invalid: false, undetermined: true,
+      reason: 'syntax check did not run', timedOut: false, exitCode: null,
+    };
   }
 
   if (invalid) {
-    return { killed: false, invalid: true, checkFailed: false, timedOut: false, exitCode: null };
+    return { killed: false, invalid: true, undetermined: false, reason: null, timedOut: false, exitCode: null };
+  }
+
+  // The test command could not be LAUNCHED. Nothing was executed, so there is
+  // nothing to score — and scoring it a kill (which "timed out" would) invents
+  // coverage out of an infrastructure failure.
+  if (trial.spawnFailed) {
+    return {
+      killed: false, invalid: false, undetermined: true,
+      reason: `test command did not run (${trial.reason})`, timedOut: false, exitCode: null,
+    };
   }
 
   const killed = trial.timedOut || (trial.status !== 0);
@@ -102,7 +146,8 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   return {
     killed,
     invalid: false,
-    checkFailed: false,
+    undetermined: false,
+    reason: null,
     timedOut: trial.timedOut,
     exitCode: trial.status,
   };

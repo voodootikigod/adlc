@@ -12,7 +12,7 @@ import {
   readRailsFromTicketFile, expandRailsToFiles,
 } from '../lib/targets.mjs';
 import { buildJsonReport, printTable } from '../lib/report.mjs';
-import { checkSyntax } from '../lib/runner.mjs';
+import { checkSyntax, classifyTestResult } from '../lib/runner.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
 
@@ -266,7 +266,7 @@ const MIXED = [
 describe('buildJsonReport with invalid mutants', () => {
   it('counts invalid separately from killed and survived', () => {
     const r = buildJsonReport(MIXED);
-    assert.deepEqual(r.summary, { total: 3, killed: 1, survived: 1, invalid: 1, checkFailed: 0 });
+    assert.deepEqual(r.summary, { total: 3, killed: 1, survived: 1, invalid: 1, undetermined: 0 });
   });
 
   it('labels each mutant with its own status', () => {
@@ -357,15 +357,15 @@ describe('checkSyntax', () => {
 // when the real problem is the execution environment.
 describe('report surfaces distinguish a checker failure from a survivor', () => {
   const WITH_CHECK_FAILURE = [
-    { file: 'a.mjs', line: 1, operator: 'null-return', killed: false, invalid: false, checkFailed: true,  timedOut: false, original: 'return {', mutated: 'return null;' },
-    { file: 'a.mjs', line: 2, operator: 'bool-flip',   killed: false, invalid: false, checkFailed: false, timedOut: false, original: 'x = true', mutated: 'x = false' },
+    { file: 'a.mjs', line: 1, operator: 'null-return', killed: false, invalid: false, undetermined: true,  timedOut: false, original: 'return {', mutated: 'return null;' },
+    { file: 'a.mjs', line: 2, operator: 'bool-flip',   killed: false, invalid: false, undetermined: false, timedOut: false, original: 'x = true', mutated: 'x = false' },
   ];
 
   it('JSON gives it its own status and keeps it out of survived', () => {
     const r = buildJsonReport(WITH_CHECK_FAILURE);
     assert.equal(r.summary.survived, 1, 'only the genuine survivor counts');
-    assert.equal(r.summary.checkFailed, 1);
-    assert.deepEqual(r.mutants.map((m) => m.status), ['check-failed', 'survived']);
+    assert.equal(r.summary.undetermined, 1);
+    assert.deepEqual(r.mutants.map((m) => m.status), ['undetermined', 'survived']);
   });
 
   it('the table does not label it SURVIVED', () => {
@@ -375,6 +375,56 @@ describe('report surfaces distinguish a checker failure from a survivor', () => 
     try { printTable(WITH_CHECK_FAILURE); } finally { console.log = original; }
     const out = lines.join('\n');
     assert.doesNotMatch(out, /SURVIVED\s+a\.mjs:1/);
-    assert.match(out, /CHECK-FAIL\s+a\.mjs:1/);
+    assert.match(out, /UNDETERMINED\s+a\.mjs:1/);
+  });
+});
+
+// ── classifyTestResult: a kill must mean the tests RAN and failed ────────────
+//
+// This previously read `timedOut = signal === 'SIGTERM' || status === null`,
+// folding spawn failures into "timed out" — and a timeout counts as a kill. So
+// a transient inability to LAUNCH the test command became coverage evidence:
+// the same false-kill shape as an unparseable mutant (#293), one layer down.
+//
+// EAGAIN/ENOMEM under process pressure cannot be provoked reliably in a test,
+// which is precisely how this stayed unnoticed. Hence synthetic results.
+
+describe('classifyTestResult', () => {
+  it('a completed run carries its exit status and is neither timeout nor spawn failure', () => {
+    assert.deepEqual(classifyTestResult({ status: 0, signal: null }),
+      { status: 0, timedOut: false, spawnFailed: false, reason: null });
+    assert.deepEqual(classifyTestResult({ status: 1, signal: null }),
+      { status: 1, timedOut: false, spawnFailed: false, reason: null });
+  });
+
+  it('a real timeout is a timeout, in both shapes Node reports it', () => {
+    // SIGTERM from the `timeout` option...
+    assert.equal(classifyTestResult({ status: null, signal: 'SIGTERM' }).timedOut, true);
+    // ...and ETIMEDOUT, which other Node versions surface instead.
+    const err = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    assert.equal(classifyTestResult({ status: null, signal: null, error: err }).timedOut, true);
+  });
+
+  it('a spawn failure is NOT a timeout and NOT a kill', () => {
+    for (const code of ['EAGAIN', 'ENOMEM', 'ENOENT']) {
+      const error = Object.assign(new Error(code), { code });
+      const c = classifyTestResult({ status: null, signal: null, error });
+      assert.equal(c.spawnFailed, true, `${code} must be a spawn failure`);
+      assert.equal(c.timedOut, false, `${code} must not masquerade as a timeout`);
+      assert.equal(c.reason, code);
+    }
+  });
+
+  it('an unexpected signal is undetermined, not a timeout', () => {
+    const c = classifyTestResult({ status: null, signal: 'SIGKILL' });
+    assert.equal(c.spawnFailed, true);
+    assert.equal(c.timedOut, false);
+    assert.match(c.reason, /SIGKILL/);
+  });
+
+  it('a missing exit status with no error or signal is undetermined', () => {
+    const c = classifyTestResult({ status: null, signal: null });
+    assert.equal(c.spawnFailed, true);
+    assert.equal(c.timedOut, false);
   });
 });

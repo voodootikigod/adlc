@@ -127,9 +127,9 @@ failure) rather than passing: no assertion was exercised, so the run proves
 nothing.
 
 Validation uses `node --check`, so no parser dependency is added and the real
-file extension and package type are honoured. The check is **tri-state** — `valid`, `invalid`, or `unknown`. "Could not
+file extension and package type are honoured. Both the syntax check and the test run are **tri-state** — `valid`, `invalid`, or `unknown`. "Could not
 determine" never collapses into "valid": if the checker is killed, times out, or
-cannot spawn, the run fails operationally rather than guessing.
+cannot spawn, the run fails operationally rather than guessing. The same applies to the test command itself: a spawn failure (EAGAIN, ENOMEM) is not a timeout, and a timeout is the only non-completion that counts as a kill. A kill must mean the tests ran and failed.
 
 The all-invalid guard is applied **per file**, not just globally, so an
 explicitly named `--target` cannot go untested while some other file's kill
