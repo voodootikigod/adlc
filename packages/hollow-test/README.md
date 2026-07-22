@@ -102,8 +102,18 @@ exclude production paths such as `packages/hollow-test/lib/targets.mjs` or
 `spec-foo.js`) are *not* treated as tests — a hyphen is ambiguous between a test
 convention and a product name, and `hollow-test.mjs` and `spec-lint.mjs` are
 production files. If you use that convention, keep tests in a `test/` directory
-or name them `*.test.*`. `--target`/`--rails` files bypass this exclusion —
-the caller is deliberately naming a mutation target.
+or name them `*.test.*`. `--target`/`--rails` files bypass the **test-path** exclusion — the caller is
+deliberately naming a mutation target, and rails are usually test files.
+
+They do **not** bypass the language allow-list. Operators are JS/TS-shaped, and
+a mutant that renders another language syntactically invalid makes the test
+command exit non-zero, which is scored as *killed* — a false pass. So:
+
+- `--target <path>` in an unsupported language is **refused** (exit 1). The
+  caller named one file; dropping it silently would be its own silent pass.
+- `--rails <ticket>` expansions legitimately match non-source (`schemas/**`,
+  JSON, fixtures). Those are filtered out and **reported**, and the run fails
+  only if nothing mutable remains.
 
 Within diff-derived eligible files, only lines changed in the diff are
 targeted; `--target`/`--rails` files are mutated in their entirety. Lines that

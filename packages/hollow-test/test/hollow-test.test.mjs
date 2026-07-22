@@ -623,7 +623,7 @@ describe('CLI: an explicit --target outside the source allow-list is refused', (
       // looser assertion passes for entirely the wrong reason. (Caught by
       // mutating the guard away: the first version of this test stayed green.)
       const out = result.stderr + result.stdout;
-      assert.match(out, /not mutable source/,
+      assert.match(out, /not a supported source language/,
         `Expected the unsupported-target refusal, got: ${out}`);
       assert.match(out, new RegExp(target.replace('.', '\\.')),
         'the refusal must name the offending target');
@@ -633,6 +633,37 @@ describe('CLI: an explicit --target outside the source allow-list is refused', (
         'the run must refuse before generating any mutant');
     });
   }
+});
+
+// The language guard must NOT re-import test-path exclusion. Explicit targets
+// deliberately bypass it — rails ARE test files, which is the entire point of
+// the P3 rails-authoring workflow. An earlier revision of this guard used the
+// combined predicate and rejected every rail under a test/ directory, breaking
+// the documented contract while looking like a safety improvement.
+describe('CLI: explicit targets still bypass test-path exclusion', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-testtarget-'));
+    createRailsAuthoringRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates a --target under test/ rather than refusing it', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'test/guarded.test.mjs', '--max', '3', '--json'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.doesNotMatch(out, /not a supported source language/,
+      `a test-path target must not be rejected by the language guard: ${out}`);
+    assert.notEqual(result.status, 1,
+      `expected the run to proceed, not an operational refusal: ${out}`);
+  });
 });
 
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──

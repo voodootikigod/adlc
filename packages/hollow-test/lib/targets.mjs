@@ -81,6 +81,21 @@ const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
  * "source" for both hollow-test and the mutation-gate wrapper.
  * @param {string} file repo-relative path
  */
+/**
+ * Extension check ONLY — is this a language whose operators we implement?
+ *
+ * Split out from isMutableSource because explicit --target/--rails paths
+ * DELIBERATELY bypass test-path exclusion (rails ARE test files; that is the
+ * whole point of the P3 rails-authoring workflow). They must still not be
+ * mutated in an unsupported language, so they need the language half of the
+ * predicate without the test-discovery half. Conflating the two rejected every
+ * rail under a test/ directory and broke the documented workflow.
+ * @param {string} file repo-relative path
+ */
+export function isSupportedSourceExtension(file) {
+  return SOURCE_EXT_RE.test(file);
+}
+
 export function isMutableSource(file, { testGlobs = [] } = {}) {
   if (EXCLUDE_DIR_RE.test(file)) return false;
   if (EXCLUDE_FILE_RE.test(file)) return false;

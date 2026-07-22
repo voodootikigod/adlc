@@ -9,7 +9,7 @@ import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
   filterTargetFiles, buildFileTargets, readFileSafe,
-  readRailsFromTicketFile, expandRailsToFiles, isMutableSource,
+  readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
 } from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
@@ -270,6 +270,7 @@ if (railsGlobs.length > 0) {
 }
 
 const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
+const mutableExplicitFiles = () => [...new Set([...explicitTargets, ...railsFiles.filter(isSupportedSourceExtension)])];
 
 // ── fail closed: every explicit --target/--rails file must be readable ─────
 // Unlike diff-derived files (which came from a real git diff and should
@@ -309,32 +310,54 @@ if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
 const effectiveChangedLines = { ...changedLines };
 for (const f of explicitFiles) delete effectiveChangedLines[f];
 
-// FAIL CLOSED on explicit targets outside the source allow-list. The allow-list
-// was applied only to diff-derived files, so --target/--rails could aim
-// JS-shaped operators at a .py or .css file. That is not merely useless: a
-// mutant which renders the file syntactically invalid makes the test command
-// exit non-zero, and runner.mjs scores `killed = timedOut || status !== 0` — so
-// it is recorded KILLED. The gate whose purpose is catching false greens would
-// itself report a false green.
+// FAIL CLOSED on explicit targets in an UNSUPPORTED LANGUAGE — but only the
+// language half of the predicate. Explicit --target/--rails paths deliberately
+// bypass test-path exclusion: rails ARE test files, which is the entire point of
+// the P3 rails-authoring workflow. Using the full isMutableSource here rejected
+// every rail under a test/ directory and broke that documented contract.
 //
-// Refused rather than silently filtered: the caller named these files
-// deliberately, so dropping them quietly would be its own silent-pass bug —
-// mirrors the --max starvation check below.
-const unsupportedTargets = explicitFiles.filter((f) => !isMutableSource(f, { testGlobs }));
+// The language guard still matters. Operators are JS/TS-shaped, and runner.mjs
+// scores `killed = timedOut || status !== 0`, so a mutant that renders a .py or
+// .css file syntactically invalid makes the test command fail and is recorded as
+// KILLED — a false green on the gate built to detect false greens.
+//
+// --target and --rails are treated differently on purpose:
+//   --target  the caller typed ONE path. Refuse loudly; silently dropping it
+//             would be its own silent-pass bug.
+//   --rails   a glob EXPANSION legitimately matches non-source (schemas/**,
+//             JSON, fixtures). Filter those out, say which were dropped, and
+//             fail only if nothing mutable remains.
+const unsupportedTargets = explicitTargets.filter((f) => !isSupportedSourceExtension(f));
 if (unsupportedTargets.length > 0) {
   opError(
-    `explicit target(s) are not mutable source: ${unsupportedTargets.join(', ')} — ` +
+    `--target ${unsupportedTargets.join(', ')} is not a supported source language — ` +
     `mutation operators are JS/TS-shaped, and mutating another language yields ` +
     `syntactically invalid code that is scored as "killed" rather than testing ` +
-    `anything. Remove these target(s), or convert them to a supported extension.`
+    `anything.`
   );
 }
 
-const allTargetFiles = [...new Set([...diffEligibleFiles, ...explicitFiles])];
+const droppedRails = railsFiles.filter((f) => !isSupportedSourceExtension(f));
+if (droppedRails.length > 0) {
+  console.warn(
+    `hollow-test: ${droppedRails.length} --rails match(es) are not a supported source ` +
+    `language and will not be mutated: ${droppedRails.join(', ')}`
+  );
+}
+const mutableRails = railsFiles.filter(isSupportedSourceExtension);
+if (railsFiles.length > 0 && mutableRails.length === 0) {
+  opError(
+    `--rails matched ${railsFiles.length} file(s), none of which are a supported ` +
+    `source language (${[...new Set(railsFiles.map((f) => f.replace(/^.*(\.[^.]*)$/, '$1')))].join(', ')}) — ` +
+    `nothing could be mutated, which would otherwise report a vacuous pass.`
+  );
+}
+
+const allTargetFiles = [...new Set([...diffEligibleFiles, ...mutableExplicitFiles()])];
 // explicitFiles are passed as a priority list so the --max budget can't
 // starve them to quota 0 when diff-derived files alone would consume it —
 // see buildFileTargets() in lib/targets.mjs.
-const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, explicitFiles);
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, mutableExplicitFiles());
 
 // ── fail closed: --max too small to cover every explicit target ────────────
 // buildFileTargets() reserves 1 quota per explicit file when the budget
