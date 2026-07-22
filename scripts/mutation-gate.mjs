@@ -41,9 +41,24 @@
 // Given both, the only sound design is: never pass --target (get hunk-scoping
 // for free from hollow-test's own diff mode), and make --test-cmd cover EVERY
 // eligible file hollow-test would independently discover. When a source file
-// doesn't map to a known fast test directory, we cannot safely predict what
+// doesn't map to a known fast test target, we cannot safely predict what
 // hollow-test will do with it — so we fall back to the full monorepo suite
 // (slow, but never wrong) rather than silently leaving it untested.
+//
+// v3 — the slow fallback ITSELF turned out unsafe in the CI job that runs it.
+// `node scripts/run-tests.mjs` includes segments needing globally-installed
+// `codex`/`opencode`/`pi` CLIs, which the `test` job's workflow provisions but
+// the `mutation-gate` job's workflow does not (it only runs `npm ci`). The very
+// first real use of the slow fallback — this file's own PR, since this file
+// itself lives under scripts/** and had no dedicated test — failed on that
+// mismatch, not on the mutation logic. Two fixes: (1) this file now has a real
+// test (scripts/test/mutation-gate.test.mjs), and (2) `scripts/<name>.mjs` maps
+// to `scripts/test/<name>.test.mjs` when that exact file exists, the same
+// same-basename convention already used by release.mjs/ceremony-drift.mjs/etc,
+// so a scripts/ file WITH direct coverage takes the fast, single-file path
+// instead of ever reaching the slow fallback. Files without such a test still
+// correctly fall through to the slow path — this narrows the unsafe fallback's
+// blast radius, it does not eliminate the environment mismatch for those.
 //
 //   node scripts/mutation-gate.mjs [base-ref] [--max N]
 //
@@ -53,59 +68,42 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const args = process.argv.slice(2);
-const base = args.find((a) => !a.startsWith('--')) || process.env.MUTATION_BASE || 'origin/main';
-const maxFlag = args.indexOf('--max');
-const requestedMax = maxFlag >= 0 ? Number(args[maxFlag + 1]) : 12;
-
-function fail(msg) {
-  console.error(`mutation-gate: ${msg}`);
-  process.exit(1);
-}
-
-function git(gitArgs) {
-  const r = spawnSync('git', gitArgs, { encoding: 'utf8', cwd: ROOT, timeout: 60000 });
-  if (r.error) fail(`git ${gitArgs[0]} failed: ${r.error.message}`);
-  return r;
-}
-
-// The base must resolve. `git diff <bad-ref>` fails loudly, but an unfetched base
-// in CI is an operational problem, not "nothing changed" — say so rather than
-// passing an empty diff.
-if (git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`]).status !== 0) {
-  fail(`base ref '${base}' does not resolve — fetch it or pass the correct base`);
-}
-
-const diff = git(['diff', '--name-only', '-z', base, '--']);
-if (diff.status !== 0) fail('git diff failed');
-const changed = diff.stdout.split('\0').filter(Boolean);
+export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Map a changed file to the test directory that covers it, mirroring
- * hollow-test's own eligibility filter closely enough to reason about what its
- * independent diff scan will pick up (test/spec paths and non-code extensions
- * excluded — see hollow-test/lib/targets.mjs EXCLUDE_PATH_RE / EXCLUDE_EXT_RE).
+ * Map a changed file to the fast test TARGET that covers it — a directory glob
+ * (`pkg/test/*.test.mjs`) for packages/plugins, or a single same-basename test
+ * file for a scripts/ source (`scripts/foo.mjs` → `scripts/test/foo.test.mjs`),
+ * mirroring the convention already used by release.mjs, ceremony-drift.mjs, etc.
  *
- * Deliberately conservative: a file that maps to no known test directory
- * contributes NO command here, and the caller must treat that as "cannot
- * guarantee coverage" rather than "safe to ignore" — see the fallback below.
+ * Deliberately conservative: a file that maps to nothing contributes NO target,
+ * and the caller must treat that as "cannot guarantee coverage" rather than
+ * "safe to ignore" — see classify() below.
+ *
+ * @param {string} file  repo-relative path
+ * @param {string} [root]  repo root, for the existsSync checks (testable with a
+ *        fixture root without touching the real filesystem layout)
+ * @returns {string|null} a `node --test`-able target, or null if unknown
  */
-function testDirFor(file) {
+export function testTargetFor(file, root = ROOT) {
   let m;
   if ((m = /^packages\/([^/]+)\//.exec(file))) {
     const d = `packages/${m[1]}/test`;
-    return existsSync(join(ROOT, d)) ? d : null;
+    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
   }
   if ((m = /^plugins\/([^/]+)\/(hooks|lib|agents|mcp)\//.exec(file))) {
     const d = `plugins/${m[1]}/${m[2]}/test`;
-    return existsSync(join(ROOT, d)) ? d : null;
+    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
   }
   if ((m = /^plugins\/([^/]+)\//.exec(file))) {
     const d = `plugins/${m[1]}/test`;
-    return existsSync(join(ROOT, d)) ? d : null;
+    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
+  }
+  if ((m = /^scripts\/([^/]+)\.mjs$/.exec(file))) {
+    const f = `scripts/test/${m[1]}.test.mjs`;
+    return existsSync(join(root, f)) ? f : null;
   }
   return null;
 }
@@ -113,83 +111,147 @@ function testDirFor(file) {
 // hollow-test's own exclusion: test/spec paths and non-code extensions. A file
 // matching this is one hollow-test would NEVER independently select, so it is
 // safe to ignore for test-cmd coverage purposes regardless of which directory
-// it lives in.
+// it lives in. Mirrors hollow-test/lib/targets.mjs EXCLUDE_PATH_RE/EXCLUDE_EXT_RE.
 const HOLLOW_TEST_EXCLUDE_PATH = /(?:test|spec)/i;
 const HOLLOW_TEST_EXCLUDE_EXT = /\.(?:md|json|yml|yaml|lock|txt|toml|snap)$/i;
-function hollowTestWouldMutate(file) {
+export function hollowTestWouldMutate(file) {
   if (HOLLOW_TEST_EXCLUDE_PATH.test(file)) return false;
   if (HOLLOW_TEST_EXCLUDE_EXT.test(file)) return false;
   return true;
 }
 
-// Every file hollow-test's OWN diff scan would independently select — this is
-// what actually gets mutated, regardless of anything else this script does.
-const eligible = changed.filter(hollowTestWouldMutate);
+/**
+ * Pure classification: given the set of changed files, decide the test
+ * command and mutant budget. No I/O beyond testTargetFor's existsSync checks.
+ *
+ * @param {string[]} changed  repo-relative changed file paths
+ * @param {number} requestedMax
+ * @param {string} [root]
+ * @returns {
+ *   | { kind: 'nothing' }
+ *   | { kind: 'fast', testCmd: string, max: number, files: string[] }
+ *   | { kind: 'slow', testCmd: string, max: number, uncovered: string[] }
+ * }
+ */
+export function classify(changed, requestedMax, root = ROOT) {
+  const eligible = changed.filter(hollowTestWouldMutate);
+  if (eligible.length === 0) return { kind: 'nothing' };
 
-if (eligible.length === 0) {
-  console.log('mutation-gate: no source files changed — nothing to mutate.');
-  process.exit(0);
-}
+  const covered = [];   // [file, testTarget]
+  const uncovered = [];
+  for (const file of eligible) {
+    const target = testTargetFor(file, root);
+    if (target) covered.push([file, target]);
+    else uncovered.push(file);
+  }
 
-const covered = [];   // [file, testDir]
-const uncovered = []; // file with no known fast test directory
+  if (uncovered.length === 0) {
+    // FAST PATH. Every file hollow-test will discover maps to a known, quick
+    // test target. No --target passed to hollow-test itself: it hunk-scopes
+    // these files from the same diff, more precisely than we could re-derive.
+    const targets = [...new Set(covered.map(([, t]) => t))].sort();
+    return {
+      kind: 'fast',
+      testCmd: targets.map((t) => `node --test ${t}`).join(' && '),
+      max: requestedMax,
+      files: eligible,
+    };
+  }
 
-for (const file of eligible) {
-  const dir = testDirFor(file);
-  if (dir) covered.push([file, dir]);
-  else uncovered.push(file);
-}
-
-console.log(`mutation-gate: base=${base}`);
-
-let testCmd;
-let max = requestedMax;
-
-if (uncovered.length === 0) {
-  // FAST PATH. Every file hollow-test will discover maps to a known, quick
-  // test directory. No --target: hollow-test hunk-scopes these files itself
-  // from the same diff, which is strictly more precise than anything we could
-  // do by re-deriving line numbers here.
-  const dirs = [...new Set(covered.map(([, d]) => d))].sort();
-  testCmd = dirs.map((d) => `node --test ${d}/*.test.mjs`).join(' && ');
-  console.log(`mutation-gate: ${eligible.length} file(s) covered by fast test dirs → ${testCmd}`);
-} else {
   // SLOW FALLBACK. At least one file hollow-test will mutate has no fast,
-  // known-correct test command — most commonly something under scripts/**,
-  // which has no per-file test directory at all. Guessing "skip it" here is
-  // exactly the bug this rewrite fixes: hollow-test would mutate it anyway via
-  // its own independent scan, and a --test-cmd that never touches it would
-  // report a guaranteed false SURVIVED. The only sound fallback is a test
-  // command broad enough to actually exercise it — the full monorepo suite.
-  console.log(`mutation-gate: ${uncovered.length} file(s) have no known fast test directory — falling back to the FULL suite:`);
-  for (const f of uncovered) console.log(`  ${f}`);
-  testCmd = 'node scripts/run-tests.mjs';
-  // The full suite is ~9.5 minutes per run; keep the fallback's mutant budget
-  // small regardless of what --max requested, so a scripts/-touching PR still
-  // finishes in bounded CI time rather than silently taking hours.
-  max = Math.min(requestedMax, 3);
-  console.log(`mutation-gate: capping budget at ${max} mutant(s) for the slow path (requested ${requestedMax})`);
+  // known-correct test command. Guessing "skip it" here is exactly the bug
+  // this file exists to fix: hollow-test would mutate it anyway via its own
+  // independent scan, and a --test-cmd that never touches it would report a
+  // guaranteed false SURVIVED. The only sound fallback is a command broad
+  // enough to actually exercise it — the full monorepo suite. Known unsafe in
+  // the mutation-gate CI job for files needing live CLI installs that job
+  // doesn't provision (see the v3 header note) — narrowing WHICH files reach
+  // this path (via testTargetFor's scripts/ mapping) is the mitigation.
+  return {
+    kind: 'slow',
+    testCmd: 'node scripts/run-tests.mjs',
+    // The full suite is ~9.5 minutes per run; keep the fallback's mutant budget
+    // small regardless of what --max requested, so a slow-path PR still
+    // finishes in bounded CI time rather than silently taking hours.
+    max: Math.min(requestedMax, 3),
+    uncovered,
+  };
 }
 
-// NO --target. hollow-test independently re-derives the same file set from the
-// same --base and hunk-scopes each one from the diff itself.
-const bin = join(ROOT, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
-const result = spawnSync(process.execPath, [
-  bin,
-  '--base', base,
-  '--test-cmd', testCmd,
-  '--max', String(max),
-  '--timeout-ms', uncovered.length === 0 ? '180000' : '600000',
-], { stdio: 'inherit', cwd: ROOT, timeout: 1800000 });
-
-if (result.error) fail(`could not run hollow-test: ${result.error.message}`);
-if (result.signal) fail(`hollow-test timed out or was killed by ${result.signal}`);
-
-if (result.status === 2) {
-  console.error('');
-  console.error('mutation-gate: a mutant SURVIVED — some changed code has no test that notices it changing.');
-  console.error('This is the hollow-test failure mode: a guard can be correct and still be unverified.');
-  console.error('Either add a test that fails when that line is altered, or, if the line is genuinely');
-  console.error('redundant with a stronger check, say so in a comment AT ITS DEFINITION and re-run.');
+function isMain() {
+  return process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 }
-process.exit(typeof result.status === 'number' ? result.status : 1);
+
+export function main() {
+  const args = process.argv.slice(2);
+  const base = args.find((a) => !a.startsWith('--')) || process.env.MUTATION_BASE || 'origin/main';
+  const maxFlag = args.indexOf('--max');
+  const requestedMax = maxFlag >= 0 ? Number(args[maxFlag + 1]) : 12;
+
+  function fail(msg) {
+    console.error(`mutation-gate: ${msg}`);
+    process.exit(1);
+  }
+
+  function git(gitArgs) {
+    const r = spawnSync('git', gitArgs, { encoding: 'utf8', cwd: ROOT, timeout: 60000 });
+    if (r.error) fail(`git ${gitArgs[0]} failed: ${r.error.message}`);
+    return r;
+  }
+
+  // The base must resolve. `git diff <bad-ref>` fails loudly, but an unfetched
+  // base in CI is an operational problem, not "nothing changed" — say so rather
+  // than passing an empty diff.
+  if (git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`]).status !== 0) {
+    fail(`base ref '${base}' does not resolve — fetch it or pass the correct base`);
+  }
+
+  const diff = git(['diff', '--name-only', '-z', base, '--']);
+  if (diff.status !== 0) fail('git diff failed');
+  const changed = diff.stdout.split('\0').filter(Boolean);
+
+  console.log(`mutation-gate: base=${base}`);
+
+  const decision = classify(changed, requestedMax, ROOT);
+
+  if (decision.kind === 'nothing') {
+    console.log('mutation-gate: no source files changed — nothing to mutate.');
+    process.exit(0);
+  }
+
+  if (decision.kind === 'fast') {
+    console.log(`mutation-gate: ${decision.files.length} file(s) covered by fast test targets → ${decision.testCmd}`);
+  } else {
+    console.log(`mutation-gate: ${decision.uncovered.length} file(s) have no known fast test target — falling back to the FULL suite:`);
+    for (const f of decision.uncovered) console.log(`  ${f}`);
+    console.log(`mutation-gate: capping budget at ${decision.max} mutant(s) for the slow path (requested ${requestedMax})`);
+  }
+
+  // NO --target. hollow-test independently re-derives the same file set from
+  // the same --base and hunk-scopes each one from the diff itself.
+  const bin = join(ROOT, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
+  const result = spawnSync(process.execPath, [
+    bin,
+    '--base', base,
+    '--test-cmd', decision.testCmd,
+    '--max', String(decision.max),
+    '--timeout-ms', decision.kind === 'fast' ? '180000' : '600000',
+  ], { stdio: 'inherit', cwd: ROOT, timeout: 1800000 });
+
+  if (result.error) fail(`could not run hollow-test: ${result.error.message}`);
+  if (result.signal) fail(`hollow-test timed out or was killed by ${result.signal}`);
+
+  if (result.status === 2) {
+    console.error('');
+    console.error('mutation-gate: a mutant SURVIVED — some changed code has no test that notices it changing.');
+    console.error('This is the hollow-test failure mode: a guard can be correct and still be unverified.');
+    console.error('Either add a test that fails when that line is altered, or, if the line is genuinely');
+    console.error('redundant with a stronger check, say so in a comment AT ITS DEFINITION and re-run.');
+  }
+  process.exit(typeof result.status === 'number' ? result.status : 1);
+}
+
+// Only run main() when executed directly, so the test can import the pure parts.
+if (isMain()) {
+  main();
+}
