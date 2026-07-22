@@ -2,6 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -134,7 +135,7 @@ test('printStatus & printDoctor: execute subcommand displays without crashing an
 });
 
 test('CLI subcommand end-to-end: adlc-rails-guard.cjs status and doctor subcommands execute via subprocess', () => {
-  const cjsPath = join(process.cwd(), 'hooks', 'adlc-rails-guard.cjs');
+  const cjsPath = fileURLToPath(new URL('../hooks/adlc-rails-guard.cjs', import.meta.url));
   const statusOut = execSync(`node "${cjsPath}" status`, { encoding: 'utf8' });
   assert.ok(statusOut.includes('ADLC Antigravity Status'));
 

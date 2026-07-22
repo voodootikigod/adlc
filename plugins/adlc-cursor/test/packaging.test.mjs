@@ -140,7 +140,13 @@ test('AC4: packed tarball extracted outside the repo runs adlc-cursor-scaffold s
     //    package, without a real registry round-trip in CI.
     const nodeModules = join(pkgRoot, 'node_modules', '@adlc');
     mkdirSync(nodeModules, { recursive: true });
-    symlinkSync(join(repoRoot, 'node_modules', '@adlc', 'core'), join(nodeModules, 'core'));
+    const coreTarget = [
+      join(repoRoot, 'packages', 'core'),
+      join(repoRoot, 'node_modules', '@adlc', 'core'),
+      join(repoRoot, '..', '..', 'packages', 'core'),
+    ].find(existsSync);
+    assert.ok(coreTarget, 'core target directory exists');
+    symlinkSync(coreTarget, join(nodeModules, 'core'), 'junction');
 
     // 4. Run the packed bin standalone against a fresh temp target repo.
     const binPath = join(pkgRoot, pkg.bin[Object.keys(pkg.bin)[0]]);

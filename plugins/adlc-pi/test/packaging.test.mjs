@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -123,7 +123,15 @@ test('AC3: pi-live-deny.mjs consults ADLC_PI_BIN before running pi', () => {
   if (piSupported) {
     // Precondition: the DEFAULT bin exists — so a "not found" can only come from
     // the bogus override having been consulted (not the default path).
-    assert.ok(existsSync(join(repoRoot, 'node_modules', '.bin', 'pi')), 'precondition: default pi bin present');
+    let curr = repoRoot;
+    let defaultPiPresent = false;
+    for (let i = 0; i < 5; i++) {
+      if (existsSync(join(curr, 'node_modules', '.bin', 'pi'))) { defaultPiPresent = true; break; }
+      const parent = dirname(curr);
+      if (parent === curr) break;
+      curr = parent;
+    }
+    assert.ok(defaultPiPresent, 'precondition: default pi bin present');
     assert.equal(res.status, 1, `expected fast-fail; got ${res.status}\n${out}`);
     assert.match(out, /pi binary not found/, 'override path should be reported missing');
   } else {

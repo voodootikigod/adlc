@@ -1,12 +1,18 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getTool } from './registry.mjs';
 
 const require = createRequire(import.meta.url);
 
 function packageJsonPath(packageName) {
+  if (packageName.startsWith('@adlc/')) {
+    const name = packageName.slice('@adlc/'.length);
+    const devPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', name, 'package.json');
+    if (existsSync(devPath)) return devPath;
+  }
   try {
     return require.resolve(`${packageName}/package.json`);
   } catch {
@@ -87,7 +93,7 @@ export function dispatch(toolName, args, opts = {}) {
   if (tool?.external) {
     return runExternal(tool.packageName, args, spawnFn);
   }
-  return runBin(`@adlc/${toolName}`, resolveBin(toolName), args, spawnFn);
+  return runBin(tool?.packageName ?? `@adlc/${toolName}`, resolveBin(toolName), args, spawnFn);
 }
 
 export function dispatchRunner(args, opts = {}) {

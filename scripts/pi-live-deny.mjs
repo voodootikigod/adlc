@@ -21,11 +21,24 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-// Default: the pinned devDependency pi binary (the required CI leg uses this).
+// Default: the pinned devDependency pi binary at repoRoot (or parent worktree root).
 // The optional version-matrix job (scripts/pi-version-matrix.mjs) overrides
-// ADLC_PI_BIN to run this same proof against a different pi build; the default
-// behavior is unchanged when the variable is unset.
-const piBin = process.env.ADLC_PI_BIN || join(repoRoot, 'node_modules', '.bin', 'pi');
+// ADLC_PI_BIN to run this same proof against a different pi build; when unset,
+// findPiBin checks repoRoot and ancestor worktree roots for node_modules/.bin/pi.
+function findPiBin(root) {
+  if (process.env.ADLC_PI_BIN) return process.env.ADLC_PI_BIN;
+  let curr = root;
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(curr, 'node_modules', '.bin', 'pi');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return join(root, 'node_modules', '.bin', 'pi');
+}
+
+const piBin = findPiBin(repoRoot);
 const adlcExtension = join(repoRoot, 'plugins', 'adlc-pi', 'index.ts');
 
 const [major, minor] = process.versions.node.split('.').map(Number);

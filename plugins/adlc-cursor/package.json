@@ -53,5 +53,8 @@
     "@adlc/build-gate": "^1.6.0",
     "@adlc/core": "^1.6.0",
     "@adlc/flail-detector": "^1.6.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
   }
 }
