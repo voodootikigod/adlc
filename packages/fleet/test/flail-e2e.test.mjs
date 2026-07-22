@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -198,6 +198,31 @@ test('the transcript is written when the worker emits TICKET-BLOCKED', async () 
   assert.ok(existsSync(fleetLogPath(statusDir, '/repo', 'T1')), 'a blocked run still leaves a transcript');
 });
 
+test('ensureGitignore excludes fleet state from a LINKED git worktree', async () => {
+  // <repo>/.git is a FILE in a linked worktree, so the old <repo>/.git/info
+  // path silently failed — leaving .adlc/fleet-logs/ untracked and aborting
+  // every later run at preflight.
+  const root = mkdtempSync(join(tmpdir(), 'fleet-e2e-git-'));
+  const main = join(root, 'main');
+  const run = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+  mkdirSync(main, { recursive: true });
+  run(main, 'init', '-q', '-b', 'main');
+  run(main, 'config', 'user.email', 't@t.t');
+  run(main, 'config', 'user.name', 't');
+  writeFileSync(join(main, 'f.txt'), 'x\n');
+  run(main, 'add', '-A');
+  run(main, 'commit', '-qm', 'init');
+  const linked = join(root, 'wt');
+  run(main, 'worktree', 'add', '-q', linked, '-b', 'side');
+  assert.ok(statSync(join(linked, '.git')).isFile(), 'precondition: linked worktree .git is a FILE');
+
+  defaultIo().ensureGitignore(linked);
+
+  const excl = readFileSync(join(main, '.git', 'info', 'exclude'), 'utf8');
+  assert.match(excl, /\.adlc\/fleet-logs\//, 'the transcript dir must be excluded from the common dir');
+  assert.equal(run(linked, 'status', '--porcelain').stdout.trim(), '', 'no untracked fleet state left behind');
+});
+
 // ---------------------------------------------------------------------------
 // Run isolation. The log is git-excluded and INERT, so nothing else ever
 // deletes it; the detector's repeated-error threshold is 2. Without a reset a
@@ -237,5 +262,7 @@ test('a commit failure reaches the transcript the flail check analyzes', async (
   const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
 
   assert.equal(res.exitCode, 1, 'precondition: the commit failed');
-  assert.match(readFileSync(fleetLogPath(statusDir, '/repo', 'T1'), 'utf8'), /commit failed: nothing to commit/);
+  const body = readFileSync(fleetLogPath(statusDir, '/repo', 'T1'), 'utf8');
+  assert.match(body, /commit failed: nothing to commit/);
+  assert.match(body, /worker ok/, 'appending the failure must not truncate the transcript it joins');
 });
