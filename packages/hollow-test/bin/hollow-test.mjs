@@ -461,6 +461,7 @@ for (const target of fileTargets) {
       line: mutant.line,
       operator: mutant.operator,
       killed: trial.killed,
+      invalid: trial.invalid === true,
       timedOut: trial.timedOut,
       original: mutant.original,
       mutated: mutant.mutated,
@@ -496,7 +497,8 @@ if (mutableExplicitFiles.length > 0) {
 
 // ── reporting ────────────────────────────────────────────────────────────────
 
-const survivors = results.filter((r) => !r.killed);
+const survivors = results.filter((r) => !r.killed && !r.invalid);
+const invalidMutants = results.filter((r) => r.invalid);
 
 if (useJson) {
   printJson(buildJsonReport(results));
@@ -510,6 +512,24 @@ if (results.length === 0) {
   const warnMsg = 'warning: no mutants generated from diff — nothing mutable in diff';
   if (!useJson) console.warn(warnMsg);
   pass();
+}
+
+// FAIL CLOSED when nothing valid ever ran (#293). If every mutant was
+// syntactically invalid, no assertion was exercised and the gate proved exactly
+// nothing — passing here is the false green this check exists to prevent.
+// Reported as an OPERATIONAL failure, not a gate failure: the tests are not at
+// fault, the mutations were.
+if (invalidMutants.length === results.length) {
+  const msg =
+    `every one of the ${results.length} generated mutant(s) was syntactically invalid, so ` +
+    `no assertion was ever exercised — this run proves nothing. Line-based operators can ` +
+    `produce unparseable code on multiline constructs (see issue #293); raise --max so a ` +
+    `valid mutant is reached, or narrow --target to a file with mutable single-line logic.`;
+  if (useJson) {
+    console.error(`error: ${msg}`);
+    process.exit(1);
+  }
+  opError(msg);
 }
 
 if (survivors.length > 0) {

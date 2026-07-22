@@ -822,6 +822,119 @@ describe('CLI: --source-glob rescues a diff-derived file named like a test', () 
   });
 });
 
+// ── invalid mutants must never be credited as kills (#293) ────────────────
+//
+// runner.mjs scored `killed = timedOut || status !== 0`, so ANY non-zero exit
+// counted as a kill — including a PARSE FAILURE. A mutant that renders the file
+// syntactically invalid was therefore recorded as successfully killed while
+// nothing was tested.
+//
+// The fixture is ordinary JavaScript, deliberately: this is not a
+// TypeScript/JSX problem. `null-return` rewrites the `return {` line to
+// `return null;` and leaves the object's remaining lines stranded, so the file
+// no longer parses. With a per-file quota of one that invalid mutant is the ONLY
+// trial — the gate exits 0 having exercised no assertion at all. A false green
+// from the tool whose entire purpose is detecting false greens.
+
+function createMultilineReturnRepo(dir) {
+  initRepo(dir);
+  mkdirSync(join(dir, 'src'));
+  mkdirSync(join(dir, 'test'));
+  writeFileSync(join(dir, 'src', 'shape.mjs'), [
+    'export function shape() {',
+    '  return {',
+    '    a: 1,',
+    '    b: 2,',
+    '  };',
+    '}',
+    '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'test', 'shape.test.mjs'), [
+    "import { it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { shape } from '../src/shape.mjs';",
+    "it('shape', () => { assert.deepEqual(shape(), { a: 1, b: 2 }); });",
+    '',
+  ].join('\n'));
+  commitAll(dir, 'init');
+  // Second commit touches the return line, so the diff targets it.
+  writeFileSync(join(dir, 'src', 'shape.mjs'), [
+    'export function shape() {',
+    '  return {',
+    '    a: 1,',
+    '    b: 3,',
+    '  };',
+    '}',
+    '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'test', 'shape.test.mjs'), [
+    "import { it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { shape } from '../src/shape.mjs';",
+    "it('shape', () => { assert.deepEqual(shape(), { a: 1, b: 3 }); });",
+    '',
+  ].join('\n'));
+  commitAll(dir, 'change the returned shape');
+  return dir;
+}
+
+describe('CLI: a syntactically invalid mutant is not a kill', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-invalid-'));
+    createMultilineReturnRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('marks the unparseable null-return mutant invalid rather than killed', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/shape.mjs', '--max', '20', '--json'],
+      dir
+    );
+    const parsed = JSON.parse(result.stdout);
+
+    // `return {` -> `return null;` strands the object literal's remaining lines,
+    // so the file no longer parses. Verified directly with `node --check`.
+    const nullReturn = parsed.mutants.find((m) => m.operator === 'null-return');
+    assert.ok(nullReturn, `expected a null-return mutant: ${result.stdout}`);
+    assert.equal(nullReturn.status, 'invalid',
+      `an unparseable mutant must not be scored as a kill: ${JSON.stringify(nullReturn)}`);
+
+    // The legitimate mutants on the same file are unaffected — this must not
+    // become "discard anything inconvenient".
+    const offByOne = parsed.mutants.filter((m) => m.operator === 'off-by-one');
+    assert.ok(offByOne.length > 0, 'expected off-by-one mutants too');
+    assert.ok(offByOne.every((m) => m.status === 'killed'),
+      `real mutants must still be killed: ${JSON.stringify(offByOne)}`);
+
+    // Invalid mutants are excluded from the kill accounting, not silently
+    // folded into it.
+    assert.equal(parsed.summary.killed, offByOne.length,
+      'the invalid mutant must not inflate the killed count');
+    assert.ok(parsed.summary.invalid >= 1, 'invalid mutants must be reported');
+  });
+
+  it('fails operationally when EVERY mutant is invalid, rather than passing', () => {
+    // Quota of one: the null-return mutant is the only trial. Pre-fix this
+    // exited 0 — a green gate built entirely on a file that never parsed.
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/shape.mjs', '--max', '1', '--json'],
+      dir
+    );
+    const parsed = JSON.parse(result.stdout);
+    if ((parsed.mutants ?? []).every((m) => m.status === 'invalid')) {
+      assert.notEqual(result.status, 0,
+        `no valid mutant ran, so the gate proved nothing: ${result.stdout}${result.stderr}`);
+    }
+  });
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {

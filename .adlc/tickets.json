@@ -1329,6 +1329,32 @@
       "title": "ceremony-drift: recognize the bot author gh actually reports, so the tracker updates instead of duplicating"
     },
     {
+      "body": "Implements .adlc/specs/rails-start-lifecycle.md as the contract; closes voodootikigod/adlc#159. Rails currently freeze from the moment a ticket exists: the union in scripts/rails-guard-ci.mjs skips only completed tickets (T36/#130 gave rails an END, nothing gives them a START). Two harms: a ticket cannot author its own rails (observed three narrow/re-freeze cycles building T58), and the documented workaround is to declare rails:[] (T39/T40). Add a `started` field gating the union, self-service via a narrow isStartAnnotationOnly exemption and irreversible because un-starting is already denied by assertBaseTicketContractsPreserved. BLOCKING constraint from premortem: grandfather tickets predating the field via a formatVersion bump — absent `started` must not mean never-started, or merging expires all 30 currently-frozen paths at once. Also required: decide start+complete recovery explicitly, never emit `started` at authoring, and drive the transition from P3 rather than a remembered step. Coldstart gaps folded in: packages/build-gate/** added to scope because the automatic P3 transition lives there, and the formatVersion grandfather mechanism collides with the existing 0->1 migration gate (rails-guard-ci.mjs:348,377) so the spec now prefers a per-ticket provenance signal. Acceptance is AC1-AC17 in the spec. Suppressions are denied. Backfilling started onto shipped tickets, manifest-derived start, and diff-derived start are out of scope (rationale in the spec).",
+      "budget": "frontier",
+      "category": "feature",
+      "duration": 3,
+      "edges": [
+        {
+          "contract": "T59 owns the START half of the rail lifecycle; T60 owns the authorized-ceremony mechanism. Independently grabbable — but if T59 lands first its grandfather clause must keep T60's motivating drift frozen, and if T60 lands first the union is already empty. Neither may depend on the other's merge order.",
+          "to": "T60"
+        }
+      ],
+      "id": "T59",
+      "rails": [],
+      "scope": [
+        "scripts/rails-guard-ci.mjs",
+        "scripts/test/rails-guard-ci.test.mjs",
+        "packages/tickets/**",
+        "packages/rails-guard/**",
+        "packages/build-gate/**",
+        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+        "plugins/adlc-claude-code/test/**",
+        "docs/adr/**",
+        ".adlc/specs/rails-start-lifecycle.md"
+      ],
+      "title": "Rails START lifecycle: freeze from build-start, not from authoring"
+    },
+    {
       "body": "Build the foundation of @adlc/ticket-sync per docs/superpowers/specs/2026-06-27-external-ticketing-sync-design.md (sections 'Schema bedrock', 'Hard constraints', field-definition table). Create packages/ticket-sync as a zero-runtime-dependency package (CONVENTIONS rule 1; Node 18+ built-ins only) WITHOUT editing packages/core (CONVENTIONS rule 2 — core is frozen). Deliver: lib/schema.mjs (single declarative field definition = source of truth), lib/validate.mjs (definition-driven validator over the rich schema), lib/canonical.mjs (canonical JSON: sorted keys, LF, stable number formatting, CRLF-insensitive equality), scripts/gen-schema.mjs (emits schemas/adlc-ticket.schema.json, adlc-block.schema.json, adlc-config.schema.json, adlc-sync-state.schema.json from the definition), and the committed schema files.\n\nAcceptance criteria (each verifiable):\n1. `npm test` green for packages/ticket-sync/test/{schema,validate,canonical}.test.mjs.\n2. Drift gate: test regenerates schemas in-memory and asserts byte-equality with the committed schemas/*.json; editing the definition without regenerating fails the test (verify by mutating the definition in a scratch run).\n3. Cross-validator agreement: a corpus of tickets core's validateTicket accepts is also accepted by the rich validator on shared fields (asymmetric subset direction).\n4. No file under packages/core is modified (verify: `git diff --name-only main...HEAD -- packages/core` is empty).\n5. Package declares zero runtime dependencies (verify: no 'dependencies' beyond @adlc/* in package.json).",
       "category": "contract",
       "duration": 2,
@@ -1498,30 +1524,21 @@
       "title": "Push + create: write-back, idempotent create, status outcomes"
     },
     {
-      "body": "Implements .adlc/specs/rails-start-lifecycle.md as the contract; closes voodootikigod/adlc#159. Rails currently freeze from the moment a ticket exists: the union in scripts/rails-guard-ci.mjs skips only completed tickets (T36/#130 gave rails an END, nothing gives them a START). Two harms: a ticket cannot author its own rails (observed three narrow/re-freeze cycles building T58), and the documented workaround is to declare rails:[] (T39/T40). Add a `started` field gating the union, self-service via a narrow isStartAnnotationOnly exemption and irreversible because un-starting is already denied by assertBaseTicketContractsPreserved. BLOCKING constraint from premortem: grandfather tickets predating the field via a formatVersion bump — absent `started` must not mean never-started, or merging expires all 30 currently-frozen paths at once. Also required: decide start+complete recovery explicitly, never emit `started` at authoring, and drive the transition from P3 rather than a remembered step. Coldstart gaps folded in: packages/build-gate/** added to scope because the automatic P3 transition lives there, and the formatVersion grandfather mechanism collides with the existing 0->1 migration gate (rails-guard-ci.mjs:348,377) so the spec now prefers a per-ticket provenance signal. Acceptance is AC1-AC17 in the spec. Suppressions are denied. Backfilling started onto shipped tickets, manifest-derived start, and diff-derived start are out of scope (rationale in the spec).",
+      "body": "Fixes voodootikigod/adlc#293. packages/hollow-test/lib/runner.mjs scores `killed = trial.timedOut || (trial.status !== 0)`, so ANY non-zero exit counts as a kill - including a parse failure. A mutant that renders the file syntactically invalid is therefore credited as successfully killed when nothing was tested. Demonstrated on ordinary JavaScript: null-return rewrites a multiline `return {` to `return null;` and leaves the object's remaining lines behind. At the common per-file quota of one, that invalid mutant can be the only trial, so the required gate reports success having exercised no assertion - a false green from the tool built to detect false greens. This is language-independent; the JS/TS allow-list narrowing in #289 removed the most frequent trigger (Promise<unknown> -> Promise>=unknown>) but not the cause. Validate that the mutated file parses before running the test command, using `node --check` so no new runtime dependency is added to a published package. An invalid mutant is DISCARDED - neither killed nor survived - and reported. If every mutant for a run is invalid the gate must fail operationally rather than pass, since it proved nothing. Verification: node --test packages/hollow-test/test/*.test.mjs. allow-suppression: none",
       "budget": "frontier",
-      "category": "feature",
-      "duration": 3,
-      "edges": [
-        {
-          "contract": "T59 owns the START half of the rail lifecycle; T60 owns the authorized-ceremony mechanism. Independently grabbable — but if T59 lands first its grandfather clause must keep T60's motivating drift frozen, and if T60 lands first the union is already empty. Neither may depend on the other's merge order.",
-          "to": "T60"
-        }
-      ],
-      "id": "T59",
+      "category": "bug",
+      "duration": 2,
+      "edges": [],
+      "id": "T62",
       "rails": [],
       "scope": [
-        "scripts/rails-guard-ci.mjs",
-        "scripts/test/rails-guard-ci.test.mjs",
-        "packages/tickets/**",
-        "packages/rails-guard/**",
-        "packages/build-gate/**",
-        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
-        "plugins/adlc-claude-code/test/**",
-        "docs/adr/**",
-        ".adlc/specs/rails-start-lifecycle.md"
+        "packages/hollow-test/lib/runner.mjs",
+        "packages/hollow-test/bin/hollow-test.mjs",
+        "packages/hollow-test/test/**",
+        "packages/hollow-test/README.md",
+        "docs/tools/hollow-test.md"
       ],
-      "title": "Rails START lifecycle: freeze from build-start, not from authoring"
+      "title": "hollow-test: never credit a syntactically invalid mutant as a kill"
     }
   ]
 }

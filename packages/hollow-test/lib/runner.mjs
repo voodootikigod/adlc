@@ -56,19 +56,61 @@ export function runTest(testCmd, timeoutMs, cwd) {
  */
 export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) {
   let trial;
+  let invalid = false;
   try {
     writeFileSync(filePath, mutated, 'utf8');
-    trial = runTest(testCmd, timeoutMs, cwd);
+    // SYNTAX GATE, before the test command (#293).
+    //
+    // `killed` is inferred from a non-zero exit, and a file that does not PARSE
+    // also exits non-zero — so without this check an unparseable mutant is
+    // credited as a kill while nothing was tested. Line-based operators produce
+    // these routinely: `null-return` rewrites a multiline `return {` to
+    // `return null;` and strands the object literal's remaining lines. At a
+    // per-file quota of one, that single invalid mutant can be the only trial,
+    // and the gate reports success having exercised no assertion at all.
+    //
+    // `node --check` rather than a parser dependency: @adlc/hollow-test is
+    // published, and this asks exactly the right question — would Node accept
+    // this file — honouring the real extension and package type instead of
+    // approximating them.
+    invalid = !parses(filePath, cwd);
+    if (!invalid) trial = runTest(testCmd, timeoutMs, cwd);
   } finally {
     // Always restore original content, even if the test run threw.
     writeFileSync(filePath, original, 'utf8');
+  }
+
+  // An invalid mutant is DISCARDED — neither killed nor survived. Counting it
+  // either way is wrong: as a kill it fakes coverage, as a survivor it blames
+  // the tests for a mutation that was never valid code.
+  if (invalid) {
+    return { killed: false, invalid: true, timedOut: false, exitCode: null };
   }
 
   const killed = trial.timedOut || (trial.status !== 0);
 
   return {
     killed,
+    invalid: false,
     timedOut: trial.timedOut,
     exitCode: trial.status,
   };
+}
+
+/**
+ * Does Node consider the file on disk syntactically valid?
+ * @param {string} filePath absolute path to the (currently mutated) file
+ * @param {string} cwd
+ */
+function parses(filePath, cwd) {
+  const r = spawnSync(process.execPath, ['--check', filePath], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  // A timeout or spawn failure is NOT proof of invalidity — treat only a clean
+  // non-zero exit as a parse error, so an environment problem cannot silently
+  // discard every mutant and turn the gate into a no-op.
+  if (r.error || r.signal) return true;
+  return r.status === 0;
 }
