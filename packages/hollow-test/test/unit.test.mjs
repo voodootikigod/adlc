@@ -368,6 +368,12 @@ describe('report surfaces distinguish a checker failure from a survivor', () => 
     assert.deepEqual(r.mutants.map((m) => m.status), ['undetermined', 'survived']);
   });
 
+  it('carries the reason, so a checker failure is distinguishable from a launch failure', () => {
+    const withReason = [{ ...WITH_CHECK_FAILURE[0], reason: 'test command did not run (EAGAIN)' }];
+    const r = buildJsonReport(withReason);
+    assert.equal(r.mutants[0].reason, 'test command did not run (EAGAIN)');
+  });
+
   it('the table does not label it SURVIVED', () => {
     const lines = [];
     const original = console.log;
@@ -420,6 +426,24 @@ describe('classifyTestResult', () => {
     assert.equal(c.spawnFailed, true);
     assert.equal(c.timedOut, false);
     assert.match(c.reason, /SIGKILL/);
+  });
+
+  // `error` only reports whether the SHELL launched. If /bin/sh starts but
+  // cannot exec the inner test binary it exits 126/127 with a numeric status —
+  // which would otherwise read as a completed run and be credited as a kill.
+  // The green baseline already proved this command can launch, so a 126/127
+  // during a mutant trial is a launch regression, not a verdict.
+  it('shell-level launch failures (126/127) are undetermined, not kills', () => {
+    for (const status of [126, 127]) {
+      const c = classifyTestResult({ status, signal: null });
+      assert.equal(c.spawnFailed, true, `exit ${status} must not be a verdict`);
+      assert.match(c.reason, /could not launch/);
+    }
+    // ...but ordinary non-zero exits remain real test failures.
+    for (const status of [1, 2, 125, 128]) {
+      assert.equal(classifyTestResult({ status, signal: null }).spawnFailed, false,
+        `exit ${status} is a genuine test failure`);
+    }
   });
 
   it('a missing exit status with no error or signal is undetermined', () => {

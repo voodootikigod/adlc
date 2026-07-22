@@ -1419,6 +1419,24 @@
       "title": "mutation-gate: classify source by an include-list, not by excluding known non-source extensions"
     },
     {
+      "body": "Fixes voodootikigod/adlc#293. packages/hollow-test/lib/runner.mjs scores `killed = trial.timedOut || (trial.status !== 0)`, so ANY non-zero exit counts as a kill - including a parse failure. A mutant that renders the file syntactically invalid is therefore credited as successfully killed when nothing was tested. Demonstrated on ordinary JavaScript: null-return rewrites a multiline `return {` to `return null;` and leaves the object's remaining lines behind. At the common per-file quota of one, that invalid mutant can be the only trial, so the required gate reports success having exercised no assertion - a false green from the tool built to detect false greens. This is language-independent; the JS/TS allow-list narrowing in #289 removed the most frequent trigger (Promise<unknown> -> Promise>=unknown>) but not the cause. Validate that the mutated file parses before running the test command, using `node --check` so no new runtime dependency is added to a published package. An invalid mutant is DISCARDED - neither killed nor survived - and reported. If every mutant for a run is invalid the gate must fail operationally rather than pass, since it proved nothing. Verification: node --test packages/hollow-test/test/*.test.mjs. allow-suppression: none Report surfaces (lib/report.mjs) are in scope because invalid and undetermined trials need their own buckets - rendering them as 'survived' asserts a test outcome for a test that never ran.",
+      "budget": "frontier",
+      "category": "bug",
+      "duration": 2,
+      "edges": [],
+      "id": "T62",
+      "rails": [],
+      "scope": [
+        "packages/hollow-test/lib/runner.mjs",
+        "packages/hollow-test/lib/report.mjs",
+        "packages/hollow-test/bin/hollow-test.mjs",
+        "packages/hollow-test/test/**",
+        "packages/hollow-test/README.md",
+        "docs/tools/hollow-test.md"
+      ],
+      "title": "hollow-test: never credit a syntactically invalid mutant as a kill"
+    },
+    {
       "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
       "category": "feature",
       "completed": true,
@@ -1522,23 +1540,6 @@
         "packages/ticket-sync/test/github.test.mjs"
       ],
       "title": "Push + create: write-back, idempotent create, status outcomes"
-    },
-    {
-      "body": "Fixes voodootikigod/adlc#293. packages/hollow-test/lib/runner.mjs scores `killed = trial.timedOut || (trial.status !== 0)`, so ANY non-zero exit counts as a kill - including a parse failure. A mutant that renders the file syntactically invalid is therefore credited as successfully killed when nothing was tested. Demonstrated on ordinary JavaScript: null-return rewrites a multiline `return {` to `return null;` and leaves the object's remaining lines behind. At the common per-file quota of one, that invalid mutant can be the only trial, so the required gate reports success having exercised no assertion - a false green from the tool built to detect false greens. This is language-independent; the JS/TS allow-list narrowing in #289 removed the most frequent trigger (Promise<unknown> -> Promise>=unknown>) but not the cause. Validate that the mutated file parses before running the test command, using `node --check` so no new runtime dependency is added to a published package. An invalid mutant is DISCARDED - neither killed nor survived - and reported. If every mutant for a run is invalid the gate must fail operationally rather than pass, since it proved nothing. Verification: node --test packages/hollow-test/test/*.test.mjs. allow-suppression: none",
-      "budget": "frontier",
-      "category": "bug",
-      "duration": 2,
-      "edges": [],
-      "id": "T62",
-      "rails": [],
-      "scope": [
-        "packages/hollow-test/lib/runner.mjs",
-        "packages/hollow-test/bin/hollow-test.mjs",
-        "packages/hollow-test/test/**",
-        "packages/hollow-test/README.md",
-        "docs/tools/hollow-test.md"
-      ],
-      "title": "hollow-test: never credit a syntactically invalid mutant as a kill"
     }
   ]
 }

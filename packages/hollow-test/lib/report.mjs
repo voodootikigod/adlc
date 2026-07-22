@@ -44,7 +44,7 @@ export function printTable(results) {
       console.log('         (did not parse — discarded, not counted as a kill)');
     }
     if (r.undetermined) {
-      console.log('         (syntax check did not run — validity unknown, nothing was scored)');
+      console.log(`         (not scored — ${r.reason ?? 'validity unknown'})`);
     }
   }
 
@@ -84,6 +84,10 @@ export function buildJsonReport(results) {
       line: r.line,
       operator: r.operator,
       status: r.undetermined ? 'undetermined' : r.invalid ? 'invalid' : r.killed ? 'killed' : 'survived',
+      // Why it could not be scored. Without this an undetermined trial is
+      // indistinguishable from a tooling bug, and the operator cannot tell a
+      // syntax-check failure from a test command that would not launch.
+      ...(r.undetermined && r.reason ? { reason: r.reason } : {}),
       timedOut: r.timedOut,
       original: r.original,
       mutated: r.mutated,

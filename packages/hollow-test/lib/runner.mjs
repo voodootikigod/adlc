@@ -70,6 +70,21 @@ export function classifyTestResult(result) {
   if (typeof result.status !== 'number') {
     return { status: null, timedOut: false, spawnFailed: true, reason: 'no exit status' };
   }
+  // SHELL-LEVEL LAUNCH FAILURE. `result.error` only tells us whether the SHELL
+  // started; if /bin/sh starts but cannot exec or fork the inner test binary it
+  // exits 126 (found, not executable) or 127 (not found) — a numeric status,
+  // which would otherwise read as a completed test run and be credited as a kill.
+  //
+  // Safe to treat as undetermined because the GREEN BASELINE already proved this
+  // exact command can launch. A 126/127 during a mutant trial is therefore a
+  // launch regression, not a test verdict. (A suite that genuinely exits 127
+  // would have failed the baseline first, loudly.)
+  if (result.status === 126 || result.status === 127) {
+    return {
+      status: result.status, timedOut: false, spawnFailed: true,
+      reason: `shell could not launch the test command (exit ${result.status})`,
+    };
+  }
   return { status: result.status, timedOut: false, spawnFailed: false, reason: null };
 }
 

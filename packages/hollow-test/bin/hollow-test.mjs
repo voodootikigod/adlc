@@ -463,6 +463,7 @@ for (const target of fileTargets) {
       killed: trial.killed,
       invalid: trial.invalid === true,
       undetermined: trial.undetermined === true,
+      reason: trial.reason ?? null,
       timedOut: trial.timedOut,
       original: mutant.original,
       mutated: mutant.mutated,
@@ -501,7 +502,7 @@ if (mutableExplicitFiles.length > 0) {
 // convenient one.
 const undetermined = results.filter((r) => r.undetermined);
 if (undetermined.length > 0) {
-  const where = undetermined.map((r) => `${r.file}:${r.line}`).join(', ');
+  const where = undetermined.map((r) => `${r.file}:${r.line}${r.reason ? ` (${r.reason})` : ''}`).join(', ');
   opError(
     `could not syntax-check ${undetermined.length} mutant(s) (${where}) — the checker did ` +
     `not run to completion, so whether they were valid is unknown. Refusing to score them: ` +
