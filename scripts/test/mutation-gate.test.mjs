@@ -130,6 +130,36 @@ test('genuine test and spec paths are still excluded', () => {
   }
 });
 
+// Replacing the substring match with directory + dotted-filename rules alone
+// admitted common JS test basenames — `test.js`, `spec.js`, `test_foo.js`,
+// `foo_test.js`. Mutating an assertion inside a test makes that test fail, which
+// scores the mutant KILLED: a test-only diff satisfies the gate vacuously.
+test('conventional test basenames are excluded even outside a test/ directory', () => {
+  for (const f of [
+    'test.js', 'spec.js', 'test.mjs', 'spec.ts',
+    'lib/test.js', 'lib/spec.js',
+    'test_foo.js', 'spec_foo.js',
+    'foo_test.js', 'foo_spec.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is a test file`);
+  }
+});
+
+// The HYPHEN forms (`foo-test.js`, `spec-foo.js`) are deliberately NOT excluded,
+// and this test pins that decision so it is not "fixed" into a regression.
+// Hyphens are ambiguous between a test convention and a product name, and this
+// repository contains the counterexamples: `hollow-test.mjs` and `spec-lint.mjs`
+// are production source. Excluding `*-test.*` or `spec-*` would silently
+// un-mutate them again — the exact bug fixed earlier in this branch.
+test('hyphenated product names are still production source', () => {
+  for (const f of [
+    'packages/hollow-test/bin/hollow-test.mjs',
+    'packages/spec-lint/bin/spec-lint.mjs',
+  ]) {
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is production source`);
+  }
+});
+
 // classify()-level proof, and the self-referential one that matters most: a diff
 // touching only the predicate's own file must reach the gate.
 test('a diff touching only the predicate file still reaches the mutation gate', () => {

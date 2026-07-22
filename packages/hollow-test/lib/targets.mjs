@@ -40,7 +40,24 @@ import { globMatch } from '@adlc/core';
 // the gate that uses it. Match a whole path SEGMENT, or a `.test.`/`.spec.`
 // filename, and nothing else.
 const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
-const EXCLUDE_FILE_RE = /(?:^|\/)[^/]*\.(?:test|spec)\.[^/]+$/i;
+// Filename conventions, anchored to the BASENAME. Three forms, all unambiguous:
+//   dotted   foo.test.mjs, foo.spec.ts
+//   exact    test.js, spec.js
+//   snake    test_foo.py-style prefixes and foo_test.js-style suffixes
+// Without these, a project keeping its suite in `test.js` or `foo_test.js` had
+// those files mutated as production source — and mutating an assertion makes the
+// test fail, which scores the mutant KILLED. A test-only diff would satisfy the
+// gate vacuously.
+//
+// HYPHEN forms (`foo-test.js`, `spec-foo.js`) are deliberately NOT matched.
+// A hyphen is ambiguous between a test convention and a product name, and this
+// very package is the counterexample: `hollow-test.mjs` and `spec-lint.mjs` are
+// production source. Excluding `*-test.*` or `spec-*` would silently un-mutate
+// them — reintroducing the substring bug above in a narrower disguise. Projects
+// using the hyphen convention should keep tests in a test/ directory or name
+// them `*.test.*`, both of which are matched.
+const EXCLUDE_FILE_RE =
+  /(?:^|\/)(?:[^/]*\.(?:test|spec)\.[^/]+|(?:test|spec)\.[^/.]+|(?:test|spec)_[^/]+|[^/]*_(?:test|spec)\.[^/.]+)$/i;
 // JS/TS ONLY, deliberately. The shared mutator's header calls itself suitable
 // for "JS/TS/Python-style code", and an earlier revision admitted .py on that
 // basis. Two things make that claim unsafe to honour today:

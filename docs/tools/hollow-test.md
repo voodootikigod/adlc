@@ -87,10 +87,17 @@ is skipped, because the mutation operators are JS-shaped and produce either
 nonsense or unkillable mutants elsewhere.
 
 A file is also skipped when a path **segment** is `test`, `tests`, `spec`,
-`specs`, or `__tests__`, or when its filename matches `*.test.*` or `*.spec.*`.
-The match is segment- and filename-anchored on purpose: a substring test would
+`specs`, or `__tests__`, or when its **basename** matches one of three anchored
+conventions: dotted (`foo.test.mjs`, `foo.spec.ts`), exact (`test.js`,
+`spec.js`), or snake (`test_foo.js`, `foo_test.js`).
+
+Matching is segment- and basename-anchored on purpose. A substring test would
 exclude production paths such as `packages/hollow-test/lib/targets.mjs` or
-`lib/attest.mjs`.
+`lib/attest.mjs`. For the same reason, **hyphenated** forms (`foo-test.js`,
+`spec-foo.js`) are *not* treated as tests — a hyphen is ambiguous between a test
+convention and a product name, and `hollow-test.mjs` and `spec-lint.mjs` are
+production files. If you use that convention, keep tests in a `test/` directory
+or name them `*.test.*`.
 
 Within eligible files, only lines changed in the diff are targeted. Lines that
 are blank, comments, imports, `export {`, or `console.*` calls are skipped.
