@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { git, changedFiles, gitDiff, splitNulPaths } from '../lib/git.mjs';
+import { git, changedFiles, gitDiff, splitNulPaths, GIT_MAX_BUFFER } from '../lib/git.mjs';
 
 const NON_ASCII = 'café.js'; // U+00E9 — git quotes this as "caf\303\251.js" by default
 
@@ -77,6 +77,10 @@ describe('git helpers return authoritative (unquoted) paths', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('git() caps output at 64 MiB', () => {
+    assert.strictEqual(GIT_MAX_BUFFER, 64 * 1024 * 1024);
+  });
 });
 
 // #249 — the byte level below C-quoting. `-z` avoids quoting, but the OUTPUT was
@@ -102,12 +106,24 @@ describe('splitNulPaths — buffer-level split, fail closed on lossy decode (#24
     assert.deepEqual(splitNulPaths(Buffer.concat([enc('only.json'), Buffer.from([0])])), ['only.json']);
   });
 
+  test('a leading NUL does not yield an empty entry, and does not leak into the next path', () => {
+    const buf = Buffer.concat([Buffer.from([0]), enc('only.json'), Buffer.from([0])]);
+    assert.deepEqual(splitNulPaths(buf), ['only.json']);
+  });
+
   test('two paths differing only in INVALID bytes do not collapse — they throw', () => {
     // This is the whole point: bad-\x80/p.json and bad-\xEF\xBF\xBD/p.json both
     // decode to bad-�/p.json. A tolerant splitter would return ONE entry for two
     // files. splitNulPaths refuses the invalid one instead.
     const invalid = Buffer.concat([enc('bad-'), Buffer.from([0x80]), enc('/p.json'), Buffer.from([0])]);
     assert.throws(() => splitNulPaths(invalid), /not valid UTF-8|#249/);
+  });
+
+  test('the fail-closed error names UTF-8 specifically, not just #249', () => {
+    // The `|#249` alternation above also matches if this wording drifts (e.g. a
+    // typo'd encoding name), so pin the encoding name on its own here.
+    const invalid = Buffer.concat([enc('bad-'), Buffer.from([0x80]), enc('/p.json'), Buffer.from([0])]);
+    assert.throws(() => splitNulPaths(invalid), /not valid UTF-8/);
   });
 
   test('a lone surrogate byte sequence fails closed', () => {

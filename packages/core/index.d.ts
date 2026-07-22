@@ -67,6 +67,7 @@ export function resolveModel(
   env?: Record<string, string | undefined>
 ): string;
 
+export const GIT_MAX_BUFFER: number;
 export function git(args: readonly string[], opts?: {
   cwd?: string;
   stdio?: unknown;

@@ -3,10 +3,15 @@
 
 import { execFileSync } from 'node:child_process';
 
+// Exported (rather than inlined) so a test can pin the exact value directly —
+// generating 64 MiB of real git output per mutation trial to observe this
+// behaviorally would make every CI run pay that cost.
+export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
 export function git(args, opts = {}) {
   return execFileSync('git', args, {
     encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: GIT_MAX_BUFFER,
     ...opts,
   });
 }
