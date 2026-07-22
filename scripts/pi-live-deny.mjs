@@ -21,36 +21,35 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-// Resolution: checks ADLC_PI_BIN, current worktree, or parent repository for node_modules/.bin/pi.
-function findPiBin(root) {
-  if (process.env.ADLC_PI_BIN) return process.env.ADLC_PI_BIN;
+export function findPiBin(root, env = process.env) {
+  if (env.ADLC_PI_BIN) return env.ADLC_PI_BIN;
   let curr = root;
+  const fallback = join(root, 'node_modules', '.bin', 'pi');
   for (let i = 0; i < 5; i++) {
     const candidate = join(curr, 'node_modules', '.bin', 'pi');
     if (existsSync(candidate)) return candidate;
-    // Stop ascending at git boundary (.git directory or worktree file)
-    if (existsSync(join(curr, '.git'))) break;
     const parent = dirname(curr);
     if (parent === curr) break;
     curr = parent;
   }
-  return join(root, 'node_modules', '.bin', 'pi');
+  return fallback;
 }
 
-const piBin = findPiBin(repoRoot);
-const adlcExtension = join(repoRoot, 'plugins', 'adlc-pi', 'index.ts');
+export function runLiveDeny() {
+  const piBin = findPiBin(repoRoot);
+  const adlcExtension = join(repoRoot, 'plugins', 'adlc-pi', 'index.ts');
 
-const [major, minor] = process.versions.node.split('.').map(Number);
-if (major < 22 || (major === 22 && minor < 19)) {
-  console.log(`SKIP: pi requires Node >= 22.19 (running ${process.version}). ` +
-    'CI runs this proof on the Node 22 matrix leg.');
-  process.exit(0);
-}
-if (!existsSync(piBin)) {
-  console.error('FAIL: pi binary not found — install devDependencies first (npm install).');
-  process.exit(1);
-}
-console.log(`Resolved pi binary at: ${piBin}`);
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 19)) {
+    console.log(`SKIP: pi requires Node >= 22.19 (running ${process.version}). ` +
+      'CI runs this proof on the Node 22 matrix leg.');
+    process.exit(0);
+  }
+  if (!existsSync(piBin)) {
+    console.error('FAIL: pi binary not found — install devDependencies first (npm install).');
+    process.exit(1);
+  }
+  console.log(`Resolved pi binary at: ${piBin}`);
 
 const RAIL_FILE = 'test/contracts/frozen.test.ts';
 const RAIL_CONTENT = 'export const CONTRACT = "must not change";\n';
@@ -191,3 +190,8 @@ const poll = setInterval(() => {
     finish(0, 'PASS: rail write denied inside a live pi agent loop; rail file byte-identical.');
   }
 }, 250);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  runLiveDeny();
+}

@@ -361,7 +361,7 @@ test('runFromStdin multi-root: routes session tracking to respective ADLC roots'
   }
 });
 
-test('session store freeze: write to .adlc/sessions.json is denied under enforcement as a rail violation', () => {
+test('session store freeze: write to .adlc/sessions.json and .adlc/sessions.lock/** is denied under enforcement as a rail violation', () => {
   const root = mkdtempSync(join(tmpdir(), 'freeze-sess-'));
   try {
     mkdirSync(join(root, '.adlc'), { recursive: true });
@@ -371,15 +371,26 @@ test('session store freeze: write to .adlc/sessions.json is denied under enforce
     writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-1' }));
 
     const sessFile = join(root, '.adlc', 'sessions.json');
-    const payload = JSON.stringify({
+    const payload1 = JSON.stringify({
       conversationId: 'freeze-test',
       toolCall: { name: 'write_to_file', args: { TargetFile: sessFile, CodeContent: '{}' } },
       workspacePaths: [root],
     });
 
-    const res = runFromStdin(payload, { ADLC_P4_ENFORCEMENT: '1' });
-    assert.equal(res.allow_tool, false);
-    assert.match(res.deny_reason, /frozen rail/i);
+    const res1 = runFromStdin(payload1, { ADLC_P4_ENFORCEMENT: '1' });
+    assert.equal(res1.allow_tool, false);
+    assert.match(res1.deny_reason, /frozen rail/i);
+
+    const lockFile = join(root, '.adlc', 'sessions.lock', 'owner.json');
+    const payload2 = JSON.stringify({
+      conversationId: 'freeze-test',
+      toolCall: { name: 'write_to_file', args: { TargetFile: lockFile, CodeContent: '{}' } },
+      workspacePaths: [root],
+    });
+
+    const res2 = runFromStdin(payload2, { ADLC_P4_ENFORCEMENT: '1' });
+    assert.equal(res2.allow_tool, false);
+    assert.match(res2.deny_reason, /frozen rail/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

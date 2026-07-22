@@ -175,3 +175,23 @@ test('AC3: matrixVerdict — latest FAILS the deny proof is the ONLY exit 1', ()
   assert.equal(v.code, 1);
   assert.equal(v.level, 'FAIL');
 });
+
+test('findPiBin traverses up to locate node_modules/.bin/pi when ADLC_PI_BIN is unset', async () => {
+  const { findPiBin } = await import('../../../scripts/pi-live-deny.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+  const tempAncestor = mkdtempSync(join(tmpdir(), 'pibin-test-'));
+  try {
+    const fakeBinDir = join(tempAncestor, 'node_modules', '.bin');
+    mkdirSync(fakeBinDir, { recursive: true });
+    const fakePi = join(fakeBinDir, 'pi');
+    writeFileSync(fakePi, '#!/bin/sh\n');
+
+    const nestedChild = join(tempAncestor, 'a', 'b', 'c');
+    mkdirSync(nestedChild, { recursive: true });
+
+    const resolved = findPiBin(nestedChild, {});
+    assert.equal(resolved, fakePi);
+  } finally {
+    rmSync(tempAncestor, { recursive: true, force: true });
+  }
+});
