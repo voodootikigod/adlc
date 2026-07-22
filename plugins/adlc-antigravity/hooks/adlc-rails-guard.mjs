@@ -138,11 +138,11 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
       // Check build-gate backstop for structured mutators
       if (cls === 'mutating' && enforcing) {
+        if (sessionID === 'default_session') {
+          console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
+        }
         const gate = checkBuildGate({ sessionID, tracker: pathTracker, root, env });
         if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
-        if (gate.reason && gate.reason.includes('default_session')) {
-          console.error(`[adlc-rails-guard] Advisory: ${gate.reason}`);
-        }
       }
     }
     return allow();
@@ -161,10 +161,18 @@ export function runFromStdin(raw, env = process.env) {
     try { payload = JSON.parse(raw); }
     catch { return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow(); }
   }
-  const paths = extractFilePaths(payload);
-  const sessionID = resolveSessionId({ payload, env });
-  const trackerCache = new Map();
+  const toolName = extractToolName(payload);
+  const cls = classifyTool(toolName);
 
+  const trackerCache = new Map();
+  const sessionID = resolveSessionId({ payload, env });
+
+  // For readonly tools, skip session lock persistence entirely
+  if (cls === 'readonly') {
+    return decide(payload, { env, trackerCache });
+  }
+
+  const paths = extractFilePaths(payload);
   const getTracker = (r) => {
     if (!trackerCache.has(r)) trackerCache.set(r, createPersistentTracker(r, env));
     return trackerCache.get(r);

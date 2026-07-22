@@ -53,5 +53,6 @@ test('fence tag includes content hash neutralizing forged inner END markers', ()
   assert.ok(openMatch);
   const tag = openMatch[1];
   assert.ok(prompt.includes(`<<END:PRIOR_ATTEMPT_1:${tag}>>`));
+  assert.ok(prompt.includes('<<ESCAPED_END:PRIOR_ATTEMPT_1:PRIOR_ATTEMPT_1-8>>'), 'embedded END tags must be escaped');
   assert.ok(!forgedLog.includes(tag), 'content must not be able to predict the hash-bearing fence tag');
 });

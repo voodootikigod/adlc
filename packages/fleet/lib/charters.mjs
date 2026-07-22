@@ -13,9 +13,15 @@ function fenceNonce(label, content) {
   return `${label}-${(content ?? '').length}-${hex}`;
 }
 
+function sanitizeFencedContent(content) {
+  if (!content) return '';
+  return content.replaceAll('<<END:', '<<ESCAPED_END:').replaceAll('<<UNTRUSTED:', '<<ESCAPED_UNTRUSTED:');
+}
+
 function fence(label, content) {
-  const tag = fenceNonce(label, content);
-  return `<<UNTRUSTED:${label}:${tag}>>\n${content ?? ''}\n<<END:${label}:${tag}>>`;
+  const safeContent = sanitizeFencedContent(content);
+  const tag = fenceNonce(label, safeContent);
+  return `<<UNTRUSTED:${label}:${tag}>>\n${safeContent}\n<<END:${label}:${tag}>>`;
 }
 
 /** The builder prompt for a fresh (strike-1) dispatch. */

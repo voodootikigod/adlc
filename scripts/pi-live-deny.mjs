@@ -28,9 +28,8 @@ function findPiBin(root) {
   for (let i = 0; i < 5; i++) {
     const candidate = join(curr, 'node_modules', '.bin', 'pi');
     if (existsSync(candidate)) return candidate;
-    // Stop ascending once we reach the main git repository root (.git directory)
-    const gitPath = join(curr, '.git');
-    if (existsSync(gitPath) && lstatSync(gitPath).isDirectory()) break;
+    // Stop ascending at git boundary (.git directory or worktree file)
+    if (existsSync(join(curr, '.git'))) break;
     const parent = dirname(curr);
     if (parent === curr) break;
     curr = parent;
