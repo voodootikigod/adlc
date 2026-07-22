@@ -41,7 +41,12 @@ import { globMatch } from '@adlc/core';
 // filename, and nothing else.
 const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
 const EXCLUDE_FILE_RE = /(?:^|\/)[^/]*\.(?:test|spec)\.[^/]+$/i;
-const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
+// Includes .py deliberately: @adlc/hollow-test is PUBLISHED, filterTargetFiles is
+// its public surface, and both doc copies and the shared mutator describe it as
+// suitable for "JS/TS/Python-style code". Dropping Python would be a silent
+// breaking change to a gate external consumers already run — invisible here,
+// since this repo tracks no Python.
+const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx|py)$/i;
 
 /**
  * True when a path is source this tool can mutate. The single definition of

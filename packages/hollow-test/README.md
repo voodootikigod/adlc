@@ -86,7 +86,7 @@ hollow-test --test-cmd "node --test test/*.test.mjs" --json
 ## What is mutated (and what is skipped)
 
 Files from the diff are **excluded** from mutation if their path contains `test`
-or `spec`, or if they have extensions `.md`, `.json`, `.yml`, `.yaml`, `.lock`,
+only mutates JS/TS/Python source (`.mjs`, `.cjs`, `.js`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.py`). Files are skipped when a path SEGMENT is `test`/`tests`/`spec`/`specs`/`__tests__`, when the filename matches `*.test.*` or `*.spec.*`, or when the extension is anything else, including `.md`, `.json`, `.yml`, `.yaml`, `.lock`,
 `.txt`, `.toml`, or `.snap`. `--target`/`--rails` files bypass this exclusion —
 the caller is deliberately naming a mutation target.
 

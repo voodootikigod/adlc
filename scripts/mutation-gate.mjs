@@ -135,6 +135,11 @@ export function hollowTestWouldMutate(file) {
  */
 export function classify(changed, requestedMax, root = ROOT) {
   const eligible = changed.filter(hollowTestWouldMutate);
+  // Carried by EVERY classification, not just the empty one. Populating it only
+  // on the 'nothing' branch left the mixed case silent — one tested source file
+  // plus a stylesheet takes the fast path, and the stylesheet vanishes from the
+  // report. That run is green AND busy, so nothing hints a file went uncovered.
+  const skipped = changed.filter((f) => !hollowTestWouldMutate(f));
   // Report what was skipped. A green gate must not be a SILENT green: a diff of
   // files this tool does not mutate (CSS, MDX, docs) exits 0, and without naming
   // them "the gate passed" is indistinguishable from "the gate looked".
@@ -145,7 +150,7 @@ export function classify(changed, requestedMax, root = ROOT) {
   // (`opacity: 0` -> `opacity: 1`) that no test here could kill, since there are
   // no CSS tests. Admitting it would pin the required gate permanently red on
   // any stylesheet change — worse than declaring the type uncovered out loud.
-  if (eligible.length === 0) return { kind: 'nothing', skipped: changed.filter((f) => !hollowTestWouldMutate(f)) };
+  if (eligible.length === 0) return { kind: 'nothing', skipped };
 
   const covered = [];   // [file, testTarget]
   const uncovered = [];
@@ -165,6 +170,7 @@ export function classify(changed, requestedMax, root = ROOT) {
       testCmd: targets.map((t) => `node --test ${t}`).join(' && '),
       max: requestedMax,
       files: eligible,
+      skipped,
     };
   }
 
@@ -185,6 +191,7 @@ export function classify(changed, requestedMax, root = ROOT) {
     // finishes in bounded CI time rather than silently taking hours.
     max: Math.min(requestedMax, 3),
     uncovered,
+    skipped,
   };
 }
 
@@ -224,12 +231,15 @@ export function main() {
 
   const decision = classify(changed, requestedMax, ROOT);
 
+  // Printed for EVERY outcome. A green run must never leave a reader unable to
+  // tell "the gate looked and found nothing" from "the gate did not look".
+  if (decision.skipped?.length) {
+    console.log(`mutation-gate: ${decision.skipped.length} changed file(s) are not a mutable source type, so this gate does not cover them:`);
+    for (const f of decision.skipped) console.log(`  ${f}`);
+  }
+
   if (decision.kind === 'nothing') {
     console.log('mutation-gate: no source files changed — nothing to mutate.');
-    if (decision.skipped?.length) {
-      console.log(`mutation-gate: ${decision.skipped.length} changed file(s) are not a mutable source type, so this gate does not cover them:`);
-      for (const f of decision.skipped) console.log(`  ${f}`);
-    }
     process.exit(0);
   }
 

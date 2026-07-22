@@ -165,6 +165,40 @@ test('classify reports nothing skipped when the diff is genuinely empty', () => 
   assert.deepEqual(classify([], 12).skipped, []);
 });
 
+// The first attempt at visibility only populated `skipped` on the 'nothing'
+// branch, so a MIXED diff — one tested source file plus a stylesheet — took the
+// fast path and dropped the stylesheet from the report entirely. That is the
+// same silent gap, just harder to notice: the run is green AND busy, so nothing
+// suggests a file went uncovered. Every classification must carry it.
+test('skipped files are reported on the fast path too', () => {
+  const root = fixtureRoot(['packages/foo/test'], []);
+  try {
+    const decision = classify(['packages/foo/lib/x.mjs', 'apps/docs/app/global.css'], 12, root);
+    assert.equal(decision.kind, 'fast');
+    assert.deepEqual(decision.skipped, ['apps/docs/app/global.css']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('skipped files are reported on the slow path too', () => {
+  const root = fixtureRoot([], []);
+  try {
+    const decision = classify(['some/unmapped/x.mjs', 'README.md'], 12, root);
+    assert.equal(decision.kind, 'slow');
+    assert.deepEqual(decision.skipped, ['README.md']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// @adlc/hollow-test is PUBLISHED. filterTargetFiles is its public surface, and
+// both doc copies plus the shared mutator describe it as suitable for
+// "JS/TS/Python-style code". Narrowing to JS/TS alone would silently drop .py
+// for external consumers — a breaking change to a required gate they already
+// run, invisible in this repo because it tracks no Python.
+test('the published predicate still admits Python, as documented', () => {
+  assert.equal(hollowTestWouldMutate('src/app.py'), true);
+  assert.equal(hollowTestWouldMutate('src/test_app.py'), true); // not a test/ segment
+  assert.equal(hollowTestWouldMutate('tests/app.py'), false);   // is a test/ segment
+});
+
 // THE CONTRACT TEST. Both bugs in this file came from the same predicate living
 // in two places — packages/hollow-test/lib/targets.mjs and here — and drifting.
 // The wrapper deciding a file is not source means hollow-test is never invoked
