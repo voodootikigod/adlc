@@ -2,9 +2,19 @@
 // personas. Untrusted content (prior failure logs, prosecution findings) enters
 // only inside an unguessable fence and is declared inert data.
 
-/** Deterministic fence tag from label + content length (no Date/random here). */
+function fenceNonce(label, content) {
+  let hash = 0;
+  const str = `${label}:${content ?? ''}`;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const hex = (hash >>> 0).toString(16);
+  return `${label}-${(content ?? '').length}-${hex}`;
+}
+
 function fence(label, content) {
-  const tag = `${label}-${(content ?? '').length}`;
+  const tag = fenceNonce(label, content);
   return `<<UNTRUSTED:${label}:${tag}>>\n${content ?? ''}\n<<END:${label}:${tag}>>`;
 }
 

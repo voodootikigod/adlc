@@ -21,10 +21,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-// Default: the pinned devDependency pi binary at repoRoot (or parent worktree root).
-// The optional version-matrix job (scripts/pi-version-matrix.mjs) overrides
-// ADLC_PI_BIN to run this same proof against a different pi build; when unset,
-// findPiBin checks repoRoot and ancestor worktree roots for node_modules/.bin/pi.
+// Resolution: checks ADLC_PI_BIN, current worktree, or parent repository for node_modules/.bin/pi.
 function findPiBin(root) {
   if (process.env.ADLC_PI_BIN) return process.env.ADLC_PI_BIN;
   let curr = root;
@@ -54,6 +51,7 @@ if (!existsSync(piBin)) {
   console.error('FAIL: pi binary not found — install devDependencies first (npm install).');
   process.exit(1);
 }
+console.log(`Resolved pi binary at: ${piBin}`);
 
 const RAIL_FILE = 'test/contracts/frozen.test.ts';
 const RAIL_CONTENT = 'export const CONTRACT = "must not change";\n';

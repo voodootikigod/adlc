@@ -182,6 +182,25 @@ test('checkBuildGate: correctly loads active ticket from sharded .adlc/tickets/.
   }
 });
 
+test('runFromStdin: pathless run_command payload advances tool call depth', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pathless-cmd-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
+    const payload = JSON.stringify({
+      conversationId: 'sess-pathless',
+      toolCall: { name: 'run_command', command: 'npm test' },
+      workspacePaths: [root],
+    });
+    runFromStdin(payload);
+    const tracker = createPersistentTracker(root);
+    assert.equal(tracker.depth('sess-pathless'), 1, 'pathless run_command must advance session depth');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('createDepthTracker: tracks tool call count per session', () => {
   const tracker = createDepthTracker();
   assert.equal(tracker.depth('s1'), 0);

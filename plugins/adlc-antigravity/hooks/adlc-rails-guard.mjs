@@ -179,6 +179,11 @@ export function runFromStdin(raw, env = process.env) {
         if (root) distinctRoots.add(root);
       }
     }
+  } else {
+    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+      .find((s) => typeof s === 'string' && s.trim());
+    const fallbackRoot = findAdlcRoot(ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd());
+    if (fallbackRoot) distinctRoots.add(fallbackRoot);
   }
 
   for (const root of distinctRoots) {
