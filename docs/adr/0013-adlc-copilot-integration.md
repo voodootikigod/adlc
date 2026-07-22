@@ -169,14 +169,22 @@ no competing CI workflow.
 
 ## Unverified / follow-on
 
-- **Live deny-proof — DONE.** Real `copilot -p` turns against a frozen rail on
-  CLI 1.0.73 (entitled personal account) confirmed the hook enforces headless:
-  the rail edit was blocked under the explicit-allowlist posture and proceeded
-  only under `--allow-all-tools` (appendix §1.1). An earlier attempt hit a
-  feature-entitlement `403` initially mis-surfaced as an org-policy denial;
-  resolved with an entitled account, not a contract change. The only remaining
-  gated item is the marketplace install/uninstall convenience smoke behind
-  `ADLC_COPILOT_LIVE_INSTALL=1`, which needs an unrestricted CI account.
+- **Live deny-proof — DONE + re-runnable, but not in default CI.** Real `copilot -p`
+  turns against a frozen rail on CLI 1.0.73 (entitled personal account) confirmed
+  the hook enforces headless: the rail edit was blocked under the explicit-allowlist
+  posture and proceeded only under `--allow-all-tools` (appendix §1.1). An earlier
+  attempt hit a feature-entitlement `403` initially mis-surfaced as an org-policy
+  denial; resolved with an entitled account, not a contract change.
+  **Coverage caveat:** default CI proves only the deny *shape* (the offline
+  install-smoke runs the hook on synthetic stdin), NOT real CLI enforcement — so a
+  future Copilot release that changed hook semantics could ship green while this ADR
+  still claimed enforcement. The regression guard is `scripts/copilot-live-deny.mjs`
+  (control run lands the edit under `--allow-all-tools`; treatment run blocks it under
+  an explicit allowlist), which drives the real binary — opt-in
+  (`ADLC_COPILOT_LIVE_INSTALL=1`; advisory `copilot-live-deny` CI job behind
+  `vars.COPILOT_LIVE_DENY`, needs an entitled login). Re-run after any Copilot CLI
+  upgrade. The marketplace install/uninstall convenience smoke is separately gated
+  on an unrestricted CI account.
 - **VS Code Copilot hooks are Preview status** — the contract may shift; re-pin
   against the appendix if it does.
 - **Enterprise `policy.d` tier** — `strictKnownMarketplaces` is present in the

@@ -149,6 +149,39 @@ jobs:
           node scripts/opencode-live-deny.mjs --require
           node scripts/opencode-live-tool.mjs --require
 
+  # Copilot live rail-deny regression proof. Opt-in and advisory: it drives REAL
+  # `copilot -p` model turns (consumes AI credits) and needs an ENTITLED Copilot
+  # login, so it only runs where a repo sets vars.COPILOT_LIVE_DENY == '1' and
+  # provides an auth token secret. The required test job's offline install-smoke
+  # (deny-SHAPE proof) stays authoritative; this catches real CLI drift when
+  # enabled. See scripts/copilot-live-deny.mjs and docs/integrations/copilot.md.
+  copilot-live-deny:
+    if: vars.COPILOT_LIVE_DENY == '1'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: Copilot live rail-deny proof (entitled account required)
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          ADLC_COPILOT_LIVE_INSTALL: '1'
+        run: |
+          npm install -g @github/copilot
+          copilot --version
+          node scripts/copilot-live-deny.mjs --require
+
   # Advisory drift canary. The pinned proof in the required test matrix remains
   # authoritative while this job exposes changes in the newest Codex release.
   codex-live-latest:

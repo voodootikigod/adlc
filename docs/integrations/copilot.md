@@ -249,16 +249,23 @@ corrected contract; no overstatement, no understatement:
   targets is documented by GitHub as **Preview** status in the VS Code Copilot
   path; its contract may shift, and this doc will be re-pinned against the
   appendix if it does.
-- **(d) Live deny-proof is DONE.** The end-to-end deny behavior was proven with
-  real `copilot -p` model turns against a frozen rail on CLI 1.0.73 using an
-  entitled personal account
+- **(d) Live deny-proof: verified once, and re-runnable — but NOT in default CI.**
+  The end-to-end deny behavior was proven with real `copilot -p` model turns
+  against a frozen rail on CLI 1.0.73 using an entitled personal account
   ([appendix §1.1](./copilot-probe-appendix.md)) — the rail edit was blocked
-  under the explicit-allowlist posture and proceeded only under
-  `--allow-all-tools`. (An earlier attempt hit a feature-entitlement `403`
-  initially mis-surfaced as an org-policy denial; it was resolved with an
-  entitled account, not a contract change.) The `ADLC_COPILOT_LIVE_INSTALL=1`
-  marketplace install/uninstall smoke remains the only convenience-CI item still
-  gated on an unrestricted CI account; the deny mechanism itself is verified.
+  under the explicit-allowlist posture and proceeded only under `--allow-all-tools`.
+  (An earlier attempt hit a feature-entitlement `403` initially mis-surfaced as an
+  org-policy denial; it was resolved with an entitled account, not a contract
+  change.) **Coverage caveat, stated plainly:** default CI proves only the deny
+  *shape* (`scripts/copilot-install-smoke.mjs` runs the hook on synthetic stdin and
+  asserts `{reason}` + exit 0) — it does **not** exercise the real CLI, so a future
+  Copilot release that changed hook semantics could ship green while these docs
+  still claimed enforcement. The regression guard for that is
+  `scripts/copilot-live-deny.mjs` (control run under `--allow-all-tools` lands the
+  edit; treatment run under an explicit allowlist blocks it), which drives the real
+  binary — but it needs an entitled login and AI credits, so it is **opt-in**
+  (`ADLC_COPILOT_LIVE_INSTALL=1`; wired as the advisory `copilot-live-deny` CI job
+  behind `vars.COPILOT_LIVE_DENY`). **Re-run it after any Copilot CLI upgrade.**
 
 ## Boundary
 

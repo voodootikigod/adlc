@@ -13,7 +13,7 @@
 | Version | **1.0.73** |
 | Platform | `darwin-arm64` |
 | Evidence source | Bundled `app.js` (the shipped application) + a live example hook (`~/.copilot/hooks/superterm.json`) + **a live end-to-end deny-proof** (a real `copilot -p` model turn against a frozen rail) |
-| Live model leg | **DONE.** Ran against 1.0.73 on an entitled personal Copilot account. The live proof CORRECTED the static read of the deny mechanism — see §1.1/§1.2. (First attempts were blocked by a feature-entitlement `403 "not authorized to use this Copilot feature"`, initially mis-surfaced as an "organization policy" denial; resolved by using an entitled account.) |
+| Live model leg | **DONE (one-time proof) + re-runnable.** Ran against 1.0.73 on an entitled personal Copilot account; the live proof CORRECTED the static read of the deny mechanism (§1.1/§1.2). Made repeatable as `scripts/copilot-live-deny.mjs` (control lands the edit under `--allow-all-tools`; treatment blocks it under an explicit allowlist) — opt-in (`ADLC_COPILOT_LIVE_INSTALL=1`), not in default CI (which proves only the deny *shape*). Re-run after any Copilot CLI upgrade. (First attempts hit a feature-entitlement `403 "not authorized to use this Copilot feature"`, initially mis-surfaced as an "organization policy" denial; resolved with an entitled account.) |
 
 Most facts below are read from the shipped implementation (static). The
 **enforcement** facts (§1.1–§1.2) were additionally proven end-to-end with a
@@ -113,6 +113,22 @@ determination — unrelated to hook execution.)
   observer, which only needs to observe, so it emits nothing.
 - `permissionRequest`: output `{"behavior":"allow"|"deny"}` — the event that
   backs an approval prompt (distinct from preToolUse).
+
+### 1.4 Context injection (`additionalContext`) — STATIC-derived, not live-confirmed
+
+A non-gating hook (`sessionStart`, `preCompact`, `subagentStart/Stop`) injects
+narration back into the session by emitting a **top-level `additionalContext`
+string**. Evidence is **static** — read from the 1.0.73 bundle, where the hook
+result's `additionalContext` is consumed (`n.additionalContext`) and buffered via
+`drainAdditionalContexts()` / `hookProcessorUpdateContext`. This is NOT Claude
+Code's `hookSpecificOutput.additionalContext` wrapper.
+
+**Confidence caveat:** unlike the deny path (§1.1, proven end-to-end in the live
+deny-proof), context ingestion was **not** separately confirmed to surface in a
+real session. `adlc-lifecycle.mjs` uses this shape for **advisory narration
+only** — if Copilot consumes it differently, the narration silently no-ops; it
+never causes a failure or a false gate. The capability matrix marks Copilot's
+context re-injection accordingly (bundle-derived, not live-confirmed).
 
 ## 2. Hook config format (authoritative)
 

@@ -56,8 +56,8 @@ existing required job instead).
 
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Ticket context re-injection | ✅ 5 events (SessionStart/PreCompact/PostCompact/Subagent*/Stop) | ✅ 8 events | ✅ per-turn system transform + rail names in tool descriptions | ✅ per-turn system-prompt append | ⚠️ `beforeSubmitPrompt` ships; narrower scope | ❌ (PreToolUse only) | ✅ 4 events (`sessionStart`/`preCompact`/`subagentStart`/`subagentStop`), advisory narration |
-| Compaction survival defense | ✅ | ✅ | ✅ compaction-prompt append + autocontinue disable | ✅ | ❌ | ❌ | ✅ `preCompact` wired |
+| Ticket context re-injection | ✅ 5 events (SessionStart/PreCompact/PostCompact/Subagent*/Stop) | ✅ 8 events | ✅ per-turn system transform + rail names in tool descriptions | ✅ per-turn system-prompt append | ⚠️ `beforeSubmitPrompt` ships; narrower scope | ❌ (PreToolUse only) | ⚠️ 4 events wired (`sessionStart`/`preCompact`/`subagentStart`/`subagentStop`), advisory narration — the `additionalContext` ingestion shape is **bundle-derived, not live-confirmed** (appendix §1.4); a wrong shape degrades to a silent no-op |
+| Compaction survival defense | ✅ | ✅ | ✅ compaction-prompt append + autocontinue disable | ✅ | ❌ | ❌ | ⚠️ `preCompact` wired (advisory; `additionalContext` ingestion bundle-derived, not live-confirmed) |
 | Flail detection | ✅ advisory | ✅ failure-signature recorder | ✅ advisory | ✅ | ✅ reminder | ❌ | ✅ advisory (`postToolUse`) |
 | Live ticket statusline/footer | ❌ | ❌ | ✅ toast statusline | ✅ footer pill + verdict widget | ❌ | ❌ | ❌ |
 
@@ -84,7 +84,7 @@ existing required job instead).
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Fleet worker adapter | ✅ | ✅ | ✅ | ✅ | ✅ (`cursor-agent -p`) | ✅ | ✅ `copilot -p` (text output only — no JSON mode; **defaults to explicit `--allow-tool write --allow-tool shell`, NOT `--allow-all-tools`**, so the rails-guard hook keeps enforcing; `allowAllTools:true` is an opt-in for CI-gate-only autonomy) |
-| Headless in-session enforcement verified | ❌ not exercised | ⚠️ hook execution proven from installed cache | ✅ headless live-deny in CI | ✅ `pi --mode rpc` live-deny in CI | ❌ | ✅ probed (`--print` blocked a rail write) | ✅ **live deny-proof DONE** — real `copilot -p` turns against a frozen rail on 1.0.73 blocked the rail edit under the explicit allowlist; proceeded only under `--allow-all-tools` |
+| Headless in-session enforcement verified | ❌ not exercised | ⚠️ hook execution proven from installed cache | ✅ headless live-deny in CI | ✅ `pi --mode rpc` live-deny in CI | ❌ | ✅ probed (`--print` blocked a rail write) | ✅ **live deny-proof DONE** (real `copilot -p` turns vs a frozen rail on 1.0.73 blocked the edit under the explicit allowlist; proceeded only under `--allow-all-tools`), re-runnable via `scripts/copilot-live-deny.mjs` — but **opt-in, not in default CI** (which proves deny-*shape* only); re-run after CLI upgrades |
 
 ## G. Governance
 

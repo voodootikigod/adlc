@@ -58,10 +58,12 @@ function stateContext(root) {
 
 function hookOutput(_event, context) {
   if (!context) return null;
-  // Verified Copilot context-injection shape (1.0.73): a hook injects context
-  // by emitting a top-level `additionalContext` string (consumed as
-  // n.additionalContext) — not Claude Code's hookSpecificOutput wrapper. See
-  // docs/integrations/copilot-probe-appendix.md.
+  // Copilot context-injection shape, STATIC-derived from the 1.0.73 bundle
+  // (app.js consumes a top-level `additionalContext` via `n.additionalContext`
+  // and `drainAdditionalContexts()`) — not Claude Code's hookSpecificOutput
+  // wrapper. This is bundle-grounded but NOT separately live-confirmed to surface
+  // in-session (unlike the deny path, which was); see appendix §1.4. Advisory
+  // narration only, so a wrong shape degrades to a silent no-op, never a failure.
   return { additionalContext: context };
 }
 

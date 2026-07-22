@@ -75,11 +75,16 @@ handles locking and validation for you.
 
 **Trust-root note.** Once any ticket declares `rails`, the plugin's `preToolUse`
 rails-guard hook freezes `.adlc/tickets.json` itself (it is the rail trust root,
-so it can't be edited to disable enforcement). If a prior ticket already declares
-rails, the write will be denied — run with `ADLC_RAILS_BYPASS=1` set, which allows
-the edit and records the change to the gate-manifest. Editing the ticket set while
-rails are frozen is a deliberate, audited action. (The in-session hook is
-advisory; the CI `rails-guard-ci` gate is the unbypassable backstop.)
+so it can't be edited to disable enforcement). The canonical way to change the
+ticket set is the `adlc ticket` CLI, which locks and validates for you. If a
+prior ticket already declares rails and you must make a deliberate direct edit,
+set `ADLC_P4_ENFORCEMENT=0` for that operation — this is the escape the copilot
+rails-guard honors. Note it is a **blunt disable** of the in-session hook, not
+Claude Code's audited `ADLC_RAILS_BYPASS=1` (which the copilot hook does **not**
+implement); the audit trail for the change is therefore the `rails-guard-ci` gate
+plus git history, not a gate-manifest bypass record. The in-session hook enforces
+headless (its deny-ask defaults to deny) unless the session runs with
+`--allow-all-tools`; the CI `rails-guard-ci` gate is the unbypassable backstop.
 
 ## 3. Warn (don't fail) if the repo's formatter/linter would reformat the write
 

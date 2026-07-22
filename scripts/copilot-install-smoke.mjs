@@ -154,7 +154,9 @@ function liveLeg() {
   const list = spawnSync('copilot', ['plugin', 'list', '--plugin-dir', plugin], { cwd: repo, encoding: 'utf8' });
   if (list.status !== 0) fail(`copilot plugin list --plugin-dir failed: ${list.stderr}`);
   ok(`live: copilot ${which.stdout.trim()} resolved the plugin via --plugin-dir`);
-  console.log('  note: an end-to-end in-session DENY needs a model turn and may be blocked by an org Copilot policy — not asserted here.');
+  console.log('  note: this smoke asserts plugin resolution + deny-SHAPE only. The end-to-end');
+  console.log('  in-session DENY (a real model turn blocked against a frozen rail) is proven');
+  console.log('  by scripts/copilot-live-deny.mjs (opt-in: ADLC_COPILOT_LIVE_INSTALL=1, entitled login).');
 }
 
 function main() {
