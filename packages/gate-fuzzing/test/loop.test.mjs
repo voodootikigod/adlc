@@ -210,3 +210,65 @@ test('duplicate defeats not counted as new defeats (dryStreak advances)', async 
   // Round 1 has new defeat, rounds 2-4 are dry → stops after round 4
   assert.equal(result.rounds, 4);
 });
+
+// ─── token budget: must charge the prompt, not just the completion ───────────
+// Regression coverage for the undercount bug: estimateTokens was called
+// without the per-instance prompt text, so --token-budget metered output
+// only. Real spend for this workload is input-dominated (system+user prompt
+// built per fan instance), so a budget that never sees it isn't a budget.
+
+test('token estimate charges promptChars from each fan result, not output/error text alone', async () => {
+  // 4000 prompt chars + 2 output chars('ok') = 4002 chars -> ceil(4002/4) = 1001 tokens.
+  // If promptChars were ignored (the bug), this would estimate ceil(2/4) = 1.
+  const fanFn = async () => [{ ok: true, value: 'ok', promptChars: 4000 }];
+
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn,
+    classifyFn: makeOutOfScopeClassify(),
+    maxRounds: 1,
+    dryRounds: 5,
+    tokenBudget: 1_000_000,
+    maxFailRate: 0.5,
+    cloneDir: CLONE_DIR,
+    n: 1,
+  });
+
+  assert.equal(result.tokensEstimated, 1001, 'must charge promptChars, not just completion/error text');
+});
+
+test('token budget trips on prompt tokens alone, even with a tiny completion (previously invisible to the estimator)', async () => {
+  // promptChars alone (~10k tokens) exceeds a 5k budget; output is 2 chars.
+  // Before the fix, this round would have estimated ~1 token and never stopped.
+  const fanFn = async () => [{ ok: true, value: 'ok', promptChars: 40_000 }];
+
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn,
+    classifyFn: makeOutOfScopeClassify(),
+    maxRounds: 5,
+    dryRounds: 5,
+    tokenBudget: 5_000,
+    maxFailRate: 0.5,
+    cloneDir: CLONE_DIR,
+    n: 1,
+  });
+
+  assert.equal(result.stoppedBy, 'budget', 'prompt tokens alone must be able to trip the budget');
+  assert.equal(result.rounds, 1, 'should stop after the first round once prompt tokens are charged');
+});
+
+test('token estimate treats a missing promptChars as 0 (backward compatible with fixtures/stubs that omit it)', async () => {
+  const fanFn = async () => [{ ok: true, value: 'ok' }]; // no promptChars field, like the older fixtures above
+
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn,
+    classifyFn: makeOutOfScopeClassify(),
+    maxRounds: 1,
+    dryRounds: 5,
+    tokenBudget: 1_000_000,
+    maxFailRate: 0.5,
+    cloneDir: CLONE_DIR,
+    n: 1,
+  });
+
+  assert.equal(result.tokensEstimated, 1); // ceil('ok'.length / 4) = 1
+});

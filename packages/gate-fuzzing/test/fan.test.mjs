@@ -49,6 +49,32 @@ test('fanAdversary: default fan width is n, one completeFn call per fan instance
   assert.ok(calls.every((c) => c.provider === undefined));
 });
 
+test('fanAdversary: each result carries promptChars for the prompt actually sent to that instance (regression: gate-fuzzing budget undercount)', async () => {
+  // Each fan instance gets a DIFFERENT system+user prompt (distinct gate/seed
+  // pairing) — promptChars must reflect the instance's own prompt, not a
+  // single shared value, so the loop's token estimator can charge input
+  // tokens per instance instead of undercounting them entirely.
+  const completeFn = async () => 'candidate-output';
+  const results = await fanAdversary({ gates: [gate()], n: 3, completeFn });
+
+  assert.equal(results.length, 3);
+  for (const r of results) {
+    assert.equal(typeof r.promptChars, 'number');
+    assert.ok(r.promptChars > 0, 'system+user prompt must be non-empty for a real fan instance');
+  }
+});
+
+test('fanAdversary: promptChars is still reported for a failed instance (the prompt was still sent)', async () => {
+  const completeFn = async () => {
+    throw new Error('boom');
+  };
+  const results = await fanAdversary({ gates: [gate()], n: 1, completeFn });
+
+  assert.equal(results[0].ok, false);
+  assert.equal(typeof results[0].promptChars, 'number');
+  assert.ok(results[0].promptChars > 0);
+});
+
 test('fanAdversary: a failing fan instance surfaces as ok:false, not a thrown error', async () => {
   let n = 0;
   const completeFn = async () => {

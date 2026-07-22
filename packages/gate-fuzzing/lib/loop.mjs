@@ -9,13 +9,27 @@ import { parseCandidates, normalizeAndHash } from './candidate.mjs';
 /**
  * Estimate tokens used from fan results (§3.2 option A).
  * labeled as estimate: ≈chars/4.
- * @param {Array<{ok:boolean, value?:string}>} fanResults
- * @param {string} promptText - The prompt sent (for input estimate)
+ *
+ * Charges BOTH the prompt actually sent per instance (`r.promptChars` — each
+ * fan instance gets a distinct system+user prompt, cycling gate/seed, so
+ * this is a per-item field, not one shared string) and the
+ * completion/error text returned. Omitting the prompt side undercounts
+ * input tokens, which dominate this workload — a budget that only meters
+ * output reports discipline that isn't happening (issue: gate-fuzzing
+ * --token-budget metered output only).
+ *
+ * `promptChars` is optional for backward compatibility with fixtures/stubs
+ * that don't set it (treated as 0 — matches their pre-existing behavior;
+ * those tests aren't exercising token accounting).
+ *
+ * @param {Array<{ok:boolean, value?:string, error?:string, promptChars?:number}>} fanResults
+ * @param {string} [promptText] - extra shared prompt text to charge once (rarely used; per-item promptChars is the normal path)
  * @returns {number}
  */
 function estimateTokens(fanResults, promptText = '') {
   let chars = promptText.length;
   for (const r of fanResults) {
+    if (typeof r.promptChars === 'number') chars += r.promptChars;
     if (r.ok && r.value) chars += r.value.length;
     if (!r.ok && r.error) chars += r.error.length;
   }

@@ -124,7 +124,11 @@ export function buildUserPrompt(gate, seed, baselineManifest = '') {
  * @param {Function|null} [opts.completeFn] - Injectable: async (fanOpts) => string,
  *   called once per fan instance. If null, uses core `complete()` per instance
  *   (dynamic import keeps @adlc/core optional for pure prompt-builder tests).
- * @returns {Promise<Array<{ok:boolean, value?:string, error?:string, provider?:string}>>}
+ * @returns {Promise<Array<{ok:boolean, value?:string, error?:string, provider?:string, promptChars:number}>>}
+ *   `promptChars` is the system+user prompt length actually SENT for that
+ *   instance (system and prompt differ per instance — different gate/seed
+ *   pairing), so the loop's token estimator can charge input, not just
+ *   output (see loop.mjs `estimateTokens`).
  */
 export async function fanAdversary(opts) {
   const {
@@ -169,11 +173,13 @@ export async function fanAdversary(opts) {
 
   const results = await Promise.allSettled(fanCalls.map(runOne));
 
-  return results.map((r, i) =>
-    r.status === 'fulfilled'
-      ? { ok: true, value: r.value, provider: fanCalls[i].provider }
-      : { ok: false, error: String(r.reason), provider: fanCalls[i].provider }
-  );
+  return results.map((r, i) => {
+    const call = fanCalls[i];
+    const promptChars = (call.system?.length ?? 0) + (call.prompt?.length ?? 0);
+    return r.status === 'fulfilled'
+      ? { ok: true, value: r.value, provider: call.provider, promptChars }
+      : { ok: false, error: String(r.reason), provider: call.provider, promptChars };
+  });
 }
 
 /**
