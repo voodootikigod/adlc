@@ -18,7 +18,8 @@ function touchesAny(globs, paths) {
   return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch(g, p)));
 }
 
-function sleepSync(ms) {
+function sleepSyncWithJitter(baseMs = 5) {
+  const ms = baseMs + Math.floor(Math.random() * 5);
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   } catch {
@@ -114,7 +115,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     let acquired = false;
     const nonce = `${process.pid}-${Date.now()}-${Math.random()}`;
 
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       try {
         mkdirSync(lockDir);
         try {
@@ -139,7 +140,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             }
           }
         } catch { /* ignore */ }
-        sleepSync(5);
+        sleepSyncWithJitter(5);
       }
     }
     if (!acquired) {

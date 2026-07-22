@@ -53,9 +53,11 @@ export function extractFilePaths(payload) {
 
 const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', 'workspace_roots'];
 
-/** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null. */
+/** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null.
+ * Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir). */
 export function findAdlcRoot(absPath) {
-  let cur = isAbsolute(absPath) ? absPath : join(process.cwd(), absPath);
+  if (!absPath || typeof absPath !== 'string' || !isAbsolute(absPath)) return null;
+  let cur = absPath;
   const { root: fsRoot } = parse(cur);
   while (true) {
     if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
@@ -198,7 +200,8 @@ async function readStdin() {
 }
 
 export function printStatus(root = process.cwd(), env = process.env, payload = {}) {
-  const resolvedRoot = findAdlcRoot(root) ?? root;
+  const absRoot = isAbsolute(root) ? root : join(process.cwd(), root);
+  const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
   const active = resolveActiveTicketId(resolvedRoot, env);
   const tracker = createPersistentTracker(resolvedRoot, env);
   const sessionID = resolveSessionId({ payload, env });
@@ -213,7 +216,8 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
 }
 
 export function printDoctor(root = process.cwd(), env = process.env) {
-  const resolvedRoot = findAdlcRoot(root) ?? root;
+  const absRoot = isAbsolute(root) ? root : join(process.cwd(), root);
+  const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
   const active = resolveActiveTicketId(resolvedRoot, env);
 
   console.log(`--- ADLC Antigravity Doctor ---`);
