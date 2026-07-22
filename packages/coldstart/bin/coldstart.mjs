@@ -13,11 +13,10 @@ import {
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll, resolveExpectedModel } from '../lib/gate.mjs';
-import { buildCacheData } from '../lib/cache.mjs';
+import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
 import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
-import { ticketHash } from '@adlc/tickets';
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
 // so plain --prompt-only runs never pay for or depend on it. The real
@@ -141,20 +140,14 @@ try {
 // prior evidence rather than manufacturing a duplicate entry for the same
 // verification, and a cache hit is what makes a later run's lookup possible
 // in the first place, so recording must be per-ticket, not aggregated across
-// the whole --all run the way the pre-#278 design did.
+// the whole --all run the way the pre-#278 design did. buildRecordPlan
+// returns [] when there's nothing to record (every result cached/mocked);
+// looping over that is already a no-op, so there is no separate "is there
+// anything to record?" branch here to leave untested.
 
-const auditedResults = results.filter((r) => !r.cached && !r.mocked);
-if (auditedResults.length > 0) {
-  const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
-  const model = resolveExpectedModel(tier);
-  for (const result of auditedResults) {
-    const ticket = targets.find((t) => t.id === result.id);
-    const data = { tier };
-    if (model) data.cache = buildCacheData({ ticketHash: ticketHash(ticket), model, gaps: result.gaps });
-    if (result.usage) data.usage = result.usage;
-    record({ gate: 'coldstart', ticket: result.id, rawData: JSON.stringify(data) });
-  }
-}
+const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
+const recordPlan = buildRecordPlan(results, targets, { model: resolveExpectedModel(tier), tier });
+for (const entry of recordPlan) record(entry);
 
 // ── Output ───────────────────────────────────────────────────────────────────
 
