@@ -935,6 +935,49 @@ describe('CLI: a syntactically invalid mutant is not a kill', () => {
   });
 });
 
+// The all-invalid guard has to be PER FILE. A global check passes the moment any
+// OTHER file yields a kill — so an explicitly named target whose every mutant
+// was unparseable gets reported as success without a single test touching it.
+// That is the worst version of #293: the caller asked for that file specifically.
+describe('CLI: an explicit target with only invalid mutants is not masked', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-perfile-'));
+    createMultilineReturnRepo(dir);
+    // A second file with an ordinary, killable single-line mutant.
+    writeFileSync(join(dir, 'src', 'plain.mjs'), 'export const twice = (n) => n * 2;\n');
+    writeFileSync(join(dir, 'test', 'plain.test.mjs'), [
+      "import { it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { twice } from '../src/plain.mjs';",
+      "it('twice', () => { assert.equal(twice(2), 4); });",
+      '',
+    ].join('\n'));
+    commitAll(dir, 'add a plainly mutable file');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fails even though the other file produced a killed mutant', () => {
+    // --max 1 on the multiline-return target: its single allocated mutant is the
+    // invalid null-return. Without per-file accounting the run exits 0 on the
+    // strength of plain.mjs.
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/shape.mjs', '--max', '2'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.notEqual(result.status, 0,
+      `an explicit target with no valid mutant must not pass: ${out}`);
+    assert.match(out, /src\/shape\.mjs/,
+      'the refusal must name the target that went unchecked');
+  });
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {

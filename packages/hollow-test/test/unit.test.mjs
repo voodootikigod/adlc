@@ -12,6 +12,7 @@ import {
   readRailsFromTicketFile, expandRailsToFiles,
 } from '../lib/targets.mjs';
 import { buildJsonReport, printTable } from '../lib/report.mjs';
+import { checkSyntax } from '../lib/runner.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
 
@@ -314,5 +315,39 @@ describe('printTable with invalid mutants', () => {
     const out = capture(MIXED);
     assert.match(out, /original: return \{/);   // invalid
     assert.match(out, /original: x = true/);     // survivor
+  });
+});
+
+// ── checkSyntax is TRI-STATE (#293) ──────────────────────────────────────────
+//
+// "Could not determine" is not the same as "valid". Treating a spawn failure or
+// timeout as valid reopens the exact false-kill path this work closes: the test
+// command then runs against unparseable source, exits non-zero on the parse
+// error, and that is scored as a kill. Transient process exhaustion would be
+// silently converted into coverage evidence.
+
+describe('checkSyntax', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-checksyntax-'));
+
+  it('reports valid source as valid', () => {
+    const f = join(dir, 'ok.mjs');
+    writeFileSync(f, 'export const a = 1;\n');
+    assert.equal(checkSyntax(f, dir), 'valid');
+  });
+
+  it('reports unparseable source as invalid', () => {
+    const f = join(dir, 'bad.mjs');
+    writeFileSync(f, 'export function f() {\n  return null;\n    a: 1,\n  };\n}\n');
+    assert.equal(checkSyntax(f, dir), 'invalid');
+  });
+
+  it('reports UNKNOWN — never valid — when the checker cannot run', () => {
+    const f = join(dir, 'ok2.mjs');
+    writeFileSync(f, 'export const a = 1;\n');
+    assert.equal(
+      checkSyntax(f, dir, join(dir, 'no-such-node-binary')),
+      'unknown',
+      'a checker that cannot run proves nothing about the file'
+    );
   });
 });

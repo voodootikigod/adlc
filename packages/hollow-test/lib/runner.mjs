@@ -59,6 +59,7 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   // No initialiser: it is assigned unconditionally below, so a literal here is
   // dead weight the mutation gate would flag forever.
   let invalid;
+  let syntax;
   try {
     writeFileSync(filePath, mutated, 'utf8');
     // SYNTAX GATE, before the test command (#293).
@@ -75,8 +76,9 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
     // published, and this asks exactly the right question — would Node accept
     // this file — honouring the real extension and package type instead of
     // approximating them.
-    invalid = !parses(filePath, cwd);
-    if (!invalid) trial = runTest(testCmd, timeoutMs, cwd);
+    syntax = checkSyntax(filePath, cwd);
+    invalid = syntax === 'invalid';
+    if (syntax === 'valid') trial = runTest(testCmd, timeoutMs, cwd);
   } finally {
     // Always restore original content, even if the test run threw.
     writeFileSync(filePath, original, 'utf8');
@@ -85,8 +87,14 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   // An invalid mutant is DISCARDED — neither killed nor survived. Counting it
   // either way is wrong: as a kill it fakes coverage, as a survivor it blames
   // the tests for a mutation that was never valid code.
+  // Could not determine validity — refuse to score it either way. The caller
+  // turns this into an operational failure; guessing is what reopens #293.
+  if (syntax === 'unknown') {
+    return { killed: false, invalid: false, checkFailed: true, timedOut: false, exitCode: null };
+  }
+
   if (invalid) {
-    return { killed: false, invalid: true, timedOut: false, exitCode: null };
+    return { killed: false, invalid: true, checkFailed: false, timedOut: false, exitCode: null };
   }
 
   const killed = trial.timedOut || (trial.status !== 0);
@@ -94,25 +102,35 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   return {
     killed,
     invalid: false,
+    checkFailed: false,
     timedOut: trial.timedOut,
     exitCode: trial.status,
   };
 }
 
 /**
- * Does Node consider the file on disk syntactically valid?
+ * TRI-STATE syntax check: 'valid' | 'invalid' | 'unknown'.
+ *
+ * "Could not determine" must never collapse into "valid". If the checker is
+ * killed, times out, or cannot spawn, assuming validity reopens the exact
+ * false-kill path this exists to close: the test command then runs against
+ * unparseable source, exits non-zero on the parse error, and that is scored as a
+ * kill. Transient process exhaustion would become coverage evidence.
+ *
+ * Exported so the three outcomes can be tested directly, including the one that
+ * needs an injected failure.
+ *
  * @param {string} filePath absolute path to the (currently mutated) file
  * @param {string} cwd
+ * @param {string} [execPath] node binary to check with; overridable for tests
+ * @returns {'valid'|'invalid'|'unknown'}
  */
-function parses(filePath, cwd) {
-  const r = spawnSync(process.execPath, ['--check', filePath], {
+export function checkSyntax(filePath, cwd, execPath = process.execPath) {
+  const r = spawnSync(execPath, ['--check', filePath], {
     cwd,
     encoding: 'utf8',
     timeout: 30000,
   });
-  // A timeout or spawn failure is NOT proof of invalidity — treat only a clean
-  // non-zero exit as a parse error, so an environment problem cannot silently
-  // discard every mutant and turn the gate into a no-op.
-  if (r.error || r.signal) return true;
-  return r.status === 0;
+  if (r.error || r.signal || typeof r.status !== 'number') return 'unknown';
+  return r.status === 0 ? 'valid' : 'invalid';
 }
