@@ -85,20 +85,28 @@ hollow-test --test-cmd "node --test test/*.test.mjs" --json
 
 ## What is mutated (and what is skipped)
 
-Mutation applies to JavaScript and TypeScript source only: `.mjs`, `.cjs`,
-`.js`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`. This is an **allow-list** — any
-other extension (`.md`, `.json`, `.yml`, `.css`, `.py`, and anything unlisted)
-is skipped, because the mutation operators are JS-shaped and produce either
-nonsense or unkillable mutants elsewhere.
+Mutation applies to plain JavaScript only: `.mjs`, `.cjs`, `.js`. This is an
+**allow-list**. TypeScript and JSX (`.ts`, `.mts`, `.cts`, `.tsx`, `.jsx`),
+Python, CSS and everything else are excluded, because the operators are
+text-based and cannot tell a comparison from a type argument or a JSX
+delimiter — `Promise<unknown>` becomes the invalid `Promise>=unknown>`, and a
+parse failure is currently scored as a *killed* mutant. See issue #293.
 
 A file is also skipped when a path **segment** is `test`, `tests`, `spec`,
-`specs`, or `__tests__`, or when its **basename** matches one of three anchored
-conventions: dotted (`foo.test.mjs`, `foo.spec.ts`), exact (`test.js`,
-`spec.js`), or snake (`test_foo.js`, `foo_test.js`).
+`specs`, or `__tests__`, or when its **basename** matches a `node --test`
+discovery convention: `test.js`, `test-*`, `test_*`, `*-test.*`, `*_test.*`,
+`*.test.*` (and the `spec` equivalents).
 
-Matching is segment- and basename-anchored on purpose. A substring test would
+Matching is segment- and basename-anchored on purpose: a substring test would
 exclude production paths such as `packages/hollow-test/lib/targets.mjs` or
-`lib/attest.mjs`. For the same reason, **hyphenated** forms (`foo-test.js`,
+`lib/attest.mjs`.
+
+Two escape hatches, because no convention resolves every case:
+
+- `--test-glob <glob>` — treat additional paths as tests.
+- `--source-glob <glob>` — treat paths as production source even when their name
+  matches a test convention. Needed for product names like `hollow-test.mjs` and
+  `spec-lint.mjs`, which are indistinguishable from tests by naming alone. For the same reason, **hyphenated** forms (`foo-test.js`,
 `spec-foo.js`) are *not* treated as tests — a hyphen is ambiguous between a test
 convention and a product name, and `hollow-test.mjs` and `spec-lint.mjs` are
 production files. If you use that convention, keep tests in a `test/` directory

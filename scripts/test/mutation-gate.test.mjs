@@ -71,13 +71,24 @@ test('hollowTestWouldMutate does not treat dotfiles as source', () => {
 // returned kind:'nothing' and the required gate exited 0 without running.
 // Caught by adversarial review, not by the tests written alongside that fix,
 // because those tests only asserted the extensions the fix happened to allow.
-test('hollowTestWouldMutate admits every source extension hollow-test mutates', () => {
-  for (const f of [
-    'a.mjs', 'a.cjs', 'a.js', 'a.jsx',
-    'a.ts', 'a.mts', 'a.cts', 'a.tsx',
-    'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs', 'apps/docs/app/page.tsx',
-  ]) {
+// It must ALSO admit nothing more. An extension the operators cannot handle
+// produces INVALID mutants, and runner.mjs scores `killed = timedOut ||
+// status !== 0` — so a parse failure is credited as a kill. `invert-comparison`
+// rewrites `Promise<unknown>` to `Promise>=unknown>` and `<Button>` to
+// `>=Button>`; with the common per-file quota of one, that single invalid mutant
+// satisfies the entire gate having exercised no assertion.
+//
+// Both directions were learned the hard way here: narrowing to mjs|cjs|js first
+// dropped 49 .ts/.tsx files while hollow-test still accepted them, then adding
+// TS back admitted the invalid-mutant path. Plain JavaScript only — and the
+// exclusion is REPORTED (see the skipped-files tests), which is the difference
+// between a documented coverage boundary and a hole. Tracked in #293.
+test('the allow-list admits plain JavaScript and nothing the operators cannot handle', () => {
+  for (const f of ['a.mjs', 'a.cjs', 'a.js', 'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs']) {
     assert.equal(hollowTestWouldMutate(f), true, `${f} is mutable source`);
+  }
+  for (const f of ['a.ts', 'a.mts', 'a.cts', 'a.tsx', 'a.jsx', 'a.py', 'apps/docs/app/page.tsx']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} needs syntax-aware mutation (#293)`);
   }
 });
 
@@ -106,7 +117,6 @@ test('production source is not excluded merely for containing "test"/"spec"', ()
     'packages/spec-lint/lib/parse.mjs',
     'packages/spec-lint/bin/spec-lint.mjs',
     'scripts/run-tests.mjs',
-    'apps/docs/app/latest/page.tsx', // "latest" contains "test"
   ]) {
     assert.equal(hollowTestWouldMutate(f), true, `${f} is production source`);
   }
@@ -145,18 +155,30 @@ test('conventional test basenames are excluded even outside a test/ directory', 
   }
 });
 
-// The HYPHEN forms (`foo-test.js`, `spec-foo.js`) are deliberately NOT excluded,
-// and this test pins that decision so it is not "fixed" into a regression.
-// Hyphens are ambiguous between a test convention and a product name, and this
-// repository contains the counterexamples: `hollow-test.mjs` and `spec-lint.mjs`
-// are production source. Excluding `*-test.*` or `spec-*` would silently
-// un-mutate them again — the exact bug fixed earlier in this branch.
-test('hyphenated product names are still production source', () => {
+// Hyphenated names ARE test conventions: `node --test` discovers `*-test.js` and
+// `test-*.js` by default, and this tool's own examples use that runner. An
+// earlier revision on this branch treated them as merely stylistic and admitted
+// them as source, which let a test-only diff pass by mutating its OWN
+// assertions — flipping `true` to `false` fails the changed test, and that
+// failure is credited as a killed production mutant.
+test('node --test naming conventions are excluded by default', () => {
+  for (const f of ['foo-test.js', 'test-foo.js', 'foo_test.mjs', 'test.js', 'spec-foo.js']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} matches a node --test convention`);
+  }
+});
+
+// The genuine ambiguity is with PRODUCT names — `hollow-test.mjs` and
+// `spec-lint.mjs` are production source here. No convention can resolve that, so
+// the project declares it rather than the tool guessing. The second assertion is
+// the load-bearing one: it proves the declaration is doing the work, not a
+// lenient default.
+test('declared source globs rescue production files that look like tests', () => {
   for (const f of [
     'packages/hollow-test/bin/hollow-test.mjs',
     'packages/spec-lint/bin/spec-lint.mjs',
   ]) {
-    assert.equal(hollowTestWouldMutate(f), true, `${f} is production source`);
+    assert.equal(hollowTestWouldMutate(f), true, `${f} is declared production source`);
+    assert.equal(isMutableSource(f), false, `${f} is ambiguous without a declaration`);
   }
 });
 
@@ -268,13 +290,13 @@ test('the wrapper and hollow-test agree on what source is', () => {
 // End to end at the classify() level: the unit above proves the predicate, this
 // proves the predicate is actually what gates the run. A TypeScript-only diff
 // must NOT short-circuit to 'nothing'.
-test('a TypeScript-only diff still reaches the mutation gate', () => {
+// TypeScript is excluded deliberately (#293 — invalid mutants score as kills),
+// so the requirement is not that it be mutated but that its exclusion is
+// REPORTED. Silence is the failure mode; a declared skip is a coverage boundary.
+test('a TypeScript-only diff is reported as skipped, not silently passed', () => {
   const decision = classify(['plugins/adlc-pi/index.ts'], 12);
-  assert.notEqual(
-    decision.kind,
-    'nothing',
-    'a TS-only change must be mutated, not silently passed'
-  );
+  assert.equal(decision.kind, 'nothing');
+  assert.deepEqual(decision.skipped, ['plugins/adlc-pi/index.ts']);
 });
 
 test('hollowTestWouldMutate excludes non-code extensions', () => {

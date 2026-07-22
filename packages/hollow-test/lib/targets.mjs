@@ -40,41 +40,24 @@ import { globMatch } from '@adlc/core';
 // the gate that uses it. Match a whole path SEGMENT, or a `.test.`/`.spec.`
 // filename, and nothing else.
 const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
-// Filename conventions, anchored to the BASENAME. Three forms, all unambiguous:
-//   dotted   foo.test.mjs, foo.spec.ts
-//   exact    test.js, spec.js
-//   snake    test_foo.py-style prefixes and foo_test.js-style suffixes
-// Without these, a project keeping its suite in `test.js` or `foo_test.js` had
-// those files mutated as production source — and mutating an assertion makes the
-// test fail, which scores the mutant KILLED. A test-only diff would satisfy the
-// gate vacuously.
+// Filename conventions, anchored to the BASENAME, matching `node --test`'s OWN
+// default discovery: `test.js`, `test-*`, `*-test`, `*_test`, `*.test.*` (and
+// the spec equivalents). An earlier revision excluded only the dotted, exact and
+// snake forms on the theory that hyphens were a stylistic choice; they are not —
+// they are Node's documented convention, and this tool's own examples use
+// `node --test`. Admitting them meant a test-only diff got its ASSERTIONS
+// mutated: flipping `true` to `false` makes the changed test fail, which is
+// credited as a killed production mutant, so the gate passes having mutated no
+// production code at all.
 //
-// HYPHEN forms (`foo-test.js`, `spec-foo.js`) are deliberately NOT matched.
-// A hyphen is ambiguous between a test convention and a product name, and this
-// very package is the counterexample: `hollow-test.mjs` and `spec-lint.mjs` are
-// production source. Excluding `*-test.*` or `spec-*` would silently un-mutate
-// them — reintroducing the substring bug above in a narrower disguise. Projects
-// using the hyphen convention should keep tests in a test/ directory or name
-// them `*.test.*`, both of which are matched.
+// This does catch product names that merely look like tests — `hollow-test.mjs`
+// and `spec-lint.mjs` are production source in this very repository. That is
+// what `sourceGlobs` is for: an explicit override, rather than a heuristic
+// guessing which side of the ambiguity a given project is on.
 const EXCLUDE_FILE_RE =
-  /(?:^|\/)(?:[^/]*\.(?:test|spec)\.[^/]+|(?:test|spec)\.[^/.]+|(?:test|spec)_[^/]+|[^/]*_(?:test|spec)\.[^/.]+)$/i;
-// JS/TS ONLY, deliberately. The shared mutator's header calls itself suitable
-// for "JS/TS/Python-style code", and an earlier revision admitted .py on that
-// basis. Two things make that claim unsafe to honour today:
-//
-//   1. packages/core/lib/mutate.mjs has ZERO Python-aware operators — no
-//      `return None`, no `True`/`False`, no `elif`. Every operator is JS-shaped.
-//   2. The test exclusion below knows the dotted JS convention (*.test.*,
-//      *.spec.*) but not Python's, where test_*.py / *_test.py / conftest.py ARE
-//      the tests. Admitting .py classified pytest modules as production source,
-//      so mutating an assertion made the test fail and scored it "killed" — a
-//      vacuously green gate.
-//
-// This narrows the published behaviour of filterTargetFiles for any consumer
-// mutating non-JS source, which is a deliberate, documented breaking change:
-// declining support is better than claiming support the operators do not
-// implement. Restoring Python needs Python operators AND Python test discovery.
-const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
+  /(?:^|\/)(?:[^/]*\.(?:test|spec)\.[^/]+|(?:test|spec)\.[^/.]+|(?:test|spec)[-_][^/]+|[^/]*[-_](?:test|spec)\.[^/.]+)$/i;
+
+const SOURCE_EXT_RE = /\.(?:mjs|cjs|js)$/i;
 
 /**
  * True when a path is source this tool can mutate. The single definition of
@@ -96,7 +79,13 @@ export function isSupportedSourceExtension(file) {
   return SOURCE_EXT_RE.test(file);
 }
 
-export function isMutableSource(file, { testGlobs = [] } = {}) {
+export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {}) {
+  // Explicit source declaration wins over every heuristic below. Names like
+  // `hollow-test.mjs` are indistinguishable from a test by convention alone, so
+  // the only correct answer is to let the project say which it is.
+  if (sourceGlobs.length > 0 && sourceGlobs.some((g) => globMatch(g, file))) {
+    return SOURCE_EXT_RE.test(file);
+  }
   if (EXCLUDE_DIR_RE.test(file)) return false;
   if (EXCLUDE_FILE_RE.test(file)) return false;
   // Caller-declared test paths. The built-in rules cannot infer every project's
@@ -115,8 +104,8 @@ export function isMutableSource(file, { testGlobs = [] } = {}) {
  * @param {{ [file: string]: Set<number> }} changedLines - From mutate.changedLinesFromDiff()
  * @returns {string[]} Array of file paths eligible for mutation.
  */
-export function filterTargetFiles(changedLines, { testGlobs = [] } = {}) {
-  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs }));
+export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {
+  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs }));
 }
 
 /**

@@ -33,6 +33,7 @@ const { values } = parseArgs({
     // let a caller whose project uses that convention declare it:
     //   --test-glob '**/*-test.js'
     'test-glob':  { type: 'string', multiple: true },
+    'source-glob':{ type: 'string', multiple: true },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -73,6 +74,9 @@ Exit codes:
 
 const testCmd   = values['test-cmd'];
 const testGlobs = values['test-glob'] ?? [];
+// Rescues production files whose names match a test convention — `hollow-test.mjs`,
+// `spec-lint.mjs`. Convention alone cannot resolve that ambiguity; the project must.
+const sourceGlobs = values['source-glob'] ?? [];
 const maxMutants = parseInt(values.max, 10);
 const timeoutMs  = parseInt(values['timeout-ms'], 10);
 const useJson    = values.json;
@@ -156,7 +160,7 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const diffEligibleFiles = filterTargetFiles(changedLines, { testGlobs });
+const diffEligibleFiles = filterTargetFiles(changedLines, { testGlobs, sourceGlobs });
 
 // ── explicit --target / --rails resolution ──────────────────────────────────
 // These bypass EXCLUDE_PATH_RE deliberately: the caller is asking, by name,

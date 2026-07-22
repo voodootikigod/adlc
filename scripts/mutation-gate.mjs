@@ -116,8 +116,14 @@ export function testTargetFor(file, root = ROOT) {
 // is never invoked for it, so the required gate goes green without testing the
 // change. Re-declaring the predicate here, however carefully, recreates that.
 // scripts/test/mutation-gate.test.mjs asserts the two agree.
+// This repository owns two production files whose names match a test convention
+// (`node --test` discovers `*-test.*`). Convention cannot resolve the ambiguity,
+// so the project declares it — mirrored into the hollow-test invocation below as
+// --source-glob, so the wrapper and the tool agree.
+export const SOURCE_GLOBS = ['**/hollow-test.mjs', '**/spec-lint.mjs'];
+
 export function hollowTestWouldMutate(file) {
-  return isMutableSource(file);
+  return isMutableSource(file, { sourceGlobs: SOURCE_GLOBS });
 }
 
 /**
@@ -260,6 +266,9 @@ export function main() {
     '--test-cmd', decision.testCmd,
     '--max', String(decision.max),
     '--timeout-ms', decision.kind === 'fast' ? '180000' : '600000',
+    // Mirror the wrapper's own source declaration into the tool, so the two
+    // cannot disagree about the ambiguous product names (see SOURCE_GLOBS).
+    ...SOURCE_GLOBS.flatMap((g) => ['--source-glob', g]),
   ], { stdio: 'inherit', cwd: ROOT, timeout: 1800000 });
 
   if (result.error) fail(`could not run hollow-test: ${result.error.message}`);
