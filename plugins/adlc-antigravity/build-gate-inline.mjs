@@ -1,9 +1,11 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-antigravity.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
+import { detectEditChurn } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 
@@ -58,6 +60,77 @@ export function createDepthTracker() {
     },
     isCompacted(sessionID) {
       return compacted.has(sessionID);
+    },
+  };
+}
+
+/**
+ * File-backed persistent session tracker.
+ * Persists depth, compaction, and edit log state to .adlc/sessions.json across process calls.
+ */
+export function createPersistentTracker(root = process.cwd()) {
+  const adlcDir = join(root, '.adlc');
+  const storePath = join(adlcDir, 'sessions.json');
+
+  function readStore() {
+    try {
+      if (existsSync(storePath)) {
+        return JSON.parse(readFileSync(storePath, 'utf8'));
+      }
+    } catch { /* ignore corrupted store */ }
+    return {};
+  }
+
+  function writeStore(data) {
+    try {
+      if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
+      writeFileSync(storePath, JSON.stringify(data, null, 2));
+    } catch { /* ignore write errors */ }
+  }
+
+  return {
+    recordToolCall(sessionID) {
+      if (!sessionID) return;
+      const store = readStore();
+      const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+      s.depth = (s.depth ?? 0) + 1;
+      store[sessionID] = s;
+      writeStore(store);
+    },
+    markCompacted(sessionID) {
+      if (!sessionID) return;
+      const store = readStore();
+      const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+      s.compacted = true;
+      store[sessionID] = s;
+      writeStore(store);
+    },
+    recordEdit(sessionID, filePath) {
+      if (!sessionID || !filePath) return { churning: [] };
+      const store = readStore();
+      const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
+      s.edits = s.edits ?? [];
+      s.warned = s.warned ?? [];
+      s.edits.push(`Editing ${filePath}`);
+      if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+
+      const churns = detectEditChurn(s.edits, 3);
+      const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
+      for (const c of newlyChurning) s.warned.push(c.path);
+
+      store[sessionID] = s;
+      writeStore(store);
+      return { churning: newlyChurning };
+    },
+    depth(sessionID) {
+      if (!sessionID) return 0;
+      const store = readStore();
+      return store[sessionID]?.depth ?? 0;
+    },
+    isCompacted(sessionID) {
+      if (!sessionID) return false;
+      const store = readStore();
+      return Boolean(store[sessionID]?.compacted);
     },
   };
 }

@@ -5,10 +5,11 @@
 // editor-agnostic checkRail() and emits agy's { allow_tool, deny_reason } verdict.
 // Deny path imports ONLY node: builtins + the sibling checker (→ @adlc/core).
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
-import { checkRail, classifyTool, isShellTool } from '../rails-checker.mjs';
-import { checkBuildGate } from '../build-gate-inline.mjs';
+import { checkRail, classifyTool, isShellTool, resolveActiveTicketId } from '../rails-checker.mjs';
+import { checkBuildGate, createPersistentTracker } from '../build-gate-inline.mjs';
+import { flailMessage } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -117,9 +118,17 @@ export function decide(payload, { env = process.env, tracker } = {}) {
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
+      // Record edit for flail tracking
+      const sessionID = payload.conversationId ?? payload.conversation_id ?? payload.conversationID ?? 'session';
+      if (cls === 'mutating' && tracker?.recordEdit) {
+        const { churning } = tracker.recordEdit(sessionID, abs);
+        if (churning.length > 0) {
+          for (const c of churning) console.error(flailMessage(c));
+        }
+      }
+
       // Check build-gate backstop for structured mutators
       if (cls === 'mutating' && enforcing) {
-        const sessionID = payload.conversationId ?? payload.conversation_id ?? 'session';
         const gate = checkBuildGate({ sessionID, tracker, root, env });
         if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
       }
@@ -140,7 +149,20 @@ export function runFromStdin(raw, env = process.env) {
     try { payload = JSON.parse(raw); }
     catch { return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow(); }
   }
-  return decide(payload, { env });
+  const paths = extractFilePaths(payload);
+  let root = process.cwd();
+  if (paths.length > 0) {
+    const { abs } = anchorPath(paths[0], payload);
+    if (abs) {
+      const found = findAdlcRoot(abs);
+      if (found) root = found;
+    }
+  }
+  const tracker = createPersistentTracker(root);
+  const sessionID = payload.conversationId ?? payload.conversation_id ?? payload.conversationID ?? 'session';
+  tracker.recordToolCall(sessionID);
+
+  return decide(payload, { env, tracker });
 }
 
 async function readStdin() {
@@ -149,7 +171,41 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+export function printStatus(root = process.cwd(), env = process.env) {
+  const active = resolveActiveTicketId(root, env);
+  const tracker = createPersistentTracker(root);
+  const sessionID = env.ANTIGRAVITY_CONVERSATION_ID ?? 'session';
+
+  console.log(`--- ADLC Antigravity Status ---`);
+  console.log(`Root: ${root}`);
+  console.log(`Active Ticket: ${active.id ?? (active.conflict ? 'CONFLICT' : 'NONE')}`);
+  console.log(`Enforcement (ADLC_P4_ENFORCEMENT): ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE'}`);
+  console.log(`Context Depth (Tool Calls): ${tracker.depth(sessionID)}`);
+  console.log(`Session Compacted: ${tracker.isCompacted(sessionID)}`);
+}
+
+export function printDoctor(root = process.cwd(), env = process.env) {
+  const active = resolveActiveTicketId(root, env);
+
+  console.log(`--- ADLC Antigravity Doctor ---`);
+  console.log(`Node Version: ${process.version}`);
+  console.log(`Root Directory: ${root}`);
+  console.log(`ADLC Ticket Store Present: ${existsSync(join(root, '.adlc/tickets.json')) || existsSync(join(root, '.adlc/tickets/.store.json'))}`);
+  console.log(`Active Ticket: ${active.id ?? 'NONE'}`);
+  console.log(`CI Rail Guard Workflow: ${existsSync(join(root, '.github/workflows/adlc-rails-guard.yml')) ? 'PRESENT' : 'MISSING'}`);
+}
+
 export async function main() {
+  const subcmd = process.argv[2];
+  if (subcmd === 'status') {
+    printStatus();
+    return;
+  }
+  if (subcmd === 'doctor') {
+    printDoctor();
+    return;
+  }
+
   const raw = await readStdin();
   process.stdout.write(JSON.stringify(runFromStdin(raw, process.env)));
 }
