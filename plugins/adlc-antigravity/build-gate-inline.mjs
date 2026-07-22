@@ -62,6 +62,9 @@ export function createDepthTracker() {
     isCompacted(sessionID) {
       return compacted.has(sessionID);
     },
+    isLockFailed() {
+      return false;
+    },
   };
 }
 
@@ -78,14 +81,16 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 /**
  * File-backed persistent session tracker with mutex locking and LRU pruning.
- * Only writes to disk when ticketStoreExists(root) is true.
+ * Fails closed (isLockFailed=true) on lock acquisition timeout.
  */
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
   const lockDir = join(adlcDir, 'sessions.lock');
 
-  function withLock(fn, fallback = null) {
+  const lockFailures = new Set();
+
+  function withLock(sessionID, fn, fallback = null) {
     let acquired = false;
     for (let i = 0; i < 20; i++) {
       try {
@@ -104,13 +109,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       }
     }
     if (!acquired) {
+      if (sessionID) lockFailures.add(sessionID);
       console.error(`[adlc-rails-guard] Warning: session lock acquisition timed out at ${lockDir}`);
       return fallback;
     }
     try {
       return fn();
     } finally {
-      try { rmdirSync(lockDir, { recursive: true }); } catch { /* ignore */ }
+      if (acquired) {
+        try { rmdirSync(lockDir, { recursive: true }); } catch { /* ignore */ }
+      }
     }
   }
 
@@ -148,7 +156,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   return {
     recordToolCall(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
-      withLock(() => {
+      withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
         s.depth = (s.depth ?? 0) + 1;
@@ -159,7 +167,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     },
     markCompacted(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
-      withLock(() => {
+      withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
         s.compacted = true;
@@ -170,7 +178,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     },
     recordEdit(sessionID, filePath) {
       if (!sessionID || !filePath || !ticketStoreExists(root, env)) return { churning: [] };
-      return withLock(() => {
+      return withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
         s.edits = s.edits ?? [];
@@ -197,6 +205,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return false;
       const store = readStore();
       return Boolean(store[sessionID]?.compacted);
+    },
+    isLockFailed(sessionID) {
+      if (!sessionID) return false;
+      return lockFailures.has(sessionID);
     },
   };
 }
@@ -246,7 +258,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   const depth = tracker?.depth?.(sessionID) ?? 0;
   const parsedThreshold = Number.parseInt(env.ADLC_BUILD_GATE_DEPTH_THRESHOLD ?? '', 10);
   const depthThreshold = Number.isNaN(parsedThreshold) ? DEFAULT_DEPTH_THRESHOLD : parsedThreshold;
-  const degraded = depth >= depthThreshold || Boolean(tracker?.isCompacted?.(sessionID));
+  const degraded = depth >= depthThreshold || Boolean(tracker?.isCompacted?.(sessionID)) || Boolean(tracker?.isLockFailed?.(sessionID));
 
   const verdict = decideBuildGate({
     riskTier: tier,
@@ -256,7 +268,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   });
 
   if (verdict.decision === 'deny') {
-    const cause = tracker?.isCompacted?.(sessionID) ? 'session was compacted' : `tool-call depth ${depth} >= ${depthThreshold}`;
+    const cause = tracker?.isLockFailed?.(sessionID) ? 'session lock acquisition timed out (fail closed)' : tracker?.isCompacted?.(sessionID) ? 'session was compacted' : `tool-call depth ${depth} >= ${depthThreshold}`;
     return { ...verdict, reason: `${verdict.reason} [signal: ${cause}]` };
   }
   return verdict;

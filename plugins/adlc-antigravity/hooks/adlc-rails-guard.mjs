@@ -118,18 +118,20 @@ export function decide(payload, { env = process.env, tracker } = {}) {
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
+      const pathTracker = tracker ?? createPersistentTracker(root, env);
+
       // Record edit for flail tracking
       const sessionID = resolveSessionId({ payload, env });
-      if (cls === 'mutating' && tracker?.recordEdit) {
-        const { churning } = tracker.recordEdit(sessionID, abs);
-        if (churning.length > 0) {
+      if (cls === 'mutating' && pathTracker?.recordEdit) {
+        const { churning } = pathTracker.recordEdit(sessionID, abs);
+        if (churning && churning.length > 0) {
           for (const c of churning) console.error(flailMessage(c));
         }
       }
 
       // Check build-gate backstop for structured mutators
       if (cls === 'mutating' && enforcing) {
-        const gate = checkBuildGate({ sessionID, tracker, root, env });
+        const gate = checkBuildGate({ sessionID, tracker: pathTracker, root, env });
         if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
         if (gate.reason && gate.reason.includes('default_session')) {
           console.error(`[adlc-rails-guard] Advisory: ${gate.reason}`);
@@ -176,7 +178,7 @@ async function readStdin() {
 
 export function printStatus(root = process.cwd(), env = process.env, payload = {}) {
   const active = resolveActiveTicketId(root, env);
-  const tracker = createPersistentTracker(root);
+  const tracker = createPersistentTracker(root, env);
   const sessionID = resolveSessionId({ payload, env });
 
   console.log(`--- ADLC Antigravity Status ---`);
