@@ -85,9 +85,17 @@ hollow-test --test-cmd "node --test test/*.test.mjs" --json
 
 ## What is mutated (and what is skipped)
 
-Files from the diff are **excluded** from mutation if their path contains `test`
-only mutates JS/TS/Python source (`.mjs`, `.cjs`, `.js`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.py`). Files are skipped when a path SEGMENT is `test`/`tests`/`spec`/`specs`/`__tests__`, when the filename matches `*.test.*` or `*.spec.*`, or when the extension is anything else, including `.md`, `.json`, `.yml`, `.yaml`, `.lock`,
-`.txt`, `.toml`, or `.snap`. `--target`/`--rails` files bypass this exclusion —
+Mutation applies to JavaScript and TypeScript source only: `.mjs`, `.cjs`,
+`.js`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`. This is an **allow-list** — any
+other extension (`.md`, `.json`, `.yml`, `.css`, `.py`, and anything unlisted)
+is skipped, because the mutation operators are JS-shaped and produce either
+nonsense or unkillable mutants elsewhere.
+
+A file is also skipped when a path **segment** is `test`, `tests`, `spec`,
+`specs`, or `__tests__`, or when its filename matches `*.test.*` or `*.spec.*`.
+The match is segment- and filename-anchored on purpose: a substring test would
+exclude production paths such as `packages/hollow-test/lib/targets.mjs` or
+`lib/attest.mjs`. `--target`/`--rails` files bypass this exclusion —
 the caller is deliberately naming a mutation target.
 
 Within diff-derived eligible files, only lines changed in the diff are

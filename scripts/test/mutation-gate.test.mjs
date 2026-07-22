@@ -188,15 +188,28 @@ test('skipped files are reported on the slow path too', () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-// @adlc/hollow-test is PUBLISHED. filterTargetFiles is its public surface, and
-// both doc copies plus the shared mutator describe it as suitable for
-// "JS/TS/Python-style code". Narrowing to JS/TS alone would silently drop .py
-// for external consumers — a breaking change to a required gate they already
-// run, invisible in this repo because it tracks no Python.
-test('the published predicate still admits Python, as documented', () => {
-  assert.equal(hollowTestWouldMutate('src/app.py'), true);
-  assert.equal(hollowTestWouldMutate('src/test_app.py'), true); // not a test/ segment
-  assert.equal(hollowTestWouldMutate('tests/app.py'), false);   // is a test/ segment
+// PYTHON IS DELIBERATELY NOT SOURCE, and this test records why rather than
+// leaving it to be "fixed" later by someone reading the mutator's docstring.
+//
+// The shared mutator calls itself suitable for "JS/TS/Python-style code", and an
+// earlier revision of this branch admitted `.py` on that basis. That was wrong
+// twice over:
+//
+//   1. packages/core/lib/mutate.mjs has ZERO Python-aware operators — no
+//      `return None`, no `True`/`False`, no `elif`. Its operators are JS-shaped.
+//   2. The test exclusion recognizes the dotted JS convention (`*.test.*`,
+//      `*.spec.*`) but not Python's, where `test_*.py` / `*_test.py` /
+//      `conftest.py` ARE the test files. Admitting `.py` therefore classified
+//      pytest modules as production source, so mutating an assertion would make
+//      the test fail and be scored "killed" — a vacuously green gate.
+//
+// Claiming support the operators do not implement is worse than declining it.
+// Python support needs Python operators AND Python test discovery; until both
+// exist, `.py` is out. See the tracking issue referenced in targets.mjs.
+test('Python is not treated as mutable source while operators are JS-shaped', () => {
+  for (const f of ['src/app.py', 'src/test_app.py', 'src/app_test.py', 'conftest.py']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} must not be mutated`);
+  }
 });
 
 // THE CONTRACT TEST. Both bugs in this file came from the same predicate living

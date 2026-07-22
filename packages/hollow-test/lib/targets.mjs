@@ -41,12 +41,23 @@ import { globMatch } from '@adlc/core';
 // filename, and nothing else.
 const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
 const EXCLUDE_FILE_RE = /(?:^|\/)[^/]*\.(?:test|spec)\.[^/]+$/i;
-// Includes .py deliberately: @adlc/hollow-test is PUBLISHED, filterTargetFiles is
-// its public surface, and both doc copies and the shared mutator describe it as
-// suitable for "JS/TS/Python-style code". Dropping Python would be a silent
-// breaking change to a gate external consumers already run — invisible here,
-// since this repo tracks no Python.
-const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx|py)$/i;
+// JS/TS ONLY, deliberately. The shared mutator's header calls itself suitable
+// for "JS/TS/Python-style code", and an earlier revision admitted .py on that
+// basis. Two things make that claim unsafe to honour today:
+//
+//   1. packages/core/lib/mutate.mjs has ZERO Python-aware operators — no
+//      `return None`, no `True`/`False`, no `elif`. Every operator is JS-shaped.
+//   2. The test exclusion below knows the dotted JS convention (*.test.*,
+//      *.spec.*) but not Python's, where test_*.py / *_test.py / conftest.py ARE
+//      the tests. Admitting .py classified pytest modules as production source,
+//      so mutating an assertion made the test fail and scored it "killed" — a
+//      vacuously green gate.
+//
+// This narrows the published behaviour of filterTargetFiles for any consumer
+// mutating non-JS source, which is a deliberate, documented breaking change:
+// declining support is better than claiming support the operators do not
+// implement. Restoring Python needs Python operators AND Python test discovery.
+const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|jsx|ts|mts|cts|tsx)$/i;
 
 /**
  * True when a path is source this tool can mutate. The single definition of
