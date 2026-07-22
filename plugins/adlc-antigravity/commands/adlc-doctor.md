@@ -8,7 +8,7 @@ description: Environment, ticket pointer, and plugin health check for Antigravit
 Run diagnostic environment and health checks for the Antigravity ADLC integration:
 
 ```sh
-adlc doctor || npx @adlc/cli doctor
+node plugins/adlc-antigravity/hooks/adlc-rails-guard.cjs doctor
 ```
 
 ## Diagnostics Sequence

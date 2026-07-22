@@ -361,6 +361,30 @@ test('runFromStdin multi-root: routes session tracking to respective ADLC roots'
   }
 });
 
+test('session store freeze: write to .adlc/sessions.json is denied under enforcement as a rail violation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'freeze-sess-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({
+      tickets: [{ id: 'T-1', scope: ['src/**'], rails: [] }]
+    }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-1' }));
+
+    const sessFile = join(root, '.adlc', 'sessions.json');
+    const payload = JSON.stringify({
+      conversationId: 'freeze-test',
+      toolCall: { name: 'write_to_file', args: { TargetFile: sessFile, CodeContent: '{}' } },
+      workspacePaths: [root],
+    });
+
+    const res = runFromStdin(payload, { ADLC_P4_ENFORCEMENT: '1' });
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /frozen rail/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('flail-inline: detectEditChurn identifies churning file edits', () => {
   const logs = ['Editing src/a.js', 'Editing src/b.js', 'Editing src/a.js', 'Editing src/a.js'];
   const churning = detectEditChurn(logs, 3);

@@ -136,8 +136,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         }
       }
 
-      // Check build-gate backstop for structured mutators
-      if (cls === 'mutating' && enforcing) {
+      // Check build-gate backstop for structured mutators and unknown ('other') tools
+      if (cls !== 'readonly' && enforcing) {
         if (sessionID === 'default_session') {
           console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
         }
