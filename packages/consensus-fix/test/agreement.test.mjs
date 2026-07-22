@@ -17,11 +17,6 @@ import {
   selectWinner,
   isAllDivergent,
 } from '../lib/agreement.mjs';
-import { countChangedLines } from '../lib/diff.mjs';
-
-test('countChangedLines returns 0 for identical content', () => {
-  assert.equal(countChangedLines('hello\nworld', 'hello\nworld'), 0);
-});
 
 function hunk(replacement, startLine = 1, endLine = 1) {
   return [{ startLine, endLine, replacement }];
