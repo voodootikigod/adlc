@@ -666,6 +666,49 @@ describe('CLI: explicit targets still bypass test-path exclusion', () => {
   });
 });
 
+// A rails glob legitimately matches non-source: schemas/**, JSON, fixtures.
+// Those are filtered from the mutation set — but an earlier revision still fed
+// the ORIGINAL rail list to the post-run zero-mutant verifier, so a mixed
+// expansion did all the mutation work and THEN failed, claiming the JSON file
+// produced no mutants. Filtering something out and then demanding results for it
+// is the kind of bug that only shows up on a real mixed ticket.
+describe('CLI: --rails matching a mix of source and non-source', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-mixedrails-'));
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'schema.json'), '{"a":1}\n');
+    writeFileSync(join(dir, 'ticket.json'), JSON.stringify({
+      id: 'T1', rails: ['src/guarded.mjs', 'schema.json'],
+    }));
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'mixed rails fixture'], dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('mutates the source rail and does not fail over the dropped JSON', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--rails', 'ticket.json', '--max', '10', '--json'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.notEqual(result.status, 1,
+      `expected the run to complete, not an operational failure: ${out}`);
+    assert.match(result.stderr, /schema\.json/,
+      'the dropped non-source rail must be reported, not silently ignored');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); },
+      `stdout is not valid JSON: ${result.stdout}`);
+    assert.ok(parsed.mutants.every((m) => m.file === 'src/guarded.mjs'),
+      'only the supported rail should be mutated');
+  });
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {

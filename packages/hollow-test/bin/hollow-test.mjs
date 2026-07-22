@@ -270,7 +270,17 @@ if (railsGlobs.length > 0) {
 }
 
 const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
-const mutableExplicitFiles = () => [...new Set([...explicitTargets, ...railsFiles.filter(isSupportedSourceExtension)])];
+// The MUTABLE explicit set — computed once and used everywhere a decision
+// depends on what will actually be mutated (budget allocation, starvation
+// checks, post-run zero-mutant verification). `explicitFiles` above keeps every
+// caller-named path and is for readability checks and reporting only.
+//
+// Getting this wrong is subtle: dropped non-source rails were removed from the
+// mutation set but still checked by the post-run verifier, so a mixed
+// source+JSON rails expansion did all the mutation work and THEN failed,
+// claiming the JSON file produced zero mutants — exactly the behaviour the
+// filtering was added to avoid.
+const mutableExplicitFiles = [...new Set([...explicitTargets, ...railsFiles.filter(isSupportedSourceExtension)])];
 
 // ── fail closed: every explicit --target/--rails file must be readable ─────
 // Unlike diff-derived files (which came from a real git diff and should
@@ -353,11 +363,11 @@ if (railsFiles.length > 0 && mutableRails.length === 0) {
   );
 }
 
-const allTargetFiles = [...new Set([...diffEligibleFiles, ...mutableExplicitFiles()])];
+const allTargetFiles = [...new Set([...diffEligibleFiles, ...mutableExplicitFiles])];
 // explicitFiles are passed as a priority list so the --max budget can't
 // starve them to quota 0 when diff-derived files alone would consume it —
 // see buildFileTargets() in lib/targets.mjs.
-const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, mutableExplicitFiles());
+const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxMutants, root, mutableExplicitFiles);
 
 // ── fail closed: --max too small to cover every explicit target ────────────
 // buildFileTargets() reserves 1 quota per explicit file when the budget
@@ -365,13 +375,13 @@ const fileTargets = buildFileTargets(allTargetFiles, effectiveChangedLines, maxM
 // of them still can't be guaranteed a slot — refuse to run rather than
 // silently mutating a subset and reporting a full pass.
 const starvedByBudget = fileTargets.filter(
-  (t) => explicitFiles.includes(t.file) && t.quota === 0
+  (t) => mutableExplicitFiles.includes(t.file) && t.quota === 0
 );
 if (starvedByBudget.length > 0) {
   opError(
     `--max ${maxMutants} is too small to allocate mutation budget to explicit ` +
     `target(s): ${starvedByBudget.map((t) => t.file).join(', ')} — increase ` +
-    `--max to at least ${explicitFiles.length}, or reduce the number of ` +
+    `--max to at least ${mutableExplicitFiles.length}, or reduce the number of ` +
     'explicit --target/--rails files'
   );
 }
@@ -464,12 +474,12 @@ for (const target of fileTargets) {
 // prosecute — exactly the vacuous-pass class issues #70/#41/#35 exist to
 // close. Distinguish this from the legitimate "every mutant was killed" case
 // by checking per-file counts rather than results.length overall.
-if (explicitFiles.length > 0) {
+if (mutableExplicitFiles.length > 0) {
   const mutantCountByFile = {};
   for (const r of results) {
     mutantCountByFile[r.file] = (mutantCountByFile[r.file] ?? 0) + 1;
   }
-  const starvedExplicitFiles = explicitFiles.filter((f) => !mutantCountByFile[f]);
+  const starvedExplicitFiles = mutableExplicitFiles.filter((f) => !mutantCountByFile[f]);
   if (starvedExplicitFiles.length > 0) {
     opError(
       'explicit --target/--rails file(s) produced zero mutants — ' +

@@ -31,10 +31,3 @@ node_modules/
 # Local env files (may contain secrets, e.g. ATTIO_API_TOKEN)
 .env.local
 .env*.local
-
-# ADLC runtime
-!.adlc/config.json
-!.adlc/tickets/
-!.adlc/tickets/**
-!.adlc/ticket-archive/
-!.adlc/ticket-archive/**
