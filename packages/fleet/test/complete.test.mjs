@@ -221,6 +221,71 @@ test('a failed commit does NOT erase a concurrent manifest evidence append (data
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a failed commit whose evidence CANNOT be withdrawn flags the ledger dirty (so the caller quarantines)', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const failingGit = (...args) => {
+      if (args[0] === 'commit') {
+        // Concurrent recorder appends AFTER our evidence — ours is no longer the tail,
+        // so it cannot be removed without disturbing theirs.
+        writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}{"seq":97,"gate":"concurrent","ts":"2026-01-04T00:00:00.000Z","data":{},"prev":null}\n`);
+        throw new Error('commit rejected by hook');
+      }
+      return git(...args);
+    };
+
+    let caught = null;
+    try { completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: failingGit }); }
+    catch (error) { caught = error; }
+
+    assert.ok(caught, 'the completion still fails');
+    assert.equal(caught.ledgerDirty, true, 'and marks the ledger dirty so the branch gets quarantined');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a clean failed commit does NOT flag the ledger dirty (evidence withdrawn exactly)', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const failingGit = (...args) => {
+      if (args[0] === 'commit') throw new Error('commit rejected by hook');
+      return git(...args);
+    };
+    let caught = null;
+    try { completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: failingGit }); }
+    catch (error) { caught = error; }
+
+    assert.ok(caught);
+    assert.notEqual(caught.ledgerDirty, true, 'no concurrent append ⇒ our entry was removed exactly ⇒ no quarantine');
+    assert.equal(git('status', '--porcelain'), '', 'and the checkout is clean');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('runFleet QUARANTINES the branch when completion evidence could not be withdrawn', async () => {
+  const rec = { prs: [] };
+  const dirty = Object.assign(new Error('commit rejected by hook'), { ledgerDirty: true });
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => {},
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
+    dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+    gate: () => ({ ok: true }),
+    prosecute: () => ({ verdict: 'pass' }),
+    flail: () => ({ flail: false }),
+    mergeToIntegration: () => ({ mergeSha: 'M', preMergeSha: 'P' }),
+    postMergeGate: () => ({ ok: true }),
+    revertMerge: () => ({ method: 'reset', ok: true }),
+    completeTicket: () => { throw dirty; },
+    openPR: ({ integrationBranch }) => { rec.prs.push(integrationBranch); },
+  };
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+
+  assert.equal(summary.contaminated, true, 'a dirty ledger quarantines the branch');
+  assert.deepEqual(rec.prs, [], 'and no PR is opened from it');
+  assert.notEqual(summary.results.T1, 'merged');
+});
+
 test('withdrawing the completion commit does NOT destroy unrelated tracked work in the shared checkout', () => {
   const { root, git, integrationBranch } = makeRepo();
   try {

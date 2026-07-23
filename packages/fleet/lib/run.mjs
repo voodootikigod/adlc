@@ -75,6 +75,14 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
           }
         }
       } catch (error) {
+        // A completion that failed but left its evidence append behind is NOT a
+        // degradation we can shrug off: the ledger now attests a completion that never
+        // landed, and a later completion's `git add` would commit it. Quarantine.
+        if (error?.ledgerDirty) {
+          const reason = `completion evidence could not be withdrawn after a failed commit (${error.message})`;
+          markContaminated(reason);
+          return { ok: false, output: `${reason}; integration branch quarantined` };
+        }
         deps.log?.(`${ticket.id} WARNING: post-merge completion failed (${error.message}); ticket merged but not marked completed`);
       }
       return { ok: true };

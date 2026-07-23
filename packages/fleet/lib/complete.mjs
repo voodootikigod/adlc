@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { withLedgerLock } from '@adlc/core';
 import { ACTIVE_DIRECTORY, DirectoryTicketStore, LEGACY_FILE, detectTicketStore, TicketService, ticketFilename, acquireTicketLock, releaseTicketLock } from '@adlc/tickets';
 import { defaultGit } from './worktrees.mjs';
 
@@ -142,18 +143,26 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
       // bytes and unstage them, then re-throw so the caller degrades to "merged, not
       // yet completed". Safe under the held lock — no other writer can have touched
       // these paths since we captured them.
-      // The shard is covered by the ticket lock we hold, so restoring it is safe.
+      // The shard is covered by the ticket lock we hold, so restoring it is exact.
       restoreFile(storeAbs, priorStore);
-      // The manifest is NOT: its appends are serialized by the ledger lock, and other
-      // pipeline steps record gate evidence concurrently. Only roll it back when it is
-      // byte-identical to what THIS completion left — i.e. nothing appended since.
-      // Otherwise leave it: an extra append-only evidence line is harmless, erasing a
-      // concurrent writer's evidence is data loss.
-      const manifestNow = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
-      const untouchedSinceOurAppend = manifestNow !== null && afterManifest !== null
-        && manifestNow.equals(afterManifest);
-      if (untouchedSinceOurAppend) restoreFile(manifestAbs, priorManifest);
+      // The ledger is NOT: its appends are serialized by the MANIFEST lock, which the
+      // ticket lock does not cover. Take that lock and undo our append only if it is
+      // still the tail. If a concurrent recorder appended meanwhile we cannot remove
+      // ours without disturbing theirs — and leaving it would let a later completion's
+      // `git add` commit an attestation that THIS ticket completed, when we just
+      // restored it to open. Undo is exact or we refuse: flag the ledger dirty and let
+      // the caller quarantine the branch (same rule as revertCompletionCommit).
+      // Lock order is ticket → manifest here, matching the transaction layer, so this
+      // cannot deadlock against a concurrent recorder.
+      let ledgerDirty = false;
+      withLedgerLock(manifestAbs, () => {
+        const now = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
+        const stillOurTail = now !== null && afterManifest !== null && now.equals(afterManifest);
+        if (stillOurTail) restoreFile(manifestAbs, priorManifest);
+        else ledgerDirty = true;
+      });
       try { git('reset', '-q', '--', storePath, MANIFEST_FILE); } catch { /* best-effort unstage */ }
+      if (ledgerDirty) error.ledgerDirty = true;
       throw error;
     }
 
