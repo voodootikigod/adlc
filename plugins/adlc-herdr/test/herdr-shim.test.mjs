@@ -8,7 +8,7 @@
 // closed before anything spawns.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { herdrArgv, runHerdr, runHerdrJson } from '../lib/herdr.mjs';
+import { herdrArgv, runHerdr, runHerdrJson, paneInfoArgs, makeCachedReader } from '../lib/herdr.mjs';
 
 test('herdrArgv builds [bin, ...args] from HERDR_BIN_PATH, defaulting to "herdr"', () => {
   const argv = herdrArgv(['pane', 'list'], { env: { HERDR_BIN_PATH: '/opt/herdr' } });
@@ -75,4 +75,23 @@ test('runHerdrJson parses JSON stdout and fails soft on malformed output', async
 test('shim never throws into callers for runtime failures (fail soft end-to-end)', async () => {
   const throwExec = async () => { throw new Error('killed'); };
   await assert.doesNotReject(runHerdrJson(['api', 'snapshot'], { env: {}, exec: throwExec }));
+});
+
+test('paneInfoArgs builds the exact pane-get argv and fails closed without an id', () => {
+  assert.deepEqual(paneInfoArgs('w4:p2'), ['pane', 'get', 'w4:p2']);
+  assert.throws(() => paneInfoArgs(''));
+  assert.throws(() => paneInfoArgs(undefined));
+});
+
+test('makeCachedReader serves fresh within TTL, re-reads after expiry and invalidate', async () => {
+  let clock = 1000;
+  let reads = 0;
+  const reader = makeCachedReader(async (key) => { reads += 1; return `${key}#${reads}`; }, 100, () => clock);
+  assert.equal(await reader('a'), 'a#1');
+  clock += 50;
+  assert.equal(await reader('a'), 'a#1'); // within TTL — cached
+  clock += 100;
+  assert.equal(await reader('a'), 'a#2'); // expired — re-read
+  reader.invalidate('a');
+  assert.equal(await reader('a'), 'a#3'); // invalidated — re-read
 });

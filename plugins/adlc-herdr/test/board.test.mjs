@@ -130,6 +130,15 @@ test('renderBoard truncates rows to the pane width', () => {
   }
 });
 
+test('renderBoard pins the width floor at 20', () => {
+  const state = baseState();
+  state.width = 5; // below the floor — clamp must land exactly on 20
+  state.groups.ready = [t('t-long', { title: 'y'.repeat(100) })];
+  const lines = renderBoard(state).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+  assert.ok(lines.every((l) => l.length <= 20));
+  assert.ok(lines.some((l) => l.length === 20), 'content must fill exactly to the 20-col floor');
+});
+
 test('renderBoard renders calm empty states', () => {
   const out = renderBoard({
     width: 80, repoRoot: '/repo', active: { state: 'absent' }, phase: null,

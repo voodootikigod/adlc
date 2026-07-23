@@ -7,7 +7,7 @@
 import net from 'node:net';
 import { watch, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
+import { runHerdr, runHerdrJson, makeCachedReader } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport } from '../lib/adlc-state.mjs';
@@ -26,14 +26,7 @@ const SUBSCRIPTIONS = [
   'worktree.created', 'worktree.opened', 'worktree.removed',
 ];
 
-const backlogCache = new Map(); // repoRoot -> {at, tickets}
-async function readBacklog(repoRoot) {
-  const cached = backlogCache.get(repoRoot);
-  if (cached && Date.now() - cached.at < BACKLOG_CACHE_MS) return cached.tickets;
-  const tickets = await readTicketsViaExport(repoRoot);
-  backlogCache.set(repoRoot, { at: Date.now(), tickets });
-  return tickets;
-}
+const readBacklog = makeCachedReader((repoRoot) => readTicketsViaExport(repoRoot), BACKLOG_CACHE_MS);
 
 let prevPane = new Map();
 let prevWorkspace = new Map();
@@ -99,10 +92,10 @@ function ensureWatched(repoRoot) {
   const adlcDir = join(repoRoot, '.adlc');
   if (!existsSync(adlcDir)) return;
   try {
-    watch(adlcDir, () => { backlogCache.delete(repoRoot); scheduleRefresh(); });
+    watch(adlcDir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
     const ticketsDir = join(adlcDir, 'tickets');
     if (existsSync(ticketsDir)) {
-      watch(ticketsDir, () => { backlogCache.delete(repoRoot); scheduleRefresh(); });
+      watch(ticketsDir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
     }
   } catch {
     // fail soft — heartbeat polling still covers this repo

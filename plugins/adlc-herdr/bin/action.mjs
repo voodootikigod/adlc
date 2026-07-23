@@ -4,7 +4,7 @@
 // resolve the repo, plan, execute. Every failure path ends in a clear
 // notification; nothing is ever spawned from an unresolved context.
 import { execFile } from 'node:child_process';
-import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
+import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot, resolveOnPath } from '../lib/repo-root.mjs';
 import { readActiveTicket } from '../lib/adlc-state.mjs';
 import { parseContext, resolveTarget, planAction, gateNotification, notifyArgs } from '../lib/actions.mjs';
@@ -30,7 +30,7 @@ async function main() {
     await notify('ADLC', `cannot act: ${parsed.reason}`);
     return;
   }
-  const paneRes = await runHerdrJson(['pane', 'get', parsed.ctx.focused_pane_id]);
+  const paneRes = await runHerdrJson(paneInfoArgs(parsed.ctx.focused_pane_id));
   const paneInfo = paneRes.ok ? paneRes.value?.result?.pane ?? null : null;
   const target = resolveTarget({ ctx: parsed.ctx, paneInfo, resolveRepoRoot });
   const active = target.ok ? readActiveTicket(target.repoRoot) : null;

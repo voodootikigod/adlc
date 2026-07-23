@@ -6,7 +6,7 @@
 // actions do, gather via the tested libs, redraw every few seconds and on
 // resize, quit on q / Ctrl-C.
 import { appendFileSync } from 'node:fs';
-import { runHerdrJson } from '../lib/herdr.mjs';
+import { runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
 import {
@@ -22,7 +22,7 @@ async function resolveRepo() {
   const parsed = parseContext(process.env.HERDR_PLUGIN_CONTEXT_JSON);
   let paneInfo = null;
   if (parsed.ok) {
-    const res = await runHerdrJson(['pane', 'get', parsed.ctx.focused_pane_id]);
+    const res = await runHerdrJson(paneInfoArgs(parsed.ctx.focused_pane_id));
     paneInfo = res.ok ? res.value?.result?.pane ?? null : null;
   }
   const target = resolveTarget({ ctx: parsed.ok ? parsed.ctx : {}, paneInfo, resolveRepoRoot });

@@ -50,6 +50,30 @@ export async function runHerdr(args, { env = process.env, exec = defaultExec, ti
   }
 }
 
+/** The argv for fetching one pane's live info (foreground_cwd et al). Built
+ *  in tested code so call sites can't silently drop the pane id. */
+export function paneInfoArgs(paneId) {
+  if (typeof paneId !== 'string' || paneId.length === 0) {
+    throw new TypeError('paneInfoArgs requires a pane id');
+  }
+  return ['pane', 'get', paneId];
+}
+
+/** Wrap an async reader with a TTL cache keyed on its first argument. The
+ *  clock is injectable so expiry is testable. */
+export function makeCachedReader(readFn, ttlMs, now = Date.now) {
+  const cache = new Map();
+  const reader = async (key) => {
+    const cached = cache.get(key);
+    if (cached && now() - cached.at < ttlMs) return cached.value;
+    const value = await readFn(key);
+    cache.set(key, { at: now(), value });
+    return value;
+  };
+  reader.invalidate = (key) => cache.delete(key);
+  return reader;
+}
+
 /** Run a herdr CLI command and parse its stdout as JSON, failing soft on
  *  malformed output. */
 export async function runHerdrJson(args, opts = {}) {
