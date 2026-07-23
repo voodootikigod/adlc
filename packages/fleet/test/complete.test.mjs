@@ -145,6 +145,36 @@ test('a RAILED ticket completes normally — rails are enforced by rails-guard-c
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('completion REFUSES when the shared checkout is not on the integration branch', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    // Another local process switched the shared checkout away between the post-merge
+    // gate and completion. Every git op here targets current HEAD, so without a check
+    // the lifecycle commit would land on the wrong branch.
+    git('checkout', '-q', 'main');
+
+    assert.throws(
+      () => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git }),
+      /checkout is on "main", not the integration branch/,
+      'it fails closed instead of committing to whatever is checked out',
+    );
+    assert.equal(isCompleted(root, 'T1'), false, 'and mutates nothing');
+    assert.equal(git('status', '--porcelain'), '', 'leaving the checkout clean');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('completion REFUSES without an integrationBranch to verify against', () => {
+  const { root, git } = makeRepo();
+  try {
+    assert.throws(
+      () => completeTicketOnIntegration({ repo: root, ticketId: 'T1', git }),
+      /requires integrationBranch/,
+      'the verification target is mandatory — it cannot be silently skipped',
+    );
+    assert.equal(isCompleted(root, 'T1'), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('the completion commit is CI-shaped — completed:true-only shard + append-only manifest (rails-guard-ci)', () => {
   const { root, git, integrationBranch } = makeRepo();
   try {

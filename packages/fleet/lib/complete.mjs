@@ -89,7 +89,21 @@ export function revertCompletionCommit({ repo, toSha, shardPath = null, completi
  *
  * @returns {{completed: boolean, alreadyComplete?: boolean, reason?: string}}
  */
-export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(repo), detectStore = detectTicketStore } = {}) {
+export function completeTicketOnIntegration({ repo, ticketId, integrationBranch, git = defaultGit(repo), detectStore = detectTicketStore } = {}) {
+  // Every git operation below targets the SHARED checkout's current HEAD. The merge
+  // mutex serializes only this fleet process — another local process can change the
+  // checkout between the post-merge gate and here — so verify we are actually on the
+  // integration branch BEFORE any mutation, rather than trusting the caller's
+  // choreography. Without this a lifecycle commit can land on the wrong branch.
+  if (!integrationBranch) throw new Error('completeTicketOnIntegration requires integrationBranch to verify the checkout before mutating');
+  const currentBranch = git('symbolic-ref', '--short', 'HEAD'); // throws on detached HEAD — fail closed
+  if (currentBranch !== integrationBranch) {
+    throw new Error(`refusing to complete: checkout is on "${currentBranch}", not the integration branch "${integrationBranch}"`);
+  }
+  if (git('rev-parse', 'HEAD') !== git('rev-parse', integrationBranch)) {
+    throw new Error(`refusing to complete: HEAD does not point at "${integrationBranch}"`);
+  }
+
   const store = detectStore({ root: repo });
   const storePath = completionStorePath(store, ticketId);
   const storeAbs = join(repo, storePath);
