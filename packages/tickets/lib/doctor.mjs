@@ -73,16 +73,14 @@ function storeHashBindingCheck(root, snapshot) {
     return { ...check, ok: false, code: 'MANIFEST_UNREADABLE', message: `cannot read the evidence ledger: ${error.message}` };
   }
 
+  // The last store-level evidence entry is the most recent CHECKPOINT the store was
+  // hash-bound at. We report only whether the store still matches that checkpoint.
   let boundStoreHash = null;
-  const evidencedTicketHashes = new Map(); // ticketId → last recorded ticketHash
   for (const line of lines) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; } // a malformed line is another check's concern
     const data = entry?.data;
     if (data && typeof data.storeHash === 'string') boundStoreHash = data.storeHash;
-    if (data && data.bindingScope === 'ticket' && typeof entry.ticket === 'string' && typeof data.ticketHash === 'string') {
-      evidencedTicketHashes.set(entry.ticket, data.ticketHash);
-    }
   }
 
   if (!boundStoreHash) return { ...check, bound: false, reason: 'no evidence-required transaction recorded yet' };
@@ -91,34 +89,18 @@ function storeHashBindingCheck(root, snapshot) {
   check.storeHash = snapshot.hash;
   check.boundStoreHash = boundStoreHash;
 
-  const tampered = [];
-  for (const [id, recordedHash] of evidencedTicketHashes) {
-    const liveHash = snapshot.ticketHashes[id];
-    if (liveHash !== undefined && liveHash !== recordedHash) tampered.push(id);
-  }
-  if (tampered.length > 0) {
-    return {
-      ...check,
-      ok: false,
-      code: 'STOREHASH_MANIFEST_MISMATCH',
-      tampered,
-      message: `ticket(s) changed outside a recorded transaction — live storeHash no longer matches the manifest evidence: ${tampered.join(', ')}`,
-    };
-  }
-
+  // This check does NOT attribute drift to specific tickets or claim tampering.
+  // The ticket model permits ordinary UNEVIDENCED create/update between checkpoints,
+  // so a per-ticket "changed since its evidence" signal is unsound in both
+  // directions: false positives (an evidenced ticket later edited legitimately) and
+  // false negatives (a never-evidenced ticket hand-edited). Sound out-of-band tamper
+  // detection needs a store hash recorded on EVERY transaction — tracked as a
+  // follow-up. Here we report an honest fact: is the store at its last evidenced
+  // checkpoint, or has it drifted (unverified) since?
   if (snapshot.hash !== boundStoreHash) {
     check.drift = true;
-    // Tampering can only be detected relative to a recorded baseline. A ticket with
-    // NO ticket-scoped evidence entry has none here, so a hand-edit to it is
-    // indistinguishable from a legitimate unevidenced create/update — this check
-    // cannot catch it. Do NOT imply the store is confirmed clean: report the blind
-    // spot honestly and name git history as the primary record for those shards.
-    const unverified = Object.keys(snapshot.ticketHashes ?? {}).filter((id) => !evidencedTicketHashes.has(id));
-    check.unverified = unverified.length;
     check.message =
-      unverified.length > 0
-        ? `live storeHash differs from the last recorded evidence; every EVIDENCED ticket is intact, but ${unverified.length} ticket(s) have no evidence baseline and are NOT integrity-verified by this check (rely on git history for those shards) — reported, not failed`
-        : 'live storeHash differs from the last recorded evidence, but every evidenced ticket is intact — unevidenced non-sensitive op(s) since; reported, not failed';
+      'live storeHash differs from the last evidenced checkpoint — unevidenced change(s) since. This check does not verify those (git history is the record for those shards); reported, not failed';
   }
   return check;
 }

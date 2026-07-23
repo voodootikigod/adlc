@@ -114,12 +114,16 @@ test('doctor current-ticket: a pointer pinning no ticketHash is reported (strict
 // storeHash ↔ manifest evidence binding (T77).
 //
 // doctor reported the live storeHash but never compared it to the storeHash the
-// last evidence-required transaction bound in .adlc/manifest.jsonl, so a silent
-// shard hand-edit between transactions went undetected. The check now binds them:
-//   - clean store (hash == last bound storeHash) → pass;
-//   - hash drifted but the evidenced ticket(s) still match → legit unevidenced
-//     non-sensitive op(s), REPORTED not failed;
-//   - an evidenced ticket that no longer matches its bound hash → tamper, FLAGGED.
+// last evidence-required transaction bound in .adlc/manifest.jsonl. The check now
+// binds the store to that last evidenced CHECKPOINT and reports honestly — it does
+// NOT adjudicate per-ticket tamper (unsound in this model: the ticket layer permits
+// ordinary unevidenced updates, so a "changed since its evidence" signal both
+// false-flags legitimately-edited evidenced tickets and misses hand-edits to
+// never-evidenced ones — sound tamper-detection needs a store hash per transaction,
+// a follow-up). Contract:
+//   - clean store (hash == last bound storeHash) → pass, no drift;
+//   - hash differs from the checkpoint → drift, REPORTED not failed (git history is
+//     the record for the changed shards).
 // ---------------------------------------------------------------------------
 
 /** A directory store with ticket A authored and COMPLETED (so A carries manifest evidence). */
@@ -148,21 +152,42 @@ test('doctor storehash-manifest-bind: a clean store (unchanged since the last ev
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('doctor storehash-manifest-bind: a hand-edited shard (tamper) is flagged and fails the report', () => {
+test('doctor storehash-manifest-bind: a hand-edited shard surfaces as drift, deliberately NOT adjudicated as tamper', () => {
   const { root, store } = storeWithEvidence();
   try {
-    // Hand-edit A's shard directly, bypassing the transaction machinery: keep the
-    // id (so the filename still matches) but change the title. A's hash — and the
-    // whole storeHash — now diverge from the evidence with no new manifest entry.
+    // Hand-edit A's shard directly, bypassing the transaction machinery. The store
+    // hash now diverges from the last evidenced checkpoint. This check reports the
+    // drift but must NOT claim tamper — a per-ticket tamper signal is unsound here
+    // (see the file header), so the honest output is drift, with git history as the
+    // record for the changed shard.
     const shard = join(root, '.adlc', 'tickets', ticketFilename('A'));
-    const tampered = { ...JSON.parse(readFileSync(shard, 'utf8')), title: 'Silently edited' };
-    writeFileSync(shard, prettyCanonicalJson(tampered));
+    const edited = { ...JSON.parse(readFileSync(shard, 'utf8')), title: 'Silently edited' };
+    writeFileSync(shard, prettyCanonicalJson(edited));
 
     const report = doctorTicketStore(store, { root });
     const check = bindCheck(report);
-    assert.equal(check.ok, false, 'the tamper is flagged');
-    assert.equal(check.code, 'STOREHASH_MANIFEST_MISMATCH');
-    assert.equal(report.ok, false, 'a tampered store fails the whole report');
+    assert.equal(check.drift, true, 'the divergence from the checkpoint is surfaced');
+    assert.notEqual(check.code, 'STOREHASH_MANIFEST_MISMATCH', 'but no false tamper claim is made');
+    assert.equal(check.ok, true, 'and it is not failed — this check does not adjudicate tamper');
+    assert.equal(report.ok, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a legit later update of an EVIDENCED ticket is NOT flagged as tamper (no false positive)', () => {
+  // The round-2 adversarial-review finding: an evidenced ticket that later receives
+  // an ordinary non-sensitive update (permitted, unevidenced) must not be reported
+  // as tampering. It is drift, reported, never a failure.
+  const { root, store, service } = storeWithEvidence();
+  try {
+    const current = store.load().get('A');
+    service.apply(service.planUpdate('A', { ...current, title: 'Legitimately edited later' }));
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true, 'a legit unevidenced update of an evidenced ticket does not fail');
+    assert.notEqual(check.code, 'STOREHASH_MANIFEST_MISMATCH', 'no false tamper claim');
+    assert.equal(check.drift, true, 'it is surfaced as drift');
+    assert.equal(report.ok, true, 'the report stays green on a valid repo');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -179,11 +204,9 @@ test('doctor storehash-manifest-bind: a legitimate unevidenced op (create) is re
     assert.equal(check.ok, true, 'a legitimate unevidenced op does not fail the check');
     assert.equal(check.drift, true, 'but the drift is surfaced');
     assert.equal(report.ok, true, 'and the report stays green');
-    // Honesty (adversarial-review finding): B has no evidence baseline, so this
-    // check CANNOT detect a tamper of it. The drift report must say so rather than
-    // imply the store is confirmed clean.
-    assert.ok(check.unverified >= 1, 'the count of tickets with no integrity baseline is surfaced');
-    assert.match(check.message, /not integrity-verified|no evidence baseline/i, 'the blind spot is stated, not hidden');
+    // The message is honest that the drift is unverified by this check, not a claim
+    // that the store is confirmed clean.
+    assert.match(check.message, /does not verify|git history/i, 'the drift is reported as unverified, not adjudicated');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
