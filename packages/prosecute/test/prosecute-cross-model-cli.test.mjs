@@ -251,6 +251,40 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
     }
   });
 
+  it('residual: a store tracked at BASE but absent from the worktree still supplies rails', () => {
+    // A sparse checkout / skip-worktree entry leaves the canonical store absent
+    // locally WITHOUT git reporting a deletion, so it never shows up in
+    // changedFiles either. Reading only the worktree collapses that to "no rails"
+    // and declassifies a rails-only trust-root change — a fail-OPEN bypass. The
+    // base tree is authoritative, exactly as rails-guard-ci.mjs treats it.
+    //
+    // The override store is what makes this reachable rather than merely broken:
+    // downstream ticket binding still resolves T1 through it, so the run proceeds
+    // to the tier decision instead of op-erroring on an unresolvable ticket. Only
+    // tiering is left blind — which is precisely the hole.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
+    const g = (...args) => execFileSync('git', args, { cwd: repo.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      const railFree = join(repo.dir, 'rail-free-tickets.json');
+      writeFileSync(railFree, JSON.stringify({ tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] }] }));
+      g('update-index', '--skip-worktree', '.adlc/tickets.json');
+      rmSync(join(repo.dir, '.adlc', 'tickets.json'));
+      // Precondition: git must NOT see this as a change, or the test would be
+      // proving something weaker than the sparse-checkout scenario it describes.
+      assert.equal(g('status', '--porcelain', '--', '.adlc/tickets.json').trim(), '', 'skip-worktree removal must be invisible to git');
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      const res = runBin(
+        ['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'],
+        repo.dir,
+        { ADLC_TICKET_STORE: railFree },
+      );
+      assert.equal(res.status, 2, 'base-tree rails must still tier when the worktree store is absent');
+      assert.match(res.stderr, /rails deny-path of ticket T1/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
   it('residual: an AMBIGUOUS dual store (legacy + directory) fails closed (exit 1), never a silent ungated pass', () => {
     // A half-finished migration leaves both backends present. Resolving the
     // canonical store then throws AMBIGUOUS_STORE — which must op-error rather

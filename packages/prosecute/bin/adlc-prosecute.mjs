@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles } from '@adlc/core';
-import { detectTicketStore } from '@adlc/tickets';
+import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview } from '../lib/cross-model.mjs';
@@ -72,8 +72,32 @@ function readCanonicalTickets(root) {
 // in-repo ADLC workspace still tiers). The classifier unions rails across all
 // tickets, so extra sources can only ADD deny-paths (fail-safe), never remove
 // them; an out-of-repo --dir contributes nothing to tiering.
-function loadTicketsForTier(dir, root) {
-  const tickets = [...readCanonicalTickets(root)];
+// The canonical store as the TRUSTED BASE has it. The worktree read above cannot
+// distinguish "this repo has no ticket store" from "the store is tracked at base
+// but not materialised here" — a sparse checkout or a skip-worktree entry leaves
+// the shards absent WITHOUT git reporting them as deleted, so they never appear
+// in changedFiles either. Collapsing that to an empty rail set fails OPEN: a
+// rails-only trust-root change classifies as ordinary and skips the
+// distinct-provider requirement. Reading the base tree closes it, and mirrors
+// how rails-guard-ci.mjs resolves its rail set (base, never the PR worktree).
+//
+// A base that genuinely has no store contributes nothing; any other failure
+// throws rather than degrading to "no rails".
+function readBaseTickets(root, revision) {
+  if (!revision) return [];
+  try {
+    return new GitTreeTicketStore({ cwd: root, revision }).load().mutableTickets();
+  } catch (err) {
+    if (err.code === 'STORE_NOT_FOUND') return [];
+    throw new Error(`ticket store at base ${revision} cannot be read for tiering: ${err.message}`);
+  }
+}
+
+function loadTicketsForTier(dir, root, base) {
+  // UNION, never replace: rails from the base and from the worktree both apply.
+  // The classifier ORs deny-paths across tickets, so adding a source can only
+  // widen the trust-root surface (fail-safe), never narrow it.
+  const tickets = [...readBaseTickets(root, base), ...readCanonicalTickets(root)];
   const resolvedDir = resolve(dir);
   if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
     tickets.push(...readTicketArray(join(resolvedDir, 'tickets.json')));
@@ -253,7 +277,7 @@ try {
 }
 let tier;
 try {
-  tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root) });
+  tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root, values.base) });
 } catch (err) {
   opError(`cannot determine trust-root tier: ${err.message}`);
 }
