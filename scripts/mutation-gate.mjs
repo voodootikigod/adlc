@@ -94,17 +94,23 @@ export function testTargetFor(file, root = ROOT) {
     const d = `packages/${m[1]}/test`;
     return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
   }
+  if ((m = /^apps\/([^/]+)\//.exec(file))) {
+    const d = `apps/${m[1]}/test`;
+    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
+  }
   if ((m = /^plugins\/([^/]+)\/(hooks|lib|agents|mcp)\//.exec(file))) {
     const d = `plugins/${m[1]}/${m[2]}/test`;
-    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
+    if (existsSync(join(root, d))) return `${d}/*.test.mjs`;
   }
   if ((m = /^plugins\/([^/]+)\//.exec(file))) {
     const d = `plugins/${m[1]}/test`;
     return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
   }
-  if ((m = /^scripts\/([^/]+)\.mjs$/.exec(file))) {
+  if ((m = /^scripts\/([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
     const f = `scripts/test/${m[1]}.test.mjs`;
-    return existsSync(join(root, f)) ? f : null;
+    if (existsSync(join(root, f))) return f;
+    if (m[1] === 'pi-live-deny' && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
+    return null;
   }
   return null;
 }

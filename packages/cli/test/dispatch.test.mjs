@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -175,4 +175,31 @@ test('mcp-server is a stable hidden entrypoint that initializes and lists ADLC t
   const responses = stdout.trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(responses[0].result.serverInfo.name, 'adlc-codex');
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ['adlc_gate', 'adlc_prosecute']);
+});
+
+test('resolveBin resolves tool bins and returns null for non-existent tools', () => {
+  const bin = resolveBin('spec-lint');
+  assert.ok(bin && bin.includes('spec-lint'));
+  assert.equal(resolveBin('nonexistent-tool-xyz'), null);
+});
+
+test('packageJsonPath resolves local worktree devPath directly without escaping to parent repo node_modules', () => {
+  const devPath = packageJsonPath('@adlc/spec-lint');
+  assert.ok(devPath);
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  assert.ok(devPath.startsWith(worktreeRoot), `packageJsonPath (${devPath}) must resolve within current worktree (${worktreeRoot})`);
+});
+
+test('packageJsonPath falls back to require.resolve if the local package.json has a mismatched name', () => {
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const fakePkgDir = join(worktreeRoot, 'packages', 'fake-mismatch');
+  try {
+    mkdirSync(fakePkgDir, { recursive: true });
+    writeFileSync(join(fakePkgDir, 'package.json'), JSON.stringify({ name: 'wrong-name' }));
+    
+    const result = packageJsonPath('@adlc/fake-mismatch');
+    assert.equal(result, null);
+  } finally {
+    rmSync(fakePkgDir, { recursive: true, force: true });
+  }
 });

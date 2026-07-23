@@ -324,7 +324,14 @@ test('testTargetFor returns null when the package has no test directory', () => 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('testTargetFor maps plugins/<x>/hooks|lib|agents|mcp to their own test dir', () => {
+test('testTargetFor maps apps/<x>/ source to its test directory glob', () => {
+  const root = fixtureRoot(['apps/docs/test']);
+  try {
+    assert.equal(testTargetFor('apps/docs/lib/x.mjs', root), 'apps/docs/test/*.test.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor maps plugins/<x>/hooks|lib|agents|mcp to their own test dir when it exists', () => {
   const root = fixtureRoot(['plugins/adlc-codex/hooks/test', 'plugins/adlc-codex/lib/test']);
   try {
     assert.equal(testTargetFor('plugins/adlc-codex/hooks/x.mjs', root), 'plugins/adlc-codex/hooks/test/*.test.mjs');
@@ -332,7 +339,7 @@ test('testTargetFor maps plugins/<x>/hooks|lib|agents|mcp to their own test dir'
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('testTargetFor falls back to plugins/<x>/test for other plugin subpaths', () => {
+test('testTargetFor maps plugins/<x>/ source to its test directory glob', () => {
   const root = fixtureRoot(['plugins/adlc-cursor/test']);
   try {
     assert.equal(testTargetFor('plugins/adlc-cursor/rails-checker.mjs', root), 'plugins/adlc-cursor/test/*.test.mjs');
@@ -340,12 +347,24 @@ test('testTargetFor falls back to plugins/<x>/test for other plugin subpaths', (
 });
 
 test('testTargetFor maps scripts/<name>.mjs to scripts/test/<name>.test.mjs when it exists', () => {
-  // The exact fix for #260's own failure: this repo's same-basename convention,
-  // applied to scripts/ so a covered scripts/ file takes the fast, single-file
-  // path instead of the slow full-suite fallback.
   const root = fixtureRoot(['scripts/test'], ['scripts/test/mutation-gate.test.mjs']);
   try {
     assert.equal(testTargetFor('scripts/mutation-gate.mjs', root), 'scripts/test/mutation-gate.test.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor maps scripts/pi-live-deny.mjs to plugins/adlc-pi/test/*.test.mjs when no same-basename test exists', () => {
+  const root = fixtureRoot(['plugins/adlc-pi/test']);
+  try {
+    assert.equal(testTargetFor('scripts/pi-live-deny.mjs', root), 'plugins/adlc-pi/test/*.test.mjs');
+    assert.equal(testTargetFor('scripts/pi-other.mjs', root), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor does not match a nested scripts/ path as a top-level script', () => {
+  const root = fixtureRoot(['scripts/test'], ['scripts/test/mutation-gate.test.mjs']);
+  try {
+    assert.equal(testTargetFor('scripts/sub/mutation-gate.mjs', root), null);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -356,16 +375,7 @@ test('testTargetFor returns null for a scripts/ file with no matching test', () 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('testTargetFor does not match a nested scripts/ path as a top-level script', () => {
-  // scripts/foo/bar.mjs is not scripts/<name>.mjs — the regex is anchored to
-  // exactly one path segment between scripts/ and .mjs.
-  const root = fixtureRoot(['scripts/test'], ['scripts/test/bar.test.mjs']);
-  try {
-    assert.equal(testTargetFor('scripts/foo/bar.mjs', root), null);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test('testTargetFor returns null for an unrecognised top-level path', () => {
+test('testTargetFor returns null for an unrecognised top-level path or missing test dir', () => {
   const root = fixtureRoot([]);
   try {
     assert.equal(testTargetFor('apps/docs/x.mjs', root), null);

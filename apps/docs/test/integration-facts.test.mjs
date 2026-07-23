@@ -191,8 +191,8 @@ test('filesystem-derived surface counts match marketing facts for every harness'
   assert.equal(surfaceCount(ag, 'agents'), listEntries('plugins/adlc-antigravity/agents', { files: true, ext: '.md' }).length);
   assert.equal(surfaceCount(ag, 'skills'), listEntries('plugins/adlc-antigravity/skills', { dirs: true }).length);
   assert.equal(surfaceCount(ag, 'hooks'), hookEventCount('plugins/adlc-antigravity'));
-  assert.equal(surfaceCount(ag, 'commands'), 1);
-  assert.deepEqual(ag.surfaces.find((s) => s.key === 'commands')?.items, ['/adlc-init']);
+  assert.equal(surfaceCount(ag, 'commands'), 3);
+  assert.deepEqual(ag.surfaces.find((s) => s.key === 'commands')?.items, ['/adlc-init', '/adlc-status', '/adlc-doctor']);
 
   // Bundle notes that declare a surfaceKey must stay tied to that surface's count.
   for (const integration of INTEGRATIONS) {

@@ -5,9 +5,11 @@
 // editor-agnostic checkRail() and emits agy's { allow_tool, deny_reason } verdict.
 // Deny path imports ONLY node: builtins + the sibling checker (→ @adlc/core).
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
-import { checkRail, classifyTool, isShellTool } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool, resolveActiveTicketId } from '../rails-checker.mjs';
+import { checkBuildGate, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
+import { flailMessage } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -51,11 +53,12 @@ export function extractFilePaths(payload) {
 
 const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', 'workspace_roots'];
 
-/** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null. */
+/** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null.
+ * Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir). */
 export function findAdlcRoot(absPath) {
-  let cur = dirname(absPath);
+  if (!absPath || typeof absPath !== 'string' || !isAbsolute(absPath)) return null;
+  let cur = absPath;
   const { root: fsRoot } = parse(cur);
-  // Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir).
   while (true) {
     if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
     if (cur === fsRoot) return null;
@@ -80,7 +83,7 @@ const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: $
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
  */
-export function decide(payload, { env = process.env } = {}) {
+export function decide(payload, { env = process.env, trackerCache } = {}) {
   let enforcing = false;
   try {
     enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
@@ -103,6 +106,12 @@ export function decide(payload, { env = process.env } = {}) {
         : allow();
     }
 
+    const localCache = trackerCache ?? new Map();
+    const getTracker = (r) => {
+      if (!localCache.has(r)) localCache.set(r, createPersistentTracker(r, env));
+      return localCache.get(r);
+    };
+
     // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
     // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
     for (const raw of paths) {
@@ -115,6 +124,26 @@ export function decide(payload, { env = process.env } = {}) {
       if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
+
+      const pathTracker = getTracker(root);
+
+      // Record edit for flail tracking
+      const sessionID = resolveSessionId({ payload, env });
+      if (cls === 'mutating' && pathTracker?.recordEdit) {
+        const { churning } = pathTracker.recordEdit(sessionID, abs);
+        if (churning && churning.length > 0) {
+          for (const c of churning) console.error(flailMessage(c));
+        }
+      }
+
+      // Check build-gate backstop for structured mutators and unknown ('other') tools
+      if (cls !== 'readonly' && enforcing) {
+        if (sessionID === 'default_session') {
+          console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
+        }
+        const gate = checkBuildGate({ sessionID, tracker: pathTracker, root, env });
+        if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
+      }
     }
     return allow();
   } catch (err) {
@@ -132,7 +161,44 @@ export function runFromStdin(raw, env = process.env) {
     try { payload = JSON.parse(raw); }
     catch { return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow(); }
   }
-  return decide(payload, { env });
+  const toolName = extractToolName(payload);
+  const cls = classifyTool(toolName);
+
+  const trackerCache = new Map();
+  const sessionID = resolveSessionId({ payload, env });
+
+  // For readonly tools, skip session lock persistence entirely
+  if (cls === 'readonly') {
+    return decide(payload, { env, trackerCache });
+  }
+
+  const paths = extractFilePaths(payload);
+  const getTracker = (r) => {
+    if (!trackerCache.has(r)) trackerCache.set(r, createPersistentTracker(r, env));
+    return trackerCache.get(r);
+  };
+
+  const distinctRoots = new Set();
+  if (paths.length > 0) {
+    for (const p of paths) {
+      const { abs } = anchorPath(p, payload);
+      if (abs) {
+        const root = findAdlcRoot(abs);
+        if (root) distinctRoots.add(root);
+      }
+    }
+  } else {
+    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+      .find((s) => typeof s === 'string' && s.trim());
+    const fallbackRoot = findAdlcRoot(ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd());
+    if (fallbackRoot) distinctRoots.add(fallbackRoot);
+  }
+
+  for (const root of distinctRoots) {
+    getTracker(root).recordToolCall(sessionID);
+  }
+
+  return decide(payload, { env, trackerCache });
 }
 
 async function readStdin() {
@@ -141,7 +207,46 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+export function printStatus(root = process.cwd(), env = process.env, payload = {}) {
+  const absRoot = isAbsolute(root) ? root : join(process.cwd(), root);
+  const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
+  const active = resolveActiveTicketId(resolvedRoot, env);
+  const tracker = createPersistentTracker(resolvedRoot, env);
+  const sessionID = resolveSessionId({ payload, env });
+
+  console.log(`--- ADLC Antigravity Status ---`);
+  console.log(`Root: ${resolvedRoot}`);
+  console.log(`Active Ticket: ${active.id ?? (active.conflict ? 'CONFLICT' : 'NONE')}`);
+  console.log(`Enforcement (ADLC_P4_ENFORCEMENT): ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE'}`);
+  console.log(`Resolved Session ID: ${sessionID}`);
+  console.log(`Context Depth (Tool Calls): ${tracker.depth(sessionID)}`);
+  console.log(`Session Compacted: ${tracker.isCompacted(sessionID)}`);
+}
+
+export function printDoctor(root = process.cwd(), env = process.env) {
+  const absRoot = isAbsolute(root) ? root : join(process.cwd(), root);
+  const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
+  const active = resolveActiveTicketId(resolvedRoot, env);
+
+  console.log(`--- ADLC Antigravity Doctor ---`);
+  console.log(`Node Version: ${process.version}`);
+  console.log(`Root Directory: ${resolvedRoot}`);
+  console.log(`ADLC Ticket Store Present: ${existsSync(join(resolvedRoot, '.adlc/tickets.json')) || existsSync(join(resolvedRoot, '.adlc/tickets/.store.json'))}`);
+  console.log(`Active Ticket: ${active.id ?? 'NONE'}`);
+  console.log(`CI Rail Guard Workflow: ${existsSync(join(resolvedRoot, '.github/workflows/adlc-rails-guard.yml')) ? 'PRESENT' : 'MISSING'}`);
+}
+
 export async function main() {
+  const subcmd = process.argv[2];
+  if (subcmd === 'status') {
+    printStatus();
+    return;
+  }
+  if (subcmd === 'doctor') {
+    printDoctor();
+    return;
+  }
+
   const raw = await readStdin();
   process.stdout.write(JSON.stringify(runFromStdin(raw, process.env)));
 }

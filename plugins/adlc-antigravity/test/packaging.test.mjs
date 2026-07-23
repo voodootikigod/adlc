@@ -85,7 +85,7 @@ test('AC3: no @adlc/* runtime dependency (agy copies without node_modules)', () 
 
 test('AC2: files allowlist ships the runtime surface, plugin.json, and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['agents/', 'commands/', 'constants.mjs', 'core-inline.mjs', 'hooks/', 'hooks.json', 'rails-checker.mjs', 'skills/', 'plugin.json', 'README.md', 'LICENSE']) {
+  for (const entry of ['agents/', 'build-gate-inline.mjs', 'commands/', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks/', 'hooks.json', 'rails-checker.mjs', 'skills/', 'plugin.json', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -100,7 +100,7 @@ test('AC2: npm pack --dry-run ships the runtime surface, plugin.json, and NO tes
   for (const dir of ['agents/', 'commands/', 'hooks/', 'skills/']) {
     assert.ok(paths.some((p) => p.startsWith(dir)), `pack must include ${dir}`);
   }
-  for (const file of ['constants.mjs', 'core-inline.mjs', 'hooks.json', 'rails-checker.mjs', 'plugin.json', 'README.md', 'LICENSE']) {
+  for (const file of ['build-gate-inline.mjs', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks.json', 'rails-checker.mjs', 'plugin.json', 'README.md', 'LICENSE']) {
     assert.ok(paths.includes(file), `pack must include ${file}`);
   }
   assert.ok(!paths.some((p) => p.startsWith('test/')), `pack must NOT include test/: ${paths.filter((p) => p.startsWith('test/')).join(', ')}`);

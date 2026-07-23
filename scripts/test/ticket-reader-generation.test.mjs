@@ -3,15 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadTicketStoreReadOnly, ticketFilename } from '../ticket-readers/read-only-loader.mjs';
 
+const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
+
 test('self-contained harness ticket readers match the canonical generated source', () => {
-  const source = readFileSync('scripts/ticket-readers/read-only-loader.mjs', 'utf8').replace('// GENERATED-LOADER SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
+  const source = readFileSync(join(ROOT, 'scripts/ticket-readers/read-only-loader.mjs'), 'utf8').replace('// GENERATED-LOADER SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
   for (const output of [
     'plugins/adlc-codex/hooks/generated-ticket-reader.mjs',
     'plugins/adlc-claude-code/hooks/generated-ticket-reader.mjs',
     'plugins/adlc-antigravity/generated-ticket-reader.mjs',
-  ]) assert.equal(readFileSync(join(output), 'utf8'), source, `${output} drifted; run the generator`);
+  ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 
 test('generated-loader source reads equivalent legacy and sharded snapshots', () => {
