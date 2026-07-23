@@ -370,7 +370,16 @@ Merge sequentially. Worktree branches integrate one at a time with rebases
 between (squash-merge recovery per the worktree conventions). No parallel
 builds across worktrees.
 
-**Gate:** human behavioral acceptance. Second of the two human gates.
+**Close the ticket.** Acceptance is not finished until it is recorded *and* the
+ticket is marked done: `adlc gate-manifest record p6-accept --ticket <id>` to log
+the human verdict, then `adlc ticket complete <id> --write` to set
+`completed:true` (add `--authorize` — the railed-ticket completion ceremony —
+when the ticket declares rails). Fleet does this automatically on a passing
+post-merge gate; do it by hand for a solo merge. A ticket left un-completed keeps
+resurfacing in every backlog enumeration.
+
+**Gate:** human behavioral acceptance, concluded by `adlc ticket complete`.
+Second of the two human gates.
 
 ### P7 — Distill
 

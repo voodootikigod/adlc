@@ -3,7 +3,7 @@
 // Verbs: record | verify | show | attest
 
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
-import { record, parseData } from '../lib/record.mjs';
+import { record, parseData, ticketCompletionReminder } from '../lib/record.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
@@ -71,6 +71,12 @@ if (verb === 'record') {
     const signed = typeof entry.sig === 'string' ? ' (signed)' : ' (unsigned)';
     console.log(`recorded: seq=${entry.seq} gate=${entry.gate} ts=${entry.ts}${signed}`);
   }
+
+  // T74: a p6-accept verdict is not ticket completion. Print a one-line reminder
+  // of the command that IS — to stderr, so it never corrupts --json stdout, and
+  // WITHOUT touching what was recorded (no auto-mutation).
+  const reminder = ticketCompletionReminder(gate, flags.ticket);
+  if (reminder) console.error(reminder);
 
   pass();
 }
