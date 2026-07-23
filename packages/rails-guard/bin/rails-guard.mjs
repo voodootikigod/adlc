@@ -250,6 +250,14 @@ if (values.json) {
 } else {
   if (violations.length === 0) {
     console.log('rails-guard: all checks passed');
+    // A clean pass here is NOT full pre-merge clearance, and reading it as such
+    // has already cost a red CI run: this command answers "did the diff edit a
+    // frozen rail path?", while the CI gate additionally rejects any change to
+    // an EXISTING ticket's contract in the trust root. A branch that reused a
+    // ticket id another branch had claimed passed this check and failed that
+    // one. Advisory, on stderr, so piping stdout is unaffected.
+    console.error('note: CI also runs scripts/rails-guard-ci.mjs, which is stricter ' +
+      '(it rejects changes to existing tickets in .adlc/tickets.json). Run `npm run preflight` for the full set.');
   } else {
     console.error(formatViolations(violations));
   }
