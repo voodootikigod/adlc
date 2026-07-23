@@ -7,22 +7,23 @@ import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
+import { readActiveTicketPointer } from './generated-active-ticket.mjs';
 
-/** Read `.adlc/current-ticket.json`. → {state:'absent'|'unreadable'} or
- *  {state:'active', id}. */
+/** Read the active-ticket pointer through the repo's generated reader — the
+ *  pointer file is parsed in exactly ONE canonical place, and the
+ *  ticket-store boundary guard enforces that nobody (including this plugin)
+ *  hand-parses it. → {state:'absent'|'unreadable'} or {state:'active', id}. */
 export function readActiveTicket(repoRoot) {
-  const path = join(repoRoot, '.adlc', 'current-ticket.json');
-  if (!existsSync(path)) return { state: 'absent' };
-  let parsed;
+  let result;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
+    result = readActiveTicketPointer(repoRoot);
   } catch {
     return { state: 'unreadable' };
   }
-  if (!parsed || typeof parsed !== 'object' || typeof parsed.id !== 'string' || parsed.id.length === 0) {
-    return { state: 'unreadable' };
-  }
-  return { state: 'active', id: parsed.id };
+  if (!result?.ok) return { state: 'unreadable' };
+  if (!result.value?.present) return { state: 'absent' };
+  if (typeof result.value.id !== 'string' || result.value.id.length === 0) return { state: 'unreadable' };
+  return { state: 'active', id: result.value.id };
 }
 
 /**

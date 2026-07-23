@@ -47,6 +47,11 @@ test('readActiveTicket: a one-character id is valid (only empty is unreadable)',
   assert.deepEqual(readActiveTicket(repo), { state: 'active', id: 'a' });
 });
 
+test('readActiveTicket: the legacy bare-string pointer resolves via the canonical reader', () => {
+  writeAdlc('current-ticket.json', JSON.stringify('t-legacy'));
+  assert.deepEqual(readActiveTicket(repo), { state: 'active', id: 't-legacy' });
+});
+
 // ---- readLatestPhase ----
 
 test('readLatestPhase: missing ledger yields null', () => {
