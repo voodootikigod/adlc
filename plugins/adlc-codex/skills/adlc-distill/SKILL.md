@@ -94,3 +94,18 @@ LLM-backed `gate-fuzzing` check runs via a scheduled Codex session invoking
 this skill, where Codex is the model and no API keys are needed — CI cron is
 the deterministic fallback for the other three when no scheduled session is
 configured.
+
+## Close the loop — the lesson-foundry gate (P7)
+
+Whether you just distilled findings or ran the maintenance checks above, finish on
+the ledger's own gate — it must exit `0`:
+
+```sh
+adlc lesson-foundry --gate
+```
+
+A non-zero exit names each cluster in `.adlc/findings.jsonl` that recurs but still
+has no banked lesson; each is an undefended cluster. Bank or refine its lesson and
+re-run until the gate is green. It is deterministic and keyless, but **not** in the
+maintenance cron — `.adlc/findings.jsonl` is machine-local, so the cluster set only
+exists in the session that holds the ledger; run it here, not in CI.
