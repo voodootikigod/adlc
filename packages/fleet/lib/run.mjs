@@ -41,7 +41,18 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
       // gate, so a completion failure must NOT revert good, shipped work; it degrades
       // to the pre-T73 status quo (merged, not yet marked completed) and is logged.
       try {
-        await deps.completeTicket?.({ ticket, integrationBranch });
+        const completion = await deps.completeTicket?.({ ticket, integrationBranch });
+        // The completion adds a commit AFTER the gate that just passed, so re-run the
+        // gate over it — no unvalidated commit reaches the PR. If that re-gate fails,
+        // withdraw ONLY the completion commit (the shipped merge below it stays) and
+        // degrade to the pre-T73 status quo: merged, not marked completed.
+        if (completion?.completed && completion.preCompletionSha) {
+          const recheck = await deps.postMergeGate({ ticket, integrationBranch });
+          if (!recheck.ok) {
+            await deps.revertCompletion?.({ ticket, integrationBranch, toSha: completion.preCompletionSha });
+            deps.log?.(`${ticket.id} WARNING: gate over the completion commit failed; completion withdrawn (merged, not marked completed)`);
+          }
+        }
       } catch (error) {
         deps.log?.(`${ticket.id} WARNING: post-merge completion failed (${error.message}); ticket merged but not marked completed`);
       }

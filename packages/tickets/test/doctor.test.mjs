@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename } from '../index.mjs';
@@ -228,6 +229,79 @@ test('doctor storehash-manifest-bind: a forged / chain-broken manifest is NOT tr
     assert.notEqual(check.boundStoreHash, 'deadbeefdeadbeef', 'the forged storeHash is never adopted');
     assert.match(check.reason ?? '', /chain|FAILED|malformed/i, 'the broken chain is reported');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Signature verification (adversarial-review round 6): the backward hash chain
+// leaves the FINAL entry unprotected, so with a key configured every entry must
+// also carry a valid HMAC or the last entry's storeHash could be edited in place.
+function signManifestEntry(key, entry) {
+  const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
+  if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
+  if (entry.data !== undefined) canonical.data = entry.data;
+  canonical.files = entry.files;
+  canonical.prev = entry.prev;
+  return createHmac('sha256', key).update(JSON.stringify(canonical)).digest('hex');
+}
+
+function writeSignedManifest(root, key, { storeHash }) {
+  const entry = { seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', data: { storeHash, bindingScope: 'store' }, files: {}, prev: null };
+  entry.sig = signManifestEntry(key, entry);
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${JSON.stringify(entry)}\n`);
+  return entry;
+}
+
+test('doctor storehash-manifest-bind: with a key set, a validly-signed manifest verifies (signaturesVerified)', () => {
+  const { root, store } = storeWithEvidence();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  try {
+    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
+    const live = store.load().hash;
+    writeSignedManifest(root, 'test-signing-key', { storeHash: live });
+
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, true, 'a correctly-signed ledger verifies');
+    assert.equal(check.signaturesVerified, true, 'and reports that signatures WERE checked');
+    assert.notEqual(check.drift, true, 'the bound hash matches the live store');
+  } finally {
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('doctor storehash-manifest-bind: an in-place edit of the FINAL entry storeHash fails signature verification', () => {
+  const { root, store } = storeWithEvidence();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  try {
+    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
+    const entry = writeSignedManifest(root, 'test-signing-key', { storeHash: store.load().hash });
+    // The exploit: rewrite the last entry's storeHash but leave its signature (and
+    // the chain, which does not protect the final line) untouched.
+    const forged = { ...entry, data: { ...entry.data, storeHash: 'deadbeefdeadbeef' } };
+    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${JSON.stringify(forged)}\n`);
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, false, 'the tampered final entry fails verification');
+    assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');
+    assert.equal(report.ok, false, 'and fails the overall report');
+    assert.notEqual(check.boundStoreHash, 'deadbeefdeadbeef', 'the forged storeHash is never adopted');
+  } finally {
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('doctor storehash-manifest-bind: with NO key configured, it reports signatures were not verified', () => {
+  const { root, store } = storeWithEvidence();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  try {
+    delete process.env.ADLC_MANIFEST_KEY;
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.signaturesVerified, false, 'no false assurance — only the structural chain was checked');
+  } finally {
+    if (prevKey !== undefined) process.env.ADLC_MANIFEST_KEY = prevKey;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('doctor storehash-manifest-bind: a store with no recorded evidence yet is inert (not a failure)', () => {

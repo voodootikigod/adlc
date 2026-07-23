@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
+import { canonicalJson } from './canonical.mjs';
 import { ARCHIVE_DIRECTORY, CURRENT_TICKET_FILE, LOCK_DIRECTORY } from './constants.mjs';
 import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
@@ -58,6 +59,40 @@ function currentTicketCheck(root, snapshot) {
  * removes the shard the same way a hand-delete would and records no evidence
  * either, so absence is inherently ambiguous and left to the archive/graph checks.
  */
+// Manifest HMAC verification, mirroring @adlc/gate-manifest's sign.mjs byte-for-byte.
+// It cannot be imported: the package graph is tickets ← core ← gate-manifest, so
+// tickets (the base layer) would create a cycle. The v1 form is a fixed key order;
+// v2 signs canonical JSON of every field but `sig` (this package's canonicalJson is
+// byte-identical to core's, verified by test). Keep in lockstep with sign.mjs.
+const MANIFEST_KEY_ENV = 'ADLC_MANIFEST_KEY';
+
+function manifestKey(env = process.env) {
+  const k = env[MANIFEST_KEY_ENV];
+  return typeof k === 'string' && k.length > 0 ? k : null;
+}
+
+function canonicalEntryBytes(entry) {
+  if (entry.sigVersion === 2) {
+    const { sig: _sig, ...signed } = entry;
+    return canonicalJson(signed);
+  }
+  const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
+  if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
+  if (entry.data !== undefined) canonical.data = entry.data;
+  canonical.files = entry.files;
+  canonical.prev = entry.prev;
+  return JSON.stringify(canonical);
+}
+
+function entrySigValid(key, entry) {
+  if (typeof entry.sig !== 'string' || entry.sig.length === 0) return false;
+  const expected = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
+  const a = Buffer.from(entry.sig, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 function storeHashBindingCheck(root, snapshot) {
   const check = { name: 'storehash-manifest-bind', ok: true };
   // No live storeHash to compare — the active-store check already carries that
@@ -79,6 +114,7 @@ function storeHashBindingCheck(root, snapshot) {
   // arbitrary "bound" hash, and a malformed line silently skipped could hide a break.
   // The chain format is the ledger writer's (evidence.mjs / ledger.mjs): each entry's
   // `prev` is sha256 of the previous raw line, and `seq` increments from 1.
+  const key = manifestKey();
   let boundStoreHash = null;
   let prevLine = null;
   let prevSeq = 0;
@@ -94,6 +130,12 @@ function storeHashBindingCheck(root, snapshot) {
     if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) {
       return { ...check, ok: false, code: 'MANIFEST_CHAIN_INVALID', reason: `manifest hash chain breaks at line ${i + 1}; integrity check FAILED` };
     }
+    // With a key configured EVERY entry must carry a valid signature. The backward
+    // hash chain alone leaves the FINAL entry unprotected — nothing links forward
+    // from it — so its data.storeHash could be edited in place undetected.
+    if (key !== null && !entrySigValid(key, entry)) {
+      return { ...check, ok: false, code: 'MANIFEST_SIGNATURE_INVALID', reason: `manifest entry at line ${i + 1} is unsigned or its signature does not verify; integrity check FAILED` };
+    }
     if (entry?.data && typeof entry.data.storeHash === 'string') boundStoreHash = entry.data.storeHash;
     prevLine = lines[i];
     prevSeq = entry.seq;
@@ -104,6 +146,9 @@ function storeHashBindingCheck(root, snapshot) {
   check.bound = true;
   check.storeHash = snapshot.hash;
   check.boundStoreHash = boundStoreHash;
+  // Honest about the strength of what was checked: with no key configured only the
+  // structural chain was verified, so the ledger is not cryptographically attested.
+  check.signaturesVerified = key !== null;
 
   // This check does NOT attribute drift to specific tickets or claim tampering.
   // The ticket model permits ordinary UNEVIDENCED create/update between checkpoints,

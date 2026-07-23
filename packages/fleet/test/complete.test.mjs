@@ -215,6 +215,50 @@ test('runFleet completes a merged+gate-passed ticket via the completeTicket effe
   assert.deepEqual(rec.completed, [{ id: 'T1', integrationBranch: integrationBranchName('r') }]);
 });
 
+// The completion adds a commit AFTER the post-merge gate, so the gate is re-run over
+// it. A failing re-gate withdraws ONLY the completion — never the shipped merge.
+function regateHarness({ regatePasses }) {
+  const rec = { completed: [], reverted: [], gateCalls: 0 };
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => {},
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
+    dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+    gate: () => ({ ok: true }),
+    prosecute: () => ({ verdict: 'pass' }),
+    flail: () => ({ flail: false }),
+    mergeToIntegration: () => ({ mergeSha: 'M', preMergeSha: 'P' }),
+    // 1st call = post-merge gate (passes); 2nd = the re-gate over the completion commit.
+    postMergeGate: () => { rec.gateCalls += 1; return { ok: rec.gateCalls === 1 ? true : regatePasses }; },
+    revertMerge: () => ({ method: 'reset', ok: true }),
+    completeTicket: ({ ticket }) => { rec.completed.push(ticket.id); return { completed: true, preCompletionSha: 'PRE' }; },
+    revertCompletion: ({ toSha }) => { rec.reverted.push(toSha); },
+    openPR: () => {},
+  };
+  return { deps, rec };
+}
+
+test('runFleet re-gates the completion commit and withdraws it when that gate fails (T73)', async () => {
+  const { deps, rec } = regateHarness({ regatePasses: false });
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+
+  assert.equal(summary.results.T1, 'merged', 'the shipped merge is NOT reverted by a completion re-gate failure');
+  assert.deepEqual(rec.completed, ['T1']);
+  assert.equal(rec.gateCalls, 2, 'the gate ran again over the new completion commit');
+  assert.deepEqual(rec.reverted, ['PRE'], 'the completion commit is withdrawn to the pre-completion sha');
+});
+
+test('runFleet keeps the completion when the re-gate over it passes (T73)', async () => {
+  const { deps, rec } = regateHarness({ regatePasses: true });
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+
+  assert.equal(summary.results.T1, 'merged');
+  assert.equal(rec.gateCalls, 2, 'the completion commit is still validated');
+  assert.deepEqual(rec.reverted, [], 'nothing is withdrawn when the completion commit gates clean');
+});
+
 test('runFleet does NOT complete a ticket whose post-merge gate failed (T73 b)', async () => {
   const { deps, rec } = harness({ postMerge: () => ({ ok: false }) });
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };

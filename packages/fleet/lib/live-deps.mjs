@@ -23,7 +23,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnAsync } from './spawn-async.mjs';
-import { completeTicketOnIntegration } from './complete.mjs';
+import { completeTicketOnIntegration, revertCompletionCommit } from './complete.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -301,6 +301,10 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     // rides the single PR. Idempotent and best-effort at the call site (§run.mjs).
     completeTicket: ({ ticket, integrationBranch }) =>
       completeTicketOnIntegration({ repo, ticketId: ticket.id, integrationBranch, git: repoGit }),
+
+    // Withdraw ONLY the completion commit when the gate re-run over it fails; the
+    // shipped merge underneath is never touched.
+    revertCompletion: ({ toSha }) => revertCompletionCommit({ repo, toSha, git: repoGit }),
 
     cleanup: ({ worktree, state }) => {
       // Keep failed worktrees for inspection; remove merged ones.

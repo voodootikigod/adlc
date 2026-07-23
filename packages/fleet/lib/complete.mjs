@@ -31,6 +31,16 @@ function restoreFile(absPath, priorBytes) {
 }
 
 /**
+ * Discard the completion commit, returning the integration branch to `toSha`.
+ * Used when the gate re-run over the completion commit fails: the shipped merge
+ * below it stays intact, only the completion annotation is withdrawn.
+ */
+export function revertCompletionCommit({ repo, toSha, git = defaultGit(repo) } = {}) {
+  git('reset', '--hard', toSha);
+  return { reverted: true, toSha };
+}
+
+/**
  * Complete `ticketId` in the ticket store rooted at `repo` and commit the
  * add-only diff onto the currently checked-out (integration) branch.
  *
@@ -74,6 +84,10 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
     // auto-completion in that case and degrade to "merged, not yet completed".
     if (priorManifest === null) return { completed: false, reason: 'no-manifest-baseline' };
 
+    // The tip BEFORE the completion commit — the caller re-gates the new commit and
+    // rolls back to exactly here if that gate fails.
+    const preCompletionSha = git('rev-parse', 'HEAD');
+
     const service = new TicketService(store, { root: repo });
     service.apply(service.planComplete(ticketId), { lock });
 
@@ -94,7 +108,7 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
       throw error;
     }
 
-    return { completed: true };
+    return { completed: true, preCompletionSha };
   } finally {
     releaseTicketLock(lock);
   }
