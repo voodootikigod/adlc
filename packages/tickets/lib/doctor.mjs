@@ -108,7 +108,17 @@ function storeHashBindingCheck(root, snapshot) {
 
   if (snapshot.hash !== boundStoreHash) {
     check.drift = true;
-    check.message = 'live storeHash differs from the last recorded evidence, but every evidenced ticket is intact — unevidenced non-sensitive op(s) since; reported, not failed';
+    // Tampering can only be detected relative to a recorded baseline. A ticket with
+    // NO ticket-scoped evidence entry has none here, so a hand-edit to it is
+    // indistinguishable from a legitimate unevidenced create/update — this check
+    // cannot catch it. Do NOT imply the store is confirmed clean: report the blind
+    // spot honestly and name git history as the primary record for those shards.
+    const unverified = Object.keys(snapshot.ticketHashes ?? {}).filter((id) => !evidencedTicketHashes.has(id));
+    check.unverified = unverified.length;
+    check.message =
+      unverified.length > 0
+        ? `live storeHash differs from the last recorded evidence; every EVIDENCED ticket is intact, but ${unverified.length} ticket(s) have no evidence baseline and are NOT integrity-verified by this check (rely on git history for those shards) — reported, not failed`
+        : 'live storeHash differs from the last recorded evidence, but every evidenced ticket is intact — unevidenced non-sensitive op(s) since; reported, not failed';
   }
   return check;
 }

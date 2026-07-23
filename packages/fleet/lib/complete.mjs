@@ -12,6 +12,8 @@
 // choreography checks it out for the post-merge gate immediately before this
 // runs, all under the merge mutex), so a commit here lands on that branch.
 
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { ACTIVE_DIRECTORY, DirectoryTicketStore, LEGACY_FILE, detectTicketStore, TicketService, ticketFilename } from '@adlc/tickets';
 import { defaultGit } from './worktrees.mjs';
 
@@ -20,6 +22,12 @@ const MANIFEST_FILE = '.adlc/manifest.jsonl';
 /** Repo-relative path of the store artifact a completion of `id` rewrites. */
 function completionStorePath(store, id) {
   return store instanceof DirectoryTicketStore ? `${ACTIVE_DIRECTORY}/${ticketFilename(id)}` : LEGACY_FILE;
+}
+
+/** Restore a file to captured bytes (or delete it if it did not exist before). */
+function restoreFile(absPath, priorBytes) {
+  if (priorBytes === null) { if (existsSync(absPath)) rmSync(absPath); }
+  else writeFileSync(absPath, priorBytes);
 }
 
 /**
@@ -43,15 +51,37 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
   // so an already-completed ticket must short-circuit here.
   if (existing.completed === true) return { completed: false, alreadyComplete: true };
 
+  // Capture the exact pre-completion bytes of the two paths this touches, BEFORE
+  // the transaction writes them, so a failed commit can be rolled back precisely
+  // whether or not the manifest already existed.
+  const storePath = completionStorePath(store, ticketId);
+  const storeAbs = join(repo, storePath);
+  const manifestAbs = join(repo, MANIFEST_FILE);
+  const priorStore = existsSync(storeAbs) ? readFileSync(storeAbs) : null;
+  const priorManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
+
   const service = new TicketService(store, { root: repo });
   service.apply(service.planComplete(ticketId));
 
   // Commit ONLY the completion artifacts (the shard/legacy file + the evidence
   // ledger). A path-scoped add + commit never sweeps in unrelated build output
   // the post-merge gate may have left in the working tree.
-  const storePath = completionStorePath(store, ticketId);
-  git('add', '--', storePath, MANIFEST_FILE);
-  git('commit', '-q', '-m', `chore(${ticketId}): mark completed after passing merge gate`, '--', storePath, MANIFEST_FILE);
+  try {
+    git('add', '--', storePath, MANIFEST_FILE);
+    git('commit', '-q', '-m', `chore(${ticketId}): mark completed after passing merge gate`, '--', storePath, MANIFEST_FILE);
+  } catch (error) {
+    // planComplete already wrote the shard + manifest to disk and `git add` may
+    // have staged them. A failed commit (e.g. a rejecting commit hook) must NOT
+    // leave the shared integration checkout dirty — a later fleet step could sweep
+    // the orphaned staged change into an unrelated commit, and the pushed branch
+    // would be inconsistent. Restore the two owned paths to their exact
+    // pre-completion bytes, unstage them, then re-throw so the caller degrades to
+    // "merged, not yet completed" exactly as before.
+    restoreFile(storeAbs, priorStore);
+    restoreFile(manifestAbs, priorManifest);
+    try { git('reset', '-q', '--', storePath, MANIFEST_FILE); } catch { /* best-effort unstage */ }
+    throw error;
+  }
 
   return { completed: true };
 }

@@ -99,6 +99,32 @@ test('completeTicketOnIntegration is idempotent — a re-run over an already-com
   }
 });
 
+test('a failed completion commit is rolled back — the shared integration checkout stays clean (T73)', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    // A git that behaves normally except it refuses to COMMIT (e.g. a rejecting
+    // commit hook). add/reset delegate to real git so staging is real.
+    const failingGit = (...args) => {
+      if (args[0] === 'commit') throw new Error('commit rejected by hook');
+      return git(...args);
+    };
+
+    assert.throws(
+      () => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: failingGit }),
+      /commit rejected/,
+      'the completion surfaces the commit failure',
+    );
+
+    // The on-disk transaction was undone: the ticket is open again...
+    assert.equal(isCompleted(root, 'T1'), false, 'the completion write is rolled back');
+    // ...and NOTHING is left staged or modified in the shared checkout — a later
+    // fleet step must not find orphaned completion state to sweep into a commit.
+    assert.equal(git('status', '--porcelain'), '', 'the integration checkout is clean after the failed completion');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ---- runFleet wiring: completion is gated on a passing post-merge gate --------
 
 const T = (id) => ({ id, title: id, scope: [`src/${id}/**`], edges: [] });

@@ -106,6 +106,31 @@ test('a batch with one inbound-edge-blocked ticket still archives the rest and n
   });
 });
 
+test('an UNEXPECTED archive failure (not an inbound edge) fails the sweep — never reports ok:true', () => {
+  withScratchRepo((dir) => {
+    shipScope(dir, join('packages', 'c2'));
+    git(['add', '-A'], dir);
+    git(['commit', '-q', '-m', 'ship c2'], dir);
+    writeDirectoryStore(dir, [
+      { id: 'AAA', title: 'rails-less shipped', scope: ['packages/c2/**'] },
+    ]);
+    // Make the archive destination a FILE so archiveTicket hits a filesystem error
+    // (ENOTDIR) — an unexpected, non-recoverable failure, NOT an inbound-edge block.
+    // The old broad catch swallowed this into `blocked` and still returned ok:true;
+    // a corrupt/unwritable store must fail the sweep so automation never reads a
+    // broken store as clean.
+    writeFileSync(join(dir, '.adlc', 'ticket-archive'), 'not a directory\n');
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, false, 'a genuine I/O failure must not report success');
+    assert.equal(result.failedId, 'AAA');
+    assert.notEqual(result.code, 'ARCHIVE_INBOUND_EDGE', 'this was not an inbound-edge block');
+    // The ticket was NOT archived (the failure was real, not skipped).
+    assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('AAA'))));
+  });
+});
+
 test('an in-batch edge source is archived before its target, so neither is falsely blocked (topological write path)', () => {
   withScratchRepo((dir) => {
     shipScope(dir, join('packages', 'src2'));

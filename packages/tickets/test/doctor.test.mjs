@@ -179,6 +179,11 @@ test('doctor storehash-manifest-bind: a legitimate unevidenced op (create) is re
     assert.equal(check.ok, true, 'a legitimate unevidenced op does not fail the check');
     assert.equal(check.drift, true, 'but the drift is surfaced');
     assert.equal(report.ok, true, 'and the report stays green');
+    // Honesty (adversarial-review finding): B has no evidence baseline, so this
+    // check CANNOT detect a tamper of it. The drift report must say so rather than
+    // imply the store is confirmed clean.
+    assert.ok(check.unverified >= 1, 'the count of tickets with no integrity baseline is surfaced');
+    assert.match(check.message, /not integrity-verified|no evidence baseline/i, 'the blind spot is stated, not hidden');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

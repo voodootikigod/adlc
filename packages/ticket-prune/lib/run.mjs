@@ -163,13 +163,25 @@ export function runTicketPrune(options = {}) {
         });
         archivedEntries.push(result.archived);
       } catch (error) {
-        // Each archive is its own committed transaction. A single ticket failing
-        // closed — e.g. ARCHIVE_INBOUND_EDGE because a ticket OUTSIDE this batch
-        // still references it — must NOT wedge the whole sweep (T75). Collect it,
-        // the way needsCeremony surfaces rail-freezing ones, and CONTINUE, so every
-        // still-eligible ticket archives and the operator gets a report instead of
-        // a half-processed store behind a bare {ok:false}.
-        blocked.push({ id, reason: item?.reason ?? null, code: error.code ?? 'ARCHIVE_FAILED', error: error.message });
+        // ONLY the expected, per-ticket, recoverable block is swallowed-and-continued:
+        // ARCHIVE_INBOUND_EDGE, where a ticket OUTSIDE this batch still references
+        // `id`. That is the wedge T75 exists to fix — collect it (like needsCeremony)
+        // and keep archiving the rest. EVERYTHING else — a corrupt/unreadable store,
+        // a lock or CAS failure, an I/O or disk error, a transaction fault — is NOT
+        // recoverable and must fail the sweep, or automation reading exit 0 would take
+        // a broken store for a clean one. Preserve what was archived + the blocked set.
+        if (error?.code === 'ARCHIVE_INBOUND_EDGE') {
+          blocked.push({ id, reason: item?.reason ?? null, code: 'ARCHIVE_INBOUND_EDGE', error: error.message });
+          continue;
+        }
+        return {
+          ok: false,
+          baseRef, write, ceremony, stale, active,
+          archived: archivedEntries, needsCeremony, blocked,
+          failedId: id,
+          code: error?.code ?? 'ARCHIVE_FAILED',
+          error: `archiving ${id} failed: ${error.message}`,
+        };
       }
     }
     return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony, blocked };
