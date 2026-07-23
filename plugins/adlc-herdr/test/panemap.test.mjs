@@ -53,6 +53,14 @@ test('buildPaneMap fails soft on malformed input', () => {
   assert.deepEqual(buildPaneMap([{ not_a_pane: true }], { resolveRepoRoot: () => '/x' }), []);
 });
 
+test('a null or non-object element is skipped without dropping its neighbors', () => {
+  const map = buildPaneMap(
+    [null, pane('w1:p2', { cwd: '/ok', fg: '/ok' }), 'junk'],
+    { resolveRepoRoot: (d) => d },
+  );
+  assert.deepEqual(map, [{ paneId: 'w1:p2', workspaceId: 'w1', repoRoot: '/ok' }]);
+});
+
 test('a resolver throw excludes that pane instead of crashing the map', () => {
   const map = buildPaneMap(
     [pane('w1:p1', { cwd: '/boom', fg: '/boom' }), pane('w1:p2', { cwd: '/ok', fg: '/ok' })],

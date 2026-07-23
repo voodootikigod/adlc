@@ -42,6 +42,11 @@ test('readActiveTicket: a valid pointer yields the id', () => {
   assert.deepEqual(readActiveTicket(repo), { state: 'active', id: 't-x1' });
 });
 
+test('readActiveTicket: a one-character id is valid (only empty is unreadable)', () => {
+  writeAdlc('current-ticket.json', JSON.stringify({ id: 'a', ticketHash: 'abc' }));
+  assert.deepEqual(readActiveTicket(repo), { state: 'active', id: 'a' });
+});
+
 // ---- readLatestPhase ----
 
 test('readLatestPhase: missing ledger yields null', () => {
@@ -118,6 +123,11 @@ test('paneTokens: unreadable pointer yields an explicit unreadable token', () =>
 
 test('paneTokens: absent state publishes nothing', () => {
   assert.deepEqual(paneTokens({ state: 'absent' }, null), {});
+});
+
+test('paneTokens: null or non-object state publishes nothing instead of throwing', () => {
+  assert.deepEqual(paneTokens(null, null), {});
+  assert.deepEqual(paneTokens('junk', 'P4'), {});
 });
 
 test('paneTokens: values are sanitized — escape injection in a ticket id is stripped', () => {

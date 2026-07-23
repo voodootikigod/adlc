@@ -6,11 +6,12 @@
 // heartbeat refreshes keep TTLs alive (plan premortem bounds).
 import net from 'node:net';
 import { watch, existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
+import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket, readLatestPhase, backlogCounts, ticketsFromExport } from '../lib/adlc-state.mjs';
 import {
   paneTokens, workspaceTokens, buildReportArgs, buildWorkspaceReportArgs,
@@ -26,21 +27,6 @@ const SUBSCRIPTIONS = [
   'pane.created', 'pane.updated', 'pane.closed', 'pane.exited',
   'worktree.created', 'worktree.opened', 'worktree.removed',
 ];
-
-const repoRootCache = new Map();
-function resolveRepoRoot(dir) {
-  if (repoRootCache.has(dir)) return repoRootCache.get(dir);
-  let root = null;
-  try {
-    root = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim() || null;
-  } catch {
-    root = null;
-  }
-  repoRootCache.set(dir, root);
-  return root;
-}
 
 // `ticket list --json` is a projection without completed/edges (verified
 // live) — backlog math needs the full `store export` envelope.
