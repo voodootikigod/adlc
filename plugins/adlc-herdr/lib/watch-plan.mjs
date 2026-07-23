@@ -26,6 +26,43 @@ export function pendingWatchDirs(repoRoot, watched, exists) {
 }
 
 /**
+ * Wrap `action` so it runs AT MOST once, no matter how many times the result
+ * is called. Used for socket reconnect: a failed connection emits both `error`
+ * and `close`, and scheduling a retry on each would double the attempts every
+ * failure (2^N) until file descriptors are exhausted.
+ */
+export function once(action) {
+  let done = false;
+  return (...args) => {
+    if (done) return undefined;
+    done = true;
+    return action(...args);
+  };
+}
+
+/**
+ * Map `fn` over `items` with at most `limit` in flight at once, preserving
+ * result order. Bounds the fan-out of subprocess-spawning reads so a session
+ * with many open worktrees doesn't spawn one `adlc` process per worktree all
+ * at once on each heartbeat (a cache stampede that pegs the host).
+ */
+export async function mapLimit(items, limit, fn) {
+  const list = Array.isArray(items) ? items : [];
+  const results = new Array(list.length);
+  let next = 0;
+  const workers = Math.max(1, Math.min(limit, list.length));
+  async function run() {
+    while (next < list.length) {
+      const idx = next;
+      next += 1;
+      results[idx] = await fn(list[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, run));
+  return results;
+}
+
+/**
  * Watched directories whose repo is no longer active — the FSWatchers to
  * close so a long session navigating many repos does not leak inotify watches
  * until it hits the OS limit. `watchedDirs` maps dir → {repoRoot}; `active`

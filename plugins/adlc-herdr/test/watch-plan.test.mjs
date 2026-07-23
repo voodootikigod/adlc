@@ -5,7 +5,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { planTokens, pendingWatchDirs, staleWatchDirs } from '../lib/watch-plan.mjs';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { planTokens, pendingWatchDirs, staleWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
 
 const counts = (ready, inFlight, blocked) => ({ ready, inFlight, blocked });
 
@@ -117,4 +118,42 @@ test('staleWatchDirs returns dirs whose repo is no longer active', () => {
 test('staleWatchDirs returns nothing when every watched repo is still active', () => {
   const watched = new Map([[join('/r', '.adlc'), { repoRoot: '/r' }]]);
   assert.deepEqual(staleWatchDirs(watched, new Set(['/r'])), []);
+});
+
+// ---- mapLimit (bounded concurrency for backlog spawns) ----
+
+test('mapLimit preserves order and applies fn to every item', async () => {
+  const out = await mapLimit([1, 2, 3, 4], 2, async (n) => n * 10);
+  assert.deepEqual(out, [10, 20, 30, 40]);
+});
+
+test('mapLimit never runs more than `limit` tasks at once', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const fn = async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await sleep(10);
+    inFlight -= 1;
+    return null;
+  };
+  await mapLimit(Array.from({ length: 20 }, (_, i) => i), 4, fn);
+  assert.ok(peak <= 4, `peak concurrency ${peak} exceeded the limit of 4`);
+  assert.ok(peak >= 2, 'the limiter should actually run tasks in parallel');
+});
+
+test('mapLimit handles the empty list and fails soft on a non-array', async () => {
+  assert.deepEqual(await mapLimit([], 4, async () => 1), []);
+  assert.deepEqual(await mapLimit(null, 4, async () => 1), []);
+});
+
+// ---- once (socket reconnect double-retry guard) ----
+
+test('once runs the action a single time even when called from both error and close', () => {
+  let calls = 0;
+  const retry = once(() => { calls += 1; });
+  retry(); // 'error'
+  retry(); // 'close'
+  retry(); // any further
+  assert.equal(calls, 1);
 });

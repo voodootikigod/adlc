@@ -15,13 +15,18 @@ import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
-import { planTokens, pendingWatchDirs, staleWatchDirs } from '../lib/watch-plan.mjs';
+import { planTokens, pendingWatchDirs, staleWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
 const HEARTBEAT_MS = 45_000;
 const DEBOUNCE_MS = 400;
-const BACKLOG_CACHE_MS = 30_000;
+// Above the heartbeat interval: a steady-state heartbeat reuses the cached
+// backlog (real changes still invalidate it via fs.watch) instead of
+// re-spawning `adlc export` on every beat.
+const BACKLOG_CACHE_MS = 60_000;
+// Max concurrent backlog subprocess reads per refresh.
+const READ_CONCURRENCY = 6;
 const SUBSCRIPTIONS = [
   'pane.created', 'pane.updated', 'pane.closed', 'pane.exited',
   'worktree.created', 'worktree.opened', 'worktree.removed',
@@ -66,17 +71,18 @@ async function refresh({ full = false } = {}) {
       watchedDirs.delete(dir);
     }
 
-    // Read each repo's state CONCURRENTLY: readBacklog spawns `adlc` with a
-    // 15s timeout, so awaiting several sequentially could exceed the 90s token
-    // TTL under load and let every token expire. Fan out, then plan.
+    // Read each repo's state with BOUNDED concurrency: readBacklog spawns
+    // `adlc` (15s timeout). Awaiting sequentially could exceed the 90s token
+    // TTL under load; spawning one per repo all at once (many worktrees) is a
+    // process storm. `mapLimit` fans out up to READ_CONCURRENCY at a time.
     for (const repoRoot of activeRepos) ensureWatched(repoRoot);
-    const states = await Promise.all([...activeRepos].map(async (repoRoot) => {
+    const states = await mapLimit([...activeRepos], READ_CONCURRENCY, async (repoRoot) => {
       const active = readActiveTicket(repoRoot);
       const phase = active.state === 'active' ? readLatestPhase(repoRoot, active.id) : null;
       const tickets = existsSync(join(repoRoot, '.adlc')) ? await readBacklog(repoRoot) : null;
       const counts = tickets ? backlogCounts(tickets, active.state === 'active' ? active.id : null) : null;
       return [repoRoot, { active, phase, counts }];
-    }));
+    });
     const repoState = new Map(states);
     const { nextPane, nextWorkspace } = planTokens(map, repoState);
 
@@ -126,6 +132,19 @@ function ensureWatched(repoRoot) {
   for (const dir of pendingWatchDirs(repoRoot, watchedDirs, existsSync)) {
     try {
       const watcher = watch(dir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
+      // If the directory is deleted (e.g. `rm -rf .adlc` before a re-init), the
+      // watch breaks silently; drop it from the map so a later refresh
+      // re-attaches once the directory reappears, instead of assuming it's
+      // still watched forever.
+      watcher.on('error', () => {
+        try {
+          watcher.close();
+        } catch {
+          // best-effort
+        }
+        watchedDirs.delete(dir);
+        scheduleRefresh();
+      });
       watchedDirs.set(dir, { watcher, repoRoot });
     } catch {
       // fail soft — heartbeat polling still covers this repo
@@ -154,7 +173,10 @@ function subscribeSocket() {
     }
     if (buf.length > 1_000_000) buf = ''; // bound memory on a torn stream
   });
-  const retry = () => setTimeout(subscribeSocket, 30_000).unref();
+  // A failed connection emits BOTH `error` and `close`; retry AT MOST once per
+  // socket instance, or the retries double on every failure (2^N) and exhaust
+  // file descriptors when the herdr server is down for a while.
+  const retry = once(() => setTimeout(subscribeSocket, 30_000).unref());
   client.on('error', retry);
   client.on('close', retry);
 }
