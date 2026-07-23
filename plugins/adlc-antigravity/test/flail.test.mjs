@@ -1,0 +1,145 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  normalizeError,
+  detectRepeatedErrors,
+  detectEditChurn,
+  resolveTranscriptPath,
+  parseTranscriptLines,
+  analyzeFlail,
+  createFlailTracker,
+} from '../flail-inline.mjs';
+import { runFromStdin, printStatus } from '../hooks/adlc-rails-guard.mjs';
+
+test('normalizeError strips line numbers, hex, quotes, absolute paths, and digits', () => {
+  const raw1 = 'Error: Failed to build target "/Users/test/app.js" at line 42 (0xDEADBEEF)';
+  const raw2 = 'Error: Failed to build target "C:\\Users\\test\\app.js" at line 99 (0x1234)';
+  const norm1 = normalizeError(raw1);
+  const norm2 = normalizeError(raw2);
+
+  assert.equal(norm1, norm2);
+  assert.equal(norm1, 'error: failed to build target at line ()');
+});
+
+test('detectRepeatedErrors detects error signatures repeating >= maxRepeat times', () => {
+  const lines = [
+    'Error: Failed to compile src/a.js at line 10',
+    'Info: compiling...',
+    'Error: Failed to compile src/b.js at line 20',
+    'Error: Failed to compile src/c.js at line 30',
+  ];
+  const detected = detectRepeatedErrors(lines, 3);
+  assert.equal(detected.length, 1);
+  assert.equal(detected[0].count, 3);
+  assert.equal(detected[0].signature, 'error: failed to compile at line');
+});
+
+test('detectEditChurn identifies files edited >= threshold times', () => {
+  const logs = ['Editing src/foo.ts', 'Editing src/bar.ts', 'Editing src/foo.ts', 'Editing src/foo.ts'];
+  const churning = detectEditChurn(logs, 3);
+  assert.equal(churning.length, 1);
+  assert.equal(churning[0].path, 'src/foo.ts');
+  assert.equal(churning[0].count, 3);
+});
+
+test('parseTranscriptLines extracts content and error text from JSONL transcript files', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'flail-test-'));
+  try {
+    const transcriptPath = join(tmpDir, 'transcript.jsonl');
+    const records = [
+      JSON.stringify({ step_index: 0, content: 'User request\nStarting build...' }),
+      JSON.stringify({ step_index: 1, content: 'Error: Cannot find module lodash line 1' }),
+      JSON.stringify({ step_index: 2, text: 'Error: Cannot find module express line 2' }),
+    ];
+    writeFileSync(transcriptPath, records.join('\n'));
+
+    const lines = parseTranscriptLines(transcriptPath);
+    assert.ok(lines.includes('Error: Cannot find module lodash line 1'));
+    assert.ok(lines.includes('Error: Cannot find module express line 2'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('analyzeFlail flags both edit churn and repeated errors', () => {
+  const edits = ['Editing src/a.js', 'Editing src/a.js', 'Editing src/a.js'];
+  const transcriptLines = [
+    'Error: Test failure in test/suite.js line 10',
+    'Error: Test failure in test/suite.js line 25',
+  ];
+
+  const res = analyzeFlail({ edits, transcriptLines, threshold: 3, maxErrorRepeat: 2 });
+  assert.equal(res.verdict, 'flail');
+  assert.equal(res.signals.length, 2);
+  assert.match(res.summary, /file edit churn/i);
+  assert.match(res.summary, /repeated error signatures/i);
+});
+
+test('createFlailTracker records history and returns flail analysis', () => {
+  const tracker = createFlailTracker({ threshold: 2, maxErrorRepeat: 2 });
+  const sessionID = 'session-123';
+
+  let res = tracker.record({
+    sessionID,
+    filePath: 'src/main.js',
+    transcriptLines: ['Error: Build failed line 1'],
+  });
+  assert.equal(res.verdict, 'clean');
+
+  res = tracker.record({
+    sessionID,
+    filePath: 'src/main.js',
+    transcriptLines: ['Error: Build failed line 2'],
+  });
+  assert.equal(res.verdict, 'flail');
+  assert.ok(res.isNewSignal);
+});
+
+test('runFromStdin denies mutating tools when session is flailing under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'flail-e2e-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    const ticket = { id: 'T-FLAIL', title: 'Flail test ticket', scope: ['src/**'] };
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-FLAIL' }));
+
+    // Mock transcript dir structure
+    const convId = 'conv-flail-999';
+    const brainLogsDir = join(root, 'brain', convId, '.system_generated', 'logs');
+    mkdirSync(brainLogsDir, { recursive: true });
+    const transcriptFile = join(brainLogsDir, 'transcript.jsonl');
+    writeFileSync(transcriptFile, [
+      JSON.stringify({ content: 'Error: Adversarial review check failed on line 12' }),
+      JSON.stringify({ content: 'Error: Adversarial review check failed on line 45' }),
+    ].join('\n'));
+
+    const env = {
+      ADLC_P4_ENFORCEMENT: '1',
+      ANTIGRAVITY_APP_DATA_DIR: root,
+    };
+
+    const targetFile = join(root, 'src', 'app.js');
+    const payload = JSON.stringify({
+      conversationId: convId,
+      toolCall: { name: 'write_to_file', args: { TargetFile: targetFile, CodeContent: 'x' } },
+      workspacePaths: [root],
+    });
+
+    const res = runFromStdin(payload, env);
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /flail-detector — session is flailing/i);
+    assert.match(res.deny_reason, /repeated error signatures/i);
+
+    // Bypass check
+    const bypassEnv = { ...env, ADLC_FLAIL_BYPASS: '1' };
+    const resBypass = runFromStdin(payload, bypassEnv);
+    assert.equal(resBypass.allow_tool, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
