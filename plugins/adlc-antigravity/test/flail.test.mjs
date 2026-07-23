@@ -143,3 +143,9 @@ test('runFromStdin denies mutating tools when session is flailing under enforcem
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('resolveTranscriptPath rejects path traversal sequences in conversationId', () => {
+  assert.equal(resolveTranscriptPath({ conversationId: '../secret' }), null);
+  assert.equal(resolveTranscriptPath({ conversationId: 'foo/bar' }), null);
+  assert.equal(resolveTranscriptPath({ conversationId: 'c:\\windows' }), null);
+});

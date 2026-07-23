@@ -79,7 +79,9 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
   if (!cid && !payload && typeof conversationId === 'string' && conversationId !== 'default_session') {
     cid = conversationId;
   }
-  if (!cid) return null;
+  if (!cid || typeof cid !== 'string') return null;
+  if (cid.includes('..') || cid.includes('/') || cid.includes('\\')) return null;
+
   const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const transcriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl');
   if (existsSync(transcriptPath)) return transcriptPath;
