@@ -16,7 +16,6 @@ import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 const REFRESH_MS = 3_000;
-const LEDGER_ROWS = 8;
 
 async function resolveRepo() {
   const parsed = parseContext(process.env.HERDR_PLUGIN_CONTEXT_JSON);
@@ -52,7 +51,7 @@ async function gather(repoRoot) {
     phase,
     groups,
     paneRows,
-    ledger: readLedgerTail(repoRoot, LEDGER_ROWS),
+    ledger: readLedgerTail(repoRoot),
   };
 }
 

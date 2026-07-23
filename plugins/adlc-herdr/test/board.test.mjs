@@ -53,6 +53,14 @@ test('readLedgerTail returns the last N parsed records, skipping torn lines', ()
   assert.deepEqual(tail.map((r) => r.seq), [2, 3]);
 });
 
+test('readLedgerTail defaults to the display depth (8 of a deeper ledger)', () => {
+  const lines = Array.from({ length: 12 }, (_, i) => JSON.stringify({ seq: i + 1 }));
+  writeAdlc('manifest.jsonl', lines.join('\n'));
+  const tail = readLedgerTail(repo);
+  assert.equal(tail.length, 8);
+  assert.deepEqual(tail.map((r) => r.seq), [5, 6, 7, 8, 9, 10, 11, 12]);
+});
+
 test('readLedgerTail yields [] for a missing ledger or non-positive n', () => {
   assert.deepEqual(readLedgerTail(repo, 5), []);
   writeAdlc('manifest.jsonl', JSON.stringify({ seq: 1 }));

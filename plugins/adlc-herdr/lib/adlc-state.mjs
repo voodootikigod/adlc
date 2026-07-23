@@ -101,8 +101,11 @@ export function groupBacklog(tickets, activeId) {
   return groups;
 }
 
+/** Default ledger-tail depth for display surfaces (the board). */
+export const DEFAULT_LEDGER_ROWS = 8;
+
 /** Last `n` parsed records of `.adlc/manifest.jsonl` (torn lines skipped). */
-export function readLedgerTail(repoRoot, n) {
+export function readLedgerTail(repoRoot, n = DEFAULT_LEDGER_ROWS) {
   if (!Number.isFinite(n) || n <= 0) return [];
   const path = join(repoRoot, '.adlc', 'manifest.jsonl');
   if (!existsSync(path)) return [];

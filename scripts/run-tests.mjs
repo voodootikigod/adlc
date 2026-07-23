@@ -66,6 +66,7 @@ const SEGMENTS = [
   ['cursor install smoke', 'node scripts/cursor-install-smoke.mjs .'],
   ['antigravity', 'node --test plugins/adlc-antigravity/test/*.test.mjs'],
   ['antigravity install smoke', 'node scripts/antigravity-install-smoke.mjs .'],
+  ['herdr', 'node --test plugins/adlc-herdr/test/*.test.mjs'],
   ['docs app', 'node --test apps/docs/test/*.test.mjs'],
 ];
 
