@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { ARCHIVE_DIRECTORY, CURRENT_TICKET_FILE, LOCK_DIRECTORY } from './constants.mjs';
 import { readTicketLock } from './lock.mjs';
@@ -73,14 +74,26 @@ function storeHashBindingCheck(root, snapshot) {
     return { ...check, ok: false, code: 'MANIFEST_UNREADABLE', message: `cannot read the evidence ledger: ${error.message}` };
   }
 
-  // The last store-level evidence entry is the most recent CHECKPOINT the store was
-  // hash-bound at. We report only whether the store still matches that checkpoint.
+  // Verify the manifest is a well-formed, unbroken hash chain BEFORE trusting any
+  // storeHash it records. Otherwise a forged or tampered ledger could assert an
+  // arbitrary "bound" hash, and a malformed line silently skipped could hide a break.
+  // The chain format is the ledger writer's (evidence.mjs / ledger.mjs): each entry's
+  // `prev` is sha256 of the previous raw line, and `seq` increments from 1.
   let boundStoreHash = null;
-  for (const line of lines) {
+  let prevLine = null;
+  let prevSeq = 0;
+  for (let i = 0; i < lines.length; i++) {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; } // a malformed line is another check's concern
-    const data = entry?.data;
-    if (data && typeof data.storeHash === 'string') boundStoreHash = data.storeHash;
+    try { entry = JSON.parse(lines[i]); } catch {
+      return { ...check, bound: false, reason: `manifest ledger has a malformed entry at line ${i + 1}; integrity not verifiable` };
+    }
+    const expectedPrev = prevLine === null ? null : createHash('sha256').update(prevLine).digest('hex');
+    if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) {
+      return { ...check, bound: false, reason: `manifest hash chain breaks at line ${i + 1}; integrity not verifiable` };
+    }
+    if (entry?.data && typeof entry.data.storeHash === 'string') boundStoreHash = entry.data.storeHash;
+    prevLine = lines[i];
+    prevSeq = entry.seq;
   }
 
   if (!boundStoreHash) return { ...check, bound: false, reason: 'no evidence-required transaction recorded yet' };

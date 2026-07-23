@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { initializeTicketStores, TicketService, detectTicketStore, ticketFilename } from '@adlc/tickets';
+import { initializeTicketStores, TicketService, detectTicketStore, ticketFilename, readTicketLock } from '@adlc/tickets';
 import { runFleet, integrationBranchName } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 import { completeTicketOnIntegration } from '../lib/complete.mjs';
@@ -163,6 +163,24 @@ test('on a repo with NO manifest baseline, completion is skipped — it never cr
     assert.equal(isCompleted(root, 'T1'), false, 'the ticket stays open');
     assert.ok(!existsSync(join(root, '.adlc', 'manifest.jsonl')), 'no manifest was created');
     assert.equal(git('status', '--porcelain'), '', 'the checkout is untouched');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the completion holds the ticket writer lock across the transaction AND the commit, then releases it (T73)', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    // Observe the lock state at commit time: the transaction, the commit, and any
+    // rollback must run under ONE held lock so a concurrent writer cannot interleave
+    // and be clobbered by the rollback.
+    let lockHeldDuringCommit = null;
+    const observingGit = (...args) => {
+      if (args[0] === 'commit') lockHeldDuringCommit = readTicketLock(root);
+      return git(...args);
+    };
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: observingGit });
+    assert.equal(res.completed, true);
+    assert.ok(lockHeldDuringCommit, 'the writer lock is held during the commit — transaction+commit are atomic');
+    assert.ok(!readTicketLock(root), 'and the lock is released afterward (no stale lock left behind)');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

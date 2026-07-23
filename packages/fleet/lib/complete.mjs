@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { ACTIVE_DIRECTORY, DirectoryTicketStore, LEGACY_FILE, detectTicketStore, TicketService, ticketFilename } from '@adlc/tickets';
+import { ACTIVE_DIRECTORY, DirectoryTicketStore, LEGACY_FILE, detectTicketStore, TicketService, ticketFilename, acquireTicketLock, releaseTicketLock } from '@adlc/tickets';
 import { defaultGit } from './worktrees.mjs';
 
 const MANIFEST_FILE = '.adlc/manifest.jsonl';
@@ -43,53 +43,59 @@ function restoreFile(absPath, priorBytes) {
  */
 export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(repo), detectStore = detectTicketStore } = {}) {
   const store = detectStore({ root: repo });
-  const snapshot = store.load();
-  const existing = snapshot.get(ticketId);
-  if (!existing) return { completed: false, reason: 'ticket-not-found' };
-  // Idempotency: guard BEFORE planComplete. A no-change complete transaction
-  // still records evidence (evidenceRequired) and would leave an empty commit —
-  // so an already-completed ticket must short-circuit here.
-  if (existing.completed === true) return { completed: false, alreadyComplete: true };
-
-  // Capture the exact pre-completion bytes of the two paths this touches, BEFORE
-  // the transaction writes them, so a failed commit can be rolled back precisely
-  // whether or not the manifest already existed.
   const storePath = completionStorePath(store, ticketId);
   const storeAbs = join(repo, storePath);
   const manifestAbs = join(repo, MANIFEST_FILE);
-  const priorStore = existsSync(storeAbs) ? readFileSync(storeAbs) : null;
-  const priorManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
 
-  // rails-guard-ci DENIES a PR that CREATES .adlc/manifest.jsonl with evidence
-  // (only a verified migration may); appending to an existing one is allowed. On a
-  // repo whose ADLC manifest is not yet bootstrapped, recording completion evidence
-  // here would create the ledger and get the whole fleet PR rejected. Skip
-  // auto-completion in that case and degrade to "merged, not yet completed" rather
-  // than open a PR the CI gate is guaranteed to reject.
-  if (priorManifest === null) return { completed: false, reason: 'no-manifest-baseline' };
-
-  const service = new TicketService(store, { root: repo });
-  service.apply(service.planComplete(ticketId));
-
-  // Commit ONLY the completion artifacts (the shard/legacy file + the evidence
-  // ledger). A path-scoped add + commit never sweeps in unrelated build output
-  // the post-merge gate may have left in the working tree.
+  // Hold the ticket writer lock across the ENTIRE completion — the read, the
+  // transaction, the commit, and any rollback. The transaction alone releases the
+  // lock as soon as it returns, which would let another ticket/manifest writer
+  // interleave before the commit; a failed-commit rollback (which rewrites the whole
+  // shard + manifest back to pre-completion bytes) could then clobber that writer's
+  // committed state. Holding one lock over the whole unit makes it atomic. `apply`
+  // reuses this lock and does NOT release it (we release in finally).
+  const lock = acquireTicketLock(repo, { command: `fleet:complete:${ticketId}` });
   try {
-    git('add', '--', storePath, MANIFEST_FILE);
-    git('commit', '-q', '-m', `chore(${ticketId}): mark completed after passing merge gate`, '--', storePath, MANIFEST_FILE);
-  } catch (error) {
-    // planComplete already wrote the shard + manifest to disk and `git add` may
-    // have staged them. A failed commit (e.g. a rejecting commit hook) must NOT
-    // leave the shared integration checkout dirty — a later fleet step could sweep
-    // the orphaned staged change into an unrelated commit, and the pushed branch
-    // would be inconsistent. Restore the two owned paths to their exact
-    // pre-completion bytes, unstage them, then re-throw so the caller degrades to
-    // "merged, not yet completed" exactly as before.
-    restoreFile(storeAbs, priorStore);
-    restoreFile(manifestAbs, priorManifest);
-    try { git('reset', '-q', '--', storePath, MANIFEST_FILE); } catch { /* best-effort unstage */ }
-    throw error;
-  }
+    const existing = store.load().get(ticketId);
+    if (!existing) return { completed: false, reason: 'ticket-not-found' };
+    // Idempotency: an already-completed ticket short-circuits — a no-change complete
+    // still records evidence and would leave an empty commit.
+    if (existing.completed === true) return { completed: false, alreadyComplete: true };
 
-  return { completed: true };
+    // Capture pre-completion bytes (BEFORE the transaction writes them) so a failed
+    // commit rolls back precisely.
+    const priorStore = existsSync(storeAbs) ? readFileSync(storeAbs) : null;
+    const priorManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
+
+    // rails-guard-ci DENIES a PR that CREATES .adlc/manifest.jsonl with evidence
+    // (only a verified migration may); appending to an existing one is allowed. On a
+    // repo whose ADLC manifest is not yet bootstrapped, recording completion evidence
+    // here would create the ledger and get the whole fleet PR rejected. Skip
+    // auto-completion in that case and degrade to "merged, not yet completed".
+    if (priorManifest === null) return { completed: false, reason: 'no-manifest-baseline' };
+
+    const service = new TicketService(store, { root: repo });
+    service.apply(service.planComplete(ticketId), { lock });
+
+    // Commit ONLY the completion artifacts (the shard/legacy file + the evidence
+    // ledger). A path-scoped add + commit never sweeps in unrelated build output.
+    try {
+      git('add', '--', storePath, MANIFEST_FILE);
+      git('commit', '-q', '-m', `chore(${ticketId}): mark completed after passing merge gate`, '--', storePath, MANIFEST_FILE);
+    } catch (error) {
+      // A failed commit (e.g. a rejecting hook) must NOT leave the shared integration
+      // checkout dirty. Restore the two owned paths to their exact pre-completion
+      // bytes and unstage them, then re-throw so the caller degrades to "merged, not
+      // yet completed". Safe under the held lock — no other writer can have touched
+      // these paths since we captured them.
+      restoreFile(storeAbs, priorStore);
+      restoreFile(manifestAbs, priorManifest);
+      try { git('reset', '-q', '--', storePath, MANIFEST_FILE); } catch { /* best-effort unstage */ }
+      throw error;
+    }
+
+    return { completed: true };
+  } finally {
+    releaseTicketLock(lock);
+  }
 }

@@ -210,6 +210,25 @@ test('doctor storehash-manifest-bind: a legitimate unevidenced op (create) is re
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('doctor storehash-manifest-bind: a forged / chain-broken manifest is NOT trusted (no arbitrary checkpoint)', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // Append a forged entry asserting an arbitrary storeHash but with a broken
+    // prev-link and out-of-sequence seq. The check must verify the hash chain and
+    // refuse to adopt the forged hash — reporting the ledger unverifiable instead of
+    // silently trusting the last syntactically-valid storeHash.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const forged = JSON.stringify({ seq: 999, gate: 'forged', ts: '2026-01-01T00:00:00.000Z', data: { storeHash: 'deadbeefdeadbeef', bindingScope: 'store' }, prev: 'not-a-real-hash' });
+    writeFileSync(manifestPath, readFileSync(manifestPath, 'utf8') + forged + '\n');
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.bound, false, 'a chain-invalid manifest is not trusted as a binding');
+    assert.notEqual(check.boundStoreHash, 'deadbeefdeadbeef', 'the forged storeHash is never adopted');
+    assert.match(check.reason ?? '', /chain|verifiable|malformed/i, 'the broken chain is reported');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('doctor storehash-manifest-bind: a store with no recorded evidence yet is inert (not a failure)', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-noevidence-'));
   try {
