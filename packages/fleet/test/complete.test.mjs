@@ -9,14 +9,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { initializeTicketStores, TicketService, detectTicketStore, ticketFilename, readTicketLock } from '@adlc/tickets';
 import { runFleet, integrationBranchName } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
-import { completeTicketOnIntegration } from '../lib/complete.mjs';
+import { completeTicketOnIntegration, revertCompletionCommit } from '../lib/complete.mjs';
 
 function gitRunner(cwd) {
   return (...args) =>
@@ -195,6 +195,51 @@ test('the completion holds the ticket writer lock across the transaction AND the
     assert.equal(res.completed, true);
     assert.ok(lockHeldDuringCommit, 'the writer lock is held during the commit — transaction+commit are atomic');
     assert.ok(!readTicketLock(root), 'and the lock is released afterward (no stale lock left behind)');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a failed commit does NOT erase a concurrent manifest evidence append (data loss)', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    // A concurrent recorder appends gate evidence between our transaction and the
+    // commit — it holds the LEDGER lock, which our ticket lock does not cover.
+    const concurrentLine = '{"seq":99,"gate":"concurrent-recorder","ts":"2026-01-02T00:00:00.000Z","data":{},"prev":null}';
+    const failingGit = (...args) => {
+      if (args[0] === 'commit') {
+        writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}${concurrentLine}\n`);
+        throw new Error('commit rejected by hook');
+      }
+      return git(...args);
+    };
+
+    assert.throws(() => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: failingGit }), /commit rejected/);
+
+    const manifestAfter = readFileSync(manifestPath, 'utf8');
+    assert.ok(manifestAfter.includes('concurrent-recorder'), 'the concurrent evidence append survives the rollback');
+    assert.equal(isCompleted(root, 'T1'), false, 'while the shard is still rolled back');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('withdrawing the completion commit does NOT destroy unrelated tracked work in the shared checkout', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    assert.equal(res.completed, true);
+
+    // Unrelated tracked work present in the shared integration checkout, as another
+    // step may legitimately have staged/modified. A checkout-wide reset --hard would
+    // destroy it.
+    const unrelated = join(root, 'unrelated.txt');
+    writeFileSync(unrelated, 'work in progress\n');
+    git('add', '--', 'unrelated.txt');
+
+    revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, git });
+
+    assert.equal(isCompleted(root, 'T1'), false, 'the completion annotation is withdrawn');
+    assert.equal(git('rev-parse', 'HEAD'), res.preCompletionSha, 'HEAD is back at the pre-completion commit');
+    assert.ok(existsSync(unrelated), 'unrelated tracked work is NOT destroyed');
+    assert.equal(readFileSync(unrelated, 'utf8'), 'work in progress\n');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

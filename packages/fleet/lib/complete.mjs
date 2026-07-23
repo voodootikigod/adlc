@@ -31,12 +31,25 @@ function restoreFile(absPath, priorBytes) {
 }
 
 /**
- * Discard the completion commit, returning the integration branch to `toSha`.
+ * Withdraw the completion commit, returning the integration branch to `toSha`.
  * Used when the gate re-run over the completion commit fails: the shipped merge
  * below it stays intact, only the completion annotation is withdrawn.
+ *
+ * Deliberately NOT a checkout-wide `reset --hard`: this runs in the SHARED
+ * integration checkout, so a hard reset would destroy unrelated tracked work. HEAD
+ * moves back with --soft and only this completion's own paths are discarded.
+ *
+ * The manifest is treated differently from the shard: it is a shared, append-only
+ * evidence ledger whose appends are serialized by the LEDGER lock, not the ticket
+ * lock — a concurrent recorder may have appended since. So the manifest is only
+ * UNSTAGED (its bytes are left on disk); restoring it to `toSha` would erase that
+ * concurrent evidence. An extra append-only evidence line is harmless; losing
+ * another writer's evidence is not.
  */
-export function revertCompletionCommit({ repo, toSha, git = defaultGit(repo) } = {}) {
-  git('reset', '--hard', toSha);
+export function revertCompletionCommit({ repo, toSha, shardPath = null, git = defaultGit(repo) } = {}) {
+  git('reset', '-q', '--soft', toSha);
+  if (shardPath) git('restore', '--staged', '--worktree', '--', shardPath);
+  git('restore', '--staged', '--', MANIFEST_FILE);
   return { reverted: true, toSha };
 }
 
@@ -90,6 +103,9 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
 
     const service = new TicketService(store, { root: repo });
     service.apply(service.planComplete(ticketId), { lock });
+    // What the manifest looks like immediately after OUR append — the baseline for
+    // detecting a concurrent evidence append before any rollback.
+    const afterManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
 
     // Commit ONLY the completion artifacts (the shard/legacy file + the evidence
     // ledger). A path-scoped add + commit never sweeps in unrelated build output.
@@ -102,13 +118,22 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
       // bytes and unstage them, then re-throw so the caller degrades to "merged, not
       // yet completed". Safe under the held lock — no other writer can have touched
       // these paths since we captured them.
+      // The shard is covered by the ticket lock we hold, so restoring it is safe.
       restoreFile(storeAbs, priorStore);
-      restoreFile(manifestAbs, priorManifest);
+      // The manifest is NOT: its appends are serialized by the ledger lock, and other
+      // pipeline steps record gate evidence concurrently. Only roll it back when it is
+      // byte-identical to what THIS completion left — i.e. nothing appended since.
+      // Otherwise leave it: an extra append-only evidence line is harmless, erasing a
+      // concurrent writer's evidence is data loss.
+      const manifestNow = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
+      const untouchedSinceOurAppend = manifestNow !== null && afterManifest !== null
+        && manifestNow.equals(afterManifest);
+      if (untouchedSinceOurAppend) restoreFile(manifestAbs, priorManifest);
       try { git('reset', '-q', '--', storePath, MANIFEST_FILE); } catch { /* best-effort unstage */ }
       throw error;
     }
 
-    return { completed: true, preCompletionSha };
+    return { completed: true, preCompletionSha, shardPath: storePath };
   } finally {
     releaseTicketLock(lock);
   }
