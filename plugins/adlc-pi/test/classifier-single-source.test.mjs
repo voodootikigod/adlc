@@ -47,8 +47,9 @@ test('live checkShellCommand denies the #290 redirect bypass into a frozen rail 
     // These use a read-only-ALLOWLISTED prefix (`cat`), so a classifier missing
     // the #290 fix classifies them read-only and ALLOWS them. Each flips
     // allow->deny exactly on `hasUnquotedFileRedirect` — genuinely load-bearing
-    // for pi's live path (the echo forms below are NOT: echo is not allowlisted,
-    // so they deny via the fail-closed default regardless of #290).
+    // for pi's live path (the echo case below is NOT: echo is not allowlisted,
+    // so its SPACED redirect is caught by the legacy whitespace-anchored regex
+    // and denied via the rail-hit branch regardless of #290).
     const mustDeny290 = [
       `cat x>${rail}`,     // no space before >  (the exact pre-#290 bypass)
       `cat x>"${rail}"`,   // quoted no-space target
@@ -63,7 +64,9 @@ test('live checkShellCommand denies the #290 redirect bypass into a frozen rail 
     }
 
     // Sanity: a non-allowlisted prefix writing to a rail is denied too — here via
-    // the fail-closed default, independent of #290 (kept only as a sanity check).
+    // the rail-hit branch (the spaced redirect trips the legacy whitespace-
+    // anchored regex, so this holds independent of #290). Kept only as a sanity
+    // check; it is NOT load-bearing for the #290 fix.
     assert.equal(
       checkShellCommand(`echo hi > ${rail}`, ticket, root).decision,
       'deny',
