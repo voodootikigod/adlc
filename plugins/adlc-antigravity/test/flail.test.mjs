@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -146,6 +146,18 @@ test('runFromStdin denies mutating tools when session is flailing under enforcem
     const resReadonly = runFromStdin(readonlyPayload, env);
     assert.equal(resReadonly.allow_tool, true);
 
+    // Tools classified as 'other' do not record file edit churn
+    const otherFile = join(root, 'src', 'other.js');
+    const otherPayload = JSON.stringify({
+      conversationId: convId,
+      toolCall: { name: 'custom_file_op', args: { path: otherFile } },
+      workspacePaths: [root],
+    });
+    const resOther = runFromStdin(otherPayload, env);
+    assert.equal(resOther.allow_tool, true);
+    const trackerCheck = createPersistentTracker(root);
+    assert.equal(trackerCheck.edits(convId).includes(`Editing ${otherFile}`), false);
+
     // Standalone ADLC_FLAIL_ENFORCEMENT=1 without ADLC_P4_ENFORCEMENT
     const flailOnlyEnv = {
       ADLC_FLAIL_ENFORCEMENT: '1',
@@ -193,12 +205,13 @@ test('createPersistentTracker handles null sessionID, missing ticket store, null
     const nullSessRes = tracker.recordEdit(null, 'src/app.js');
     assert.equal(nullSessRes.verdict, 'clean');
 
-    // 2. missing ticket store returns clean without recording
+    // 2. missing ticket store returns clean without recording or creating store file
     const noStoreRoot = mkdtempSync(join(tmpdir(), 'no-store-'));
     try {
       const noStoreTracker = createPersistentTracker(noStoreRoot);
       const noStoreRes = noStoreTracker.recordEdit('s1', 'src/app.js');
       assert.equal(noStoreRes.verdict, 'clean');
+      assert.equal(existsSync(join(noStoreRoot, '.adlc', 'ticket-store.json')), false);
     } finally {
       rmSync(noStoreRoot, { recursive: true, force: true });
     }
