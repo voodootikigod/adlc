@@ -16,7 +16,7 @@ plus herdr's own API. The capability × harness matrix keeps seven columns.
 | Piece | Ticket | State |
 | --- | --- | --- |
 | Manifest, herdr CLI shim, sanitizer rail | t-herdr-1 | shipped |
-| Watcher daemon → per-pane status tokens | t-herdr-2 | planned |
+| Watcher daemon → per-pane status tokens | t-herdr-2 | shipped |
 | Actions: ticket-show / gate / prosecute | t-herdr-3 | planned |
 | Board pane | t-herdr-4 | planned |
 
@@ -63,6 +63,17 @@ arrays; `[[events]]` uses dotted names (`on = "worktree.created"`) while the
 socket schema uses underscores (`worktree_created`); `wait agent-status`
 accepts `done` but `agent wait --status` does not. Re-verify against the
 installed herdr before extending the shim.
+
+Watcher-specific probes (2026-07-23, same host): pane objects carry both
+`cwd` (launch dir) and `foreground_cwd` (live process cwd — use this for repo
+mapping); the `tokens` key is **absent** when no tokens are set, and
+`--ttl-ms` applies to every token in the call (expiry removes the key);
+`report-metadata` succeeds silently and accepts 300-char values (we cap at 64
+anyway). The socket speaks newline-delimited JSON: `{id, method:
+"events.subscribe", params: {subscriptions: [{type: "pane.updated"}, …]}}`
+(dotted wire names) is acked with `subscription_started`, then events stream
+as `{data: {pane: {…}}}` objects — ~25 events in 2.5s on a busy session, so
+the watcher debounces and never spawns a process per event.
 
 ## Live smoke (AC7 — operator-run, not CI)
 

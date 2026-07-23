@@ -10,6 +10,9 @@
     }
   ],
   "id": "t-herdr-2",
+  "rails": [
+    "plugins/adlc-herdr/test/panemap.test.mjs"
+  ],
   "scope": [
     "plugins/adlc-herdr/**"
   ],

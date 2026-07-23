@@ -1,0 +1,163 @@
+// t-herdr-2 verification: the watcher's logic surface, with the herdr CLI
+// mocked behind lib/herdr.mjs and real temp-dir fixtures for `.adlc/` reads.
+// The daemon loop in bin/watcher.mjs stays thin; everything decision-shaped
+// lives in lib/adlc-state.mjs and lib/tokens.mjs and is pinned here.
+import { test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readActiveTicket, readLatestPhase, backlogCounts } from '../lib/adlc-state.mjs';
+import { paneTokens, workspaceTokens, buildReportArgs, diffPublishes, versionGate } from '../lib/tokens.mjs';
+
+let repo;
+beforeEach(() => { repo = mkdtempSync(join(tmpdir(), 'adlc-herdr-test-')); });
+afterEach(() => { rmSync(repo, { recursive: true, force: true }); });
+
+const writeAdlc = (rel, content) => {
+  mkdirSync(join(repo, '.adlc'), { recursive: true });
+  writeFileSync(join(repo, '.adlc', rel), content);
+};
+
+// ---- readActiveTicket ----
+
+test('readActiveTicket: missing .adlc or pointer file is absent (fail soft)', () => {
+  assert.deepEqual(readActiveTicket(repo), { state: 'absent' });
+  mkdirSync(join(repo, '.adlc'), { recursive: true });
+  assert.deepEqual(readActiveTicket(repo), { state: 'absent' });
+});
+
+test('readActiveTicket: malformed JSON is unreadable, never a throw', () => {
+  writeAdlc('current-ticket.json', '{not json');
+  assert.deepEqual(readActiveTicket(repo), { state: 'unreadable' });
+});
+
+test('readActiveTicket: pointer without a string id is unreadable', () => {
+  writeAdlc('current-ticket.json', JSON.stringify({ ticketHash: 'abc' }));
+  assert.deepEqual(readActiveTicket(repo), { state: 'unreadable' });
+});
+
+test('readActiveTicket: a valid pointer yields the id', () => {
+  writeAdlc('current-ticket.json', JSON.stringify({ id: 't-x1', ticketHash: 'abc' }));
+  assert.deepEqual(readActiveTicket(repo), { state: 'active', id: 't-x1' });
+});
+
+// ---- readLatestPhase ----
+
+test('readLatestPhase: missing ledger yields null', () => {
+  assert.equal(readLatestPhase(repo, 't-x1'), null);
+});
+
+test('readLatestPhase: newest matching record wins; other tickets and phaseless records ignored', () => {
+  writeAdlc('manifest.jsonl', [
+    JSON.stringify({ ticket: 't-x1', data: { phase: 'p3' } }),
+    JSON.stringify({ ticket: 't-other', data: { phase: 'p5' } }),
+    JSON.stringify({ ticket: 't-x1', data: { note: 'no phase here' } }),
+    JSON.stringify({ ticket: 't-x1', data: { phase: 'p4' } }),
+  ].join('\n'));
+  assert.equal(readLatestPhase(repo, 't-x1'), 'P4');
+});
+
+test('readLatestPhase: a torn (unparseable) trailing line is skipped, not fatal', () => {
+  writeAdlc('manifest.jsonl', `${JSON.stringify({ ticket: 't-x1', data: { phase: 'p5' } })}\n{"tor`);
+  assert.equal(readLatestPhase(repo, 't-x1'), 'P5');
+});
+
+// ---- backlogCounts ----
+
+const t = (id, { completed = false, edges = [] } = {}) => ({ id, completed, edges });
+
+test('backlogCounts: completed tickets are excluded and satisfy edges (invariant #104)', () => {
+  const tickets = [
+    t('t-done', { completed: true, edges: [{ to: 't-b' }] }),
+    t('t-a', { edges: [{ to: 't-c' }] }),
+    t('t-b'),
+    t('t-c'),
+  ];
+  // t-b unblocked (prereq completed); t-c blocked by live t-a; t-a ready.
+  assert.deepEqual(backlogCounts(tickets, null), { ready: 2, inFlight: 0, blocked: 1 });
+});
+
+test('backlogCounts: the active ticket counts as in-flight, not ready', () => {
+  const tickets = [t('t-a'), t('t-b')];
+  assert.deepEqual(backlogCounts(tickets, 't-a'), { ready: 1, inFlight: 1, blocked: 0 });
+});
+
+test('backlogCounts: fails soft on malformed input', () => {
+  assert.deepEqual(backlogCounts(null, null), { ready: 0, inFlight: 0, blocked: 0 });
+  assert.deepEqual(backlogCounts([{ junk: true }], null), { ready: 0, inFlight: 0, blocked: 0 });
+});
+
+// ---- token building ----
+
+test('paneTokens: active ticket + phase; phase key omitted when unknown', () => {
+  assert.deepEqual(paneTokens({ state: 'active', id: 't-x1' }, 'P4'), { ticket: 't-x1', phase: 'P4' });
+  assert.deepEqual(paneTokens({ state: 'active', id: 't-x1' }, null), { ticket: 't-x1' });
+});
+
+test('paneTokens: unreadable pointer yields an explicit unreadable token', () => {
+  assert.deepEqual(paneTokens({ state: 'unreadable' }, null), { ticket: 'unreadable' });
+});
+
+test('paneTokens: absent state publishes nothing', () => {
+  assert.deepEqual(paneTokens({ state: 'absent' }, null), {});
+});
+
+test('paneTokens: values are sanitized — escape injection in a ticket id is stripped', () => {
+  const hostile = { state: 'active', id: '\x1b]0;pwn\x07t-x1\x1b[31m' };
+  assert.deepEqual(paneTokens(hostile, null), { ticket: 't-x1' });
+});
+
+test('workspaceTokens renders backlog counts as single sanitized tokens', () => {
+  assert.deepEqual(
+    workspaceTokens({ ready: 3, inFlight: 1, blocked: 2 }),
+    { adlc_ready: '3', adlc_active: '1', adlc_blocked: '2' },
+  );
+});
+
+// ---- publish planning ----
+
+test('buildReportArgs emits a single batched report-metadata argv with TTL', () => {
+  const args = buildReportArgs('w1:p2', { ticket: 't-x1', phase: 'P4' }, 90_000);
+  assert.deepEqual(args, [
+    'pane', 'report-metadata', 'w1:p2', '--source', 'adlc',
+    '--token', 'ticket=t-x1', '--token', 'phase=P4', '--ttl-ms', '90000',
+  ]);
+});
+
+test('buildReportArgs never emits report-agent (agent state belongs to herdr built-ins)', () => {
+  const args = buildReportArgs('w1:p2', { ticket: 't-x1' }, 90_000);
+  assert.ok(!args.includes('report-agent'));
+  assert.equal(args[1], 'report-metadata');
+});
+
+test('diffPublishes returns only new or changed pane token sets', () => {
+  const prev = new Map([['w1:p1', { ticket: 't-a' }], ['w1:p2', { ticket: 't-b' }]]);
+  const next = new Map([['w1:p1', { ticket: 't-a' }], ['w1:p2', { ticket: 't-b', phase: 'P5' }], ['w1:p3', { ticket: 't-c' }]]);
+  assert.deepEqual([...diffPublishes(prev, next).keys()].sort(), ['w1:p2', 'w1:p3']);
+});
+
+test('diffPublishes with identical maps publishes nothing (change-driven, not periodic spam)', () => {
+  const same = new Map([['w1:p1', { ticket: 't-a', phase: 'P4' }]]);
+  assert.equal(diffPublishes(same, new Map(same)).size, 0);
+});
+
+// ---- version gate ----
+
+test('versionGate: at or below the tested ceiling is supported', () => {
+  assert.deepEqual(versionGate('herdr 0.7.4', '0.7.4'), { supported: true });
+  assert.deepEqual(versionGate('herdr 0.7.3', '0.7.4'), { supported: true });
+});
+
+test('versionGate: newer than the ceiling degrades to a single warning token', () => {
+  const res = versionGate('herdr 0.8.0', '0.7.4');
+  assert.equal(res.supported, false);
+  assert.ok(res.token.includes('untested'));
+  assert.ok(res.token.includes('0.8.0'));
+});
+
+test('versionGate: unparseable version output degrades (fail closed to the warning)', () => {
+  const res = versionGate('something weird', '0.7.4');
+  assert.equal(res.supported, false);
+  assert.ok(res.token.includes('untested'));
+});
