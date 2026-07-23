@@ -77,6 +77,19 @@ export function staleWatchDirs(watchedDirs, active) {
 }
 
 /**
+ * Watched directories that no longer exist on disk. Deleting a watched dir
+ * emits `rename`/`change` (NOT `error`), so an error-handler self-heal never
+ * fires — the daemon must actively check existence each refresh, drop the dead
+ * watch, and let `pendingWatchDirs` re-attach when the dir reappears (the
+ * `rm -rf .adlc && adlc init` case). `exists` is injected for testability.
+ */
+export function deadWatchDirs(watchedDirs, exists) {
+  const dead = [];
+  for (const dir of watchedDirs.keys()) if (!exists(dir)) dead.push(dir);
+  return dead;
+}
+
+/**
  * @param {Array<{paneId, workspaceId, repoRoot}>} paneMap
  * @param {Map<string,{active, phase, counts}>} repoState  keyed by repoRoot
  * @returns {{nextPane: Map<string,object>, nextWorkspace: Map<string,object>}}

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { planTokens, pendingWatchDirs, staleWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
+import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
 
 const counts = (ready, inFlight, blocked) => ({ ready, inFlight, blocked });
 
@@ -118,6 +118,23 @@ test('staleWatchDirs returns dirs whose repo is no longer active', () => {
 test('staleWatchDirs returns nothing when every watched repo is still active', () => {
   const watched = new Map([[join('/r', '.adlc'), { repoRoot: '/r' }]]);
   assert.deepEqual(staleWatchDirs(watched, new Set(['/r'])), []);
+});
+
+// ---- deadWatchDirs (directory-deletion self-heal, the round-7 HIGH) ----
+
+test('deadWatchDirs returns watched dirs that no longer exist on disk', () => {
+  const gone = join('/r', '.adlc');
+  const live = join('/r', '.adlc', 'tickets');
+  const watched = new Map([[gone, { repoRoot: '/r' }], [live, { repoRoot: '/r' }]]);
+  // .adlc was `rm -rf`'d; its tickets child reports gone too, but say only the
+  // parent is missing to prove per-dir granularity.
+  const exists = (p) => p === live;
+  assert.deepEqual(deadWatchDirs(watched, exists), [gone]);
+});
+
+test('deadWatchDirs returns nothing when every watched dir still exists', () => {
+  const watched = new Map([[join('/r', '.adlc'), { repoRoot: '/r' }]]);
+  assert.deepEqual(deadWatchDirs(watched, () => true), []);
 });
 
 // ---- mapLimit (bounded concurrency for backlog spawns) ----

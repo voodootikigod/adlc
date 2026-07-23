@@ -15,7 +15,7 @@ import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
-import { planTokens, pendingWatchDirs, staleWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
+import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
@@ -79,12 +79,17 @@ async function refreshPass(full) {
     const groups = repoGroups(map);
     const activeRepos = new Set(groups.keys());
 
-    // Close watches for repos no longer present — otherwise each repo ever
-    // observed leaks two inotify watches for the process lifetime, eventually
-    // hitting the OS limit (EMFILE/ENOSPC).
-    for (const dir of staleWatchDirs(watchedDirs, activeRepos)) {
+    // Close watches for repos no longer present (leak prevention) AND for
+    // directories deleted on disk (a deleted `.adlc` emits rename/change, not
+    // error, so the watch goes silently dead — drop it here so ensureWatched
+    // re-attaches when the dir reappears).
+    const toClose = new Set([
+      ...staleWatchDirs(watchedDirs, activeRepos),
+      ...deadWatchDirs(watchedDirs, existsSync),
+    ]);
+    for (const dir of toClose) {
       try {
-        watchedDirs.get(dir).watcher.close();
+        watchedDirs.get(dir)?.watcher.close();
       } catch {
         // best-effort
       }
@@ -144,11 +149,11 @@ function scheduleRefresh() {
 function ensureWatched(repoRoot) {
   for (const dir of pendingWatchDirs(repoRoot, watchedDirs, existsSync)) {
     try {
+      // Deletion of `dir` (e.g. `rm -rf .adlc`) emits rename/change, not
+      // error, and the deterministic `deadWatchDirs` prune in refresh() is what
+      // drops the dead watch so this re-attaches on re-init. The `error`
+      // handler is only a defensive backstop against a watcher-level error.
       const watcher = watch(dir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
-      // If the directory is deleted (e.g. `rm -rf .adlc` before a re-init), the
-      // watch breaks silently; drop it from the map so a later refresh
-      // re-attaches once the directory reappears, instead of assuming it's
-      // still watched forever.
       watcher.on('error', () => {
         try {
           watcher.close();
