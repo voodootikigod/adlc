@@ -25,6 +25,26 @@ function completionStorePath(store, id) {
   return store instanceof DirectoryTicketStore ? `${ACTIVE_DIRECTORY}/${ticketFilename(id)}` : LEGACY_FILE;
 }
 
+/**
+ * Assert the shared checkout is on `branch` and HEAD points at it.
+ *
+ * NOTE ON THE RESIDUAL RACE: nothing we can lock stops an external process from
+ * running `git checkout` in a shared checkout — the ticket and manifest locks do not
+ * serialize git's own refs. So this is checked at entry AND again immediately before
+ * the commit (narrowing the window to that call), with a post-commit verification to
+ * DETECT a switch we could not prevent. The complete fix is not to share the checkout
+ * at all — give the integration branch a dedicated worktree. Tracked as follow-up.
+ */
+function assertOnBranch(git, branch, when) {
+  const current = git('symbolic-ref', '--short', 'HEAD'); // throws on detached HEAD — fail closed
+  if (current !== branch) {
+    throw new Error(`refusing to complete (${when}): checkout is on "${current}", not the integration branch "${branch}"`);
+  }
+  if (git('rev-parse', 'HEAD') !== git('rev-parse', branch)) {
+    throw new Error(`refusing to complete (${when}): HEAD does not point at "${branch}"`);
+  }
+}
+
 /** Restore a file to captured bytes (or delete it if it did not exist before). */
 function restoreFile(absPath, priorBytes) {
   if (priorBytes === null) { if (existsSync(absPath)) rmSync(absPath); }
@@ -65,17 +85,26 @@ export function revertCompletionCommit({ repo, toSha, shardPath = null, completi
   }
   const committedManifest = git('show', `${head}:${MANIFEST_FILE}`);
   const manifestAbs = join(repo, MANIFEST_FILE);
-  const liveManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs, 'utf8').trimEnd() : '';
-  if (liveManifest !== committedManifest.trimEnd()) {
-    throw new Error('refusing to withdraw: the evidence ledger changed since the completion commit (concurrent append) — cannot remove our entry without disturbing another writer');
-  }
 
-  // Preconditions hold: nothing concurrent to lose, so restore BOTH owned paths
-  // exactly. Still path-scoped — never a checkout-wide reset --hard.
-  git('reset', '-q', '--soft', toSha);
-  const paths = shardPath ? [shardPath, MANIFEST_FILE] : [MANIFEST_FILE];
-  git('restore', '--staged', '--worktree', '--', ...paths);
-  return { reverted: true, toSha };
+  // The ledger comparison and the restore that acts on it MUST be one critical
+  // section. Checking first and restoring after leaves a window in which a recorder
+  // appends between the two — the restore then rewrites the ledger to the
+  // pre-completion version and silently destroys that evidence. Hold the manifest
+  // lock across BOTH. Lock order is ticket → manifest everywhere, matching the
+  // transaction layer, so this cannot deadlock against a concurrent recorder.
+  return withLedgerLock(manifestAbs, () => {
+    const liveManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs, 'utf8').trimEnd() : '';
+    if (liveManifest !== committedManifest.trimEnd()) {
+      throw new Error('refusing to withdraw: the evidence ledger changed since the completion commit (concurrent append) — cannot remove our entry without disturbing another writer');
+    }
+    // Preconditions hold AND no recorder can interleave while we hold the lock, so
+    // restore both owned paths exactly. Still path-scoped — never a checkout-wide
+    // reset --hard.
+    git('reset', '-q', '--soft', toSha);
+    const paths = shardPath ? [shardPath, MANIFEST_FILE] : [MANIFEST_FILE];
+    git('restore', '--staged', '--worktree', '--', ...paths);
+    return { reverted: true, toSha };
+  });
 }
 
 /**
@@ -96,13 +125,7 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
   // integration branch BEFORE any mutation, rather than trusting the caller's
   // choreography. Without this a lifecycle commit can land on the wrong branch.
   if (!integrationBranch) throw new Error('completeTicketOnIntegration requires integrationBranch to verify the checkout before mutating');
-  const currentBranch = git('symbolic-ref', '--short', 'HEAD'); // throws on detached HEAD — fail closed
-  if (currentBranch !== integrationBranch) {
-    throw new Error(`refusing to complete: checkout is on "${currentBranch}", not the integration branch "${integrationBranch}"`);
-  }
-  if (git('rev-parse', 'HEAD') !== git('rev-parse', integrationBranch)) {
-    throw new Error(`refusing to complete: HEAD does not point at "${integrationBranch}"`);
-  }
+  assertOnBranch(git, integrationBranch, 'before mutating');
 
   const store = detectStore({ root: repo });
   const storePath = completionStorePath(store, ticketId);
@@ -149,8 +172,16 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
     // Commit ONLY the completion artifacts (the shard/legacy file + the evidence
     // ledger). A path-scoped add + commit never sweeps in unrelated build output.
     try {
+      // Re-verify immediately before staging/committing: an external checkout switch
+      // between entry and here would otherwise land this lifecycle commit on whatever
+      // branch is now current. This narrows the unpreventable window to these calls.
+      assertOnBranch(git, integrationBranch, 'before committing');
       git('add', '--', storePath, MANIFEST_FILE);
       git('commit', '-q', '-m', `chore(${ticketId}): mark completed after passing merge gate`, '--', storePath, MANIFEST_FILE);
+      // And DETECT the switch we cannot prevent: if the checkout moved mid-commit, the
+      // commit landed somewhere we do not own. Surface it as a hard, quarantining
+      // failure rather than reporting a completion that is not on the run's branch.
+      assertOnBranch(git, integrationBranch, 'after committing');
     } catch (error) {
       // A failed commit (e.g. a rejecting hook) must NOT leave the shared integration
       // checkout dirty. Restore the two owned paths to their exact pre-completion

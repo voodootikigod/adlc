@@ -163,6 +163,26 @@ test('completion REFUSES when the shared checkout is not on the integration bran
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a checkout switch DURING the commit is detected, not silently accepted', () => {
+  // The race we cannot prevent (no lock we hold serializes `git checkout`) must at
+  // least be detected: a completion that landed somewhere we do not own is never
+  // reported as success.
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    let switched = false;
+    const switchingGit = (...args) => {
+      const out = git(...args);
+      if (args[0] === 'commit' && !switched) { switched = true; git('checkout', '-q', 'main'); }
+      return out;
+    };
+    assert.throws(
+      () => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: switchingGit }),
+      /after committing/,
+      'the post-commit verification catches the switch',
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('completion REFUSES without an integrationBranch to verify against', () => {
   const { root, git } = makeRepo();
   try {
