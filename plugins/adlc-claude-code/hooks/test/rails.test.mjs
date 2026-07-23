@@ -230,6 +230,7 @@ test('#243: a frozen-rail denial names its structured-edit scope and honestly sc
   assert.match(r.out, /structured edits/i);            // scope named
   assert.match(r.out, /rails-guard CI diff gate/i);     // backstop named
   assert.match(r.out, /base branch/i);                  // …but scoped to base-branch rails
+  assert.match(r.out, /ADLC_RAILS_BYPASS=1\b/);          // the audited override names the correct value
   // Never revert to the blanket false claim (P5: false for same-change rails and the pointer).
   assert.doesNotMatch(r.out, /does not escape enforcement/i);
 });
