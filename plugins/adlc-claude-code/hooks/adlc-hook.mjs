@@ -1166,7 +1166,7 @@ function rails(input) {
     `${h.rel} is a frozen rail declared by ticket ${h.ticket} (rails: "${h.glob}")` +
       `${hits.length > 1 ? ` (+${hits.length - 1} more rail path(s) in this edit)` : ''}. ` +
       `Edits to frozen rails are blocked during build. Scope: this in-session hook gates ` +
-      `structured edits (Edit/Write/MultiEdit) only — it does not parse Bash, so a shell write ` +
+      `structured edits (Edit/Write/MultiEdit/NotebookEdit) only — it does not parse Bash, so a shell write ` +
       `(a redirect or in-place edit) to a frozen path is NOT blocked here. Do not route around ` +
       `the gate that way: the rails-guard CI diff gate catches only rails already on the base ` +
       `branch — not a rail this same change declares, nor the gitignored active-ticket pointer ` +
