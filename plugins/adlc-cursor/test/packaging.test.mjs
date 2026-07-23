@@ -13,9 +13,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -94,16 +94,32 @@ test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never 
   // over the previously published versions: X"), which would flip this assertion red
   // the moment the current version ships. Bumping to an unpublishable-high version
   // keeps the public-access check deterministic regardless of what is live on the
-  // registry. The real package.json is restored in finally.
-  const pkgJsonPath = join(pkgDir, 'package.json');
-  const originalPkgJson = readFileSync(pkgJsonPath, 'utf8');
+  // registry.
+  //
+  // The bump happens in a COPY outside the repo, never in the working tree. This
+  // test previously rewrote the real plugins/adlc-cursor/package.json and
+  // restored it in a finally. `node --test` runs this file in PARALLEL with its
+  // siblings, and any sibling importing a module from this package makes Node
+  // read this package.json to resolve the module scope. A read landing inside
+  // either non-atomic writeFileSync window sees a truncated file and throws
+  // ERR_INVALID_PACKAGE_CONFIG ("Unexpected end of JSON input") — surfacing as a
+  // failure in an unrelated test file, on a random CI matrix leg, with nothing
+  // wrong in the committed tree. Staging the mutation in a temp directory removes
+  // the shared mutable state rather than narrowing the window.
+  const stage = mkdtempSync(join(tmpdir(), 'adlc-cursor-publish-'));
   let out;
   try {
-    writeFileSync(pkgJsonPath, JSON.stringify({ ...JSON.parse(originalPkgJson), version: '999.999.999' }, null, 2) + '\n');
-    const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8', timeout: 60_000 });
+    // node_modules is excluded: it is irrelevant to publish resolution, may hold
+    // workspace symlinks that do not survive a copy, and is large.
+    cpSync(pkgDir, stage, {
+      recursive: true,
+      filter: (src) => !src.split(sep).includes('node_modules'),
+    });
+    writeFileSync(join(stage, 'package.json'), `${JSON.stringify({ ...pkg, version: '999.999.999' }, null, 2)}\n`);
+    const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: stage, encoding: 'utf8', timeout: 60_000 });
     out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
   } finally {
-    writeFileSync(pkgJsonPath, originalPkgJson);
+    rmSync(stage, { recursive: true, force: true });
   }
   assert.match(out, /with tag latest and public access/, `expected real npm to report public access:\n${out}`);
   assert.ok(!/default access/.test(out), `npm reported "default access" (restricted) — publishConfig is missing or wrong:\n${out}`);
