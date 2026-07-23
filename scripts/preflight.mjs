@@ -25,46 +25,72 @@
 // Everything here is hermetic.
 
 import { spawnSync, execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
-const BASE = process.argv.includes('--base')
-  ? process.argv[process.argv.indexOf('--base') + 1]
-  : 'main';
+/** Base branch name (not a ref) — `--base <name>`, default `main`. */
+export function parseBase(argv) {
+  const i = argv.indexOf('--base');
+  return i !== -1 && argv[i + 1] ? argv[i + 1] : 'main';
+}
 
-/** Gates that block a PR, in the order CI runs them. */
-const GATES = [
-  {
-    name: 'tests',
-    why: 'the full workspace suite',
-    argv: ['node', ['scripts/run-tests.mjs']],
-  },
-  {
-    name: 'rail-freeze',
-    why: 'no frozen rail edited, and no EXISTING ticket contract changed',
-    argv: ['node', ['scripts/rails-guard-ci.mjs', `origin/${BASE}`]],
-  },
-  {
-    name: 'mutation-gate',
-    why: 'changed code has tests that notice it being broken',
-    argv: ['node', ['scripts/mutation-gate.mjs', '--base', BASE]],
-  },
-];
+/**
+ * The gates that block a PR, in the order CI runs them.
+ *
+ * Each argv MIRRORS ci.yml exactly. That is load-bearing, and getting it subtly
+ * wrong is the very failure this script exists to prevent: mutation-gate reads
+ * its base as the first NON-FLAG positional (`args.find(a => !a.startsWith('--'))`,
+ * defaulting to `origin/main`), so passing `--base main` would silently hand it
+ * the bare branch name and diff against a different ref than CI does.
+ */
+export function buildGates(base) {
+  return [
+    {
+      name: 'tests',
+      why: 'the full workspace suite',
+      argv: ['node', ['scripts/run-tests.mjs']],
+    },
+    {
+      name: 'rail-freeze',
+      why: 'no frozen rail edited, and no EXISTING ticket contract changed',
+      argv: ['node', ['scripts/rails-guard-ci.mjs', `origin/${base}`]],
+    },
+    {
+      name: 'mutation-gate',
+      why: 'changed code has tests that notice it being broken',
+      argv: ['node', ['scripts/mutation-gate.mjs', `origin/${base}`, '--max', '12']],
+    },
+  ];
+}
+
+const BASE = parseBase(process.argv);
+const GATES = buildGates(BASE);
 
 /**
  * The rail-freeze and mutation gates both diff against `origin/<base>`. A stale
  * or missing remote ref makes them compare against the wrong tree and quietly
  * pass — the exact "green locally, red in CI" gap this script exists to close.
  */
-function refreshBase() {
+export function refreshBase(base = BASE, run = defaultFetch) {
   try {
-    execFileSync('git', ['fetch', '--no-tags', 'origin', `${BASE}:refs/remotes/origin/${BASE}`], { stdio: 'pipe' });
+    run(base);
     return true;
   } catch (e) {
-    console.error(`preflight: could not fetch origin/${BASE} — gates would compare against a stale base.`);
+    console.error(`preflight: could not fetch origin/${base} — gates would compare against a stale base.`);
     console.error(`  ${String(e.stderr ?? e.message).trim()}`);
     return false;
   }
 }
 
+function defaultFetch(base) {
+  execFileSync('git', ['fetch', '--no-tags', 'origin', `${base}:refs/remotes/origin/${base}`], { stdio: 'pipe' });
+}
+
+// Importable for tests; only the direct invocation runs the gates.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (!isMain) { /* imported — expose the helpers above without running anything */ }
+else main();
+
+function main() {
 console.log(`preflight: running the ${GATES.length} gates that block a PR (base: origin/${BASE})\n`);
 
 if (!refreshBase()) process.exit(1);
@@ -93,3 +119,4 @@ for (const [i, gate] of GATES.entries()) {
 }
 
 console.log(`✔ preflight: all ${GATES.length} PR-blocking gates passed in ${Math.round((Date.now() - started) / 1000)}s`);
+}

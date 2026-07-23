@@ -48,6 +48,19 @@ session. Choosing an id from a snapshot taken earlier silently **overwrites
 someone else's ticket**, which is exactly what the gate rejects. Re-read shared
 mutable state at the moment you use it, not when you start.
 
+### Resolving a `.adlc/tickets.json` conflict during a rebase
+
+`--ours` and `--theirs` are **inverted in a rebase**: `--ours` is upstream, and
+`--theirs` is the commit being replayed. `git checkout --theirs` therefore keeps
+*your* stale store and silently drops tickets that landed on the base — which
+the rail-freeze gate then rejects as removals. Name the ref explicitly instead
+of relying on the side words, then re-add your ticket:
+
+```sh
+git checkout origin/main -- .adlc/tickets.json
+adlc ticket create --input <file> --write
+```
+
 ## Undoing an experiment: copy, don't `git checkout`
 
 Mutation testing and gate-bite checks mean deliberately breaking a file and
@@ -58,6 +71,17 @@ here.
 ```sh
 cp packages/x/lib/y.mjs /tmp/y.bak    # then mutate, test
 cp /tmp/y.bak packages/x/lib/y.mjs    # restore exactly what you had
+```
+
+`git stash` has a sharper edge: this repo carries **long-lived stashes from other
+branches**. `git stash push` on a clean tree saves nothing, so a later
+`git stash pop` silently pops *someone else's* entry. Never pair a bare
+push/pop around a checkout. If you already did, the entry is recoverable:
+
+```sh
+git fsck --unreachable | grep commit | awk '{print $3}' \
+  | xargs -n1 git log -1 --format='%H %s' | grep 'On <branch>'
+git stash store -m "<original message>" <sha>
 ```
 
 ## Check whether the checkout is already busy

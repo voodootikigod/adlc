@@ -1436,111 +1436,6 @@
       "title": "fleet: make checkFlail actually read flail-detector's real contract (verdict + exit 2)"
     },
     {
-      "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
-      "category": "feature",
-      "completed": true,
-      "duration": 1,
-      "edges": [
-        {
-          "to": "T8"
-        }
-      ],
-      "id": "T7",
-      "rails": [
-        "packages/ticket-sync/lib/schema.mjs",
-        "packages/ticket-sync/lib/validate.mjs",
-        "packages/ticket-sync/lib/canonical.mjs",
-        "packages/ticket-sync/scripts/gen-schema.mjs",
-        "packages/ticket-sync/schemas/**",
-        "packages/ticket-sync/test/schema.test.mjs",
-        "packages/ticket-sync/test/validate.test.mjs",
-        "packages/ticket-sync/test/canonical.test.mjs"
-      ],
-      "scope": [
-        "packages/ticket-sync/lib/block.mjs",
-        "packages/ticket-sync/test/block.test.mjs"
-      ],
-      "title": "Fenced JSON block codec (parse/serialize, fail-closed)"
-    },
-    {
-      "body": "Implement `adlc ticket pull` (dry-run by default; --write applies) per the spec data-flow 'Pull', 'Sidecar', 'Validity Gate', 'Sync vs the rails trust root', and 'Lock + atomic write'. Deliver: lib/gh.mjs (execFile wrapper — argv only, no shell, C4), lib/providers/github.mjs (read/map), lib/provider.mjs (interface, no registry), lib/reconcile.mjs (pure 3-way base/local/remote; base from sidecar syncedHash; missing/corrupt base fails safe to CONFLICT), lib/config.mjs (+ adlc-config validation, repo auto-detect, issue selector), lib/store.mjs (writeTicketsAtomic + mkdir lock sharing .adlc/tickets.lock; sidecar .adlc/ticket-sync.state.json gitignored rebuildable cache), lib/rails-guard-sync.mjs (rails superset / scope subset guard + forensic record), and register the `ticket` tool in packages/cli/lib/registry.mjs. Single repo-qualified id space gh:owner/repo#n, owner/repo lowercased to match loadTickets equality; unresolved edges FAIL CLOSED (no silent drop); pagination explicit (truncation -> exit 1, never deletion). Depends on T2.\n\nAcceptance criteria:\n1. test/{reconcile,github,config,store,validity,rails-guard-sync}.test.mjs green; all offline via an injected gh runner with canned --json fixtures.\n2. reconcile: remote-only/local-only/both-changed(conflict)/both-equal(converged); local-only ticket survives pull; out-of-selection survives.\n3. Validity Gate: id normalization unifies T<n>/gh: spellings; an unresolved edges[].to fails closed (exit 2), not dropped; resolution-checked set == bytes written.\n4. rails-guard-sync: rails non-superset and scope-widen refused without --allow-rail-narrowing; forensic record written.\n5. pull is dry-run without --write (verify no file mutation); exit codes 0/1/2 per matrix.",
-      "category": "feature",
-      "completed": true,
-      "duration": 3,
-      "edges": [
-        {
-          "to": "T9"
-        }
-      ],
-      "id": "T8",
-      "rails": [
-        "packages/ticket-sync/lib/schema.mjs",
-        "packages/ticket-sync/lib/validate.mjs",
-        "packages/ticket-sync/lib/canonical.mjs",
-        "packages/ticket-sync/lib/block.mjs",
-        "packages/ticket-sync/scripts/gen-schema.mjs",
-        "packages/ticket-sync/schemas/**",
-        "packages/ticket-sync/test/schema.test.mjs",
-        "packages/ticket-sync/test/validate.test.mjs",
-        "packages/ticket-sync/test/canonical.test.mjs",
-        "packages/ticket-sync/test/block.test.mjs"
-      ],
-      "scope": [
-        "packages/ticket-sync/lib/gh.mjs",
-        "packages/ticket-sync/lib/provider.mjs",
-        "packages/ticket-sync/lib/providers/github.mjs",
-        "packages/ticket-sync/lib/reconcile.mjs",
-        "packages/ticket-sync/lib/config.mjs",
-        "packages/ticket-sync/lib/store.mjs",
-        "packages/ticket-sync/lib/rails-guard-sync.mjs",
-        "packages/ticket-sync/bin/ticket-sync.mjs",
-        "packages/ticket-sync/test/reconcile.test.mjs",
-        "packages/ticket-sync/test/github.test.mjs",
-        "packages/ticket-sync/test/config.test.mjs",
-        "packages/ticket-sync/test/store.test.mjs",
-        "packages/ticket-sync/test/validity.test.mjs",
-        "packages/ticket-sync/test/rails-guard-sync.test.mjs",
-        "packages/cli/lib/registry.mjs"
-      ],
-      "title": "Pull: GitHub read adapter, 3-way reconcile, Validity Gate, sidecar, store"
-    },
-    {
-      "body": "Implement `adlc ticket push` and `adlc ticket sync` (dry-run by default; --write applies) per the spec data-flow 'Push'. Deliver: lib/outcomes.mjs (reduce .adlc/manifest.jsonl -> per-ticket status: latest-per-gate, verdict=latest P5 entry, no P5 -> no pass label), lib/status-render.mjs (labels mutually-exclusive within statusLabels + a canonical timestamp-free status comment; both display-only, never authoritative), and github write ops (updateIssueBody, ensureLabels, upsertStatusComment, createIssue). Create is idempotent: stable sentinel key, adopt off the already-paginated pull list (not the eventually-consistent search index), persist {nodeId,number} into pendingCreates before id-reassignment, >1 key match fails closed; on create reassign id T<n>->gh:owner/repo#n, rewrite every edges[].to store-wide, migrate manifest evidence to the new id. Transfer/renumber reuses the same reassign+edge-rewrite path. Depends on T3.\n\nAcceptance criteria:\n1. test/outcomes.test.mjs green: multiple verdicts (latest wins), none (no fabricated pass), per-gate latest.\n2. test/github.test.mjs idempotency: push twice against a recording fake -> second run makes no mutating calls; create adoption finds an existing keyed issue; a simulated lost local write does NOT duplicate; id reassignment rewrites edge references.\n3. push is dry-run without --write; partial failure -> per-issue result list, exit 1.",
-      "category": "feature",
-      "completed": true,
-      "duration": 3,
-      "edges": [
-        {
-          "to": "T10"
-        }
-      ],
-      "id": "T9",
-      "rails": [
-        "packages/ticket-sync/lib/schema.mjs",
-        "packages/ticket-sync/lib/validate.mjs",
-        "packages/ticket-sync/lib/canonical.mjs",
-        "packages/ticket-sync/lib/block.mjs",
-        "packages/ticket-sync/lib/gh.mjs",
-        "packages/ticket-sync/lib/provider.mjs",
-        "packages/ticket-sync/lib/reconcile.mjs",
-        "packages/ticket-sync/lib/rails-guard-sync.mjs",
-        "packages/ticket-sync/lib/config.mjs",
-        "packages/ticket-sync/lib/store.mjs",
-        "packages/ticket-sync/lib/pull.mjs",
-        "packages/ticket-sync/scripts/gen-schema.mjs",
-        "packages/ticket-sync/schemas/**"
-      ],
-      "scope": [
-        "packages/ticket-sync/lib/outcomes.mjs",
-        "packages/ticket-sync/lib/status-render.mjs",
-        "packages/ticket-sync/lib/providers/github.mjs",
-        "packages/ticket-sync/bin/ticket-sync.mjs",
-        "packages/ticket-sync/test/outcomes.test.mjs",
-        "packages/ticket-sync/test/github.test.mjs"
-      ],
-      "title": "Push + create: write-back, idempotent create, status outcomes"
-    },
-    {
       "body": "Fixes voodootikigod/adlc#293. packages/hollow-test/lib/runner.mjs scores `killed = trial.timedOut || (trial.status !== 0)`, so ANY non-zero exit counts as a kill - including a parse failure. A mutant that renders the file syntactically invalid is therefore credited as successfully killed when nothing was tested. Demonstrated on ordinary JavaScript: null-return rewrites a multiline `return {` to `return null;` and leaves the object's remaining lines behind. At the common per-file quota of one, that invalid mutant can be the only trial, so the required gate reports success having exercised no assertion - a false green from the tool built to detect false greens. This is language-independent; the JS/TS allow-list narrowing in #289 removed the most frequent trigger (Promise<unknown> -> Promise>=unknown>) but not the cause. Validate that the mutated file parses before running the test command, using `node --check` so no new runtime dependency is added to a published package. An invalid mutant is DISCARDED - neither killed nor survived - and reported. If every mutant for a run is invalid the gate must fail operationally rather than pass, since it proved nothing. Verification: node --test packages/hollow-test/test/*.test.mjs. allow-suppression: none Report surfaces (lib/report.mjs) are in scope because invalid and undetermined trials need their own buckets - rendering them as 'survived' asserts a test outcome for a test that never ran. (Authored as T62; renumbered to T63 after #304 landed a different T62 on main — fleet checkFlail — while this branch was open.)",
       "budget": "frontier",
       "category": "bug",
@@ -1779,6 +1674,33 @@
       "title": "Cursor DX: /adlc-init one-flow onboarding + marketplace publish checklist execution"
     },
     {
+      "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
+      "category": "feature",
+      "completed": true,
+      "duration": 1,
+      "edges": [
+        {
+          "to": "T8"
+        }
+      ],
+      "id": "T7",
+      "rails": [
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**",
+        "packages/ticket-sync/test/schema.test.mjs",
+        "packages/ticket-sync/test/validate.test.mjs",
+        "packages/ticket-sync/test/canonical.test.mjs"
+      ],
+      "scope": [
+        "packages/ticket-sync/lib/block.mjs",
+        "packages/ticket-sync/test/block.test.mjs"
+      ],
+      "title": "Fenced JSON block codec (parse/serialize, fail-closed)"
+    },
+    {
       "body": "GitHub issue #309. Follow-on to #284 / T62 (PR #304, merged).\n\n## Problem\n\n`checkFlail` returns `{ flail, signals, failedOpen? }`. `failedOpen` marks the\n§12 backstop: the detector could not produce a trustworthy verdict, so the gate\ndeclines to cut the build short.\n\nNOTHING READS IT. `scheduler.mjs:74` and `:84` consult `.flail` alone:\n\n```js\nif (canRetry() && (await effects.flail({ ticket })).flail) {\n  return fail('flail-detector diagnosed a genuine flail — skipping the second strike');\n}\n```\n\nA repo-wide search finds `failedOpen` only at its construction in gates.mjs and\nin test assertions. So at runtime EVERY fail-open is indistinguishable from a\ngenuine clean verdict:\n\n- the detector is not installed or is unspawnable (spawn error)\n- an operational error (exit 1)\n- output that will not parse\n- a document whose `verdict` we no longer recognize (schema drift)\n- `statusDir` is unwritable so no transcript exists (appendLog is best-effort\n  by design and swallows the failure)\n\nEach silently reports \"this session is fine, keep building\". Mistype statusDir,\nor run where @adlc/flail-detector fails to resolve, and every ticket in every\nrun gets a clean flail verdict forever with no log line and no evidence entry.\n\nThis is the SAME FAILURE CLASS as #284 — a supervision control that stops\nworking while reporting normally. #284 fixed why the gate was blind; this is\nabout noticing when it goes blind again.\n\n## Required behavior\n\nThe fail-open POLICY must not change. An unverifiable signal must not cut a\nbuild's normal retry short; the two-strike cap remains the backstop. `flail`\nstays `false` and the build still gets its retry. The ONLY change is that the\nfail-open becomes observable.\n\n1. `checkFlail`'s fail-open carries a machine-readable `reason`, one of:\n   - `spawn-error`         — exec threw without a usable detector verdict\n   - `operational-error`   — the detector ran and exited non-zero, not exit 2\n   - `unparseable`         — stdout was not JSON\n   - `unrecognized-verdict`— parsed, but `verdict` was not 'flail'|'clean',\n                             or `signals` was not an array\n2. The scheduler emits an operator-visible warning via its injected `log` when a\n   consultation fails open, naming the ticket and the reason.\n3. A genuine `clean` verdict emits NO warning — no crying wolf on the happy path.\n4. The scheduler's effects-contract JSDoc is updated from\n   `flail({ticket}) -> { flail }` to the real widened shape.\n\n## Acceptance criteria\n\n1. Each of the four `reason` values is produced by its own branch, covered by a\n   unit test per branch. Verify: `node --test packages/fleet/test/`.\n2. A fail-open during `advanceTicket` emits a warning through the injected `log`\n   naming BOTH the ticket id and the reason. Verify by asserting on captured log\n   output, not on the returned object — the point is operator visibility.\n3. A genuine clean verdict emits no fail-open warning. Verify by asserting the\n   captured log contains no such line.\n4. THE POLICY IS UNCHANGED: on a fail-open the ticket still consumes its normal\n   retry and is NOT failed early. Assert explicitly, so this can never drift\n   into fail-closed — that would let a missing detector kill real work.\n5. A genuine flail verdict still short-circuits the second strike exactly as\n   before (no regression in the #284 behavior).\n6. `node --test packages/fleet/test/*.test.mjs` exits 0.\n7. `adlc hollow-test` reports no surviving non-equivalent mutants on the changed\n   lines.\n\n## Constraints\n\n- Do NOT change the fail-open policy to fail closed.\n- Do NOT change flail-detector; its contract is the frozen rail.\n- Preserve `checkFlail`'s exported signature and the `{adlcBin, exec}` options.\n- fleet is ESM (.mjs), node:test, no external test deps.\n- `scheduler.mjs` already receives an injected `log` (default no-op) — use it\n  rather than console.*, so the warning is testable.",
       "category": "bugfix",
       "duration": 1,
@@ -1794,6 +1716,102 @@
         "packages/fleet/test/**"
       ],
       "title": "fleet: make a fail-open flail consultation observable, so the gate cannot go blind silently"
+    },
+    {
+      "body": "Implement `adlc ticket pull` (dry-run by default; --write applies) per the spec data-flow 'Pull', 'Sidecar', 'Validity Gate', 'Sync vs the rails trust root', and 'Lock + atomic write'. Deliver: lib/gh.mjs (execFile wrapper — argv only, no shell, C4), lib/providers/github.mjs (read/map), lib/provider.mjs (interface, no registry), lib/reconcile.mjs (pure 3-way base/local/remote; base from sidecar syncedHash; missing/corrupt base fails safe to CONFLICT), lib/config.mjs (+ adlc-config validation, repo auto-detect, issue selector), lib/store.mjs (writeTicketsAtomic + mkdir lock sharing .adlc/tickets.lock; sidecar .adlc/ticket-sync.state.json gitignored rebuildable cache), lib/rails-guard-sync.mjs (rails superset / scope subset guard + forensic record), and register the `ticket` tool in packages/cli/lib/registry.mjs. Single repo-qualified id space gh:owner/repo#n, owner/repo lowercased to match loadTickets equality; unresolved edges FAIL CLOSED (no silent drop); pagination explicit (truncation -> exit 1, never deletion). Depends on T2.\n\nAcceptance criteria:\n1. test/{reconcile,github,config,store,validity,rails-guard-sync}.test.mjs green; all offline via an injected gh runner with canned --json fixtures.\n2. reconcile: remote-only/local-only/both-changed(conflict)/both-equal(converged); local-only ticket survives pull; out-of-selection survives.\n3. Validity Gate: id normalization unifies T<n>/gh: spellings; an unresolved edges[].to fails closed (exit 2), not dropped; resolution-checked set == bytes written.\n4. rails-guard-sync: rails non-superset and scope-widen refused without --allow-rail-narrowing; forensic record written.\n5. pull is dry-run without --write (verify no file mutation); exit codes 0/1/2 per matrix.",
+      "category": "feature",
+      "completed": true,
+      "duration": 3,
+      "edges": [
+        {
+          "to": "T9"
+        }
+      ],
+      "id": "T8",
+      "rails": [
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/lib/block.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**",
+        "packages/ticket-sync/test/schema.test.mjs",
+        "packages/ticket-sync/test/validate.test.mjs",
+        "packages/ticket-sync/test/canonical.test.mjs",
+        "packages/ticket-sync/test/block.test.mjs"
+      ],
+      "scope": [
+        "packages/ticket-sync/lib/gh.mjs",
+        "packages/ticket-sync/lib/provider.mjs",
+        "packages/ticket-sync/lib/providers/github.mjs",
+        "packages/ticket-sync/lib/reconcile.mjs",
+        "packages/ticket-sync/lib/config.mjs",
+        "packages/ticket-sync/lib/store.mjs",
+        "packages/ticket-sync/lib/rails-guard-sync.mjs",
+        "packages/ticket-sync/bin/ticket-sync.mjs",
+        "packages/ticket-sync/test/reconcile.test.mjs",
+        "packages/ticket-sync/test/github.test.mjs",
+        "packages/ticket-sync/test/config.test.mjs",
+        "packages/ticket-sync/test/store.test.mjs",
+        "packages/ticket-sync/test/validity.test.mjs",
+        "packages/ticket-sync/test/rails-guard-sync.test.mjs",
+        "packages/cli/lib/registry.mjs"
+      ],
+      "title": "Pull: GitHub read adapter, 3-way reconcile, Validity Gate, sidecar, store"
+    },
+    {
+      "body": "Implement `adlc ticket push` and `adlc ticket sync` (dry-run by default; --write applies) per the spec data-flow 'Push'. Deliver: lib/outcomes.mjs (reduce .adlc/manifest.jsonl -> per-ticket status: latest-per-gate, verdict=latest P5 entry, no P5 -> no pass label), lib/status-render.mjs (labels mutually-exclusive within statusLabels + a canonical timestamp-free status comment; both display-only, never authoritative), and github write ops (updateIssueBody, ensureLabels, upsertStatusComment, createIssue). Create is idempotent: stable sentinel key, adopt off the already-paginated pull list (not the eventually-consistent search index), persist {nodeId,number} into pendingCreates before id-reassignment, >1 key match fails closed; on create reassign id T<n>->gh:owner/repo#n, rewrite every edges[].to store-wide, migrate manifest evidence to the new id. Transfer/renumber reuses the same reassign+edge-rewrite path. Depends on T3.\n\nAcceptance criteria:\n1. test/outcomes.test.mjs green: multiple verdicts (latest wins), none (no fabricated pass), per-gate latest.\n2. test/github.test.mjs idempotency: push twice against a recording fake -> second run makes no mutating calls; create adoption finds an existing keyed issue; a simulated lost local write does NOT duplicate; id reassignment rewrites edge references.\n3. push is dry-run without --write; partial failure -> per-issue result list, exit 1.",
+      "category": "feature",
+      "completed": true,
+      "duration": 3,
+      "edges": [
+        {
+          "to": "T10"
+        }
+      ],
+      "id": "T9",
+      "rails": [
+        "packages/ticket-sync/lib/schema.mjs",
+        "packages/ticket-sync/lib/validate.mjs",
+        "packages/ticket-sync/lib/canonical.mjs",
+        "packages/ticket-sync/lib/block.mjs",
+        "packages/ticket-sync/lib/gh.mjs",
+        "packages/ticket-sync/lib/provider.mjs",
+        "packages/ticket-sync/lib/reconcile.mjs",
+        "packages/ticket-sync/lib/rails-guard-sync.mjs",
+        "packages/ticket-sync/lib/config.mjs",
+        "packages/ticket-sync/lib/store.mjs",
+        "packages/ticket-sync/lib/pull.mjs",
+        "packages/ticket-sync/scripts/gen-schema.mjs",
+        "packages/ticket-sync/schemas/**"
+      ],
+      "scope": [
+        "packages/ticket-sync/lib/outcomes.mjs",
+        "packages/ticket-sync/lib/status-render.mjs",
+        "packages/ticket-sync/lib/providers/github.mjs",
+        "packages/ticket-sync/bin/ticket-sync.mjs",
+        "packages/ticket-sync/test/outcomes.test.mjs",
+        "packages/ticket-sync/test/github.test.mjs"
+      ],
+      "title": "Push + create: write-back, idempotent create, status outcomes"
+    },
+    {
+      "body": "ADLC P7 (distill) for the #284 / #309 session.\n\n## Problem\n\nCONTRIBUTING step 2 told contributors to run `npm test` before pushing. CI\nblocks a PR on THREE required gates:\n\n  npm test                                  (suite)\n  node scripts/rails-guard-ci.mjs origin/main   (rail-freeze + trust root)\n  node scripts/mutation-gate.mjs origin/main    (mutation coverage)\n\nTwo of the three were documented nowhere and had no local entry point, so doing\nexactly what CONTRIBUTING said still left a contributor surprised by CI.\n\nWorse, there is an active trap: `adlc rails-guard` and\n`scripts/rails-guard-ci.mjs` sound interchangeable and are not. The CI script\nadditionally forbids any change to an EXISTING ticket's contract in\n.adlc/tickets.json (the rail trust root). The weaker check is the more\ndiscoverable one.\n\nThis is not hypothetical. In the #309 session a branch reused a ticket id that a\nconcurrent session had already claimed on main, silently rewriting that ticket's\ncontract. `adlc rails-guard` reported \"all checks passed\" throughout; CI\nrejected the PR. The gate did its job — the local workflow was the defect.\n\n## Deterministic defense (preferred over prose)\n\n1. `scripts/preflight.mjs` + `npm run preflight` — runs all three PR-blocking\n   gates in CI's order, cheapest first, stopping at the first failure, after\n   fetching the base ref (a stale origin/<base> makes both diff gates compare\n   against the wrong tree and pass for the wrong reason).\n2. CONTRIBUTING step 2 points at preflight and names the three gates.\n3. `adlc rails-guard`'s clean-pass output carries a stderr advisory naming the\n   stricter CI gate, so the friendlier command stops reading as full clearance.\n   STDERR and human-mode only — stdout and the --json contract are untouched.\n\n## Prose defense (only for what a script cannot encode)\n\n`AGENTS.md` at the repo root — harness-agnostic, because this repo ships seven\nharness plugins and a Claude-specific file would contradict that. Limited to\nnon-derivable, session-proven lessons: preflight vs npm test; ticket ids must be\nre-read after a fetch AND checked against open PRs; never `git checkout --` a\nfile to undo a mutation experiment (it discards uncommitted work); check for a\nconcurrent agent session mutating the checkout; PRs are squash-merged so a\nstacked base needs cherry-pick, not rebase.\n\n## Acceptance criteria\n\n1. `npm run preflight` exists and runs exactly the gates CI blocks on. Verify by\n   a test that reads .github/workflows/ci.yml and asserts each CI gate marker\n   has a corresponding command in preflight — so CI growing a gate reds the\n   test rather than silently outdating the script.\n2. preflight fetches the base ref before the diff-based gates, and fails\n   (non-zero, with a clear message) when the base cannot be resolved rather than\n   comparing against nothing. Verify by driving the real script with an\n   unresolvable --base.\n3. preflight stops at the first failing gate and exits non-zero.\n4. A clean `adlc rails-guard` run emits a stderr advisory naming\n   scripts/rails-guard-ci.mjs, the .adlc/tickets.json rule that differs, and\n   `npm run preflight`. Verify by driving the real bin.\n5. The advisory does NOT appear on stdout and does NOT appear in --json mode;\n   `--json` output still parses. Verify by driving the real bin both ways.\n6. CONTRIBUTING names `npm run preflight`.\n7. `npm test` green; `npm run preflight` green.\n\n## Constraints\n\n- rails-guard is an ENFORCEMENT package (trust-root tier): the change there must\n  be output-only, with no effect on exit codes, violation detection, the --json\n  document, or the manifest record. Per ADLC P5 this tier also requires a\n  cross-model review recorded before merge — flag it rather than self-approving.\n- Do not restate in AGENTS.md what CONVENTIONS.md or the code already encode.",
+      "category": "chore",
+      "duration": 1,
+      "edges": [],
+      "id": "T71",
+      "rails": [],
+      "scope": [
+        "scripts/preflight.mjs",
+        "scripts/test/**",
+        "packages/rails-guard/bin/**",
+        "packages/rails-guard/test/**",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "package.json"
+      ],
+      "title": "Make the local gate set match CI, and record the working lessons agents cannot derive"
     }
   ]
 }

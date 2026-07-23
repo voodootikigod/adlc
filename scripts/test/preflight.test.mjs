@@ -12,11 +12,13 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildGates, parseBase, refreshBase } from '../preflight.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPT = resolve(REPO, 'scripts/preflight.mjs');
 const src = readFileSync(SCRIPT, 'utf8');
 const ci = readFileSync(resolve(REPO, '.github/workflows/ci.yml'), 'utf8');
+const flat = (g) => [g.argv[0], ...g.argv[1]].join(' ');
 
 // gate -> (how CI invokes it, what preflight must run). Kept as a pair so the
 // assertion fails loudly if CI stops running a gate OR preflight stops matching.
@@ -43,6 +45,42 @@ test('CONTRIBUTING points contributors at preflight, not just npm test', async (
   const doc = readFileSync(resolve(REPO, 'CONTRIBUTING.md'), 'utf8');
 
   assert.match(doc, /npm run preflight/, 'the PR process must name the command that matches CI');
+});
+
+test('every gate is invoked EXACTLY as ci.yml invokes it', async () => {
+  // The failure this pins: mutation-gate reads its base as the first NON-FLAG
+  // positional and defaults to origin/main, so `--base main` silently diffs
+  // against a different ref than CI. A grep for the script name cannot see that.
+  const [tests, rail, mutation] = buildGates('main');
+
+  assert.deepEqual(tests.argv[1], ['scripts/run-tests.mjs']);
+  assert.deepEqual(rail.argv[1], ['scripts/rails-guard-ci.mjs', 'origin/main']);
+  assert.deepEqual(mutation.argv[1], ['scripts/mutation-gate.mjs', 'origin/main', '--max', '12']);
+
+  // ...and CI really does use the positional + --max form.
+  assert.match(ci, /mutation-gate\.mjs "origin\/\$BASE_REF" --max 12/);
+  assert.match(ci, /rails-guard-ci\.mjs "origin\/\$BASE_REF"/);
+});
+
+test('--base selects the ref every diff-based gate compares against', async () => {
+  assert.equal(parseBase(['node', 'preflight.mjs', '--base', 'release-2']), 'release-2');
+  assert.equal(parseBase(['node', 'preflight.mjs']), 'main', 'defaults to main');
+  assert.equal(parseBase(['node', 'preflight.mjs', '--base']), 'main', 'a dangling --base is not a ref');
+
+  for (const g of buildGates('release-2').filter((x) => x.name !== 'tests')) {
+    assert.ok(flat(g).includes('origin/release-2'), `${g.name} must honor --base`);
+  }
+});
+
+test('refreshBase reports success only when the fetch actually succeeded', async () => {
+  // Both diff gates compare against origin/<base>. Reporting success on a failed
+  // fetch would let them run against a stale ref and pass for the wrong reason —
+  // the "green locally, red in CI" gap this script exists to close.
+  const calls = [];
+  assert.equal(refreshBase('main', (b) => calls.push(b)), true);
+  assert.deepEqual(calls, ['main'], 'the requested base is what gets fetched');
+
+  assert.equal(refreshBase('main', () => { throw new Error('no such ref'); }), false);
 });
 
 test('preflight refreshes the base ref before diffing against it', async () => {
