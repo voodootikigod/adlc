@@ -1,6 +1,6 @@
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ARCHIVE_DIRECTORY, CURRENT_TICKET_FILE, LOCK_DIRECTORY, TRANSACTION_DIRECTORY } from './constants.mjs';
+import { ARCHIVE_DIRECTORY, CURRENT_TICKET_FILE, LOCK_DIRECTORY } from './constants.mjs';
 import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';

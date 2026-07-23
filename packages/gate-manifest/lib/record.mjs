@@ -4,7 +4,7 @@
 // while holding the ledger lock; parsed/re-serialized entries are never used.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, hashFiles, appendEntries, ledgerPath, ADLC_DIR } from '@adlc/core';
+import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 

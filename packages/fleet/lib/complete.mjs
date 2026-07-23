@@ -33,7 +33,7 @@ function completionStorePath(store, id) {
  *
  * @returns {{completed: boolean, alreadyComplete?: boolean, reason?: string}}
  */
-export function completeTicketOnIntegration({ repo, ticketId, integrationBranch, git = defaultGit(repo), detectStore = detectTicketStore } = {}) {
+export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(repo), detectStore = detectTicketStore } = {}) {
   const store = detectStore({ root: repo });
   const snapshot = store.load();
   const existing = snapshot.get(ticketId);
