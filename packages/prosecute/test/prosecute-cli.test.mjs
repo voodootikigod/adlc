@@ -74,23 +74,19 @@ describe('adlc-prosecute cli', () => {
     // Isolated repo for the same WORKING-TREE-INCLUSIVE-tiering reason as above.
     // --input still points at the REAL bundled docs fixture via an absolute path
     // (read as-is, not cwd-resolved), but the transcript/review_packet paths INSIDE
-    // that fixture are repo-relative and get resolved against `cwd` by run.mjs, and
-    // the ticket lookup reads the ticket store under `<cwd>/.adlc/` — so both must be
-    // mirrored into the isolated repo for this fixture to still validate as it does
-    // for real. Mirror whichever backend this repository currently uses: it has
-    // migrated from the legacy `.adlc/tickets.json` to the sharded `.adlc/tickets/`.
+    // that fixture are repo-relative and get resolved against `cwd` by run.mjs — so
+    // that evidence must be mirrored into the isolated repo for this fixture to still
+    // validate as it does for real.
+    //
+    // The repository's own ticket store is deliberately NOT mirrored. This used to
+    // copy `.adlc/tickets.json` in, with a comment claiming the ticket lookup needed
+    // it, but that was never true: `tmpAdlc()` seeds T1/T10 into `<dir>/tickets.json`
+    // and run.mjs's ticketDefinitionHash() prefers that `--dir` store over `<cwd>/.adlc`,
+    // so the mirrored copy was never read. It only ever mattered because `cpSync`
+    // throws on a missing source — which is how it survived unnoticed until the store
+    // migrated to the sharded backend and the copy started failing with ENOENT.
     const repo = gitRepo();
     try {
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const shardedStore = join(repoRoot, '.adlc/tickets');
-      const legacyStore = join(repoRoot, '.adlc/tickets.json');
-      if (existsSync(shardedStore)) {
-        cpSync(shardedStore, join(repo.dir, '.adlc/tickets'), { recursive: true });
-      } else if (existsSync(legacyStore)) {
-        cpSync(legacyStore, join(repo.dir, '.adlc/tickets.json'));
-      } else {
-        throw new Error('no ticket store found at .adlc/tickets/ or .adlc/tickets.json');
-      }
       mkdirSync(join(repo.dir, '.omo/evidence'), { recursive: true });
       cpSync(join(repoRoot, '.omo/evidence'), join(repo.dir, '.omo/evidence'), { recursive: true });
       repo.g('add', '-A');
