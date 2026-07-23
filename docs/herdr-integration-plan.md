@@ -218,7 +218,12 @@ pushes it into herdr's native UI as metadata tokens:
 - Discover panes/worktrees via `herdr api snapshot` + `herdr worktree list
   --json`; per-pane cwd via `herdr pane process-info`. Refresh on the socket
   event stream (`EventMatch` subscription), with polling fallback if
-  subscriptions prove awkward in 0.7.x.
+  subscriptions prove awkward in 0.7.x. Repo resolution is pinned: repo root =
+  `git rev-parse --show-toplevel` of the pane's cwd, and a **git worktree is
+  its own root** (it has its own `.adlc/`) — never walk up to the main
+  checkout. Steady-state resource bound: publishes are change-driven and
+  debounced, batched per refresh, with a slow heartbeat (≥30s) — the watcher
+  must not spawn a `herdr` process per event.
 - Watch `.adlc/current-ticket.json`, `.adlc/manifest.jsonl`, the ticket store,
   and `.adlc/fleet-status.json` with `fs.watch` — all writers use atomic
   renames, so watches are clean.
@@ -253,7 +258,10 @@ phase, gates green?" for every pane at a glance — today it only answers
 One-shot commands surfaced in herdr's action palette, scoped by `contexts` to
 the pane/worktree under the cursor. All of them resolve the repo from
 `HERDR_PLUGIN_CONTEXT_JSON` and run the **trusted** `adlc` from `PATH` — never
-a repo-local binary (fleet's K1/A2 operator-trust rule carried over):
+a repo-local binary (fleet's K1/A2 operator-trust rule carried over). Every
+action echoes the resolved repo + active ticket before acting, and fails
+closed (clear notification, nothing spawned) when the context does not resolve
+to a repo:
 
 - `ticket-show` — popup with the active ticket for that pane's repo.
 - `gate` — run `adlc gate-manifest verify` / configured gate, result as
@@ -333,7 +341,10 @@ things.**
    docs and 0.7.4 already — `done` status discrepancy, §2.1).
    `min_herdr_version` pins the floor; every herdr CLI call goes through one
    `lib/herdr.mjs` shim so a CLI change is a one-file fix (mirrors the fleet
-   adapter override design); unknown output shapes fail soft.
+   adapter override design); unknown output shapes fail soft. The daemon also
+   checks `herdr --version` at startup against its tested ceiling and degrades
+   to a single "untested herdr version" workspace token (no crash, no spam)
+   when the host is newer.
 6. **Install-time `[[build]]` commands: none.** The plugin ships runnable
    (zero-dep Node) so `herdr plugin install` executes nothing at install
    beyond registration.
@@ -391,7 +402,32 @@ then the run tab/tail-pane/notification bridge.
   the tokens and board make the race legible; the observer doesn't care which
   harness is which.
 
-## 10. Open questions
+## 10. Acceptance criteria (Phase 1)
+
+- AC1 — The full plugin test suite passes offline, with no herdr server, no
+  network, and no npm install. Verification: `node --test plugins/adlc-herdr/test/`.
+- AC2 — The manifest is shape-valid: required fields present, every declared
+  entrypoint file exists and passes syntax check. Verification:
+  `node --test plugins/adlc-herdr/test/manifest.test.mjs`.
+- AC3 — The sanitizer strips ANSI/OSC/C1/control escapes from any string bound
+  for a terminal; its tests are frozen rails. Verification:
+  `node --test plugins/adlc-herdr/test/sanitize.test.mjs`.
+- AC4 — The watcher maps panes to repos and publishes ticket/phase tokens with
+  TTL, failing soft on missing `.adlc/` and closed (explicit unreadable token)
+  on malformed JSON. Verification:
+  `node --test plugins/adlc-herdr/test/watcher.test.mjs` (herdr CLI mocked
+  behind `lib/herdr.mjs`).
+- AC5 — Actions dispatch on `HERDR_PLUGIN_ACTION_ID`, resolve the repo from
+  validated context JSON, and spawn only fixed-argv trusted binaries.
+  Verification: `node --test plugins/adlc-herdr/test/action.test.mjs`.
+- AC6 — The board renders backlog, mapping, and gate-ledger sections from
+  sanitized data. Verification: `node --test plugins/adlc-herdr/test/board.test.mjs`.
+- AC7 — Live install smoke (operator-run, not CI — Copilot live-smoke
+  precedent): `herdr plugin link plugins/adlc-herdr` then
+  `herdr plugin list --json` shows plugin id `adlc` enabled, and the board pane
+  opens via `herdr plugin pane open adlc board`.
+
+## 11. Open questions
 
 1. Socket `EventMatch` subscription ergonomics from a plugin daemon (probed
    schema only) — if awkward, v1 falls back to `api snapshot` polling.
