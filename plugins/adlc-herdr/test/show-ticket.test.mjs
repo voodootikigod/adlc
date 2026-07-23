@@ -51,3 +51,13 @@ test('refuses a leading-hyphen ticket id (argument injection into adlc)', () => 
     assert.equal(run([join(dir, 'repo'), id]).status, 1, `${id} must be refused`);
   }
 });
+
+test('surfaces the CLI stderr when adlc fails, not just a generic "Command failed"', () => {
+  // Replace the stub with one that writes a semantic error to stderr and exits 1.
+  const stub = join(dir, 'adlc');
+  writeFileSync(stub, '#!/bin/sh\necho "malformed JSON in store" >&2\nexit 1\n');
+  chmodSync(stub, 0o755);
+  const res = run([join(dir, 'repo'), 't-x1']);
+  assert.equal(res.status, 0); // the renderer itself succeeds, showing the error
+  assert.ok(res.stdout.includes('malformed JSON in store'), `stderr not surfaced: ${res.stdout}`);
+});

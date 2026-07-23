@@ -20,7 +20,14 @@ try {
     cwd: repoRoot, encoding: 'utf8', timeout: 15_000, shell: false,
   });
 } catch (error) {
-  output = `could not read ticket ${ticketId}: ${error instanceof Error ? error.message : String(error)}`;
+  // Surface the CLI's own stderr/stdout — execFileSync's error.message is only
+  // a generic "Command failed", so the real reason (e.g. a malformed store)
+  // would otherwise be discarded.
+  const detail = [error?.stderr, error?.stdout, error?.message]
+    .map((part) => (part == null ? '' : String(part).trim()))
+    .filter(Boolean)
+    .join(' — ');
+  output = `could not read ticket ${ticketId}: ${detail || 'unknown error'}`;
 }
 
 process.stdout.write(`${sanitize(output)}\n\n— press Enter to close —\n`);

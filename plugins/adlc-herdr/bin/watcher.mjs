@@ -55,8 +55,25 @@ async function refresh({ full = false } = {}) {
   }
   refreshing = true;
   try {
-    const snap = await runHerdrJson(['api', 'snapshot']);
-    if (!snap.ok) return; // fail soft — next heartbeat retries
+    // Drain iteratively (NOT by recursively awaiting refresh()): a recursive
+    // await under continuous fs events builds an unbounded promise chain that
+    // never unwinds → OOM. This loop consumes pending requests in place.
+    let runFull = full;
+    for (;;) {
+      await refreshPass(runFull);
+      if (pendingFull) { pendingFull = false; pendingRefresh = false; runFull = true; continue; }
+      if (pendingRefresh) { pendingRefresh = false; runFull = false; continue; }
+      break;
+    }
+  } finally {
+    refreshing = false;
+  }
+}
+
+async function refreshPass(full) {
+  const snap = await runHerdrJson(['api', 'snapshot']);
+  if (!snap.ok) return; // fail soft — next heartbeat retries
+  {
     const panes = snap.value?.result?.snapshot?.panes;
     const map = buildPaneMap(Array.isArray(panes) ? panes : [], { resolveRepoRoot });
     const groups = repoGroups(map);
@@ -108,17 +125,6 @@ async function refresh({ full = false } = {}) {
     }
     prevPane = nextPane;
     prevWorkspace = nextWorkspace;
-  } finally {
-    refreshing = false;
-  }
-  // Service a refresh that collided with this run — full wins over non-full.
-  if (pendingFull) {
-    pendingFull = false;
-    pendingRefresh = false;
-    await refresh({ full: true });
-  } else if (pendingRefresh) {
-    pendingRefresh = false;
-    await refresh({ full: false });
   }
 }
 
