@@ -39,6 +39,29 @@ else {
   else ok('dependency @adlc/tickets declared');
   if (!pkg.cursor?.hooks) fail('package.json cursor.hooks entry missing'); else ok('cursor.hooks manifest entry');
   if (!pkg.cursor?.rules) fail('package.json cursor.rules entry missing'); else ok('cursor.rules manifest entry');
+  if (pkg.cursor?.mcpServers !== './mcp.json') fail('package.json cursor.mcpServers must be ./mcp.json');
+  else ok('cursor.mcpServers manifest entry');
+}
+
+// ---- T63: mcp.json Roots proxy wrapper (not raw adlc mcp-server) ----
+{
+  const mcpPath = join(PLUGIN, 'mcp.json');
+  if (!existsSync(mcpPath)) fail('plugins/adlc-cursor/mcp.json missing');
+  else {
+    const mcp = JSON.parse(read(mcpPath));
+    const adlc = mcp.mcpServers?.adlc;
+    if (!adlc) fail('mcp.json missing mcpServers.adlc');
+    else if (adlc.command !== 'node' || !(adlc.args ?? []).some((a) => /adlc-mcp-wrapper\.mjs/.test(String(a)))) {
+      fail('mcp.json must launch node ./bin/adlc-mcp-wrapper.mjs (Roots proxy)');
+    } else if (JSON.stringify(adlc).includes('mcp-server')) {
+      fail('mcp.json must not wire raw adlc mcp-server (use the wrapper)');
+    } else ok('mcp.json wires Roots proxy wrapper');
+  }
+  if (!existsSync(join(PLUGIN, 'bin', 'adlc-mcp-wrapper.mjs'))) fail('bin/adlc-mcp-wrapper.mjs missing');
+  else ok('bin/adlc-mcp-wrapper.mjs present');
+  const manifest = JSON.parse(read(join(PLUGIN, '.cursor-plugin', 'plugin.json')));
+  if (manifest.mcpServers !== './mcp.json') fail('.cursor-plugin/plugin.json mcpServers must be ./mcp.json');
+  else ok('plugin.json discovers mcp.json');
 }
 
 // ---- AC1 + T47: hooks wiring (dispatcher + audit + shell + stop + preflight) ----
@@ -74,10 +97,28 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
   const preflight = hj.hooks?.beforeSubmitPrompt ?? [];
   if (!preflight.some((e) => /adlc-preflight\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeSubmitPrompt must wire adlc-preflight.mjs by default (T47)`);
   else ok(`${label}: beforeSubmitPrompt wired by default`);
-  const VERIFIED_EVENTS = new Set(['sessionStart', 'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile', 'stop', 'beforeSubmitPrompt']);
+  const VERIFIED_EVENTS = new Set([
+    'sessionStart', 'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile',
+    'stop', 'beforeSubmitPrompt', 'preCompact', 'subagentStart', 'subagentStop',
+  ]);
   const unverified = Object.keys(hj.hooks ?? {}).filter((k) => !VERIFIED_EVENTS.has(k));
   if (unverified.length) fail(`${label}: unverified event(s): ${unverified.join(', ')}`);
   else ok(`${label}: only documented Cursor events`);
+  for (const ev of ['preCompact', 'subagentStart', 'subagentStop']) {
+    const entries = hj.hooks?.[ev] ?? [];
+    if (!entries.length) fail(`${label}: ${ev} missing (T65)`);
+    else if (!entries.every((e) => e.failClosed === false && e.timeout === 10)) fail(`${label}: ${ev} must use failClosed:false timeout:10`);
+    else ok(`${label}: ${ev} wired`);
+  }
+  if (!(hj.hooks?.preCompact ?? []).some((e) => /adlc-precompact\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: preCompact must wire adlc-precompact.mjs`);
+  }
+  if (!(hj.hooks?.subagentStart ?? []).some((e) => /adlc-subagent\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: subagentStart must wire adlc-subagent.mjs`);
+  }
+  if (!(hj.hooks?.subagentStop ?? []).some((e) => /adlc-subagent\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: subagentStop must wire adlc-subagent.mjs`);
+  }
   if (pre[0]?.failClosed !== false) fail(`${label}: preToolUse failClosed must be false`);
   else ok(`${label}: failClosed:false`);
   const matcher = pre.find((e) => /adlc-pretool/.test(e.command ?? ''))?.matcher ?? '';
@@ -365,24 +406,50 @@ else {
   } else ok(`adlc-prosecute.md lens-brief count matches the @adlc/core registry (${LENSES.length})`);
   if (!/verifier/i.test(pr)) fail('adlc-prosecute.md missing the verifier pass');
   else ok('adlc-prosecute.md has the verifier pass');
-  // Binding honesty requirement (spec decision 3): sequential same-context
-  // lenses must be labeled as weaker than the siblings' fresh-context fan-out,
-  // with the cross-model gate recommended.
-  if (!/weaker independence/.test(pr)) fail('adlc-prosecute.md missing the weaker-independence honesty caveat');
-  else ok('adlc-prosecute.md states the weaker-independence caveat');
+  // T64: Task fan-out preferred; sequential is degraded fallback (weaker independence).
+  if (/no subagent fan-out/i.test(pr)) fail('adlc-prosecute.md must not claim Cursor has no subagent fan-out (T64)');
+  else ok('adlc-prosecute.md does not claim Cursor has no subagent fan-out');
+  if (!/\bTask\b/.test(pr) || !/prosecutor-correctness/.test(pr) || !/prosecutor-verifier/.test(pr)) {
+    fail('adlc-prosecute.md must require Task/custom-agent fan-out of packaged prosecutor agents');
+  } else ok('adlc-prosecute.md requires Task fan-out of prosecutor agents');
+  if (!/degraded fallback/i.test(pr) || !/weaker independence/.test(pr)) {
+    fail('adlc-prosecute.md must label sequential same-context as degraded fallback with weaker independence');
+  } else ok('adlc-prosecute.md states degraded-fallback weaker-independence caveat');
+  if (!/writeP5Marker|P5 marker/i.test(pr) || !/clearP5Marker|clear.*marker/i.test(pr)) {
+    fail('adlc-prosecute.md must instruct write/clear of the session P5 marker');
+  } else ok('adlc-prosecute.md instructs P5 marker write/clear');
+  if (!/adlc prosecute|adlc_prosecute/.test(pr)) fail('adlc-prosecute.md must require adlc prosecute / adlc_prosecute evidence recording');
+  else ok('adlc-prosecute.md requires prosecute evidence recording');
   if (!/adversarial-review --providers/.test(pr)) fail('adlc-prosecute.md does not recommend `npx adversarial-review --providers` for the cross-model risk gate');
   else ok('adlc-prosecute.md recommends the cross-model adversarial review');
-  // AC7: the command must instruct recording the adversarial-review outcome so
-  // the risk-tier stop-audit (decideAdversarialReviewNotice) has a satisfiable
-  // record instead of nagging unconditionally.
-  // --ticket is load-bearing on both record forms (P5 round-1 finding): a
-  // ticketless adversarial-review entry satisfies the risk-tier stop-audit
-  // for ANY later ticket touching the same files, so the pinned assertion
-  // includes the flag — the bare pre-round-1 form must not silently return.
   if (!/gate-manifest record adversarial-review --ticket/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record adversarial-review --ticket` instruction (ticket-scoped form required)');
   else ok('adlc-prosecute.md instructs recording the adversarial-review gate, ticket-scoped');
   if (!/gate-manifest record prosecution --ticket/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record prosecution --ticket` instruction (ticket-scoped form required)');
   else ok('adlc-prosecute.md instructs recording the prosecution gate, ticket-scoped');
+}
+
+// ---- T64: prosecutor agents roster packaged ----
+{
+  const agentsDir = join(PLUGIN, 'agents');
+  const required = [
+    'prosecutor-correctness.md',
+    'prosecutor-security.md',
+    'prosecutor-contract.md',
+    'prosecutor-diff.md',
+    'prosecutor-tests.md',
+    'prosecutor-verifier.md',
+  ];
+  for (const f of required) {
+    const p = join(agentsDir, f);
+    if (!existsSync(p)) { fail(`agents/${f} missing`); continue; }
+    const body = read(p);
+    if (!/readonly:\s*true/.test(body)) fail(`agents/${f} missing readonly: true`);
+    else if (/^tools:/m.test(body.split('---')[1] ?? '')) fail(`agents/${f} must not use tools: frontmatter`);
+    else ok(`agents/${f} readonly:true`);
+  }
+  const manifest = JSON.parse(read(join(PLUGIN, '.cursor-plugin', 'plugin.json')));
+  if (manifest.agents !== './agents/') fail('plugin.json must register agents: ./agents/');
+  else ok('plugin.json registers agents/');
 }
 
 // ---- AC3: run the real enforcement unit tests (always-on proof) ----
@@ -483,6 +550,42 @@ if (existsSync(docPath)) {
   else ok('cursor.md describes the command palette deployment');
   if (/prosecutor subagents/i.test(doc)) fail('cursor.md still calls the P5 prosecution a follow-on "prosecutor subagents" gap (shipped in T17)');
   else ok('cursor.md no longer lists the prosecutor as a follow-on gap');
+}
+
+
+// ---- T66: deny-proof runbook ----
+{
+  const denyReadme = join(ROOT, 'scripts', 'cursor-deny-proof', 'README.md');
+  if (!existsSync(denyReadme)) fail('scripts/cursor-deny-proof/README.md missing');
+  else {
+    const body = read(denyReadme);
+    if (!/sentinel/i.test(body) || !/enforcement-off/i.test(body) || !/hash/i.test(body)) {
+      fail('deny-proof README missing sentinel/hash/enforcement-off ordering');
+    } else ok('deny-proof runbook ordering strings');
+  }
+  if (!existsSync(join(ROOT, 'scripts', 'cursor-deny-proof.mjs'))) fail('scripts/cursor-deny-proof.mjs missing');
+  else ok('deny-proof entry script');
+  if (existsSync(docPath)) {
+    const doc = read(docPath);
+    if (!/cursor-deny-proof/.test(doc)) fail('cursor.md Gaps must link cursor-deny-proof');
+    else ok('cursor.md links deny-proof');
+  }
+}
+
+// ---- T67: marketplace publish checklist honesty ----
+{
+  if (!existsSync(docPath)) fail('docs/integrations/cursor.md missing for publish checklist');
+  else {
+    const body = read(docPath);
+    if (!/Marketplace publish checklist/i.test(body) && !/cursor-marketplace-publish/.test(body)) {
+      fail('cursor.md must include marketplace publish checklist');
+    } else ok('cursor.md has marketplace publish checklist');
+    if (!/cursor\.com\/marketplace\/publish/.test(body)) fail('checklist must point at publish flow, not a fake listing');
+    else ok('publish checklist points at cursor.com/marketplace/publish');
+    if (/cursor\.com\/marketplace\/adlc-cursor\/?/.test(body)) {
+      fail('docs must not fabricate a live marketplace listing URL before submit succeeds');
+    } else ok('no fabricated live marketplace listing URL');
+  }
 }
 
 if (failures) { console.error(`\ncursor-install-smoke: ${failures} failure(s)`); process.exit(2); }

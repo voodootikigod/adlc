@@ -30,6 +30,27 @@
         "failClosed": false
       }
     ],
+    "preCompact": [
+      {
+        "command": "node ./hooks/adlc-precompact.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "node ./hooks/adlc-subagent.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "node ./hooks/adlc-subagent.mjs --stop",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
     "stop": [
       {
         "command": "node ./hooks/adlc-stop.mjs",

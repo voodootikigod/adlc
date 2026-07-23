@@ -27,6 +27,8 @@ const SESSION_START_REL = 'hooks/adlc-session-start.mjs';
 const PRETOOL_REL = 'hooks/adlc-pretool.mjs';
 const AUDIT_REL = 'hooks/adlc-audit.mjs';
 const SHELL_ADVISORY_REL = 'hooks/adlc-shell-advisory.mjs';
+const PRECOMPACT_REL = 'hooks/adlc-precompact.mjs';
+const SUBAGENT_REL = 'hooks/adlc-subagent.mjs';
 // DEFAULT-ON (T47): `stop` / `beforeSubmitPrompt` are documented Cursor events.
 // Opt out with `wireUnpinned: false`, `--no-unpinned`, or
 // ADLC_CURSOR_WIRE_UNPINNED=0.
@@ -50,7 +52,7 @@ const TICKET_CONTEXT_SENTINEL_END = '<!-- END ADLC_TICKET_CONTEXT_V1 -->';
  * that user hooks are always preserved. */
 function isAdlcHook(entry) {
   return typeof entry?.command === 'string'
-    && /(^|[/\\"'\s])adlc-(rails-guard|pretool|audit|shell-advisory|stop|preflight|session-start)\.mjs/.test(entry.command);
+    && /(^|[/\\"'\s])adlc-(rails-guard|pretool|audit|shell-advisory|stop|preflight|session-start|precompact|subagent)\.mjs/.test(entry.command);
 }
 
 function sha256Hex(text) {
@@ -88,6 +90,9 @@ export function buildHookCommands(pluginRoot = PLUGIN_ROOT, { projectRoot } = {}
     pretool: hook(PRETOOL_REL),
     audit: hook(AUDIT_REL),
     shellAdvisory: hook(SHELL_ADVISORY_REL),
+    preCompact: hook(PRECOMPACT_REL),
+    subagentStart: hook(SUBAGENT_REL),
+    subagentStop: `${hook(SUBAGENT_REL)} --stop`,
     stop: hook(STOP_REL),
     preflight: hook(PREFLIGHT_REL),
   };
@@ -124,7 +129,25 @@ export function mergeHooks(existing, pluginRoot = PLUGIN_ROOT, { wireUnpinned = 
   const beforeShellExecution = asHookList(hooks.beforeShellExecution).filter((e) => !isAdlcHook(e));
   beforeShellExecution.push({ command: cmds.shellAdvisory, timeout: 10, failClosed: false });
 
-  const merged = { ...hooks, sessionStart, preToolUse, afterFileEdit, beforeShellExecution };
+  const preCompact = asHookList(hooks.preCompact).filter((e) => !isAdlcHook(e));
+  preCompact.push({ command: cmds.preCompact, timeout: 10, failClosed: false });
+
+  const subagentStart = asHookList(hooks.subagentStart).filter((e) => !isAdlcHook(e));
+  subagentStart.push({ command: cmds.subagentStart, timeout: 10, failClosed: false });
+
+  const subagentStop = asHookList(hooks.subagentStop).filter((e) => !isAdlcHook(e));
+  subagentStop.push({ command: cmds.subagentStop, timeout: 10, failClosed: false });
+
+  const merged = {
+    ...hooks,
+    sessionStart,
+    preToolUse,
+    afterFileEdit,
+    beforeShellExecution,
+    preCompact,
+    subagentStart,
+    subagentStop,
+  };
 
   // Unpinned events: strip our entries first (so turning the flag OFF restores
   // the default), then re-add only on explicit opt-in. A user's own entries on

@@ -210,9 +210,8 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
   may accept the hook output and still drop context before the composer is
   ready; durable fallback is `rules/adlc-ticket-context.mdc`
   (`alwaysApply: true`).
-- **Live deny proof** — a maintainer-only end-to-end test against a real Cursor
-  binary (does `permission: "deny"` actually abort the Write on the target
-  platform?) remains the GA gate (T66).
+- **Live deny proof** — harness under `scripts/cursor-deny-proof/`; dated
+  result in T66 section above (pending maintainer run).
 
 ## T62: sessionStart + per-session control state
 
@@ -230,6 +229,59 @@ Recorded with `.adlc/specs/cursor-deeper-native.md`.
 4. **Always-apply fallback** — `rules/adlc-ticket-context.mdc` with
    `alwaysApply: true` for canonical ticket resolution when sessionStart
    context is dropped.
+
+## T63: MCP Roots proxy (wrapper landed / channel unverified)
+
+1. **`mcp.json`** launches `node ./bin/adlc-mcp-wrapper.mjs` — never raw
+   `adlc mcp-server`. Packaging + smoke reject direct wiring.
+2. **Lifecycle Roots proxy** completes initialize, requests `roots/list`,
+   decodes `file://` Root URIs, runs the T62 consumer-workspace algorithm, then
+   spawns `adlc mcp-server` with that cwd. Multi-active roots fail closed.
+   Clients without roots capability fail closed in production (no cwd guess).
+3. **Host-env** (`ADLC_CURSOR_MCP_ROOT` / `CURSOR_PROJECT_DIR`) is test-only
+   (`ADLC_CURSOR_MCP_ALLOW_HOSTENV=1` on the wrapper) and does **not** unlock
+   "MCP shipped."
+4. **Ship gate:** installed-Cursor proof of Roots resolution (incl. multi-root
+   refuse / rebind) still required before matrix/docs claim MCP shipped or T67
+   marketplace publication completes. Until then: **wrapper landed / channel
+   unverified.**
+5. `packages/cli/lib/mcp-server.mjs` remains frozen (T63 rail).
+
+## T64: prosecutor agents (packaged-but-unverified)
+
+1. `plugins/adlc-cursor/agents/` ships five lenses + verifier with
+   `readonly: true` (no Claude `tools:` frontmatter). Optional `prosecutor.md`
+   orchestrator may set `readonly: false` for mechanical shell gates only.
+2. `/adlc-prosecute` prefers Task/custom-agent fresh-context fan-out; sequential
+   same-context is degraded fallback (**weaker independence**). Must not claim
+   Cursor has no subagent fan-out.
+3. Recorder `@adlc/prosecute` accepts core lens keys including `contract` and
+   `diff`.
+4. **Ship gate:** agents-backed matrix/docs claim waits on installed-Cursor
+   proof of five distinct lens contexts + verifier receipt (AC10). Until then:
+   **packaged-but-unverified.**
+
+## T65: preCompact + subagent P5 policy
+
+1. `preCompact` → `adlc-precompact.mjs` (observational ticket/rails reminder).
+2. `subagentStart` / `subagentStop` → `adlc-subagent.mjs` (defense-in-depth).
+3. **Authoritative** Task allowlist during P5 is on `preToolUse` via
+   `lib/p5-subagent-policy.mjs` + fenced `writeP5Marker` / `readP5Marker`
+   (user-scoped state dir). Session-mismatched markers ≡ absent.
+4. Nested Task lineage remains **degraded/permissive** until a live lineage
+   channel is proven; do not use a global anonymous marker to fake lineage.
+5. Fixtures: `test/fixtures/pretool-task-*.json`, `subagent-start-prosecutor.json`.
+
+## T66: live deny-proof harness (result pending)
+
+**Date:** 2026-07-22 — harness landed; **live Cursor binary proof not yet run**
+in this change (status: fail / pending until a maintainer records pass/fail).
+
+- Runbook: `scripts/cursor-deny-proof/README.md` (+ `run.mjs` baseline helper).
+- Binding order: pristine baseline (sentinel absent) → enforcement-on attempt →
+  unchanged hash + sentinel still absent → **then** enforcement-off control.
+- `failClosed` remains `false` on preToolUse regardless of outcome.
+- Cursor version/platform: _pending maintainer run_.
 
 ## Consequences
 

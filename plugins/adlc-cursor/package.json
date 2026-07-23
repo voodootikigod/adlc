@@ -29,18 +29,23 @@
     "hooks": "./hooks/hooks.json",
     "rules": "./rules/",
     "command": "./command/",
-    "skills": "./skills/"
+    "skills": "./skills/",
+    "agents": "./agents/",
+    "mcpServers": "./mcp.json"
   },
   "bin": {
     "adlc-cursor-scaffold": "lib/scaffold-cli.mjs"
   },
   "files": [
+    "agents/",
+    "bin/",
     "command/",
     "constants.mjs",
     "generated-active-ticket.mjs",
     "hooks/",
     "hooks.json",
     "lib/",
+    "mcp.json",
     "rails-checker.mjs",
     "rules/",
     "README.md",

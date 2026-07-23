@@ -159,15 +159,14 @@ export function readDepth(sessionId, { env = process.env, now = Date.now(), ttlM
   return fresh && Number.isInteger(data.count) ? data.count : 0;
 }
 
-/** Write P5 marker (fenced). */
-export function writeP5Marker({ sessionId, ticketId, runId, env = process.env, now = Date.now() }) {
-  if (!sessionId) throw new TypeError('writeP5Marker requires sessionId');
+/** Write P5 marker (fenced). `sessionId` null → anonymous marker file. */
+export function writeP5Marker({ sessionId = null, ticketId, runId, env = process.env, now = Date.now() }) {
   if (!runId) throw new TypeError('writeP5Marker requires runId');
   const stateDir = resolveStateDir(env);
   const path = markerPath(stateDir, sessionId);
   const lockPath = `${path}.lock`;
   return withStateLock(lockPath, ({ revalidate }) => {
-    const record = { ts: now, ticketId: ticketId ?? null, sessionId, runId };
+    const record = { ts: now, ticketId: ticketId ?? null, sessionId: sessionId ?? null, runId };
     revalidate();
     atomicWrite(path, record);
     return record;
@@ -193,6 +192,7 @@ export function readP5Marker(sessionId, { env = process.env, now = Date.now(), t
   const cur = readJson(markerPath(resolveStateDir(env), sessionId));
   if (!cur) return null;
   if (typeof cur.ts !== 'number' || now - cur.ts > ttlMs) return null;
-  if (cur.sessionId !== sessionId) return null;
+  // Named vs anonymous must never cross-restrict.
+  if ((cur.sessionId ?? null) !== (sessionId ?? null)) return null;
   return cur;
 }

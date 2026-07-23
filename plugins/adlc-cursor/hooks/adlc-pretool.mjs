@@ -38,6 +38,7 @@ import { classifyTool, isShellTool } from '../rails-checker.mjs';
 import { loadTickets, ticketStoreExists } from '@adlc/core';
 import { resolveSessionIdentity } from '../lib/session-identity.mjs';
 import { bumpDepthCounter as bumpDepthCounterState } from '../lib/session-state.mjs';
+import { decideP5SubagentPolicy, isP5TaskPayload } from '../lib/p5-subagent-policy.mjs';
 
 /**
  * Prefer pinned session_id / conversation_id (+ env). Rejects thread/generation
@@ -219,6 +220,21 @@ export async function consultBuildGate(payload, {
 export async function dispatch(payload, { root, env = process.env, now, importModule } = {}) {
   const rails = decide(payload, root != null ? { root, env } : { env });
   if (rails.permission !== 'allow') return rails; // any non-allow returned VERBATIM
+
+  // T65: authoritative P5 Task/subagent allowlist on preToolUse (after rails allow).
+  const toolName = extractToolName(payload);
+  if (isP5TaskPayload(payload, toolName)) {
+    const p5 = decideP5SubagentPolicy(payload, { env, now: now ?? Date.now(), toolName });
+    if (p5.permission !== 'allow') {
+      return {
+        permission: p5.permission,
+        user_message: p5.reason,
+        agent_message:
+          `${p5.reason} (authoritative preToolUse Task allowlist during P5). ` +
+          'Nested Task lineage is degraded/permissive until proven — see ADR-0006.',
+      };
+    }
+  }
 
   if (env.ADLC_BUILD_GATE_ENFORCEMENT !== '1') return rails; // buildgate is default-OFF
 

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "adlc": {
+      "command": "node",
+      "args": ["./bin/adlc-mcp-wrapper.mjs"]
+    }
+  }
+}

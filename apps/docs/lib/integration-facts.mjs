@@ -305,7 +305,7 @@ export const CURSOR_INTEGRATION = {
   slug: 'cursor',
   name: 'Cursor',
   status: 'marketplace',
-  tagline: 'Marketplace plugin with a preToolUse rails dispatcher, afterFileEdit audit, advisory shell notice, /adlc-* commands, and a sequential five-lens prosecute loop, with CI as the backstop.',
+  tagline: 'Marketplace plugin with sessionStart context, preToolUse rails, packaged prosecutor agents + MCP wrapper (channel unverified), /adlc-* commands, and CI as the backstop.',
   install: [
     '# Cursor → Settings → Plugins → Add marketplace:',
     '#   https://github.com/voodootikigod/adlc',
@@ -331,6 +331,8 @@ export const CURSOR_INTEGRATION = {
     entries: [
       { path: '├─ .cursor-plugin/', note: 'marketplace manifest' },
       { path: '├─ hooks/', surfaceKey: 'hooks', note: 'Cursor hook events' },
+      { path: '├─ agents/', surfaceKey: 'agents', note: 'prosecutor agents' },
+      { path: '├─ mcp.json', surfaceKey: 'mcp', note: 'Roots proxy MCP' },
       { path: '├─ command/', surfaceKey: 'commands', note: '/adlc-* commands' },
       { path: '├─ skills/', surfaceKey: 'skills', note: 'skills' },
       { path: '└─ rules/', surfaceKey: 'rules', note: 'phase-router rule' },
@@ -339,11 +341,11 @@ export const CURSOR_INTEGRATION = {
   surfaces: [
     {
       key: 'hooks',
-      count: 5,
+      count: 9,
       label: 'hook events',
       title: 'Rails first, then audit hooks',
-      detail: 'preToolUse runs rails before anything else. afterFileEdit and beforeShellExecution only observe. stop and beforeSubmitPrompt surface evidence and readiness.',
-      items: ['preToolUse', 'afterFileEdit', 'beforeShellExecution', 'stop', 'beforeSubmitPrompt'],
+      detail: 'sessionStart injects ticket context (best-effort). preToolUse runs rails first; Task spawn allowlist during P5. preCompact re-injects ticket context. subagentStart/Stop coordinate P5. stop/beforeSubmitPrompt surface evidence.',
+      items: ['sessionStart', 'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'stop', 'beforeSubmitPrompt', 'preCompact', 'subagentStart', 'subagentStop'],
     },
     {
       key: 'commands',
@@ -364,6 +366,22 @@ export const CURSOR_INTEGRATION = {
       ],
     },
     {
+      key: 'agents',
+      count: 7,
+      label: 'prosecutor agents',
+      title: 'Packaged prosecutor agents (fan-out unverified)',
+      detail: 'Five readonly lenses plus verifier (+ optional orchestrator). Task fan-out is preferred; agents-backed claim waits on installed-Cursor proof.',
+      items: ['prosecutor-correctness', 'prosecutor-security', 'prosecutor-contract', 'prosecutor-diff', 'prosecutor-tests', 'prosecutor-verifier', 'prosecutor'],
+    },
+    {
+      key: 'mcp',
+      count: 2,
+      label: 'MCP tools',
+      title: 'Wrapper landed / channel unverified',
+      detail: 'mcp.json runs a Roots proxy to adlc mcp-server. Do not claim MCP shipped until installed-Cursor Roots proof.',
+      items: ['adlc_gate', 'adlc_prosecute'],
+    },
+    {
       key: 'skills',
       count: 2,
       label: 'skills',
@@ -373,11 +391,11 @@ export const CURSOR_INTEGRATION = {
     },
     {
       key: 'rules',
-      count: 1,
+      count: 2,
       label: 'rules',
-      title: 'Session rule for phase routing',
-      detail: 'adlc.mdc keeps phase routing in the agent context for the session.',
-      items: ['adlc.mdc'],
+      title: 'Phase routing + always-apply ticket context',
+      detail: 'adlc.mdc keeps phase routing in context; adlc-ticket-context.mdc alwaysApply fallback when sessionStart context is dropped.',
+      items: ['adlc.mdc', 'adlc-ticket-context.mdc'],
     },
   ],
   surfacesSection: {
@@ -394,7 +412,7 @@ export const CURSOR_INTEGRATION = {
   phaseSection: {
     kicker: 'Phase routing',
     title: 'Pick a phase command',
-    intro: 'Use the `/adlc-*` palette for each phase. Prosecution is sequential in one context, so pair it with cross-model `adversarial-review` when you need independent reviewers.',
+    intro: 'Use the `/adlc-*` palette for each phase. Prefer Task fan-out for P5; sequential same-context is a degraded fallback. Pair with cross-model `adversarial-review` for the risk gate.',
     entryHeader: 'Cursor entry',
   },
   enforcement: {

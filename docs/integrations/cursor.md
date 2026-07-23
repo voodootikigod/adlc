@@ -170,7 +170,7 @@ not re-implemented here):
 | P2 Decompose | `/adlc-decompose` command | `adlc coldstart` / `merge-forecast` |
 | **P3 Rail** | **`preToolUse` dispatcher** | **rails-guard (this package + CI gate) + the advisory, default-off buildgate** |
 | P4 Build | `/adlc-verify-build` command | targeted tests + `adlc flail-detector` |
-| P5 Prosecute | `/adlc-prosecute` command — the sequential five-lens loop | five lenses → dedupe → verifier → loop-until-dry + `adlc hollow-test` / `behavior-diff` + cross-model `adversarial-review`. **Weaker independence** than the siblings' fresh-context subagent fan-out (one context runs all five lenses); run `npx adversarial-review --providers` for the cross-model gate. |
+| P5 Prosecute | `/adlc-prosecute` + packaged `agents/prosecutor-*` | Prefer Task/custom-agent fan-out (five fresh lenses → verifier) + `@adlc/core` convergence + `adlc prosecute` evidence. Sequential same-context is a **degraded fallback** (**weaker independence**). Agents-backed claim waits on installed-Cursor proof; run `npx adversarial-review --providers` for the cross-model gate. |
 | P6 Integrate | `adlc gate-manifest` | human gate |
 | P7 Distill | `/adlc-distill` command | `adlc lesson-foundry` / `rejection-mining` |
 
@@ -183,13 +183,19 @@ maintenance sweep (`skill-rot` / `model-ratchet` / `ticket-prune` / `gate-fuzzin
 These are the real residual gaps after the native-parity build — no overstatement:
 
 - **Live deny-proof** against a real Cursor binary (does `permission: "deny"`
-  actually abort the Write on the target platform?), and pinning the exact
-  `preToolUse` payload field names — tracked in [ADR 0006](../adr/0006-adlc-cursor-integration.md);
-  the adapter extracts the path defensively until then. This is the one GA gate.
-- **Prosecutor independence caveat.** `/adlc-prosecute` runs its five lenses
-  **sequentially in one context** — Cursor has no subagent fan-out — so it has
-  **weaker independence** than the Claude Code / OpenCode fresh-context reviews.
-  Run `npx adversarial-review --providers` for the cross-model risk gate.
+  actually abort the Write on the target platform?) — maintainer harness under
+  [`scripts/cursor-deny-proof/`](../../scripts/cursor-deny-proof/README.md); dated results in
+  [ADR 0006](../adr/0006-adlc-cursor-integration.md).
+- **MCP channel unverified.** `mcp.json` ships a lifecycle Roots proxy
+  (`bin/adlc-mcp-wrapper.mjs` → `adlc mcp-server` with resolved consumer cwd;
+  tools `adlc_gate` / `adlc_prosecute`). Until an installed-Cursor Roots proof
+  is recorded (incl. multi-root refuse), status is **wrapper landed / channel
+  unverified** — not MCP shipped.
+- **Prosecutor agents packaged-but-unverified.** Prefer Task fan-out via
+  `agents/prosecutor-*` (fresh context). Sequential same-context remains a
+  degraded fallback with **weaker independence**. Agents-backed publication
+  waits on installed-Cursor fan-out proof (AC10). Run
+  `npx adversarial-review --providers` for the cross-model risk gate.
 - **buildgate has no unbypassable backstop.** It is advisory and disabled by
   default (`ADLC_BUILD_GATE_ENFORCEMENT=1`); nothing at commit time enforces its
   verdict (its depth signal is an agent-writable file). Only the rails guard has
@@ -200,6 +206,44 @@ These are the real residual gaps after the native-parity build — no overstatem
   the match is trivially bypassable; a Turing-complete shell can't be reliably
   parsed, so shell-driven rail writes are covered only by the CI gate.
 
+
+## Marketplace publish checklist
+
+<!-- cursor-marketplace-publish -->
+
+Human submit to Cursor’s publish flow. This repo’s automated release does **not**
+publish the plugin listing.
+
+## Before submit
+
+1. Wave gates honest:
+   - MCP: **wrapper landed / channel unverified** until installed-Cursor Roots
+     proof (AC7) is recorded in ADR-0006 — do **not** claim MCP shipped.
+   - Agents: **packaged-but-unverified** until AC10 installed-Cursor fan-out
+     proof — do **not** claim agents-backed P5.
+   - T65 subagent hooks + T66 deny-proof harness must be present; live deny
+     result dated in ADR (pass or fail).
+2. Plugin packaging green:
+   - `node scripts/cursor-install-smoke.mjs .`
+   - `node --test plugins/adlc-cursor/test/*.test.mjs`
+3. Marketplace identity: root `.cursor-plugin/marketplace.json` marketplace
+   `adlc-plugins`, plugin display name **ADLC for Cursor** (`adlc-cursor`),
+   logo resolves (PNG).
+4. README + `docs/integrations/cursor.md` install path: marketplace →
+   `npm i -g @adlc/cli` → `/adlc-init` / `adlc init --harness cursor` → CI
+   `docs/ci/rails-guard.yml`. Do not require `npx @adlc/cursor` for normal users.
+
+## Submit
+
+Use Cursor’s publish UI:
+[https://cursor.com/marketplace/publish](https://cursor.com/marketplace/publish)
+
+## After submit
+
+- Record the submission date in ADR-0006 / release notes.
+- **Do not** invent a live `cursor.com/marketplace/<slug>` listing URL in docs
+  until the listing is actually public.
+- Keep CI rails-guard as the unbypassable control narrative.
 ## Boundary
 
 The in-session hook is a convenience that fails safe; it is **not** a security

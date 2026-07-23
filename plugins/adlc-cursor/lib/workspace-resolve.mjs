@@ -1,7 +1,7 @@
 // workspace-resolve.mjs — ADLC-bearing root selection for Cursor hooks (T62).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join, normalize, resolve as pathResolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, resolve as pathResolve } from 'node:path';
 import { detectTicketStore } from '@adlc/tickets';
 import { ticketStoreExists } from '@adlc/core';
 import { resolveActiveTicketAgainst } from '../generated-active-ticket.mjs';
