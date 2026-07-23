@@ -212,6 +212,22 @@ test('a COMPLETED ticket with a non-array rails object still fails closed', () =
 });
 
 
+// ---- #243: the frozen-rail denial states its SCOPE honestly ----
+// The hook gates structured edits only; a shell write to a rail (cat >>, perl -i)
+// is NOT blocked in-session but IS caught by the rails-guard CI diff gate. If the
+// message only says "blocked during build", an agent blocked on an Edit wrongly
+// concludes the rail is fully enforced — then a shell dodge silently loses the
+// in-session guard it thinks it has and only finds out at PR time. The message
+// must name its scope and the CI backstop so neither mental model is wrong.
+// (out is raw JSON with backslash-escaped quotes — match unquoted fragments only.)
+test('#243: a frozen-rail denial names its structured-edit scope and the CI backstop', () => {
+  const r = runRails('{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}', 'test/auth/login.test.mjs');
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, /structured edits/i);
+  assert.match(r.out, /rails-guard CI diff gate at commit time/i);
+});
+
+
 // ---- trust root: tickets.json is frozen once rails exist (structured edits) ----
 
 const RAIL_T = '{"tickets":[{"id":"T1","rails":["test/auth/**","src/types/api.d.ts"]}]}';

@@ -1165,7 +1165,11 @@ function rails(input) {
   return denyRail(
     `${h.rel} is a frozen rail declared by ticket ${h.ticket} (rails: "${h.glob}")` +
       `${hits.length > 1 ? ` (+${hits.length - 1} more rail path(s) in this edit)` : ''}. ` +
-      `Edits to frozen rails are blocked during build. To override deliberately, set ` +
+      `Edits to frozen rails are blocked during build. Scope: this in-session hook gates ` +
+      `structured edits (Edit/Write/MultiEdit) only — a shell write to this rail (a redirect ` +
+      `or in-place edit via Bash, e.g. \`cat >> ${h.rel}\` or \`perl -i\`) is NOT blocked here, ` +
+      `but it IS caught by the rails-guard CI diff gate at commit time, so it does not escape ` +
+      `enforcement — it only defers the failure to CI. To override deliberately, set ` +
       `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
   );
 }
