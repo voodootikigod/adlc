@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles } from '@adlc/core';
+import { detectTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview } from '../lib/cross-model.mjs';
@@ -32,18 +33,38 @@ function isInsideRepo(root, resolvedDir) {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+// The canonical repository ticket store, whichever BACKEND holds it. Reading the
+// legacy `.adlc/tickets.json` path directly would fail open after a repo migrates
+// to the sharded `.adlc/tickets/` backend: the file is gone, the ENOENT branch
+// above yields an empty table, and every change that is trust-root ONLY via a
+// ticket rail silently declassifies. detectTicketStore resolves the active
+// backend instead.
+//
+// FAIL-CLOSED, matching readTicketArray's distinction: a genuinely ABSENT store
+// contributes no rails, but a store that exists and cannot be resolved
+// (ambiguous dual store, unfinished migration transaction, corrupt shard) must
+// throw rather than degrade to "no rails".
+function readCanonicalTickets(root) {
+  try {
+    return detectTicketStore({ root }).load().mutableTickets();
+  } catch (err) {
+    if (err.code === 'STORE_NOT_FOUND') return [];
+    throw new Error(`canonical ticket store under ${root} exists but cannot be read for tiering: ${err.message}`);
+  }
+}
+
 // Load the ticket table(s) whose `rails` define trust-root DENY paths for
 // tiering. SECURITY: tiering is a GATE decision, so the rails source must be the
-// repo's CANONICAL <repoRoot>/.adlc/tickets.json — never REPLACEABLE by a
-// caller-supplied --dir. Otherwise `--dir ../elsewhere` pointing at a table that
-// OMITS the rails would declassify a change that is trust-root via the repo's
-// real rails (a gate bypass). We therefore ALWAYS include the canonical table,
-// and only UNION an additional --dir table when that dir is CONTAINED within the
-// repo (so a custom in-repo ADLC workspace still tiers). The classifier unions
-// rails across all tickets, so extra sources can only ADD deny-paths (fail-safe),
-// never remove them; an out-of-repo --dir contributes nothing to tiering.
+// repo's CANONICAL store — never REPLACEABLE by a caller-supplied --dir.
+// Otherwise `--dir ../elsewhere` pointing at a table that OMITS the rails would
+// declassify a change that is trust-root via the repo's real rails (a gate
+// bypass). We therefore ALWAYS include the canonical store, and only UNION an
+// additional --dir table when that dir is CONTAINED within the repo (so a custom
+// in-repo ADLC workspace still tiers). The classifier unions rails across all
+// tickets, so extra sources can only ADD deny-paths (fail-safe), never remove
+// them; an out-of-repo --dir contributes nothing to tiering.
 function loadTicketsForTier(dir, root) {
-  const tickets = [...readTicketArray(join(root, '.adlc', 'tickets.json'))];
+  const tickets = [...readCanonicalTickets(root)];
   const resolvedDir = resolve(dir);
   if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
     tickets.push(...readTicketArray(join(resolvedDir, 'tickets.json')));

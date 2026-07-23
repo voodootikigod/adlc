@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
+import { migrateLegacyStore } from '@adlc/tickets';
 import { resolveProsecutionRevision } from '../lib/run.mjs';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
@@ -35,7 +36,7 @@ function runBin(args, cwd) {
 // `baselineFiles` are committed on MAIN before branching, so no untracked file
 // spuriously tiers under the working-tree-inclusive changed-file set. `featurePath`
 // (if given) is committed on the `feat` branch.
-function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rails = [] } = {}) {
+function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rails = [], migrateStore = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-xm-cli-'));
   const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
@@ -56,6 +57,12 @@ function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rai
   writeFileSync(join(ledger, 'tickets.json'), JSON.stringify({
     tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails, edges: [] }],
   }));
+  // Optionally convert the canonical store to the SHARDED backend before the
+  // baseline commit, so the directory store is committed on main and a feature
+  // change tiers (or not) purely on its own merits — not because uncommitted
+  // shards under .adlc/tickets/ are themselves a trust-root surface.
+  if (migrateStore) migrateLegacyStore(dir, { write: true, yes: true, requireClean: false });
+
   const adlc = join(dir, '.adlc');
   mkdirSync(adlc, { recursive: true });
   const transcriptPath = join(adlc, 'review.txt');
@@ -195,6 +202,40 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
     } finally {
       rmSync(repo.dir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('residual: canonical rails still tier when the store uses the SHARDED directory backend', () => {
+    // Pre-fix, loadTicketsForTier read only `.adlc/tickets.json`. After a repo
+    // migrates to `.adlc/tickets/`, that path is GONE — the ENOENT branch yielded
+    // an empty table, so a change that is trust-root ONLY via a ticket rail was
+    // silently declassified and a same-model P5 passed clean. That is a fail-OPEN
+    // gate bypass, so it is asserted at the process boundary on a real migrated store.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'], migrateStore: true });
+    try {
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+      assert.equal(res.status, 2, 'a rail-only trust-root change must still tier under the directory backend');
+      assert.match(JSON.parse(res.stdout).message, /cross-model adversarial approve from a distinct provider/);
+      assert.match(res.stderr, /rails deny-path of ticket T1/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('residual: an AMBIGUOUS dual store (legacy + directory) fails closed (exit 1), never a silent ungated pass', () => {
+    // A half-finished migration leaves both backends present. Resolving the
+    // canonical store then throws AMBIGUOUS_STORE — which must op-error rather
+    // than degrade to "no rails" and drop the rails dimension entirely.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'], migrateStore: true });
+    try {
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      writeFileSync(join(repo.dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+      assert.equal(res.status, 1, 'an ambiguous dual store must op-error, not proceed ungated');
+      assert.match(`${res.stderr ?? ''}${res.stdout ?? ''}`, /AMBIGUOUS_STORE|cannot be read for tiering|determine trust-root tier/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
     }
   });
 

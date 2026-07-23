@@ -60,9 +60,42 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     assert.equal(r.isTrustRootTier, true);
     assert.ok(r.reasons.some((x) => x.includes('T7') && x.includes('test/auth/**')));
   });
+
+  // The sharded backend is the SAME trust root as `.adlc/tickets.json`. When a
+  // repo migrates, the exact-file entry stops matching and every shard edit would
+  // declassify unless the store directory itself is a trust-root surface.
+  it('TRUE for a shard in the sharded ticket store', () => {
+    const r = classifyTrustRootTier({
+      changedFiles: ['.adlc/tickets/t64--ec791ef8cffb458098b48e73556d0f644cd8c1845bf94cc167060c1e3aca4a42.json'],
+      tickets: TICKETS,
+    });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('.adlc/tickets/')));
+  });
+
+  it('TRUE for the sharded store manifest and for the archive', () => {
+    for (const f of ['.adlc/tickets/.store.json', '.adlc/ticket-archive/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
+    }
+  });
+
+  // The test-path exemption applies to package prefixes only. A shard is DATA the
+  // gate reads, so a ticket id that happens to look test-ish must not exempt it.
+  it('TRUE for a shard whose name would trip the test-file heuristic', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets/t-test--abc.test.mjs'], tickets: TICKETS });
+    assert.equal(r.isTrustRootTier, true);
+  });
 });
 
 describe('classifyTrustRootTier — negative / ordinary diffs', () => {
+  it('FALSE for a lookalike path outside the ticket store directory', () => {
+    for (const f of ['.adlc/tickets-notes.md', '.adlc/specs/x.md', 'docs/.adlc/tickets/x.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, false, `${f} should NOT be trust-root`);
+    }
+  });
+
   it('FALSE for a docs-only change', () => {
     const r = classifyTrustRootTier({ changedFiles: ['apps/docs/x.mdx'], tickets: TICKETS });
     assert.deepEqual(r, { isTrustRootTier: false, reasons: [] });
