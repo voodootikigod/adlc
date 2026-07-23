@@ -102,6 +102,39 @@ test('spec-gap: a reworded lesson that dropped the legacy slug marker is still b
   }
 });
 
+// End-to-end order-independence: the marker is stamped from one member ordering
+// and the gate re-clusters (possibly reordering members) before checking. This is
+// the property the whole ticket rests on — an order-dependent id would orphan the
+// marker across a re-run — and unlike the headline tests above it does NOT reuse
+// one cluster.id on both sides, so an id that stopped sorting its members would
+// go RED here, not just in the clusterId unit test.
+test('spec-gap: banking survives cluster members being re-ordered between emit and gate', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const a = { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' };
+    const b = { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' };
+
+    // Emit stamps the marker from the [a, b] ordering.
+    const [emit] = buildClusters([a, b], 2);
+    assert.equal(emit.route, 'spec-gap');
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# Interrogation Template\n\n- [ ] **[security]** retention window + deletion trigger? <!-- cluster-id: ${emit.id} -->\n`,
+      'utf8',
+    );
+
+    // The next run re-clusters and hands the SAME members in the OPPOSITE order.
+    const [check] = buildClusters([b, a], 2);
+    assert.equal(check.id, emit.id, 'the stable id is invariant to member order');
+    const unbanked = findUnbankedClusters([check], outDir, existsSync);
+    assert.deepEqual(unbanked, [], 'the re-ordered cluster is still credited by its stable id');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('skill: a lesson whose file was renamed is still banked via the id in its content', () => {
   const dir = makeTempDir();
   try {
