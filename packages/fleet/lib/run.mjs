@@ -49,7 +49,18 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
         if (completion?.completed && completion.preCompletionSha) {
           const recheck = await deps.postMergeGate({ ticket, integrationBranch });
           if (!recheck.ok) {
-            await deps.revertCompletion?.({ ticket, integrationBranch, toSha: completion.preCompletionSha });
+            // The completion commit FAILED the gate, so it must come off the branch.
+            // Withdrawal failing is NOT a degradation we may swallow: the branch would
+            // carry a gate-rejected commit into the fleet PR. Both a missing withdrawal
+            // path and a throwing one fail the ticket loudly instead.
+            if (!deps.revertCompletion) {
+              return { ok: false, output: 'completion commit failed its gate and no withdrawal path is wired; integration branch would carry an ungated commit' };
+            }
+            try {
+              await deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha });
+            } catch (revertError) {
+              return { ok: false, output: `completion commit failed its gate and could NOT be withdrawn (${revertError.message}); integration branch carries an ungated commit` };
+            }
             deps.log?.(`${ticket.id} WARNING: gate over the completion commit failed; completion withdrawn (merged, not marked completed)`);
           }
         }

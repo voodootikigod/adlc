@@ -217,7 +217,7 @@ test('runFleet completes a merged+gate-passed ticket via the completeTicket effe
 
 // The completion adds a commit AFTER the post-merge gate, so the gate is re-run over
 // it. A failing re-gate withdraws ONLY the completion — never the shipped merge.
-function regateHarness({ regatePasses }) {
+function regateHarness({ regatePasses, revert = 'ok' }) {
   const rec = { completed: [], reverted: [], gateCalls: 0 };
   const deps = {
     baseSha: 'BASE',
@@ -235,6 +235,8 @@ function regateHarness({ regatePasses }) {
     revertCompletion: ({ toSha }) => { rec.reverted.push(toSha); },
     openPR: () => {},
   };
+  if (revert === 'throw') deps.revertCompletion = () => { throw new Error('reset failed: index.lock held'); };
+  if (revert === 'missing') delete deps.revertCompletion;
   return { deps, rec };
 }
 
@@ -257,6 +259,27 @@ test('runFleet keeps the completion when the re-gate over it passes (T73)', asyn
   assert.equal(summary.results.T1, 'merged');
   assert.equal(rec.gateCalls, 2, 'the completion commit is still validated');
   assert.deepEqual(rec.reverted, [], 'nothing is withdrawn when the completion commit gates clean');
+});
+
+test('runFleet FAILS the ticket when a gate-rejected completion cannot be withdrawn (throwing revert)', async () => {
+  // A swallowed rollback failure would leave a gate-rejected commit on the branch and
+  // let it ride into the fleet PR — the ticket must fail loudly instead.
+  const { deps } = regateHarness({ regatePasses: false, revert: 'throw' });
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+
+  assert.notEqual(summary.results.T1, 'merged', 'a branch carrying an ungated commit is never reported merged');
+  assert.equal(summary.merged, 0, 'and it does not count toward opening the PR');
+});
+
+test('runFleet FAILS the ticket when a gate-rejected completion has no withdrawal path wired', async () => {
+  // Optional-chaining on a missing dep must not read as "successfully withdrawn".
+  const { deps } = regateHarness({ regatePasses: false, revert: 'missing' });
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+
+  assert.notEqual(summary.results.T1, 'merged', 'a missing withdrawal path is a failure, not a silent success');
+  assert.equal(summary.merged, 0);
 });
 
 test('runFleet does NOT complete a ticket whose post-merge gate failed (T73 b)', async () => {
