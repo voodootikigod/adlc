@@ -1,39 +1,111 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, lstatSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, lstatSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Guard for #307 (T73): pi must carry NO second copy of the shell-command
-// classifier. The live enforcement path (lib/rails-checker.mjs) IMPORTS the
-// canonical classifier from @adlc/core (single source of truth, ADR-0004). A
-// forked copy is exactly how the pre-#290 `cat a>rail` bypass survived in the
-// vestigial index.js after core was fixed.
+// Guard for #307 (T73): pi must enforce shell rails through the ONE canonical
+// classifier in @adlc/core (single source of truth, ADR-0004), never a local
+// fork. A forked/weaker copy is exactly how the pre-#290 `cat a>rail` no-space
+// redirect bypass survived in the vestigial index.js after core was fixed.
 //
-// Scope of this guard, stated honestly (it is a strong tripwire, not a proof of
-// non-existence). It makes RED:
-//   (a) any local DEFINITION — function / const / arrow / re-export — of a named
-//       core shell primitive;
-//   (b) any copy of the whitespace-anchored redirect regex that WAS the bypass,
-//       regardless of the surrounding identifier; and it asserts
-//   (c) the live path still IMPORTS the classifier from @adlc/core.
-// It cannot catch a semantically-equivalent classifier re-authored under wholly
-// new names with a different redirect implementation — the inherent limit of
-// name-based scanning. Combined with (c), the realistic drift surface is closed.
+// Two layers, strongest first:
+//   1. BEHAVIORAL (load-bearing): drive pi's live `checkShellCommand` over the
+//      #290 bypass corpus and assert the DECISIONS. This proves the live path is
+//      wired to a classifier that actually has the fix — independent of how a
+//      fork might be named, typed, or spelled. A renamed/re-authored fork that a
+//      source scan could never catch fails HERE, on behavior.
+//   2. STRUCTURAL tripwire (best-effort): no pi source file defines, or imports
+//      from a non-core specifier, one of the named core shell primitives. This
+//      catches the common copy-paste reintroduction early; it is explicitly NOT
+//      a proof of non-existence (a fork under wholly new names evades it — that
+//      case is owned by layer 1).
 //
-// The scan reads the WORKING TREE, not `git ls-files`, on purpose: an untracked
-// on-disk copy would still load at runtime, so the working tree is the surface a
-// runtime-safety guard must police.
+// The scan reads the WORKING TREE, not `git ls-files`: an untracked on-disk copy
+// still loads at runtime, so the working tree is the surface to police.
 
 const PI_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-
-// Any executable-source extension pi's loader (jiti) can run.
 const SOURCE_EXT = new Set(['.js', '.mjs', '.cjs', '.mts', '.cts', '.ts', '.jsx', '.tsx']);
+const CORE = '@adlc/core';
 
-// Recursive walk. lstat (never follows symlinks → no cycles, no dangling-link
-// throw). Only node_modules (any depth) and the TOP-LEVEL test dir (this guard +
-// fixtures) are outside the runtime surface; everything else is scanned so a
-// classifier cannot hide under skills/, prompts/, or a nested directory.
+// Named primitives assembled from parts so these lines are RULES, not matches.
+const NAMES = ['shellHas' + 'Mutation', 'hasUnquotedFile' + 'Redirect', 'classifyShell' + 'Command', 'collectShell' + 'Paths'];
+
+// -------------------------------------------------------------------------
+// Layer 1 — behavioral: the live path denies the pre-#290 redirect bypass.
+// -------------------------------------------------------------------------
+test('live checkShellCommand denies the #290 redirect bypass into a frozen rail (#307 AC2/AC4)', async () => {
+  const { checkShellCommand } = await import('../lib/rails-checker.mjs');
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-307-')));
+  try {
+    mkdirSync(join(root, 'guard'), { recursive: true });
+    writeFileSync(join(root, 'guard', 'rail.txt'), 'frozen\n');
+    const ticket = { id: 'T-307-guard', title: 'guard', body: '', scope: ['**'], rails: ['guard/**'] };
+    const rail = 'guard/rail.txt';
+
+    // Each MUST be denied — a classifier missing the #290 fix would misclassify
+    // the no-space forms as read-only and ALLOW them.
+    const mustDeny = [
+      `cat x>${rail}`,       // no space before >  (the exact pre-#290 bypass)
+      `cat x>"${rail}"`,     // quoted no-space target
+      `echo hi>>${rail}`,    // no-space append
+      `echo hi > ${rail}`,   // spaced form (sanity)
+    ];
+    for (const cmd of mustDeny) {
+      assert.equal(
+        checkShellCommand(cmd, ticket, root).decision,
+        'deny',
+        `live path must DENY a redirect into a frozen rail: ${cmd}`,
+      );
+    }
+
+    // Negative control: a quoted '>' in a read-only grep is NOT a redirect.
+    assert.equal(
+      checkShellCommand(`grep '>' ${rail}`, ticket, root).decision,
+      'allow',
+      'a quoted > in a read-only command must not be treated as a redirect',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------------------
+// Layer 2 — structural tripwire against verbatim reintroduction.
+// -------------------------------------------------------------------------
+
+// Whole-file scan (not per-line) so a def or specifier split across newlines is
+// still seen; `\s` crosses newlines. Flags: a local function/const/let/var
+// definition of a named primitive (async/generator/generic/typed tolerated), or
+// a named import/re-export of one from any specifier that is not exactly
+// @adlc/core. Call sites and the canonical core import are deliberately allowed.
+function structuralOffenders(src) {
+  const hits = [];
+  for (const name of NAMES) {
+    if (new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s*\\*?\\s+${name}(?:\\s*<[^>]*>)?\\s*\\(`).test(src)) {
+      hits.push(`local function definition of ${name}`);
+    }
+    if (new RegExp(`(?:export\\s+)?(?:const|let|var)\\s+${name}\\s*(?::[^=\\n]+)?=`).test(src)) {
+      hits.push(`local const/let/var definition of ${name}`);
+    }
+  }
+  const importRe = /(?:import|export)\s*\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/g;
+  let m;
+  while ((m = importRe.exec(src)) !== null) {
+    const [, names, , specifier] = m;
+    if (specifier === CORE) continue; // consuming the canon is the point
+    for (const name of NAMES) {
+      if (new RegExp(`\\b${name}\\b`).test(names)) {
+        hits.push(`imports/re-exports ${name} from non-core '${specifier}'`);
+      }
+    }
+  }
+  return hits;
+}
+
+// lstat (never follows symlinks → no cycles, no dangling-link throw). Excludes
+// node_modules (any depth) and the TOP-LEVEL test dir (this guard + fixtures).
 function walkSource(dir, rel = '') {
   const found = [];
   for (const entry of readdirSync(dir)) {
@@ -52,49 +124,33 @@ function walkSource(dir, rel = '') {
   return found;
 }
 
-// The core shell primitives pi must import, never define. Assembled from parts so
-// these source lines are detection RULES, not matchable local definitions.
-const NAMES = ['shellHas' + 'Mutation', 'hasUnquotedFile' + 'Redirect', 'classifyShell' + 'Command', 'collectShell' + 'Paths'];
-const NAME_ALT = NAMES.join('|');
-
-// Local DEFINITION forms (declaration, assignment/arrow, re-export from a
-// non-core specifier). Call sites (`classifyShellCommand(cmd)`) and imports are
-// deliberately NOT matched — they are the legitimate way to consume the canon.
-const DEF_PATTERNS = [
-  new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s*\\*?\\s+(?:${NAME_ALT})\\s*\\(`),
-  new RegExp(`(?:export\\s+)?(?:const|let|var)\\s+(?:${NAME_ALT})\\s*=`),
-  new RegExp(`export\\s*\\{[^}]*\\b(?:${NAME_ALT})\\b[^}]*\\}\\s*from\\s*(?!['"]@adlc/core)`),
-];
-
-// Signature of the pre-#290 vulnerable redirect regex: a start-or-separator
-// anchor `(^|[…;&|…])` immediately governing a `>`/`>>`/fd redirect alternation.
-// Independent of any function name, so an inlined const/embedded copy is caught.
-const REDIRECT_REGEX_SIG = /\(\s*\^\s*\|\s*\[[^\]]*[\s;&|][^\]]*\]\s*\)[^\n]*>>?/;
-
-function offendingLines(src) {
-  return src.split('\n').filter((line) => {
-    if (/^\s*import\b/.test(line)) return false; // imports/consumers are allowed
-    return DEF_PATTERNS.some((re) => re.test(line)) || REDIRECT_REGEX_SIG.test(line);
-  });
-}
-
-test('guard detectors are load-bearing — positive/negative controls (#307)', () => {
-  const BAD = [
-    'export const classifyShell' + 'Command = (t) => t',
-    'function shellHas' + 'Mutation(x){ return true; }',
-    "export { collectShell" + "Paths } from './forked-classifier.mjs'",
-    'const RE = /(^|[\\s;&|])(?:>>?|[0-9]>>?|[0-9]>)\\s*\\S+/;', // the vulnerable regex, any name
+test('structural detector is load-bearing — positive/negative controls (#307)', () => {
+  const mustFlag = [
+    'export const classifyShell' + 'Command = (t) => t',                      // untyped arrow
+    'export const classifyShell' + 'Command: Classifier = (t) => t',          // typed arrow (TS house style)
+    'function shellHas' + 'Mutation(x){ return true; }',                      // function decl
+    'function classifyShell' + 'Command<T>(x){ return x; }',                  // generic function
+    "export {\n  collectShell" + "Paths\n} from './forked-classifier.mjs'",   // multi-line re-export from fork
+    "import { classifyShell" + "Command } from './local-fork.mjs'",           // import fork under canonical name
+    "export { classifyShell" + "Command } from '@adlc/core-shim'",            // look-alike specifier
   ];
-  for (const s of BAD) {
-    assert.ok(offendingLines(s).length > 0, `detector must flag a reintroduced classifier: ${s}`);
+  for (const s of mustFlag) {
+    assert.ok(structuralOffenders(s).length > 0, `detector must flag: ${s}`);
   }
-  // The legitimate consume-the-canon shape must NOT be flagged.
-  const GOOD = "import { classifyShell" + "Command } from '@adlc/core';\nconst c = classifyShell" + 'Command(cmd);';
-  assert.equal(offendingLines(GOOD).length, 0, 'importing + calling the @adlc/core classifier must be allowed');
+  const mustAllow = [
+    "import { classifyShell" + "Command, collectShell" + "Paths } from '@adlc/core';",  // the canon
+    'const c = classifyShell' + 'Command(cmd);',                                        // a call site
+    "export { checkShellCommand } from './rails-checker.mjs';",                          // a non-primitive symbol
+  ];
+  for (const s of mustAllow) {
+    assert.equal(structuralOffenders(s).length, 0, `detector must NOT flag: ${s}`);
+  }
 });
 
-test('pi ships no vestigial index monolith (#307 AC1)', () => {
-  // index.ts is the legitimate entry; only a JS/compiled monolith is forbidden.
+test('pi ships no vestigial index monolith, only index.ts (#307 AC1)', () => {
+  // Anchor PI_ROOT: the real entry MUST exist, so a mis-resolved root fails loudly
+  // rather than passing the ENOENT assertions vacuously.
+  assert.doesNotThrow(() => statSync(join(PI_ROOT, 'index.ts')), 'index.ts (the real pi entry) must exist');
   for (const name of ['index.js', 'index.mjs', 'index.cjs', 'index.mts', 'index.cts']) {
     assert.throws(
       () => statSync(join(PI_ROOT, name)),
@@ -104,28 +160,16 @@ test('pi ships no vestigial index monolith (#307 AC1)', () => {
   }
 });
 
-test('live enforcement path imports the classifier from @adlc/core (#307 AC4)', () => {
-  const railsChecker = readFileSync(join(PI_ROOT, 'lib', 'rails-checker.mjs'), 'utf-8');
-  assert.match(
-    railsChecker,
-    /import\s*\{[^}]*\bclassifyShellCommand\b[^}]*\}\s*from\s*['"]@adlc\/core['"]/,
-    'lib/rails-checker.mjs must import classifyShellCommand from @adlc/core (single source, ADR-0004)',
-  );
-});
-
-test('no pi source defines a local shell classifier or the vulnerable redirect regex (#307 AC2/AC3)', () => {
+test('no pi source defines or non-core-imports a shell classifier primitive (#307 AC2/AC3)', () => {
   const files = walkSource(PI_ROOT);
-  // AC3: the scan must inspect a non-empty, glob-discovered set, never pass vacuously.
-  assert.ok(files.length > 0, 'expected to discover pi source files to scan');
-
+  assert.ok(files.length > 0, 'expected to discover pi source files to scan'); // AC3: never vacuous
   const offenders = files
-    .map((f) => ({ file: f, lines: offendingLines(readFileSync(f, 'utf-8')) }))
-    .filter((o) => o.lines.length > 0);
-
+    .map((file) => ({ file, hits: structuralOffenders(readFileSync(file, 'utf-8')) }))
+    .filter((o) => o.hits.length > 0);
   assert.deepEqual(
     offenders.map((o) => o.file),
     [],
-    `pi source must import the shell classifier from @adlc/core, not define it locally:\n` +
-      offenders.map((o) => `  ${o.file}: ${o.lines[0].trim()}`).join('\n'),
+    `pi source must consume the @adlc/core shell classifier, not fork it:\n` +
+      offenders.map((o) => `  ${o.file}: ${o.hits.join('; ')}`).join('\n'),
   );
 });
