@@ -7,7 +7,9 @@ import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { resolveRepoRoot, clearRepoRootCache } from '../lib/repo-root.mjs';
+import { resolveRepoRoot, clearRepoRootCache, resolveOnPath } from '../lib/repo-root.mjs';
+import { writeFileSync } from 'node:fs';
+import { delimiter } from 'node:path';
 
 let dir;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'adlc-herdr-git-')); clearRepoRootCache(); });
@@ -29,4 +31,19 @@ test('resolves null outside any git repository', () => {
 
 test('resolves null for a nonexistent directory instead of throwing', () => {
   assert.equal(resolveRepoRoot(join(dir, 'missing')), null);
+});
+
+test('resolveOnPath returns the first PATH entry that actually contains the binary', () => {
+  const empty = join(dir, 'empty');
+  const hit = join(dir, 'hit');
+  mkdirSync(empty, { recursive: true });
+  mkdirSync(hit, { recursive: true });
+  writeFileSync(join(hit, 'somebin'), '#!/bin/sh\n');
+  const path = ['', empty, hit].join(delimiter);
+  assert.equal(resolveOnPath('somebin', path), join(hit, 'somebin'));
+});
+
+test('resolveOnPath returns null when the binary is nowhere on PATH (fail closed)', () => {
+  assert.equal(resolveOnPath('nope-not-here', join(dir, 'empty')), null);
+  assert.equal(resolveOnPath('nope-not-here', undefined), null);
 });

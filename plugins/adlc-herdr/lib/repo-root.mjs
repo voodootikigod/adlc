@@ -3,6 +3,8 @@
 // root — never the main checkout. Cached per directory; failures resolve to
 // null (pane excluded from the map, never a crash).
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join, delimiter } from 'node:path';
 
 const cache = new Map();
 
@@ -23,4 +25,14 @@ export function resolveRepoRoot(dir) {
 /** Test hook: drop cached resolutions. */
 export function clearRepoRootCache() {
   cache.clear();
+}
+
+/** Resolve a binary name against PATH entries (first hit wins), or null.
+ *  Used to fail closed BEFORE spawning anything that needs the binary. */
+export function resolveOnPath(bin, pathValue) {
+  const entries = typeof pathValue === 'string' ? pathValue.split(delimiter) : [];
+  for (const dir of entries) {
+    if (dir && existsSync(join(dir, bin))) return join(dir, bin);
+  }
+  return null;
 }

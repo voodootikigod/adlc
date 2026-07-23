@@ -4,22 +4,13 @@
 // resolve the repo, plan, execute. Every failure path ends in a clear
 // notification; nothing is ever spawned from an unresolved context.
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join, delimiter } from 'node:path';
 import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
-import { resolveRepoRoot } from '../lib/repo-root.mjs';
+import { resolveRepoRoot, resolveOnPath } from '../lib/repo-root.mjs';
 import { readActiveTicket } from '../lib/adlc-state.mjs';
 import { parseContext, resolveTarget, planAction, gateNotification, notifyArgs } from '../lib/actions.mjs';
 
 function notify(title, body, sound = 'request') {
   return runHerdr(notifyArgs(title, body, sound));
-}
-
-function resolveOnPath(bin) {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    if (dir && existsSync(join(dir, bin))) return join(dir, bin);
-  }
-  return null;
 }
 
 function runGate(plan) {
@@ -54,7 +45,7 @@ async function main() {
     return;
   }
   if (plan.kind === 'spawn-pane') {
-    if (plan.requiresBin && !resolveOnPath(plan.requiresBin)) {
+    if (plan.requiresBin && !resolveOnPath(plan.requiresBin, process.env.PATH ?? '')) {
       await notify('ADLC', `cannot run ${actionId}: ${plan.requiresBin} not on PATH (${plan.echo})`);
       return;
     }
