@@ -57,8 +57,15 @@ export function scopeViolations(changedPaths, ticket) {
 /** flail-detector's gate exit code for "I ran fine and the verdict is flail". */
 const EXIT_FLAIL = 2;
 
-/** The §12 backstop: an unverifiable signal must not cut a build's retry short. */
-const failOpen = () => ({ flail: false, signals: [], failedOpen: true });
+/**
+ * The §12 backstop: an unverifiable signal must not cut a build's retry short.
+ *
+ * `reason` names WHY the verdict was unusable so the caller can surface it.
+ * Without it every fail-open — missing detector, unwritable log, schema drift —
+ * flattens into something indistinguishable from "this session is clean", which
+ * is how a supervision control goes blind without anyone noticing (#309).
+ */
+const failOpen = (reason) => ({ flail: false, signals: [], failedOpen: true, reason });
 
 /**
  * Consult flail-detector on the accumulated worker log between strikes.
@@ -113,7 +120,11 @@ export function checkFlail(logFile, scope, { adlcBin = 'adlc', exec = defaultExe
     out = exec(adlcBin, args);
   } catch (e) {
     // Exit 2 is a verdict, not an error — recover the document it printed.
-    if (e?.status !== EXIT_FLAIL || typeof e.stdout !== 'string') return failOpen();
+    if (e?.status !== EXIT_FLAIL || typeof e.stdout !== 'string') {
+      // A numeric exit code means the detector RAN and reported an operational
+      // failure; anything else means we never got a usable process at all.
+      return failOpen(typeof e?.status === 'number' ? 'operational-error' : 'spawn-error');
+    }
     out = e.stdout;
   }
 
@@ -121,13 +132,13 @@ export function checkFlail(logFile, scope, { adlcBin = 'adlc', exec = defaultExe
   try {
     parsed = JSON.parse(out);
   } catch {
-    return failOpen();
+    return failOpen('unparseable');
   }
 
-  if (parsed?.verdict !== 'flail' && parsed?.verdict !== 'clean') return failOpen();
+  if (parsed?.verdict !== 'flail' && parsed?.verdict !== 'clean') return failOpen('unrecognized-verdict');
   // `signals` gets the same strictness as `verdict`: the return shape is
   // documented as an array, so a drifted non-array is drift, not a value.
-  if (parsed.signals !== undefined && !Array.isArray(parsed.signals)) return failOpen();
+  if (parsed.signals !== undefined && !Array.isArray(parsed.signals)) return failOpen('unrecognized-verdict');
   return { flail: parsed.verdict === 'flail', signals: parsed.signals ?? [] };
 }
 

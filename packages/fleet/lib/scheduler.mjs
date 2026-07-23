@@ -40,7 +40,7 @@ export function planRound(all, { statusById = {}, inFlightIds = [], cap = 2, onl
  *   gate({ticket})                       → { ok, output }
  *   prosecute({ticket})                  → { verdict:'pass'|'block'|'unavailable', reason }
  *   merge({ticket})                      → { ok, reverted, output }
- *   flail({ticket})                      → { flail }
+ *   flail({ticket})                      → { flail, signals?, failedOpen?, reason? }
  *
  * Policy (spec §12):
  *   - up to `maxStrikes` attempts;
@@ -60,6 +60,23 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
 
   const fail = (reason) => ({ state: 'failed', strikes, reason, deadEnds, gatePassed, prosecution });
 
+  /**
+   * Consult flail-detector, and SAY SO when the consultation could not produce
+   * a verdict. The §12 policy is unchanged — a fail-open still returns false and
+   * the build keeps its normal retry — but an unobservable fail-open is how the
+   * gate goes blind without anyone noticing (#309): a missing detector, an
+   * unwritable transcript, or schema drift would otherwise read exactly like
+   * "this session is clean".
+   */
+  const consultFlail = async () => {
+    const r = await effects.flail({ ticket });
+    if (r?.failedOpen) {
+      log(`${ticket.id} WARNING: flail consultation failed open (${r.reason ?? 'unknown'}) — ` +
+          'the supervision signal is unavailable, not clean; the build keeps its normal retry');
+    }
+    return r?.flail === true;
+  };
+
   while (strikes < maxStrikes) {
     strikes += 1;
     log(`${ticket.id} strike ${strikes}: building`);
@@ -71,7 +88,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
     if (build.exitCode !== 0 || build.timedOut) {
       deadEnds.push(fence('BUILD', build.output, DEAD_END_MAX_CHARS));
-      if (canRetry() && (await effects.flail({ ticket })).flail) {
+      if (canRetry() && await consultFlail()) {
         return fail('flail-detector diagnosed a genuine flail — skipping the second strike');
       }
       continue;
@@ -81,7 +98,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     const gate = await effects.gate({ ticket });
     if (!gate.ok) {
       deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
-      if (canRetry() && (await effects.flail({ ticket })).flail) {
+      if (canRetry() && await consultFlail()) {
         return fail('flail-detector diagnosed a genuine flail — skipping the second strike');
       }
       continue;

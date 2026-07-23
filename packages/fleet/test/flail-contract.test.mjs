@@ -129,13 +129,13 @@ test('checkFlail FAILS OPEN on a real detector operational error (exit 1)', asyn
 test('checkFlail FAILS OPEN when exec throws without a detector verdict (§12)', async () => {
   const r = checkFlail('/log', [], { exec: () => { throw new Error('adlc not found'); } });
 
-  assert.deepEqual(r, { flail: false, signals: [], failedOpen: true });
+  assert.deepEqual(r, { flail: false, signals: [], failedOpen: true, reason: 'spawn-error' });
 });
 
 test('checkFlail FAILS OPEN on malformed JSON (§12)', async () => {
   const r = checkFlail('/log', [], { exec: () => 'not json at all' });
 
-  assert.deepEqual(r, { flail: false, signals: [], failedOpen: true });
+  assert.deepEqual(r, { flail: false, signals: [], failedOpen: true, reason: 'unparseable' });
 });
 
 test('checkFlail FAILS OPEN on a JSON document with no recognized verdict (§12)', async () => {
