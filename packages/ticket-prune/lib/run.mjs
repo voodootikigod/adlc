@@ -158,7 +158,10 @@ export function runTicketPrune(options = {}) {
         const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), id, {
           root: cwd,
           expectedSnapshotHash: current.hash,
-          reason: item.reason,
+          // The RE-classified reason, not the first pass's: archiveTicket embeds this
+          // permanently in _adlcArchive, and the disposition + CAS already come from
+          // `current`. Using the stale reason would immortalise a pre-edit rationale.
+          reason: reclassified.reason,
           authorized: true,
         });
         archivedEntries.push(result.archived);

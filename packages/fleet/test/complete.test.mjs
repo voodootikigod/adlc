@@ -131,6 +131,20 @@ test('a failed completion commit is rolled back — the shared integration check
   }
 });
 
+test('a RAILED ticket completes normally — rails are enforced by rails-guard-ci on the diff, not by TicketService', () => {
+  // Guards against a plausible-but-wrong belief that fleet cannot complete railed
+  // tickets. TicketService only refuses completion for ids passed as `protectedIds`
+  // to its constructor, and NO production path (CLI included) populates that — it
+  // defaults to empty. The real rails protection is rails-guard-ci over the PR diff,
+  // which exempts a completed:true-only annotation. So railed tickets DO auto-complete.
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'railed', rails: ['test/contract.test.mjs'], scope: ['src/**'] });
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    assert.equal(res.completed, true, 'a railed ticket is not silently left open');
+    assert.equal(isCompleted(root, 'T1'), true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('the completion commit is CI-shaped — completed:true-only shard + append-only manifest (rails-guard-ci)', () => {
   const { root, git, integrationBranch } = makeRepo();
   try {
