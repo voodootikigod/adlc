@@ -135,6 +135,31 @@ test('runFromStdin denies mutating tools when session is flailing under enforcem
     assert.match(res.deny_reason, /flail-detector — session is flailing/i);
     assert.match(res.deny_reason, /repeated error signatures/i);
 
+    // Readonly tools are allowed even during flailing sessions
+    const readonlyPayload = JSON.stringify({
+      conversationId: convId,
+      toolCall: { name: 'view_file', args: { AbsolutePath: targetFile } },
+      workspacePaths: [root],
+    });
+    const resReadonly = runFromStdin(readonlyPayload, env);
+    assert.equal(resReadonly.allow_tool, true);
+
+    // Standalone ADLC_FLAIL_ENFORCEMENT=1 without ADLC_P4_ENFORCEMENT
+    const flailOnlyEnv = {
+      ADLC_FLAIL_ENFORCEMENT: '1',
+      ANTIGRAVITY_APP_DATA_DIR: root,
+    };
+    const resFlailOnly = runFromStdin(payload, flailOnlyEnv);
+    assert.equal(resFlailOnly.allow_tool, false);
+    assert.match(resFlailOnly.deny_reason, /flail-detector — session is flailing/i);
+
+    // Advisory mode (neither ADLC_P4_ENFORCEMENT nor ADLC_FLAIL_ENFORCEMENT set)
+    const advisoryEnv = {
+      ANTIGRAVITY_APP_DATA_DIR: root,
+    };
+    const resAdvisory = runFromStdin(payload, advisoryEnv);
+    assert.equal(resAdvisory.allow_tool, true);
+
     // Bypass check
     const bypassEnv = { ...env, ADLC_FLAIL_BYPASS: '1' };
     const resBypass = runFromStdin(payload, bypassEnv);
