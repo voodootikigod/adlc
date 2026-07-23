@@ -44,9 +44,18 @@ function isInsideRepo(root, resolvedDir) {
 // contributes no rails, but a store that exists and cannot be resolved
 // (ambiguous dual store, unfinished migration transaction, corrupt shard) must
 // throw rather than degrade to "no rails".
+//
+// SECURITY — `env: {}` is load-bearing, not tidiness. detectTicketStore defaults
+// to `env = process.env` and honours ADLC_TICKET_STORE / ADLC_TICKETS, which
+// would make the CANONICAL store replaceable by the very author being gated:
+// point either variable at a valid store that contains the active ticket but
+// OMITS the repo's rails and a rails-only trust-root change declassifies,
+// dropping the distinct-provider requirement. That is the same bypass the --dir
+// containment rule below exists to prevent, just through a different door. An
+// empty env disables override resolution, so the repo's real store always wins.
 function readCanonicalTickets(root) {
   try {
-    return detectTicketStore({ root }).load().mutableTickets();
+    return detectTicketStore({ root, env: {} }).load().mutableTickets();
   } catch (err) {
     if (err.code === 'STORE_NOT_FOUND') return [];
     throw new Error(`canonical ticket store under ${root} exists but cannot be read for tiering: ${err.message}`);

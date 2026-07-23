@@ -22,9 +22,11 @@ import { resolveProsecutionRevision } from '../lib/run.mjs';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
-function runBin(args, cwd) {
+function runBin(args, cwd, env = {}) {
   try {
-    const stdout = execFileSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execFileSync(process.execPath, [BIN, ...args], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env },
+    });
     return { status: 0, stdout };
   } catch (err) {
     return { status: err.status, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
@@ -220,6 +222,32 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
       assert.match(res.stderr, /rails deny-path of ticket T1/);
     } finally {
       rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('residual: ADLC_TICKETS / ADLC_TICKET_STORE cannot replace the canonical store for tiering', () => {
+    // Same escape as the OUT-OF-REPO --dir case, through the environment instead.
+    // detectTicketStore defaults to env = process.env and honours these variables,
+    // so resolving the canonical store WITHOUT disabling overrides would let the
+    // gated author point tiering at a valid rail-free store and declassify a
+    // rails-only trust-root change. Both variable names are covered.
+    for (const varName of ['ADLC_TICKETS', 'ADLC_TICKET_STORE']) {
+      const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
+      try {
+        // A VALID store that contains the active ticket but omits the rail.
+        const railFree = join(repo.dir, 'rail-free-tickets.json');
+        writeFileSync(railFree, JSON.stringify({ tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] }] }));
+        writePasses({ ...repo, revision: 'fixed-rev' });
+        const res = runBin(
+          ['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'],
+          repo.dir,
+          { [varName]: railFree },
+        );
+        assert.equal(res.status, 2, `${varName} must not declassify a change that is trust-root via the canonical rails`);
+        assert.match(res.stderr, /rails deny-path of ticket T1/);
+      } finally {
+        rmSync(repo.dir, { recursive: true, force: true });
+      }
     }
   });
 
