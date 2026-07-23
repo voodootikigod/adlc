@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -188,4 +188,18 @@ test('packageJsonPath resolves local worktree devPath directly without escaping 
   assert.ok(devPath);
   const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   assert.ok(devPath.startsWith(worktreeRoot), `packageJsonPath (${devPath}) must resolve within current worktree (${worktreeRoot})`);
+});
+
+test('packageJsonPath falls back to require.resolve if the local package.json has a mismatched name', () => {
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const fakePkgDir = join(worktreeRoot, 'packages', 'fake-mismatch');
+  try {
+    mkdirSync(fakePkgDir, { recursive: true });
+    writeFileSync(join(fakePkgDir, 'package.json'), JSON.stringify({ name: 'wrong-name' }));
+    
+    const result = packageJsonPath('@adlc/fake-mismatch');
+    assert.equal(result, null);
+  } finally {
+    rmSync(fakePkgDir, { recursive: true, force: true });
+  }
 });
