@@ -33,6 +33,18 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
         return { ok: false, reverted: true, output: `post-merge gate failed; recovery=${rev.method}` };
       }
+      // Post-merge gate PASSED (T73): mark the ticket completed on the integration
+      // branch so the single PR the fleet opens carries the add-only completed:true
+      // annotation. Runs here — inside the merge mutex, right after the gate that
+      // just checked the integration branch out — so exactly one completion touches
+      // that branch at a time. Best-effort: the merge already landed and passed its
+      // gate, so a completion failure must NOT revert good, shipped work; it degrades
+      // to the pre-T73 status quo (merged, not yet marked completed) and is logged.
+      try {
+        await deps.completeTicket?.({ ticket, integrationBranch });
+      } catch (error) {
+        deps.log?.(`${ticket.id} WARNING: post-merge completion failed (${error.message}); ticket merged but not marked completed`);
+      }
       return { ok: true };
     }),
   };

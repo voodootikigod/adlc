@@ -23,6 +23,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnAsync } from './spawn-async.mjs';
+import { completeTicketOnIntegration } from './complete.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -293,6 +294,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     revertMerge: ({ integrationBranch, mergeSha, preMergeSha }) =>
       worktrees.revertMerge(repo, integrationBranch, { mergeSha, preMergeSha }, repoGit),
+
+    // T73: after the post-merge gate passes, complete the ticket ON the integration
+    // branch (checked out at `repo` by postMergeGate) via the same planComplete +
+    // apply path the CLI uses, committing the add-only completed:true diff so it
+    // rides the single PR. Idempotent and best-effort at the call site (§run.mjs).
+    completeTicket: ({ ticket, integrationBranch }) =>
+      completeTicketOnIntegration({ repo, ticketId: ticket.id, integrationBranch, git: repoGit }),
 
     cleanup: ({ worktree, state }) => {
       // Keep failed worktrees for inspection; remove merged ones.

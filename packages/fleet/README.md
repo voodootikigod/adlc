@@ -29,6 +29,12 @@ Design contract: [`docs/specs/fleet-orchestration.md`](../../docs/specs/fleet-or
   reachable.
 - **Integration branch, never base** — finished tickets merge sequentially into
   `fleet/run-<runId>`; the fleet opens at most one PR to base and never pushes.
+- **Auto-completes on a passing merge gate** — once a ticket's post-merge gate
+  passes, the fleet marks it `completed:true` on the integration branch via the
+  same `adlc ticket complete` (`planComplete` + apply) path a human would use, so
+  the add-only annotation and its manifest evidence ride the single PR. Idempotent
+  (an already-completed ticket is a no-op) and gated (a gate-failed ticket stays
+  open).
 - **Two-strike failure policy** informed by `flail-detector` (fails open).
 
 ## Usage
