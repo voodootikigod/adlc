@@ -40,14 +40,17 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 let refreshTimer = null;
 let refreshing = false;
 let pendingFull = false;
+let pendingRefresh = false;
 
 async function refresh({ full = false } = {}) {
-  // Coalesce, don't drop: if a refresh is already running and a FULL heartbeat
-  // fires, remember it and run a follow-up full pass when the current one
-  // finishes — otherwise two colliding heartbeats could let a stable pane's
-  // tokens lapse past their 90s TTL.
+  // Coalesce, don't drop: if a refresh is already running, remember that
+  // another was requested (and whether it was a full heartbeat) and run a
+  // follow-up when the current one finishes. Dropping a non-full refresh would
+  // leave a pane's tokens stale until the next 45s heartbeat; dropping a full
+  // one could lapse tokens past their 90s TTL.
   if (refreshing) {
     if (full) pendingFull = true;
+    else pendingRefresh = true;
     return;
   }
   refreshing = true;
@@ -108,10 +111,14 @@ async function refresh({ full = false } = {}) {
   } finally {
     refreshing = false;
   }
-  // Service a heartbeat that collided with this run.
+  // Service a refresh that collided with this run — full wins over non-full.
   if (pendingFull) {
     pendingFull = false;
+    pendingRefresh = false;
     await refresh({ full: true });
+  } else if (pendingRefresh) {
+    pendingRefresh = false;
+    await refresh({ full: false });
   }
 }
 
