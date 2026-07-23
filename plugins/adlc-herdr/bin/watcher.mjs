@@ -5,12 +5,13 @@
 // pinned by tests. Change-driven and debounced: no herdr process per event,
 // heartbeat refreshes keep TTLs alive (plan premortem bounds).
 import net from 'node:net';
-import { watch, existsSync } from 'node:fs';
+import { watch, existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
-import { readActiveTicket, readLatestPhase, backlogCounts } from '../lib/adlc-state.mjs';
+import { readActiveTicket, readLatestPhase, backlogCounts, ticketsFromExport } from '../lib/adlc-state.mjs';
 import {
   paneTokens, workspaceTokens, buildReportArgs, buildWorkspaceReportArgs,
   diffPublishes, versionGate,
@@ -41,23 +42,31 @@ function resolveRepoRoot(dir) {
   return root;
 }
 
+// `ticket list --json` is a projection without completed/edges (verified
+// live) — backlog math needs the full `store export` envelope.
+const exportDir = mkdtempSync(join(tmpdir(), 'adlc-herdr-watcher-'));
+process.on('exit', () => { try { rmSync(exportDir, { recursive: true, force: true }); } catch { /* best-effort */ } });
+
 const backlogCache = new Map(); // repoRoot -> {at, tickets}
+let exportSeq = 0;
 function readBacklog(repoRoot) {
   return new Promise((resolve) => {
     const cached = backlogCache.get(repoRoot);
     if (cached && Date.now() - cached.at < BACKLOG_CACHE_MS) return resolve(cached.tickets);
-    execFile('adlc', ['ticket', 'list', '--json'], {
+    exportSeq += 1;
+    const outPath = join(exportDir, `export-${exportSeq}.json`);
+    execFile('adlc', ['ticket', 'store', 'export', '--output', outPath], {
       cwd: repoRoot, timeout: 15_000, shell: false,
-    }, (error, stdout) => {
+    }, (error) => {
       let tickets = null;
       if (!error) {
         try {
-          const parsed = JSON.parse(stdout);
-          tickets = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickets) ? parsed.tickets : null;
+          tickets = ticketsFromExport(JSON.parse(readFileSync(outPath, 'utf8')));
         } catch {
           tickets = null;
         }
       }
+      try { rmSync(outPath, { force: true }); } catch { /* best-effort */ }
       backlogCache.set(repoRoot, { at: Date.now(), tickets });
       resolve(tickets);
     });

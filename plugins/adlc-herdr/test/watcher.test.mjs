@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readActiveTicket, readLatestPhase, backlogCounts } from '../lib/adlc-state.mjs';
+import { readActiveTicket, readLatestPhase, backlogCounts, ticketsFromExport } from '../lib/adlc-state.mjs';
 import { paneTokens, workspaceTokens, buildReportArgs, diffPublishes, versionGate } from '../lib/tokens.mjs';
 
 let repo;
@@ -86,6 +86,23 @@ test('backlogCounts: the active ticket counts as in-flight, not ready', () => {
 test('backlogCounts: fails soft on malformed input', () => {
   assert.deepEqual(backlogCounts(null, null), { ready: 0, inFlight: 0, blocked: 0 });
   assert.deepEqual(backlogCounts([{ junk: true }], null), { ready: 0, inFlight: 0, blocked: 0 });
+});
+
+// ---- ticketsFromExport ----
+// Live-smoke lesson (2026-07-23): `adlc ticket list --json` is a projection
+// WITHOUT `completed`/`edges` — backlog counts computed from it are silently
+// wrong. The full source is the `store export` envelope; this pins its shape.
+
+test('ticketsFromExport accepts the {tickets:[...]} envelope', () => {
+  const tickets = [t('t-a'), t('t-b', { completed: true })];
+  assert.deepEqual(ticketsFromExport({ tickets }), tickets);
+});
+
+test('ticketsFromExport fails soft (null) on anything else', () => {
+  assert.equal(ticketsFromExport(null), null);
+  assert.equal(ticketsFromExport({ nope: [] }), null);
+  assert.equal(ticketsFromExport([t('t-a')]), null); // bare list is not the envelope
+  assert.equal(ticketsFromExport({ tickets: 'not-a-list' }), null);
 });
 
 // ---- token building ----

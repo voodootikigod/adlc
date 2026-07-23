@@ -54,6 +54,18 @@ export function readLatestPhase(repoRoot, ticketId) {
 }
 
 /**
+ * Extract the tickets array from an `adlc ticket store export` envelope.
+ * `ticket list --json` is a projection WITHOUT `completed`/`edges` (verified
+ * live 2026-07-23) — backlog math needs the full export. Fails soft (null)
+ * on any other shape.
+ */
+export function ticketsFromExport(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (!Array.isArray(parsed.tickets)) return null;
+  return parsed.tickets;
+}
+
+/**
  * Backlog counts from a ticket list. `completed:true` tickets are excluded
  * and satisfy edges (repo invariant #104). A ticket is blocked when a live
  * ticket holds an edge to it (edges live on the prerequisite); the active
