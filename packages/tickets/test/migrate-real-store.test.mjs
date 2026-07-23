@@ -12,8 +12,16 @@ import { writeLegacy } from './helpers.mjs';
 // `.adlc/tickets.json` to the sharded `.adlc/tickets/` backend, and the point of
 // this test is to exercise migration against real tickets whichever backend
 // currently holds them.
+//
+// `env: {}` is required for that claim to hold. detectTicketStore defaults to
+// `env = process.env` and honours ADLC_TICKET_STORE / ADLC_TICKETS, so a runner
+// that exports either variable for an unrelated ADLC operation would silently
+// redirect this test to that store — every hash assertion would still pass while
+// the actual repository corpus went unexercised, and the non-empty guard below
+// would not notice because an override store is also non-empty.
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
-const realTickets = detectTicketStore({ root: repoRoot }).load().mutableTickets();
+const loadRepoCorpus = () => detectTicketStore({ root: repoRoot, env: {} }).load().mutableTickets();
+const realTickets = loadRepoCorpus();
 
 test('the real repository store migrates and exports with exact logical hashes', () => {
   // Guard against a vacuous pass: reading through the store abstraction cannot
@@ -34,4 +42,20 @@ test('the real repository store migrates and exports with exact logical hashes',
     assert.equal(exported.hash, before.hash);
     assert.deepEqual(exported.mutableTickets(), before.mutableTickets());
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the real-corpus loader cannot be redirected by store-override environment variables', () => {
+  // Pins the property the comment above depends on. `.adlc/tickets.example.json`
+  // is a VALID, non-empty store, so without `env: {}` the override silently wins
+  // and this test's corpus is no longer the repository's.
+  for (const varName of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const previous = process.env[varName];
+    process.env[varName] = '.adlc/tickets.example.json';
+    try {
+      assert.deepEqual(loadRepoCorpus(), realTickets, `${varName} must not redirect the real-corpus loader`);
+    } finally {
+      if (previous === undefined) delete process.env[varName];
+      else process.env[varName] = previous;
+    }
+  }
 });
