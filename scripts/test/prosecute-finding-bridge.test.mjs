@@ -13,22 +13,36 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { globSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 /**
- * Discovered by GLOB, never a hardcoded list — a sixth harness must not be able
- * to ship a prosecution workflow that silently starves P7.
+ * DISCOVERED from disk, never a hardcoded list — a sixth harness must not be
+ * able to ship a prosecution workflow that silently starves P7.
+ *
+ * Walked with readdirSync rather than fs.globSync: globSync is Node 22+, and
+ * this repo's CI runs the suite on Node 18, 20 and 22.
  */
-const DOCS = globSync('plugins/*/{command,commands,prompts}/adlc-prosecute.md', { cwd: REPO })
-  .map((p) => ({ path: p, text: readFileSync(resolve(REPO, p), 'utf8') }));
+function discoverProsecuteDocs() {
+  const out = [];
+  const pluginsDir = resolve(REPO, 'plugins');
+  for (const plugin of readdirSync(pluginsDir, { withFileTypes: true })) {
+    if (!plugin.isDirectory()) continue;
+    for (const sub of ['command', 'commands', 'prompts']) {
+      const p = `plugins/${plugin.name}/${sub}/adlc-prosecute.md`;
+      if (existsSync(resolve(REPO, p))) out.push({ path: p, text: readFileSync(resolve(REPO, p), 'utf8') });
+    }
+  }
+  return out;
+}
+
+const DOCS = discoverProsecuteDocs();
 
 test('the harness prosecute docs are actually discovered', async () => {
-  // A glob that matches nothing would make every assertion below vacuous.
+  // A walk that finds nothing would make every assertion below vacuous.
   assert.ok(DOCS.length >= 4, `expected the harness prosecute docs, found ${DOCS.length}`);
   const harnesses = new Set(DOCS.map((d) => d.path.split('/')[1]));
   for (const h of ['adlc-claude-code', 'adlc-cursor', 'adlc-opencode', 'adlc-pi']) {
