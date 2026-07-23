@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { planTokens, pendingWatchDirs } from '../lib/watch-plan.mjs';
+import { planTokens, pendingWatchDirs, staleWatchDirs } from '../lib/watch-plan.mjs';
 
 const counts = (ready, inFlight, blocked) => ({ ready, inFlight, blocked });
 
@@ -89,4 +89,32 @@ test('the tickets dir is attached on a LATER call once it appears, though .adlc 
   // Steady state: nothing new to attach.
   watched.add(tickets);
   assert.deepEqual(pendingWatchDirs('/repo', watched, exists), []);
+});
+
+test('pendingWatchDirs works with the Map the daemon uses (has() semantics)', () => {
+  const adlc = join('/repo', '.adlc');
+  const watched = new Map([[adlc, { repoRoot: '/repo' }]]);
+  const exists = (p) => p === adlc || p === join(adlc, 'tickets');
+  assert.deepEqual(pendingWatchDirs('/repo', watched, exists), [join(adlc, 'tickets')]);
+});
+
+// ---- staleWatchDirs (the FD-leak cleanup) ----
+
+test('staleWatchDirs returns dirs whose repo is no longer active', () => {
+  const gone = join('/gone', '.adlc');
+  const live = join('/live', '.adlc');
+  const watched = new Map([
+    [gone, { repoRoot: '/gone' }],
+    [join('/gone', '.adlc', 'tickets'), { repoRoot: '/gone' }],
+    [live, { repoRoot: '/live' }],
+  ]);
+  assert.deepEqual(
+    staleWatchDirs(watched, new Set(['/live'])).sort(),
+    [gone, join('/gone', '.adlc', 'tickets')].sort(),
+  );
+});
+
+test('staleWatchDirs returns nothing when every watched repo is still active', () => {
+  const watched = new Map([[join('/r', '.adlc'), { repoRoot: '/r' }]]);
+  assert.deepEqual(staleWatchDirs(watched, new Set(['/r'])), []);
 });

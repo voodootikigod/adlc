@@ -26,6 +26,20 @@ export function pendingWatchDirs(repoRoot, watched, exists) {
 }
 
 /**
+ * Watched directories whose repo is no longer active — the FSWatchers to
+ * close so a long session navigating many repos does not leak inotify watches
+ * until it hits the OS limit. `watchedDirs` maps dir → {repoRoot}; `active`
+ * is the set of currently-present repo roots.
+ */
+export function staleWatchDirs(watchedDirs, active) {
+  const stale = [];
+  for (const [dir, info] of watchedDirs) {
+    if (!active.has(info.repoRoot)) stale.push(dir);
+  }
+  return stale;
+}
+
+/**
  * @param {Array<{paneId, workspaceId, repoRoot}>} paneMap
  * @param {Map<string,{active, phase, counts}>} repoState  keyed by repoRoot
  * @returns {{nextPane: Map<string,object>, nextWorkspace: Map<string,object>}}

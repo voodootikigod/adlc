@@ -15,7 +15,7 @@ import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
-import { planTokens, pendingWatchDirs } from '../lib/watch-plan.mjs';
+import { planTokens, pendingWatchDirs, staleWatchDirs } from '../lib/watch-plan.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
@@ -31,7 +31,7 @@ const readBacklog = makeCachedReader((repoRoot) => readTicketsViaExport(repoRoot
 
 let prevPane = new Map();
 let prevWorkspace = new Map();
-const watchedDirs = new Set();
+const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 let refreshTimer = null;
 let refreshing = false;
 let pendingFull = false;
@@ -52,17 +52,32 @@ async function refresh({ full = false } = {}) {
     const panes = snap.value?.result?.snapshot?.panes;
     const map = buildPaneMap(Array.isArray(panes) ? panes : [], { resolveRepoRoot });
     const groups = repoGroups(map);
+    const activeRepos = new Set(groups.keys());
 
-    // Read each repo's state once, then let the pure planner assemble tokens.
-    const repoState = new Map();
-    for (const [repoRoot] of groups) {
-      ensureWatched(repoRoot);
+    // Close watches for repos no longer present — otherwise each repo ever
+    // observed leaks two inotify watches for the process lifetime, eventually
+    // hitting the OS limit (EMFILE/ENOSPC).
+    for (const dir of staleWatchDirs(watchedDirs, activeRepos)) {
+      try {
+        watchedDirs.get(dir).watcher.close();
+      } catch {
+        // best-effort
+      }
+      watchedDirs.delete(dir);
+    }
+
+    // Read each repo's state CONCURRENTLY: readBacklog spawns `adlc` with a
+    // 15s timeout, so awaiting several sequentially could exceed the 90s token
+    // TTL under load and let every token expire. Fan out, then plan.
+    for (const repoRoot of activeRepos) ensureWatched(repoRoot);
+    const states = await Promise.all([...activeRepos].map(async (repoRoot) => {
       const active = readActiveTicket(repoRoot);
       const phase = active.state === 'active' ? readLatestPhase(repoRoot, active.id) : null;
       const tickets = existsSync(join(repoRoot, '.adlc')) ? await readBacklog(repoRoot) : null;
       const counts = tickets ? backlogCounts(tickets, active.state === 'active' ? active.id : null) : null;
-      repoState.set(repoRoot, { active, phase, counts });
-    }
+      return [repoRoot, { active, phase, counts }];
+    }));
+    const repoState = new Map(states);
     const { nextPane, nextWorkspace } = planTokens(map, repoState);
 
     const paneChanges = full ? nextPane : diffPublishes(prevPane, nextPane);
@@ -110,8 +125,8 @@ function scheduleRefresh() {
 function ensureWatched(repoRoot) {
   for (const dir of pendingWatchDirs(repoRoot, watchedDirs, existsSync)) {
     try {
-      watch(dir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
-      watchedDirs.add(dir);
+      const watcher = watch(dir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
+      watchedDirs.set(dir, { watcher, repoRoot });
     } catch {
       // fail soft — heartbeat polling still covers this repo
     }
