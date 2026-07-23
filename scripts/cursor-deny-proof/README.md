@@ -1,4 +1,4 @@
-# Cursor live `permission: deny` proof (T66)
+# Cursor live `permission: deny` proof (T68)
 
 Maintainer-run harness. Manual / `workflow_dispatch` only — not a required CI
 gate. Results are dated in `docs/adr/0006-adlc-cursor-integration.md` with the

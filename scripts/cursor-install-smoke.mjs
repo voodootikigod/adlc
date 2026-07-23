@@ -43,7 +43,7 @@ else {
   else ok('cursor.mcpServers manifest entry');
 }
 
-// ---- T63: mcp.json Roots proxy wrapper (not raw adlc mcp-server) ----
+// ---- T65: mcp.json Roots proxy wrapper (not raw adlc mcp-server) ----
 {
   const mcpPath = join(PLUGIN, 'mcp.json');
   if (!existsSync(mcpPath)) fail('plugins/adlc-cursor/mcp.json missing');
@@ -106,7 +106,7 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
   else ok(`${label}: only documented Cursor events`);
   for (const ev of ['preCompact', 'subagentStart', 'subagentStop']) {
     const entries = hj.hooks?.[ev] ?? [];
-    if (!entries.length) fail(`${label}: ${ev} missing (T65)`);
+    if (!entries.length) fail(`${label}: ${ev} missing (T67)`);
     else if (!entries.every((e) => e.failClosed === false && e.timeout === 10)) fail(`${label}: ${ev} must use failClosed:false timeout:10`);
     else ok(`${label}: ${ev} wired`);
   }
@@ -288,7 +288,7 @@ for (const f of ['adlc-stop.mjs', 'adlc-preflight.mjs']) {
 }
 
 
-// ---- T62: sessionStart + alwaysApply ticket context + comment truth ----
+// ---- T64: sessionStart + alwaysApply ticket context + comment truth ----
 if (!existsSync(join(PLUGIN, 'hooks', 'adlc-session-start.mjs'))) fail('hooks/adlc-session-start.mjs missing');
 else ok('hooks/adlc-session-start.mjs ships');
 const ticketRule = join(PLUGIN, 'rules', 'adlc-ticket-context.mdc');
@@ -325,7 +325,7 @@ else {
   if (/function\s+globMatch\s*\(/.test(chk)) fail('rails-checker RE-IMPLEMENTS globMatch (must delegate to @adlc/core)'); else ok('no inlined globMatch (engine delegated)');
   // deny-path source must not pull a third-party runtime dependency
   const imports = [...chk.matchAll(/from '([^']+)'/g), ...read(guardPath).matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-  if (!/detectTicketStore/.test(chk) || !/allowLegacyPointer:\s*true/.test(chk)) fail('rails-checker must use detectTicketStore + allowLegacyPointer: true (T62)');
+  if (!/detectTicketStore/.test(chk) || !/allowLegacyPointer:\s*true/.test(chk)) fail('rails-checker must use detectTicketStore + allowLegacyPointer: true (T64)');
   else ok('rails-checker aligns store detection + allowLegacyPointer');
   const thirdParty = imports.filter((s) => !s.startsWith('node:') && !s.startsWith('.') && s !== '@adlc/core' && s !== '@adlc/tickets');
   if (thirdParty.length) fail(`deny path imports third-party deps: ${thirdParty.join(', ')}`); else ok('deny path: only node: builtins + @adlc/core + @adlc/tickets');
@@ -406,8 +406,8 @@ else {
   } else ok(`adlc-prosecute.md lens-brief count matches the @adlc/core registry (${LENSES.length})`);
   if (!/verifier/i.test(pr)) fail('adlc-prosecute.md missing the verifier pass');
   else ok('adlc-prosecute.md has the verifier pass');
-  // T64: Task fan-out preferred; sequential is degraded fallback (weaker independence).
-  if (/no subagent fan-out/i.test(pr)) fail('adlc-prosecute.md must not claim Cursor has no subagent fan-out (T64)');
+  // T66: Task fan-out preferred; sequential is degraded fallback (weaker independence).
+  if (/no subagent fan-out/i.test(pr)) fail('adlc-prosecute.md must not claim Cursor has no subagent fan-out (T66)');
   else ok('adlc-prosecute.md does not claim Cursor has no subagent fan-out');
   if (!/\bTask\b/.test(pr) || !/prosecutor-correctness/.test(pr) || !/prosecutor-verifier/.test(pr)) {
     fail('adlc-prosecute.md must require Task/custom-agent fan-out of packaged prosecutor agents');
@@ -428,7 +428,7 @@ else {
   else ok('adlc-prosecute.md instructs recording the prosecution gate, ticket-scoped');
 }
 
-// ---- T64: prosecutor agents roster packaged ----
+// ---- T66: prosecutor agents roster packaged ----
 {
   const agentsDir = join(PLUGIN, 'agents');
   const required = [
@@ -484,7 +484,7 @@ else {
   }
   if (/no plugin marketplace/i.test(adr)) fail('ADR 0006 still claims Cursor has no plugin marketplace (T47)');
   else ok('ADR 0006 does not claim Cursor has no plugin marketplace');
-  if (!/ADLC_CURSOR_SESSION_ID/.test(adr) || !/session_id/.test(adr)) fail('ADR 0006 must pin session_id / ADLC_CURSOR_SESSION_ID (T62)');
+  if (!/ADLC_CURSOR_SESSION_ID/.test(adr) || !/session_id/.test(adr)) fail('ADR 0006 must pin session_id / ADLC_CURSOR_SESSION_ID (T64)');
   else ok('ADR pins session_id / ADLC_CURSOR_SESSION_ID');
   if (!/best-effort/i.test(adr) || !/adlc-ticket-context/.test(adr)) fail('ADR 0006 must mark sessionStart context best-effort and name always-apply rule');
   else ok('ADR documents sessionStart best-effort + always-apply fallback');
@@ -553,7 +553,7 @@ if (existsSync(docPath)) {
 }
 
 
-// ---- T66: deny-proof runbook ----
+// ---- T68: deny-proof runbook ----
 {
   const denyReadme = join(ROOT, 'scripts', 'cursor-deny-proof', 'README.md');
   if (!existsSync(denyReadme)) fail('scripts/cursor-deny-proof/README.md missing');
@@ -572,7 +572,7 @@ if (existsSync(docPath)) {
   }
 }
 
-// ---- T67: marketplace publish checklist honesty ----
+// ---- T69: marketplace publish checklist honesty ----
 {
   if (!existsSync(docPath)) fail('docs/integrations/cursor.md missing for publish checklist');
   else {

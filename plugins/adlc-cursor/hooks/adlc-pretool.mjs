@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// adlc-pretool.mjs — the SINGLE Cursor `preToolUse` dispatcher (T18 / T62).
+// adlc-pretool.mjs — the SINGLE Cursor `preToolUse` dispatcher (T18 / T64).
 //
 // Cursor's multi-entry-per-event ordering and permission-combination semantics
 // are UNPINNED (ADR 0006), so a second preToolUse entry could mask a rails
@@ -26,7 +26,7 @@
 // DISABLED by default behind ADLC_BUILD_GATE_ENFORCEMENT=1 (mirroring
 // ADLC_P4_ENFORCEMENT).
 //
-// Depth signal (T62): per-session counters under ~/.adlc/ (or
+// Depth signal (T64): per-session counters under ~/.adlc/ (or
 // ADLC_CURSOR_STATE_DIR), keyed by SHA-256 session id; idempotent on
 // tool_use_id. Session id from resolveSessionIdentity (session_id /
 // conversation_id / ADLC_CURSOR_SESSION_ID only).
@@ -42,7 +42,7 @@ import { decideP5SubagentPolicy, isP5TaskPayload } from '../lib/p5-subagent-poli
 
 /**
  * Prefer pinned session_id / conversation_id (+ env). Rejects thread/generation
- * as session keys (T62). Legacy name kept for build-gate tests.
+ * as session keys (T64). Legacy name kept for build-gate tests.
  */
 export function extractConversationId(payload, env = process.env) {
   const id = resolveSessionIdentity(payload, env);
@@ -221,7 +221,7 @@ export async function dispatch(payload, { root, env = process.env, now, importMo
   const rails = decide(payload, root != null ? { root, env } : { env });
   if (rails.permission !== 'allow') return rails; // any non-allow returned VERBATIM
 
-  // T65: authoritative P5 Task/subagent allowlist on preToolUse (after rails allow).
+  // T67: authoritative P5 Task/subagent allowlist on preToolUse (after rails allow).
   const toolName = extractToolName(payload);
   if (isP5TaskPayload(payload, toolName)) {
     const p5 = decideP5SubagentPolicy(payload, { env, now: now ?? Date.now(), toolName });

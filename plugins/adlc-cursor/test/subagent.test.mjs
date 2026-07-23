@@ -1,4 +1,4 @@
-// subagent.test.mjs — T65 AC11/AC12: P5 marker + Task/subagent policy.
+// subagent.test.mjs — T67 AC11/AC12: P5 marker + Task/subagent policy.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

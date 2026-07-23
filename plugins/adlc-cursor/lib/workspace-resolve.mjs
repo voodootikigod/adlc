@@ -1,4 +1,4 @@
-// workspace-resolve.mjs — ADLC-bearing root selection for Cursor hooks (T62).
+// workspace-resolve.mjs — ADLC-bearing root selection for Cursor hooks (T64).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, resolve as pathResolve } from 'node:path';

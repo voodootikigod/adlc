@@ -1,4 +1,4 @@
-// mcp-file-uri.mjs — decode MCP Roots `file://` URIs to absolute paths (T63).
+// mcp-file-uri.mjs — decode MCP Roots `file://` URIs to absolute paths (T65).
 
 import { normalizeRootPath } from './workspace-resolve.mjs';
 

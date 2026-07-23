@@ -46,7 +46,7 @@ edit interception:  preToolUse   (fires before any tool, incl. Write/Edit)
   stdout:  { permission: "allow" | "deny" | "ask", user_message, agent_message }
 post-edit observe:  afterFileEdit   (fires AFTER the edit; OBSERVATIONAL — cannot block)
 shell:              beforeShellExecution   (Bash writes NOT rail-gated in-session)
-session:            sessionStart (T62), stop, beforeSubmitPrompt (documented; default-on)
+session:            sessionStart (T64), stop, beforeSubmitPrompt (documented; default-on)
 rule host:          .cursor/rules/adlc.mdc   (frontmatter: description / globs / alwaysApply)
 plugin host:        .cursor-plugin/plugin.json + repo marketplace.json (T47)
 ```
@@ -171,7 +171,7 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
    the gate-manifest; risk/decide/depth/override logic imported from
    `@adlc/build-gate` deep lib subpaths — the package has no exports map, so
    `lib/*.mjs` subpaths are the sanctioned import form).
-3. **Depth session-scoping (T62):** per-session counters under the user-scoped
+3. **Depth session-scoping (T64):** per-session counters under the user-scoped
    ADLC state dir (`~/.adlc/` or `ADLC_CURSOR_STATE_DIR`), keyed by SHA-256 of
    the unified session id. Session identity accepts docs-pinned `session_id` /
    `conversation_id` and env `ADLC_CURSOR_SESSION_ID` only (rejects
@@ -199,21 +199,21 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
 
 ## Unverified / follow-on
 
-- **`preToolUse` / `sessionStart` payload pins (T62):** ADLC pins
+- **`preToolUse` / `sessionStart` payload pins (T64):** ADLC pins
   `session_id` / `conversation_id`, `ADLC_CURSOR_SESSION_ID`,
   `workspace_roots`, `tool_name`, `tool_input`, and `tool_use_id` for the
   Cursor hooks it ships. Checked-in fixtures under
   `plugins/adlc-cursor/test/fixtures/` exercise those fields through the real
   sessionStart / preToolUse dispatchers. Live Cursor binary confirmation of
-  deny delivery remains a follow-on (T66).
+  deny delivery remains a follow-on (T68).
 - **`sessionStart` `additional_context` delivery** — best-effort only. Cursor
   may accept the hook output and still drop context before the composer is
   ready; durable fallback is `rules/adlc-ticket-context.mdc`
   (`alwaysApply: true`).
 - **Live deny proof** — harness under `scripts/cursor-deny-proof/`; dated
-  result in T66 section above (pending maintainer run).
+  result in T68 section above (pending maintainer run).
 
-## T62: sessionStart + per-session control state
+## T64: sessionStart + per-session control state
 
 Recorded with `.adlc/specs/cursor-deeper-native.md`.
 
@@ -230,24 +230,24 @@ Recorded with `.adlc/specs/cursor-deeper-native.md`.
    `alwaysApply: true` for canonical ticket resolution when sessionStart
    context is dropped.
 
-## T63: MCP Roots proxy (wrapper landed / channel unverified)
+## T65: MCP Roots proxy (wrapper landed / channel unverified)
 
 1. **`mcp.json`** launches `node ./bin/adlc-mcp-wrapper.mjs` — never raw
    `adlc mcp-server`. Packaging + smoke reject direct wiring.
 2. **Lifecycle Roots proxy** completes initialize, requests `roots/list`,
-   decodes `file://` Root URIs, runs the T62 consumer-workspace algorithm, then
+   decodes `file://` Root URIs, runs the T64 consumer-workspace algorithm, then
    spawns `adlc mcp-server` with that cwd. Multi-active roots fail closed.
    Clients without roots capability fail closed in production (no cwd guess).
 3. **Host-env** (`ADLC_CURSOR_MCP_ROOT` / `CURSOR_PROJECT_DIR`) is test-only
    (`ADLC_CURSOR_MCP_ALLOW_HOSTENV=1` on the wrapper) and does **not** unlock
    "MCP shipped."
 4. **Ship gate:** installed-Cursor proof of Roots resolution (incl. multi-root
-   refuse / rebind) still required before matrix/docs claim MCP shipped or T67
+   refuse / rebind) still required before matrix/docs claim MCP shipped or T69
    marketplace publication completes. Until then: **wrapper landed / channel
    unverified.**
-5. `packages/cli/lib/mcp-server.mjs` remains frozen (T63 rail).
+5. `packages/cli/lib/mcp-server.mjs` remains frozen (T65 rail).
 
-## T64: prosecutor agents (packaged-but-unverified)
+## T66: prosecutor agents (packaged-but-unverified)
 
 1. `plugins/adlc-cursor/agents/` ships five lenses + verifier with
    `readonly: true` (no Claude `tools:` frontmatter). Optional `prosecutor.md`
@@ -261,7 +261,7 @@ Recorded with `.adlc/specs/cursor-deeper-native.md`.
    proof of five distinct lens contexts + verifier receipt (AC10). Until then:
    **packaged-but-unverified.**
 
-## T65: preCompact + subagent P5 policy
+## T67: preCompact + subagent P5 policy
 
 1. `preCompact` → `adlc-precompact.mjs` (observational ticket/rails reminder).
 2. `subagentStart` / `subagentStop` → `adlc-subagent.mjs` (defense-in-depth).
@@ -272,7 +272,7 @@ Recorded with `.adlc/specs/cursor-deeper-native.md`.
    channel is proven; do not use a global anonymous marker to fake lineage.
 5. Fixtures: `test/fixtures/pretool-task-*.json`, `subagent-start-prosecutor.json`.
 
-## T66: live deny-proof harness (result pending)
+## T68: live deny-proof harness (result pending)
 
 **Date:** 2026-07-22 — harness landed; **live Cursor binary proof not yet run**
 in this change (status: fail / pending until a maintainer records pass/fail).

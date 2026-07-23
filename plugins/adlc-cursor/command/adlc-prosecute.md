@@ -45,7 +45,7 @@ Establish the target ticket (its `scope`, spec, and acceptance criteria from
 prosecuting, do not edit product files or run state-changing commands except
 the mechanical gates in step 5 and the marker/evidence commands below.
 
-**P5 marker (session-matched, fenced — T62 helper).** Before fan-out, write a
+**P5 marker (session-matched, fenced — T64 helper).** Before fan-out, write a
 fresh marker via the plugin's `writeP5Marker` helper (user-scoped state dir
 `~/.adlc` / `ADLC_CURSOR_STATE_DIR`, never consumer `.adlc/`):
 

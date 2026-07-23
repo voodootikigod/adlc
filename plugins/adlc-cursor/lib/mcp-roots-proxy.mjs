@@ -1,6 +1,6 @@
-// mcp-roots-proxy.mjs — lifecycle-aware MCP Roots proxy (T63).
+// mcp-roots-proxy.mjs — lifecycle-aware MCP Roots proxy (T65).
 // Speaks JSON-RPC stdio with the Cursor client, requests roots/list after
-// initialize, resolves the consumer workspace via T62 algorithm, then spawns
+// initialize, resolves the consumer workspace via T64 algorithm, then spawns
 // `adlc mcp-server` with that cwd and forwards traffic.
 //
 // Never falls back to process.cwd() / plugin cache. Clients without roots

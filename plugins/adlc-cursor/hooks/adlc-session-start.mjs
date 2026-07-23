@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// adlc-session-start.mjs — Cursor sessionStart hook (T62).
+// adlc-session-start.mjs — Cursor sessionStart hook (T64).
 //
 // Resolves the consumer workspace from host-supplied roots (never plugin cwd),
 // emits best-effort additional_context + ADLC_CURSOR_SESSION_ID env pin, and

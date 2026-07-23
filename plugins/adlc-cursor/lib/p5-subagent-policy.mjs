@@ -1,4 +1,4 @@
-// p5-subagent-policy.mjs — P5 Task/subagent allowlist (T65).
+// p5-subagent-policy.mjs — P5 Task/subagent allowlist (T67).
 // Authoritative enforcement is preToolUse; subagentStart is defense-in-depth.
 // Nested Task during P5 is explicitly degraded/permissive until lineage is proven.
 
@@ -86,7 +86,7 @@ export function decideP5SubagentPolicy(payload, {
   }
 
   // Unrelated agent under a fresh matching marker → ask (prefer ask over silent deny
-  // so operators can override; T66 live proof may observe deny when configured).
+  // so operators can override; T68 live proof may observe deny when configured).
   const mode = env.ADLC_CURSOR_P5_UNRELATED === 'deny' ? 'deny' : 'ask';
   return {
     permission: mode,

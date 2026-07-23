@@ -1,4 +1,4 @@
-// mcp-hostenv.mjs — thin host-env consumer-root resolver for MCP tests (T63).
+// mcp-hostenv.mjs — thin host-env consumer-root resolver for MCP tests (T65).
 // Production ship path is the lifecycle Roots proxy. This helper MUST NOT
 // unlock "MCP shipped" claims and MUST NOT fall back to process.cwd().
 

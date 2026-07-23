@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// cursor-deny-proof/run.mjs — checklist + local hash helpers for T66 live proof.
+// cursor-deny-proof/run.mjs — checklist + local hash helpers for T68 live proof.
 // Does NOT drive the Cursor binary (maintainer does). Exit 0 = checklist printed;
 // exit 2 = local preconditions failed.
 
@@ -39,7 +39,7 @@ function main(argv) {
   const recIdx = argv.indexOf('--record');
   const recordDir = recIdx >= 0 ? resolve(argv[recIdx + 1]) : join(HERE, 'runs');
 
-  console.log('=== Cursor deny-proof checklist (T66) ===');
+  console.log('=== Cursor deny-proof checklist (T68) ===');
   console.log('1. Pristine baseline: rail hash + sentinel ABSENT');
   console.log('2. Enforcement-on structured Write/Edit with unique sentinel');
   console.log('3. Observe deny/allow + Cursor version; hash UNCHANGED; sentinel still ABSENT');

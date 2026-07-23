@@ -20,7 +20,7 @@ against a real Cursor binary remains the one GA honesty gate (see
 
 ## What you get
 
-- **`sessionStart` hook (T62)** — resolves the consumer workspace from host
+- **`sessionStart` hook (T64)** — resolves the consumer workspace from host
   roots, pins `ADLC_CURSOR_SESSION_ID`, and emits best-effort
   `additional_context` (ticket id or `no active ticket`). Context injection is
   **best-effort**; durable fallback is `rules/adlc-ticket-context.mdc`
@@ -221,7 +221,7 @@ publish the plugin listing.
      proof (AC7) is recorded in ADR-0006 — do **not** claim MCP shipped.
    - Agents: **packaged-but-unverified** until AC10 installed-Cursor fan-out
      proof — do **not** claim agents-backed P5.
-   - T65 subagent hooks + T66 deny-proof harness must be present; live deny
+   - T67 subagent hooks + T68 deny-proof harness must be present; live deny
      result dated in ADR (pass or fail).
 2. Plugin packaging green:
    - `node scripts/cursor-install-smoke.mjs .`

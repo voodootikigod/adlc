@@ -1,4 +1,4 @@
-// prosecute-agents.test.mjs — T64 AC9/AC10: agents roster + recorder packet.
+// prosecute-agents.test.mjs — T66 AC9/AC10: agents roster + recorder packet.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,20 +1,20 @@
-# Spec — Cursor deeper-native integration (T62–T67)
+# Spec — Cursor deeper-native integration (T64–T69)
 
 **Phase:** P1 contract for closing issue #241 Cursor gaps and making
 `plugins/adlc-cursor` use Cursor’s full plugin surface (hooks, agents, MCP,
 skills, commands, rules).
 
-**Tickets:** T62 → (T63, T65, T66); T63 → (T64, T67); T64 → (T65, T67);
-T65 → (T66, T67); T66 → T67. Build in that DAG order; this file is binding for
-all six. Marketplace publish / `/adlc-init` DX (T67) MUST NOT proceed until
-T65 (subagent hooks) and T66 (live deny-proof) are complete.
+**Tickets:** T64 → (T65, T67, T68); T65 → (T66, T69); T66 → (T67, T69);
+T67 → (T68, T69); T68 → T69. Build in that DAG order; this file is binding for
+all six. Marketplace publish / `/adlc-init` DX (T69) MUST NOT proceed until
+T67 (subagent hooks) and T68 (live deny-proof) are complete.
 
 ## P1 review boundary
 
 This file is the **P1 contract**. Spec approval ships the *contract*, not the
-T62–T67 implementations. Adversarial review of this artifact must judge
+T64–T69 implementations. Adversarial review of this artifact must judge
 accuracy/completeness of the pinned decisions and acceptance criteria. Absence
-of `sessionStart` wiring or other T62 code in the working tree is expected
+of `sessionStart` wiring or other T64 code in the working tree is expected
 until P4 build and is **not** a P1 no-ship reason.
 
 **Supersedes (partially):** T47 out-of-scope items “full five-lens fresh-context
@@ -35,7 +35,7 @@ and weak P5 independence.
 
 ## Goal
 
-After T62–T67:
+After T64–T69:
 
 1. An installed ADLC Cursor plugin injects ticket/rails context at session
    start, exposes MCP tools, and can prosecute via fresh-context agents.
@@ -65,12 +65,12 @@ After T62–T67:
    change when `docs/integrations/harness-capability-matrix.md` exists on the
    branch; if absent, update ADR-0006 + `docs/integrations/cursor.md` Gaps and
    leave a TODO to sync the matrix when it lands.
-5. **Stale “no subagent fan-out” language** is retired only by **T64**, not by
-   T62/T63 docs drive-bys.
+5. **Stale “no subagent fan-out” language** is retired only by **T66**, not by
+   T64/T65 docs drive-bys.
 
 ## Pinned contracts
 
-### Session id + env (T62)
+### Session id + env (T64)
 
 Cursor `sessionStart` input (docs-pinned fields + ADLC-required
 workspace resolution):
@@ -112,8 +112,8 @@ Hooks may reimplement the filesystem checks with Node built-ins (no
 
 Classify each ADLC-bearing root with **one** pinned active-ticket policy after
 store detection — shared by sessionStart, AC17 fallback, and Cursor rail
-reader (`rails-checker.mjs` / rails-guard path). **T62 owns** aligning that
-reader (remove from T62 rails freeze; add to T62 scope):
+reader (`rails-checker.mjs` / rails-guard path). **T64 owns** aligning that
+reader (remove from T64 rails freeze; add to T64 scope):
 
 - Use `resolveActiveTicketAgainst` / equivalent with
   **`allowLegacyPointer: true`** (1.x bridge): hashless object/string pointers
@@ -257,7 +257,7 @@ Verify: `node --test plugins/adlc-cursor/test/session-start.test.mjs`
   reads, pauses past lease expiry, holder B reclaims and commits, then A
   resumes and must retry (not overwrite B).
 - Preflight / flail session markers SHOULD follow the same per-id preference
-  when they key session-ness; minimum bar for T62 AC is the depth counter.
+  when they key session-ness; minimum bar for T64 AC is the depth counter.
 - `additional_context` must include: active ticket id **or** the exact phrase
   `no active ticket`; whether enforcement is active; a one-line pointer
   to `/adlc-*` / the `adlc` skill. **Enforcement (binding):** active iff
@@ -268,18 +268,18 @@ Verify: `node --test plugins/adlc-cursor/test/session-start.test.mjs`
 - **`sessionStart` MUST NOT set or clear `ADLC_P4_ENFORCEMENT`.** It only
   reports whether the flag is already set. Auto-enabling enforcement from the
   plugin is out of bounds (parallax resolution + premortem).
-- **User-scoped session-resolution record (T62):** on every **terminal**
+- **User-scoped session-resolution record (T64):** on every **terminal**
   resolution with a valid unified session id, atomically write either a
   success record or the corresponding AC19 TTL tombstone (error / ambiguous /
   unresolved). Skip mutation only for missing identity or alias conflict.
-  Owned by T62 for hooks/AC17; **not** an MCP root channel until session-id
+  Owned by T64 for hooks/AC17; **not** an MCP root channel until session-id
   handoff is evidenced.
 - Scaffold path: `mergeHooks` in `plugins/adlc-cursor/lib/scaffold.mjs` (in
-  T62 scope) must wire `sessionStart` with the same relative /
+  T64 scope) must wire `sessionStart` with the same relative /
   `node_modules/@adlc/cursor` command rules as other ADLC hooks.
 
 
-### sessionStart delivery honesty (T62)
+### sessionStart delivery honesty (T64)
 
 Cursor docs accept `additional_context` on `sessionStart`, but there is a
 community-reported race where the host accepts the hook output and still drops
@@ -288,7 +288,7 @@ the context before the composer is ready
 Therefore:
 
 1. `additional_context` injection is **best-effort**, not a guaranteed control.
-2. T62 MUST ship a **dedicated** minimal plugin rule (e.g.
+2. T64 MUST ship a **dedicated** minimal plugin rule (e.g.
    `rules/adlc-ticket-context.mdc`) with **`alwaysApply: true`** that directs
    the agent to resolve the active ticket via the **canonical** reader
    semantics (same fail-closed outcomes as `generated-active-ticket.mjs` /
@@ -312,7 +312,7 @@ Therefore:
    always-apply fallback rule file.
 5. AC4 remains a unit test of hook JSON shape; **AC17** covers the always-apply
    rule frontmatter + scaffold install/upgrade. A live marketplace IDE proof is
-   nice-to-have, not a hard T62 AC.
+   nice-to-have, not a hard T64 AC.
 
 ### Hook wiring defaults
 
@@ -322,16 +322,16 @@ new events with the same relative-command / `node_modules` rules as T47.
 
 | Event | Script | Ticket |
 | --- | --- | --- |
-| `sessionStart` | `hooks/adlc-session-start.mjs` | T62 |
+| `sessionStart` | `hooks/adlc-session-start.mjs` | T64 |
 | existing five | unchanged roles | — |
-| `preCompact` | `hooks/adlc-precompact.mjs` | T65 |
-| `subagentStart` / `subagentStop` | `hooks/adlc-subagent.mjs` (shared) | T65 |
+| `preCompact` | `hooks/adlc-precompact.mjs` | T67 |
+| `subagentStart` / `subagentStop` | `hooks/adlc-subagent.mjs` (shared) | T67 |
 
 All new entries: `timeout: 10`, `failClosed: false`. Marketplace vs
 scaffold/package-root command path policy is T47-compatible (see AC2) —
 semantic lockstep, not identical command strings.
 
-### MCP (T63)
+### MCP (T65)
 
 `plugins/adlc-cursor/mcp.json` MUST launch the **plugin wrapper**, not
 raw `adlc mcp-server` (direct wiring is a packaging/smoke failure):
@@ -356,14 +356,14 @@ failure; skills/README tell the user to `npm i -g @adlc/cli`.
 
 **Consumer workspace for MCP (binding):** `packages/cli/lib/mcp-server.mjs`
 today scopes gates to `process.cwd()`. Marketplace MCP may not launch with the
-consumer repo as cwd. T63 ships a plugin entry under `plugins/adlc-cursor/`
+consumer repo as cwd. T65 ships a plugin entry under `plugins/adlc-cursor/`
 that invokes `adlc mcp-server` only after resolving a consumer root.
-Do **not** edit `packages/cli/lib/mcp-server.mjs` (frozen by T63 rails).
+Do **not** edit `packages/cli/lib/mcp-server.mjs` (frozen by T65 rails).
 Do **not** silently leave MCP on plugin-cache cwd. Expanding `ALLOWED_GATES`
 remains out of scope.
 
 **Shipped MCP architecture (binding):** the **lifecycle-aware MCP Roots
-proxy** is **mandatory** to claim MCP shipped / unlock T67 publication. A thin
+proxy** is **mandatory** to claim MCP shipped / unlock T69 publication. A thin
 host-env-only wrapper may land for development and unit tests but **cannot**
 alone unlock the shipped claim — it cannot detect multi-root when only
 `CURSOR_PROJECT_DIR` is present. AC7's installed-Cursor ship gate must prove
@@ -374,10 +374,10 @@ alone are insufficient.
 **Production root channel (binding — not test-only inject):** a **thin
 pre-spawn wrapper** cannot call MCP `roots/list` before the child server
 exists (`roots/list` is post-initialize). Do **not** claim Roots as a
-pre-spawn source unless T63 ships a **lifecycle-aware MCP proxy** that
+pre-spawn source unless T65 ships a **lifecycle-aware MCP proxy** that
 completes initialize, requests Roots, then forwards to `adlc mcp-server`.
 
-**Mandatory shipped path (T63 lifecycle proxy):** after initialize, negotiate
+**Mandatory shipped path (T65 lifecycle proxy):** after initialize, negotiate
 capabilities; if client lacks roots, fail closed (do not fall back to guessing
 cwd). Request `roots/list`; decode each Root `uri` from `file://`
 (percent-decoding; Windows `file:///C:/...` / `file://localhost/C:/...`
@@ -391,7 +391,7 @@ resuming; in-flight calls must not mutate the stale root. Expanding
 AC7 fixtures must use real `roots/list` Root objects (not bare path strings).
 
 Thin host-env wrapper may exist for local/dev unit tests only — not for
-"MCP shipped." T62 session-resolution records remain for hooks/AC17, not as
+"MCP shipped." T64 session-resolution records remain for hooks/AC17, not as
 MCP root channel until session-id handoff is evidenced.
 
 **Production MCP root (binding):** shipped path is the lifecycle Roots proxy
@@ -401,7 +401,7 @@ session-id handoff is evidenced. Thin host-env helpers are test-only.
 AC7 unit/subprocess MUST include: (a) host-env success without session id or
 cwd heuristics; (b) absent host env → fail closed even if cwd is ADLC-bearing
 (unrelated repo / plugin checkout). **Production ship gate (binding):** do not
-mark Cursor MCP as shipped in matrix/docs and do not complete T67 publication
+mark Cursor MCP as shipped in matrix/docs and do not complete T69 publication
 until an **installed-Cursor** proof records that the lifecycle Roots proxy
 resolves a consumer root (incl. multi-root ambiguity/refuse) without
 harness-injected env. Until that proof, MCP remains "wrapper landed / channel
@@ -415,7 +415,7 @@ repo must not win. If a lifecycle Roots proxy is shipped, also cover
 zero/one/multi-root Roots cases. Session-index MCP cases are **out of AC7**
 until live session-id handoff evidence is recorded — do not require them.
 
-### Agents + prosecute (T64)
+### Agents + prosecute (T66)
 
 Ship under `plugins/adlc-cursor/agents/` (register `"agents": "./agents/"` in
 `.cursor-plugin/plugin.json`):
@@ -449,8 +449,8 @@ command body orchestrates Task/agent fan-out.
 **Evidence lens vocabulary (binding):** `@adlc/core` lens keys are
 `correctness`, `security`, `contract`, `diff`, `tests`. The
 `adlc prosecute` recorder (`packages/prosecute/lib/schema.mjs`) must accept
-those keys. T64 MUST either extend the recorder `LENSES` set to include
-`contract` and `diff` (preferred; add `packages/prosecute/**` to T64
+those keys. T66 MUST either extend the recorder `LENSES` set to include
+`contract` and `diff` (preferred; add `packages/prosecute/**` to T66
 scope) **or** document a lossless mapping table in the command and prove a
 full five-pass packet validates through the real recorder. AC10 must run a
 generated packet through `validateInput` / `adlc prosecute` — string
@@ -464,10 +464,10 @@ asserts alone fail.
 3. **Not** contain the claim that Cursor has no subagent fan-out.
 4. Still require `npx adversarial-review --providers` for the cross-model
    risk gate on risk-tiered changes.
-5. Before fan-out, write P5 marker (see T65); clear it on completion/abort
+5. Before fan-out, write P5 marker (see T67); clear it on completion/abort
    best-effort.
 
-### P5 marker + subagent policy (T65)
+### P5 marker + subagent policy (T67)
 
 - Marker path: prefer **per-session** files
   `cursor-p5-marker-<safeId>.json` using the same SHA-256 `safeId`
@@ -513,7 +513,7 @@ asserts alone fail.
   `plugins/adlc-cursor/test/fixtures/` for `preToolUse` Task/spawn and
   `subagentStart`, naming the exact `tool_name` and agent-name / subagent-type
   fields used in production. Allowed prosecutor + unrelated-agent cases run
-  through the real dispatcher. T66 live proof must show a rejected Task spawn
+  through the real dispatcher. T68 live proof must show a rejected Task spawn
   (version/platform recorded); if `subagentStart` alone is insufficient,
   `preToolUse` remains the control and ADR notes the degradation.
 - Anonymous sessions (no session id): use a separate
@@ -526,7 +526,7 @@ asserts alone fail.
 - `preCompact` is observational: `user_message` reminding of active ticket +
   rails; cannot block compaction.
 
-### Live deny-proof (T66)
+### Live deny-proof (T68)
 
 Maintainer-run harness under `scripts/cursor-deny-proof/` (or
 `scripts/cursor-deny-proof.mjs` + README). Manual /
@@ -545,7 +545,7 @@ control mutates. Reversing order can make an executed deny look like a no-op.
 A run that only logs a deny without this ordering is not a proof. A fixture
 that omits enforcement or never edits a rail is not a proof.
 
-### Install DX (T67)
+### Install DX (T69)
 
 `/adlc-init` + `skills/adlc-init` become the single onboarding narrative:
 
@@ -564,7 +564,7 @@ active”; Cursor CLI `statusLine` snippet reading
 
 ## Deliverables by ticket
 
-### T62
+### T64
 
 1. This spec (author before code).
 2. `hooks/adlc-session-start.mjs` + hooks.json wiring + scaffold merge
@@ -575,9 +575,9 @@ active”; Cursor CLI `statusLine` snippet reading
 4. Upsert versioned **session-resolution records** / TTL tombstones (AC19)
    under whole-index lock/CAS; concurrent upsert + ordering + TTL tests.
 4b. Align `rails-checker.mjs` / rails-guard active-ticket path with pinned
-   store detection + `allowLegacyPointer: true` (T62 scope; not frozen).
+   store detection + `allowLegacyPointer: true` (T64 scope; not frozen).
 5. Dedicated `alwaysApply: true` ticket-context rule + scaffold upgrade path
-   (`plugins/adlc-cursor/rules/**` in T62 scope); ADR/docs mark sessionStart
+   (`plugins/adlc-cursor/rules/**` in T64 scope); ADR/docs mark sessionStart
    context as best-effort.
 6. Checked-in fixtures under `plugins/adlc-cursor/test/fixtures/` (or
    equivalent) for docs-pinned `sessionStart` and `preToolUse` payloads
@@ -587,7 +587,7 @@ active”; Cursor CLI `statusLine` snippet reading
 7. Fix stop/preflight “DISABLED BY DEFAULT” comments.
 8. Smoke + unit tests (AC below).
 
-### T63
+### T65
 
 1. `mcp.json` launching the **lifecycle Roots proxy** (mandatory for ship) +
    packaging allowlist + plugin discovery. Thin host-env wrapper may exist for
@@ -599,7 +599,7 @@ active”; Cursor CLI `statusLine` snippet reading
    evidenced; exercise host-env (and optional Roots proxy) in AC7. Reject
    direct `adlc mcp-server` mcp.json wiring in smoke.
 
-### T64
+### T66
 
 1. `agents/` roster + plugin.json.
 2. Rewrite `command/adlc-prosecute.md` for five-lens+verifier fresh fan-out,
@@ -608,22 +608,22 @@ active”; Cursor CLI `statusLine` snippet reading
 3. Matrix/docs P5 independence cell → agents-backed (+ providers caveat) only
    after AC9/AC10 pass.
 
-### T65
+### T67
 
-1. preCompact + subagent hooks using the **T62** fenced P5 marker helper
+1. preCompact + subagent hooks using the **T64** fenced P5 marker helper
    (no second marker implementation).
 2. ADR pin + smoke; barrier tests for overlapping cleanup.
 
-### T66
+### T68
 
 1. Deny-proof runbook/harness + dated ADR/matrix evidence.
 2. Gaps section updated.
 
-### T67
+### T69
 
 1. `/adlc-init` one-flow + marketplace publish checklist honesty.
 2. Docs/integration-facts marketplace-first including agents+MCP once landed.
-3. Blocked on T65 + T66 (and transitively earlier wave tickets) — do not publish
+3. Blocked on T67 + T68 (and transitively earlier wave tickets) — do not publish
    or claim wave-complete until those gates land.
 4. Do not claim MCP shipped or complete marketplace publication until AC7's
    installed-Cursor production-channel proof is recorded.
@@ -633,7 +633,7 @@ active”; Cursor CLI `statusLine` snippet reading
 ## Acceptance criteria
 
 - **AC1 — umbrella spec:** `.adlc/specs/cursor-deeper-native.md` exists and
-  names T62–T67 with the binding decisions above.
+  names T64–T69 with the binding decisions above.
   Verify: `node scripts/cursor-install-smoke.mjs .` asserts the spec path is
   present (or a packaging test references it); `test -f .adlc/specs/cursor-deeper-native.md`.
 - **AC2 — sessionStart wired (semantic lockstep):** both
@@ -676,9 +676,9 @@ active”; Cursor CLI `statusLine` snippet reading
   `ADLC_CURSOR_SESSION_ID` as pinned; stop/preflight source headers do not say
   `DISABLED BY DEFAULT`.
   Verify: `node scripts/cursor-install-smoke.mjs .` (ripgrep asserts).
-- **AC6 — rails + tests:** `adlc rails-guard --base main --ticket T62` passes;
+- **AC6 — rails + tests:** `adlc rails-guard --base main --ticket T64` passes;
   plugin unit tests pass.
-  Verify: `adlc rails-guard --base main --ticket T62` and
+  Verify: `adlc rails-guard --base main --ticket T64` and
   `node --test plugins/adlc-cursor/test/*.test.mjs`
 - **AC7 — mcp.json + consumer root channel:** `plugins/adlc-cursor/mcp.json`
   points at the wrapper/proxy; packaging includes mcp config + entry.
@@ -688,7 +688,7 @@ active”; Cursor CLI `statusLine` snippet reading
   cwd is an unrelated ADLC-bearing repo or plugin checkout; if proxy shipped,
   zero/one/multi-root Roots cases; `adlc_gate` / `adlc_prosecute` hit temp
   fixtures when root resolves there (wrong-repo / plugin cwd must not win).
-  **Ship gate:** matrix/docs must not claim MCP shipped, and T67 must not
+  **Ship gate:** matrix/docs must not claim MCP shipped, and T69 must not
   publish, until installed-Cursor proof shows the **Roots proxy** resolves
   consumer root (incl. multi-root refuse/ambiguity and root-change rebind /
   stale-child isolation) without harness injection (ADR dated pass/fail +
@@ -697,10 +697,10 @@ active”; Cursor CLI `statusLine` snippet reading
   `node scripts/cursor-install-smoke.mjs .`; live-proof/ADR asserts for
   production channel.
 - **AC8 — mcp-server frozen:** `packages/cli/lib/mcp-server.mjs` is unchanged
-  by T63. Consumer-root selection is implemented by a **plugin wrapper** under
+  by T65. Consumer-root selection is implemented by a **plugin wrapper** under
   `plugins/adlc-cursor/` that sets cwd (or equivalent) before launching
   `adlc mcp-server` — not by editing the frozen server.
-  Verify: `adlc rails-guard --base main --ticket T63` (rail covers
+  Verify: `adlc rails-guard --base main --ticket T65` (rail covers
   `packages/cli/lib/mcp-server.mjs`).
 - **AC9 — prosecutor agents roster:** Exact shipped files
   `prosecutor-correctness.md`, `prosecutor-security.md`,
@@ -718,8 +718,8 @@ active”; Cursor CLI `statusLine` snippet reading
   Task (or Cursor custom-agent) fan-out of the **five lenses then verifier**
   in **fresh contexts**; documents sequential same-context as degraded
   fallback only; does not claim Cursor has no subagent fan-out; keeps
-  `adversarial-review --providers` for the cross-model risk gate; instructs write/clear of the session-matched P5 marker via the **T62 fenced
-  marker helper** (hooks in T65 call the same helper); and requires recording
+  `adversarial-review --providers` for the cross-model risk gate; instructs write/clear of the session-matched P5 marker via the **T64 fenced
+  marker helper** (hooks in T67 call the same helper); and requires recording
   ticket- and revision-bound prosecution evidence via `adlc prosecute` /
   `adlc_prosecute` (gate-manifest), including fail-closed verifier handling
   and shared convergence (`@adlc/core` prosecutor semantics — no third
@@ -797,7 +797,7 @@ active”; Cursor CLI `statusLine` snippet reading
   Verify: `node --test plugins/adlc-cursor/test/*.test.mjs` and ADR smoke
   asserts.
 
-- **AC19 — versioned session-resolution record (T62):** sessionStart upserts a
+- **AC19 — versioned session-resolution record (T64):** sessionStart upserts a
   versioned record in `~/.adlc/cursor-session-workspaces.json` (or
   `ADLC_CURSOR_SESSION_INDEX`) keyed by SHA-256 session id, via **whole-index
   lock/CAS with fencing**. Schema (binding):
@@ -831,7 +831,7 @@ active”; Cursor CLI `statusLine` snippet reading
 node scripts/cursor-install-smoke.mjs .
 node --test plugins/adlc-cursor/test/*.test.mjs
 adlc rails-guard --base main --ticket <active>
-# T66: follow scripts/cursor-deny-proof runbook against a real Cursor binary
+# T68: follow scripts/cursor-deny-proof runbook against a real Cursor binary
 ```
 
 ## References

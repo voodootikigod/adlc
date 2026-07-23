@@ -153,7 +153,7 @@ export function resolveRailPath(filePath, root) {
  *
  * Identity-only (used by advisory stop-audit). Rail enforcement uses
  * `railPreconditions`, which applies `resolveActiveTicketAgainst` with
- * `allowLegacyPointer: true` (T62) for hash/store fail-closed outcomes.
+ * `allowLegacyPointer: true` (T64) for hash/store fail-closed outcomes.
  */
 export function resolveActiveTicketId(root, env) {
   const resolved = resolveActiveTicketIdCanonical({ root, env });

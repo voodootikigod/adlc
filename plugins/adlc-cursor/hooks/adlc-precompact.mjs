@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// adlc-precompact.mjs — observational preCompact reminder (T65).
+// adlc-precompact.mjs — observational preCompact reminder (T67).
 // Cannot block compaction. Reminds of active ticket + rails when resolvable.
 
 import { fileURLToPath } from 'node:url';

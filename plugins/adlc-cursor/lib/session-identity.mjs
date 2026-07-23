@@ -1,4 +1,4 @@
-// session-identity.mjs — strict Cursor session id resolution (T62).
+// session-identity.mjs — strict Cursor session id resolution (T64).
 // Accepts only session_id / conversation_id (+ env ADLC_CURSOR_SESSION_ID).
 // Rejects generation_id / thread_id as session keys.
 

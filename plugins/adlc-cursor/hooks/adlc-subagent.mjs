@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// adlc-subagent.mjs — subagentStart / subagentStop (T65).
+// adlc-subagent.mjs — subagentStart / subagentStop (T67).
 // subagentStart: defense-in-depth P5 allowlist (authoritative path is preToolUse).
 // subagentStop: observational only (marker cleared by /adlc-prosecute via runId).
 

@@ -56,7 +56,7 @@ test('AC1: Cursor plugin manifest locksteps package version (T47)', () => {
   assert.doesNotMatch(manifest.description, /Claude Code/i);
 });
 
-test('AC7/T63: mcp.json launches the Roots proxy wrapper, not raw adlc mcp-server', () => {
+test('AC7/T65: mcp.json launches the Roots proxy wrapper, not raw adlc mcp-server', () => {
   const mcpPath = join(pkgDir, 'mcp.json');
   assert.ok(existsSync(mcpPath), 'mcp.json must exist');
   const mcp = JSON.parse(readFileSync(mcpPath, 'utf8'));

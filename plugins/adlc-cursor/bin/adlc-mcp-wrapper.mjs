@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// adlc-mcp-wrapper.mjs — Cursor marketplace MCP entry (T63).
+// adlc-mcp-wrapper.mjs — Cursor marketplace MCP entry (T65).
 // Lifecycle Roots proxy → spawn `adlc mcp-server` with resolved consumer cwd.
 // Missing `adlc` on PATH surfaces as Cursor's normal MCP start failure;
 // install with: npm i -g @adlc/cli

@@ -1,4 +1,4 @@
-// session-start.test.mjs — T62 AC3/AC4/AC17/AC19: sessionStart wiring semantics,
+// session-start.test.mjs — T64 AC3/AC4/AC17/AC19: sessionStart wiring semantics,
 // consumer-root resolution, env pin, depth isolation, always-apply rule scaffold.
 
 import { test } from 'node:test';

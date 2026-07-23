@@ -1,4 +1,4 @@
-// session-state.mjs — user-scoped per-session control state (T62).
+// session-state.mjs — user-scoped per-session control state (T64).
 // Depth, seen tool_use_ids, and P5 markers live under ~/.adlc (or ADLC_CURSOR_STATE_DIR),
 // not under the consumer workspace.
 

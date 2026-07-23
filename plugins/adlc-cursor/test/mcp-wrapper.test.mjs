@@ -1,4 +1,4 @@
-// mcp-wrapper.test.mjs — T63 AC7: host-env + Roots proxy (unit/subprocess).
+// mcp-wrapper.test.mjs — T65 AC7: host-env + Roots proxy (unit/subprocess).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
