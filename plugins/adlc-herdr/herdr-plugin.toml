@@ -13,6 +13,12 @@ platforms = ["linux", "macos"]
 [[startup]]
 command = ["node", "bin/watcher.mjs"]
 
+[[panes]]
+id = "board"
+title = "ADLC board"
+placement = "overlay"
+command = ["node", "bin/board.mjs"]
+
 [[actions]]
 id = "ticket-show"
 title = "ADLC: show active ticket"

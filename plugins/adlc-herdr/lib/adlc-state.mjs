@@ -3,8 +3,10 @@
 // throw into the daemon. Structured ticket data beyond these files comes from
 // the trusted `adlc` CLI, never from workspace imports (the installed plugin
 // is a bare clone with no node_modules).
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
 
 /** Read `.adlc/current-ticket.json`. → {state:'absent'|'unreadable'} or
  *  {state:'active', id}. */
@@ -72,7 +74,15 @@ export function ticketsFromExport(parsed) {
  * ticket counts as in-flight.
  */
 export function backlogCounts(tickets, activeId) {
-  if (!Array.isArray(tickets)) return { ready: 0, inFlight: 0, blocked: 0 };
+  const groups = groupBacklog(tickets, activeId);
+  return { ready: groups.ready.length, inFlight: groups.inFlight.length, blocked: groups.blocked.length };
+}
+
+/** Same semantics as backlogCounts, but returning the ticket groups
+ *  themselves (for the board). */
+export function groupBacklog(tickets, activeId) {
+  const groups = { ready: [], inFlight: [], blocked: [] };
+  if (!Array.isArray(tickets)) return groups;
   const live = tickets.filter(
     (t) => t && typeof t === 'object' && typeof t.id === 'string' && t.completed !== true,
   );
@@ -82,13 +92,67 @@ export function backlogCounts(tickets, activeId) {
       if (edge && typeof edge.to === 'string') blockedIds.add(edge.to);
     }
   }
-  let ready = 0;
-  let inFlight = 0;
-  let blocked = 0;
   for (const ticket of live) {
-    if (ticket.id === activeId) inFlight += 1;
-    else if (blockedIds.has(ticket.id)) blocked += 1;
-    else ready += 1;
+    if (ticket.id === activeId) groups.inFlight.push(ticket);
+    else if (blockedIds.has(ticket.id)) groups.blocked.push(ticket);
+    else groups.ready.push(ticket);
   }
-  return { ready, inFlight, blocked };
+  return groups;
+}
+
+/** Last `n` parsed records of `.adlc/manifest.jsonl` (torn lines skipped). */
+export function readLedgerTail(repoRoot, n) {
+  if (!Number.isFinite(n) || n <= 0) return [];
+  const path = join(repoRoot, '.adlc', 'manifest.jsonl');
+  if (!existsSync(path)) return [];
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return [];
+  }
+  const records = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      continue;
+    }
+  }
+  return records.slice(-n);
+}
+
+function defaultRunExport(repoRoot, outPath) {
+  return new Promise((resolve) => {
+    execFile('adlc', ['ticket', 'store', 'export', '--output', outPath], {
+      cwd: repoRoot, timeout: 15_000, shell: false,
+    }, (error) => resolve(!error));
+  });
+}
+
+let exportSeq = 0;
+
+/**
+ * Full ticket set via the trusted `adlc ticket store export` CLI (the
+ * envelope with completed/edges — `ticket list --json` is a projection,
+ * verified live 2026-07-23). Fails soft (null) on any failure. The exporter
+ * is injectable for tests.
+ */
+export async function readTicketsViaExport(repoRoot, { runExport = defaultRunExport } = {}) {
+  exportSeq += 1;
+  const outPath = join(tmpdir(), `adlc-herdr-export-${process.pid}-${exportSeq}.json`);
+  try {
+    const ok = await runExport(repoRoot, outPath);
+    if (!ok) return null;
+    return ticketsFromExport(JSON.parse(readFileSync(outPath, 'utf8')));
+  } catch {
+    return null;
+  } finally {
+    try {
+      rmSync(outPath, { force: true });
+    } catch {
+      // best-effort cleanup
+    }
+  }
 }

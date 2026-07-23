@@ -5,14 +5,12 @@
 // pinned by tests. Change-driven and debounced: no herdr process per event,
 // heartbeat refreshes keep TTLs alive (plan premortem bounds).
 import net from 'node:net';
-import { watch, existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { watch, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
-import { readActiveTicket, readLatestPhase, backlogCounts, ticketsFromExport } from '../lib/adlc-state.mjs';
+import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport } from '../lib/adlc-state.mjs';
 import {
   paneTokens, workspaceTokens, buildReportArgs, buildWorkspaceReportArgs,
   diffPublishes, versionGate,
@@ -28,35 +26,13 @@ const SUBSCRIPTIONS = [
   'worktree.created', 'worktree.opened', 'worktree.removed',
 ];
 
-// `ticket list --json` is a projection without completed/edges (verified
-// live) — backlog math needs the full `store export` envelope.
-const exportDir = mkdtempSync(join(tmpdir(), 'adlc-herdr-watcher-'));
-process.on('exit', () => { try { rmSync(exportDir, { recursive: true, force: true }); } catch { /* best-effort */ } });
-
 const backlogCache = new Map(); // repoRoot -> {at, tickets}
-let exportSeq = 0;
-function readBacklog(repoRoot) {
-  return new Promise((resolve) => {
-    const cached = backlogCache.get(repoRoot);
-    if (cached && Date.now() - cached.at < BACKLOG_CACHE_MS) return resolve(cached.tickets);
-    exportSeq += 1;
-    const outPath = join(exportDir, `export-${exportSeq}.json`);
-    execFile('adlc', ['ticket', 'store', 'export', '--output', outPath], {
-      cwd: repoRoot, timeout: 15_000, shell: false,
-    }, (error) => {
-      let tickets = null;
-      if (!error) {
-        try {
-          tickets = ticketsFromExport(JSON.parse(readFileSync(outPath, 'utf8')));
-        } catch {
-          tickets = null;
-        }
-      }
-      try { rmSync(outPath, { force: true }); } catch { /* best-effort */ }
-      backlogCache.set(repoRoot, { at: Date.now(), tickets });
-      resolve(tickets);
-    });
-  });
+async function readBacklog(repoRoot) {
+  const cached = backlogCache.get(repoRoot);
+  if (cached && Date.now() - cached.at < BACKLOG_CACHE_MS) return cached.tickets;
+  const tickets = await readTicketsViaExport(repoRoot);
+  backlogCache.set(repoRoot, { at: Date.now(), tickets });
+  return tickets;
 }
 
 let prevPane = new Map();

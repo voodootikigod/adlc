@@ -18,7 +18,7 @@ plus herdr's own API. The capability × harness matrix keeps seven columns.
 | Manifest, herdr CLI shim, sanitizer rail | t-herdr-1 | shipped |
 | Watcher daemon → per-pane status tokens | t-herdr-2 | shipped |
 | Actions: ticket-show / gate / prosecute | t-herdr-3 | shipped |
-| Board pane | t-herdr-4 | planned |
+| Board pane | t-herdr-4 | shipped |
 
 ## Install
 
@@ -74,6 +74,19 @@ anyway). The socket speaks newline-delimited JSON: `{id, method:
 (dotted wire names) is acked with `subscription_started`, then events stream
 as `{data: {pane: {…}}}` objects — ~25 events in 2.5s on a busy session, so
 the watcher debounces and never spawns a process per event.
+
+Pane-entrypoint probes (2026-07-23, same host): open with `herdr plugin pane
+open --plugin adlc --entrypoint board`. The overlay is a **real PTY with its
+own pane id** (stdin/stdout are TTYs, live columns/rows, resize events fire),
+receives `HERDR_PLUGIN_ENTRYPOINT_ID` plus the same context JSON as actions —
+`focused_pane_id` is the pane that was focused at open (`invocation_source:
+"api"`) — and **the pane closes when the entrypoint process exits**. Never
+emit `\x1b[2J` in a pane: herdr's emulator leaves the pane blank and `pane
+read` empty — redraw with cursor-home + per-line `\x1b[K` + trailing
+`\x1b[0J` instead. Action probes: dispatch on `HERDR_PLUGIN_ACTION_ID`; the
+context's `focused_pane_cwd` is the launch cwd, so live `foreground_cwd`
+still comes from `pane get`. Manifest changes require a re-link; `bin/*.mjs`
+changes are picked up live.
 
 ## Live smoke (AC7 — operator-run, not CI)
 
