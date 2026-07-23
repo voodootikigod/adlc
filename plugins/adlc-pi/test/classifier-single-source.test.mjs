@@ -44,21 +44,31 @@ test('live checkShellCommand denies the #290 redirect bypass into a frozen rail 
     const ticket = { id: 'T-307-guard', title: 'guard', body: '', scope: ['**'], rails: ['guard/**'] };
     const rail = 'guard/rail.txt';
 
-    // Each MUST be denied — a classifier missing the #290 fix would misclassify
-    // the no-space forms as read-only and ALLOW them.
-    const mustDeny = [
-      `cat x>${rail}`,       // no space before >  (the exact pre-#290 bypass)
-      `cat x>"${rail}"`,     // quoted no-space target
-      `echo hi>>${rail}`,    // no-space append
-      `echo hi > ${rail}`,   // spaced form (sanity)
+    // These use a read-only-ALLOWLISTED prefix (`cat`), so a classifier missing
+    // the #290 fix classifies them read-only and ALLOWS them. Each flips
+    // allow->deny exactly on `hasUnquotedFileRedirect` — genuinely load-bearing
+    // for pi's live path (the echo forms below are NOT: echo is not allowlisted,
+    // so they deny via the fail-closed default regardless of #290).
+    const mustDeny290 = [
+      `cat x>${rail}`,     // no space before >  (the exact pre-#290 bypass)
+      `cat x>"${rail}"`,   // quoted no-space target
+      `cat x>>${rail}`,    // no-space APPEND (the s[i+1] === '>' branch of the fix)
     ];
-    for (const cmd of mustDeny) {
+    for (const cmd of mustDeny290) {
       assert.equal(
         checkShellCommand(cmd, ticket, root).decision,
         'deny',
-        `live path must DENY a redirect into a frozen rail: ${cmd}`,
+        `#290 fix must DENY a no-space redirect into a frozen rail: ${cmd}`,
       );
     }
+
+    // Sanity: a non-allowlisted prefix writing to a rail is denied too — here via
+    // the fail-closed default, independent of #290 (kept only as a sanity check).
+    assert.equal(
+      checkShellCommand(`echo hi > ${rail}`, ticket, root).decision,
+      'deny',
+      'any recognized write to a frozen rail must be denied',
+    );
 
     // Negative control: a quoted '>' in a read-only grep is NOT a redirect.
     assert.equal(
