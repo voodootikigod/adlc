@@ -80,6 +80,13 @@ test('shim never throws into callers for runtime failures (fail soft end-to-end)
   await assert.doesNotReject(runHerdrJson(['api', 'snapshot'], { env: {}, exec: throwExec }));
 });
 
+test('runHerdr preserves a string errno (ENOENT) so a missing binary is distinguishable', async () => {
+  // Real spawn of a nonexistent binary via the default executor.
+  const res = await runHerdr(['status'], { env: { HERDR_BIN_PATH: '/nonexistent/adlc-herdr-binary' } });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'ENOENT', `expected ENOENT, got ${JSON.stringify(res)}`);
+});
+
 test('paneInfoArgs builds the exact pane-get argv and fails closed without an id', () => {
   assert.deepEqual(paneInfoArgs('w4:p2'), ['pane', 'get', 'w4:p2']);
   assert.throws(() => paneInfoArgs(''));

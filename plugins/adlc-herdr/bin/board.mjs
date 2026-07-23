@@ -74,6 +74,9 @@ async function gather(repoRoot) {
     }));
   return {
     width: process.stdout.columns ?? 80,
+    // Reserve two lines for the blank + footer draw() adds, so the whole frame
+    // fits the pane and cursor-home redraw never scrolls/duplicates.
+    height: process.stdout.rows ? Math.max(4, process.stdout.rows - 2) : null,
     repoRoot,
     active,
     phase,

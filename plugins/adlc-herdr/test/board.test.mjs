@@ -187,6 +187,23 @@ test('renderBoard pins the width floor at 20 on a content row, not just the sepa
   assert.equal(contentRow.length, 20, 'the content row fills exactly to the floor');
 });
 
+test('renderBoard clamps to `height`, ending with a "…N more" marker (no scroll)', () => {
+  const state = baseState();
+  state.height = 6;
+  state.groups.ready = Array.from({ length: 40 }, (_, i) => t(`t-${i}`));
+  const lines = renderBoard(state).split('\n');
+  assert.equal(lines.length, 6, 'output must not exceed the height');
+  assert.ok(lines[lines.length - 1].includes('more'), 'the last line marks the truncation');
+});
+
+test('renderBoard does not clamp when the frame fits within `height`', () => {
+  const state = baseState();
+  state.height = 100;
+  const out = renderBoard(state);
+  assert.ok(!out.includes('more (resize'), 'a fitting frame is not truncated');
+  assert.ok(out.includes('rails-frozen'), 'the full frame renders');
+});
+
 test('renderBoard renders calm empty states', () => {
   const out = renderBoard({
     width: 80, repoRoot: '/repo', active: { state: 'absent' }, phase: null,

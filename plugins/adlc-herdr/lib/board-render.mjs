@@ -11,8 +11,12 @@ const RESET = '\x1b[0m';
 
 const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? width : 80, 400));
 
-/** Render the full board frame as a string of newline-joined rows. */
-export function renderBoard({ width, repoRoot, active, phase, groups, paneRows, ledger }) {
+/** Render the full board frame as a string of newline-joined rows. When
+ *  `height` is given, the output is clamped to that many lines — the redraw
+ *  uses cursor-home (not an alternate screen), so a frame taller than the pane
+ *  would scroll and duplicate every refresh. A truncated frame ends with a
+ *  "…N more" marker. */
+export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger }) {
   const w = clampWidth(width);
   const cut = (text) => sanitizeToken(String(text), w);
   const lines = [];
@@ -56,5 +60,11 @@ export function renderBoard({ width, repoRoot, active, phase, groups, paneRows, 
     }
   }
 
+  if (Number.isFinite(height) && height > 0 && lines.length > height) {
+    const hidden = lines.length - height;
+    const kept = lines.slice(0, Math.max(1, height - 1));
+    kept.push(`${DIM}${cut(`  …${hidden + 1} more (resize to see all)`)}${RESET}`);
+    return kept.join('\n');
+  }
   return lines.join('\n');
 }

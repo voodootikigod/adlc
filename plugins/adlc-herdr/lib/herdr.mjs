@@ -22,8 +22,11 @@ function defaultExec(file, args, opts) {
   return new Promise((resolve) => {
     execFile(file, args, opts, (error, stdout, stderr) => {
       if (error) {
+        // Preserve a string errno like 'ENOENT' (binary missing) instead of
+        // coercing it to 1 — callers can then tell "not installed" from "the
+        // command ran and failed".
         resolve({
-          code: typeof error.code === 'number' ? error.code : 1,
+          code: typeof error.code === 'number' || typeof error.code === 'string' ? error.code : 1,
           stdout: stdout ?? '',
           stderr: stderr ?? '',
         });

@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { resolveRepoRoot, clearRepoRootCache, resolveOnPath } from '../lib/repo-root.mjs';
+import { resolveRepoRoot, clearRepoRootCache, resolveOnPath, evictIfFull } from '../lib/repo-root.mjs';
 import { writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
@@ -72,4 +72,12 @@ test('resolveOnPath returns the first PATH entry that actually contains the bina
 test('resolveOnPath returns null when the binary is nowhere on PATH (fail closed)', () => {
   assert.equal(resolveOnPath('nope-not-here', join(dir, 'empty')), null);
   assert.equal(resolveOnPath('nope-not-here', undefined), null);
+});
+
+test('evictIfFull drops the oldest entry at/over the bound, and is a no-op below it', () => {
+  const m = new Map([['a', 1], ['b', 2], ['c', 3]]);
+  evictIfFull(m, 3); // at the bound → evict oldest ('a')
+  assert.deepEqual([...m.keys()], ['b', 'c']);
+  evictIfFull(m, 5); // below the bound → no change
+  assert.deepEqual([...m.keys()], ['b', 'c']);
 });

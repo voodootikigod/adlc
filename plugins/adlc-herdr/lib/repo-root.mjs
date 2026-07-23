@@ -15,11 +15,16 @@ const cache = new Map(); // dir -> { root, at }
 // would stall the daemon's event loop — but short enough that a directory
 // which later becomes a repo (a freshly opened worktree) is re-probed soon.
 const NEG_TTL_MS = 30_000;
+// Bound the cache so a weeks-long session opening panes in many ephemeral
+// directories (test worktrees, /tmp) cannot grow it without limit. Map keeps
+// insertion order, so evicting the oldest key is FIFO; an evicted positive
+// entry is simply re-resolved on next use.
+const MAX_ENTRIES = 1_000;
 
 export function resolveRepoRoot(dir, now = Date.now) {
   const cached = cache.get(dir);
   if (cached) {
-    if (cached.root !== null) return cached.root; // positive: permanent
+    if (cached.root !== null) return cached.root; // positive: permanent (until evicted)
     if (now() - cached.at < NEG_TTL_MS) return null; // negative: within TTL
   }
   let root = null;
@@ -30,8 +35,16 @@ export function resolveRepoRoot(dir, now = Date.now) {
   } catch {
     root = null;
   }
+  cache.delete(dir); // re-insert at the end so refreshed entries are "newest"
+  evictIfFull(cache, MAX_ENTRIES);
   cache.set(dir, { root, at: now() });
   return root;
+}
+
+/** Evict the oldest entry if the map is at/over `max` (FIFO on a Map's
+ *  insertion order). Keeps the cache bounded across a long session. */
+export function evictIfFull(map, max) {
+  if (map.size >= max) map.delete(map.keys().next().value);
 }
 
 /** Test hook: drop cached resolutions. */
