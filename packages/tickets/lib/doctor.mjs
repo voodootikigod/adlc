@@ -85,11 +85,14 @@ function storeHashBindingCheck(root, snapshot) {
   for (let i = 0; i < lines.length; i++) {
     let entry;
     try { entry = JSON.parse(lines[i]); } catch {
-      return { ...check, bound: false, reason: `manifest ledger has a malformed entry at line ${i + 1}; integrity not verifiable` };
+      // A corrupt/tampered ledger is a real integrity FAILURE, not an inert state:
+      // it must fail the check (and the report), distinct from the legitimately-inert
+      // "no manifest yet" cases above which stay ok:true.
+      return { ...check, ok: false, code: 'MANIFEST_MALFORMED', reason: `manifest ledger has a malformed entry at line ${i + 1}; integrity check FAILED` };
     }
     const expectedPrev = prevLine === null ? null : createHash('sha256').update(prevLine).digest('hex');
     if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) {
-      return { ...check, bound: false, reason: `manifest hash chain breaks at line ${i + 1}; integrity not verifiable` };
+      return { ...check, ok: false, code: 'MANIFEST_CHAIN_INVALID', reason: `manifest hash chain breaks at line ${i + 1}; integrity check FAILED` };
     }
     if (entry?.data && typeof entry.data.storeHash === 'string') boundStoreHash = entry.data.storeHash;
     prevLine = lines[i];

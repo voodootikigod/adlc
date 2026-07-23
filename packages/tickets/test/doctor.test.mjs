@@ -223,9 +223,10 @@ test('doctor storehash-manifest-bind: a forged / chain-broken manifest is NOT tr
 
     const report = doctorTicketStore(store, { root });
     const check = bindCheck(report);
-    assert.equal(check.bound, false, 'a chain-invalid manifest is not trusted as a binding');
+    assert.equal(check.ok, false, 'a chain-invalid manifest FAILS the integrity check');
+    assert.equal(report.ok, false, 'and fails the overall report — a detected corruption is never reported healthy');
     assert.notEqual(check.boundStoreHash, 'deadbeefdeadbeef', 'the forged storeHash is never adopted');
-    assert.match(check.reason ?? '', /chain|verifiable|malformed/i, 'the broken chain is reported');
+    assert.match(check.reason ?? '', /chain|FAILED|malformed/i, 'the broken chain is reported');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
