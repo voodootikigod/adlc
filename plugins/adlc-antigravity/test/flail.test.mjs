@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -201,9 +201,14 @@ test('createPersistentTracker handles null sessionID, missing ticket store, null
 
     const tracker = createPersistentTracker(root);
 
-    // 1. null sessionID returns clean without recording
+    // 1. null sessionID returns clean without recording or creating store entries
     const nullSessRes = tracker.recordEdit(null, 'src/app.js');
     assert.equal(nullSessRes.verdict, 'clean');
+    assert.ok(Array.isArray(nullSessRes.repeatedErrors));
+    const storePath = join(root, '.adlc', 'ticket-store.json');
+    const storeObj = existsSync(storePath) ? JSON.parse(readFileSync(storePath, 'utf8')) : {};
+    assert.equal('null' in storeObj, false);
+    assert.equal('undefined' in storeObj, false);
 
     // 2. missing ticket store returns clean without recording or creating store file
     const noStoreRoot = mkdtempSync(join(tmpdir(), 'no-store-'));
@@ -211,6 +216,7 @@ test('createPersistentTracker handles null sessionID, missing ticket store, null
       const noStoreTracker = createPersistentTracker(noStoreRoot);
       const noStoreRes = noStoreTracker.recordEdit('s1', 'src/app.js');
       assert.equal(noStoreRes.verdict, 'clean');
+      assert.ok(Array.isArray(noStoreRes.repeatedErrors));
       assert.equal(existsSync(join(noStoreRoot, '.adlc', 'ticket-store.json')), false);
     } finally {
       rmSync(noStoreRoot, { recursive: true, force: true });
