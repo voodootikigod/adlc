@@ -33,6 +33,15 @@ test('resolves null for a nonexistent directory instead of throwing', () => {
   assert.equal(resolveRepoRoot(join(dir, 'missing')), null);
 });
 
+test('a null resolution is NOT cached — a dir that becomes a repo is re-probed', () => {
+  const later = join(dir, 'later');
+  mkdirSync(later, { recursive: true });
+  assert.equal(resolveRepoRoot(later), null); // not a repo yet
+  execFileSync('git', ['init', '-q', later]);
+  // Without a cached null, the second probe sees the new repo.
+  assert.equal(realpathSync(resolveRepoRoot(later)), realpathSync(later));
+});
+
 test('resolveOnPath returns the first PATH entry that actually contains the binary', () => {
   const empty = join(dir, 'empty');
   const hit = join(dir, 'hit');

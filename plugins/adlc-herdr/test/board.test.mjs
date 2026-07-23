@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { groupBacklog, readLedgerTail, readTicketsViaExport } from '../lib/adlc-state.mjs';
+import { groupBacklog, readLedgerTail, readLedgerByTicket, readTicketsViaExport } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 let repo;
@@ -65,6 +65,28 @@ test('readLedgerTail yields [] for a missing ledger or non-positive n', () => {
   assert.deepEqual(readLedgerTail(repo, 5), []);
   writeAdlc('manifest.jsonl', JSON.stringify({ seq: 1 }));
   assert.deepEqual(readLedgerTail(repo, 0), []);
+});
+
+test('readLedgerByTicket keeps the most recent record per ticket, not a raw tail', () => {
+  // t-hot floods the tail; a raw slice(-2) would drop t-cold entirely.
+  writeAdlc('manifest.jsonl', [
+    JSON.stringify({ seq: 1, gate: 'a', ticket: 't-cold' }),
+    JSON.stringify({ seq: 2, gate: 'b', ticket: 't-hot' }),
+    JSON.stringify({ seq: 3, gate: 'c', ticket: 't-hot' }),
+    JSON.stringify({ seq: 4, gate: 'd', ticket: 't-hot' }),
+  ].join('\n'));
+  const rows = readLedgerByTicket(repo, 8);
+  assert.deepEqual(rows.map((r) => [r.ticket, r.seq]), [['t-cold', 1], ['t-hot', 4]]);
+});
+
+test('readLedgerByTicket caps at n tickets and drops records without a ticket', () => {
+  writeAdlc('manifest.jsonl', [
+    JSON.stringify({ seq: 1, ticket: 't-a' }),
+    JSON.stringify({ seq: 2, gate: 'no-ticket-here' }),
+    JSON.stringify({ seq: 3, ticket: 't-b' }),
+    JSON.stringify({ seq: 4, ticket: 't-c' }),
+  ].join('\n'));
+  assert.deepEqual(readLedgerByTicket(repo, 2).map((r) => r.ticket), ['t-b', 't-c']);
 });
 
 // ---- readTicketsViaExport ----
@@ -138,13 +160,17 @@ test('renderBoard truncates rows to the pane width', () => {
   }
 });
 
-test('renderBoard pins the width floor at 20', () => {
+test('renderBoard pins the width floor at 20 on a content row, not just the separator', () => {
   const state = baseState();
   state.width = 5; // below the floor — clamp must land exactly on 20
   state.groups.ready = [t('t-long', { title: 'y'.repeat(100) })];
   const lines = renderBoard(state).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
-  assert.ok(lines.every((l) => l.length <= 20));
-  assert.ok(lines.some((l) => l.length === 20), 'content must fill exactly to the 20-col floor');
+  assert.ok(lines.every((l) => l.length <= 20), 'no line may overflow the floor');
+  // The long ticket row must itself truncate to exactly 20 — a separator being
+  // 20 wide must not be what satisfies this.
+  const contentRow = lines.find((l) => l.includes('t-long'));
+  assert.ok(contentRow, 'the long ticket row must be present');
+  assert.equal(contentRow.length, 20, 'the content row fills exactly to the floor');
 });
 
 test('renderBoard renders calm empty states', () => {

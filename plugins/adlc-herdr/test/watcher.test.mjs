@@ -193,3 +193,8 @@ test('versionGate: unparseable version output degrades (fail closed to the warni
   assert.equal(res.supported, false);
   assert.ok(res.token.includes('untested'));
 });
+
+test('versionGate: a non-semver ceiling throws a clear TypeError, not an unguarded null.slice', () => {
+  assert.throws(() => versionGate('herdr 0.7.4', 'not-a-version'), TypeError);
+  assert.throws(() => versionGate('herdr 0.7.4', null), TypeError);
+});

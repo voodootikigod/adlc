@@ -35,6 +35,8 @@ const GENERATED_READERS = [
   'plugins/adlc-opencode/generated-active-ticket.mjs',
   'plugins/adlc-cursor/generated-active-ticket.mjs',
   'plugins/adlc-pi/lib/generated-active-ticket.mjs',
+  'plugins/adlc-copilot/hooks/generated-active-ticket.mjs',
+  'plugins/adlc-herdr/lib/generated-active-ticket.mjs',
 ];
 
 const TICKET = { id: 'T1', title: 'Pointer fixture', rails: ['test/**'] };

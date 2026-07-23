@@ -3,7 +3,7 @@
 // throw into the daemon. Structured ticket data beyond these files comes from
 // the trusted `adlc` CLI, never from workspace imports (the installed plugin
 // is a bare clone with no node_modules).
-import { readFileSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -127,6 +127,39 @@ export function readLedgerTail(repoRoot, n = DEFAULT_LEDGER_ROWS) {
   return records.slice(-n);
 }
 
+/**
+ * The most-recent ledger record PER TICKET (plan §5.2 / t-herdr-4: "most
+ * recent gate-evidence records per ticket"), newest ticket-activity first,
+ * capped at `n` tickets. A raw tail would let one hot ticket's burst hide
+ * every other ticket's latest state — the opposite of the per-ticket view the
+ * board promises. Records with no string `ticket` are dropped.
+ */
+export function readLedgerByTicket(repoRoot, n = DEFAULT_LEDGER_ROWS) {
+  if (!Number.isFinite(n) || n <= 0) return [];
+  const path = join(repoRoot, '.adlc', 'manifest.jsonl');
+  if (!existsSync(path)) return [];
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return [];
+  }
+  const latestByTicket = new Map(); // ticket -> record (last occurrence wins)
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof record?.ticket !== 'string') continue;
+    latestByTicket.delete(record.ticket); // re-insert so iteration order = recency of latest activity
+    latestByTicket.set(record.ticket, record);
+  }
+  return [...latestByTicket.values()].slice(-n);
+}
+
 function defaultRunExport(repoRoot, outPath) {
   return new Promise((resolve) => {
     execFile('adlc', ['ticket', 'store', 'export', '--output', outPath], {
@@ -135,17 +168,26 @@ function defaultRunExport(repoRoot, outPath) {
   });
 }
 
-let exportSeq = 0;
-
 /**
  * Full ticket set via the trusted `adlc ticket store export` CLI (the
  * envelope with completed/edges — `ticket list --json` is a projection,
  * verified live 2026-07-23). Fails soft (null) on any failure. The exporter
  * is injectable for tests.
+ *
+ * The export file lives in a fresh private `mkdtempSync` directory (0700),
+ * not a predictable name in the shared tmpdir — this reader runs on a 3s
+ * board loop and on watcher heartbeats, so a predictable path would be a
+ * co-tenant symlink/TOCTOU target (CWE-59/CWE-377). The whole directory is
+ * removed in `finally`.
  */
 export async function readTicketsViaExport(repoRoot, { runExport = defaultRunExport } = {}) {
-  exportSeq += 1;
-  const outPath = join(tmpdir(), `adlc-herdr-export-${process.pid}-${exportSeq}.json`);
+  let outDir;
+  try {
+    outDir = mkdtempSync(join(tmpdir(), 'adlc-herdr-export-'));
+  } catch {
+    return null;
+  }
+  const outPath = join(outDir, 'store.json');
   try {
     const ok = await runExport(repoRoot, outPath);
     if (!ok) return null;
@@ -154,7 +196,7 @@ export async function readTicketsViaExport(repoRoot, { runExport = defaultRunExp
     return null;
   } finally {
     try {
-      rmSync(outPath, { force: true });
+      rmSync(outDir, { recursive: true, force: true });
     } catch {
       // best-effort cleanup
     }

@@ -18,7 +18,12 @@ export function resolveRepoRoot(dir) {
   } catch {
     root = null;
   }
-  cache.set(dir, root);
+  // Cache only SUCCESSFUL resolutions. This runs inside a session-long daemon:
+  // caching null would let one transient git failure (timeout under load, a
+  // momentary lock) blind a pane for the whole process lifetime, and would
+  // pin a directory that only later becomes a repo (a freshly opened worktree)
+  // as non-repo forever. Negative results are re-probed on the next refresh.
+  if (root !== null) cache.set(dir, root);
   return root;
 }
 

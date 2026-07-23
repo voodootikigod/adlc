@@ -45,3 +45,9 @@ test('refuses a hostile ticket id instead of passing it to the CLI', () => {
   const res = run([join(dir, 'repo'), 't-x1;rm -rf /']);
   assert.equal(res.status, 1);
 });
+
+test('refuses a leading-hyphen ticket id (argument injection into adlc)', () => {
+  for (const id of ['--help', '-rf']) {
+    assert.equal(run([join(dir, 'repo'), id]).status, 1, `${id} must be refused`);
+  }
+});

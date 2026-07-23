@@ -69,7 +69,10 @@ test('runHerdrJson parses JSON stdout and fails soft on malformed output', async
   const badExec = async () => ({ code: 0, stdout: 'not json {', stderr: '' });
   const bad = await runHerdrJson(['api', 'snapshot'], { env: {}, exec: badExec });
   assert.equal(bad.ok, false);
-  assert.ok(!('value' in bad) || bad.value === undefined);
+  // Positive failure contract: no value leaks, and the error is the specific
+  // malformed-JSON message (a stale/attacker value on the failure path fails).
+  assert.equal(bad.value, undefined);
+  assert.equal(bad.error, 'malformed JSON from herdr');
 });
 
 test('shim never throws into callers for runtime failures (fail soft end-to-end)', async () => {

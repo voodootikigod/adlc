@@ -6,8 +6,12 @@
 // sanitized.
 import { sanitize, sanitizeToken } from './sanitize.mjs';
 
-const PANE_ID_RE = /^[A-Za-z0-9:_-]+$/;
-const TICKET_ID_RE = /^[A-Za-z0-9._-]+$/;
+// A leading hyphen would let an id read from untrusted .adlc/ state or herdr
+// context be delivered to a CLI as an OPTION instead of an operand (CWE-88
+// argument injection). Forbid it in first position; spawn plans also insert a
+// `--` end-of-options separator before every externally-derived positional.
+const PANE_ID_RE = /^[A-Za-z0-9:_][A-Za-z0-9:_-]*$/;
+const TICKET_ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 
 /** Validate HERDR_PLUGIN_CONTEXT_JSON (live-probed shape, 2026-07-23). */
 export function parseContext(jsonText) {

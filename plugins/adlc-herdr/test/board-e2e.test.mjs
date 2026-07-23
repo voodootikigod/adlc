@@ -26,7 +26,9 @@ beforeEach(() => {
     '#!/bin/sh',
     'case "$1 $2" in',
     `  "pane get") echo '{"result":{"pane":{"foreground_cwd":"${repo}"}}}' ;;`,
-    '  "api snapshot") echo \'{"result":{"snapshot":{"panes":[]}}}\' ;;',
+    // one OTHER pane rooted in the same repo, so the pane->row extraction
+    // (agent / agent_status / tokens.ticket) actually runs against a real pane
+    `  "api snapshot") echo '{"result":{"snapshot":{"panes":[{"pane_id":"w1:p9","workspace_id":"w1","foreground_cwd":"${repo}","agent":"codex","agent_status":"blocked","tokens":{"ticket":"t-mapped"}}]}}}' ;;`,
     '  *) exit 0 ;;',
     'esac',
   ].join('\n'));
@@ -55,6 +57,16 @@ test('a resolvable repo renders the board header, not the refusal', () => {
   assert.ok(res.stdout.includes('ADLC board · repo'), `no header in: ${res.stdout.slice(0, 200)}`);
   assert.ok(res.stdout.includes('t-e2e'));
   assert.ok(!res.stdout.includes('does not resolve'));
+});
+
+test('the mapped pane row renders agent, status, and ticket from the snapshot', () => {
+  const res = runBoard(JSON.stringify({ focused_pane_id: 'w1:p1', focused_pane_cwd: repo }));
+  assert.equal(res.status, 0);
+  // pane->row extraction (byId.get(...).agent / .agent_status / .tokens.ticket)
+  assert.ok(res.stdout.includes('w1:p9'), 'the other pane must appear in the map');
+  assert.ok(res.stdout.includes('codex'));
+  assert.ok(res.stdout.includes('blocked'));
+  assert.ok(res.stdout.includes('t-mapped'));
 });
 
 test('a non-repo directory refuses with the no-repo message', () => {

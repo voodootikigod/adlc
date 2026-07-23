@@ -57,7 +57,8 @@ re-probed before code depends on it.
 - **Agent semantics:** `herdr agent list | get | read [--source
   visible|recent|recent-unwrapped] | send | rename | focus | wait --status
   <idle|working|blocked|unknown> | attach [--takeover] | start <name> [--cwd]
-  [--env K=V] [--split] -- <argv...> | explain`.
+  [--env K=V] [--split right|down] -- <argv...> | explain` (`--split` takes a
+  direction argument — verified against `agent start --help` on 0.7.4).
 - **Pane metadata reporting — the key UI channel:** `herdr pane report-metadata
   <pane_id> --source ID [--title TEXT] [--display-agent TEXT] [--state-label
   STATUS=TEXT] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]`
@@ -215,8 +216,11 @@ Components:
 The startup daemon maintains a map of *pane → repo root → `.adlc/` state* and
 pushes it into herdr's native UI as metadata tokens:
 
-- Discover panes/worktrees via `herdr api snapshot` + `herdr worktree list
-  --json`; per-pane cwd via `herdr pane process-info`. Refresh on the socket
+- Discover panes/worktrees via `herdr api snapshot`. (The plan originally named
+  three sources — `api snapshot` + `worktree list --json` + `pane
+  process-info` — but probing showed snapshot panes already carry
+  `foreground_cwd`, so as-built the map is derived from `api snapshot` +
+  `git rev-parse` alone; the other two are unused.) Refresh on the socket
   event stream (`EventMatch` subscription), with polling fallback if
   subscriptions prove awkward in 0.7.x. Repo resolution is pinned: repo root =
   `git rev-parse --show-toplevel` of the pane's cwd, and a **git worktree is
@@ -242,7 +246,7 @@ phase, gates green?" for every pane at a glance — today it only answers
 
 ### 5.2 Board pane
 
-`herdr plugin pane open adlc board` (or a keybinding) opens an overlay TUI:
+`herdr plugin pane open --plugin adlc --entrypoint board` (or a keybinding) opens an overlay TUI:
 
 - Backlog list from the ticket store (ready / in-flight / blocked-by-edges,
   `completed:true` filtered — repo invariant #104), with the ticket→pane
@@ -255,19 +259,27 @@ phase, gates green?" for every pane at a glance — today it only answers
 
 ### 5.3 Actions
 
-One-shot commands surfaced in herdr's action palette, scoped by `contexts` to
-the pane/worktree under the cursor. All of them resolve the repo from
-`HERDR_PLUGIN_CONTEXT_JSON` and run the **trusted** `adlc` from `PATH` — never
-a repo-local binary (fleet's K1/A2 operator-trust rule carried over). Every
-action echoes the resolved repo + active ticket before acting, and fails
-closed (clear notification, nothing spawned) when the context does not resolve
-to a repo:
+One-shot commands surfaced in herdr's action palette. As built, all three
+declare `contexts = ["pane"]` (the draft named `["pane", "worktree"]`, but a
+worktree context need not supply `focused_pane_id`, which resolution requires;
+worktree-context support is deferred). Each resolves the repo from
+`HERDR_PLUGIN_CONTEXT_JSON` (plus a live `pane get` for `foreground_cwd`) and
+runs only fixed-argv trusted binaries from `PATH` — never a repo-local binary
+(fleet's K1/A2 operator-trust rule carried over). Spawn-pane actions echo the
+resolved repo + active ticket before acting; all actions fail closed (clear
+notification, nothing spawned) when the context does not resolve to a repo:
 
-- `ticket-show` — popup with the active ticket for that pane's repo.
-- `gate` — run `adlc gate-manifest verify` / configured gate, result as
-  notification + tokens.
-- `prosecute` — run `adlc prosecute` for the pane's worktree; long-running, so
-  it opens as a split pane, not a popup.
+- `ticket-show` — a split pane rendering the active ticket via the plugin's own
+  sanitizing renderer (herdr popups are id-less singletons, so a split spawn is
+  the robust shape).
+- `gate` — run `adlc gate-manifest verify --json` for the pane's repo; the
+  result is a **notification** (pass/FAIL + repo/ticket echo). It writes no
+  tokens directly — token refresh is the watcher's job via its file watches —
+  and `gate-manifest verify` writes no ledger record, so a passing/failing
+  verify is surfaced only through the notification.
+- `prosecute` — spawn `adversarial-review --base main` from trusted `PATH` in a
+  split pane (`adlc prosecute` is the P5 evidence recorder, not a runnable
+  review loop); fails closed with a notification if the binary is absent.
 - (phase 2) `ticket-complete`, `adlc-init`, `fleet-status`.
 
 ### 5.4 Event glue
@@ -416,9 +428,11 @@ then the run tab/tail-pane/notification bridge.
   `node --test plugins/adlc-herdr/test/sanitize.test.mjs`.
 - AC4 — The watcher maps panes to repos and publishes ticket/phase tokens with
   TTL, failing soft on missing `.adlc/` and closed (explicit unreadable token)
-  on malformed JSON. Verification:
-  `node --test plugins/adlc-herdr/test/watcher.test.mjs` (herdr CLI mocked
-  behind `lib/herdr.mjs`).
+  on malformed JSON. Verification: `watcher.test.mjs` (state/token helpers),
+  `panemap.test.mjs` (pane→repo mapping), `watch-plan.test.mjs` (token
+  assembly + multi-repo workspace aggregation), and `watcher-e2e.test.mjs`
+  (the daemon driven end-to-end against a scripted `herdr` stub — publishes the
+  expected tokens and never emits `report-agent`).
 - AC5 — Actions dispatch on `HERDR_PLUGIN_ACTION_ID`, resolve the repo from
   validated context JSON, and spawn only fixed-argv trusted binaries.
   Verification: `node --test plugins/adlc-herdr/test/action.test.mjs`.
@@ -427,7 +441,7 @@ then the run tab/tail-pane/notification bridge.
 - AC7 — Live install smoke (operator-run, not CI — Copilot live-smoke
   precedent): `herdr plugin link plugins/adlc-herdr` then
   `herdr plugin list --json` shows plugin id `adlc` enabled, and the board pane
-  opens via `herdr plugin pane open adlc board`.
+  opens via `herdr plugin pane open --plugin adlc --entrypoint board`.
 
 ## 11. Open questions
 

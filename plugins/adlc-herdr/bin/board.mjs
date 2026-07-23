@@ -10,7 +10,7 @@ import { runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
 import {
-  readActiveTicket, readLatestPhase, groupBacklog, readLedgerTail, readTicketsViaExport,
+  readActiveTicket, readLatestPhase, groupBacklog, readLedgerByTicket, readTicketsViaExport,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
@@ -51,7 +51,7 @@ async function gather(repoRoot) {
     phase,
     groups,
     paneRows,
-    ledger: readLedgerTail(repoRoot),
+    ledger: readLedgerByTicket(repoRoot),
   };
 }
 
@@ -64,8 +64,20 @@ function draw(body) {
   process.stdout.write(`\x1b[H${frameText}\n\x1b[0J`);
 }
 
+// Single-flight latch: gather() runs several herdr subprocess calls plus an
+// `adlc ticket store export` (15s timeout), so a slow gather could outlast the
+// 3s interval or collide with a resize. Two concurrent frames would interleave
+// their cursor-home + erase writes and corrupt the pane. Mirror the watcher's
+// `refreshing` guard — skip a frame while one is in flight.
+let framing = false;
 async function frame(repoRoot) {
-  draw(renderBoard(await gather(repoRoot)));
+  if (framing) return;
+  framing = true;
+  try {
+    draw(renderBoard(await gather(repoRoot)));
+  } finally {
+    framing = false;
+  }
 }
 
 function armInput(onQuit) {

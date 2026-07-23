@@ -1,8 +1,10 @@
 # ADLC × herdr plugin manifest.
 #
-# Entrypoints land with their tickets: [[startup]] watcher (t-herdr-2, here),
-# [[actions]] (t-herdr-3), [[panes]] board (t-herdr-4). No [[build]] commands
-# ever — the plugin ships runnable, zero-dep (plan §6.6).
+# Entrypoints land with their tickets: [[startup]] watcher (t-herdr-2),
+# [[actions]] (t-herdr-3), [[panes]] board (t-herdr-4). The [[events]]
+# entrypoints that t-herdr-1 enumerated are intentionally DEFERRED to Phase 2
+# (event glue — plan §5.4/§8); no bin/on-event.mjs exists yet. No [[build]]
+# commands ever — the plugin ships runnable, zero-dep (plan §6.6).
 id = "adlc"
 name = "ADLC"
 version = "0.2.0"

@@ -1,0 +1,65 @@
+// Unit tests for the pure watcher token planner — the decision-shaped core of
+// refresh() that was previously untested (P5 tests-lens finding). Covers the
+// multi-repo-per-workspace aggregation that the earlier last-writer-wins code
+// got wrong.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { planTokens } from '../lib/watch-plan.mjs';
+
+const counts = (ready, inFlight, blocked) => ({ ready, inFlight, blocked });
+
+test('per-pane tokens come from that pane repo state; workspace counts published', () => {
+  const map = [{ paneId: 'w1:p1', workspaceId: 'w1', repoRoot: '/r1' }];
+  const state = new Map([['/r1', { active: { state: 'active', id: 't-a' }, phase: 'P4', counts: counts(3, 1, 2) }]]);
+  const { nextPane, nextWorkspace } = planTokens(map, state);
+  assert.deepEqual(nextPane.get('w1:p1'), { ticket: 't-a', phase: 'P4' });
+  assert.deepEqual(nextWorkspace.get('w1'), { adlc_ready: '3', adlc_active: '1', adlc_blocked: '2' });
+});
+
+test('a workspace spanning two repos SUMS their backlog counts (no last-writer-wins)', () => {
+  const map = [
+    { paneId: 'w1:p1', workspaceId: 'w1', repoRoot: '/main' },
+    { paneId: 'w1:p2', workspaceId: 'w1', repoRoot: '/wt-fleet' },
+  ];
+  const state = new Map([
+    ['/main', { active: { state: 'active', id: 't-a' }, phase: 'P4', counts: counts(10, 1, 0) }],
+    ['/wt-fleet', { active: { state: 'absent' }, phase: null, counts: counts(2, 0, 3) }],
+  ]);
+  const { nextWorkspace } = planTokens(map, state);
+  // 10+2 ready, 1+0 in-flight, 0+3 blocked — order-independent.
+  assert.deepEqual(nextWorkspace.get('w1'), { adlc_ready: '12', adlc_active: '1', adlc_blocked: '3' });
+});
+
+test('multiple panes rooted in the SAME repo do not double-count that repo', () => {
+  const map = [
+    { paneId: 'w1:p1', workspaceId: 'w1', repoRoot: '/r1' },
+    { paneId: 'w1:p2', workspaceId: 'w1', repoRoot: '/r1' },
+  ];
+  const state = new Map([['/r1', { active: { state: 'absent' }, phase: null, counts: counts(5, 0, 0) }]]);
+  assert.deepEqual(planTokens(map, state).nextWorkspace.get('w1'), { adlc_ready: '5', adlc_active: '0', adlc_blocked: '0' });
+});
+
+test('the aggregate is independent of pane iteration order', () => {
+  const a = [{ paneId: 'w1:p1', workspaceId: 'w1', repoRoot: '/x' }, { paneId: 'w1:p2', workspaceId: 'w1', repoRoot: '/y' }];
+  const b = [a[1], a[0]];
+  const state = new Map([
+    ['/x', { active: { state: 'absent' }, phase: null, counts: counts(1, 0, 0) }],
+    ['/y', { active: { state: 'absent' }, phase: null, counts: counts(0, 0, 7) }],
+  ]);
+  assert.deepEqual(planTokens(a, state).nextWorkspace.get('w1'), planTokens(b, state).nextWorkspace.get('w1'));
+});
+
+test('panes whose repo has no state, and repos with null counts, are skipped safely', () => {
+  const map = [
+    { paneId: 'w1:p1', workspaceId: 'w1', repoRoot: '/known' },
+    { paneId: 'w1:p2', workspaceId: 'w1', repoRoot: '/unknown' },
+  ];
+  const state = new Map([['/known', { active: { state: 'absent' }, phase: null, counts: null }]]);
+  const { nextPane, nextWorkspace } = planTokens(map, state);
+  assert.equal(nextPane.size, 0); // absent state → no pane token
+  assert.equal(nextWorkspace.size, 0); // null counts → no workspace token
+});
+
+test('planTokens fails soft on a non-array pane map', () => {
+  assert.deepEqual(planTokens(null, new Map()), { nextPane: new Map(), nextWorkspace: new Map() });
+});

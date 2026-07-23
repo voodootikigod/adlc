@@ -111,6 +111,18 @@ test('ticket-show refuses a ticket id with characters outside [A-Za-z0-9._-]', (
   assert.equal(plan.kind, 'refuse');
 });
 
+test('ticket-show refuses a leading-hyphen ticket id (argument-injection guard)', () => {
+  for (const id of ['--help', '-rf', '-x']) {
+    assert.equal(planAction('ticket-show', target, { state: 'active', id }).kind, 'refuse',
+      `leading-hyphen id ${id} must refuse`);
+  }
+});
+
+test('parseContext rejects a leading-hyphen pane id', () => {
+  assert.equal(parseContext(JSON.stringify({ focused_pane_id: '-rf' })).ok, false);
+  assert.equal(parseContext(JSON.stringify({ focused_pane_id: '--flag' })).ok, false);
+});
+
 test('prosecute plans a split-pane adversarial-review from trusted PATH', () => {
   const plan = planAction('prosecute', target, active);
   assert.equal(plan.kind, 'spawn-pane');

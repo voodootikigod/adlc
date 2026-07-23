@@ -1,8 +1,9 @@
 // Offline manifest smoke (t-herdr-1, AC2): the shipped herdr-plugin.toml is
 // shape-valid, declares no [[build]] commands (plan §6.6), and every declared
-// node entrypoint exists and passes syntax check. The parser itself is also
-// exercised against a full-entrypoint example and known-bad inputs so this
-// test stays load-bearing while the shipped manifest has no entrypoints yet.
+// node entrypoint exists and passes syntax check. The parser is also exercised
+// against a full-entrypoint example and known-bad inputs; the "every declared
+// node entrypoint" test now walks the real shipped entrypoints
+// ([[startup]]/[[panes]]/[[actions]]).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';

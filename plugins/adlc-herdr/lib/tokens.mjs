@@ -60,8 +60,10 @@ export function diffPublishes(prev, next) {
 export function versionGate(versionOutput, ceiling) {
   const match = typeof versionOutput === 'string' ? versionOutput.match(/(\d+)\.(\d+)\.(\d+)/) : null;
   if (!match) return { supported: false, token: 'untested herdr version (unparseable)' };
+  const ceilMatch = typeof ceiling === 'string' ? ceiling.match(/(\d+)\.(\d+)\.(\d+)/) : null;
+  if (!ceilMatch) throw new TypeError(`versionGate ceiling must be an x.y.z string, got ${ceiling}`);
   const version = match.slice(1, 4).map(Number);
-  const ceil = ceiling.match(/(\d+)\.(\d+)\.(\d+)/).slice(1, 4).map(Number);
+  const ceil = ceilMatch.slice(1, 4).map(Number);
   for (let i = 0; i < 3; i += 1) {
     if (version[i] > ceil[i]) {
       return { supported: false, token: `untested herdr version ${match[0]} (tested <= ${ceiling})` };

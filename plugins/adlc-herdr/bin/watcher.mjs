@@ -11,10 +11,8 @@ import { runHerdr, runHerdrJson, makeCachedReader } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport } from '../lib/adlc-state.mjs';
-import {
-  paneTokens, workspaceTokens, buildReportArgs, buildWorkspaceReportArgs,
-  diffPublishes, versionGate,
-} from '../lib/tokens.mjs';
+import { buildReportArgs, buildWorkspaceReportArgs, diffPublishes, versionGate } from '../lib/tokens.mjs';
+import { planTokens } from '../lib/watch-plan.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
@@ -33,9 +31,17 @@ let prevWorkspace = new Map();
 const watchedRepos = new Set();
 let refreshTimer = null;
 let refreshing = false;
+let pendingFull = false;
 
 async function refresh({ full = false } = {}) {
-  if (refreshing) return;
+  // Coalesce, don't drop: if a refresh is already running and a FULL heartbeat
+  // fires, remember it and run a follow-up full pass when the current one
+  // finishes — otherwise two colliding heartbeats could let a stable pane's
+  // tokens lapse past their 90s TTL.
+  if (refreshing) {
+    if (full) pendingFull = true;
+    return;
+  }
   refreshing = true;
   try {
     const snap = await runHerdrJson(['api', 'snapshot']);
@@ -44,24 +50,17 @@ async function refresh({ full = false } = {}) {
     const map = buildPaneMap(Array.isArray(panes) ? panes : [], { resolveRepoRoot });
     const groups = repoGroups(map);
 
-    const nextPane = new Map();
-    const nextWorkspace = new Map();
-    for (const [repoRoot, entries] of groups) {
+    // Read each repo's state once, then let the pure planner assemble tokens.
+    const repoState = new Map();
+    for (const [repoRoot] of groups) {
       ensureWatched(repoRoot);
       const active = readActiveTicket(repoRoot);
       const phase = active.state === 'active' ? readLatestPhase(repoRoot, active.id) : null;
-      const tokens = paneTokens(active, phase);
       const tickets = existsSync(join(repoRoot, '.adlc')) ? await readBacklog(repoRoot) : null;
-      for (const entry of entries) {
-        if (Object.keys(tokens).length > 0) nextPane.set(entry.paneId, tokens);
-        if (tickets && typeof entry.workspaceId === 'string') {
-          nextWorkspace.set(
-            entry.workspaceId,
-            workspaceTokens(backlogCounts(tickets, active.state === 'active' ? active.id : null)),
-          );
-        }
-      }
+      const counts = tickets ? backlogCounts(tickets, active.state === 'active' ? active.id : null) : null;
+      repoState.set(repoRoot, { active, phase, counts });
     }
+    const { nextPane, nextWorkspace } = planTokens(map, repoState);
 
     const paneChanges = full ? nextPane : diffPublishes(prevPane, nextPane);
     const wsChanges = full ? nextWorkspace : diffPublishes(prevWorkspace, nextWorkspace);
@@ -75,6 +74,11 @@ async function refresh({ full = false } = {}) {
     prevWorkspace = nextWorkspace;
   } finally {
     refreshing = false;
+  }
+  // Service a heartbeat that collided with this run.
+  if (pendingFull) {
+    pendingFull = false;
+    await refresh({ full: true });
   }
 }
 

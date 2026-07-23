@@ -6,7 +6,10 @@ import { execFileSync } from 'node:child_process';
 import { sanitize } from '../lib/sanitize.mjs';
 
 const [repoRoot, ticketId] = process.argv.slice(2);
-if (!repoRoot || !/^[A-Za-z0-9._-]+$/.test(ticketId ?? '')) {
+// Reject a leading hyphen: `adlc` does not honor a `--` end-of-options
+// separator (verified), so a `-`-leading id would reach it as an option
+// (CWE-88). The dispatcher validates too; this is the redundant second gate.
+if (!repoRoot || !/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(ticketId ?? '')) {
   process.stderr.write('usage: show-ticket.mjs <repoRoot> <ticketId>\n');
   process.exit(1);
 }

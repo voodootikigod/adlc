@@ -39,8 +39,9 @@ Node and declares no `[[build]]` commands — installation executes nothing.
 
 ## Layout
 
-- `herdr-plugin.toml` — manifest. v0.1.0 registers identity only; entrypoints
-  land with their tickets.
+- `herdr-plugin.toml` — manifest (v0.2.0): identity plus the shipped
+  entrypoints — `[[startup]]` watcher, `[[panes]]` board, and three
+  `[[actions]]`. `[[events]]` is deferred to Phase 2.
 - `lib/herdr.mjs` — the single shim every herdr CLI call goes through: fixed
   argv arrays, no shell, `HERDR_BIN_PATH`-or-`herdr` binary resolution,
   runtime failures fail soft. When a herdr release changes CLI shape, this is
@@ -96,5 +97,9 @@ herdr plugin list --json   # expect id "adlc", enabled
 ```
 
 Record the result with
-`adlc gate-manifest record herdr-live-smoke --ticket <ticket>`. The board-pane
-step (`herdr plugin pane open adlc board`) applies from t-herdr-4 onward.
+`adlc gate-manifest record herdr-live-smoke --ticket <ticket>`. Open the board
+with the probed flag form (matches the "Probed facts" section above):
+
+```sh
+herdr plugin pane open --plugin adlc --entrypoint board
+```
