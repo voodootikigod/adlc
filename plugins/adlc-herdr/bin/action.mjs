@@ -9,10 +9,10 @@ import { join, delimiter } from 'node:path';
 import { runHerdr, runHerdrJson } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket } from '../lib/adlc-state.mjs';
-import { parseContext, resolveTarget, planAction, gateNotification } from '../lib/actions.mjs';
+import { parseContext, resolveTarget, planAction, gateNotification, notifyArgs } from '../lib/actions.mjs';
 
 function notify(title, body, sound = 'request') {
-  return runHerdr(['notification', 'show', title, '--body', body, '--sound', sound]);
+  return runHerdr(notifyArgs(title, body, sound));
 }
 
 function resolveOnPath(bin) {

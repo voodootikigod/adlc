@@ -8,7 +8,7 @@
 // resolved repo + ticket; all rendered text sanitized.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseContext, resolveTarget, planAction, gateNotification } from '../lib/actions.mjs';
+import { parseContext, resolveTarget, planAction, gateNotification, notifyArgs } from '../lib/actions.mjs';
 
 const CTX = JSON.stringify({
   workspace_id: 'w4', workspace_cwd: '/repo',
@@ -132,6 +132,19 @@ test('no plan ever carries a shell string — argv arrays only', () => {
       }
     }
   }
+});
+
+// ---- notifyArgs ----
+
+test('notifyArgs emits the exact herdr notification argv, sanitized', () => {
+  assert.deepEqual(
+    notifyArgs('ADLC', 'body text', 'done'),
+    ['notification', 'show', 'ADLC', '--body', 'body text', '--sound', 'done'],
+  );
+  const hostile = notifyArgs('\x1b[31mtitle', 'b\x07ody');
+  assert.equal(hostile[2], 'title');
+  assert.equal(hostile[4], 'body');
+  assert.equal(hostile[6], 'request');
 });
 
 // ---- gateNotification ----

@@ -87,6 +87,12 @@ export function planAction(actionId, target, active, opts = {}) {
   }
 }
 
+/** The exact herdr argv for a notification — argv construction stays in
+ *  tested code (bin glue only passes it through the shim). */
+export function notifyArgs(title, body, sound = 'request') {
+  return ['notification', 'show', sanitizeToken(String(title), 80), '--body', sanitize(String(body)), '--sound', sound];
+}
+
 /** Render the gate verify result as a notification plan; fail soft on
  *  unreadable output; strip escapes from everything. */
 export function gateNotification(output, echo) {
