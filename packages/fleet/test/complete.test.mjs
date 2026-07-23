@@ -9,11 +9,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { initializeTicketStores, TicketService, detectTicketStore } from '@adlc/tickets';
+import { initializeTicketStores, TicketService, detectTicketStore, ticketFilename } from '@adlc/tickets';
 import { runFleet, integrationBranchName } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 import { completeTicketOnIntegration } from '../lib/complete.mjs';
@@ -28,12 +28,18 @@ function gitRunner(cwd) {
 }
 
 /** A temp git repo carrying a directory ticket store with one open ticket on an integration branch. */
-function makeRepo(ticket = { id: 'T1', title: 'first' }) {
+function makeRepo(ticket = { id: 'T1', title: 'first' }, { bootstrapManifest = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'fleet-complete-'));
   const git = gitRunner(root);
   git('init', '-b', 'main');
   git('commit', '--allow-empty', '-q', '-m', 'root');
   initializeTicketStores(root);
+  // Bootstrap a manifest ledger so completion evidence APPENDS — the supported case
+  // (rails-guard-ci allows append, denies create). Tests that want the un-bootstrapped
+  // repo pass { bootstrapManifest: false }.
+  if (bootstrapManifest) {
+    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"bootstrap","ts":"2026-01-01T00:00:00.000Z","data":{"note":"test-bootstrap"},"prev":null}\n');
+  }
   const service = new TicketService(detectTicketStore({ root }), { root });
   service.apply(service.planCreate(ticket));
   git('add', '-A');
@@ -123,6 +129,41 @@ test('a failed completion commit is rolled back — the shared integration check
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('the completion commit is CI-shaped — completed:true-only shard + append-only manifest (rails-guard-ci)', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const shardRel = `.adlc/tickets/${ticketFilename('T1')}`;
+    const baseShard = JSON.parse(git('show', `HEAD:${shardRel}`));
+    const baseManifest = git('show', 'HEAD:.adlc/manifest.jsonl');
+    assert.ok(!('completed' in baseShard), 'precondition: base shard has no completed field');
+
+    completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+
+    // Shard diff is EXACTLY `completed: true` added — what rails-guard-ci's
+    // isCompletionAnnotationOnly exempts (add-only on a pristine field).
+    const headShard = JSON.parse(git('show', `HEAD:${shardRel}`));
+    assert.equal(headShard.completed, true);
+    const { completed, ...headWithoutCompleted } = headShard;
+    assert.deepEqual(headWithoutCompleted, baseShard, 'the only shard change is the completed:true annotation');
+
+    // Manifest diff is append-only — what rails-guard-ci requires (HEAD starts with base).
+    const headManifest = git('show', 'HEAD:.adlc/manifest.jsonl');
+    assert.ok(headManifest.startsWith(baseManifest), 'the manifest is append-only');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('on a repo with NO manifest baseline, completion is skipped — it never creates a manifest CI would reject', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    assert.equal(res.completed, false);
+    assert.equal(res.reason, 'no-manifest-baseline', 'it degrades to merged-not-completed with a clear reason');
+    assert.equal(isCompleted(root, 'T1'), false, 'the ticket stays open');
+    assert.ok(!existsSync(join(root, '.adlc', 'manifest.jsonl')), 'no manifest was created');
+    assert.equal(git('status', '--porcelain'), '', 'the checkout is untouched');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 // ---- runFleet wiring: completion is gated on a passing post-merge gate --------

@@ -60,6 +60,14 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
   const priorStore = existsSync(storeAbs) ? readFileSync(storeAbs) : null;
   const priorManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
 
+  // rails-guard-ci DENIES a PR that CREATES .adlc/manifest.jsonl with evidence
+  // (only a verified migration may); appending to an existing one is allowed. On a
+  // repo whose ADLC manifest is not yet bootstrapped, recording completion evidence
+  // here would create the ledger and get the whole fleet PR rejected. Skip
+  // auto-completion in that case and degrade to "merged, not yet completed" rather
+  // than open a PR the CI gate is guaranteed to reject.
+  if (priorManifest === null) return { completed: false, reason: 'no-manifest-baseline' };
+
   const service = new TicketService(store, { root: repo });
   service.apply(service.planComplete(ticketId));
 
