@@ -1,0 +1,12 @@
+# ADLC × herdr plugin manifest.
+#
+# v0.1.0 registers the plugin identity only. Entrypoints land with their
+# tickets: [[startup]] watcher (t-herdr-2), [[actions]] (t-herdr-3),
+# [[panes]] board (t-herdr-4). No [[build]] commands ever — the plugin ships
+# runnable, zero-dep (plan §6.6).
+id = "adlc"
+name = "ADLC"
+version = "0.1.0"
+min_herdr_version = "0.7.4"
+description = "Agentic Development Lifecycle: per-pane phase/ticket/gate status, backlog board, gate actions, and fleet run observability."
+platforms = ["linux", "macos"]

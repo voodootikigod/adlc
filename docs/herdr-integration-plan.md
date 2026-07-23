@@ -405,7 +405,9 @@ then the run tab/tail-pane/notification bridge.
 ## 10. Acceptance criteria (Phase 1)
 
 - AC1 — The full plugin test suite passes offline, with no herdr server, no
-  network, and no npm install. Verification: `node --test plugins/adlc-herdr/test/`.
+  network, and no npm install. Verification:
+  `node --test 'plugins/adlc-herdr/test/*.test.mjs'` (glob form — the bare
+  directory form fails on Node 24).
 - AC2 — The manifest is shape-valid: required fields present, every declared
   entrypoint file exists and passes syntax check. Verification:
   `node --test plugins/adlc-herdr/test/manifest.test.mjs`.
