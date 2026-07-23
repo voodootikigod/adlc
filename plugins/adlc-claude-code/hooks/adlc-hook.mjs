@@ -1166,11 +1166,13 @@ function rails(input) {
     `${h.rel} is a frozen rail declared by ticket ${h.ticket} (rails: "${h.glob}")` +
       `${hits.length > 1 ? ` (+${hits.length - 1} more rail path(s) in this edit)` : ''}. ` +
       `Edits to frozen rails are blocked during build. Scope: this in-session hook gates ` +
-      `structured edits (Edit/Write/MultiEdit) only — a shell write to this rail (a redirect ` +
-      `or in-place edit via Bash, e.g. \`cat >> ${h.rel}\` or \`perl -i\`) is NOT blocked here, ` +
-      `but it IS caught by the rails-guard CI diff gate at commit time, so it does not escape ` +
-      `enforcement — it only defers the failure to CI. To override deliberately, set ` +
-      `ADLC_RAILS_BYPASS=1 (the bypass is recorded to the gate-manifest).`
+      `structured edits (Edit/Write/MultiEdit) only — it does not parse Bash, so a shell write ` +
+      `(a redirect or in-place edit) to a frozen path is NOT blocked here. Do not route around ` +
+      `the gate that way: the rails-guard CI diff gate catches only rails already on the base ` +
+      `branch — not a rail this same change declares, nor the gitignored active-ticket pointer ` +
+      `— so such a write is an unaudited change to a protected rail that may go undetected. To ` +
+      `change this rail deliberately, set ADLC_RAILS_BYPASS=1 (audited, recorded to the ` +
+      `gate-manifest).`
   );
 }
 

@@ -214,17 +214,33 @@ test('a COMPLETED ticket with a non-array rails object still fails closed', () =
 
 // ---- #243: the frozen-rail denial states its SCOPE honestly ----
 // The hook gates structured edits only; a shell write to a rail (cat >>, perl -i)
-// is NOT blocked in-session but IS caught by the rails-guard CI diff gate. If the
-// message only says "blocked during build", an agent blocked on an Edit wrongly
-// concludes the rail is fully enforced — then a shell dodge silently loses the
-// in-session guard it thinks it has and only finds out at PR time. The message
-// must name its scope and the CI backstop so neither mental model is wrong.
+// is NOT blocked in-session. If the message only says "blocked during build", an
+// agent blocked on an Edit wrongly concludes the rail is fully enforced — then a
+// shell dodge silently loses the in-session guard it thinks it has. The message
+// must name its scope. It must NOT over-promise the CI backstop: rails-guard-ci
+// reads its frozen set from the TRUSTED BASE, so it catches shell writes only to
+// rails ALREADY on the base branch — not a rail this same change declares, and
+// not the gitignored .adlc/current-ticket.json pointer (both surfaced by the P5
+// prosecution of this ticket). A blanket "caught by CI / does not escape" claim
+// would hand the agent false assurance for exactly those cases.
 // (out is raw JSON with backslash-escaped quotes — match unquoted fragments only.)
-test('#243: a frozen-rail denial names its structured-edit scope and the CI backstop', () => {
+test('#243: a frozen-rail denial names its structured-edit scope and honestly scopes the CI backstop', () => {
   const r = runRails('{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}', 'test/auth/login.test.mjs');
   assert.equal(r.verdict, 'deny');
-  assert.match(r.out, /structured edits/i);
-  assert.match(r.out, /rails-guard CI diff gate at commit time/i);
+  assert.match(r.out, /structured edits/i);            // scope named
+  assert.match(r.out, /rails-guard CI diff gate/i);     // backstop named
+  assert.match(r.out, /base branch/i);                  // …but scoped to base-branch rails
+  // Never revert to the blanket false claim (P5: false for same-change rails and the pointer).
+  assert.doesNotMatch(r.out, /does not escape enforcement/i);
+});
+
+test('#243: the active-ticket pointer denial does not falsely claim CI catches a shell write to it', () => {
+  // .adlc/current-ticket.json is gitignored local state with NO commit-time CI diff,
+  // so the message must not promise it is CI-backstopped.
+  const r = runRails('{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}', '.adlc/current-ticket.json');
+  assert.equal(r.verdict, 'deny');
+  assert.doesNotMatch(r.out, /does not escape enforcement/i);
+  assert.match(r.out, /active-ticket pointer/i);        // the scoped caveat is present
 });
 
 
