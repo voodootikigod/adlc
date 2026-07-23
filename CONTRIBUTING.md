@@ -41,6 +41,13 @@ npm install        # installs the workspace
 npm test           # runs every package's test suite
 ```
 
+To run every gate that blocks a PR (what CI enforces):
+
+```sh
+npm run preflight              # tests + rail-freeze + mutation gate, vs origin/main
+npm run preflight -- --base <ref>
+```
+
 To run a single package's tests:
 
 ```sh
@@ -113,7 +120,19 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
 
 1. Fork the repo and create a branch (`feat/<name>`, `fix/<name>`, …).
-2. Make your change with tests; run `npm test`.
+2. Make your change with tests, then run `npm run preflight` — **not just
+   `npm test`**. CI blocks a PR on three gates and the suite is only one of
+   them; preflight runs all three locally, in CI's order:
+
+   | gate | what it checks |
+   | --- | --- |
+   | tests | the full workspace suite |
+   | rail-freeze | no frozen rail edited, and no *existing* ticket changed in `.adlc/tickets.json` |
+   | mutation-gate | changed code has tests that notice it being broken |
+
+   Note `adlc rails-guard` is **not** the CI check — `scripts/rails-guard-ci.mjs`
+   is stricter, and a clean `adlc rails-guard` has already been mistaken for
+   clearance on a branch CI then rejected.
 3. Push and open a PR against `main` using the PR template.
 4. Keep PRs focused — one logical change per PR.
 5. A maintainer will review; address feedback and we'll merge once green.

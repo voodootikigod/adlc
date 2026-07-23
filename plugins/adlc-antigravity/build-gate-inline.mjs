@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSyn
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
-import { detectEditChurn } from './flail-inline.mjs';
+import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptLines } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
@@ -249,25 +249,53 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         writeStore(store);
       });
     },
-    recordEdit(sessionID, filePath) {
-      if (!sessionID || !filePath || !ticketStoreExists(root, env)) return { churning: [] };
+    recordEdit(sessionID, filePath, { transcriptLines = [] } = {}) {
+      if (!sessionID || !ticketStoreExists(root, env)) return { churning: [], repeatedErrors: [], verdict: 'clean', summary: '' };
       return withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
         s.edits = s.edits ?? [];
         s.warned = s.warned ?? [];
-        s.edits.push(`Editing ${filePath}`);
-        if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+        if (filePath) {
+          s.edits.push(`Editing ${filePath}`);
+          if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+        }
+
+        const analysis = analyzeFlail({ edits: s.edits, transcriptLines });
+        const hashKey = `${analysis.verdict}:${analysis.summary}`;
+        const isNew = analysis.verdict === 'flail' && !s.warned.includes(hashKey);
+        if (isNew) {
+          s.warned.push(hashKey);
+        }
+
+        s.flailStatus = {
+          verdict: analysis.verdict,
+          summary: analysis.summary,
+          updatedAt: Date.now(),
+        };
+
+        s.updatedAt = Date.now();
+        store[sessionID] = s;
+        writeStore(store);
 
         const churns = detectEditChurn(s.edits, 3);
         const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
         for (const c of newlyChurning) s.warned.push(c.path);
 
-        s.updatedAt = Date.now();
-        store[sessionID] = s;
-        writeStore(store);
-        return { churning: newlyChurning };
-      }, { churning: [] });
+        return {
+          churning: newlyChurning,
+          verdict: analysis.verdict,
+          signals: analysis.signals,
+          summary: analysis.summary,
+          recommendation: analysis.recommendation,
+          isNewSignal: isNew,
+        };
+      }, { churning: [], verdict: 'clean', summary: '' });
+    },
+    edits(sessionID) {
+      if (!sessionID) return [];
+      const store = readStore();
+      return store[sessionID]?.edits ?? [];
     },
     depth(sessionID) {
       if (!sessionID) return 0;
@@ -284,6 +312,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       return lockFailures.has(sessionID);
     },
   };
+}
+
+export function checkFlail({ sessionID, tracker, root = process.cwd(), env = process.env }) {
+  if (!sessionID || sessionID === 'default_session') {
+    return { verdict: 'clean', signals: [], summary: '', recommendation: 'Session clean' };
+  }
+  const transcriptPath = resolveTranscriptPath({ conversationId: sessionID, env });
+  const transcriptLines = transcriptPath ? parseTranscriptLines(transcriptPath) : [];
+  const storeEdits = tracker?.edits?.(sessionID) ?? [];
+  return analyzeFlail({ edits: storeEdits, transcriptLines });
 }
 
 export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) {

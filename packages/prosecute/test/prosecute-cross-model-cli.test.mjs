@@ -12,18 +12,21 @@
 // The recorded revision is resolved the SAME way the gate resolves it (no --revision).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
+import { migrateLegacyStore } from '@adlc/tickets';
 import { resolveProsecutionRevision } from '../lib/run.mjs';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
-function runBin(args, cwd) {
+function runBin(args, cwd, env = {}) {
   try {
-    const stdout = execFileSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execFileSync(process.execPath, [BIN, ...args], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env },
+    });
     return { status: 0, stdout };
   } catch (err) {
     return { status: err.status, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
@@ -35,7 +38,7 @@ function runBin(args, cwd) {
 // `baselineFiles` are committed on MAIN before branching, so no untracked file
 // spuriously tiers under the working-tree-inclusive changed-file set. `featurePath`
 // (if given) is committed on the `feat` branch.
-function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rails = [] } = {}) {
+function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rails = [], migrateStore = false, extraTickets = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-xm-cli-'));
   const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
@@ -54,8 +57,17 @@ function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rai
   const ledger = join(dir, ledgerDir);
   mkdirSync(ledger, { recursive: true });
   writeFileSync(join(ledger, 'tickets.json'), JSON.stringify({
-    tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails, edges: [] }],
+    tickets: [
+      { id: 'T1', title: 'x', scope: ['src/**'], rails, edges: [] },
+      ...extraTickets.map((id) => ({ id, title: 'spare', scope: ['src/**'], rails: [], edges: [] })),
+    ],
   }));
+  // Optionally convert the canonical store to the SHARDED backend before the
+  // baseline commit, so the directory store is committed on main and a feature
+  // change tiers (or not) purely on its own merits — not because uncommitted
+  // shards under .adlc/tickets/ are themselves a trust-root surface.
+  if (migrateStore) migrateLegacyStore(dir, { write: true, yes: true, requireClean: false });
+
   const adlc = join(dir, '.adlc');
   mkdirSync(adlc, { recursive: true });
   const transcriptPath = join(adlc, 'review.txt');
@@ -195,6 +207,154 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
     } finally {
       rmSync(repo.dir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('residual: canonical rails still tier when the store uses the SHARDED directory backend', () => {
+    // Pre-fix, loadTicketsForTier read only `.adlc/tickets.json`. After a repo
+    // migrates to `.adlc/tickets/`, that path is GONE — the ENOENT branch yielded
+    // an empty table, so a change that is trust-root ONLY via a ticket rail was
+    // silently declassified and a same-model P5 passed clean. That is a fail-OPEN
+    // gate bypass, so it is asserted at the process boundary on a real migrated store.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'], migrateStore: true });
+    try {
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+      assert.equal(res.status, 2, 'a rail-only trust-root change must still tier under the directory backend');
+      assert.match(JSON.parse(res.stdout).message, /cross-model adversarial approve from a distinct provider/);
+      assert.match(res.stderr, /rails deny-path of ticket T1/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('residual: ADLC_TICKETS / ADLC_TICKET_STORE cannot replace the canonical store for tiering', () => {
+    // Same escape as the OUT-OF-REPO --dir case, through the environment instead.
+    // detectTicketStore defaults to env = process.env and honours these variables,
+    // so resolving the canonical store WITHOUT disabling overrides would let the
+    // gated author point tiering at a valid rail-free store and declassify a
+    // rails-only trust-root change. Both variable names are covered.
+    for (const varName of ['ADLC_TICKETS', 'ADLC_TICKET_STORE']) {
+      const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
+      try {
+        // A VALID store that contains the active ticket but omits the rail.
+        const railFree = join(repo.dir, 'rail-free-tickets.json');
+        writeFileSync(railFree, JSON.stringify({ tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] }] }));
+        writePasses({ ...repo, revision: 'fixed-rev' });
+        const res = runBin(
+          ['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'],
+          repo.dir,
+          { [varName]: railFree },
+        );
+        assert.equal(res.status, 2, `${varName} must not declassify a change that is trust-root via the canonical rails`);
+        assert.match(res.stderr, /rails deny-path of ticket T1/);
+      } finally {
+        rmSync(repo.dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('residual: a store tracked at BASE but absent from the worktree still supplies rails', () => {
+    // A sparse checkout / skip-worktree entry leaves the canonical store absent
+    // locally WITHOUT git reporting a deletion, so it never shows up in
+    // changedFiles either. Reading only the worktree collapses that to "no rails"
+    // and declassifies a rails-only trust-root change — a fail-OPEN bypass. The
+    // base tree is authoritative, exactly as rails-guard-ci.mjs treats it.
+    //
+    // The override store is what makes this reachable rather than merely broken:
+    // downstream ticket binding still resolves T1 through it, so the run proceeds
+    // to the tier decision instead of op-erroring on an unresolvable ticket. Only
+    // tiering is left blind — which is precisely the hole.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
+    const g = (...args) => execFileSync('git', args, { cwd: repo.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      const railFree = join(repo.dir, 'rail-free-tickets.json');
+      writeFileSync(railFree, JSON.stringify({ tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] }] }));
+      g('update-index', '--skip-worktree', '.adlc/tickets.json');
+      rmSync(join(repo.dir, '.adlc', 'tickets.json'));
+      // Precondition: git must NOT see this as a change, or the test would be
+      // proving something weaker than the sparse-checkout scenario it describes.
+      assert.equal(g('status', '--porcelain', '--', '.adlc/tickets.json').trim(), '', 'skip-worktree removal must be invisible to git');
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      const res = runBin(
+        ['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'],
+        repo.dir,
+        { ADLC_TICKET_STORE: railFree },
+      );
+      assert.equal(res.status, 2, 'base-tree rails must still tier when the worktree store is absent');
+      assert.match(res.stderr, /rails deny-path of ticket T1/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('residual: renaming a ticket-store shard OUT of the trust root still tiers (rename source is not invisible)', () => {
+    // `git diff --name-only` reports ONLY the destination of a rename, so moving a
+    // shard out of `.adlc/tickets/` removes a ticket contract while the classifier
+    // sees just an unprotected path — a fail-OPEN bypass of the new prefixes. The
+    // rename SOURCE must be part of the changed-file set. Covers the active store
+    // and the archive; both are trust-root surfaces.
+    for (const storeDir of ['.adlc/tickets', '.adlc/ticket-archive']) {
+      // The ACTIVE store must be genuinely migrated (a bare `.adlc/tickets/`
+      // alongside the legacy file is an ambiguous dual store and rightly fails
+      // closed). T9 is the spare whose shard gets moved; T1 remains prosecutable,
+      // which is what makes the bypass reachable rather than merely broken. The
+      // ARCHIVE is not the active store, so it needs no migration.
+      const active = storeDir === '.adlc/tickets';
+      // The shard must exist at the BASE for the move to read as a rename at all;
+      // adding it on the feature branch would diff as a plain addition of the
+      // destination. The active shard arrives via migration, the archive one via
+      // baselineFiles — both land in the baseline commit on main.
+      const repo = scratchRepo('src/app.mjs', {
+        ledgerDir: '.adlc',
+        rails: [],
+        migrateStore: active,
+        extraTickets: active ? ['T9'] : [],
+        baselineFiles: active ? {} : { '.adlc/ticket-archive/t9--abc.json': JSON.stringify({ id: 'T9' }) },
+      });
+      const g = (...args) => execFileSync('git', args, { cwd: repo.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      try {
+        let shard;
+        if (active) {
+          const found = readdirSync(join(repo.dir, ...storeDir.split('/'))).find((name) => name.startsWith('t9--'));
+          assert.ok(found, 'migration should have produced a T9 shard');
+          shard = `${storeDir}/${found}`;
+        } else {
+          shard = `${storeDir}/t9--abc.json`;
+        }
+        g('checkout', '-q', '-b', `move-${storeDir.replace(/\W/g, '')}`);
+        mkdirSync(join(repo.dir, 'holding'), { recursive: true });
+        g('mv', shard, 'holding/moved.json');
+        g('commit', '-qm', 'move shard out of the trust root');
+
+        // Precondition: plain --name-only really does hide the source, or this
+        // test would pass for a reason unrelated to the bypass it describes.
+        const nameOnly = g('diff', '--name-only', 'main', '--').trim().split('\n');
+        assert.ok(!nameOnly.includes(shard), 'rename source must be invisible to --name-only for this test to be meaningful');
+
+        writePasses({ ...repo, revision: 'fixed-rev' });
+        const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+        assert.equal(res.status, 2, `moving a shard out of ${storeDir} must tier`);
+        assert.match(res.stderr, /trust-root ticket store/);
+      } finally {
+        rmSync(repo.dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('residual: an AMBIGUOUS dual store (legacy + directory) fails closed (exit 1), never a silent ungated pass', () => {
+    // A half-finished migration leaves both backends present. Resolving the
+    // canonical store then throws AMBIGUOUS_STORE — which must op-error rather
+    // than degrade to "no rails" and drop the rails dimension entirely.
+    const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'], migrateStore: true });
+    try {
+      writePasses({ ...repo, revision: 'fixed-rev' });
+      writeFileSync(join(repo.dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+      const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
+      assert.equal(res.status, 1, 'an ambiguous dual store must op-error, not proceed ungated');
+      assert.match(`${res.stderr ?? ''}${res.stdout ?? ''}`, /AMBIGUOUS_STORE|cannot be read for tiering|determine trust-root tier/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
     }
   });
 

@@ -3,13 +3,14 @@
   "private": true,
   "type": "module",
   "version": "1.6.0",
-  "description": "Agentic Development Lifecycle toolkit — gate-shaped, zero-dependency CLIs",
+  "description": "Agentic Development Lifecycle toolkit \u2014 gate-shaped, zero-dependency CLIs",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
   "scripts": {
     "test": "node scripts/run-tests.mjs",
+    "preflight": "node scripts/preflight.mjs",
     "release": "node scripts/release.mjs"
   },
   "engines": {

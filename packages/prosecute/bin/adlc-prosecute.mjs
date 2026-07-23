@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles } from '@adlc/core';
+import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths } from '@adlc/core';
+import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview } from '../lib/cross-model.mjs';
@@ -32,18 +33,108 @@ function isInsideRepo(root, resolvedDir) {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+// The canonical repository ticket store, whichever BACKEND holds it. Reading the
+// legacy `.adlc/tickets.json` path directly would fail open after a repo migrates
+// to the sharded `.adlc/tickets/` backend: the file is gone, the ENOENT branch
+// above yields an empty table, and every change that is trust-root ONLY via a
+// ticket rail silently declassifies. detectTicketStore resolves the active
+// backend instead.
+//
+// FAIL-CLOSED, matching readTicketArray's distinction: a genuinely ABSENT store
+// contributes no rails, but a store that exists and cannot be resolved
+// (ambiguous dual store, unfinished migration transaction, corrupt shard) must
+// throw rather than degrade to "no rails".
+//
+// SECURITY — `env: {}` is load-bearing, not tidiness. detectTicketStore defaults
+// to `env = process.env` and honours ADLC_TICKET_STORE / ADLC_TICKETS, which
+// would make the CANONICAL store replaceable by the very author being gated:
+// point either variable at a valid store that contains the active ticket but
+// OMITS the repo's rails and a rails-only trust-root change declassifies,
+// dropping the distinct-provider requirement. That is the same bypass the --dir
+// containment rule below exists to prevent, just through a different door. An
+// empty env disables override resolution, so the repo's real store always wins.
+function readCanonicalTickets(root) {
+  try {
+    return detectTicketStore({ root, env: {} }).load().mutableTickets();
+  } catch (err) {
+    if (err.code === 'STORE_NOT_FOUND') return [];
+    throw new Error(`canonical ticket store under ${root} exists but cannot be read for tiering: ${err.message}`);
+  }
+}
+
 // Load the ticket table(s) whose `rails` define trust-root DENY paths for
 // tiering. SECURITY: tiering is a GATE decision, so the rails source must be the
-// repo's CANONICAL <repoRoot>/.adlc/tickets.json — never REPLACEABLE by a
-// caller-supplied --dir. Otherwise `--dir ../elsewhere` pointing at a table that
-// OMITS the rails would declassify a change that is trust-root via the repo's
-// real rails (a gate bypass). We therefore ALWAYS include the canonical table,
-// and only UNION an additional --dir table when that dir is CONTAINED within the
-// repo (so a custom in-repo ADLC workspace still tiers). The classifier unions
-// rails across all tickets, so extra sources can only ADD deny-paths (fail-safe),
-// never remove them; an out-of-repo --dir contributes nothing to tiering.
-function loadTicketsForTier(dir, root) {
-  const tickets = [...readTicketArray(join(root, '.adlc', 'tickets.json'))];
+// repo's CANONICAL store — never REPLACEABLE by a caller-supplied --dir.
+// Otherwise `--dir ../elsewhere` pointing at a table that OMITS the rails would
+// declassify a change that is trust-root via the repo's real rails (a gate
+// bypass). We therefore ALWAYS include the canonical store, and only UNION an
+// additional --dir table when that dir is CONTAINED within the repo (so a custom
+// in-repo ADLC workspace still tiers). The classifier unions rails across all
+// tickets, so extra sources can only ADD deny-paths (fail-safe), never remove
+// them; an out-of-repo --dir contributes nothing to tiering.
+// The canonical store as the TRUSTED BASE has it. The worktree read above cannot
+// distinguish "this repo has no ticket store" from "the store is tracked at base
+// but not materialised here" — a sparse checkout or a skip-worktree entry leaves
+// the shards absent WITHOUT git reporting them as deleted, so they never appear
+// in changedFiles either. Collapsing that to an empty rail set fails OPEN: a
+// rails-only trust-root change classifies as ordinary and skips the
+// distinct-provider requirement. Reading the base tree closes it, and mirrors
+// how rails-guard-ci.mjs resolves its rail set (base, never the PR worktree).
+//
+// A base that genuinely has no store contributes nothing; any other failure
+// throws rather than degrading to "no rails".
+function readBaseTickets(root, revision) {
+  if (!revision) return [];
+  try {
+    return new GitTreeTicketStore({ cwd: root, revision }).load().mutableTickets();
+  } catch (err) {
+    if (err.code === 'STORE_NOT_FOUND') return [];
+    throw new Error(`ticket store at base ${revision} cannot be read for tiering: ${err.message}`);
+  }
+}
+
+// The SOURCE side of every rename/copy between the base and the change.
+//
+// `changedFiles` collects `git diff --name-only`, and with rename detection on
+// (git's default) that reports ONLY the destination. So `git mv
+// .adlc/tickets/t1--<hash>.json holding/` REMOVES a ticket contract from the
+// trust root while the classifier sees nothing but an unprotected destination
+// path — no TRUST_ROOT_PREFIXES entry matches and the change declassifies. The
+// surviving store stays structurally valid, so an unrelated active ticket can
+// still be prosecuted same-model. Archive shards, and the legacy
+// `.adlc/tickets.json` itself, have the identical hole.
+//
+// Collect the sources explicitly rather than disabling rename detection, so the
+// destination is still reported normally. `--name-status -z` is NUL-delimited:
+// an R/C status carries TWO following paths, every other status carries one.
+// Both the worktree and --cached diffs are read, mirroring changedFiles, so a
+// rename that is merely STAGED is caught too.
+function renamedSources(base, root) {
+  const collect = (args) => {
+    const tokens = splitNulPaths(git(args, { cwd: root, encoding: 'buffer' }));
+    const sources = [];
+    for (let index = 0; index < tokens.length;) {
+      const status = tokens[index++];
+      if (/^[RC]\d*$/.test(status)) {
+        if (index < tokens.length) sources.push(tokens[index]);
+        index += 2;
+      } else {
+        index += 1;
+      }
+    }
+    return sources;
+  };
+  return [
+    ...collect(['diff', '--name-status', '-z', '-M', base, '--']),
+    ...collect(['diff', '--cached', '--name-status', '-z', '-M', base, '--']),
+  ];
+}
+
+function loadTicketsForTier(dir, root, base) {
+  // UNION, never replace: rails from the base and from the worktree both apply.
+  // The classifier ORs deny-paths across tickets, so adding a source can only
+  // widen the trust-root surface (fail-safe), never narrow it.
+  const tickets = [...readBaseTickets(root, base), ...readCanonicalTickets(root)];
   const resolvedDir = resolve(dir);
   if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
     tickets.push(...readTicketArray(join(resolvedDir, 'tickets.json')));
@@ -217,13 +308,13 @@ try {
   const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
   const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
     .split('\0').filter(Boolean);
-  changed = [...new Set([...tracked, ...untracked])];
+  changed = [...new Set([...tracked, ...untracked, ...renamedSources(values.base, root)])];
 } catch (err) {
   opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
 }
 let tier;
 try {
-  tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root) });
+  tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root, values.base) });
 } catch (err) {
   opError(`cannot determine trust-root tier: ${err.message}`);
 }

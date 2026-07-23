@@ -33,6 +33,34 @@ For each deduped finding, invoke `@prosecutor-verifier` (independently) to refut
 it. A finding **survives** only if a strict majority of verification votes confirm
 it real; refuted findings are dropped.
 
+### Record every surviving finding (the P5 → P7 bridge)
+
+As soon as a finding **survives** verification, record it — before it is handed
+off to be fixed. Once fixed it stops existing, and a finding that was never
+recorded cannot be clustered by `lesson-foundry` (P7), so the lifecycle stops
+compounding:
+
+```
+adlc prosecute --record-finding \
+  --file <repo-relative path> \
+  --desc "<plain prose: the pattern, not this instance>" \
+  --category <correctness|security|contract|diff|tests> \
+  --severity <high|medium|low>
+```
+
+Once per surviving finding. `--file` and `--desc` are required — the recorder
+fails closed rather than appending a junk entry.
+
+Write `--desc` as **plain prose describing the pattern**, with no quoted or
+backticked literals and no identifiers from this diff. `--desc` is the clustering
+key: a description tied to one instance clusters with nothing, and literals route
+the distilled defense to a lint rule when the real defect usually needs a
+spec-gap template.
+
+This is distinct from `gate-manifest record prosecution` in step 5, which records
+**that** a prosecution ran. This records **what it found** — only the second one
+compounds.
+
 ## 4. Loop until dry
 Repeat fan-out until two consecutive rounds surface no new confirmed findings.
 

@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId } from '../rails-checker.mjs';
-import { checkBuildGate, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
-import { flailMessage } from '../flail-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
+import { flailMessage, resolveTranscriptPath, parseTranscriptLines, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -126,15 +126,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
       const pathTracker = getTracker(root);
-
-      // Record edit for flail tracking
       const sessionID = resolveSessionId({ payload, env });
-      if (cls === 'mutating' && pathTracker?.recordEdit) {
-        const { churning } = pathTracker.recordEdit(sessionID, abs);
-        if (churning && churning.length > 0) {
-          for (const c of churning) console.error(flailMessage(c));
-        }
-      }
 
       // Check build-gate backstop for structured mutators and unknown ('other') tools
       if (cls !== 'readonly' && enforcing) {
@@ -143,6 +135,25 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         }
         const gate = checkBuildGate({ sessionID, tracker: pathTracker, root, env });
         if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
+      }
+
+      // Record edit for flail tracking & inspect session transcript for repeated errors / edit churn
+      if (cls === 'mutating' && pathTracker?.recordEdit) {
+        const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+        const transcriptLines = transcriptPath ? parseTranscriptLines(transcriptPath) : [];
+        const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptLines });
+
+        const flailEnforcing = enforcing || env?.ADLC_FLAIL_ENFORCEMENT === '1';
+        const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';
+
+        if (flailRes?.verdict === 'flail') {
+          if (flailEnforcing && !flailBypass) {
+            return deny(`flail-detector — session is flailing: ${flailRes.summary}. Step back or start a fresh session before retrying.`);
+          }
+          if (flailRes.isNewSignal) {
+            console.error(`[adlc-anti-flail] Advisory: ${flailRes.recommendation}`);
+          }
+        }
       }
     }
     return allow();
@@ -213,6 +224,7 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   const active = resolveActiveTicketId(resolvedRoot, env);
   const tracker = createPersistentTracker(resolvedRoot, env);
   const sessionID = resolveSessionId({ payload, env });
+  const flail = checkFlail({ sessionID, tracker, root: resolvedRoot, env });
 
   console.log(`--- ADLC Antigravity Status ---`);
   console.log(`Root: ${resolvedRoot}`);
@@ -221,6 +233,7 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   console.log(`Resolved Session ID: ${sessionID}`);
   console.log(`Context Depth (Tool Calls): ${tracker.depth(sessionID)}`);
   console.log(`Session Compacted: ${tracker.isCompacted(sessionID)}`);
+  console.log(`Flail Status: ${flail.verdict.toUpperCase()}${flail.summary ? ` (${flail.summary})` : ''}`);
 }
 
 export function printDoctor(root = process.cwd(), env = process.env) {

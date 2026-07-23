@@ -18,6 +18,22 @@ const TRUST_ROOT_FILES = [
   '.adlc/tickets.json',
 ];
 
+// 1b. The SHARDED ticket store — the same trust root as `.adlc/tickets.json`,
+// just spread across per-ticket files. Exact-file matching cannot express it (one
+// entry per ticket, and new shards appear as tickets are authored), so the whole
+// store directory is a trust-root PREFIX. Without this, migrating a repo from the
+// legacy file to the directory backend would silently declassify every edit to
+// the ticket table: the exact-file entry above stops matching and nothing else
+// covers `.adlc/tickets/`. The archive is included because a ticket moved there
+// still describes what was enforced, so mutating it rewrites gate history.
+//
+// Unconditional, like TRUST_ROOT_FILES: these are DATA the gate reads, so the
+// test-path exemption that applies to package prefixes must not apply here.
+const TRUST_ROOT_PREFIXES = [
+  '.adlc/tickets/',
+  '.adlc/ticket-archive/',
+];
+
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
 //    "the gate passes" means, so a same-model review of the author's own tests
 //    is exactly the blind spot cross-model review exists to cover.
@@ -85,6 +101,9 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) 
 
     if (TRUST_ROOT_FILES.includes(path)) {
       push(`touches trust-root file ${path}`);
+    }
+    for (const prefix of TRUST_ROOT_PREFIXES) {
+      if (path.startsWith(prefix)) push(`touches trust-root ticket store ${prefix}`);
     }
     // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
     // touches neither, so it is exempt here (#154/T41). The exact-file check
