@@ -65,6 +65,7 @@ export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult 
     clusters: clusters.map((c) => {
       const p = plan.find((e) => e.cluster === c);
       return {
+        id: c.id,
         name: c.name,
         size: c.size,
         route: c.route,

@@ -1,18 +1,29 @@
 // Core orchestration logic for lesson-foundry — pure/near-pure functions.
 // Reads findings, clusters, routes, and produces emission plans.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { readEntries } from '@adlc/core';
 import { clusterFindings } from './cluster.mjs';
-import { routeCluster, clusterName } from './route.mjs';
+import { routeCluster, clusterName, clusterId } from './route.mjs';
 import { planEmissions } from './emit.mjs';
 
 /**
- * Marker that uniquely identifies a spec-gap cluster's question inside the
- * interrogation template. Must stay in sync with buildSpecGapLine in emit.mjs.
+ * Legacy marker: identifies a spec-gap cluster's question inside the
+ * interrogation template by its human-readable slug. Kept for back-compat with
+ * lessons committed before the stable id existed. Must stay in sync with
+ * buildSpecGapLine in emit.mjs.
  */
 function specGapMarker(name) {
   return `cluster: ${name}`;
+}
+
+/**
+ * Stable marker: identifies a spec-gap cluster by its prose-independent id, so a
+ * reworded question that dropped the slug annotation is still credited. Must stay
+ * in sync with buildSpecGapLine in emit.mjs.
+ */
+function specGapIdMarker(id) {
+  return `cluster-id: ${id}`;
 }
 
 /**
@@ -55,8 +66,9 @@ export function buildClusters(findings, minSize, threshold = 0.5) {
       const clusterFinds = indices.map((i) => findings[i]);
       const route = routeCluster(clusterFinds);
       const name = clusterName(clusterFinds);
+      const id = clusterId(clusterFinds);
       const sample = clusterFinds[0]?.desc ?? '';
-      return { name, indices, size: indices.length, route, sample };
+      return { id, name, indices, size: indices.length, route, sample };
     });
 }
 
@@ -69,14 +81,21 @@ export function buildClusters(findings, minSize, threshold = 0.5) {
  *   because the template file exists. Otherwise the first banked spec-gap would
  *   silently defend every future spec-gap cluster.
  *
- * `readFile` is injected for testability; defaults to a real fs read that
- * returns '' when the file is absent/unreadable.
+ * Banking is credited by the STABLE cluster id first (so a hand-refined lesson —
+ * a reworded spec-gap question, or a lint/skill artifact renamed away from its
+ * slug — is still recognized), then by the legacy slug (so lessons committed
+ * before the id existed are not orphaned). A cluster carrying no id (older
+ * callers) falls back to slug-only detection.
+ *
+ * `readFile`/`readDir` are injected for testability; they default to real fs reads
+ * that return '' / [] when the path is absent or unreadable.
  */
 export function findUnbankedClusters(
   clusters,
   outDir,
   existsSync,
-  readFile = defaultReadFile
+  readFile = defaultReadFile,
+  readDir = defaultReadDir
 ) {
   const templatePath = `${outDir}/interrogation-template.md`;
   // Read the template once; reuse across spec-gap clusters.
@@ -88,18 +107,39 @@ export function findUnbankedClusters(
     return templateContent;
   };
 
+  // List the output dir once; used to credit an id-stamped artifact whose
+  // slug-derived filename has drifted or been renamed during refinement.
+  let dirEntries = null;
+  const listDir = () => {
+    if (dirEntries === null) dirEntries = readDir(outDir);
+    return dirEntries;
+  };
+  // Is there any `suffix` file in outDir whose content carries this cluster's id?
+  const hasIdStampedArtifact = (suffix, id) => {
+    if (!id) return false; // no id → cannot false-credit; fall back to slug only
+    for (const entry of listDir()) {
+      if (!entry.endsWith(suffix)) continue;
+      const content = readFile(`${outDir}/${entry}`);
+      if (content && content.includes(id)) return true;
+    }
+    return false;
+  };
+
   return clusters.filter((cluster) => {
-    const route = cluster.route;
-    const name = cluster.name;
+    const { route, name, id } = cluster;
 
     if (route === 'lint') {
-      return !existsSync(`${outDir}/${name}.lint.json`);
+      if (existsSync(`${outDir}/${name}.lint.json`)) return false; // legacy slug file
+      return !hasIdStampedArtifact('.lint.json', id);
     }
     if (route === 'skill') {
-      return !existsSync(`${outDir}/${name}.SKILL.md`);
+      if (existsSync(`${outDir}/${name}.SKILL.md`)) return false; // legacy slug file
+      return !hasIdStampedArtifact('.SKILL.md', id);
     }
-    // spec-gap: banked only if this cluster's question is present in the template.
-    return !getTemplate().includes(specGapMarker(name));
+    // spec-gap: banked if the stable id marker OR the legacy slug marker is present.
+    const template = getTemplate();
+    if (id && template.includes(specGapIdMarker(id))) return false;
+    return !template.includes(specGapMarker(name));
   });
 }
 
@@ -108,6 +148,14 @@ function defaultReadFile(path) {
     return readFileSync(path, 'utf8');
   } catch {
     return '';
+  }
+}
+
+function defaultReadDir(path) {
+  try {
+    return readdirSync(path);
+  } catch {
+    return [];
   }
 }
 

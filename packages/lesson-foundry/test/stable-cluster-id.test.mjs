@@ -1,0 +1,251 @@
+// T80: banking must survive hand-refinement of a scaffolded lesson.
+//
+// The gate credited a lesson by the clusterName SLUG (derived from the first
+// finding's desc). That slug drifts — cluster members are not ordered stably, and
+// a human rewording the scaffolded prose can drop the machine annotation entirely —
+// so the marker orphans and the cluster is reported unbanked forever. The fix
+// stamps a STABLE, prose-independent cluster id (sha256 over the sorted member
+// finding hashes) into both the emitted marker and the bank-detection key, while
+// still crediting a legacy slug-only marker for lessons committed before this.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildClusters, findUnbankedClusters } from '../lib/foundry.mjs';
+import { clusterId, clusterName } from '../lib/route.mjs';
+import { buildSpecGapLine, buildSkillStub, buildLintDescriptor } from '../lib/emit.mjs';
+
+function makeTempDir() {
+  return mkdtempSync(join(tmpdir(), 'stable-id-test-'));
+}
+
+// ---------------------------------------------------------------------------
+// clusterId — the stable, prose-independent key
+// ---------------------------------------------------------------------------
+test('clusterId: deterministic, order-independent, and membership-sensitive', () => {
+  const a = { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'alpha' };
+  const b = { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'beta' };
+
+  assert.equal(clusterId([a, b]), clusterId([a, b]), 'same members → same id');
+  assert.equal(clusterId([a, b]), clusterId([b, a]), 'member order must not change the id');
+  assert.notEqual(clusterId([a, b]), clusterId([a]), 'a different member set is a different cluster');
+  assert.match(clusterId([a, b]), /^[0-9a-f]+$/, 'id is a hex digest');
+});
+
+test('clusterId: does not move when unrelated lesson prose changes', () => {
+  // The id is derived only from the findings, so nothing a human does to a lesson
+  // file can perturb it. Two runs over the same findings must agree.
+  const findings = [
+    { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' },
+    { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' },
+  ];
+  assert.equal(clusterId(findings), clusterId(findings.slice()));
+});
+
+// ---------------------------------------------------------------------------
+// buildClusters stamps the id
+// ---------------------------------------------------------------------------
+test('buildClusters: stamps a stable id equal to clusterId of the members', () => {
+  const findings = [
+    { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' },
+    { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' },
+  ];
+  const [cluster] = buildClusters(findings, 2);
+  assert.ok(cluster, 'the two similar findings cluster together');
+  const members = cluster.indices.map((i) => findings[i]);
+  assert.equal(cluster.id, clusterId(members));
+});
+
+// ---------------------------------------------------------------------------
+// emit stamps the id into the marker
+// ---------------------------------------------------------------------------
+test('buildSpecGapLine: embeds the stable cluster id', () => {
+  const findings = [
+    { ts: 't1', file: 'a.mjs', category: 'security', desc: 'unclear retention policy' },
+    { ts: 't2', file: 'b.mjs', category: 'security', desc: 'unclear retention policy' },
+  ];
+  const line = buildSpecGapLine('retention-gap', findings);
+  assert.ok(line.includes(`cluster-id: ${clusterId(findings)}`), `line must carry the id: ${line}`);
+});
+
+// ---------------------------------------------------------------------------
+// (a) a reworded lesson is still banked via the stable id
+// ---------------------------------------------------------------------------
+test('spec-gap: a reworded lesson that dropped the legacy slug marker is still banked via the id', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+    assert.equal(cluster.route, 'spec-gap');
+    assert.ok(cluster.id, 'cluster carries a stable id');
+
+    // The human rewrote the question completely AND removed the auto-generated
+    // `cluster: <slug>` annotation, keeping only the stable machine marker.
+    const reworded =
+      `# Interrogation Template\n\n` +
+      `- [ ] **[security]** For every data class we persist, does the spec state its ` +
+      `retention window and deletion trigger? <!-- cluster-id: ${cluster.id} -->\n`;
+    assert.ok(!reworded.includes(`cluster: ${cluster.name}`), 'precondition: legacy slug marker is gone');
+
+    writeFileSync(join(outDir, 'interrogation-template.md'), reworded, 'utf8');
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.deepEqual(unbanked, [], 'the reworded lesson is credited by its stable id');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('skill: a lesson whose file was renamed is still banked via the id in its content', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'convention', desc: 'missing error handling in async functions' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'convention', desc: 'no error handling for async operation' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+    assert.equal(cluster.route, 'skill');
+
+    // The scaffolded stub was refined and renamed to a proper skill name; the
+    // slug-derived filename no longer exists, but the id is stamped in its content.
+    const stub = buildSkillStub(cluster.name, findings, null);
+    assert.ok(stub.content.includes(`cluster-id: ${cluster.id}`), 'stub content carries the id');
+    assert.ok(!existsSync(join(outDir, `${cluster.name}.SKILL.md`)), 'precondition: legacy filename absent');
+    writeFileSync(join(outDir, 'graceful-async-error-handling.SKILL.md'), stub.content, 'utf8');
+
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.deepEqual(unbanked, [], 'the renamed skill lesson is credited by its stable id');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lint: a descriptor whose file was renamed is still banked via the id in its content', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'convention', desc: 'production code uses "eval" call directly' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'convention', desc: 'production code uses "eval" in the handler' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+    assert.equal(cluster.route, 'lint');
+
+    const descriptor = buildLintDescriptor(cluster.name, findings);
+    const parsed = JSON.parse(descriptor.content);
+    assert.equal(parsed.id, cluster.id, 'descriptor carries the stable id');
+    assert.ok(!existsSync(join(outDir, `${cluster.name}.lint.json`)), 'precondition: legacy filename absent');
+    writeFileSync(join(outDir, 'no-eval-in-production.lint.json'), descriptor.content, 'utf8');
+
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.deepEqual(unbanked, [], 'the renamed lint descriptor is credited by its stable id');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (b) a genuinely-missing cluster is still reported unbanked
+// ---------------------------------------------------------------------------
+test('spec-gap: a genuinely undistilled cluster is still reported unbanked (no id false-credit)', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+
+    // The template defends a DIFFERENT cluster — neither this cluster's id nor its
+    // slug appears, so it must stay unbanked.
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# Interrogation Template\n\n- [ ] **[other]** unrelated question ` +
+      `*(recurring in 2 findings, cluster: some-other-gap, cluster-id: 0000000000000000)*\n`,
+      'utf8'
+    );
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.equal(unbanked.length, 1);
+    assert.equal(unbanked[0].id, cluster.id);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('skill: a cluster with no defense file is still unbanked even though the id scan runs', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'convention', desc: 'missing error handling in async functions' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'convention', desc: 'no error handling for async operation' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+    // An unrelated skill file exists but does not carry this cluster's id.
+    writeFileSync(join(outDir, 'unrelated.SKILL.md'), 'cluster-id: ffffffffffffffff\n', 'utf8');
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.equal(unbanked.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (c) a legacy slug-only marker still credits
+// ---------------------------------------------------------------------------
+test('spec-gap: a legacy slug-only marker (no cluster-id) still credits the cluster', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+    const legacyName = clusterName(findings);
+
+    // A lesson committed before T80: only the slug marker, no cluster-id.
+    const legacy =
+      `# Interrogation Template\n\n- [ ] **[security]** old question ` +
+      `*(recurring in 2 findings, cluster: ${legacyName})*\n`;
+    assert.ok(!legacy.includes('cluster-id:'), 'precondition: no stable id marker present');
+    writeFileSync(join(outDir, 'interrogation-template.md'), legacy, 'utf8');
+
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.deepEqual(unbanked, [], 'the legacy slug-only marker is still credited');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('skill: a legacy slug-named file (no id in content) still credits the cluster', () => {
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'convention', desc: 'missing error handling in async functions' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'convention', desc: 'no error handling for async operation' },
+    ];
+    const [cluster] = buildClusters(findings, 2);
+    // Pre-T80 scaffold: file named by the slug, no id stamped in content.
+    writeFileSync(join(outDir, `${cluster.name}.SKILL.md`), 'legacy content, no id\n', 'utf8');
+    const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
+    assert.deepEqual(unbanked, [], 'the legacy slug-named file is still credited');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
