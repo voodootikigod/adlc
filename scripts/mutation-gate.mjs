@@ -133,6 +133,23 @@ export function hollowTestWouldMutate(file) {
 }
 
 /**
+ * From a raw `git diff --name-only` set, keep only paths still present on disk
+ * under `root`. A deletion (or a rename's OLD path) has no post-image, and
+ * hollow-test mutates files IN PLACE — so a removed file is not a mutation
+ * target. Filtering it here keeps a deletion-only diff from fast-pathing the
+ * removed file into hollow-test, which would then hard-fail with "nothing to
+ * mutate" (exit 1) on every dead-code-removal PR (#329). classify() stays pure
+ * over path strings and is unaffected; this is the git-diff-boundary filter.
+ *
+ * @param {string[]} changed  repo-relative paths from the diff
+ * @param {string} [root]  repo root, for the existsSync check (fixture-testable)
+ * @returns {string[]} the subset that still exists on disk
+ */
+export function mutableChangedFiles(changed, root = ROOT) {
+  return changed.filter((f) => existsSync(join(root, f)));
+}
+
+/**
  * Pure classification: given the set of changed files, decide the test
  * command and mutant budget. No I/O beyond testTargetFor's existsSync checks.
  *
@@ -237,7 +254,9 @@ export function main() {
 
   const diff = git(['diff', '--name-only', '-z', base, '--']);
   if (diff.status !== 0) fail('git diff failed');
-  const changed = diff.stdout.split('\0').filter(Boolean);
+  // Deleted / renamed-away paths have no on-disk post-image to mutate in place,
+  // so a deletion-only diff must not fast-path them into hollow-test (#329).
+  const changed = mutableChangedFiles(diff.stdout.split('\0').filter(Boolean));
 
   console.log(`mutation-gate: base=${base}`);
 
