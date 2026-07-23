@@ -31,6 +31,11 @@ node_modules/
 !.adlc/ticket-archive/
 !.adlc/ticket-archive/**
 !.adlc/manifest.jsonl
+# P7 findings ledger (ADR 0014). Tracked like the manifest above so the P5→P7
+# bridge survives fleet worktrees and CI and the lesson-foundry gate can run
+# against real data. Entries are CURATED PROSE finding records — never raw tool
+# dumps or secrets (that standing rule is the basis for tracking it; see the ADR).
+!.adlc/findings.jsonl
 # P7 distilled defenses. The rest of .adlc/ is runtime evidence, but a lesson is
 # a permanent, reviewable defense — it has to reach a PR to be worth anything.
 !.adlc/lessons/
