@@ -1,0 +1,31 @@
+{
+  "body": "Implement ADR-0010 and docs/specs/sharded-ticket-store.md through the eight dependency-ordered slices tracked by epic #179. Preserve the 1.x mutable loadTickets facade and legacy read/write fallback; add the zero-dependency @adlc/tickets domain, strict directory and Git-tree readers, immutable snapshots and dual hashes, recoverable journaled writes, intent-specific TicketService APIs, dry-run-first unified CLI, explicit migration consent, tracked archive, consumer and rails integration, cross-platform verification, and documentation. Do not migrate this repository's .adlc/tickets.json in the implementation diff. Acceptance is the AC1-AC16 command matrix in the normative spec, complete repository tests, P3 rail adequacy review, and P5 prosecution with no unresolved high findings. Suppressions: none.",
+  "budget": "frontier",
+  "category": "architecture",
+  "completed": true,
+  "duration": 8,
+  "edges": [],
+  "id": "T-SHARDED-STORE",
+  "rails": [
+    "docs/adr/0010-sharded-ticket-store.md",
+    "docs/specs/sharded-ticket-store.md"
+  ],
+  "scope": [
+    "packages/tickets/**",
+    "packages/core/**",
+    "packages/cli/**",
+    "packages/ticket-sync/**",
+    "packages/ticket-prune/**",
+    "packages/rails-guard/**",
+    "packages/runner/**",
+    "packages/gate-manifest/**",
+    "plugins/**",
+    "scripts/**",
+    "docs/**",
+    ".github/workflows/**",
+    ".gitignore",
+    "package.json",
+    "package-lock.json"
+  ],
+  "title": "Build the sharded ticket store compatibility bridge"
+}

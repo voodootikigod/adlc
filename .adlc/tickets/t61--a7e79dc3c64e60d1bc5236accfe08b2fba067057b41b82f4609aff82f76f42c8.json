@@ -1,0 +1,19 @@
+{
+  "body": "hollowTestWouldMutate (scripts/mutation-gate.mjs:117) decides what counts as mutable source by EXCLUDING a fixed set of non-source extensions (md|json|yml|yaml|lock|txt|toml|snap). Any path with no extension therefore falls through and is treated as source: CODEOWNERS, LICENSE, Dockerfile, Makefile, .gitignore, .nvmrc all return true. A PR touching any of them has no fast test target, so the gate falls back to the FULL suite on the slow path. Observed on PR #287: adding CODEOWNERS produced 'mutation-gate: 1 file(s) have no known fast test target - falling back to the FULL suite: CODEOWNERS'. hollow-test can only mutate JS-family source, and the gate's own workflow step already filters '*.mjs' '*.js' '*.cjs' 'packages/**' 'plugins/**' - so the script and the workflow disagree about what source is. Invert to an include-list of JS-family extensions. Verification: node --test scripts/test/mutation-gate.test.mjs. allow-suppression: none ADVERSARIAL-REVIEW (HIGH, test-integrity): the first fix narrowed to mjs|cjs|js only, which SILENTLY SKIPPED the repo's 49 tracked non-test .ts/.tsx source files — hollow-test's own filterTargetFiles accepts them, so classify() returned kind:'nothing' and the required gate exited 0 without running. That trades a false positive for a false negative, strictly the worse direction. Root cause of BOTH bugs is the same predicate duplicated in packages/hollow-test/lib/targets.mjs:10 and scripts/mutation-gate.mjs — they drifted. Fix is one exported predicate shared by both, include-listing the JS and TS families, with a cross-contract test proving the two selectors agree.",
+  "budget": "mid",
+  "category": "bug",
+  "duration": 1,
+  "edges": [],
+  "id": "T61",
+  "rails": [],
+  "scope": [
+    "scripts/mutation-gate.mjs",
+    "scripts/test/mutation-gate.test.mjs",
+    "packages/hollow-test/lib/targets.mjs",
+    "packages/hollow-test/test/**",
+    "packages/hollow-test/bin/hollow-test.mjs",
+    "packages/hollow-test/README.md",
+    "docs/tools/hollow-test.md"
+  ],
+  "title": "mutation-gate: classify source by an include-list, not by excluding known non-source extensions"
+}

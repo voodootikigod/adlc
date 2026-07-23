@@ -1,0 +1,20 @@
+{
+  "body": "Port the two remaining Claude Code parity pieces. Full context: docs/specs/opencode-integration-continuation.md §T-F and docs/specs/opencode-native-flush.md §5.1–5.2.\n\n=== WORK ITEMS ===\n1. plugins/adlc-opencode/command/adlc-maintain.md: decay-driven maintenance command — runs adlc skill-rot over the deployed skill/command surfaces and adlc model-ratchet --dry-run; LLM-backed gate-fuzzing stays CI-only (it must NOT run on the developer host — state this in the command). Mirror the Claude Code /adlc-maintain flow; adapt paths to .opencode/.\n2. docs/ci/adlc-maintenance.yml already exists for CC — verify it covers the opencode surfaces (skill-rot paths include .opencode/ deployments) or add an opencode-aware variant; wire the weekly cron note into docs/integrations/opencode.md.\n3. agent/prosecutor.md meta-agent (7th agent, CC/antigravity parity): wraps the deterministic P5 gates — hollow-test, behavior-diff, review-calibration — invocable as @prosecutor; distinct from the 5 lens agents + verifier (those judge the diff; this one runs the mechanical gates and reports exit codes + evidence).\n4. Scaffolder deploys the new command + agent (lib/scaffold.mjs already deploys whole dirs — confirm idempotent pickup and add the names to the smoke test).\n\n=== ACCEPTANCE CRITERIA ===\nAC1: /adlc-maintain deployed by scaffold and listed in the smoke test (verify: scripts/opencode-install-smoke.mjs asserts presence).\nAC2: prosecutor meta-agent deployed; its markdown names the three deterministic gates with exact CLI invocations (verify: smoke test + read agent/prosecutor.md).\nAC3: maintenance workflow covers opencode paths (verify: read docs/ci/adlc-maintenance.yml or the added variant).\nAC4: docs/integrations/opencode.md gains a Maintenance section (verify: read).\nAC5: full suite green (verify: npm test exit 0).",
+  "category": "feature",
+  "completed": true,
+  "duration": 1,
+  "edges": [
+    {
+      "to": "T35"
+    }
+  ],
+  "id": "T34",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/**",
+    "scripts/opencode-install-smoke.mjs",
+    "docs/ci/**",
+    "docs/integrations/opencode.md"
+  ],
+  "title": "OpenCode Phase 5 parity: /adlc-maintain command, maintenance cron template, prosecutor meta-agent"
+}

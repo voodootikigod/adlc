@@ -1,0 +1,29 @@
+{
+  "body": "Armor the integration against upstream drift (opencode releases near-daily; CI currently pins 1.17.13 while upstream is 1.17.17). Full context: docs/specs/opencode-integration-continuation.md §T-C.\n\n=== WORK ITEMS ===\n1. CI version matrix for the live proofs (scripts/opencode-live-deny.mjs and scripts/opencode-live-tool.mjs in .github/workflows/ci.yml): run against BOTH the pinned floor (opencode-ai@1.17.13, the version whose hook contract the enforce-by-default posture was verified against) and opencode-ai@latest. The latest job is ADVISORY (continue-on-error: true + a visible job name) so upstream churn cannot block unrelated merges, but drift surfaces same-day.\n2. Reference sweep: the upstream repo moved github.com/sst/opencode → github.com/anomalyco/opencode. Update every reference in docs/, plugins/adlc-opencode/, ADRs, and code comments. grep -r \"sst/opencode\" must return zero hits.\n3. Re-verify permission.ask dormancy: upstream issue #7006 said the hook is defined but never dispatched at 1.17.13. Test against 1.17.17 (extend scripts/opencode-live-deny.mjs or a sibling probe: register a permission.ask handler, trigger a permission, observe dispatch). If now dispatched: promote the dormant handler in plugins/adlc-opencode/index.mjs to a live-tested second lever and record the activation. Either way, record the dated finding in docs/adr/0004-adlc-opencode-integration.md.\n4. Bump the verified-against note in docs/integrations/opencode.md and the peerDependencies floor rationale if the probe changes posture.\n\n=== ACCEPTANCE CRITERIA ===\nAC1: ci.yml contains both pinned and latest live-proof runs; latest is advisory (verify: read the workflow; both jobs present with the pinned one required).\nAC2: zero sst/opencode references (verify: grep -rn \"sst/opencode\" --exclude-dir=node_modules --exclude-dir=.git returns nothing).\nAC3: ADR 0004 has a dated permission.ask status entry citing the 1.17.17 probe result (verify: read ADR).\nAC4: full test suite green (verify: npm test exits 0).",
+  "category": "chore",
+  "completed": true,
+  "duration": 1,
+  "edges": [
+    {
+      "to": "T32"
+    },
+    {
+      "to": "T33"
+    },
+    {
+      "to": "T35"
+    }
+  ],
+  "id": "T31",
+  "rails": [],
+  "scope": [
+    ".github/workflows/ci.yml",
+    "plugins/adlc-opencode/**",
+    "scripts/opencode-live-deny.mjs",
+    "scripts/opencode-live-tool.mjs",
+    "docs/integrations/opencode.md",
+    "docs/adr/0004-adlc-opencode-integration.md",
+    "docs/specs/opencode-native-flush.md"
+  ],
+  "title": "OpenCode upstream sync: 1.17.17 baseline, CI live-proof version matrix, anomalyco sweep, permission.ask re-check"
+}

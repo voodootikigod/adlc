@@ -1,0 +1,21 @@
+{
+  "body": "Implement the dependency-free lead validator and the pluggable ContactSink core per .adlc/specs/enterprise-contact-capture.md. parseLead(input) returns {ok,value,errors}; ContactSink.submit(lead) with AttioSink (Attio v2 PUT /objects/people/records?matching_attribute=email_addresses, assert-by-email, grounded shape per PM-A) and ResendSink (email notification, from CONTACT_FROM_EMAIL, fails loud per PM-E); selectSink(env) chooses by CONTACT_SINK and throws typed sink_unconfigured when the secret is absent. No zod (hand-rolled validator, .mjs). All external HTTP mocked. Verification: cd apps/docs && node --test test/contact-schema.test.mjs test/attio-sink.test.mjs test/resend-sink.test.mjs test/sink-select.test.mjs. Satisfies AC1-AC4. allow-suppression: none",
+  "budget": "mid",
+  "category": "feature",
+  "completed": true,
+  "duration": 2,
+  "edges": [],
+  "id": "T-CC1",
+  "rails": [],
+  "scope": [
+    "apps/docs/lib/contact/schema.mjs",
+    "apps/docs/lib/contact/attio-sink.mjs",
+    "apps/docs/lib/contact/resend-sink.mjs",
+    "apps/docs/lib/contact/sinks.mjs",
+    "apps/docs/test/contact-schema.test.mjs",
+    "apps/docs/test/attio-sink.test.mjs",
+    "apps/docs/test/resend-sink.test.mjs",
+    "apps/docs/test/sink-select.test.mjs"
+  ],
+  "title": "Contact capture: Lead validator + pluggable sink core (Attio + Resend)"
+}

@@ -1,0 +1,27 @@
+{
+  "body": "Implement lib/block.mjs in @adlc/ticket-sync per the spec sections 'The block' and 'Validity Gate' (block cases). The block is JSON (JSON.parse — no YAML, zero-dep) wrapped in reserved HTML-comment sentinels `<!-- adlc:begin v=1 key=<uuid> -->` ... `<!-- adlc:end -->`. parseBlock(body) returns {prefix, block, suffix, version, key, formatErrors}; serializeBlock(prose{prefix,suffix}, fields) reproduces the body. Field validation delegates to T1's validator (no second schema). Depends on T1.\n\nAcceptance criteria:\n1. packages/ticket-sync/test/block.test.mjs green covering: lossless round-trip (prefix AND suffix prose preserved verbatim); missing/duplicate/unbalanced sentinels -> fail closed with an error naming the offending line; garbled JSON -> fail closed; present-but-invalid block (e.g. malformed rails) -> fail closed (NEVER degrade to 'no rails'); `$schema` key excluded from canonical equality; sentinel `v` greater than supported max -> fail closed.\n2. A human-authored ```json fence in prose outside the sentinels is ignored.\n3. Body model {prefix, block, suffix} is preserved across a parse->serialize cycle.",
+  "category": "feature",
+  "completed": true,
+  "duration": 1,
+  "edges": [
+    {
+      "to": "T8"
+    }
+  ],
+  "id": "T7",
+  "rails": [
+    "packages/ticket-sync/lib/schema.mjs",
+    "packages/ticket-sync/lib/validate.mjs",
+    "packages/ticket-sync/lib/canonical.mjs",
+    "packages/ticket-sync/scripts/gen-schema.mjs",
+    "packages/ticket-sync/schemas/**",
+    "packages/ticket-sync/test/schema.test.mjs",
+    "packages/ticket-sync/test/validate.test.mjs",
+    "packages/ticket-sync/test/canonical.test.mjs"
+  ],
+  "scope": [
+    "packages/ticket-sync/lib/block.mjs",
+    "packages/ticket-sync/test/block.test.mjs"
+  ],
+  "title": "Fenced JSON block codec (parse/serialize, fail-closed)"
+}

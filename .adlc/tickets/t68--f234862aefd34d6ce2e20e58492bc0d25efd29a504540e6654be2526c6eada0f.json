@@ -1,0 +1,30 @@
+{
+  "body": "Issue #241 / ADR-0006 GA honesty gate: prove (or falsify with evidence) that Cursor honors `permission: \"deny\"` from preToolUse for a frozen-rail Write under ADLC_P4_ENFORCEMENT=1 on at least one maintainer platform. Record results in ADR + harness-capability-matrix. Prefer using pinned payload shapes from T64.\n\n=== DELIVERABLES ===\n1. Maintainer-run harness under `scripts/cursor-deny-proof/` (or single mjs) documenting steps: fixture repo with rails, enforcement on, attempt Write to rail, observe allow vs deny. Automate what can be automated; remainder is a checked-in runbook + results log template.\n2. If deny works: update ADR Unverified→Pinned with platform/version; matrix Cursor deny cell to proven-with-caveats.\n3. If deny slips: keep best-effort language; document failure mode; do NOT silently claim enforcement.\n4. Optional CI job that is manual/workflow_dispatch only (never flake required checks on headless Cursor).\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: Runbook + harness exist and are referenced from docs/integrations/cursor.md Gaps. VERIFY: file paths + docs link.\n- AC2: ADR-0006 Live deny proof section updated with dated evidence (pass or fail) and Cursor version. VERIFY: docs review.\n- AC3: Matrix Cursor deny cell updated in same PR (#241 rule). VERIFY: matrix diff.\n- AC4: No change that sets failClosed:true on preToolUse (still must not brick editor). VERIFY: hooks.json assert.\n- AC5: CI rails-guard template unchanged as the unbypassable control (rails).\n\n=== OUT OF SCOPE ===\n- Making in-session deny the security boundary.\n- Shell write gating.\n- cursor.com publish (T69).\n=== P1 ===\nDeny-proof requires sentinel + unchanged rail hashes + enforcement-off control.\n\n=== P1 ===\nT68 before T69. Live proof covers Task spawn rejection + deny-proof hashes.\n\n=== P1 ===\nDeny-proof: pristine→deny→unchanged→then off-control mutates; Task canary required.\n\n\n(Renumbered from T66 → T68 so main's T62/T63 fleet/hollow-test contracts stay intact for rails-guard.)",
+  "budget": "mid",
+  "category": "test",
+  "duration": 2,
+  "edges": [
+    {
+      "contract": "T68 before T69 (live deny-proof before marketplace publish)",
+      "to": "T69",
+      "type": "before"
+    }
+  ],
+  "id": "T68",
+  "rails": [
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs",
+    "docs/ci/rails-guard.yml"
+  ],
+  "scope": [
+    "scripts/cursor-deny-proof/**",
+    "scripts/cursor-deny-proof.mjs",
+    "docs/adr/0006-adlc-cursor-integration.md",
+    "docs/integrations/cursor.md",
+    "docs/integrations/harness-capability-matrix.md",
+    ".adlc/specs/cursor-deeper-native.md",
+    "plugins/adlc-cursor/test/**",
+    "apps/docs/lib/integration-facts.mjs"
+  ],
+  "title": "Cursor GA honesty: live permission:deny proof + matrix/ADR update"
+}

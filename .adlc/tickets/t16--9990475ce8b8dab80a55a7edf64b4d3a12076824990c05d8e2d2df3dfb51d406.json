@@ -1,0 +1,25 @@
+{
+  "body": "Bring the Cursor integration's command surface to parity with the OpenCode integration, on Cursor's native `.cursor/commands/*.md` surface.\n\n=== BUG TO FIX FIRST (TDD: failing test first) ===\nplugins/adlc-cursor/lib/scaffold.mjs never deploys the package's command/ directory into the user's .cursor/commands/. The package ships command/adlc-init.md and docs/integrations/cursor.md claims \"Inside Cursor you can also run the /adlc-init command\", but after scaffolding, .cursor/commands/ does not exist — the command is unreachable. Add a deployCommands() step to scaffold() mirroring plugins/adlc-opencode/lib/scaffold.mjs's deployDir() (idempotent: re-run overwrites from package source, never deletes unrelated files; source of truth is the package).\n\n=== COMMAND SUITE ===\nAuthor these commands in plugins/adlc-cursor/command/ (Cursor commands are plain markdown; bare /adlc-<name> form — Cursor has NO plugin-namespace convention, do NOT use the /adlc:adlc-* Claude Code form):\n- adlc-ticket.md (P0) — adapt from plugins/adlc-opencode/command/adlc-ticket.md; author into .adlc/tickets.json, then coldstart-check executability (--prompt-only: the in-session model answers the printed audit).\n- adlc-spec.md (P1) + adlc-approve-spec.md — adapt from OpenCode's pair: draft spec into .adlc/specs/, run adlc spec-lint, premortem --prompt-only, record approval.\n- adlc-decompose.md (P2) — adapt from OpenCode: slice an approved spec into tickets, model-router/merge-forecast.\n- adlc-verify-build.md (P4) — adapt from OpenCode: flail-detector + targeted test run for the active ticket.\n- adlc-prosecute.md (P5) — STUB in this ticket only: a placeholder routing to `adlc hollow-test` / `behavior-diff` / `npx adversarial-review` (the full multi-lens loop is ticket T17; do not build it here).\n- adlc-distill.md (P7) and adlc-maintain.md — adapt from plugins/adlc-claude-code/commands/ equivalents (lesson-foundry + rejection-mining --prompt-only; skill-rot / model-ratchet / ticket-prune).\nEvery command: frontmatter with description, body references gates via the `adlc <tool>` dispatcher, notes --prompt-only for LLM-backed gates (no API key in-session).\n\n=== ROUTER ===\nscripts/router/router-model.mjs is the single generated source for all six phase routers (T13/T14 doctrine — NEVER hand-edit plugins/adlc-cursor/rules/adlc.mdc). Add/extend the cursor harness entry so the generated rule references the new bare /adlc-* commands where the other harnesses reference theirs, then regenerate via `node scripts/router/gen-routers.mjs` and verify `node scripts/router/gen-routers.mjs --check` passes plus `node --test scripts/test/router-drift.test.mjs`.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: after `node plugins/adlc-cursor/lib/scaffold-cli.mjs <tmp-repo>`, .cursor/commands/ contains every plugins/adlc-cursor/command/*.md file. VERIFY: new test in plugins/adlc-cursor/test/scaffold.test.mjs runs scaffold() against a temp dir and asserts each shipped command file lands.\n- AC2: re-running scaffold() is idempotent (no duplicates, package source wins). VERIFY: same test, second run.\n- AC3: all 8 commands exist with valid frontmatter (description field). VERIFY: extend scripts/cursor-install-smoke.mjs to assert each command file exists + has description frontmatter, mirroring the OpenCode smoke's per-command checks.\n- AC4: generated rule references the commands; no hand-edits to adlc.mdc. VERIFY: `node scripts/router/gen-routers.mjs --check` exits 0 and router-drift test passes.\n- AC5: no bare-command guard regression for other harnesses. VERIFY: `node scripts/claude-code-plugin-smoke.mjs .` still exits 0.\n- AC6: no sibling regression. VERIFY: `node scripts/opencode-install-smoke.mjs .` and full `npm test` exit 0.",
+  "category": "feature",
+  "completed": true,
+  "duration": 3,
+  "edges": [],
+  "id": "T16",
+  "rails": [
+    "packages/core/lib/tickets.mjs",
+    "packages/core/lib/scaffold-hygiene.mjs",
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs",
+    "plugins/adlc-cursor/test/rails-guard.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/lib/scaffold.mjs",
+    "plugins/adlc-cursor/lib/scaffold-cli.mjs",
+    "plugins/adlc-cursor/command/**",
+    "plugins/adlc-cursor/test/scaffold.test.mjs",
+    "plugins/adlc-cursor/rules/adlc.mdc",
+    "scripts/router/router-model.mjs",
+    "scripts/cursor-install-smoke.mjs"
+  ],
+  "title": "Cursor: deploy .cursor/commands/ from the scaffolder + full phase command suite"
+}

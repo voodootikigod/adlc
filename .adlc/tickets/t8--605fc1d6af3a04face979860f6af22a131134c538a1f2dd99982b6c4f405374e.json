@@ -1,0 +1,42 @@
+{
+  "body": "Implement `adlc ticket pull` (dry-run by default; --write applies) per the spec data-flow 'Pull', 'Sidecar', 'Validity Gate', 'Sync vs the rails trust root', and 'Lock + atomic write'. Deliver: lib/gh.mjs (execFile wrapper — argv only, no shell, C4), lib/providers/github.mjs (read/map), lib/provider.mjs (interface, no registry), lib/reconcile.mjs (pure 3-way base/local/remote; base from sidecar syncedHash; missing/corrupt base fails safe to CONFLICT), lib/config.mjs (+ adlc-config validation, repo auto-detect, issue selector), lib/store.mjs (writeTicketsAtomic + mkdir lock sharing .adlc/tickets.lock; sidecar .adlc/ticket-sync.state.json gitignored rebuildable cache), lib/rails-guard-sync.mjs (rails superset / scope subset guard + forensic record), and register the `ticket` tool in packages/cli/lib/registry.mjs. Single repo-qualified id space gh:owner/repo#n, owner/repo lowercased to match loadTickets equality; unresolved edges FAIL CLOSED (no silent drop); pagination explicit (truncation -> exit 1, never deletion). Depends on T2.\n\nAcceptance criteria:\n1. test/{reconcile,github,config,store,validity,rails-guard-sync}.test.mjs green; all offline via an injected gh runner with canned --json fixtures.\n2. reconcile: remote-only/local-only/both-changed(conflict)/both-equal(converged); local-only ticket survives pull; out-of-selection survives.\n3. Validity Gate: id normalization unifies T<n>/gh: spellings; an unresolved edges[].to fails closed (exit 2), not dropped; resolution-checked set == bytes written.\n4. rails-guard-sync: rails non-superset and scope-widen refused without --allow-rail-narrowing; forensic record written.\n5. pull is dry-run without --write (verify no file mutation); exit codes 0/1/2 per matrix.",
+  "category": "feature",
+  "completed": true,
+  "duration": 3,
+  "edges": [
+    {
+      "to": "T9"
+    }
+  ],
+  "id": "T8",
+  "rails": [
+    "packages/ticket-sync/lib/schema.mjs",
+    "packages/ticket-sync/lib/validate.mjs",
+    "packages/ticket-sync/lib/canonical.mjs",
+    "packages/ticket-sync/lib/block.mjs",
+    "packages/ticket-sync/scripts/gen-schema.mjs",
+    "packages/ticket-sync/schemas/**",
+    "packages/ticket-sync/test/schema.test.mjs",
+    "packages/ticket-sync/test/validate.test.mjs",
+    "packages/ticket-sync/test/canonical.test.mjs",
+    "packages/ticket-sync/test/block.test.mjs"
+  ],
+  "scope": [
+    "packages/ticket-sync/lib/gh.mjs",
+    "packages/ticket-sync/lib/provider.mjs",
+    "packages/ticket-sync/lib/providers/github.mjs",
+    "packages/ticket-sync/lib/reconcile.mjs",
+    "packages/ticket-sync/lib/config.mjs",
+    "packages/ticket-sync/lib/store.mjs",
+    "packages/ticket-sync/lib/rails-guard-sync.mjs",
+    "packages/ticket-sync/bin/ticket-sync.mjs",
+    "packages/ticket-sync/test/reconcile.test.mjs",
+    "packages/ticket-sync/test/github.test.mjs",
+    "packages/ticket-sync/test/config.test.mjs",
+    "packages/ticket-sync/test/store.test.mjs",
+    "packages/ticket-sync/test/validity.test.mjs",
+    "packages/ticket-sync/test/rails-guard-sync.test.mjs",
+    "packages/cli/lib/registry.mjs"
+  ],
+  "title": "Pull: GitHub read adapter, 3-way reconcile, Validity Gate, sidecar, store"
+}

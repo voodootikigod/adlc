@@ -1,0 +1,28 @@
+{
+  "body": "Replace the mailto-only CTA on /enterprise with an on-brand contact form (client component) that POSTs to /api/contact, shows success/error states, and KEEPS the mailto link as a visible fallback (AC10). Wire Vercel BotID: withBotId() in next.config.mjs and initBotId({protect:[{path:/api/contact,method:POST}]}) in instrumentation-client.ts. Ship /privacy (draft disclosing both processors Attio+Resend, purpose, retention, contact-to-delete; PM-F) linked from /enterprise and the home footer (AC9). Add .env.example documenting every var with no real values (AC11). Verification: cd apps/docs && npm run build && node --test test/enterprise-contact.test.mjs test/privacy-page.test.mjs test/env-example.test.mjs && npm run types:check. Satisfies AC9-AC12. allow-suppression: none",
+  "budget": "mid",
+  "category": "feature",
+  "completed": true,
+  "duration": 2,
+  "edges": [
+    {
+      "contract": "T-CC2 exposes POST /api/contact with the shared envelope; T-CC3 form consumes it.",
+      "to": "T-CC2"
+    }
+  ],
+  "id": "T-CC3",
+  "rails": [],
+  "scope": [
+    "apps/docs/app/(home)/enterprise/page.tsx",
+    "apps/docs/app/(home)/enterprise/contact-form.tsx",
+    "apps/docs/app/privacy/page.tsx",
+    "apps/docs/app/(home)/page.tsx",
+    "apps/docs/instrumentation-client.ts",
+    "apps/docs/next.config.mjs",
+    "apps/docs/.env.example",
+    "apps/docs/test/enterprise-contact.test.mjs",
+    "apps/docs/test/privacy-page.test.mjs",
+    "apps/docs/test/env-example.test.mjs"
+  ],
+  "title": "Contact capture: /enterprise form + /privacy page + BotID wiring + .env.example"
+}

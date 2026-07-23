@@ -1,0 +1,21 @@
+{
+  "body": "Implements .adlc/specs/trust-root-ceremony.md as the contract; closes voodootikigod/adlc#141. isCompletionAnnotationOnly (scripts/rails-guard-ci.mjs:147) bails when baseRails.length > 0, so completing a RAILED ticket — the one operation that clears rail drift — is structurally impossible on the normal path and has now been admin-merged four times (#199, #221, #227, #285). Add a CODEOWNERS-gated, revision-bound authorization the gate re-derives itself. BLOCKING constraint from premortem: a same-repo PR's GITHUB_TOKEN carries checks:write by default, so a check run named trust-root-authorized is forgeable on its own head SHA — the check run must be a cache, never the authority, and rails-guard-ci must re-query the label applier and approving reviewer and re-derive the decision. Authorization bar is CODEOWNERS (not write), same-repo branches only, fail closed on any API error. The authorizer runs on pull_request_target and must take no PR code. No signing key in PR CI (T36 rationale). UNBLOCKED: CODEOWNERS now exists covering the five trust-root paths. The coldstart gap turned out to be deeper than a missing file - this repo has ONE collaborator, and GitHub structurally forbids approving your own PR, so the original two-person rule was unsatisfiable and would have authorized nothing (a red check with no path through it, strictly worse than the admin override it replaces). Authorization strictness is now DERIVED from the eligible-CODEOWNER count: single-owner mode permits self-authorization by label with no review and records mode:single-owner so the evidence never implies a second reviewer; multi-owner mode auto-engages full separation of duties when a second owner is added, with no flag able to select the weaker mode while a stronger one is available. Solo, this ceremony buys auditability and keeps the required check green - NOT separation of duties, which is unavailable here. Acceptance is AC1-AC19 in the spec.",
+  "budget": "frontier",
+  "category": "feature",
+  "duration": 3,
+  "edges": [],
+  "id": "T60",
+  "rails": [],
+  "scope": [
+    "scripts/rails-guard-ci.mjs",
+    "scripts/test/rails-guard-ci.test.mjs",
+    "scripts/test/trust-root-auth.test.mjs",
+    ".github/workflows/trust-root-auth.yml",
+    "docs/ci/**",
+    "packages/gate-manifest/**",
+    "docs/adr/**",
+    ".adlc/specs/trust-root-ceremony.md",
+    "CODEOWNERS"
+  ],
+  "title": "Trust-root change ceremony: an authorized path CI recognizes, not an admin override"
+}

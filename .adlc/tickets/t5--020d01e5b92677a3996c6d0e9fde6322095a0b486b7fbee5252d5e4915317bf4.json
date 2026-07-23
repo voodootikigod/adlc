@@ -1,0 +1,14 @@
+{
+  "body": "Implements plan Phase E (§7). Builds on the T1 MVP package and the T3 keyless bridge (the lenses run in isolated model contexts). Configure the G4 build-gate command (/adlc-verify-build) and the runner assertion (adlc-runner run p4) running build/lint/test before prosecution; the fanned-out prosecution subagents (5 lenses: correctness, security, contract, diff, tests) plus the verifier/reproducer agent and the loop orchestration; and /adlc-distill for lesson mining with an optional local --simplify pass (plan §6.2 documents the Simplify deviation and its rail-freeze invariant). Acceptance: smoke test asserts the agent/ lens files and the /adlc-verify-build + /adlc-distill commands are present and wired; a unit test covers the prosecution loop orchestration against stubbed lens outputs. Read the plan as the contract.",
+  "budget": "frontier",
+  "category": "feature",
+  "duration": 5,
+  "edges": [],
+  "id": "T5",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/**",
+    "docs/integrations/opencode.md"
+  ],
+  "title": "OpenCode integration Phase E: prosecutor lenses, G4 build gate, distill"
+}

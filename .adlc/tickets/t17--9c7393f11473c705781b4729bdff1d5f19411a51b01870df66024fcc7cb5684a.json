@@ -1,0 +1,34 @@
+{
+  "body": "Give Cursor the P5 multi-lens prosecution the other two full integrations have, WITHOUT creating a third hand-copy of the convergence logic.\n\n=== PART A: extraction (issue-#97 pattern, same playbook as scaffold-hygiene) ===\nplugins/adlc-claude-code/lib/prosecutor.mjs and plugins/adlc-opencode/lib/prosecutor.mjs are byte-identical except one comment line (verify with diff before starting). Extract to packages/core/lib/prosecutor.mjs, re-export from @adlc/core's index.mjs + index.d.ts (types for the exported registry/dedupe/verify/converge functions). Both plugins' lib/prosecutor.mjs become thin import + re-export shims (their existing tests must keep passing UNCHANGED — do not edit the frozen test files; see rails). Move the duplicated behavioral tests into packages/core/test/prosecutor.test.mjs (they are duplicated across plugins/adlc-claude-code/lib/test/prosecutor.test.mjs and plugins/adlc-opencode/test/prosecutor.test.mjs — consolidate the shared cases; the per-plugin files stay as-is per rails, still passing against the re-exported surface). Add NEW per-plugin delegation test files (plugins/adlc-claude-code/lib/test/prosecutor-delegation.test.mjs, plugins/adlc-opencode/test/prosecutor-delegation.test.mjs) asserting reference equality with @adlc/core's exports — new files, so the frozen existing test files are untouched.\n\n=== PART B: Cursor /adlc-prosecute ===\nReplace the T16 stub plugins/adlc-cursor/command/adlc-prosecute.md with the full loop, adapted for Cursor's constraints: Cursor has NO subagent fan-out (no Task tool, no @agent syntax). The loop therefore runs the five lenses SEQUENTIALLY in one context (correctness, security, contract, diff, tests — port each lens brief from plugins/adlc-opencode/agent/prosecutor-*.md into either the command body or lens section files under plugins/adlc-cursor/command/), then dedupes by file+line-range+title keeping highest severity, then verifies each deduped finding via a sixth verifier pass, repeating until two consecutive rounds surface no new confirmed findings — same convergence contract as the siblings, driven by the shared @adlc/core prosecutor lib where logic is mechanical (dedupe/converge) and by command instructions where it is judgment (the lens briefs). HONESTY REQUIREMENT: the command and docs MUST state that sequential same-context lenses have weaker independence than the siblings' fresh-context subagent fan-out, and recommend `npx adversarial-review --providers <a,b>` for the cross-model risk gate — do not overstate parity.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: exactly one implementation of the prosecutor convergence logic exists (packages/core/lib/prosecutor.mjs). VERIFY: grep shows both plugins' lib/prosecutor.mjs contain no LENSES/dedupe/converge implementation, only re-exports.\n- AC2: both siblings' EXISTING prosecutor test files pass unchanged. VERIFY: `node --test plugins/adlc-claude-code/lib/test/prosecutor.test.mjs plugins/adlc-opencode/test/prosecutor.test.mjs` green with zero diff to those files (git diff --stat confirms).\n- AC3: delegation tests catch a reintroduced local copy. VERIFY: new delegation test files pass; temporarily shadowing the re-export in one plugin makes its delegation test fail (documented RED/GREEN in the PR).\n- AC4: consolidated behavioral tests live in packages/core/test/prosecutor.test.mjs and pass. VERIFY: node --test on that file.\n- AC5: Cursor command implements the full loop with the honesty caveat present. VERIFY: extended scripts/cursor-install-smoke.mjs asserts adlc-prosecute.md exists, references all five lens names + verifier, and contains the weaker-independence caveat text.\n- AC6: full `npm test` exits 0.\n\n=== P1 DESIGN-REVIEW AMENDMENTS (binding) ===\n- Lens briefs live INLINE in the adlc-prosecute.md command body. Do NOT create separate lens files under plugins/adlc-cursor/command/ — T16's scaffold deploys every command/*.md into the user's palette, so a lens file would surface as a fake invocable command.\n- The command body must be fully self-describing (it may not defer semantics to the plugins' lib/prosecutor.mjs re-export shims, which are hollow outside the monorepo).\n- The command must instruct recording the prosecution outcome via `adlc gate-manifest record adversarial-review --files <risk-gated paths> --data '{...}'` so the T18 stop-audit (decideAdversarialReviewNotice) has a satisfiable record instead of nagging unconditionally. AC7: cursor-install-smoke asserts the command contains the gate-manifest record instruction.\n- Use a ROOT export from @adlc/core for the prosecutor lib (packages/core/package.json is not in scope; no new subpath entries).",
+  "category": "feature",
+  "completed": true,
+  "duration": 3,
+  "edges": [
+    {
+      "to": "T16"
+    }
+  ],
+  "id": "T17",
+  "rails": [
+    "plugins/adlc-claude-code/lib/test/prosecutor.test.mjs",
+    "plugins/adlc-opencode/test/prosecutor.test.mjs",
+    "packages/core/lib/tickets.mjs",
+    "packages/core/lib/scaffold-hygiene.mjs",
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs",
+    "plugins/adlc-cursor/test/rails-guard.test.mjs"
+  ],
+  "scope": [
+    "packages/core/lib/prosecutor.mjs",
+    "packages/core/index.mjs",
+    "packages/core/index.d.ts",
+    "packages/core/test/prosecutor.test.mjs",
+    "plugins/adlc-claude-code/lib/prosecutor.mjs",
+    "plugins/adlc-claude-code/lib/test/prosecutor-delegation.test.mjs",
+    "plugins/adlc-opencode/lib/prosecutor.mjs",
+    "plugins/adlc-opencode/test/prosecutor-delegation.test.mjs",
+    "plugins/adlc-cursor/command/adlc-prosecute.md",
+    "scripts/cursor-install-smoke.mjs"
+  ],
+  "title": "Extract prosecutor convergence lib to @adlc/core; Cursor /adlc-prosecute multi-lens loop"
+}

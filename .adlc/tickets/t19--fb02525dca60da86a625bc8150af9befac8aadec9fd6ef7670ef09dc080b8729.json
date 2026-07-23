@@ -1,0 +1,39 @@
+{
+  "body": "Make every documentation surface tell the truth about what T16-T18 shipped — no overstated parity, no stale gaps.\n\n=== SURFACES ===\n1. docs/adr/0006-adlc-cursor-integration.md: status line updated (MVP -> command suite + prosecutor + hook parity shipped); newly pinned hook facts from T18 recorded; 'Unverified / follow-on' section updated (remove shipped items, keep live-deny-proof + any unpinned events).\n2. docs/integrations/cursor.md: Install section covers command deployment; 'Formal ADLC Coverage' table updated per phase (P0/P1/P2/P4/P5/P7 gain their command surface; P3 gains buildgate; P5 gains the multi-lens loop with the weaker-independence caveat); 'Gaps' section rewritten to the real residual gaps (live deny proof; any disabled hook modes; shell writes advisory-only; sequential-lens independence caveat).\n3. scripts/cursor-install-smoke.mjs: asserts everything new (commands present with frontmatter, hook entries wired, doc claims present) — the smoke IS the truth enforcement, mirror how opencode-install-smoke asserts doc language.\n4. apps/docs/content/docs/integrations/cursor.mdx: replace the stub with a real page following antigravity.mdx's porting pattern from docs/integrations/cursor.md (frontmatter conventions per the existing five pages; update meta.json only if cursor is not already listed). Verify `cd apps/docs && npm run build` passes.\n5. README.md / docs/README.md: only if they enumerate per-harness capabilities that are now stale (grep for cursor claims; update minimally).\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: no doc claims /adlc-init is available in-session without the scaffolder having deployed commands (the pre-T16 lie). VERIFY: grep docs/integrations/cursor.md for the corrected install narrative.\n- AC2: coverage table matches shipped reality 1:1 with T16-T18 deliverables. VERIFY: manual cross-check recorded in PR body; smoke asserts the caveat strings.\n- AC3: cursor-install-smoke passes and now fails if the weaker-independence caveat or advisory-honesty language is removed from the docs. VERIFY: node scripts/cursor-install-smoke.mjs . plus a RED check (temporarily strip the caveat, smoke fails, restore).\n- AC4: docs site builds with the new cursor page. VERIFY: apps/docs build + its test suite.\n- AC5: full `npm test` exits 0.\n\n=== P1 DESIGN-REVIEW AMENDMENTS (binding) ===\n- BARE-COMMAND PLACEMENT: claude-code-plugin-smoke's doc-wide scan covers every docs/**/*.md + README.md with command names colliding with cursor's. Bare /adlc-* cursor references may appear ONLY in unscanned paths (plugins/adlc-cursor/**, apps/docs/**/*.mdx) or already-excluded paths (docs/integrations/cursor.md, docs/adr/0006-*). Do NOT add them to README.md / docs/README.md unless also adding the path to EXCLUDED_DOC_PATHS with a reviewed inline reason. Run `node scripts/claude-code-plugin-smoke.mjs .` after every doc edit.\n- BUILDGATE HONESTY STRING: docs must state buildgate is advisory, disabled by default (ADLC_BUILD_GATE_ENFORCEMENT=1), and has NO unbypassable backstop (unlike rails); cursor-install-smoke asserts this language the same way it asserts the sequential-lens caveat (RED check: strip it, smoke fails, restore).\n- UPGRADE PATH: ensureRule() never overwrites an existing .cursor/rules/adlc.mdc, so pre-T16 scaffolds keep the old router with no command references. Document the upgrade path (delete .cursor/rules/adlc.mdc + re-run the scaffolder) in docs/integrations/cursor.md's install section.\n\n=== T17 P5 ROUND-4 HANDOFF (binding) ===\nThe generated router's command-palette line for /adlc-prosecute (cursor entry in scripts/router/router-model.mjs, 'commands' block) still describes the T16 stub ('P5 prosecution gates (hollow-test / behavior-diff / adversarial-review)'). Update it to describe the T17 full loop (five sequential lenses -> dedupe -> verifier -> loop-until-dry, plus the deterministic gates and cross-model review), regenerate via `node scripts/router/gen-routers.mjs`, verify --check passes and that ONLY the cursor router file changed.\n\n=== T18 P5 ROUND-3 COHERENCE HANDOFF (binding) ===\nmergeHooks() now wires THREE default hook entries (preToolUse->adlc-pretool.mjs dispatcher, afterFileEdit->adlc-audit.mjs, beforeShellExecution->adlc-shell-advisory.mjs), but two artifacts still describe the pre-T18 two-event wiring (safe-direction understatement, but stale):\n1. plugins/adlc-cursor/command/adlc-init.md section 2 enumerates only the preToolUse (rails-guard) + afterFileEdit (audit) entries and labels preToolUse '(rails-guard)' — update to name the dispatcher (rails-first + opt-in buildgate), the afterFileEdit audit+flail, and the beforeShellExecution shell advisory; mention the disabled-by-default stop/preflight + the --wire-unpinned opt-in.\n2. The router's 'Rail enforcement in this harness' prose (scripts/router/router-model.mjs cursor 'rail-enforcement' block -> rules/adlc.mdc) names only preToolUse+afterFileEdit — add the shell advisory + buildgate (advisory/default-off/no-backstop) to that prose, regenerate. This is the SAME router regen as the T17-handoff palette fix — do both in one gen-routers run.\n\n=== T19 P5 COHERENCE FINDING (BLOCK-1, binding) ===\nThe docs-site integrations INDEX (apps/docs/content/docs/integrations/index.mdx) still labels Cursor a stub (\"full walkthrough still being written\"), and apps/docs/test/integrations-antigravity.test.mjs pins 'cursor' in STUB_HARNESSES actively enforcing that falsehood — a direct AC-S6 violation and the front door a browsing user hits first. Rewrite the Cursor index bullet with a real descriptor (mirror the claude-code/antigravity entries), and move 'cursor' from STUB_HARNESSES to WRITTEN_HARNESSES in the test. Same reclassification claude-code/antigravity got when they shipped.",
+  "category": "docs",
+  "completed": true,
+  "duration": 2,
+  "edges": [
+    {
+      "to": "T16"
+    },
+    {
+      "to": "T17"
+    },
+    {
+      "to": "T18"
+    }
+  ],
+  "id": "T19",
+  "rails": [
+    "packages/core/lib/tickets.mjs",
+    "plugins/adlc-cursor/test/rails-guard.test.mjs",
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs"
+  ],
+  "scope": [
+    "docs/adr/0006-adlc-cursor-integration.md",
+    "docs/integrations/cursor.md",
+    "scripts/cursor-install-smoke.mjs",
+    "apps/docs/content/docs/integrations/cursor.mdx",
+    "apps/docs/content/docs/integrations/meta.json",
+    "README.md",
+    "docs/README.md",
+    "scripts/router/router-model.mjs",
+    "plugins/adlc-cursor/rules/adlc.mdc",
+    "plugins/adlc-cursor/command/adlc-init.md",
+    "apps/docs/content/docs/integrations/index.mdx",
+    "apps/docs/test/integrations-antigravity.test.mjs"
+  ],
+  "title": "Cursor integration truth sweep: ADR-0006, integration doc, smoke, site page"
+}

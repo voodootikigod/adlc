@@ -1,0 +1,26 @@
+{
+  "body": "Implements .adlc/specs/rails-start-lifecycle.md as the contract; closes voodootikigod/adlc#159. Rails currently freeze from the moment a ticket exists: the union in scripts/rails-guard-ci.mjs skips only completed tickets (T36/#130 gave rails an END, nothing gives them a START). Two harms: a ticket cannot author its own rails (observed three narrow/re-freeze cycles building T58), and the documented workaround is to declare rails:[] (T39/T40). Add a `started` field gating the union, self-service via a narrow isStartAnnotationOnly exemption and irreversible because un-starting is already denied by assertBaseTicketContractsPreserved. BLOCKING constraint from premortem: grandfather tickets predating the field via a formatVersion bump — absent `started` must not mean never-started, or merging expires all 30 currently-frozen paths at once. Also required: decide start+complete recovery explicitly, never emit `started` at authoring, and drive the transition from P3 rather than a remembered step. Coldstart gaps folded in: packages/build-gate/** added to scope because the automatic P3 transition lives there, and the formatVersion grandfather mechanism collides with the existing 0->1 migration gate (rails-guard-ci.mjs:348,377) so the spec now prefers a per-ticket provenance signal. Acceptance is AC1-AC17 in the spec. Suppressions are denied. Backfilling started onto shipped tickets, manifest-derived start, and diff-derived start are out of scope (rationale in the spec).",
+  "budget": "frontier",
+  "category": "feature",
+  "duration": 3,
+  "edges": [
+    {
+      "contract": "T59 owns the START half of the rail lifecycle; T60 owns the authorized-ceremony mechanism. Independently grabbable — but if T59 lands first its grandfather clause must keep T60's motivating drift frozen, and if T60 lands first the union is already empty. Neither may depend on the other's merge order.",
+      "to": "T60"
+    }
+  ],
+  "id": "T59",
+  "rails": [],
+  "scope": [
+    "scripts/rails-guard-ci.mjs",
+    "scripts/test/rails-guard-ci.test.mjs",
+    "packages/tickets/**",
+    "packages/rails-guard/**",
+    "packages/build-gate/**",
+    "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+    "plugins/adlc-claude-code/test/**",
+    "docs/adr/**",
+    ".adlc/specs/rails-start-lifecycle.md"
+  ],
+  "title": "Rails START lifecycle: freeze from build-start, not from authoring"
+}

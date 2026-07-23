@@ -1,0 +1,41 @@
+{
+  "body": "Port the Claude Code / Codex MCP surface into the Cursor marketplace plugin so agents get `adlc_gate` and `adlc_prosecute` as first-class MCP tools instead of shelling `adlc` only. This was explicit T47 out-of-scope and is workstream B of `.adlc/specs/cursor-deeper-native.md` / issue #241 Cursor deeper-native plan.\n\n=== CONTRACT ===\nFollow Cursor plugin MCP discovery: root `mcp.json` with `mcpServers` (or manifest `mcpServers` path). Mirror sibling shape:\n```json\n{ \"mcpServers\": { \"adlc\": { \"command\": \"adlc\", \"args\": [\"mcp-server\"] } } }\n```\nDo NOT fork packages/cli/lib/mcp-server.mjs — reuse the published CLI entrypoint. Soft-fail UX when `adlc` is missing must be documented (skills/README), not a new MCP server implementation.\n\n=== DELIVERABLES ===\n1. `plugins/adlc-cursor/mcp.json` (and plugin.json field if required for non-default discovery).\n2. Packaging allowlist (`files` in package.json) includes mcp.json.\n3. Skills/docs: note MCP tools + `npm i -g @adlc/cli` prerequisite; what happens if adlc is absent.\n4. Smoke/packaging tests assert mcp.json present and matches sibling command/args contract.\n5. Update harness-capability-matrix Cursor MCP cell to shipped (if matrix file is on branch); update cursor integration docs.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: mcp.json exists and declares adlc → `adlc mcp-server`. VERIFY: packaging test + smoke.\n- AC2: `files` allowlist packs mcp.json. VERIFY: packaging.test.mjs.\n- AC3: Docs/skills mention adlc_gate / adlc_prosecute via MCP. VERIFY: smoke string assert or docs test.\n- AC4: No changes to packages/cli/lib/mcp-server.mjs tool allowlist (rails). VERIFY: rails-guard / diff.\n- AC5: Sibling CC/Codex .mcp.json remain unchanged (rails).\n\n=== OUT OF SCOPE ===\n- Expanding ALLOWED_GATES in mcp-server.\n- Agents / Task prosecute (T66).\n- Plugin variables dashboard config (optional later).\n\n=== ADVERSARIAL-REVIEW AMENDMENTS (MCP root) ===\n- MCP must evaluate the resolved consumer workspace, not plugin cwd. Prefer thin wrapper under plugins/adlc-cursor that sets cwd to sessionStart-resolved root; expand to mcp-server root passthrough only if required (do not widen ALLOWED_GATES).\n- AC7 includes e2e from non-consumer cwd against temp fixtures.\n\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\nConsumer-root via plugin wrapper only (mcp-server.mjs frozen). Production root\nchannel order: MCP roots/list -> host env (CURSOR_PROJECT_DIR etc.) ->\nsessionStart-persisted mapping. AC7 must exercise shipped mcp.json launch for\nzero/one/ambiguous roots - not test-only root inject.\n\n=== P1 CONTRACT AMENDMENTS (binding via umbrella spec) ===\nConsumer-root via plugin wrapper only (mcp-server.mjs frozen). Production root\nchannel order: MCP roots/list -> host env (CURSOR_PROJECT_DIR etc.) ->\nsessionStart-persisted mapping. AC7 must exercise shipped mcp.json launch for\nzero/one/ambiguous roots - not test-only root inject.\n\nUser-scoped session index (~/.adlc/cursor-session-workspaces.json) is the MCP fallback; in-repo mapping alone is insufficient. T64 before T65 is required.\n\n=== P1 CONTRACT AMENDMENTS ===\nmcp.json MUST launch plugin wrapper (not direct adlc mcp-server). Consume T64\nuser-scoped session index; do not own sessionStart writes.\n\n=== P1 ===\nSessionless MCP must fail closed; AC7 rejects unrelated sole index entry.\n\n=== P1 ===\nThin pre-spawn wrapper: host env + session index only; Roots require lifecycle proxy.\n\n=== P1 ===\nAC7 primary: host env/non-plugin cwd without session id; index secondary.\n\n=== P1 ===\nThin wrapper: host-env only; no cwd heuristics; no index MCP fallback until session-id handoff evidenced.\n\n=== P1 ===\nThin wrapper single-root host-env only; multi-root requires lifecycle proxy.\n\n=== P1 ===\nMCP not \"shipped\" until installed-Cursor host-env or Roots proof (AC7 ship gate).\n\n=== P1 ===\nLifecycle Roots proxy mandatory to claim MCP shipped; thin host-env alone insufficient.\n\n=== P1 ===\nRoots list_changed: fail-closed rebind; stale child must not mutate old root.\n\n=== P1 ===\nRoots proxy mandatory; file:// URI decode; listChanged/fail-closed; AC7 uses Root objects.\n\n\n(Renumbered from T63 → T65 so main's T62/T63 fleet/hollow-test contracts stay intact for rails-guard.)",
+  "budget": "mid",
+  "category": "feature",
+  "duration": 1,
+  "edges": [
+    {
+      "contract": "T65 before T66 (Cursor deeper-native DAG)",
+      "to": "T66"
+    },
+    {
+      "contract": "T65 before T69 (Cursor deeper-native DAG)",
+      "to": "T69"
+    }
+  ],
+  "id": "T65",
+  "rails": [
+    "packages/cli/lib/mcp-server.mjs",
+    "packages/cli/bin/adlc.mjs",
+    "plugins/adlc-claude-code/.mcp.json",
+    "plugins/adlc-codex/.mcp.json"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/mcp.json",
+    "plugins/adlc-cursor/.cursor-plugin/plugin.json",
+    "plugins/adlc-cursor/package.json",
+    "plugins/adlc-cursor/skills/**",
+    "plugins/adlc-cursor/README.md",
+    "plugins/adlc-cursor/test/**",
+    "scripts/cursor-install-smoke.mjs",
+    ".adlc/specs/cursor-deeper-native.md",
+    "docs/integrations/cursor.md",
+    "docs/integrations/harness-capability-matrix.md",
+    "apps/docs/content/docs/integrations/cursor.mdx",
+    "apps/docs/lib/integration-facts.mjs",
+    "plugins/adlc-cursor/lib/**",
+    "plugins/adlc-cursor/bin/**",
+    "plugins/adlc-cursor/test/fixtures/**"
+  ],
+  "title": "Cursor plugin: ship mcp.json wiring adlc mcp-server with missing-CLI soft-fail"
+}

@@ -1,0 +1,22 @@
+{
+  "body": "Implement handleContact({req,deps}) with the ordered gates honeypot -> same-origin allowlist -> rate limit -> BotID -> sink, returning the shared envelope {ok:true}|{ok:false,error,fields?} per PM-G. Rate limiter keys on x-forwarded-for first hop and evicts expired windows (PM-B). BotID isBot=true -> 403; checkBot throwing fails open through remaining gates (PM-C/AC13). No PII or secret in logs/response (PM-D/AC8). Thin app/api/contact/route.ts wires real checkBotId + selectSink. Verification: cd apps/docs && node --test test/contact-route.test.mjs. Satisfies AC5-AC8, AC13-AC15. allow-suppression: none",
+  "budget": "mid",
+  "category": "feature",
+  "completed": true,
+  "duration": 2,
+  "edges": [
+    {
+      "contract": "T-CC1 exports parseLead + selectSink + SinkError; T-CC2 consumes them in handleContact.",
+      "to": "T-CC1"
+    }
+  ],
+  "id": "T-CC2",
+  "rails": [],
+  "scope": [
+    "apps/docs/lib/contact/handle.mjs",
+    "apps/docs/lib/contact/rate-limit.mjs",
+    "apps/docs/app/api/contact/route.ts",
+    "apps/docs/test/contact-route.test.mjs"
+  ],
+  "title": "Contact capture: POST /api/contact route (handleContact core + Vercel BotID wrapper)"
+}

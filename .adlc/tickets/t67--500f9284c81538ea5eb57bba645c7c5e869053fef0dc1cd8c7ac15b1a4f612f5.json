@@ -1,0 +1,36 @@
+{
+  "body": "Add Cursor-documented hook depth that siblings approximate via SessionStart/compaction defenses and subagent control: `preCompact` re-injects active-ticket/rails reminders; `subagentStart`/`subagentStop` coordinate ADLC P5 prosecutor agents shipped in T66.\n\nDepends on T66 agents existing (edge from T66). Prefer session_id scoping from T64 when present.\n\n=== DELIVERABLES ===\n1. `hooks/adlc-precompact.mjs` — observational; returns user_message reminding of active ticket + rails; never claims to block compaction.\n2. `hooks/adlc-subagent.mjs` (or split start/stop) — allow prosecutor agent types used by /adlc-prosecute; optional deny/ask for unrelated subagents only when an active P5 marker file is set by the prosecute command (document the marker; default permissive if marker absent).\n3. Wire events in hooks/hooks.json + scaffolder merge + smoke.\n4. Pin contracts in ADR-0006; update matrix hook-depth notes.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: preCompact + subagentStart + subagentStop present in default plugin hooks.json. VERIFY: smoke.\n- AC2: preCompact fixture test returns a message including ticket id when pointer present. VERIFY: unit test.\n- AC3: Without P5 marker, subagentStart allows explore/generalPurpose (no brick). VERIFY: unit test.\n- AC4: With P5 marker, start allows configured prosecutor agent names. VERIFY: unit test.\n- AC5: Rails guard scripts untouched (rails).\n\n=== OUT OF SCOPE ===\n- Implementing Cursor Task tool itself.\n- Fail-closed subagent policy as default (too brick-prone).\n- Tab hooks.\n=== P1 ===\nAC12: fresh marker + unrelated subagent => ask or deny (not always-allow).\n\n=== P1 ===\npreToolUse is authoritative Task allowlist; subagentStart defense-in-depth.\nT67 before T68 and T69.\n\n=== P1 ===\nChecked-in Task preToolUse + subagentStart fixtures; dispatcher cases required.\n\n=== P1 ===\nP5 marker write/delete under fenced lock; paused-cleanup barrier test.\n\n=== P1 ===\nAC12 nested Task canary under parent P5 marker.\n\n=== P1 ===\nNested Task P5 degraded/permissive until lineage channel proven; no shared anonymous marker.\n\n\n(Renumbered from T65 → T67 so main's T62/T63 fleet/hollow-test contracts stay intact for rails-guard.)",
+  "budget": "mid",
+  "category": "feature",
+  "duration": 2,
+  "edges": [
+    {
+      "contract": "T67 before T68 (subagent hooks before live deny-proof)",
+      "to": "T68",
+      "type": "before"
+    },
+    {
+      "contract": "T67 before T69 (hooks before marketplace publish)",
+      "to": "T69",
+      "type": "before"
+    }
+  ],
+  "id": "T67",
+  "rails": [
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/hooks/**",
+    "plugins/adlc-cursor/hooks.json",
+    "plugins/adlc-cursor/hooks/hooks.json",
+    "plugins/adlc-cursor/lib/**",
+    "plugins/adlc-cursor/test/**",
+    "scripts/cursor-install-smoke.mjs",
+    ".adlc/specs/cursor-deeper-native.md",
+    "docs/adr/0006-adlc-cursor-integration.md",
+    "docs/integrations/cursor.md",
+    "docs/integrations/harness-capability-matrix.md"
+  ],
+  "title": "Cursor hooks: preCompact ticket re-injection + subagentStart/Stop P5 orchestration"
+}

@@ -1,0 +1,17 @@
+{
+  "body": "Final honesty pass after T30–T34 land (this ticket depends on all of them). Full context: docs/specs/opencode-integration-continuation.md §T-G.\n\n=== WORK ITEMS ===\n1. docs/opencode-integration-plan.md: add a SUPERSEDED banner at top pointing to docs/adr/0004-adlc-opencode-integration.md + docs/specs/opencode-native-flush.md + docs/specs/opencode-integration-continuation.md. It describes never-shipped machinery (signed manifests, admin keys, adlc-runner extensions, pre-commit injection) and asserts in-session bash gating was dropped — contradicted by merged Phase 2 (PR #116). Do not rewrite the body; banner + a short \"what actually shipped\" delta table.\n2. docs/adr/0004-adlc-opencode-integration.md: convert answered open questions to dated decisions — enforce-by-default (Phase 1), the falsified session.prompt outputFormat assumption and its verdict-tool replacement, the anomalyco/opencode repo move, permission.ask status (from T31's probe), keyless bridge live (Phase 4).\n3. docs/integrations/opencode.md: final Status/Gaps reconciliation — no capability claimed without a runtime caller; Gaps list reflects what remains after T30–T34 (e.g. TUI module still deferred: PluginModule types tui?: never at 1.17.17, surface reserved not shipped).\n4. Mirror the updated status to the docs site page for opencode (apps/docs) if its content diverges.\n\n=== ACCEPTANCE CRITERIA ===\nAC1: legacy plan doc opens with the superseded banner (verify: head of file).\nAC2: ADR 0004 contains the five dated decisions above (verify: read).\nAC3: grep for known-false claims returns nothing: \"outputFormat\" as a session.prompt capability, \"proposed SDK extension\" for the bridge, unwired-library language for keyless-bridge/gate-bins (verify: targeted grep in docs/).\nAC4: docs site opencode page consistent with docs/integrations/opencode.md (verify: diff the overlapping sections).",
+  "category": "docs",
+  "completed": true,
+  "duration": 1,
+  "edges": [],
+  "id": "T35",
+  "rails": [],
+  "scope": [
+    "docs/opencode-integration-plan.md",
+    "docs/adr/0004-adlc-opencode-integration.md",
+    "docs/integrations/opencode.md",
+    "docs/specs/**",
+    "apps/docs/**"
+  ],
+  "title": "OpenCode docs truth sweep: supersede the legacy plan doc, refresh ADR 0004, final Status/Gaps pass"
+}

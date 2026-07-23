@@ -1,0 +1,14 @@
+{
+  "body": "GitHub issue: https://github.com/voodootikigod/adlc/issues/142\n\n=== CONTEXT (P0 regression guard, pairs with antigravity-booster#11) ===\nThe antigravity-booster projects a SINGLE-ticket .adlc/tickets.json into each build worktree. When that ticket has an outgoing edge, plugins/adlc-antigravity/core-inline.mjs loadTickets (~lines 51-55) reports 'edge to unknown ticket <id>'; rails-checker.mjs railPreconditions (~lines 222-224) treats any validation error as tamper and fails closed ({state:deny}); checkRail/decide (~line 249, hooks/adlc-rails-guard.mjs ~line 117) then deny EVERY mutating tool call for the whole session — not just rail paths. The plugin's decide.test.mjs always writes a full ticket set, so the single-ticket projection shape was never tested. The booster-side fix (issue #11) strips edges from the projection; this ticket locks the contract from the plugin side.\n\n=== TASK ===\n1. Add tests in plugins/adlc-antigravity/test/ over the projection shapes: (a) single-ticket tickets.json, NO edges, with rails -> hook enforces the rail (denies a rail write) AND allows an in-scope non-rail write; (b) single-ticket tickets.json WITH a dangling edge -> assert the CURRENT fail-closed deny-all behavior explicitly, with a comment linking booster#11 and adlc#142 so the failure mode is visible and intentional in the suite.\n2. Document the contract decision (plugin stays fail-closed on dangling edges; booster must project edge-free single-ticket files) in docs/integrations/antigravity.md.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: Both projection-shape tests exist and pass under node --test in plugins/adlc-antigravity/. VERIFY: run the plugin test suite, exit 0, and the two new test names appear in output.\n- AC2: The dangling-edge deny-all behavior is asserted (not implicit) with the cross-repo comment. VERIFY: grep the test file for issues/142 and issues/11 references.\n- AC3: The contract decision is documented in docs/integrations/antigravity.md. VERIFY: grep for a 'single-ticket projection' section.\n- AC4: No production code changes in this ticket — tests + docs only. VERIFY: git diff touches only test/ and docs/.",
+  "budget": "direct",
+  "category": "test",
+  "duration": 1,
+  "edges": [],
+  "id": "A142",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-antigravity/test/**",
+    "docs/integrations/antigravity.md"
+  ],
+  "title": "Lock single-ticket projection contract in adlc-antigravity (dangling-edge deny-all)"
+}

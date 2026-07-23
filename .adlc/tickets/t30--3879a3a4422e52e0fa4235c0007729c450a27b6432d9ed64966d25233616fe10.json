@@ -1,0 +1,22 @@
+{
+  "body": "Make installing the OpenCode integration a one-command, self-healing experience. Full context: docs/specs/opencode-integration-continuation.md §T-B.\n\n=== DEFECT TO FIX FIRST (TDD: failing test first) ===\nplugins/adlc-opencode/lib/scaffold.mjs ensurePluginRegistered() registers the npm name \"@adlc/opencode-package\" in opencode.json's plugin array, but the package is \"private\": true and NOT on npm. OpenCode auto-installs npm plugin entries via Bun, so for any user who did not symlink from source the registered entry cannot resolve. Fix: when the plugin is running from a local source path (detect via import.meta.url resolving outside node_modules), register the resolved local path instead of the npm name; once loaded from node_modules, register the npm name.\n\n=== WORK ITEMS ===\n1. Un-private plugins/adlc-opencode/package.json and fold it into the lockstep release (scripts/release.mjs — it becomes the 22nd @adlc package, same version cadence). Verify its \"dependencies\" on @adlc/core, @adlc/build-gate, @adlc/flail-detector resolve to published versions.\n2. Local-path registration fallback described above, with unit tests for both branches (loaded-from-source → path; loaded-from-node_modules → npm name).\n3. Single-command bootstrap: a \"bin\" entry in the package (npx @adlc/opencode-package init) that wraps lib/scaffold-cli.mjs — writes the opencode.json plugin entry, scaffolds .adlc/ + .opencode/ surfaces, prints next steps. Idempotent.\n4. Per-repo config via the plugin-options tuple: opencode.json plugin entries support [\"name\", optionsObject] (verified @opencode-ai/plugin 1.17.17). Read options as the 2nd arg in index.mjs and map the existing env knobs (ADLC_ALLOW_ADVISORY_HOOKS et al.) to options fields; env vars keep working and win as overrides. Document precedence.\n5. Skills dedup: opencode also discovers .claude/skills/**. If .claude/skills/adlc* exists (Claude Code integration present), the scaffolder must avoid producing a duplicate skill listing (skip deploy or byte-match, mirroring the existing preservedLegacySkills approach).\n\n=== ACCEPTANCE CRITERIA (each with verification) ===\nAC1: npm publish dry-run of @adlc/opencode-package succeeds (verify: \"npm publish --dry-run\" in package dir exits 0; release script includes the package — assert in scripts test).\nAC2: fresh temp repo + \"npx @adlc/opencode-package init\" yields a working scaffold: opencode.json has a resolvable plugin entry, .adlc/ + .opencode/commands exist (verify: extend scripts/opencode-install-smoke.mjs to run the bin path in a temp dir).\nAC3: unit tests prove local-path vs npm-name registration branches (verify: node --test plugins/adlc-opencode/test/scaffold.test.mjs).\nAC4: index.mjs accepts the options tuple; a unit test passes options and observes the mapped behavior; env override wins (verify: new test in plugins/adlc-opencode/test/).\nAC5: docs/integrations/opencode.md Install section rewritten to the ≤2-command flow (verify: section shows npx bootstrap; no symlink-first instruction).",
+  "category": "feature",
+  "completed": true,
+  "duration": 2,
+  "edges": [
+    {
+      "to": "T35"
+    }
+  ],
+  "id": "T30",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/**",
+    "scripts/release.mjs",
+    "scripts/opencode-install-smoke.mjs",
+    "docs/integrations/opencode.md",
+    "package.json",
+    "package-lock.json"
+  ],
+  "title": "OpenCode install flush: publish @adlc/opencode-package, one-command bootstrap, plugin-options config"
+}

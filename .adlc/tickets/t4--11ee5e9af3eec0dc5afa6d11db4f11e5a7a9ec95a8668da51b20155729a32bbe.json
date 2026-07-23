@@ -1,0 +1,18 @@
+{
+  "body": "Implements plan Phase C (§7). Builds on the T1 MVP package. Implement the advisory, fail-safe session hooks: session.created (checks runtime/git readiness and environment determinism, warns if not ready for fan-out) and session.ended (runs `gate-manifest verify` and warns only if the evidence chain is broken). Both must no-op cleanly when the repo is not ADLC-initialized. Acceptance: a unit test asserts each hook no-ops without .adlc/ and emits the expected advisory signal when the chain is broken. Read the plan as the contract.",
+  "budget": "mid",
+  "category": "feature",
+  "duration": 2,
+  "edges": [
+    {
+      "contract": "plugins/adlc-opencode/ shared package (sequential single-session build, plan §6.7)",
+      "to": "T5"
+    }
+  ],
+  "id": "T4",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/**"
+  ],
+  "title": "OpenCode integration Phase C: advisory session hooks (preflight + manifest audit)"
+}

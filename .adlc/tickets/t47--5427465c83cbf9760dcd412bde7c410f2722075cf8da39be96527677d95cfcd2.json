@@ -1,0 +1,41 @@
+{
+  "body": "Implement the Cursor native review's plugin-distribution wave: Cursor now has a first-class plugin marketplace (.cursor-plugin/plugin.json, repo marketplace.json, cursor.com/marketplace). ADR-0006's premise that Cursor has no marketplace is obsolete. Bring plugins/adlc-cursor up to that model so install is plugin install + adlc init (runtime only), not npx @adlc/cursor . copying hooks/rules/commands into every consumer repo.\n\n=== CONTRACT (write then gate) ===\nAuthor .adlc/specs/cursor-marketplace-plugin.md as the binding P1 spec before coding. It must pin: plugin layout, install UX, backward-compat for the npm scaffolder, hook path model, which Wave-1 hygiene items ship in-scope, and explicit out-of-scope (live deny-proof against a real Cursor binary remains advisory/GA follow-on; submitting to cursor.com/marketplace/publish is documented but the human submit step is out of band).\n\n=== DELIVERABLES ===\n1. **Cursor plugin manifest.** Add plugins/adlc-cursor/.cursor-plugin/plugin.json per Cursor's plugin reference (name, description, version lockstep with package.json, author, homepage → docs/integrations/cursor.md, keywords). Point or discover: rules/, commands/ (or commands renamed from command/), hooks/, skills/, agents/ as applicable.\n2. **Repo marketplace.** Add root .cursor-plugin/marketplace.json listing adlc-cursor with source ./plugins/adlc-cursor (mirror .claude-plugin/marketplace.json + .agents/plugins/marketplace.json patterns).\n3. **Relative hook wiring.** Stop writing absolute PLUGIN_ROOT paths into consumer .cursor/hooks.json as the primary install path. Plugin hooks/hooks.json (or hooks.json under the discovered hooks path) must use relative commands (./hooks/adlc-pretool.mjs style) that resolve from the plugin root. Scaffold path (if retained) may still merge into a project .cursor/hooks.json for local/dev, but must prefer project-relative paths under node_modules/@adlc/cursor or document that marketplace install supersedes scaffolding hooks.\n4. **Enable documented hook events.** stop and beforeSubmitPrompt are now in Cursor docs — wire them by default (remove --wire-unpinned as the only path; keep an explicit disable flag if needed). Update ADR-0006 pins.\n5. **Skills (+ thin agents if cheap).** Add .cursor/skills (or plugin skills/) for phase routing + init at minimum (adlc, adlc-init), adapted from Claude Code / Codex skill bodies without inventing Cursor-only lifecycle claims. Optional in this ticket: prosecutor agent stubs that improve P5 independence; if deferred, the spec must say so and keep sequential /adlc-prosecute with the existing independence caveat.\n6. **adlc init --cursor (or harness detection).** Extend packages/init so `adlc init` can bootstrap .adlc/ for Cursor without requiring npx @adlc/cursor for runtime state. Cursor plugin surfaces come from the marketplace plugin; init only writes .adlc/ + hygiene (gitignore/formatter ignores). Preserve Codex agents behavior (existing default).\n7. **Truth sweep.** Update docs/integrations/cursor.md, apps/docs cursor page, apps/docs/lib/integration-facts.mjs, ADR-0006 (marketplace premise + hook pins), plugins/adlc-cursor/README.md. Remove/qualify \"Cursor has no plugin marketplace\". Document: install plugin from marketplace (git/local) → npm i -g @adlc/cli → adlc init → CI rails-guard. Keep npx @adlc/cursor as a documented legacy/dev fallback if still useful.\n8. **Smoke + packaging.** Extend scripts/cursor-install-smoke.mjs to assert plugin.json, marketplace entry, relative hook commands, skills presence, and that stop/beforeSubmitPrompt are wired by default. Packaging tests assert the published/plugin surface includes the new files.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: plugins/adlc-cursor/.cursor-plugin/plugin.json validates against Cursor's required fields; version matches plugins/adlc-cursor/package.json. VERIFY: node --test plugins/adlc-cursor/test/packaging.test.mjs (extend).\n- AC2: root .cursor-plugin/marketplace.json lists adlc-cursor with source ./plugins/adlc-cursor. VERIFY: smoke + a small scripts/test or packaging assertion.\n- AC3: default hook config uses relative (non-absolute) command paths; stop + beforeSubmitPrompt wired by default. VERIFY: unit tests on mergeHooks/scaffold + cursor-install-smoke.\n- AC4: at least adlc + adlc-init skills ship under the plugin skills tree and are referenced by the manifest or folder discovery. VERIFY: smoke asserts SKILL.md + frontmatter name/description.\n- AC5: `adlc init --root <tmp>` (with Cursor harness flag or documented default that does not break Codex) creates .adlc/ without requiring the cursor scaffolder for runtime. VERIFY: packages/init tests + cli dispatch.\n- AC6: docs/integration-facts claim marketplace/plugin install (not only npx scaffold); ADR-0006 no longer asserts Cursor has no marketplace. VERIFY: apps/docs/test integration facts + docs phrase guards in smoke or docs tests.\n- AC7: `node scripts/cursor-install-smoke.mjs .` and `node --test plugins/adlc-cursor/test/*.test.mjs` pass; `adlc rails-guard --base main --ticket T47` passes when enforcement applies.\n\n=== OUT OF SCOPE ===\n- Live deny-proof against a real Cursor binary (still the GA honesty gate; document only).\n- Actually clicking submit on cursor.com/marketplace/publish (document the checklist).\n- Full five-lens fresh-context prosecutor agent fan-out (optional stretch; sequential prosecute may remain).\n- Porting Codex MCP server (follow-on).\n- Breaking removal of @adlc/cursor npm package in this ticket (may remain as fallback).",
+  "budget": "frontier",
+  "category": "feature",
+  "completed": true,
+  "duration": 5,
+  "edges": [
+    {
+      "contract": "T47 owns Cursor marketplace install truth; T45 remains the all-harness docs sweep — do not steal T45's cross-harness scope",
+      "to": "T45"
+    },
+    {
+      "contract": "Mirror Codex flush patterns (init, marketplace, smoke) without coupling releases; Cursor plugin layout differs (.cursor-plugin vs .codex-plugin)",
+      "to": "T46"
+    }
+  ],
+  "id": "T47",
+  "rails": [
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs",
+    "plugins/adlc-cursor/test/rails-guard.test.mjs",
+    "packages/core/lib/scaffold-hygiene.mjs",
+    "scripts/test/rails-guard-ci.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/**",
+    "packages/init/**",
+    "packages/cli/**",
+    "scripts/cursor-install-smoke.mjs",
+    "scripts/test/**",
+    "scripts/release.mjs",
+    ".cursor-plugin/**",
+    "docs/integrations/cursor.md",
+    "docs/adr/0006-adlc-cursor-integration.md",
+    "apps/docs/content/docs/integrations/cursor.mdx",
+    "apps/docs/lib/integration-facts.mjs",
+    "apps/docs/test/**",
+    ".adlc/specs/cursor-marketplace-plugin.md"
+  ],
+  "title": "Ship Cursor native ADLC as a .cursor-plugin marketplace plugin (replace npm scaffold-as-install)"
+}

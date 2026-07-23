@@ -1,0 +1,18 @@
+{
+  "body": "Fixes voodootikigod/adlc#265. MANAGED_AUTHORS in scripts/ceremony-drift.mjs defaults to the REST actor name 'github-actions[bot]', but `gh issue list --json author` returns the GraphQL actor rendered as 'app/github-actions'. findExistingIssue applies that author filter on BOTH the labeled fast path and the unlabeled sweep, so the job never recognizes its own tracker and decideAction takes the 'open' branch on every push to main — 12 duplicate issues in two days. Normalize actor logins (strip the 'app/' prefix and '[bot]' suffix, compare case-insensitively) so every rendering of the same bot compares equal. The existing tests fabricate the login they assert against, sharing the wrong string with the production default, so they pass on a value gh never emits; replace those fixtures with the recorded `gh --json author` payload shape and assert the default MANAGED_AUTHORS accepts 'app/github-actions'. Verification: node --test scripts/test/ceremony-drift.test.mjs scripts/test/ceremony-drift-exit.test.mjs. allow-suppression: none",
+  "budget": "mid",
+  "category": "bug",
+  "completed": true,
+  "duration": 1,
+  "edges": [],
+  "id": "T58",
+  "rails": [
+    "scripts/test/ceremony-drift.test.mjs"
+  ],
+  "scope": [
+    "scripts/ceremony-drift.mjs",
+    "scripts/test/ceremony-drift.test.mjs",
+    "scripts/test/ceremony-drift-exit.test.mjs"
+  ],
+  "title": "ceremony-drift: recognize the bot author gh actually reports, so the tracker updates instead of duplicating"
+}

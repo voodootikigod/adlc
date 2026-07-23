@@ -1,0 +1,20 @@
+{
+  "body": "Make OpenCode's P5 prosecution deterministic first-party code instead of model-driven orchestration — the leapfrog no other integration has. Full context: docs/specs/opencode-integration-continuation.md §T-E and docs/specs/opencode-native-flush.md §4.3. Depends on T31.\n\n=== DESIGN (verified against @opencode-ai/plugin 1.17.17) ===\nRegister a second native tool adlc_prosecute (alongside adlc_gate in index.mjs, same lazy tool.schema import pattern). Its execute() drives the fan-out → dedupe → verify → loop-until-dry protocol IN CODE, using the already-tested decision helpers in plugins/adlc-opencode/lib/prosecutor.mjs (they are currently consumed only by the model-driven /adlc-prosecute command). Child lens/verifier sessions via client.session.create({parentID}) + session.prompt with:\n- per-call system override carrying the lens prompt (agent/prosecutor-*.md content),\n- tools:{...} enable/disable map so lens sessions get NO write tools (edit/write/patch/bash disabled) — a lens can read, never mutate,\n- structured verdicts via a registered verdict tool schema. NOTE: session.prompt has NO outputFormat field at 1.17.17 (the flush spec's assumption was falsified; the correction is recorded in docs/specs/opencode-integration-continuation.md) — the verdict tool IS the structured-output mechanism; fall back to fenced-JSON parsing of text parts (fail-closed on unparseable, mirroring lib/keyless-bridge.mjs).\n/adlc-prosecute command becomes a thin invoker of the tool, keeping the prose protocol as fallback when the tool is unavailable.\n\n=== ACCEPTANCE CRITERIA ===\nAC1: unit tests drive runProsecution() with a mocked client through: multi-lens fan-out, dedupe of identical findings, verifier confirm/refute, loop-until-dry termination (2 consecutive dry rounds), and hard bounds (max rounds / max child sessions) (verify: node --test plugins/adlc-opencode/test/).\nAC2: lens child sessions provably cannot write: test asserts the tools map passed to session.prompt disables every mutating tool; a live-proof assertion drives a lens session and confirms a write attempt is rejected (verify: unit test + extension of scripts/opencode-live-tool.mjs).\nAC3: seeded-defect convergence: live proof plants a known defect, runs adlc_prosecute, asserts the finding surfaces and the loop terminates without the host model orchestrating (verify: live script exit 0 in CI, pinned version).\nAC4: unparseable verdict → fail-closed (finding kept, marked unverified), never silently dropped (verify: unit test).\nAC5: /adlc-prosecute command doc updated to invoke the tool first with prose fallback (verify: read command/adlc-prosecute.md).",
+  "category": "feature",
+  "completed": true,
+  "duration": 3,
+  "edges": [
+    {
+      "to": "T35"
+    }
+  ],
+  "id": "T33",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/**",
+    "scripts/opencode-live-tool.mjs",
+    "docs/integrations/opencode.md",
+    ".github/workflows/ci.yml"
+  ],
+  "title": "OpenCode Phase 4b: deterministic P5 runner — adlc_prosecute native tool with locked-down child sessions"
+}

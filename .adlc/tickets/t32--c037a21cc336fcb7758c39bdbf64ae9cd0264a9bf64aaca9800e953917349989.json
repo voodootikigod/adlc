@@ -1,0 +1,21 @@
+{
+  "body": "Close the context-rot hole at compaction and add native lifecycle-order advisories. Full context: docs/specs/opencode-integration-continuation.md §T-D. Depends on T31 (1.17.17 baseline). Hook signatures verified against @opencode-ai/plugin 1.17.17: experimental.session.compacting(input:{sessionID}, output:{context:string[], prompt?}); experimental.compaction.autocontinue(..., output:{enabled}); command.execute.before(input:{command,sessionID,arguments}, output:{parts}).\n\n=== WORK ITEMS ===\n1. session.compacting: append the active ticket id, scope globs, and frozen rails to output.context so enforcement context survives summarization. Reuse lib/context-inject.mjs buildSystemContext (sanitized fields — control chars stripped, length-capped — same as the Phase 3 injection path).\n2. compaction.autocontinue: when lib/build-gate.mjs reports the session degraded on a high-risk ticket (same signal that denies structured edits), set output.enabled=false so a human turn is forced after compaction instead of the agent barreling on.\n3. command.execute.before: (a) advisory lifecycle-order check — e.g. /adlc-decompose invoked with no approved spec → toast a warning (never block; commands are human-invoked); (b) tamper notice — if the invoked adlc-*.md command file differs from the package source (byte-compare against the plugin's command/ dir), warn that the command was locally modified.\n4. Extend the live proof (scripts/opencode-live-tool.mjs or a sibling) to drive one compaction cycle and assert the rail context reappears post-compaction.\n\n=== ACCEPTANCE CRITERIA ===\nAC1: unit tests simulate a session.compacting call and assert ticket/rails strings land in output.context, sanitized (verify: node --test plugins/adlc-opencode/test/).\nAC2: unit test proves autocontinue is disabled exactly when the build-gate degradation predicate fires, enabled otherwise, and the bypass env is honored + audited (verify: test asserts both branches).\nAC3: unit tests for both command.execute.before advisories, including the no-warning happy path (verify: tests assert warning emitted AND not emitted).\nAC4: live compaction proof passes against the pinned opencode (verify: script exits 0 in CI).\nAC5: docs/integrations/opencode.md documents the three new hooks and their advisory/enforcing posture (verify: read section).",
+  "category": "feature",
+  "completed": true,
+  "duration": 2,
+  "edges": [
+    {
+      "to": "T35"
+    }
+  ],
+  "id": "T32",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/**",
+    "scripts/opencode-live-tool.mjs",
+    "scripts/opencode-live-compaction.mjs",
+    "docs/integrations/opencode.md",
+    ".github/workflows/ci.yml"
+  ],
+  "title": "OpenCode compaction survival + slash-command gating (session.compacting, autocontinue, command.execute.before)"
+}
