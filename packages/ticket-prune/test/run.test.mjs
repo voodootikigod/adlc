@@ -738,12 +738,12 @@ test('#208: directory --write surfaces archived ids in the result (observability
   });
 });
 
-test('#208: a directory batch that fails mid-way reports what already archived and which id failed', () => {
+test('#208/T75: a directory batch with one inbound-edge-blocked ticket archives the rest and reports the blocked one (no mid-batch wedge)', () => {
   withScratchRepo((dir) => {
     rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
     // A and B are both rails-less shipped (archivable). B is referenced by active
     // ticket C via an edge, so archiveTicket rejects B with ARCHIVE_INBOUND_EDGE.
-    // A must archive first, then B fails — a partial batch.
+    // A archives; B is a genuine block (C stays active). The sweep must continue.
     mkdirSync(join(dir, 'packages', 'a2'), { recursive: true });
     writeFileSync(join(dir, 'packages', 'a2', 'x.mjs'), '// a\n');
     mkdirSync(join(dir, 'packages', 'b2'), { recursive: true });
@@ -758,15 +758,15 @@ test('#208: a directory batch that fails mid-way reports what already archived a
 
     const result = runTicketPrune({ cwd: dir, write: true });
 
-    assert.equal(result.ok, false);
-    assert.match(result.error, /BBB|inbound|referenced/i);
-    // The already-committed archive of AAA is reported, not lost behind the error.
+    // T75: the blocked ticket is a report, not a hard failure.
+    assert.equal(result.ok, true);
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['AAA']);
-    assert.equal(result.failedId, 'BBB');
+    assert.deepEqual((result.blocked ?? []).map((b) => b.id), ['BBB']);
+    assert.match(result.blocked[0].error, /BBB|inbound|referenced|CCC/i);
   });
 });
 
-test('#208: bin --write --json surfaces partial-batch data (archived + failedId) on a mid-batch failure', () => {
+test('#208/T75: bin --write --json exits 0 and surfaces the blocked set on a partial sweep', () => {
   withScratchRepo((dir) => {
     rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
     mkdirSync(join(dir, 'packages', 'a3'), { recursive: true });
@@ -788,10 +788,10 @@ test('#208: bin --write --json surfaces partial-batch data (archived + failedId)
       code = err.status ?? 1;
       out = (err.stdout?.toString() ?? '') + (err.stderr?.toString() ?? '');
     }
-    assert.equal(code, 1);
-    // The committed archive of AAA and the failed id must be visible, not hidden behind the bare error.
-    assert.match(out, /"archived"/);
-    assert.match(out, /AAA/);
-    assert.match(out, /"failedId": ?"BBB"/);
+    // No hard failure: the archived one and the blocked one are both visible.
+    assert.equal(code, 0);
+    const parsed = JSON.parse(out);
+    assert.deepEqual(parsed.archived.map((a) => a?.id ?? a), ['AAA']);
+    assert.deepEqual(parsed.blocked.map((b) => b.id), ['BBB']);
   });
 });
