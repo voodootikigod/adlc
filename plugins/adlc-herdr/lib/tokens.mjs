@@ -53,6 +53,34 @@ export function diffPublishes(prev, next) {
   return changed;
 }
 
+/** Keys present in `prev` but gone from `next` — the entries whose tokens must
+ *  be actively CLEARED, or they linger in herdr until the 90s TTL expires
+ *  (e.g. a pane whose ticket became absent, or a closed repo). */
+export function droppedKeys(prev, next) {
+  const gone = [];
+  for (const key of prev.keys()) if (!next.has(key)) gone.push(key);
+  return gone;
+}
+
+/** All token names this plugin ever publishes for a pane / a workspace — the
+ *  set to `--clear-token` when the target drops out. */
+export const PANE_TOKEN_KEYS = ['ticket', 'phase'];
+export const WORKSPACE_TOKEN_KEYS = ['adlc_ready', 'adlc_active', 'adlc_blocked'];
+
+/** `pane report-metadata` argv that clears this plugin's pane tokens. */
+export function buildPaneClearArgs(paneId) {
+  const args = ['pane', 'report-metadata', paneId, '--source', 'adlc'];
+  for (const key of PANE_TOKEN_KEYS) args.push('--clear-token', key);
+  return args;
+}
+
+/** `workspace report-metadata` argv that clears this plugin's workspace tokens. */
+export function buildWorkspaceClearArgs(workspaceId) {
+  const args = ['workspace', 'report-metadata', workspaceId, '--source', 'adlc'];
+  for (const key of WORKSPACE_TOKEN_KEYS) args.push('--clear-token', key);
+  return args;
+}
+
 /**
  * Version gate (plan §6.5): supported at or below the tested ceiling;
  * anything newer — or unparseable — degrades to a single warning token.

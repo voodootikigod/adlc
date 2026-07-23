@@ -11,8 +11,11 @@ import { runHerdr, runHerdrJson, makeCachedReader } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport } from '../lib/adlc-state.mjs';
-import { buildReportArgs, buildWorkspaceReportArgs, diffPublishes, versionGate } from '../lib/tokens.mjs';
-import { planTokens } from '../lib/watch-plan.mjs';
+import {
+  buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
+  buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
+} from '../lib/tokens.mjs';
+import { planTokens, pendingWatchDirs } from '../lib/watch-plan.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
@@ -28,7 +31,7 @@ const readBacklog = makeCachedReader((repoRoot) => readTicketsViaExport(repoRoot
 
 let prevPane = new Map();
 let prevWorkspace = new Map();
-const watchedRepos = new Set();
+const watchedDirs = new Set();
 let refreshTimer = null;
 let refreshing = false;
 let pendingFull = false;
@@ -70,6 +73,15 @@ async function refresh({ full = false } = {}) {
     for (const [workspaceId, tokens] of wsChanges) {
       await runHerdr(buildWorkspaceReportArgs(workspaceId, tokens, TOKEN_TTL_MS));
     }
+    // Actively clear tokens for panes/workspaces that dropped out — otherwise a
+    // pane whose ticket became absent keeps showing the stale ticket until the
+    // 90s TTL lapses.
+    for (const paneId of droppedKeys(prevPane, nextPane)) {
+      await runHerdr(buildPaneClearArgs(paneId));
+    }
+    for (const workspaceId of droppedKeys(prevWorkspace, nextWorkspace)) {
+      await runHerdr(buildWorkspaceClearArgs(workspaceId));
+    }
     prevPane = nextPane;
     prevWorkspace = nextWorkspace;
   } finally {
@@ -90,19 +102,19 @@ function scheduleRefresh() {
   }, DEBOUNCE_MS);
 }
 
+// Track watched DIRECTORIES (in `watchedDirs`), not repos: the set of dirs to
+// watch is computed by the pure `pendingWatchDirs`, which re-attaches the
+// tickets dir once it appears (it often does not exist when the repo is first
+// seen). Guarding by repoRoot alone would never attach that watch, leaving the
+// daemon serving stale backlog counts until restart.
 function ensureWatched(repoRoot) {
-  if (watchedRepos.has(repoRoot)) return;
-  watchedRepos.add(repoRoot);
-  const adlcDir = join(repoRoot, '.adlc');
-  if (!existsSync(adlcDir)) return;
-  try {
-    watch(adlcDir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
-    const ticketsDir = join(adlcDir, 'tickets');
-    if (existsSync(ticketsDir)) {
-      watch(ticketsDir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
+  for (const dir of pendingWatchDirs(repoRoot, watchedDirs, existsSync)) {
+    try {
+      watch(dir, () => { readBacklog.invalidate(repoRoot); scheduleRefresh(); });
+      watchedDirs.add(dir);
+    } catch {
+      // fail soft — heartbeat polling still covers this repo
     }
-  } catch {
-    // fail soft — heartbeat polling still covers this repo
   }
 }
 

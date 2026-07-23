@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { groupBacklog, readLedgerTail, readLedgerByTicket, readTicketsViaExport } from '../lib/adlc-state.mjs';
+import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 let repo;
@@ -77,6 +77,20 @@ test('readLedgerByTicket keeps the most recent record per ticket, not a raw tail
   ].join('\n'));
   const rows = readLedgerByTicket(repo, 8);
   assert.deepEqual(rows.map((r) => [r.ticket, r.seq]), [['t-cold', 1], ['t-hot', 4]]);
+});
+
+test('the ledger readers bound their work: a huge manifest still returns the recent tail', () => {
+  // ~1.2MB of noise from one hot ticket, then the records we actually want at
+  // the end. A whole-file parse would choke on history; the bounded tail read
+  // must still surface the most-recent per-ticket rows.
+  const noise = Array.from({ length: 12_000 }, (_, i) => JSON.stringify({ seq: i, ticket: 't-hot', data: { phase: 'p1' } }));
+  noise.push(JSON.stringify({ seq: 99_998, ticket: 't-cold', data: { phase: 'p3' } }));
+  noise.push(JSON.stringify({ seq: 99_999, ticket: 't-hot', data: { phase: 'p5' } }));
+  writeAdlc('manifest.jsonl', noise.join('\n'));
+  const rows = readLedgerByTicket(repo, 8);
+  const hot = rows.find((r) => r.ticket === 't-hot');
+  assert.equal(hot.seq, 99_999, 'latest t-hot record wins from the tail');
+  assert.equal(readLatestPhase(repo, 't-hot'), 'P5');
 });
 
 test('readLedgerByTicket caps at n tickets and drops records without a ticket', () => {

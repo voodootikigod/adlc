@@ -3,11 +3,50 @@
 // throw into the daemon. Structured ticket data beyond these files comes from
 // the trusted `adlc` CLI, never from workspace imports (the installed plugin
 // is a bare clone with no node_modules).
-import { readFileSync, existsSync, rmSync, mkdtempSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { readActiveTicketPointer } from './generated-active-ticket.mjs';
+
+// The gate ledger `.adlc/manifest.jsonl` is an append-only, UNBOUNDED file, and
+// these readers run inside the watcher's refresh loop and the 3s board loop.
+// Reading + JSON-parsing the whole file every time would peg a CPU as history
+// grows, so we read only the last LEDGER_TAIL_BYTES. The most-recent records
+// for the active ticket / recently-active tickets are always in that window;
+// an older record that falls outside it is, by definition, not the latest.
+const LEDGER_TAIL_BYTES = 256 * 1024;
+
+/** Read the last `maxBytes` of a file as UTF-8, or the whole file if smaller.
+ *  A partial first line (from the byte cut) is expected — callers skip
+ *  unparseable lines. Returns null on any error. */
+function readTailText(path, maxBytes) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    const { size } = fstatSync(fd);
+    const start = size > maxBytes ? size - maxBytes : 0;
+    const length = size - start;
+    const buf = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const n = readSync(fd, buf, read, length - read, start + read);
+      if (n <= 0) break;
+      read += n;
+    }
+    return buf.toString('utf8', 0, read);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
 
 /** Read the active-ticket pointer through the repo's generated reader — the
  *  pointer file is parsed in exactly ONE canonical place, and the
@@ -34,12 +73,8 @@ export function readActiveTicket(repoRoot) {
 export function readLatestPhase(repoRoot, ticketId) {
   const path = join(repoRoot, '.adlc', 'manifest.jsonl');
   if (!existsSync(path)) return null;
-  let text;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
+  const text = readTailText(path, LEDGER_TAIL_BYTES);
+  if (text === null) return null;
   let phase = null;
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -109,12 +144,8 @@ export function readLedgerTail(repoRoot, n = DEFAULT_LEDGER_ROWS) {
   if (!Number.isFinite(n) || n <= 0) return [];
   const path = join(repoRoot, '.adlc', 'manifest.jsonl');
   if (!existsSync(path)) return [];
-  let text;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return [];
-  }
+  const text = readTailText(path, LEDGER_TAIL_BYTES);
+  if (text === null) return [];
   const records = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -138,12 +169,8 @@ export function readLedgerByTicket(repoRoot, n = DEFAULT_LEDGER_ROWS) {
   if (!Number.isFinite(n) || n <= 0) return [];
   const path = join(repoRoot, '.adlc', 'manifest.jsonl');
   if (!existsSync(path)) return [];
-  let text;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return [];
-  }
+  const text = readTailText(path, LEDGER_TAIL_BYTES);
+  if (text === null) return [];
   const latestByTicket = new Map(); // ticket -> record (last occurrence wins)
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;

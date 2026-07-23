@@ -33,13 +33,30 @@ test('resolves null for a nonexistent directory instead of throwing', () => {
   assert.equal(resolveRepoRoot(join(dir, 'missing')), null);
 });
 
-test('a null resolution is NOT cached — a dir that becomes a repo is re-probed', () => {
+test('a negative result is cached within the TTL (no re-spawn) but re-probed after it', () => {
   const later = join(dir, 'later');
   mkdirSync(later, { recursive: true });
-  assert.equal(resolveRepoRoot(later), null); // not a repo yet
+  let clock = 1_000;
+  const now = () => clock;
+  assert.equal(resolveRepoRoot(later, now), null); // not a repo yet
   execFileSync('git', ['init', '-q', later]);
-  // Without a cached null, the second probe sees the new repo.
-  assert.equal(realpathSync(resolveRepoRoot(later)), realpathSync(later));
+  // Within the 30s negative TTL: still served as null, git NOT re-probed.
+  clock += 10_000;
+  assert.equal(resolveRepoRoot(later, now), null);
+  // After the TTL: re-probed, now sees the repo.
+  clock += 30_000;
+  assert.equal(realpathSync(resolveRepoRoot(later, now)), realpathSync(later));
+});
+
+test('a positive resolution is cached permanently', () => {
+  const repo = join(dir, 'perm');
+  mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['init', '-q', repo]);
+  let clock = 1_000;
+  const first = resolveRepoRoot(repo, () => clock);
+  rmSync(join(repo, '.git'), { recursive: true, force: true }); // repo gone
+  clock += 10 * 60_000; // well past any TTL
+  assert.equal(resolveRepoRoot(repo, () => clock), first); // still the cached toplevel
 });
 
 test('resolveOnPath returns the first PATH entry that actually contains the binary', () => {

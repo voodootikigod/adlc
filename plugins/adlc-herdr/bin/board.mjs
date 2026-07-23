@@ -5,7 +5,8 @@
 // pane closes when this process exits. Thin glue: resolve the repo like
 // actions do, gather via the tested libs, redraw every few seconds and on
 // resize, quit on q / Ctrl-C.
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, statSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
@@ -16,6 +17,30 @@ import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 const REFRESH_MS = 3_000;
+
+// mtime-gate the ticket-store export: the board redraws every 3s, but
+// `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
+// idle redraw drains battery/IO for nothing. The sharded store updates via
+// temp+rename (bumps the tickets-dir mtime) and the legacy store is a single
+// file — stat whichever exists and only re-export when it advances.
+let ticketCache = { key: null, tickets: null };
+function storeMtimeMs(repoRoot) {
+  for (const p of [join(repoRoot, '.adlc', 'tickets'), join(repoRoot, '.adlc', 'tickets.json')]) {
+    try {
+      if (existsSync(p)) return statSync(p).mtimeMs;
+    } catch {
+      // ignore — fall through to next candidate
+    }
+  }
+  return 0;
+}
+async function readBacklogTickets(repoRoot) {
+  const key = `${repoRoot}@${storeMtimeMs(repoRoot)}`;
+  if (ticketCache.tickets !== null && ticketCache.key === key) return ticketCache.tickets;
+  const tickets = await readTicketsViaExport(repoRoot);
+  ticketCache = { key, tickets };
+  return tickets;
+}
 
 async function resolveRepo() {
   const parsed = parseContext(process.env.HERDR_PLUGIN_CONTEXT_JSON);
@@ -31,7 +56,7 @@ async function resolveRepo() {
 async function gather(repoRoot) {
   const active = readActiveTicket(repoRoot);
   const phase = active.state === 'active' ? readLatestPhase(repoRoot, active.id) : null;
-  const tickets = await readTicketsViaExport(repoRoot);
+  const tickets = await readBacklogTickets(repoRoot);
   const groups = groupBacklog(tickets ?? [], active.state === 'active' ? active.id : null);
   const snap = await runHerdrJson(['api', 'snapshot']);
   const panes = Array.isArray(snap.value?.result?.snapshot?.panes) ? snap.value.result.snapshot.panes : [];

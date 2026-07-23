@@ -8,7 +8,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readActiveTicket, readLatestPhase, backlogCounts, ticketsFromExport } from '../lib/adlc-state.mjs';
-import { paneTokens, workspaceTokens, buildReportArgs, diffPublishes, versionGate } from '../lib/tokens.mjs';
+import {
+  paneTokens, workspaceTokens, buildReportArgs, diffPublishes, versionGate,
+  droppedKeys, buildPaneClearArgs, buildWorkspaceClearArgs,
+} from '../lib/tokens.mjs';
 
 let repo;
 beforeEach(() => { repo = mkdtempSync(join(tmpdir(), 'adlc-herdr-test-')); });
@@ -172,6 +175,23 @@ test('diffPublishes returns only new or changed pane token sets', () => {
 test('diffPublishes with identical maps publishes nothing (change-driven, not periodic spam)', () => {
   const same = new Map([['w1:p1', { ticket: 't-a', phase: 'P4' }]]);
   assert.equal(diffPublishes(same, new Map(same)).size, 0);
+});
+
+test('droppedKeys finds entries present in prev but gone from next', () => {
+  const prev = new Map([['w1:p1', {}], ['w1:p2', {}], ['w1:p3', {}]]);
+  const next = new Map([['w1:p1', {}], ['w1:p3', {}]]);
+  assert.deepEqual(droppedKeys(prev, next), ['w1:p2']);
+  assert.deepEqual(droppedKeys(next, next), []);
+});
+
+test('clear args target only this plugin source and clear every published token key', () => {
+  assert.deepEqual(buildPaneClearArgs('w1:p2'), [
+    'pane', 'report-metadata', 'w1:p2', '--source', 'adlc', '--clear-token', 'ticket', '--clear-token', 'phase',
+  ]);
+  assert.deepEqual(buildWorkspaceClearArgs('w1'), [
+    'workspace', 'report-metadata', 'w1', '--source', 'adlc',
+    '--clear-token', 'adlc_ready', '--clear-token', 'adlc_active', '--clear-token', 'adlc_blocked',
+  ]);
 });
 
 // ---- version gate ----

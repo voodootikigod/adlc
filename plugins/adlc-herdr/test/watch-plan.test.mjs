@@ -4,7 +4,8 @@
 // got wrong.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planTokens } from '../lib/watch-plan.mjs';
+import { join } from 'node:path';
+import { planTokens, pendingWatchDirs } from '../lib/watch-plan.mjs';
 
 const counts = (ready, inFlight, blocked) => ({ ready, inFlight, blocked });
 
@@ -62,4 +63,30 @@ test('panes whose repo has no state, and repos with null counts, are skipped saf
 
 test('planTokens fails soft on a non-array pane map', () => {
   assert.deepEqual(planTokens(null, new Map()), { nextPane: new Map(), nextWorkspace: new Map() });
+});
+
+// ---- pendingWatchDirs (the tickets-dir race) ----
+
+test('pendingWatchDirs returns nothing when .adlc itself is absent', () => {
+  assert.deepEqual(pendingWatchDirs('/repo', new Set(), () => false), []);
+});
+
+test('the tickets dir is attached on a LATER call once it appears, though .adlc is already watched', () => {
+  const adlc = join('/repo', '.adlc');
+  const tickets = join(adlc, 'tickets');
+  const watched = new Set();
+  // First pass: only .adlc exists.
+  let exists = (p) => p === adlc;
+  const first = pendingWatchDirs('/repo', watched, exists);
+  assert.deepEqual(first, [adlc]);
+  first.forEach((d) => watched.add(d)); // simulate the daemon attaching them
+
+  // Later pass: tickets dir now exists — it must be returned even though
+  // .adlc is already watched (the race the raw repoRoot guard would miss).
+  exists = (p) => p === adlc || p === tickets;
+  assert.deepEqual(pendingWatchDirs('/repo', watched, exists), [tickets]);
+
+  // Steady state: nothing new to attach.
+  watched.add(tickets);
+  assert.deepEqual(pendingWatchDirs('/repo', watched, exists), []);
 });

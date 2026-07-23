@@ -6,10 +6,22 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 
-const cache = new Map();
+const cache = new Map(); // dir -> { root, at }
 
-export function resolveRepoRoot(dir) {
-  if (cache.has(dir)) return cache.get(dir);
+// Positive resolutions are cached permanently (a git toplevel does not move).
+// NEGATIVE resolutions are cached only briefly: long enough that a burst of
+// high-frequency refreshes (socket events debounce to 400ms) over panes in
+// non-git directories does NOT spawn `git` synchronously every time — which
+// would stall the daemon's event loop — but short enough that a directory
+// which later becomes a repo (a freshly opened worktree) is re-probed soon.
+const NEG_TTL_MS = 30_000;
+
+export function resolveRepoRoot(dir, now = Date.now) {
+  const cached = cache.get(dir);
+  if (cached) {
+    if (cached.root !== null) return cached.root; // positive: permanent
+    if (now() - cached.at < NEG_TTL_MS) return null; // negative: within TTL
+  }
   let root = null;
   try {
     root = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], {
@@ -18,12 +30,7 @@ export function resolveRepoRoot(dir) {
   } catch {
     root = null;
   }
-  // Cache only SUCCESSFUL resolutions. This runs inside a session-long daemon:
-  // caching null would let one transient git failure (timeout under load, a
-  // momentary lock) blind a pane for the whole process lifetime, and would
-  // pin a directory that only later becomes a repo (a freshly opened worktree)
-  // as non-repo forever. Negative results are re-probed on the next refresh.
-  if (root !== null) cache.set(dir, root);
+  cache.set(dir, { root, at: now() });
   return root;
 }
 

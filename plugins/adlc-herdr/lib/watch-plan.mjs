@@ -3,7 +3,27 @@
 // and how workspace backlog counts combine — is unit-testable without a herdr
 // host. The daemon does the I/O (snapshot, file reads, publishing); this turns
 // (paneMap, per-repo state) into the token maps to publish.
+import { join } from 'node:path';
 import { paneTokens, workspaceTokens } from './tokens.mjs';
+
+/**
+ * Which directories the watcher should attach an `fs.watch` to for `repoRoot`
+ * that it is NOT already watching — `.adlc` and (once it exists) `.adlc/tickets`.
+ * Pure so the "tickets dir created after the repo was first seen" race is
+ * testable: passing the same `watched` set across calls, the tickets dir is
+ * returned on the first call where `exists` reports it, even though `.adlc`
+ * was already watched. A non-recursive watch on `.adlc` does not fire for
+ * shard edits inside `.adlc/tickets`, so that directory needs its own watch.
+ */
+export function pendingWatchDirs(repoRoot, watched, exists) {
+  const adlcDir = join(repoRoot, '.adlc');
+  if (!exists(adlcDir)) return [];
+  const out = [];
+  for (const dir of [adlcDir, join(adlcDir, 'tickets')]) {
+    if (exists(dir) && !watched.has(dir)) out.push(dir);
+  }
+  return out;
+}
 
 /**
  * @param {Array<{paneId, workspaceId, repoRoot}>} paneMap
