@@ -17,7 +17,7 @@ plus herdr's own API. The capability × harness matrix keeps seven columns.
 | --- | --- | --- |
 | Manifest, herdr CLI shim, sanitizer rail | t-herdr-1 | shipped |
 | Watcher daemon → per-pane status tokens | t-herdr-2 | shipped |
-| Actions: ticket-show / gate / prosecute | t-herdr-3 | planned |
+| Actions: ticket-show / gate / prosecute | t-herdr-3 | shipped |
 | Board pane | t-herdr-4 | planned |
 
 ## Install
