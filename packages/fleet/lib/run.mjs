@@ -18,7 +18,7 @@ export function integrationBranchName(runId) {
  * concurrently across tickets; the MERGE runs under `mergeMutex` so merges are
  * strictly sequential (spec §9; adversarial-review C4).
  */
-function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState) {
+function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated = () => {}) {
   return {
     dispatch: ({ strike, deadEnds }) => deps.dispatch({ ticket, worktree: wt.path, startSha: wt.startSha, strike, deadEnds }),
     gate: () => deps.gate({ ticket, worktree: wt.path, startSha: wt.startSha }),
@@ -61,14 +61,14 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState)
             // path and a throwing one fail the ticket loudly instead.
             if (!deps.revertCompletion) {
               const reason = 'a gate-rejected completion commit could not be withdrawn (no withdrawal path wired)';
-              if (runState) { runState.contaminated = true; runState.contaminationReason = reason; }
+              markContaminated(reason);
               return { ok: false, output: `${reason}; integration branch quarantined` };
             }
             try {
               await deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha });
             } catch (revertError) {
               const reason = `a gate-rejected completion commit could not be withdrawn (${revertError.message})`;
-              if (runState) { runState.contaminated = true; runState.contaminationReason = reason; }
+              markContaminated(reason);
               return { ok: false, output: `${reason}; integration branch quarantined` };
             }
             deps.log?.(`${ticket.id} WARNING: gate over the completion commit failed; completion withdrawn (merged, not marked completed)`);
@@ -120,6 +120,34 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   });
   const persist = () => { if (deps.statusDir) saveStatus(deps.statusDir, status); };
 
+  // Quarantine is a property of the BRANCH, not of this process, so it is restored
+  // from the persisted status on resume — otherwise a resume would start "clean" and
+  // happily open a PR from a branch still carrying a gate-rejected commit.
+  runState.contaminated = Boolean(status.contaminated);
+  runState.contaminationReason = status.contaminationReason ?? null;
+  const markContaminated = (reason) => {
+    runState.contaminated = true;
+    runState.contaminationReason = reason;
+    status = { ...status, contaminated: true, contaminationReason: reason };
+    persist(); // persist IMMEDIATELY — a crash after this must not forget the quarantine
+  };
+
+  // Fail closed before doing any work: a quarantined branch cannot accept merges, so
+  // dispatching would only burn agents on work that can never land.
+  if (runState.contaminated) {
+    log(`FLEET QUARANTINE: ${integrationBranch} is quarantined (${runState.contaminationReason}); refusing to resume. Clean the branch, then start a new run.`);
+    const quarantinedResults = Object.fromEntries(Object.entries(status.tickets).map(([id, r]) => [id, r.state]));
+    return {
+      integrationBranch,
+      results: quarantinedResults,
+      merged: Object.values(quarantinedResults).filter((s) => s === 'merged').length,
+      prCount: 0,
+      status,
+      contaminated: true,
+      contaminationReason: runState.contaminationReason,
+    };
+  }
+
   const cap = config.concurrency;
   const onlyIds = config.onlyIds;
   const mergeMutex = createMutex();
@@ -140,7 +168,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     status = withTicket(status, ticket.id, { state: 'building', branch: wt.branch, startSha: wt.startSha, strikes: 0 });
     persist();
     await deps.provision?.({ ticket, worktree: wt.path });
-    const outcome = await advanceTicket(ticket, buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState), { log });
+    const outcome = await advanceTicket(ticket, buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated), { log });
     status = withTicket(status, ticket.id, { state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, prosecution: outcome.prosecution ?? null });
     persist();
     await deps.cleanup?.({ ticket, worktree: wt.path, state: outcome.state });

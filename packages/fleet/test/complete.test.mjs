@@ -326,6 +326,36 @@ test('a failed withdrawal QUARANTINES the branch — no PR even when another tic
   assert.equal(rec.merges.length, 1, 'no further merge lands on the quarantined branch');
 });
 
+test('quarantine is persisted and survives RESUME — a resumed run refuses to work or open a PR', async () => {
+  // Quarantine is a property of the branch, not the process. A resume that started
+  // "clean" would happily merge onto — and publish — a branch still carrying the
+  // gate-rejected commit.
+  const { deps } = regateHarness({ regatePasses: false, revert: 'throw' });
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const first = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+  assert.equal(first.contaminated, true);
+  assert.equal(first.status.contaminated, true, 'the quarantine is recorded IN the persisted status');
+
+  // Resume with that persisted status: the branch is still contaminated.
+  const rec2 = { dispatched: [], prs: [], merges: [] };
+  const resumeDeps = {
+    ...deps,
+    dispatch: ({ ticket }) => { rec2.dispatched.push(ticket.id); return { exitCode: 0, output: 'TICKET-DONE' }; },
+    mergeToIntegration: ({ ticket }) => { rec2.merges.push(ticket.id); return { mergeSha: 'M', preMergeSha: 'P' }; },
+    openPR: ({ integrationBranch }) => { rec2.prs.push(integrationBranch); },
+  };
+  const resumed = await runFleet({
+    all: [T('T1'), T('T2')], runId: 'r', config, deps: resumeDeps,
+    resume: { status: first.status, integrationBranch: first.integrationBranch },
+  });
+
+  assert.equal(resumed.contaminated, true, 'the resumed run restores the quarantine');
+  assert.deepEqual(rec2.prs, [], 'no PR is opened from the quarantined branch on resume');
+  assert.equal(resumed.prCount, 0);
+  assert.deepEqual(rec2.dispatched, [], 'and it fails closed BEFORE dispatching work that can never land');
+  assert.deepEqual(rec2.merges, [], 'nothing merges onto the quarantined branch');
+});
+
 test('runFleet does NOT complete a ticket whose post-merge gate failed (T73 b)', async () => {
   const { deps, rec } = harness({ postMerge: () => ({ ok: false }) });
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };

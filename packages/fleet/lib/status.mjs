@@ -29,6 +29,10 @@ export function newStatus({ runId, base, baseSha, integrationBranch, concurrency
     sandboxMode,
     concurrency,
     startedAt,
+    // Branch-level quarantine: survives across resumes, so a run that could not
+    // withdraw a gate-rejected completion never publishes that branch later.
+    contaminated: false,
+    contaminationReason: null,
     tickets: {},
   };
 }
