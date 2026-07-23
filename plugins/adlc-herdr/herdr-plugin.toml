@@ -12,3 +12,21 @@ platforms = ["linux", "macos"]
 
 [[startup]]
 command = ["node", "bin/watcher.mjs"]
+
+[[actions]]
+id = "ticket-show"
+title = "ADLC: show active ticket"
+contexts = ["pane"]
+command = ["node", "bin/action.mjs"]
+
+[[actions]]
+id = "gate"
+title = "ADLC: verify gate evidence for this pane's repo"
+contexts = ["pane"]
+command = ["node", "bin/action.mjs"]
+
+[[actions]]
+id = "prosecute"
+title = "ADLC: prosecute this pane's worktree (P5 review)"
+contexts = ["pane"]
+command = ["node", "bin/action.mjs"]

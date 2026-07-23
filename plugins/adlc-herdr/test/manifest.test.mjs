@@ -5,7 +5,7 @@
 // test stays load-bearing while the shipped manifest has no entrypoints yet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,16 @@ test('every declared node entrypoint exists and passes node --check', () => {
     assert.ok(existsSync(file), `[[${name}]] entrypoint missing: ${entries.command[1]}`);
     const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
     assert.equal(check.status, 0, `[[${name}]] entrypoint fails node --check: ${check.stderr}`);
+  }
+});
+
+test('every bin/*.mjs passes node --check, declared in the manifest or not', () => {
+  const binDir = join(pluginRoot, 'bin');
+  const files = readdirSync(binDir).filter((f) => f.endsWith('.mjs'));
+  assert.ok(files.length > 0, 'bin/ must not be empty');
+  for (const file of files) {
+    const check = spawnSync(process.execPath, ['--check', join(binDir, file)], { encoding: 'utf8' });
+    assert.equal(check.status, 0, `bin/${file} fails node --check: ${check.stderr}`);
   }
 });
 
