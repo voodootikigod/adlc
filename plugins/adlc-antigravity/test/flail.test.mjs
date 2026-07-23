@@ -12,7 +12,9 @@ import {
   parseTranscriptLines,
   analyzeFlail,
   createFlailTracker,
+  MAX_SCAN_BYTES,
 } from '../flail-inline.mjs';
+import { createPersistentTracker } from '../build-gate-inline.mjs';
 import { runFromStdin, printStatus } from '../hooks/adlc-rails-guard.mjs';
 
 test('normalizeError strips line numbers, hex, quotes, absolute paths, and digits', () => {
@@ -174,3 +176,48 @@ test('resolveTranscriptPath rejects path traversal sequences in conversationId',
   assert.equal(resolveTranscriptPath({ conversationId: 'foo/bar' }), null);
   assert.equal(resolveTranscriptPath({ conversationId: 'c:\\windows' }), null);
 });
+
+test('MAX_SCAN_BYTES is exactly 256 KiB (262144 bytes)', () => {
+  assert.equal(MAX_SCAN_BYTES, 262144);
+});
+
+test('createPersistentTracker handles null sessionID, missing ticket store, null filePath, and 200 edit cap', () => {
+  const root = mkdtempSync(join(tmpdir(), 'tracker-test-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1' }] }));
+
+    const tracker = createPersistentTracker(root);
+
+    // 1. null sessionID returns clean without recording
+    const nullSessRes = tracker.recordEdit(null, 'src/app.js');
+    assert.equal(nullSessRes.verdict, 'clean');
+
+    // 2. missing ticket store returns clean without recording
+    const noStoreRoot = mkdtempSync(join(tmpdir(), 'no-store-'));
+    try {
+      const noStoreTracker = createPersistentTracker(noStoreRoot);
+      const noStoreRes = noStoreTracker.recordEdit('s1', 'src/app.js');
+      assert.equal(noStoreRes.verdict, 'clean');
+    } finally {
+      rmSync(noStoreRoot, { recursive: true, force: true });
+    }
+
+    // 3. null filePath does not push an edit entry
+    tracker.recordEdit('s-null-path', null);
+    assert.deepEqual(tracker.edits('s-null-path'), []);
+
+    // 4. 200 edit limit cap
+    const sId = 's-cap-200';
+    for (let i = 1; i <= 205; i++) {
+      tracker.recordEdit(sId, `src/file-${i}.js`);
+    }
+    const edits = tracker.edits(sId);
+    assert.equal(edits.length, 200);
+    assert.equal(edits[0], 'Editing src/file-6.js');
+    assert.equal(edits[199], 'Editing src/file-205.js');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
