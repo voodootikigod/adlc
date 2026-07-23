@@ -1,0 +1,28 @@
+{
+  "body": "Scaffold plugins/adlc-herdr per docs/herdr-integration-plan.md section 4 (zero-dep Node, repo CONVENTIONS). Deliver: herdr-plugin.toml (id adlc, min_herdr_version 0.7.4, startup/panes/actions/events entrypoints; re-probe manifest field names against live herdr plugin docs before writing — plan section 2.2 is docs-derived); lib/herdr.mjs as the single shim wrapping every herdr CLI call (fixed argv arrays, never shell interpolation, unknown output shapes fail soft — plan section 6.5); lib/sanitize.mjs stripping ANSI/OSC/control escapes from every string rendered into terminals (plan section 6.1) with its tests frozen as rails; an offline manifest smoke test (parse the TOML, assert required fields and that each entrypoint file exists and is executable); plugin README. No [[build]] commands in the manifest (plan section 6.6). Verification: node --test plugins/adlc-herdr/test/. allow-suppression: none",
+  "budget": "mid",
+  "category": "feature",
+  "duration": 2,
+  "edges": [
+    {
+      "contract": "t-herdr-1 publishes lib/herdr.mjs and lib/sanitize.mjs before t-herdr-2 builds the watcher on them.",
+      "to": "t-herdr-2"
+    },
+    {
+      "contract": "t-herdr-1 publishes lib/herdr.mjs and lib/sanitize.mjs before t-herdr-3 builds actions on them.",
+      "to": "t-herdr-3"
+    },
+    {
+      "contract": "t-herdr-1 publishes lib/herdr.mjs and lib/sanitize.mjs before t-herdr-4 builds the board pane on them.",
+      "to": "t-herdr-4"
+    }
+  ],
+  "id": "t-herdr-1",
+  "rails": [
+    "plugins/adlc-herdr/test/sanitize.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-herdr/**"
+  ],
+  "title": "herdr plugin scaffold: manifest, herdr CLI shim, ANSI sanitizer rail"
+}
