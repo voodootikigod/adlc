@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -53,6 +53,12 @@ test('completeTicketOnIntegration marks completed:true and commits it onto the r
     assert.equal(isCompleted(root, 'T1'), false, 'precondition: ticket starts open');
     const before = commitCount(git);
 
+    // The post-merge gate runs a build on the integration branch immediately
+    // before completion and can leave untracked output in the tree. The
+    // completion commit MUST be path-scoped and never sweep such files into the
+    // PR-riding commit (an `git add -A` would).
+    writeFileSync(join(root, 'dist-leaked-build-artifact.js'), '// build output the gate left behind\n');
+
     const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
 
     assert.equal(res.completed, true);
@@ -60,10 +66,17 @@ test('completeTicketOnIntegration marks completed:true and commits it onto the r
     assert.equal(commitCount(git), before + 1, 'a single completion commit landed on the run branch');
 
     // The commit is the add-only annotation: it touches the ticket shard and the
-    // evidence ledger, nothing else.
+    // evidence ledger — and NOTHING else.
     const touched = git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean);
     assert.ok(touched.some((p) => p.startsWith('.adlc/tickets/')), `commit touches a ticket shard: ${touched.join(', ')}`);
     assert.ok(touched.includes('.adlc/manifest.jsonl'), 'completion records manifest evidence in the same commit');
+    assert.deepEqual(
+      touched.filter((p) => !p.startsWith('.adlc/')),
+      [],
+      `completion commit is scoped to .adlc/ — it must not sweep in unrelated tree state, but committed: ${touched.join(', ')}`,
+    );
+    // The stray build output stays untracked (never staged by the scoped commit).
+    assert.match(git('status', '--porcelain'), /\?\? dist-leaked-build-artifact\.js/, 'the build artifact remains untracked');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
