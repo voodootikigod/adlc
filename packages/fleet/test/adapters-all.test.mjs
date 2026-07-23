@@ -13,6 +13,7 @@ const EXPECTED = {
   opencode: { cmd: 'opencode', args: ['run', PROMPT], stdin: false },
   pi: { cmd: 'pi', args: ['run', PROMPT], stdin: false },
   cursor: { cmd: 'cursor-agent', args: ['-p', PROMPT], stdin: false },
+  copilot: { cmd: 'copilot', args: ['-p', PROMPT, '--allow-tool', 'write', '--allow-tool', 'shell'], stdin: false },
 };
 
 function stubExec(rec, result = { status: 0, stdout: 'ok', stderr: '' }) {

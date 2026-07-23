@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   classifyShellCommand,
   collectShellPaths,
+  hasUnquotedFileRedirect,
   shellHasExpansion,
   shellHasMutation,
   shellHasOpaqueMutation,
@@ -139,6 +140,37 @@ test('classifyShellCommand: opaque mutation flagged', () => {
   assert.equal(c.opaque, true);
 });
 
+// ---- regression: no-space redirect must NOT read as read-only (rail bypass) ----
+// A read-only-looking command whose output is redirected with NO whitespace
+// before `>` (e.g. `cat a>rail`) previously slipped past shellHasMutation's
+// whitespace-anchored redirect regex and was misclassified "positively
+// read-only", so its target was never checked against the rails.
+for (const cmd of [
+  'cat payload.txt>protected/rail.txt',
+  'grep x foo>protected/rail.txt',
+  'echo hi>>protected/rail.txt',
+  'ls; cat a>protected/rail.txt',
+  'cat a>"protected/rail.txt"',
+]) {
+  test(`classifyShellCommand: no-space redirect is mutating + carries the target — ${cmd}`, () => {
+    const c = classifyShellCommand(cmd);
+    assert.equal(c.mutating, true, 'must be mutating, not read-only');
+    assert.equal(c.readOnly, false);
+    assert.ok(c.paths.includes('protected/rail.txt'), `target extracted: ${JSON.stringify(c.paths)}`);
+  });
+}
+test('classifyShellCommand: a QUOTED > is not a redirect (no false positive)', () => {
+  const c = classifyShellCommand('grep "[>]" file');
+  assert.equal(c.mutating, false);
+  assert.equal(c.readOnly, true);
+});
+test('classifyShellCommand: fd-duplication (2>&1) is not a file write', () => {
+  assert.equal(hasUnquotedFileRedirect('grep x foo 2>&1'), false);
+  assert.equal(hasUnquotedFileRedirect('cat a>b'), true);
+  assert.equal(hasUnquotedFileRedirect("echo '>' safe"), false);
+  assert.equal(hasUnquotedFileRedirect('echo hi >&2'), false);
+});
+
 // ---- drift pin: the codex hook's inline copy must stay in sync ----
 // The codex hook cannot import npm packages at runtime, so it keeps a verbatim
 // copy of the classifier bodies. Compare the load-bearing regex sources so an
@@ -147,9 +179,20 @@ test('codex inline copy matches the canonical core classifier', () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const codex = readFileSync(join(here, '..', '..', '..', 'plugins', 'adlc-codex', 'hooks', 'adlc-rails-guard.mjs'), 'utf8');
   const core = readFileSync(join(here, '..', 'lib', 'shell.mjs'), 'utf8');
-  for (const fn of ['shellHasMutation', 'shellHasOpaqueMutation', 'shellIsPositivelyReadOnly', 'shellHasWriteOption', 'shellChangesCwd', 'shellHasExpansion']) {
+  // Pin the FULL set of shell classifier + path-extraction functions, not just
+  // the boolean classifiers — the path functions decide WHICH paths a mutating
+  // command touches (i.e. which edits are blocked as rail violations), so a
+  // silent divergence there is a rail-enforcement hole. Signature-agnostic
+  // extraction: these take (text), (value), (text, out), etc.
+  const PINNED = [
+    'shellHasMutation', 'hasUnquotedFileRedirect', 'shellHasOpaqueMutation',
+    'shellIsPositivelyReadOnly', 'shellHasWriteOption', 'shellChangesCwd', 'shellHasExpansion',
+    'shellTokens', 'collectShellPaths', 'collectPatchPaths', 'looksPathLike',
+    'looksBarePathLike', 'keyValuePath',
+  ];
+  for (const fn of PINNED) {
     const extract = (src) => {
-      const m = src.match(new RegExp(`function ${fn}\\(text\\) \\{[\\s\\S]*?\\n\\}`));
+      const m = src.match(new RegExp(`function ${fn}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
       assert.ok(m, `${fn} found`);
       return m[0].replace(/\s+/g, ' ');
     };

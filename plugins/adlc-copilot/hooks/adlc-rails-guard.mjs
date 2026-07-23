@@ -1,12 +1,41 @@
 #!/usr/bin/env node
-// KEEP IN SYNC — the shell classifier functions in this file (shellTokens,
-// shellHasMutation, shellHasOpaqueMutation, shellIsPositivelyReadOnly,
-// shellHasWriteOption, shellChangesCwd, shellHasExpansion, collectShellPaths,
-// looksPathLike/looksBarePathLike/keyValuePath) are a verbatim inline copy of
-// the CANONICAL module packages/core/lib/shell.mjs (@adlc/core). This hook
-// script cannot resolve npm packages at runtime, hence the copy; a drift test
-// (packages/core/test/shell.test.mjs) pins the two together.
-import { readFileSync, realpathSync } from 'node:fs';
+// ADLC rails-guard — GitHub Copilot CLI adapter.
+//
+// The rail-decision core below (path collection, shell classification, rail
+// matching, active-ticket resolution) is a verbatim port of the canonical
+// implementation shipped in plugins/adlc-codex/hooks/adlc-rails-guard.mjs,
+// which is itself pinned to @adlc/core. plugins/adlc-copilot/test/shell-drift.test.mjs
+// pins this file's inline shell classifier to packages/core/lib/shell.mjs so
+// there is NO divergent rail re-implementation (issue #242, AC3).
+//
+// Only the I/O contract differs from codex, per the verified Copilot binary
+// contract (Copilot CLI 1.0.73, app.js `Y3t` — see
+// docs/integrations/copilot-probe-appendix.md):
+//   * DENY  = print a NON-EMPTY JSON object `{ "reason": "…" }` to STDOUT and
+//             exit 0 (the `reason` surfaces to the model as hookMessage).
+//             NOT exit-2 and NOT `permissionDecision` (neither is honored by
+//             the CLI). See fail() below.
+//   * ALLOW = print nothing to stdout and exit 0.
+//   * Copilot infra FAILS OPEN on a hook process crash/timeout/non-zero exit
+//     (decision = undefined → tool proceeds). This adapter therefore NEVER
+//     throws to the OS: every internal error is converted into a deny
+//     (application-level fail-safe, see the process handlers below), so the
+//     only residual fail-open window is an OS-level kill or the timeoutSec
+//     budget — documented honestly in docs/integrations/copilot.md.
+//   * Copilot stdin is camelCase `{ toolName, toolArgs(JSON string), cwd }`,
+//     normalized into the internal `{ tool_name, tool_input }` shape by
+//     normalizeCopilotPayload() before the shared collectors run.
+//
+// KEEP IN SYNC — the shell classifier + path-extraction functions in this file
+// (shellTokens, shellHasMutation, hasUnquotedFileRedirect, shellHasOpaqueMutation,
+// shellIsPositivelyReadOnly, shellHasWriteOption, shellChangesCwd, shellHasExpansion,
+// collectShellPaths, collectPatchPaths, looksPathLike, looksBarePathLike,
+// keyValuePath) are a verbatim inline copy of the CANONICAL module packages/core/lib/shell.mjs
+// (@adlc/core). This hook script cannot resolve npm packages at runtime, hence
+// the copy; a drift test (test/shell-drift.test.mjs) pins ALL of them against
+// @adlc/core so a fix to the canonical classifier that isn't mirrored here fails
+// CI instead of silently under-extracting rail paths on Copilot.
+import { readFileSync, realpathSync, writeSync } from 'node:fs';
 import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import {
@@ -14,13 +43,52 @@ import {
   resolveActiveTicketAgainst,
 } from './generated-active-ticket.mjs';
 
+function emitDeny(reason) {
+  // Verified Copilot deny shape (1.0.73): non-empty object on stdout, exit 0.
+  // Use a SYNCHRONOUS write to fd 1: process.stdout.write() to a pipe is async,
+  // and process.exit() can truncate an unflushed buffer — a lost deny object is
+  // read as empty stdout → allow → fail OPEN. writeSync guarantees the bytes land.
+  try { writeSync(1, `${JSON.stringify({ reason })}\n`); } catch { /* fd closed — nothing more we can do */ }
+  process.exit(0);
+}
+
 function fail(message) {
-  console.error(`adlc-rails-guard: ${message}`);
-  process.exit(2);
+  emitDeny(`adlc-rails-guard: ${message}`);
 }
 
 function notice(message) {
+  // Advisory only — stderr is not part of the Copilot hook decision (only
+  // parsed stdout is). An allow is "no stdout"; keep these off stdout.
   console.error(`adlc-rails-guard: ${message}`);
+}
+
+// Application-level fail-safe: Copilot infra fails OPEN on a crashed hook, so a
+// bug in this adapter must never silently let a rail edit through. Convert any
+// unexpected throw/rejection into a deny instead of dying non-zero.
+process.on('uncaughtException', (error) => {
+  emitDeny(`adlc-rails-guard: internal error, denying to fail safe: ${error?.message ?? error}`);
+});
+process.on('unhandledRejection', (error) => {
+  emitDeny(`adlc-rails-guard: internal error, denying to fail safe: ${error?.message ?? error}`);
+});
+
+/**
+ * Map Copilot's camelCase preToolUse stdin ({ toolName, toolArgs, cwd }) onto
+ * the internal { tool_name, tool_input } shape the shared collectors expect.
+ * toolArgs is a JSON STRING and must be parsed; if it will not parse we leave
+ * it in place so collectCommandText/collectPaths can still scan the raw text.
+ */
+function normalizeCopilotPayload(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const payload = { ...raw };
+  const name = raw.toolName ?? raw.tool_name ?? raw.tool ?? raw.name;
+  if (name && !payload.tool_name) payload.tool_name = name;
+  let args = raw.toolArgs ?? raw.tool_input ?? raw.arguments ?? raw.input;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch { /* keep the raw string for text scanning */ }
+  }
+  if (args !== undefined && payload.tool_input === undefined) payload.tool_input = args;
+  return payload;
 }
 
 function parseJson(path) {
@@ -478,6 +546,7 @@ if (raw.trim()) {
     fail(`malformed hook payload JSON: ${err.message}`);
   }
 }
+payload = normalizeCopilotPayload(payload);
 
 const rawPaths = collectPaths(payload);
 const paths = Array.from(rawPaths).map((path) => normalizePath(path));

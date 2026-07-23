@@ -1,0 +1,24 @@
+{
+  "name": "adlc-copilot",
+  "version": "1.6.0",
+  "description": "Native GitHub Copilot CLI workflows for operating and enforcing the Agentic Development Lifecycle.",
+  "author": {
+    "name": "Chris Williams",
+    "url": "https://github.com/voodootikigod"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-copilot",
+  "repository": "https://github.com/voodootikigod/adlc",
+  "license": "MIT",
+  "keywords": [
+    "adlc",
+    "copilot",
+    "software-development",
+    "code-review",
+    "testing",
+    "agentic"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "mcp": "./.mcp.json"
+}

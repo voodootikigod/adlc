@@ -15,7 +15,9 @@ import { ADLC_GITIGNORE_LINES } from './gitignore-defaults.mjs';
 function configForHarness(harness) {
   const harnesses = harness === 'cursor'
     ? { cursor: { railEnforcement: 'auto' } }
-    : { codex: { railEnforcement: 'auto' } };
+    : harness === 'copilot'
+      ? { copilot: { railEnforcement: 'auto' } }
+      : { codex: { railEnforcement: 'auto' } };
   // securityMode is required for config-integrity once a config is committed;
   // acknowledgedNewRailBypass must NOT be self-set here — that is a protected-base
   // ceremony field. Keep generated configs local until that ceremony runs.
@@ -348,14 +350,61 @@ function recordStoreHealth(result, manifest, created, openStore) {
   }
 }
 
+// The GitHub Copilot CLI reads repo-facing artifacts from `.github/`. A
+// `--harness copilot` scaffold drops an ADLC instructions block and a
+// coding-agent setup-steps snippet there; the enforcement primitives (hooks,
+// agents, skills, MCP) ship in the `adlc-copilot` plugin
+// (`copilot plugin install adlc-copilot@adlc`) rather than being copied inline,
+// so a repo installs them once instead of pinning a divergent copy.
+export const COPILOT_INSTRUCTIONS = `# ADLC — Agentic Development Lifecycle
+
+This repository uses the ADLC. Route every change through the correct lifecycle
+gate. Install the enforcement plugin:
+
+\`\`\`bash
+copilot plugin marketplace add voodootikigod/adlc
+copilot plugin install adlc-copilot@adlc
+\`\`\`
+
+- Frozen ticket **rails** must not be edited in-session; the plugin's
+  \`preToolUse\` hook denies rail edits, and the \`rails-guard-ci\` gate is the
+  unbypassable backstop (the in-session hook fails open on a crashed hook —
+  never rely on it as the only boundary).
+- Treat \`.adlc/manifest.jsonl\` as gate truth. Narration never passes a phase.
+- Use the \`adlc\` skill to pick a gate, \`adlc-ticket\` to author P0 tickets, and
+  \`adlc-prosecute\` before merge (P5).
+`;
+
+export const COPILOT_SETUP_STEPS = `# GitHub Copilot coding-agent environment setup for ADLC.
+# https://docs.github.com/copilot/how-tos/agents/copilot-coding-agent/customizing-the-development-environment
+name: Copilot Setup Steps
+
+on: workflow_dispatch
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install the ADLC gate toolkit
+        run: npm i -g @adlc/cli
+`;
+
 export function scaffold({ root = '.', codexAgents = true, harness = null } = {}) {
   const target = canonicalTarget(root);
   const result = { root: target, created: [], updated: [], unchanged: [], warnings: [] };
-  if (harness === 'cursor') codexAgents = false;
+  const copilot = harness === 'copilot';
+  if (harness === 'cursor' || copilot) codexAgents = false;
 
   const destinations = ['.adlc/specs', '.adlc/config.json', '.gitignore'];
   if (codexAgents) {
     destinations.push(...Object.keys(CODEX_AGENT_TEMPLATES).map((name) => `.codex/agents/${name}`));
+  }
+  if (copilot) {
+    destinations.push('.github/copilot-instructions.md', '.github/workflows/copilot-setup-steps.yml');
   }
   for (const destination of destinations) rejectSymlinkComponents(target, destination);
 
@@ -370,6 +419,12 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
     for (const [name, content] of Object.entries(CODEX_AGENT_TEMPLATES)) {
       writeMissing(target, `.codex/agents/${name}`, content, result);
     }
+  }
+
+  if (copilot) {
+    mkdirSync(join(target, '.github/workflows'), { recursive: true });
+    writeMissing(target, '.github/copilot-instructions.md', COPILOT_INSTRUCTIONS, result);
+    writeMissing(target, '.github/workflows/copilot-setup-steps.yml', COPILOT_SETUP_STEPS, result);
   }
 
   return result;
