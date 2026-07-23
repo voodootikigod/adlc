@@ -164,6 +164,9 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         const cwd = typeof getCwd === 'function' ? getCwd() : process.cwd();
         const { tickets } = loadTickets(ticketsPathFor(cwd));
         const items = tickets
+          // #104: backlog ENUMERATIONS filter completed:true. A shipped ticket is
+          // not an activation candidate; only open work is offered for completion.
+          .filter((t) => t.completed !== true)
           .filter((t) => typeof t.id === 'string' && t.id.startsWith(prefix ?? ''))
           .map((t) => ({ value: t.id, label: ticketLabel(t) }));
         return items.length > 0 ? items : null;
@@ -201,7 +204,15 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           ctx.ui.notify('ADLC: /adlc-ticket needs a ticket id in non-interactive mode (e.g. /adlc-ticket T1).', 'warning');
           return;
         }
-        const options = tickets.map(ticketLabel);
+        // #104: the picker is a backlog ENUMERATION — offer only OPEN tickets, so
+        // shipped (completed:true) ones are not presented as activation candidates.
+        // A completed ticket is still activatable by explicit id above (a lookup).
+        const openTickets = tickets.filter((t) => t.completed !== true);
+        if (openTickets.length === 0) {
+          ctx.ui.notify('ADLC: every ticket is completed — nothing open to activate.', 'info');
+          return;
+        }
+        const options = openTickets.map(ticketLabel);
         const picked = await ctx.ui.select('Select the active ADLC ticket', options);
         if (picked === undefined) {
           // Cancelled / timed out — leave state untouched (spec AC3).
@@ -213,8 +224,8 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           ctx.ui.notify('ADLC: selection did not match a known ticket — active ticket unchanged.', 'warning');
           return;
         }
-        chosenId = tickets[idx].id;
-        chosenTicket = tickets[idx];
+        chosenId = openTickets[idx].id;
+        chosenTicket = openTickets[idx];
       }
 
       // Activate: write the pointer DIRECTLY. This is the human acting through
