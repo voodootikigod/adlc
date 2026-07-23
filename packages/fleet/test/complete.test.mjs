@@ -282,6 +282,36 @@ test('runFleet FAILS the ticket when a gate-rejected completion has no withdrawa
   assert.equal(summary.merged, 0);
 });
 
+test('a failed withdrawal QUARANTINES the branch — no PR even when another ticket merges cleanly', async () => {
+  // The hole this closes: failing only the affected ticket still left the rejected
+  // commit on the SHARED branch, so a second clean ticket made merged>0 and openPR
+  // fired with the contaminated branch.
+  const rec = { prs: [], gateCalls: 0, merges: [] };
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => {},
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
+    dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+    gate: () => ({ ok: true }),
+    prosecute: () => ({ verdict: 'pass' }),
+    flail: () => ({ flail: false }),
+    mergeToIntegration: ({ ticket }) => { rec.merges.push(ticket.id); return { mergeSha: 'M', preMergeSha: 'P' }; },
+    // Every merge-gate passes; every completion RE-gate fails (calls 2,4,...).
+    postMergeGate: () => { rec.gateCalls += 1; return { ok: rec.gateCalls % 2 === 1 }; },
+    revertMerge: () => ({ method: 'reset', ok: true }),
+    completeTicket: () => ({ completed: true, preCompletionSha: 'PRE' }),
+    revertCompletion: () => { throw new Error('reset failed: index.lock held'); },
+    openPR: ({ integrationBranch }) => { rec.prs.push(integrationBranch); },
+  };
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1'), T('T2')], runId: 'r', config, deps });
+
+  assert.equal(summary.contaminated, true, 'the run is marked contaminated');
+  assert.deepEqual(rec.prs, [], 'NO PR is opened from a quarantined branch');
+  assert.equal(summary.prCount, 0);
+  assert.equal(rec.merges.length, 1, 'no further merge lands on the quarantined branch');
+});
+
 test('runFleet does NOT complete a ticket whose post-merge gate failed (T73 b)', async () => {
   const { deps, rec } = harness({ postMerge: () => ({ ok: false }) });
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };

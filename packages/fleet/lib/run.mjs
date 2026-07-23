@@ -18,7 +18,7 @@ export function integrationBranchName(runId) {
  * concurrently across tickets; the MERGE runs under `mergeMutex` so merges are
  * strictly sequential (spec §9; adversarial-review C4).
  */
-function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
+function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState) {
   return {
     dispatch: ({ strike, deadEnds }) => deps.dispatch({ ticket, worktree: wt.path, startSha: wt.startSha, strike, deadEnds }),
     gate: () => deps.gate({ ticket, worktree: wt.path, startSha: wt.startSha }),
@@ -27,6 +27,12 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
     // Best-effort evidence (spec §8.5): a recorder error must never abort the run.
     record: (phase, ok) => { try { deps.recordGate?.({ ticket, phase, ok }); } catch { /* evidence is best-effort */ } },
     merge: () => mergeMutex.runExclusive(async () => {
+      // QUARANTINE: once a gate-rejected completion could not be withdrawn, the shared
+      // integration branch carries an ungated commit. Nothing further may land on it —
+      // no merges, no retries — and the run must not open a PR from it.
+      if (runState?.contaminated) {
+        return { ok: false, output: `integration branch quarantined: ${runState.contaminationReason}` };
+      }
       const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch });
       const post = await deps.postMergeGate({ ticket, integrationBranch });
       if (!post.ok) {
@@ -54,12 +60,16 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
             // carry a gate-rejected commit into the fleet PR. Both a missing withdrawal
             // path and a throwing one fail the ticket loudly instead.
             if (!deps.revertCompletion) {
-              return { ok: false, output: 'completion commit failed its gate and no withdrawal path is wired; integration branch would carry an ungated commit' };
+              const reason = 'a gate-rejected completion commit could not be withdrawn (no withdrawal path wired)';
+              if (runState) { runState.contaminated = true; runState.contaminationReason = reason; }
+              return { ok: false, output: `${reason}; integration branch quarantined` };
             }
             try {
               await deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha });
             } catch (revertError) {
-              return { ok: false, output: `completion commit failed its gate and could NOT be withdrawn (${revertError.message}); integration branch carries an ungated commit` };
+              const reason = `a gate-rejected completion commit could not be withdrawn (${revertError.message})`;
+              if (runState) { runState.contaminated = true; runState.contaminationReason = reason; }
+              return { ok: false, output: `${reason}; integration branch quarantined` };
             }
             deps.log?.(`${ticket.id} WARNING: gate over the completion commit failed; completion withdrawn (merged, not marked completed)`);
           }
@@ -86,6 +96,10 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex) {
  */
 export async function runFleet({ all, runId, config, deps, resume }) {
   const log = deps.log ?? (() => {});
+  // Run-scoped quarantine flag. Set when a gate-rejected completion commit could not
+  // be withdrawn: the shared integration branch then carries an ungated commit, so no
+  // further merge may land on it and the run must never open a PR from it.
+  const runState = { contaminated: false, contaminationReason: null };
   // Resume (adversarial-review L3): reuse the recorded run — its integration
   // branch, runId, and reconciled status — instead of starting fresh, so merged
   // tickets are not re-dispatched and the prior integration branch is continued.
@@ -126,7 +140,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     status = withTicket(status, ticket.id, { state: 'building', branch: wt.branch, startSha: wt.startSha, strikes: 0 });
     persist();
     await deps.provision?.({ ticket, worktree: wt.path });
-    const outcome = await advanceTicket(ticket, buildEffects(ticket, wt, deps, integrationBranch, mergeMutex), { log });
+    const outcome = await advanceTicket(ticket, buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState), { log });
     status = withTicket(status, ticket.id, { state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, prosecution: outcome.prosecution ?? null });
     persist();
     await deps.cleanup?.({ ticket, worktree: wt.path, state: outcome.state });
@@ -159,7 +173,13 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   // Run end: open exactly ONE PR from the integration branch to base (§9), only
   // if something merged and the deps provide it. The fleet never pushes base.
   let prCount = 0;
-  if (merged > 0 && deps.openPR) { deps.openPR({ integrationBranch, base: config.base }); prCount = 1; }
+  // A quarantined branch is NEVER opened as a PR, however many other tickets merged
+  // cleanly — the branch itself carries a commit that failed its gate.
+  if (runState.contaminated) {
+    log(`FLEET QUARANTINE: ${integrationBranch} not opened as a PR — ${runState.contaminationReason}. Inspect and clean the branch manually.`);
+  } else if (merged > 0 && deps.openPR) {
+    deps.openPR({ integrationBranch, base: config.base }); prCount = 1;
+  }
 
-  return { integrationBranch, results, merged, prCount, status };
+  return { integrationBranch, results, merged, prCount, status, contaminated: runState.contaminated, contaminationReason: runState.contaminationReason };
 }
