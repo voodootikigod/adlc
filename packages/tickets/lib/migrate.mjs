@@ -13,6 +13,12 @@ import { recordTicketEvidence } from './evidence.mjs';
 import { validateTickets } from './schema.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
 
+// The tracked surface of `.adlc/` after a migration. `!.adlc/manifest.jsonl` is
+// NOT optional: the rails-guard CI migration gate requires hash-bound
+// ticket-migrate/apply evidence to exist in a fresh checkout, and without this
+// negation the ledger stays ignored, `git add -A` silently omits it, and the
+// migration PR the documented command sequence produces is REJECTED for missing
+// evidence.
 const GITIGNORE_STANZA = [
   '.adlc/*',
   '!.adlc/tickets.json',
@@ -21,7 +27,13 @@ const GITIGNORE_STANZA = [
   '!.adlc/ticket-archive/',
   '!.adlc/ticket-archive/**',
   '!.adlc/specs/',
+  '!.adlc/manifest.jsonl',
 ];
+
+// The blanket rule whose position decides whether any `.adlc/` negation works at
+// all: in gitignore, the LAST matching pattern wins, so every negation must sit
+// below it.
+const ADLC_BLANKET = '.adlc/*';
 const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function safeJournalPath(root, value, label) {
   if (typeof value !== 'string' || !value) throw operational('INVALID_JOURNAL', `${label} must be a non-empty relative path`);
@@ -33,12 +45,46 @@ function safeJournalPath(root, value, label) {
   return absolute;
 }
 
+// Ensure the migrated store is tracked, WITHOUT stranding negations the repo
+// already declares.
+//
+// The previous implementation stripped its own stanza lines and re-appended the
+// whole block at the end of the file. That silently broke any `.adlc/` negation
+// it does not itself know about — `!.adlc/tickets.example.json`, `!.adlc/lessons/`,
+// a user's own — because relocating `.adlc/*` to the end left those negations
+// ABOVE the blanket rule, where the later pattern wins and they become dead. The
+// failure is invisible: the file still reads as if the path were tracked.
+//
+// So: when the blanket rule is already present, leave it where it is and insert
+// only the MISSING stanza lines directly after the existing run of `.adlc/`
+// negations that follows it. Nothing moves, so no negation can be orphaned by
+// construction, and repos that already track extra `.adlc/` paths keep them.
+// Only a file with no blanket rule at all gets the whole stanza appended.
 function migrationGitignoreText(original) {
-  let lines = original.split(/\r?\n/);
+  const lines = original.split(/\r?\n/);
   while (lines.at(-1) === '') lines.pop();
-  lines = lines.filter((line) => !GITIGNORE_STANZA.includes(line));
-  if (lines.length && lines.at(-1) !== '') lines.push('');
-  lines.push(...GITIGNORE_STANZA);
+
+  const blanketIndex = lines.lastIndexOf(ADLC_BLANKET);
+  if (blanketIndex === -1) {
+    // Separate the appended stanza from existing rules. The trailing-blank pop
+    // above already guarantees the last line is non-empty, so testing it again
+    // would be dead logic.
+    if (lines.length) lines.push('');
+    lines.push(...GITIGNORE_STANZA);
+    return `${lines.join('\n')}\n`;
+  }
+
+  // Anything below the blanket rule is already effective; only those count as
+  // present. A stanza line sitting above it is dead and must be re-added below.
+  const effective = new Set(lines.slice(blanketIndex + 1));
+  const missing = GITIGNORE_STANZA.filter((line) => line !== ADLC_BLANKET && !effective.has(line));
+  if (missing.length === 0) return original;
+
+  // Append after the contiguous run of `.adlc/` rules following the blanket, so
+  // the block stays together instead of splitting around unrelated entries.
+  let insertAt = blanketIndex + 1;
+  while (insertAt < lines.length && /^!?\.adlc\//.test(lines[insertAt])) insertAt++;
+  lines.splice(insertAt, 0, ...missing);
   return `${lines.join('\n')}\n`;
 }
 
