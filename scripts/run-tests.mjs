@@ -18,7 +18,21 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, delimiter, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Put the repo's node_modules/.bin on PATH for every segment. Some tests spawn
+// the workspace `adlc` bin (e.g. recordBuildGateBypass, the rails-guard-ci
+// rail-freeze tests). Under `npm test` npm prepends .bin to PATH so they resolve;
+// but this runner is also invoked DIRECTLY as `node scripts/run-tests.mjs` (the
+// mutation-gate's slow-path baseline does exactly this), where .bin is NOT on
+// PATH and those spawns fail with ENOENT on a runner without a global adlc — a
+// silent false red. Prepending it here makes the runner self-sufficient either way.
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const SEGMENT_ENV = {
+  ...process.env,
+  PATH: `${join(REPO_ROOT, 'node_modules', '.bin')}${delimiter}${process.env.PATH ?? ''}`,
+};
 
 const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck true';
 
@@ -39,6 +53,11 @@ const SEGMENTS = [
   ['codex agents', 'node --test plugins/adlc-codex/agents/test/*.test.mjs'],
   ['codex mcp', 'node --test plugins/adlc-codex/mcp/test/*.test.mjs'],
   ['codex install smoke', 'node scripts/codex-install-smoke.mjs .'],
+  ['copilot contract', 'node --test plugins/adlc-copilot/test/*.test.mjs'],
+  ['copilot hooks', 'node --test plugins/adlc-copilot/hooks/test/*.test.mjs'],
+  ['copilot lib', 'node --test plugins/adlc-copilot/lib/test/*.test.mjs'],
+  ['copilot mcp', 'node --test plugins/adlc-copilot/mcp/test/*.test.mjs'],
+  ['copilot install smoke', 'node scripts/copilot-install-smoke.mjs .'],
   ['scripts', 'node --test scripts/test/*.test.mjs'],
   ['pi typecheck', `npx tsc ${TSC_FLAGS} plugins/adlc-pi/index.ts`],
   ['pi', 'node --test plugins/adlc-pi/test/*.test.mjs'],
@@ -60,7 +79,7 @@ if (only.length && segments.length === 0) {
 const failed = [];
 for (const [name, command] of segments) {
   console.log(`\n─── ${name}`);
-  const result = spawnSync(command, { shell: true, stdio: 'inherit' });
+  const result = spawnSync(command, { shell: true, stdio: 'inherit', env: SEGMENT_ENV });
   // A signal (status null) is a failure too — never let a killed segment read as a pass.
   if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
 }

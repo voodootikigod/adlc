@@ -461,6 +461,9 @@ for (const target of fileTargets) {
       line: mutant.line,
       operator: mutant.operator,
       killed: trial.killed,
+      invalid: trial.invalid === true,
+      undetermined: trial.undetermined === true,
+      reason: trial.reason ?? null,
       timedOut: trial.timedOut,
       original: mutant.original,
       mutated: mutant.mutated,
@@ -494,9 +497,23 @@ if (mutableExplicitFiles.length > 0) {
   }
 }
 
+// Could not determine validity for some mutant — refuse to report a verdict.
+// Scoring it either way is a guess, and the guess that reopens #293 is the
+// convenient one.
+const undetermined = results.filter((r) => r.undetermined);
+if (undetermined.length > 0) {
+  const where = undetermined.map((r) => `${r.file}:${r.line}${r.reason ? ` (${r.reason})` : ''}`).join(', ');
+  opError(
+    `could not syntax-check ${undetermined.length} mutant(s) (${where}) — the checker did ` +
+    `not run to completion, so whether they were valid is unknown. Refusing to score them: ` +
+    `treating an unknown as valid is how an unparseable mutant gets credited as a kill (#293).`
+  );
+}
+
 // ── reporting ────────────────────────────────────────────────────────────────
 
-const survivors = results.filter((r) => !r.killed);
+const survivors = results.filter((r) => !r.killed && !r.invalid);
+const invalidMutants = results.filter((r) => r.invalid);
 
 if (useJson) {
   printJson(buildJsonReport(results));
@@ -510,6 +527,86 @@ if (results.length === 0) {
   const warnMsg = 'warning: no mutants generated from diff — nothing mutable in diff';
   if (!useJson) console.warn(warnMsg);
   pass();
+}
+
+// FAIL CLOSED when nothing valid ever ran (#293). If every mutant was
+// syntactically invalid, no assertion was exercised and the gate proved exactly
+// nothing — passing here is the false green this check exists to prevent.
+// Reported as an OPERATIONAL failure, not a gate failure: the tests are not at
+// fault, the mutations were.
+// PER-FILE, not just globally. A file whose every mutant was invalid received no
+// coverage check at all — and a global test hides that whenever some OTHER file
+// produced a kill. That is most acute for an explicit --target/--rails file: the
+// caller named it deliberately, and the run would report success without a
+// single test having exercised it.
+// Seeded from the SELECTED TARGETS, not from results: a file that produced no
+// result at all (no recognised mutant, or everything skipped before push) is
+// exactly the case that must not slip through as "no news is good news".
+const validByFile = new Map(fileTargets.map((t) => [t.file, 0]));
+for (const r of results) {
+  const prev = validByFile.get(r.file) ?? 0;
+  validByFile.set(r.file, prev + (r.invalid || r.undetermined ? 0 : 1));
+}
+// EVERY file in the run, not only explicit targets. Restricting this to
+// --target/--rails left the same hole one step over: a diff-derived file whose
+// mutants were all invalid is equally unchecked, and any other file's kill hides
+// it. Whether the caller named the file or the diff did, zero valid mutants
+// means zero evidence about it.
+// Two different zero-valid cases, and conflating them is wrong in both
+// directions:
+//
+//   ATTEMPTED but every mutant invalid/undetermined -> hard failure. A trial ran
+//   and produced no evidence, which is the #293 false-green.
+//
+//   NEVER ATTEMPTED (quota 0 from budget distribution) -> reported, not fatal.
+//   Reserving budget for explicit targets while diff-derived files share what is
+//   left is the documented design (#70/#41/#35); refusing outright would break
+//   it. But it must not be SILENT — a file the gate never looked at is exactly
+//   the place to hide an untested change.
+const attempted = new Set(results.map((r) => r.file));
+const quotaByFile = new Map(fileTargets.map((t) => [t.file, t.quota]));
+// Two reasons a selected file produced nothing, and only one is a budget
+// problem. Saying "no budget" for a file whose changed lines were all comments
+// is a false alarm, and false alarms are how real warnings stop being read.
+const starved = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) === 0);
+const noMutableLines = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) > 0);
+if (starved.length > 0) {
+  console.warn(
+    `hollow-test: ${starved.length} selected file(s) received no mutation budget and were ` +
+    `NOT prosecuted: ${starved.join(', ')} — raise --max to cover them.`
+  );
+}
+if (noMutableLines.length > 0) {
+  console.warn(
+    `hollow-test: ${noMutableLines.length} selected file(s) had budget but no mutable lines ` +
+    `(comments, imports, blank): ${noMutableLines.join(', ')}`
+  );
+}
+
+const unchecked = [...validByFile.entries()]
+  .filter(([f, valid]) => valid === 0 && attempted.has(f))
+  .map(([f]) => f);
+if (unchecked.length > 0) {
+  const named = unchecked.filter((f) => mutableExplicitFiles.includes(f));
+  opError(
+    `every mutant generated for ${unchecked.join(', ')} was syntactically invalid — no test ` +
+    `ran against ${unchecked.length === 1 ? 'it' : 'them'}, so this run says nothing about ` +
+    `${named.length > 0 ? 'the file(s) you asked to prosecute' : 'those changed file(s)'}. ` +
+    `Raise --max so a valid mutant is reached (see #293).`
+  );
+}
+
+if (invalidMutants.length === results.length) {
+  const msg =
+    `every one of the ${results.length} generated mutant(s) was syntactically invalid, so ` +
+    `no assertion was ever exercised — this run proves nothing. Line-based operators can ` +
+    `produce unparseable code on multiline constructs (see issue #293); raise --max so a ` +
+    `valid mutant is reached, or narrow --target to a file with mutable single-line logic.`;
+  if (useJson) {
+    console.error(`error: ${msg}`);
+    process.exit(1);
+  }
+  opError(msg);
 }
 
 if (survivors.length > 0) {

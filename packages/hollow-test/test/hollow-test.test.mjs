@@ -822,6 +822,189 @@ describe('CLI: --source-glob rescues a diff-derived file named like a test', () 
   });
 });
 
+// ── invalid mutants must never be credited as kills (#293) ────────────────
+//
+// runner.mjs scored `killed = timedOut || status !== 0`, so ANY non-zero exit
+// counted as a kill — including a PARSE FAILURE. A mutant that renders the file
+// syntactically invalid was therefore recorded as successfully killed while
+// nothing was tested.
+//
+// The fixture is ordinary JavaScript, deliberately: this is not a
+// TypeScript/JSX problem. `null-return` rewrites the `return {` line to
+// `return null;` and leaves the object's remaining lines stranded, so the file
+// no longer parses. With a per-file quota of one that invalid mutant is the ONLY
+// trial — the gate exits 0 having exercised no assertion at all. A false green
+// from the tool whose entire purpose is detecting false greens.
+
+function createMultilineReturnRepo(dir) {
+  initRepo(dir);
+  mkdirSync(join(dir, 'src'));
+  mkdirSync(join(dir, 'test'));
+  writeFileSync(join(dir, 'src', 'shape.mjs'), [
+    'export function shape() {',
+    '  return {',
+    '    a: 1,',
+    '    b: 2,',
+    '  };',
+    '}',
+    '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'test', 'shape.test.mjs'), [
+    "import { it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { shape } from '../src/shape.mjs';",
+    "it('shape', () => { assert.deepEqual(shape(), { a: 1, b: 2 }); });",
+    '',
+  ].join('\n'));
+  commitAll(dir, 'init');
+  // Second commit touches the return line, so the diff targets it.
+  writeFileSync(join(dir, 'src', 'shape.mjs'), [
+    'export function shape() {',
+    '  return {',
+    '    a: 1,',
+    '    b: 3,',
+    '  };',
+    '}',
+    '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'test', 'shape.test.mjs'), [
+    "import { it } from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { shape } from '../src/shape.mjs';",
+    "it('shape', () => { assert.deepEqual(shape(), { a: 1, b: 3 }); });",
+    '',
+  ].join('\n'));
+  commitAll(dir, 'change the returned shape');
+  return dir;
+}
+
+describe('CLI: a syntactically invalid mutant is not a kill', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-invalid-'));
+    createMultilineReturnRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('marks the unparseable null-return mutant invalid rather than killed', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/shape.mjs', '--max', '20', '--json'],
+      dir
+    );
+    const parsed = JSON.parse(result.stdout);
+
+    // `return {` -> `return null;` strands the object literal's remaining lines,
+    // so the file no longer parses. Verified directly with `node --check`.
+    const nullReturn = parsed.mutants.find((m) => m.operator === 'null-return');
+    assert.ok(nullReturn, `expected a null-return mutant: ${result.stdout}`);
+    assert.equal(nullReturn.status, 'invalid',
+      `an unparseable mutant must not be scored as a kill: ${JSON.stringify(nullReturn)}`);
+
+    // The legitimate mutants on the same file are unaffected — this must not
+    // become "discard anything inconvenient".
+    const offByOne = parsed.mutants.filter((m) => m.operator === 'off-by-one');
+    assert.ok(offByOne.length > 0, 'expected off-by-one mutants too');
+    assert.ok(offByOne.every((m) => m.status === 'killed'),
+      `real mutants must still be killed: ${JSON.stringify(offByOne)}`);
+
+    // Invalid mutants are excluded from the kill accounting, not silently
+    // folded into it.
+    assert.equal(parsed.summary.killed, offByOne.length,
+      'the invalid mutant must not inflate the killed count');
+    assert.ok(parsed.summary.invalid >= 1, 'invalid mutants must be reported');
+  });
+
+  it('fails operationally when EVERY mutant is invalid, rather than passing', () => {
+    // Quota of one: the null-return mutant is the only trial. Pre-fix this
+    // exited 0 — a green gate built entirely on a file that never parsed.
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/shape.mjs', '--max', '1', '--json'],
+      dir
+    );
+    const parsed = JSON.parse(result.stdout);
+    if ((parsed.mutants ?? []).every((m) => m.status === 'invalid')) {
+      assert.notEqual(result.status, 0,
+        `no valid mutant ran, so the gate proved nothing: ${result.stdout}${result.stderr}`);
+    }
+  });
+});
+
+// The all-invalid guard has to be PER FILE. A global check passes the moment any
+// OTHER file yields a kill — so an explicitly named target whose every mutant
+// was unparseable gets reported as success without a single test touching it.
+// That is the worst version of #293: the caller asked for that file specifically.
+describe('CLI: an explicit target with only invalid mutants is not masked', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-perfile-'));
+    createMultilineReturnRepo(dir);
+    // Touch shape.mjs's RETURN line so it is diff-derived, and so the only
+    // changed line there is the one whose mutation cannot parse. (Mutation is
+    // diff-scoped: changing `a: 1` instead would give it a perfectly valid
+    // off-by-one mutant and the case would not reproduce.)
+    writeFileSync(join(dir, 'src', 'shape.mjs'), [
+      'export function shape() {',
+      '  return { // the shape',
+      '    a: 1,',
+      '    b: 3,',
+      '  };',
+      '}',
+      '',
+    ].join('\n'));
+    // A second file with an ordinary, killable single-line mutant.
+    writeFileSync(join(dir, 'src', 'plain.mjs'), 'export const twice = (n) => n * 2;\n');
+    writeFileSync(join(dir, 'test', 'plain.test.mjs'), [
+      "import { it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { twice } from '../src/plain.mjs';",
+      "it('twice', () => { assert.equal(twice(2), 4); });",
+      '',
+    ].join('\n'));
+    commitAll(dir, 'add a plainly mutable file');
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fails even though the other file produced a killed mutant', () => {
+    // --max 2: one mutant each. shape.mjs's single allocated mutant is the
+    // invalid null-return. Without per-file accounting the run exits 0 on the
+    // strength of plain.mjs.
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--target', 'src/shape.mjs', '--max', '2'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.notEqual(result.status, 0,
+      `an explicit target with no valid mutant must not pass: ${out}`);
+    assert.match(out, /src\/shape\.mjs/,
+      'the refusal must name the target that went unchecked');
+  });
+
+  // Same hole one step over: the file arrives via the DIFF rather than --target.
+  // Restricting the guard to explicit targets left this case passing.
+  it('fails for a diff-derived file with no valid mutant, with no --target at all', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--max', '2'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.notEqual(result.status, 0,
+      `a diff-derived file with no valid mutant must not pass: ${out}`);
+    assert.match(out, /src\/shape\.mjs/,
+      'the refusal must name the unchecked file');
+  });
+});
+
 // ── --target / --rails: mutate declared targets outside the diff (#70/#41) ──
 
 describe('CLI: --target mutates a file outside the diff', () => {

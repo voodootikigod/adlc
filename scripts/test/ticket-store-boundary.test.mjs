@@ -11,8 +11,10 @@ const APPROVED = new Set([
   'packages/ticket-sync/lib/store.mjs', // 1.x legacy compatibility adapter
   'plugins/adlc-claude-code/hooks/adlc-hook.mjs',
   'plugins/adlc-codex/hooks/adlc-rails-guard.mjs',
+  'plugins/adlc-copilot/hooks/adlc-rails-guard.mjs',
   'plugins/adlc-cursor/hooks/adlc-pretool.mjs',
   'plugins/adlc-pi/lib/commands.mjs',
+  'plugins/adlc-antigravity/build-gate-inline.mjs',
   // Reader, not a writer: fleet loads the plan (read-only) and reports the
   // '.adlc/tickets.json' path only in an error string; its writeFileSync/mkdirSync/
   // rmSync calls target sandbox temp dirs (mkdtempSync), never the ticket store.

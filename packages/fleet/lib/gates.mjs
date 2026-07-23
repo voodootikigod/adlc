@@ -54,25 +54,89 @@ export function scopeViolations(changedPaths, ticket) {
   return changedPaths.filter((p) => !inScope(ticket, p));
 }
 
+/** flail-detector's gate exit code for "I ran fine and the verdict is flail". */
+const EXIT_FLAIL = 2;
+
+/** The §12 backstop: an unverifiable signal must not cut a build's retry short. */
+const failOpen = () => ({ flail: false, signals: [], failedOpen: true });
+
 /**
  * Consult flail-detector on the accumulated worker log between strikes.
- * Returns { flail:boolean, signals:[] }. FAILS OPEN: any error → not-flail, so
- * the two-strike cap remains the backstop (§12).
+ * Returns { flail:boolean, signals:[] }, or the fail-open shape.
  *
- * @param exec  injectable runner: (bin, args) => stdout string
+ * Two things about the detector's real contract are easy to get wrong, and
+ * getting either one wrong makes this consultation a silent no-op (#284):
+ *
+ *  - Its JSON document is `{ verdict: 'flail'|'clean', signals, bytes, ... }`.
+ *    There is no `detected` field and never has been.
+ *  - It is an ADLC gate, so it signals its verdict through the EXIT CODE too:
+ *    0 = clean, 1 = operational error, 2 = flail. Exit 2 is a successful run
+ *    reporting a positive finding — not a failure — but execFileSync throws on
+ *    any non-zero exit, so that document arrives on the thrown error.
+ *
+ * Only genuinely unverifiable outcomes fail open (§12): a spawn failure, an
+ * operational error (exit 1), a document that will not parse, or a document
+ * whose verdict we do not recognize. That last case is deliberate — if the
+ * detector's schema drifts again, we would rather lose the signal than report
+ * every session clean on a document we no longer understand.
+ *
+ * NOTE: `failedOpen` is currently advisory — no caller reads it (scheduler.mjs
+ * consults `.flail` alone), so a fail-open is indistinguishable at runtime from
+ * a genuine clean verdict. Surfacing it is tracked separately; do not read the
+ * flag's presence here as "the operator will be told".
+ *
+ * @param exec  injectable runner: (bin, args) => stdout. Two shapes are
+ *              accepted, because the two real implementations differ:
+ *              - RETURN the detector's stdout for any exit code. This is what
+ *                the production adapter does (live-deps.mjs, over spawnSync,
+ *                which does not throw).
+ *              - THROW an execFileSync-shaped error whose `status` is the exit
+ *                code and `stdout` is the document. This is what `defaultExec`
+ *                does, since execFileSync throws on any non-zero exit.
+ *              Either way the EXIT CODE is the detector's own signal: 0 clean,
+ *              1 operational error, 2 flail. A runner that discards the status
+ *              and returns stdout regardless cannot distinguish 1 from 2, so
+ *              it degrades to trusting the document alone.
  */
 export function checkFlail(logFile, scope, { adlcBin = 'adlc', exec = defaultExec } = {}) {
+  // `--opt=value` and the `--` terminator keep a glob or path that begins with
+  // "-" from being parsed as a flag. The detector uses node:util.parseArgs in
+  // strict mode, where a bare `--scope -weird/**` is a hard parse error (exit
+  // 1) — which this function would then fail open on. A ticket's own scope
+  // globs must never be able to switch its supervision off.
+  const args = ['flail-detector', '--json'];
+  for (const g of scope ?? []) args.push(`--scope=${g}`);
+  args.push('--', logFile);
+
+  let out;
   try {
-    const args = ['flail-detector', logFile, '--json'];
-    for (const g of scope ?? []) args.push('--scope', g);
-    const out = exec(adlcBin, args);
-    const parsed = JSON.parse(out);
-    return { flail: parsed.detected === true, signals: parsed.signals ?? [] };
-  } catch {
-    return { flail: false, signals: [], failedOpen: true };
+    out = exec(adlcBin, args);
+  } catch (e) {
+    // Exit 2 is a verdict, not an error — recover the document it printed.
+    if (e?.status !== EXIT_FLAIL || typeof e.stdout !== 'string') return failOpen();
+    out = e.stdout;
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(out);
+  } catch {
+    return failOpen();
+  }
+
+  if (parsed?.verdict !== 'flail' && parsed?.verdict !== 'clean') return failOpen();
+  // `signals` gets the same strictness as `verdict`: the return shape is
+  // documented as an array, so a drifted non-array is drift, not a value.
+  if (parsed.signals !== undefined && !Array.isArray(parsed.signals)) return failOpen();
+  return { flail: parsed.verdict === 'flail', signals: parsed.signals ?? [] };
 }
 
+// The detector's document embeds per-signal detail drawn from the session log,
+// and the session log is written by the very agent this gate supervises. On
+// Node's default 1 MiB maxBuffer, the noisiest sessions — exactly the ones the
+// size and edit-churn signals exist to catch — would overflow and fail open.
+export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+
 function defaultExec(bin, args) {
-  return execFileSync(bin, args, { encoding: 'utf8' });
+  return execFileSync(bin, args, { encoding: 'utf8', maxBuffer: MAX_OUTPUT_BYTES });
 }

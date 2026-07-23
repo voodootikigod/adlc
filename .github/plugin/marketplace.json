@@ -1,0 +1,18 @@
+{
+  "name": "adlc",
+  "owner": {
+    "name": "Chris Williams"
+  },
+  "metadata": {
+    "description": "The Agentic Development Lifecycle toolkit, packaged for the GitHub Copilot CLI.",
+    "version": "1.6.0"
+  },
+  "plugins": [
+    {
+      "name": "adlc-copilot",
+      "description": "Embrace the ADLC from inside the GitHub Copilot CLI: phase-routing skills, rail-protecting hooks, allowlisted MCP gate tools, and read-only prosecution agents. Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli).",
+      "version": "1.6.0",
+      "source": "./plugins/adlc-copilot"
+    }
+  ]
+}

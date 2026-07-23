@@ -54,12 +54,12 @@ Then `/adlc-init` (or manual bootstrap). Enforcement: `export ADLC_P4_ENFORCEMEN
 
 | Phase | Antigravity surface |
 |-------|---------------------|
-| P0 Triage | `/adlc-init`, `adlc-ticket` skill → `.adlc/tickets.json` |
+| P0 Triage | `/adlc-init`, `/adlc-status`, `/adlc-doctor`, `adlc-ticket` skill → `.adlc/tickets.json` |
 | P1 Interrogate | `adlc spec-lint/premortem/parallax` via the `adlc` CLI |
 | P2 Decompose | `adlc coldstart/model-router/merge-forecast` |
-| P3 Rail | **PreToolUse rails-guard hook** (advisory) + CI gate (guarantee) |
-| P4 Build | doctrine skill; `adlc flail-detector/consensus-fix` |
-| P5 Prosecute | `adlc-prosecutor` skill + `prosecutor` agent; `adlc hollow-test/behavior-diff` |
+| P3 Rail | **PreToolUse rails-guard hook** (advisory) + **build-gate backstop** + CI gate (guarantee) |
+| P4 Build | doctrine skill; **in-session flail tracker** + `adlc flail-detector/consensus-fix` |
+| P5 Prosecute | `adlc-prosecutor` skill + **5-lens prosecutor roster** (`contract`, `correctness`, `diff`, `security`, `tests`) + `verifier` |
 | P6 Integrate | human gate — `adlc gate-manifest` |
 | P7 Distill | `adlc lesson-foundry/rejection-mining` |
 

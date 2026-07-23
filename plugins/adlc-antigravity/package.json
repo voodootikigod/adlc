@@ -24,6 +24,9 @@
     "access": "public",
     "provenance": true
   },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "dependencies": {},
   "agy": {
     "hooks": "./hooks.json",
@@ -32,9 +35,11 @@
   },
   "files": [
     "agents/",
+    "build-gate-inline.mjs",
     "commands/",
     "constants.mjs",
     "core-inline.mjs",
+    "flail-inline.mjs",
     "generated-active-ticket.mjs",
     "generated-ticket-reader.mjs",
     "hooks/",

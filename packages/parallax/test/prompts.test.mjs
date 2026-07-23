@@ -98,7 +98,7 @@ test('buildRouteAnswerPrompt: includes context file contents', () => {
     { path: 'spec.md', content: 'retry 3 times with exponential backoff' },
   ];
   const prompt = buildRouteAnswerPrompt('What is the retry policy?', contextFiles);
-  assert.ok(prompt.includes('spec.md'));
+  assert.ok(prompt.includes('=== spec.md (38 chars, 1 lines) ==='));
   assert.ok(prompt.includes('retry 3 times with exponential backoff'));
 });
 

@@ -127,6 +127,33 @@ Within diff-derived eligible files, only lines changed in the diff are
 targeted; `--target`/`--rails` files are mutated in their entirety. Lines that
 are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 
+### Invalid mutants
+
+A mutation that produces code Node cannot parse is **discarded**, not scored.
+Line-based operators produce these routinely — `null-return` rewrites a
+multiline `return {` to `return null;` and strands the object literal's
+remaining lines.
+
+This matters because a kill is inferred from a non-zero exit, and a file that
+does not parse also exits non-zero. Counting such a mutant as *killed* fakes
+coverage; counting it as *survived* blames the tests for code that was never
+valid. It is reported in its own `invalid` bucket in both the table and JSON.
+
+If **every** mutant in a run is invalid, hollow-test exits **1** (operational
+failure) rather than passing: no assertion was exercised, so the run proves
+nothing.
+
+Validation uses `node --check`, so no parser dependency is added and the real
+file extension and package type are honoured. Both the syntax check and the test run are **tri-state** — `valid`, `invalid`, or `unknown`. "Could not
+determine" never collapses into "valid": if the checker is killed, times out, or
+cannot spawn, the run fails operationally rather than guessing. The same applies to the test command itself: a spawn failure (EAGAIN, ENOMEM) is not a timeout, and a timeout is the only non-completion that counts as a kill. A kill must mean the tests ran and failed. Assuming
+validity would run the test command against unparseable source, whose non-zero
+exit is then scored as a kill — the very path this closes.
+
+The all-invalid guard is applied **per file**, not just globally. A global check
+passes the moment any other file yields a kill, which would let an explicitly
+named `--target` go entirely untested while the run reports success.
+
 ### Mutation operators (from `@adlc/core`)
 
 | Operator | Example |

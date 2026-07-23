@@ -11,7 +11,8 @@ import {
   filterTargetFiles, buildFileTargets,
   readRailsFromTicketFile, expandRailsToFiles,
 } from '../lib/targets.mjs';
-import { buildJsonReport } from '../lib/report.mjs';
+import { buildJsonReport, printTable } from '../lib/report.mjs';
+import { checkSyntax, classifyTestResult } from '../lib/runner.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
 
@@ -246,5 +247,208 @@ describe('buildJsonReport', () => {
     ];
     const report = buildJsonReport(results);
     assert.equal(report.mutants[0].timedOut, true);
+  });
+});
+
+// ── invalid mutants in the report surfaces (#293) ────────────────────────────
+//
+// An unparseable mutant belongs to NEITHER bucket. Counting it killed fakes
+// coverage; counting it survived blames the tests for code that was never
+// valid. Both report surfaces have to agree on that, and the human-readable
+// table is the one a person actually reads when a gate fails.
+
+const MIXED = [
+  { file: 'a.mjs', line: 1, operator: 'null-return', killed: false, invalid: true,  timedOut: false, original: 'return {', mutated: 'return null;' },
+  { file: 'a.mjs', line: 2, operator: 'off-by-one',  killed: true,  invalid: false, timedOut: false, original: 'a: 1,',    mutated: 'a: 2,' },
+  { file: 'a.mjs', line: 3, operator: 'bool-flip',   killed: false, invalid: false, timedOut: false, original: 'x = true', mutated: 'x = false' },
+];
+
+describe('buildJsonReport with invalid mutants', () => {
+  it('counts invalid separately from killed and survived', () => {
+    const r = buildJsonReport(MIXED);
+    assert.deepEqual(r.summary, { total: 3, killed: 1, survived: 1, invalid: 1, undetermined: 0 });
+  });
+
+  it('labels each mutant with its own status', () => {
+    const r = buildJsonReport(MIXED);
+    assert.deepEqual(r.mutants.map((m) => m.status), ['invalid', 'killed', 'survived']);
+  });
+
+  it('never lets an invalid mutant inflate the killed count', () => {
+    const allInvalid = MIXED.map((m) => ({ ...m, killed: true, invalid: true }));
+    const r = buildJsonReport(allInvalid);
+    assert.equal(r.summary.killed, 0, 'invalid wins over a stale killed flag');
+    assert.equal(r.summary.invalid, 3);
+  });
+});
+
+describe('printTable with invalid mutants', () => {
+  function capture(results) {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(' '));
+    try { printTable(results); } finally { console.log = original; }
+    return lines.join('\n');
+  }
+
+  it('shows INVALID rather than SURVIVED, and explains why', () => {
+    const out = capture(MIXED);
+    assert.match(out, /INVALID\s+a\.mjs:1/);
+    assert.match(out, /did not parse/);
+    // The invalid row must not be presented as a survivor — that would read as
+    // "your tests failed to catch this" for code that never compiled.
+    assert.doesNotMatch(out, /SURVIVED\s+a\.mjs:1/);
+  });
+
+  it('totals exclude invalid from both buckets and report it separately', () => {
+    const out = capture(MIXED);
+    assert.match(out, /Total: 3\s+Killed: 1\s+Survived: 1\s+Invalid: 1/);
+  });
+
+  it('omits the Invalid column entirely when there are none', () => {
+    const out = capture(MIXED.filter((m) => !m.invalid));
+    assert.match(out, /Total: 2\s+Killed: 1\s+Survived: 1/);
+    assert.doesNotMatch(out, /Invalid:/);
+  });
+
+  it('prints the diff for survivors and invalids, since both need inspecting', () => {
+    const out = capture(MIXED);
+    assert.match(out, /original: return \{/);   // invalid
+    assert.match(out, /original: x = true/);     // survivor
+  });
+});
+
+// ── checkSyntax is TRI-STATE (#293) ──────────────────────────────────────────
+//
+// "Could not determine" is not the same as "valid". Treating a spawn failure or
+// timeout as valid reopens the exact false-kill path this work closes: the test
+// command then runs against unparseable source, exits non-zero on the parse
+// error, and that is scored as a kill. Transient process exhaustion would be
+// silently converted into coverage evidence.
+
+describe('checkSyntax', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-checksyntax-'));
+
+  it('reports valid source as valid', () => {
+    const f = join(dir, 'ok.mjs');
+    writeFileSync(f, 'export const a = 1;\n');
+    assert.equal(checkSyntax(f, dir), 'valid');
+  });
+
+  it('reports unparseable source as invalid', () => {
+    const f = join(dir, 'bad.mjs');
+    writeFileSync(f, 'export function f() {\n  return null;\n    a: 1,\n  };\n}\n');
+    assert.equal(checkSyntax(f, dir), 'invalid');
+  });
+
+  it('reports UNKNOWN — never valid — when the checker cannot run', () => {
+    const f = join(dir, 'ok2.mjs');
+    writeFileSync(f, 'export const a = 1;\n');
+    assert.equal(
+      checkSyntax(f, dir, join(dir, 'no-such-node-binary')),
+      'unknown',
+      'a checker that cannot run proves nothing about the file'
+    );
+  });
+});
+
+// A checker failure is NOT a survivor. Mapping it to `survived` asserts a test
+// outcome for a test that never ran, and points remediation at the test suite
+// when the real problem is the execution environment.
+describe('report surfaces distinguish a checker failure from a survivor', () => {
+  const WITH_CHECK_FAILURE = [
+    { file: 'a.mjs', line: 1, operator: 'null-return', killed: false, invalid: false, undetermined: true,  timedOut: false, original: 'return {', mutated: 'return null;' },
+    { file: 'a.mjs', line: 2, operator: 'bool-flip',   killed: false, invalid: false, undetermined: false, timedOut: false, original: 'x = true', mutated: 'x = false' },
+  ];
+
+  it('JSON gives it its own status and keeps it out of survived', () => {
+    const r = buildJsonReport(WITH_CHECK_FAILURE);
+    assert.equal(r.summary.survived, 1, 'only the genuine survivor counts');
+    assert.equal(r.summary.undetermined, 1);
+    assert.deepEqual(r.mutants.map((m) => m.status), ['undetermined', 'survived']);
+  });
+
+  it('carries the reason, so a checker failure is distinguishable from a launch failure', () => {
+    const withReason = [{ ...WITH_CHECK_FAILURE[0], reason: 'test command did not run (EAGAIN)' }];
+    const r = buildJsonReport(withReason);
+    assert.equal(r.mutants[0].reason, 'test command did not run (EAGAIN)');
+  });
+
+  it('the table does not label it SURVIVED', () => {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(' '));
+    try { printTable(WITH_CHECK_FAILURE); } finally { console.log = original; }
+    const out = lines.join('\n');
+    assert.doesNotMatch(out, /SURVIVED\s+a\.mjs:1/);
+    assert.match(out, /UNDETERMINED\s+a\.mjs:1/);
+  });
+});
+
+// ── classifyTestResult: a kill must mean the tests RAN and failed ────────────
+//
+// This previously read `timedOut = signal === 'SIGTERM' || status === null`,
+// folding spawn failures into "timed out" — and a timeout counts as a kill. So
+// a transient inability to LAUNCH the test command became coverage evidence:
+// the same false-kill shape as an unparseable mutant (#293), one layer down.
+//
+// EAGAIN/ENOMEM under process pressure cannot be provoked reliably in a test,
+// which is precisely how this stayed unnoticed. Hence synthetic results.
+
+describe('classifyTestResult', () => {
+  it('a completed run carries its exit status and is neither timeout nor spawn failure', () => {
+    assert.deepEqual(classifyTestResult({ status: 0, signal: null }),
+      { status: 0, timedOut: false, spawnFailed: false, reason: null });
+    assert.deepEqual(classifyTestResult({ status: 1, signal: null }),
+      { status: 1, timedOut: false, spawnFailed: false, reason: null });
+  });
+
+  it('a real timeout is a timeout, in both shapes Node reports it', () => {
+    // SIGTERM from the `timeout` option...
+    assert.equal(classifyTestResult({ status: null, signal: 'SIGTERM' }).timedOut, true);
+    // ...and ETIMEDOUT, which other Node versions surface instead.
+    const err = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    assert.equal(classifyTestResult({ status: null, signal: null, error: err }).timedOut, true);
+  });
+
+  it('a spawn failure is NOT a timeout and NOT a kill', () => {
+    for (const code of ['EAGAIN', 'ENOMEM', 'ENOENT']) {
+      const error = Object.assign(new Error(code), { code });
+      const c = classifyTestResult({ status: null, signal: null, error });
+      assert.equal(c.spawnFailed, true, `${code} must be a spawn failure`);
+      assert.equal(c.timedOut, false, `${code} must not masquerade as a timeout`);
+      assert.equal(c.reason, code);
+    }
+  });
+
+  it('an unexpected signal is undetermined, not a timeout', () => {
+    const c = classifyTestResult({ status: null, signal: 'SIGKILL' });
+    assert.equal(c.spawnFailed, true);
+    assert.equal(c.timedOut, false);
+    assert.match(c.reason, /SIGKILL/);
+  });
+
+  // `error` only reports whether the SHELL launched. If /bin/sh starts but
+  // cannot exec the inner test binary it exits 126/127 with a numeric status —
+  // which would otherwise read as a completed run and be credited as a kill.
+  // The green baseline already proved this command can launch, so a 126/127
+  // during a mutant trial is a launch regression, not a verdict.
+  it('shell-level launch failures (126/127) are undetermined, not kills', () => {
+    for (const status of [126, 127]) {
+      const c = classifyTestResult({ status, signal: null });
+      assert.equal(c.spawnFailed, true, `exit ${status} must not be a verdict`);
+      assert.match(c.reason, /could not launch/);
+    }
+    // ...but ordinary non-zero exits remain real test failures.
+    for (const status of [1, 2, 125, 128]) {
+      assert.equal(classifyTestResult({ status, signal: null }).spawnFailed, false,
+        `exit ${status} is a genuine test failure`);
+    }
+  });
+
+  it('a missing exit status with no error or signal is undetermined', () => {
+    const c = classifyTestResult({ status: null, signal: null });
+    assert.equal(c.spawnFailed, true);
+    assert.equal(c.timedOut, false);
   });
 });
