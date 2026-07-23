@@ -42,13 +42,31 @@ test('AC1: Cursor plugin manifest locksteps package version (T47)', () => {
   assert.ok(existsSync(manifestPath), '.cursor-plugin/plugin.json must exist');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(manifest.name, 'adlc-cursor');
+  assert.equal(manifest.displayName, 'ADLC for Cursor');
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.commands, './command/');
   assert.equal(manifest.hooks, './hooks/hooks.json');
   assert.equal(manifest.skills, './skills/');
   assert.equal(manifest.rules, './rules/');
-  assert.equal(manifest.logo, 'assets/logo.svg');
+  assert.equal(manifest.mcpServers, './mcp.json');
+  assert.equal(manifest.logo, 'assets/logo.png');
+  assert.ok(existsSync(join(pkgDir, 'assets', 'logo.png')), 'assets/logo.png must exist');
   assert.ok(existsSync(join(pkgDir, 'assets', 'logo.svg')), 'assets/logo.svg must exist');
+  assert.match(manifest.description, /Cursor/i);
+  assert.doesNotMatch(manifest.description, /Claude Code/i);
+});
+
+test('AC7/T65: mcp.json launches the Roots proxy wrapper, not raw adlc mcp-server', () => {
+  const mcpPath = join(pkgDir, 'mcp.json');
+  assert.ok(existsSync(mcpPath), 'mcp.json must exist');
+  const mcp = JSON.parse(readFileSync(mcpPath, 'utf8'));
+  const adlc = mcp.mcpServers?.adlc;
+  assert.ok(adlc, 'mcpServers.adlc required');
+  assert.equal(adlc.command, 'node');
+  assert.ok(adlc.args?.some((a) => /adlc-mcp-wrapper\.mjs/.test(String(a))));
+  assert.ok(!JSON.stringify(adlc).includes('mcp-server'), 'must not wire raw mcp-server argv');
+  assert.ok(existsSync(join(pkgDir, 'bin', 'adlc-mcp-wrapper.mjs')));
+  assert.equal(pkg.cursor?.mcpServers, './mcp.json');
 });
 
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {
@@ -95,7 +113,7 @@ test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never 
 
 test('AC2: files allowlist ships the runtime surface and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'rails-checker.mjs', 'rules/', 'skills/', '.cursor-plugin/', 'assets/', 'README.md', 'LICENSE']) {
+  for (const entry of ['agents/', 'bin/', 'command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'mcp.json', 'rails-checker.mjs', 'rules/', 'skills/', '.cursor-plugin/', 'assets/', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -107,12 +125,13 @@ test('AC2: npm pack --dry-run ships the runtime surface and NO test files', () =
   const manifest = JSON.parse(res.stdout);
   const paths = manifest[0].files.map((f) => f.path.replace(/^\.\//, ''));
 
-  for (const dir of ['command/', 'hooks/', 'lib/', 'rules/', 'skills/', '.cursor-plugin/', 'assets/']) {
+  for (const dir of ['agents/', 'bin/', 'command/', 'hooks/', 'lib/', 'rules/', 'skills/', '.cursor-plugin/', 'assets/']) {
     assert.ok(paths.some((p) => p.startsWith(dir)), `pack must include ${dir}`);
   }
-  for (const file of ['constants.mjs', 'hooks.json', 'rails-checker.mjs', 'README.md', 'LICENSE']) {
+  for (const file of ['constants.mjs', 'hooks.json', 'mcp.json', 'rails-checker.mjs', 'README.md', 'LICENSE']) {
     assert.ok(paths.includes(file), `pack must include ${file}`);
   }
+  assert.ok(paths.some((p) => p.includes('adlc-mcp-wrapper.mjs')), 'pack must include MCP wrapper');
   assert.ok(!paths.some((p) => p.startsWith('test/')), `pack must NOT include test/: ${paths.filter((p) => p.startsWith('test/')).join(', ')}`);
 });
 

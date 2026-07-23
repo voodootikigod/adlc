@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-pretool-1",
+  "tool_name": "Write",
+  "tool_use_id": "tu-1",
+  "tool_input": { "file_path": "src/free.js" },
+  "workspace_roots": ["__ROOT__"]
+}

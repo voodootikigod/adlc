@@ -35,6 +35,15 @@ in-session (no API keys). Prefer that over wiring providers.
 **Enforcement honesty:** Cursor `preToolUse` deny is best-effort. The
 unbypassable control is the CI rail-freeze gate (`docs/ci/rails-guard.yml`).
 
-**P5 caveat:** `/adlc-prosecute` runs five lenses sequentially in one context
-(weaker independence than Claude Code / OpenCode subagent fan-out). For the
-cross-model risk gate run `npx adversarial-review --providers <a,b>`.
+**MCP tools (packaged):** the plugin ships `mcp.json` → a lifecycle Roots
+proxy (`bin/adlc-mcp-wrapper.mjs`) that spawns `adlc mcp-server` only after
+resolving a consumer root. Tools: `adlc_gate`, `adlc_prosecute`. Requires
+`adlc` on PATH (`npm i -g @adlc/cli`). Status until an installed-Cursor Roots
+proof is recorded: **wrapper landed / channel unverified** — do not treat MCP
+as production-shipped. Never guess `process.cwd()`; multi-root ambiguity fails
+closed.
+
+**P5 caveat:** prefer Task fan-out via packaged `agents/prosecutor-*` (fresh
+context per lens). Sequential same-context is a **degraded fallback** with
+weaker independence. For the cross-model risk gate run
+`npx adversarial-review --providers <a,b>`.

@@ -1,12 +1,7 @@
 #!/usr/bin/env node
-// adlc-stop.mjs — end-of-session audit for Cursor (T18). DISABLED BY DEFAULT.
-//
-// The Cursor `stop` event is NOT pinned against current Cursor documentation
-// (ADR 0006 pins only preToolUse / afterFileEdit / beforeShellExecution /
-// beforeReadFile). Per the no-invented-events rule (cursor-native-parity spec
-// decision 4), the scaffolder does NOT wire this script into .cursor/hooks.json
-// unless explicitly opted in (scaffold option `wireUnpinned` /
-// ADLC_CURSOR_WIRE_UNPINNED=1). The pinning TODO lives in ADR 0006.
+// adlc-stop.mjs — end-of-session audit for Cursor (T18 / T47).
+// Wired by default (documented Cursor `stop` event); opt out with scaffold
+// `wireUnpinned: false`, `--no-unpinned`, or ADLC_CURSOR_WIRE_UNPINNED=0.
 //
 // What it does (advisory only, never blocks, never throws):
 //   1. `adlc gate-manifest verify --json` — is the gate-evidence chain intact?

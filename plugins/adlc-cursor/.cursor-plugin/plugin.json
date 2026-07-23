@@ -1,5 +1,6 @@
 {
   "name": "adlc-cursor",
+  "displayName": "ADLC for Cursor",
   "version": "1.6.0",
   "description": "Agentic Development Lifecycle for Cursor — rails-guard hooks, phase skills, and /adlc-* commands backed by @adlc/cli.",
   "author": {
@@ -17,9 +18,18 @@
     "cursor",
     "rails"
   ],
-  "logo": "assets/logo.svg",
+  "category": "developer-tools",
+  "tags": [
+    "lifecycle",
+    "rails",
+    "gates",
+    "hooks"
+  ],
+  "logo": "assets/logo.png",
   "rules": "./rules/",
   "commands": "./command/",
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json"
+  "agents": "./agents/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./mcp.json"
 }

@@ -22,6 +22,7 @@ function listEntries(relDir, { dirs = false, files = false, ext = null } = {}) {
 const HOOK_EVENT_NAMES = new Set([
   'PreToolUse', 'PostToolUse', 'SessionStart', 'Stop',
   'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'stop', 'beforeSubmitPrompt',
+  'sessionStart', 'preCompact', 'subagentStart', 'subagentStop',
   'PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop',
 ]);
 

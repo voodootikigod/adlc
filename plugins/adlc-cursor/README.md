@@ -12,9 +12,11 @@ From a clone of this repository (Cursor plugin marketplace):
 
 1. Add the repo as a Cursor plugin marketplace (see
    [Cursor plugins](https://cursor.com/docs/reference/plugins) — root
-   `.cursor-plugin/marketplace.json` lists `adlc-cursor`).
-2. Install the `adlc-cursor` plugin.
-3. Install the gate toolkit and initialize the repo runtime:
+   `.cursor-plugin/marketplace.json` is marketplace `adlc-plugins` and lists
+   **ADLC for Cursor** / `adlc-cursor`).
+2. Install **ADLC for Cursor** (`adlc-cursor`) — not a Claude Code–named `adlc`
+   entry from this monorepo.
+3. In Cursor, run `/adlc-init` (or):
 
 ```sh
 npm install -g @adlc/cli
@@ -38,10 +40,15 @@ project files.
 
 ## What you get
 
+- **`sessionStart`** — ticket/rails context injection (best-effort) + session id env.
 - **`preToolUse` dispatcher** — rails decision first; frozen-rail edits denied.
 - **`afterFileEdit` audit** — observational rail + flail notice.
 - **`beforeShellExecution` advisory** — honesty nudge; never denies.
 - **`stop` / `beforeSubmitPrompt`** — stop-audit + preflight (Cursor-documented).
+- **MCP (wrapper landed / channel unverified)** — `mcp.json` runs the Roots
+  proxy (`bin/adlc-mcp-wrapper.mjs`) then `adlc mcp-server` with the resolved
+  consumer cwd. Exposes `adlc_gate` / `adlc_prosecute`. Missing `adlc` on PATH
+  surfaces as Cursor's normal MCP start failure (`npm i -g @adlc/cli`).
 - **Skills** — `adlc` phase router + `adlc-init`.
 - **Command palette** — `/adlc-init`, `/adlc-ticket`, `/adlc-spec`,
   `/adlc-approve-spec`, `/adlc-decompose`, `/adlc-verify-build`,

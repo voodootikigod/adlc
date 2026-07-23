@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// adlc-pretool.mjs — the SINGLE Cursor `preToolUse` dispatcher (T18).
+// adlc-pretool.mjs — the SINGLE Cursor `preToolUse` dispatcher (T18 / T64).
 //
 // Cursor's multi-entry-per-event ordering and permission-combination semantics
 // are UNPINNED (ADR 0006), so a second preToolUse entry could mask a rails
@@ -21,68 +21,52 @@
 //
 // HONESTY (binding, cursor-native-parity spec decision 7): the buildgate is
 // ADVISORY and has NO unbypassable backstop. The CI rail-freeze gate enforces
-// rail immutability, not fitness-to-build; the depth signal below is an
-// agent-writable .adlc/ file. The gate ships DISABLED by default behind
-// ADLC_BUILD_GATE_ENFORCEMENT=1 (mirroring ADLC_P4_ENFORCEMENT).
+// rail immutability, not fitness-to-build; the depth signal is an
+// agent-writable file under the user-scoped ADLC state dir. The gate ships
+// DISABLED by default behind ADLC_BUILD_GATE_ENFORCEMENT=1 (mirroring
+// ADLC_P4_ENFORCEMENT).
 //
-// Depth signal: Cursor hooks receive no transcript_path, so depth is a
-// tool-call counter this hook persists under .adlc/ (a weak, agent-writable
-// proxy — documented as such). Session scoping: the preToolUse payload is NOT
-// pinned to carry a conversation/session id (ADR 0006), so the counter is
-// scoped by TTL staleness (SESSION_TTL_MS of inactivity resets it) plus an
-// opportunistic reset when a conversation-id-shaped field IS present and
-// changes. ADLC_BUILD_GATE_DEPTH overrides the counter when set (numeric).
+// Depth signal (T64): per-session counters under ~/.adlc/ (or
+// ADLC_CURSOR_STATE_DIR), keyed by SHA-256 session id; idempotent on
+// tool_use_id. Session id from resolveSessionIdentity (session_id /
+// conversation_id / ADLC_CURSOR_SESSION_ID only).
 
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { decide, extractToolName, extractFilePaths, resolveOwning } from './adlc-rails-guard.mjs';
 import { classifyTool, isShellTool } from '../rails-checker.mjs';
-import { SESSION_TTL_MS, DEPTH_COUNTER_FILE } from '../constants.mjs';
 import { loadTickets, ticketStoreExists } from '@adlc/core';
-
-// Conversation/session-id-shaped fields seen across agent-hook payloads. NOT
-// pinned for Cursor (ADR 0006) — read opportunistically and defensively, the
-// same discipline as the frozen guard's TOOL_NAME_KEYS.
-const CONVERSATION_ID_KEYS = [
-  'conversation_id', 'conversationId', 'session_id', 'sessionId',
-  'thread_id', 'threadId', 'generation_id', 'generationId',
-];
-
-/** Best-effort conversation/session id from an (unpinned) hook payload. */
-export function extractConversationId(payload) {
-  if (!payload || typeof payload !== 'object') return null;
-  for (const k of CONVERSATION_ID_KEYS) {
-    const v = payload[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
-  }
-  return null;
-}
+import { resolveSessionIdentity } from '../lib/session-identity.mjs';
+import { bumpDepthCounter as bumpDepthCounterState } from '../lib/session-state.mjs';
+import { decideP5SubagentPolicy, isP5TaskPayload } from '../lib/p5-subagent-policy.mjs';
 
 /**
- * Increment the session-scoped tool-call depth counter persisted at
- * .adlc/<DEPTH_COUNTER_FILE>. The stored count is REUSED only when the file is
- * fresh (updated within SESSION_TTL_MS) AND the conversation id (when both
- * sides have one) matches; otherwise the counter resets to zero first — a
- * fresh session must start un-degraded. Returns the post-increment depth.
- * Throws on persistence failure (the caller decides the fail direction).
+ * Prefer pinned session_id / conversation_id (+ env). Rejects thread/generation
+ * as session keys (T64). Legacy name kept for build-gate tests.
  */
-export function bumpDepthCounter(root, { now = Date.now(), conversationId = null, ttlMs = SESSION_TTL_MS } = {}) {
-  const file = join(root, '.adlc', DEPTH_COUNTER_FILE);
-  let count = 0;
-  try {
-    const data = JSON.parse(readFileSync(file, 'utf8'));
-    const fresh = typeof data?.updatedAt === 'number' && now - data.updatedAt >= 0 && now - data.updatedAt <= ttlMs;
-    const sameConversation = !conversationId || !data?.conversationId || data.conversationId === conversationId;
-    if (fresh && sameConversation && Number.isInteger(data?.count) && data.count >= 0) count = data.count;
-  } catch {
-    // Missing or corrupt counter file → treat as a fresh session (count 0).
-  }
-  const next = count + 1;
-  const record = { count: next, updatedAt: now };
-  if (conversationId) record.conversationId = conversationId;
-  writeFileSync(file, `${JSON.stringify(record)}\n`);
-  return next;
+export function extractConversationId(payload, env = process.env) {
+  const id = resolveSessionIdentity(payload, env);
+  if (!id.ok || id.conflict) return null;
+  return id.sessionId;
+}
+
+/** Per-session depth bump (user-scoped state). Re-exported shape for tests. */
+export function bumpDepthCounter(rootIgnored, opts = {}) {
+  const {
+    now = Date.now(),
+    conversationId = null,
+    sessionId = conversationId,
+    toolUseId = null,
+    env = process.env,
+    ttlMs,
+  } = opts;
+  return bumpDepthCounterState(rootIgnored, {
+    now,
+    sessionId,
+    toolUseId: toolUseId ?? opts.tool_use_id ?? null,
+    env,
+    ttlMs,
+  });
 }
 
 /** The buildgate deny verdict in the pinned Cursor preToolUse stdout shape. */
@@ -155,12 +139,27 @@ export async function consultBuildGate(payload, {
     // attempt (the `mutating` surface above: a known mutator OR an unrecognized
     // non-shell structured tool), matching the rails path's fail-closed surface
     // rather than a narrow known-name allowlist.
+    const identity = resolveSessionIdentity(payload, env);
     let depth;
     let counterError;
-    try {
-      depth = bumpDepthCounter(root, { now, conversationId: extractConversationId(payload) });
-    } catch (err) {
-      counterError = err;
+    if (identity.conflict) {
+      // Env≠payload: do not mutate named session state; anonymous TTL singleton
+      // would still muddy isolation — treat as unreadable depth for mutating.
+      counterError = new Error(identity.message ?? 'session identity conflict');
+    } else {
+      try {
+        const toolUseId = typeof payload?.tool_use_id === 'string'
+          ? payload.tool_use_id
+          : (typeof payload?.toolUseId === 'string' ? payload.toolUseId : null);
+        depth = bumpDepthCounter(root, {
+          now,
+          sessionId: identity.sessionId,
+          toolUseId,
+          env,
+        });
+      } catch (err) {
+        counterError = err;
+      }
     }
     const envDepth = Number.parseInt(env.ADLC_BUILD_GATE_DEPTH ?? '', 10);
     if (Number.isFinite(envDepth)) depth = envDepth;
@@ -221,6 +220,21 @@ export async function consultBuildGate(payload, {
 export async function dispatch(payload, { root, env = process.env, now, importModule } = {}) {
   const rails = decide(payload, root != null ? { root, env } : { env });
   if (rails.permission !== 'allow') return rails; // any non-allow returned VERBATIM
+
+  // T67: authoritative P5 Task/subagent allowlist on preToolUse (after rails allow).
+  const toolName = extractToolName(payload);
+  if (isP5TaskPayload(payload, toolName)) {
+    const p5 = decideP5SubagentPolicy(payload, { env, now: now ?? Date.now(), toolName });
+    if (p5.permission !== 'allow') {
+      return {
+        permission: p5.permission,
+        user_message: p5.reason,
+        agent_message:
+          `${p5.reason} (authoritative preToolUse Task allowlist during P5). ` +
+          'Nested Task lineage is degraded/permissive until proven — see ADR-0006.',
+      };
+    }
+  }
 
   if (env.ADLC_BUILD_GATE_ENFORCEMENT !== '1') return rails; // buildgate is default-OFF
 

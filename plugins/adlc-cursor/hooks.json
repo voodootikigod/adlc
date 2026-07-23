@@ -1,6 +1,13 @@
 {
   "version": 1,
   "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-session-start.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
     "preToolUse": [
       {
         "command": "node ./node_modules/@adlc/cursor/hooks/adlc-pretool.mjs",
@@ -19,6 +26,27 @@
     "beforeShellExecution": [
       {
         "command": "node ./node_modules/@adlc/cursor/hooks/adlc-shell-advisory.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-precompact.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-subagent.mjs",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "node ./node_modules/@adlc/cursor/hooks/adlc-subagent.mjs --stop",
         "timeout": 10,
         "failClosed": false
       }

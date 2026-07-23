@@ -145,8 +145,21 @@ test('mergeHooks wires stop/preflight by default; wireUnpinned:false removes ADL
   );
   assert.deepEqual(
     Object.keys(base.hooks).sort(),
-    ['afterFileEdit', 'beforeShellExecution', 'beforeSubmitPrompt', 'preToolUse', 'stop'],
+    [
+      'afterFileEdit',
+      'beforeShellExecution',
+      'beforeSubmitPrompt',
+      'preCompact',
+      'preToolUse',
+      'sessionStart',
+      'stop',
+      'subagentStart',
+      'subagentStop',
+    ],
   );
+  assert.match(base.hooks.preCompact[0].command, /adlc-precompact\.mjs/);
+  assert.match(base.hooks.subagentStart[0].command, /adlc-subagent\.mjs/);
+  assert.match(base.hooks.subagentStop[0].command, /adlc-subagent\.mjs.*--stop/);
 
   const optInTwice = mergeHooks(base, undefined, { wireUnpinned: true });
   assert.equal(optInTwice.hooks.stop.filter((e) => /adlc-stop/.test(e.command)).length, 1);

@@ -1,5 +1,5 @@
 ---
-description: Prosecute a change before merge (P5) — run the five prosecution lenses sequentially, verify each finding, loop until dry, run the deterministic gates, and record the verdict.
+description: Prosecute a change before merge (P5) — Task fan-out across five fresh-context prosecutor agents, verify findings, converge, run mechanical gates, and record evidence.
 ---
 
 # /adlc-prosecute — hostile pre-merge review (P5)
@@ -8,42 +8,68 @@ Prosecute the change for the active ticket. Requires a clean G4 build
 (`/adlc-verify-build`). Target: the text after the command (default to the
 active ticket in `.adlc/current-ticket.json`).
 
-**How this differs from the sibling integrations — read before trusting the
-verdict.** Cursor has no subagent fan-out (no Task tool, no `@agent` syntax),
-so the five prosecution lenses below run SEQUENTIALLY in this one context,
-worked by the same model that reads this command. Sequential same-context
-lenses have **weaker independence** than the fresh-context subagent fan-out the
-Claude Code and OpenCode integrations use: conclusions from an earlier lens can
-anchor a later one, and a blind spot in this session repeats across all five
-passes. Do not treat this loop as equivalent to an independent review. For the
-cross-model risk gate, run `npx adversarial-review --providers <a,b>` (two
-distinct providers) — step 6 below — so at least one genuinely different model
-examines the change.
+**Preferred path — Task / custom-agent fan-out (packaged agents).** Cursor
+ships plugin agents under `agents/`. Fan out **one fresh Task (or custom
+agent) context per lens**, then the verifier — do **not** claim Cursor has no
+subagent fan-out. Exact agent `name`s:
 
-This command is self-contained: everything the loop needs (lens briefs,
-dedupe rule, verification rule, stop rule) is defined below.
+| Lens key (`@adlc/core`) | Agent `name` |
+| --- | --- |
+| `correctness` | `prosecutor-correctness` |
+| `security` | `prosecutor-security` |
+| `contract` | `prosecutor-contract` |
+| `diff` | `prosecutor-diff` |
+| `tests` | `prosecutor-tests` |
+| (verifier) | `prosecutor-verifier` |
 
-## 0. Collect the evidence
+Until an installed-Cursor proof records distinct subagent/context ids for all
+five lenses + verifier receipt, matrix/docs say **packaged-but-unverified**,
+not agents-backed.
+
+**Degraded fallback only — sequential same-context.** If Task / custom-agent
+fan-out is unavailable, run the five lenses sequentially in this one context.
+That fallback has **weaker independence** than fresh-context fan-out
+(conclusions can anchor later lenses). Do not treat the fallback as equivalent
+to independent review. For the cross-model risk gate, still run
+`npx adversarial-review --providers <a,b>` (step 6).
+
+## 0. Collect the evidence + write the P5 marker
 
 Precondition: a CLEAN working tree — commit (or stash) everything first. The
 hollow-test gate in step 5 mutates files in place and refuses to run on a
-dirty tree (exit 1: "commit or stash first"), so an uncommitted change cannot
-complete this prosecution.
+dirty tree.
 
 Establish the target ticket (its `scope`, spec, and acceptance criteria from
 `.adlc/tickets.json`) and the change under prosecution:
-`git diff <base-branch>...HEAD`. Every lens reviews this same diff plus
-whatever surrounding code it needs to read. Lenses are read-only reviewers:
-while prosecuting, do not edit files or run state-changing commands — a
-reviewer that can rewrite the evidence is not a reviewer.
+`git diff <base-branch>...HEAD`. Lenses are read-only reviewers: while
+prosecuting, do not edit product files or run state-changing commands except
+the mechanical gates in step 5 and the marker/evidence commands below.
 
-## 1. Run the five lenses, sequentially
+**P5 marker (session-matched, fenced — T64 helper).** Before fan-out, write a
+fresh marker via the plugin's `writeP5Marker` helper (user-scoped state dir
+`~/.adlc` / `ADLC_CURSOR_STATE_DIR`, never consumer `.adlc/`):
 
-Work through each lens below **in order, one at a time**. Before starting each
-lens, deliberately set aside the previous lens's conclusions and re-read the
-diff from scratch under the new lens's mandate only — this is the closest a
-single context can get to independent reviewers, and it is imperfect (see the
-caveat above).
+```js
+// From a short node one-liner in the consumer repo (adjust path if needed):
+import { writeP5Marker, clearP5Marker } from '@adlc/cursor/lib/session-state.mjs';
+import { randomUUID } from 'node:crypto';
+const runId = randomUUID();
+const sessionId = process.env.ADLC_CURSOR_SESSION_ID; // required for named sessions
+writeP5Marker({ sessionId, ticketId: '<active>', runId });
+// store runId for cleanup
+```
+
+Shape: `{ ts, ticketId, sessionId, runId }`. Overlapping same-session starts:
+replace with a new `runId` (only the owner clears). On completion **and** on
+documented abort paths, `clearP5Marker({ sessionId, runId })` (compare-and-
+delete on `runId` only). Hooks (`preToolUse` Task allowlist + `subagentStart`)
+read the same helper — mismatched sessionId ≡ absent.
+
+## 1. Fan out the five lenses (fresh contexts)
+
+For each lens in order, spawn a **fresh** Task / custom-agent with the matching
+`name` from the table above. Pass the same diff + ticket/spec context; do not
+share prior lens conclusions into later lens prompts.
 
 Every lens uses the same stance and output shape:
 
@@ -55,145 +81,109 @@ Every lens uses the same stance and output shape:
 > findings (empty if none). Do not soften or speculate beyond the evidence — a
 > finding you cannot ground in the diff does not belong.
 
-### Lens 1 — Correctness
+### Lens 1 — Correctness (`prosecutor-correctness`)
 Hunt specifically for: logic errors, off-by-one and boundary mistakes, broken
 invariants, incorrect results, mishandled error/empty/null cases, and state
 that can desync.
 
-### Lens 2 — Security
+### Lens 2 — Security (`prosecutor-security`)
 Hunt specifically for: auth and trust-boundary holes, injection
 (SQL/shell/path), secrets in code or logs, SSRF, unsafe deserialization,
 missing input validation at boundaries, and who-controls-the-control bypasses.
 
-### Lens 3 — Contract conformance
+### Lens 3 — Contract conformance (`prosecutor-contract`)
 Hunt specifically for: API/schema/type drift, backwards-incompatible changes,
 undocumented response shape changes, and violations of the ticket's declared
 contract or shared types.
 
-### Lens 4 — Spec-vs-implementation diff
+### Lens 4 — Spec-vs-implementation diff (`prosecutor-diff`)
 Hunt specifically for: places where the implementation diverges from the
 spec/acceptance criteria, behavior changes not reflected in the spec, and scope
 creep beyond the ticket.
 
-### Lens 5 — Test audit
+### Lens 5 — Test audit (`prosecutor-tests`)
 Hunt specifically for: tests that assert nothing meaningful, mock-only
 verifications, tests that would pass against a broken implementation, missing
 coverage of the change's core behavior, and suppressed/skipped assertions.
 
-Collect every finding from every lens into one list.
+Collect every finding from every lens into one list. Record each pass for
+`adlc prosecute` using core lens keys `correctness`, `security`, `contract`,
+`diff`, `tests` (no lossless remapping — the recorder accepts these keys).
 
 ## 2. Dedupe
 
 Merge findings across lenses, deduping by **file + line range + normalized
 title** (trim, lowercase, collapse internal whitespace). When two lenses report
 the same defect, keep the **highest severity** (critical > high > medium >
-low). Dedupe only on that key — do not drop a finding because it "sounds like"
-another one.
+low). Prefer `@adlc/core` `dedupeFindings` semantics — do not invent a third
+convergence implementation.
 
-## 3. Verifier pass — adversarially re-examine each finding
+## 3. Verifier pass — fresh context per finding (`prosecutor-verifier`)
 
-For each deduped finding, run the verifier brief:
+For each deduped finding, spawn a **fresh** `prosecutor-verifier` Task /
+custom-agent (fail-closed: if no valid verifier vote can be obtained, the
+finding **survives** as an unverified blocker — never silently drop).
+
+Verifier brief:
 
 > You are given ONE prosecution finding. Try to **refute it**, not to agree.
 > Steps: (1) re-read the finding's evidence in context; (2) construct the most
 > concrete reproduction or counterexample you can; (3) decide: REAL (a genuine
-> defect a maintainer should act on — you built a concrete repro or mechanism),
-> REFUTED (you built a concrete counterexample, or proved it is already
-> handled), or CANNOT-DECIDE (neither succeeded). For REAL/REFUTED record
+> defect — concrete repro or mechanism), REFUTED (concrete counterexample or
+> already handled), or CANNOT-DECIDE. For REAL/REFUTED record
 > `{ "real": boolean, "reason": string, "repro": string }`; for CANNOT-DECIDE
-> record the vote as a literal `null` and note why in prose — this matches
-> `@adlc/core`'s `survivesVerification` contract exactly, where a `null` vote
-> is discarded and a finding with no valid votes SURVIVES fail-closed. (Do NOT
-> encode cannot-decide as `{ "real": null }`: the shared contract counts that
-> object as a non-real vote, i.e. a refutation — the opposite of what
-> cannot-decide must mean.) Be specific and mechanistic; "looks fine" is not a
-> reason. (The siblings' "default to refuted" instruction applies to their
-> independent per-vote subagents, where absent votes are handled by majority
-> machinery — here there is one examiner, so cannot-decide is an explicit
-> outcome, not a default in either direction.)
+> record the vote as a literal `null`. Do NOT encode cannot-decide as
+> `{ "real": null }` (that counts as a refutation under `survivesVerification`).
 
-**Honesty note on the verification semantics:** in the sibling integrations a
-finding survives on a **strict majority of independent verifier votes**, each
-from a fresh context. Here there are no independent votes — this is **one model
-(you) re-examining its own findings in the same context**, which is weaker.
-Adapt the contract honestly:
+Apply `@adlc/core` `survivesVerification` (strict majority of valid votes).
 
-- REAL, with a concrete repro or mechanism → the finding **survives**.
-- REFUTED, with a concrete counterexample or proof it is already handled → the
-  finding is **dropped**. A vague "probably fine" does not refute anything.
-- Cannot decide (evidence unclear, cannot trace the code path) → the finding
-  **survives as an unverified blocker**. A pre-merge gate fails closed: never
-  silently drop a finding because verification did not complete.
+**Fallback honesty:** if using sequential same-context verification instead of
+fresh verifier Tasks, say so — that path has **weaker independence**.
 
 ## 4. Loop until dry
 
 Repeat steps 1–3 until **two consecutive rounds surface no new confirmed
-findings** (a round is dry when it contributes zero net-new surviving findings
-versus the running set). Cap the loop at 5 rounds; if it is cut off before
-going dry, report that as a finding itself ("convergence did not complete").
+findings**. Cap at 5 rounds; if cut off before dry, report that as a finding
+("convergence did not complete"). Use `@adlc/core` prosecutor convergence
+helpers — no third implementation.
 
 ## 5. Deterministic gates
 
 These are mechanical, not judgment:
 
-- **Hollow-test** (always) — are the tests load-bearing? Run
-  `adlc hollow-test --test-cmd "<the project's test command>"`. It mutates the
-  changed code to find tests that pass without actually testing the behavior
-  (hence the clean-tree precondition in step 0 — it mutates in place and
-  restores). On a clone with no resolvable `main`/`master`, pass an explicit
-  `--base <ref>`. Exit `2` = hollow tests found; fix them before merging.
-- **Behavior-diff** (only for HTTP-observable services) — is the change
-  visible? The capture tool probes a RUNNING HTTP target: `behavior.json`
-  must declare `baseUrl` plus a non-empty `routes` array of
-  `{method, path}` entries, and capture errors if no route is reachable.
-  There is no base-branch mode — to get a "before" snapshot, check out and
-  run the base yourself, then capture. Run
-  `adlc behavior-diff capture --config behavior.json --out before.json`,
-  repeat for `after.json` on the change, then
-  `adlc behavior-diff compare before.json after.json` to make the behavior
-  change visible for the P6 human gate. For projects with no HTTP surface
-  (CLIs, libraries), skip this gate and note the skip in the verdict.
+- **Hollow-test** (always) — `adlc hollow-test --test-cmd "<the project's test command>"`.
+  Exit `2` = hollow tests found; fix before merging. On a clone with no
+  resolvable `main`/`master`, pass `--base <ref>`.
+- **Behavior-diff** (only for HTTP-observable services) —
+  `adlc behavior-diff capture` / `compare` as in sibling integrations. Skip
+  for CLIs/libraries and note the skip.
 
 ## 6. Cross-model adversarial review (the risk gate)
 
-Run `npx adversarial-review --providers <a,b>` (≥2 distinct providers on the
-risk gate) — a fresh-context, cross-model ship/no-ship review. Given the
-weaker-independence caveat above, this step carries the cross-model weight for
-Cursor sessions; do not skip it for risk-gated changes (auth/trust boundaries,
-deny paths, secrets, destructive data operations, schema migrations,
-CI/CD/supply chain). The default invocation is single-shot: fix its findings
-and re-run until it exits 0 (`exit 0 = SHIP`; the autonomous review→fix loop is
-the separate opt-in `--loop` mode, which needs a write sandbox). If no API keys
-are configured, use `npx adversarial-review --prompt-only` and answer the
-review prompt yourself, but prefer a genuinely different model for
-security-critical changes.
+Run `npx adversarial-review --providers <a,b>` (≥2 distinct providers) for
+risk-gated changes. If no API keys, `--prompt-only` is allowed but prefer a
+genuinely different model for security-critical work.
 
-When the review passes, record it so the risk-tier stop-audit has a satisfiable
-record instead of nagging unconditionally:
+When the review passes:
 
 ```
 adlc gate-manifest record adversarial-review --ticket <id> --files <risk-gated paths> --data '{"providers":"<a,b>","verdict":"SHIP"}'
 ```
 
-`--ticket <id>` scopes the record to THIS ticket — a ticketless entry
-satisfies the stop-audit for ANY later ticket touching the same files, letting
-a stale review masquerade as coverage. `--files` is a comma-separated list of
-repo-root-relative paths and must cover the risk-gated changed paths the
-review actually examined — a record scoped to different files does not
-satisfy the audit for this change (and a space-separated list silently
-records only the first path).
+`--ticket <id>` and comma-separated `--files` are required (ticket-scoped).
 
-## 7. Record + verdict
+## 7. Record prosecution evidence + clear marker + verdict
 
-Report the surviving findings (severity, file, evidence, recommendation) and a
-ship/no-ship verdict. On CLEAR, record the prosecution evidence for the
-deterministic gate:
+Record ticket- and revision-bound evidence via `adlc prosecute` /
+`adlc_prosecute` (five-pass packet with core lens keys including `contract`
+and `diff` must validate). On CLEAR, also:
 
 ```
 adlc gate-manifest record prosecution --ticket <id> --files <changed files>
 ```
 
-(`--files` here too: comma-separated, repo-root-relative.)
+Clear **this session's** P5 marker best-effort (`clearP5Marker` with the
+`runId` from step 0) on completion and on abort.
 
-Material (surviving, non-refuted) findings block the merge — including
-unverified blockers, until they are verified or refuted.
+Material (surviving, non-refuted) findings — including unverified blockers —
+block the merge until verified or refuted.

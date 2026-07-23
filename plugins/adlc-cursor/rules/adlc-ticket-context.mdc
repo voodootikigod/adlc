@@ -1,0 +1,41 @@
+---
+description: >-
+  Always-on ADLC ticket context for Cursor. Use when deciding which ticket is
+  active, whether rails enforcement applies, or recovering after dropped
+  sessionStart additional_context. Prefer canonical resolution over raw pointer
+  or env reads.
+alwaysApply: true
+---
+
+<!-- BEGIN ADLC_TICKET_CONTEXT_V1 -->
+# ADLC active-ticket context (always apply)
+
+`sessionStart` `additional_context` is **best-effort** — Cursor may drop it.
+Treat this rule as the durable fallback.
+
+## Resolve the active ticket canonically
+
+Do **not** treat a raw `.adlc/current-ticket.json` read or raw `ADLC_TICKET`
+alone as authoritative. Use the same fail-closed outcomes as the plugin's
+sessionStart / `generated-active-ticket` reader:
+
+- env vs pointer conflict → conflict (not "no active ticket")
+- stale `ticketHash` → error-bearing
+- malformed / missing id pointer → error-bearing
+- ticket id absent from the store → error-bearing
+- multiple active-ticket-bearing workspace roots → ambiguity (no invented winner)
+- clean store with no selection → exact phrase: no active ticket
+
+Prefer a packaged helper that applies those semantics:
+
+```sh
+adlc ticket current --json
+```
+
+(or the equivalent documented Cursor `/adlc-*` / `adlc` skill path).
+
+When `workspace_roots` are unavailable, consult the user-scoped session-
+resolution record (`~/.adlc/cursor-session-workspaces.json` or
+`ADLC_CURSOR_SESSION_INDEX`) keyed by `ADLC_CURSOR_SESSION_ID` — including
+TTL tombstones for `error` / `ambiguous` / `unresolved` outcomes.
+<!-- END ADLC_TICKET_CONTEXT_V1 -->

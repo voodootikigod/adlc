@@ -35,8 +35,33 @@ else {
   else ok('dependency @adlc/build-gate declared');
   if (!pkg.dependencies?.['@adlc/flail-detector']) fail('missing @adlc/flail-detector dependency (deep-subpath imports would break on a standalone install)');
   else ok('dependency @adlc/flail-detector declared');
+  if (!pkg.dependencies?.['@adlc/tickets']) fail('missing @adlc/tickets dependency (sessionStart/rails store detection)');
+  else ok('dependency @adlc/tickets declared');
   if (!pkg.cursor?.hooks) fail('package.json cursor.hooks entry missing'); else ok('cursor.hooks manifest entry');
   if (!pkg.cursor?.rules) fail('package.json cursor.rules entry missing'); else ok('cursor.rules manifest entry');
+  if (pkg.cursor?.mcpServers !== './mcp.json') fail('package.json cursor.mcpServers must be ./mcp.json');
+  else ok('cursor.mcpServers manifest entry');
+}
+
+// ---- T65: mcp.json Roots proxy wrapper (not raw adlc mcp-server) ----
+{
+  const mcpPath = join(PLUGIN, 'mcp.json');
+  if (!existsSync(mcpPath)) fail('plugins/adlc-cursor/mcp.json missing');
+  else {
+    const mcp = JSON.parse(read(mcpPath));
+    const adlc = mcp.mcpServers?.adlc;
+    if (!adlc) fail('mcp.json missing mcpServers.adlc');
+    else if (adlc.command !== 'node' || !(adlc.args ?? []).some((a) => /adlc-mcp-wrapper\.mjs/.test(String(a)))) {
+      fail('mcp.json must launch node ./bin/adlc-mcp-wrapper.mjs (Roots proxy)');
+    } else if (JSON.stringify(adlc).includes('mcp-server')) {
+      fail('mcp.json must not wire raw adlc mcp-server (use the wrapper)');
+    } else ok('mcp.json wires Roots proxy wrapper');
+  }
+  if (!existsSync(join(PLUGIN, 'bin', 'adlc-mcp-wrapper.mjs'))) fail('bin/adlc-mcp-wrapper.mjs missing');
+  else ok('bin/adlc-mcp-wrapper.mjs present');
+  const manifest = JSON.parse(read(join(PLUGIN, '.cursor-plugin', 'plugin.json')));
+  if (manifest.mcpServers !== './mcp.json') fail('.cursor-plugin/plugin.json mcpServers must be ./mcp.json');
+  else ok('plugin.json discovers mcp.json');
 }
 
 // ---- AC1 + T47: hooks wiring (dispatcher + audit + shell + stop + preflight) ----
@@ -60,16 +85,40 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
   const shell = hj.hooks?.beforeShellExecution ?? [];
   if (!shell.some((e) => /adlc-shell-advisory\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeShellExecution missing`);
   else ok(`${label}: beforeShellExecution advisory`);
+
+  const sessionStart = hj.hooks?.sessionStart ?? [];
+  if (!sessionStart.some((e) => /adlc-session-start\.mjs/.test(e.command ?? ''))) fail(`${label}: sessionStart missing adlc-session-start.mjs`);
+  else ok(`${label}: sessionStart wired`);
+  if (!sessionStart.every((e) => e.failClosed === false && e.timeout === 10)) fail(`${label}: sessionStart must use failClosed:false timeout:10`);
+  else ok(`${label}: sessionStart failClosed/timeout lockstep`);
   const stop = hj.hooks?.stop ?? [];
   if (!stop.some((e) => /adlc-stop\.mjs/.test(e.command ?? ''))) fail(`${label}: stop must wire adlc-stop.mjs by default (T47)`);
   else ok(`${label}: stop wired by default`);
   const preflight = hj.hooks?.beforeSubmitPrompt ?? [];
   if (!preflight.some((e) => /adlc-preflight\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeSubmitPrompt must wire adlc-preflight.mjs by default (T47)`);
   else ok(`${label}: beforeSubmitPrompt wired by default`);
-  const VERIFIED_EVENTS = new Set(['preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile', 'stop', 'beforeSubmitPrompt']);
+  const VERIFIED_EVENTS = new Set([
+    'sessionStart', 'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile',
+    'stop', 'beforeSubmitPrompt', 'preCompact', 'subagentStart', 'subagentStop',
+  ]);
   const unverified = Object.keys(hj.hooks ?? {}).filter((k) => !VERIFIED_EVENTS.has(k));
   if (unverified.length) fail(`${label}: unverified event(s): ${unverified.join(', ')}`);
   else ok(`${label}: only documented Cursor events`);
+  for (const ev of ['preCompact', 'subagentStart', 'subagentStop']) {
+    const entries = hj.hooks?.[ev] ?? [];
+    if (!entries.length) fail(`${label}: ${ev} missing (T67)`);
+    else if (!entries.every((e) => e.failClosed === false && e.timeout === 10)) fail(`${label}: ${ev} must use failClosed:false timeout:10`);
+    else ok(`${label}: ${ev} wired`);
+  }
+  if (!(hj.hooks?.preCompact ?? []).some((e) => /adlc-precompact\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: preCompact must wire adlc-precompact.mjs`);
+  }
+  if (!(hj.hooks?.subagentStart ?? []).some((e) => /adlc-subagent\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: subagentStart must wire adlc-subagent.mjs`);
+  }
+  if (!(hj.hooks?.subagentStop ?? []).some((e) => /adlc-subagent\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: subagentStop must wire adlc-subagent.mjs`);
+  }
   if (pre[0]?.failClosed !== false) fail(`${label}: preToolUse failClosed must be false`);
   else ok(`${label}: failClosed:false`);
   const matcher = pre.find((e) => /adlc-pretool/.test(e.command ?? ''))?.matcher ?? '';
@@ -139,23 +188,41 @@ const marketplacePath = join(ROOT, '.cursor-plugin', 'marketplace.json');
 if (!existsSync(marketplacePath)) fail('root .cursor-plugin/marketplace.json missing');
 else {
   const m = JSON.parse(read(marketplacePath));
+  if (m.name === 'adlc') fail('marketplace name must not be bare "adlc" (collides with Claude Code plugin identity)');
+  else if (m.name !== 'adlc-plugins') fail(`marketplace name is ${m.name}, expected adlc-plugins`);
+  else ok('marketplace name is adlc-plugins (no Claude Code name collision)');
+  if (m.metadata?.pluginRoot !== 'plugins') fail('marketplace metadata.pluginRoot must be "plugins"');
+  else ok('marketplace pluginRoot=plugins');
   const entry = (m.plugins ?? []).find((p) => p.name === 'adlc-cursor');
   if (!entry) fail('marketplace missing adlc-cursor plugin entry');
-  else if (entry.source !== './plugins/adlc-cursor') fail(`marketplace source is ${entry.source}`);
+  else if (entry.source !== 'adlc-cursor') fail(`marketplace source is ${entry.source}`);
   else if (entry.version !== pkgVersion) fail(`marketplace plugin version ${entry.version} != package ${pkgVersion}`);
   else if (m.metadata?.version !== pkgVersion) fail(`marketplace metadata.version ${m.metadata?.version} != package ${pkgVersion}`);
-  else ok('marketplace lists adlc-cursor → ./plugins/adlc-cursor (version lockstep)');
+  else ok('marketplace lists adlc-cursor → plugins/adlc-cursor (version lockstep)');
+  if (!/Cursor/i.test(entry.description ?? '') || /Claude Code/i.test(entry.description ?? '')) {
+    fail('marketplace plugin description must say Cursor and must not say Claude Code');
+  } else ok('marketplace description is Cursor-branded');
+  if (entry.logo !== 'plugins/adlc-cursor/assets/logo.png') fail(`marketplace logo is ${entry.logo}`);
+  else ok('marketplace logo path resolves under plugins/adlc-cursor');
+  if (entry.displayName !== 'ADLC for Cursor') fail(`marketplace displayName is ${entry.displayName}`);
+  else ok('marketplace displayName is ADLC for Cursor');
 }
-const logoPath = join(PLUGIN, 'assets', 'logo.svg');
-if (!existsSync(logoPath)) fail('plugins/adlc-cursor/assets/logo.svg missing');
+const logoPng = join(PLUGIN, 'assets', 'logo.png');
+const logoSvg = join(PLUGIN, 'assets', 'logo.svg');
+if (!existsSync(logoPng)) fail('plugins/adlc-cursor/assets/logo.png missing');
+else ok('plugin logo assets/logo.png');
+if (!existsSync(logoSvg)) fail('plugins/adlc-cursor/assets/logo.svg missing');
 else ok('plugin logo assets/logo.svg');
 const pluginManifestPath = join(PLUGIN, '.cursor-plugin', 'plugin.json');
 if (!existsSync(pluginManifestPath)) fail('plugins/adlc-cursor/.cursor-plugin/plugin.json missing');
 else {
   const pm = JSON.parse(read(pluginManifestPath));
   if (pm.name !== 'adlc-cursor') fail(`plugin.json name is ${pm.name}`); else ok('plugin.json name');
+  if (pm.displayName !== 'ADLC for Cursor') fail(`plugin.json displayName is ${pm.displayName}`); else ok('plugin.json displayName');
   if (pm.version !== pkg.version) fail(`plugin.json version ${pm.version} != package ${pkg.version}`); else ok('plugin.json version lockstep');
-  if (pm.logo !== 'assets/logo.svg') fail(`plugin.json logo is ${pm.logo}`); else ok('plugin.json logo');
+  if (pm.logo !== 'assets/logo.png') fail(`plugin.json logo is ${pm.logo}`); else ok('plugin.json logo');
+  if (/Claude Code/i.test(pm.description ?? '')) fail('plugin.json description must not mention Claude Code');
+  else ok('plugin.json description is Cursor-only');
 }
 for (const skill of ['adlc', 'adlc-init']) {
   const skillPath = join(PLUGIN, 'skills', skill, 'SKILL.md');
@@ -220,6 +287,27 @@ for (const f of ['adlc-stop.mjs', 'adlc-preflight.mjs']) {
   else ok(`hooks/${f} ships`);
 }
 
+
+// ---- T64: sessionStart + alwaysApply ticket context + comment truth ----
+if (!existsSync(join(PLUGIN, 'hooks', 'adlc-session-start.mjs'))) fail('hooks/adlc-session-start.mjs missing');
+else ok('hooks/adlc-session-start.mjs ships');
+const ticketRule = join(PLUGIN, 'rules', 'adlc-ticket-context.mdc');
+if (!existsSync(ticketRule)) fail('rules/adlc-ticket-context.mdc missing');
+else {
+  const tr = read(ticketRule);
+  if (!/alwaysApply:\s*true/.test(tr)) fail('adlc-ticket-context.mdc must set alwaysApply: true');
+  else ok('adlc-ticket-context.mdc alwaysApply: true');
+  if (!/best-effort/i.test(tr)) fail('adlc-ticket-context.mdc must mention sessionStart best-effort');
+  else ok('adlc-ticket-context.mdc documents best-effort sessionStart');
+}
+for (const f of ['adlc-stop.mjs', 'adlc-preflight.mjs']) {
+  const body = read(join(PLUGIN, 'hooks', f));
+  if (/DISABLED BY DEFAULT/.test(body)) fail(`hooks/${f} still says DISABLED BY DEFAULT`);
+  else ok(`hooks/${f} does not say DISABLED BY DEFAULT`);
+}
+if (!existsSync(join(ROOT, '.adlc', 'specs', 'cursor-deeper-native.md'))) fail('.adlc/specs/cursor-deeper-native.md missing');
+else ok('umbrella spec cursor-deeper-native.md present');
+
 // ---- AC1: rule registration ----
 if (!existsSync(join(PLUGIN, 'rules', 'adlc.mdc'))) fail('rules/adlc.mdc missing');
 else {
@@ -233,12 +321,14 @@ if (!existsSync(checkerPath)) fail('rails-checker.mjs missing');
 else {
   const chk = read(checkerPath);
   if (!/from '@adlc\/core'/.test(chk)) fail('rails-checker does not import @adlc/core'); else ok('rails-checker imports @adlc/core');
-  if (!/globMatch/.test(chk) || !/loadTickets/.test(chk)) fail('rails-checker does not use globMatch+loadTickets from core'); else ok('delegates globMatch+loadTickets to core');
+  if (!/globMatch/.test(chk)) fail('rails-checker does not use globMatch from core'); else ok('delegates globMatch to core');
   if (/function\s+globMatch\s*\(/.test(chk)) fail('rails-checker RE-IMPLEMENTS globMatch (must delegate to @adlc/core)'); else ok('no inlined globMatch (engine delegated)');
   // deny-path source must not pull a third-party runtime dependency
   const imports = [...chk.matchAll(/from '([^']+)'/g), ...read(guardPath).matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-  const thirdParty = imports.filter((s) => !s.startsWith('node:') && !s.startsWith('.') && s !== '@adlc/core');
-  if (thirdParty.length) fail(`deny path imports third-party deps: ${thirdParty.join(', ')}`); else ok('deny path: only node: builtins + @adlc/core');
+  if (!/detectTicketStore/.test(chk) || !/allowLegacyPointer:\s*true/.test(chk)) fail('rails-checker must use detectTicketStore + allowLegacyPointer: true (T64)');
+  else ok('rails-checker aligns store detection + allowLegacyPointer');
+  const thirdParty = imports.filter((s) => !s.startsWith('node:') && !s.startsWith('.') && s !== '@adlc/core' && s !== '@adlc/tickets');
+  if (thirdParty.length) fail(`deny path imports third-party deps: ${thirdParty.join(', ')}`); else ok('deny path: only node: builtins + @adlc/core + @adlc/tickets');
 }
 
 // ---- AC1: scaffolder registers the integration ----
@@ -316,24 +406,50 @@ else {
   } else ok(`adlc-prosecute.md lens-brief count matches the @adlc/core registry (${LENSES.length})`);
   if (!/verifier/i.test(pr)) fail('adlc-prosecute.md missing the verifier pass');
   else ok('adlc-prosecute.md has the verifier pass');
-  // Binding honesty requirement (spec decision 3): sequential same-context
-  // lenses must be labeled as weaker than the siblings' fresh-context fan-out,
-  // with the cross-model gate recommended.
-  if (!/weaker independence/.test(pr)) fail('adlc-prosecute.md missing the weaker-independence honesty caveat');
-  else ok('adlc-prosecute.md states the weaker-independence caveat');
+  // T66: Task fan-out preferred; sequential is degraded fallback (weaker independence).
+  if (/no subagent fan-out/i.test(pr)) fail('adlc-prosecute.md must not claim Cursor has no subagent fan-out (T66)');
+  else ok('adlc-prosecute.md does not claim Cursor has no subagent fan-out');
+  if (!/\bTask\b/.test(pr) || !/prosecutor-correctness/.test(pr) || !/prosecutor-verifier/.test(pr)) {
+    fail('adlc-prosecute.md must require Task/custom-agent fan-out of packaged prosecutor agents');
+  } else ok('adlc-prosecute.md requires Task fan-out of prosecutor agents');
+  if (!/degraded fallback/i.test(pr) || !/weaker independence/.test(pr)) {
+    fail('adlc-prosecute.md must label sequential same-context as degraded fallback with weaker independence');
+  } else ok('adlc-prosecute.md states degraded-fallback weaker-independence caveat');
+  if (!/writeP5Marker|P5 marker/i.test(pr) || !/clearP5Marker|clear.*marker/i.test(pr)) {
+    fail('adlc-prosecute.md must instruct write/clear of the session P5 marker');
+  } else ok('adlc-prosecute.md instructs P5 marker write/clear');
+  if (!/adlc prosecute|adlc_prosecute/.test(pr)) fail('adlc-prosecute.md must require adlc prosecute / adlc_prosecute evidence recording');
+  else ok('adlc-prosecute.md requires prosecute evidence recording');
   if (!/adversarial-review --providers/.test(pr)) fail('adlc-prosecute.md does not recommend `npx adversarial-review --providers` for the cross-model risk gate');
   else ok('adlc-prosecute.md recommends the cross-model adversarial review');
-  // AC7: the command must instruct recording the adversarial-review outcome so
-  // the risk-tier stop-audit (decideAdversarialReviewNotice) has a satisfiable
-  // record instead of nagging unconditionally.
-  // --ticket is load-bearing on both record forms (P5 round-1 finding): a
-  // ticketless adversarial-review entry satisfies the risk-tier stop-audit
-  // for ANY later ticket touching the same files, so the pinned assertion
-  // includes the flag — the bare pre-round-1 form must not silently return.
   if (!/gate-manifest record adversarial-review --ticket/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record adversarial-review --ticket` instruction (ticket-scoped form required)');
   else ok('adlc-prosecute.md instructs recording the adversarial-review gate, ticket-scoped');
   if (!/gate-manifest record prosecution --ticket/.test(pr)) fail('adlc-prosecute.md missing the `adlc gate-manifest record prosecution --ticket` instruction (ticket-scoped form required)');
   else ok('adlc-prosecute.md instructs recording the prosecution gate, ticket-scoped');
+}
+
+// ---- T66: prosecutor agents roster packaged ----
+{
+  const agentsDir = join(PLUGIN, 'agents');
+  const required = [
+    'prosecutor-correctness.md',
+    'prosecutor-security.md',
+    'prosecutor-contract.md',
+    'prosecutor-diff.md',
+    'prosecutor-tests.md',
+    'prosecutor-verifier.md',
+  ];
+  for (const f of required) {
+    const p = join(agentsDir, f);
+    if (!existsSync(p)) { fail(`agents/${f} missing`); continue; }
+    const body = read(p);
+    if (!/readonly:\s*true/.test(body)) fail(`agents/${f} missing readonly: true`);
+    else if (/^tools:/m.test(body.split('---')[1] ?? '')) fail(`agents/${f} must not use tools: frontmatter`);
+    else ok(`agents/${f} readonly:true`);
+  }
+  const manifest = JSON.parse(read(join(PLUGIN, '.cursor-plugin', 'plugin.json')));
+  if (manifest.agents !== './agents/') fail('plugin.json must register agents: ./agents/');
+  else ok('plugin.json registers agents/');
 }
 
 // ---- AC3: run the real enforcement unit tests (always-on proof) ----
@@ -368,6 +484,11 @@ else {
   }
   if (/no plugin marketplace/i.test(adr)) fail('ADR 0006 still claims Cursor has no plugin marketplace (T47)');
   else ok('ADR 0006 does not claim Cursor has no plugin marketplace');
+  if (!/ADLC_CURSOR_SESSION_ID/.test(adr) || !/session_id/.test(adr)) fail('ADR 0006 must pin session_id / ADLC_CURSOR_SESSION_ID (T64)');
+  else ok('ADR pins session_id / ADLC_CURSOR_SESSION_ID');
+  if (!/best-effort/i.test(adr) || !/adlc-ticket-context/.test(adr)) fail('ADR 0006 must mark sessionStart context best-effort and name always-apply rule');
+  else ok('ADR documents sessionStart best-effort + always-apply fallback');
+
 }
 
 // ---- T19: the docs must tell the exact truth about T16-T18 — the honesty
@@ -429,6 +550,42 @@ if (existsSync(docPath)) {
   else ok('cursor.md describes the command palette deployment');
   if (/prosecutor subagents/i.test(doc)) fail('cursor.md still calls the P5 prosecution a follow-on "prosecutor subagents" gap (shipped in T17)');
   else ok('cursor.md no longer lists the prosecutor as a follow-on gap');
+}
+
+
+// ---- T68: deny-proof runbook ----
+{
+  const denyReadme = join(ROOT, 'scripts', 'cursor-deny-proof', 'README.md');
+  if (!existsSync(denyReadme)) fail('scripts/cursor-deny-proof/README.md missing');
+  else {
+    const body = read(denyReadme);
+    if (!/sentinel/i.test(body) || !/enforcement-off/i.test(body) || !/hash/i.test(body)) {
+      fail('deny-proof README missing sentinel/hash/enforcement-off ordering');
+    } else ok('deny-proof runbook ordering strings');
+  }
+  if (!existsSync(join(ROOT, 'scripts', 'cursor-deny-proof.mjs'))) fail('scripts/cursor-deny-proof.mjs missing');
+  else ok('deny-proof entry script');
+  if (existsSync(docPath)) {
+    const doc = read(docPath);
+    if (!/cursor-deny-proof/.test(doc)) fail('cursor.md Gaps must link cursor-deny-proof');
+    else ok('cursor.md links deny-proof');
+  }
+}
+
+// ---- T69: marketplace publish checklist honesty ----
+{
+  if (!existsSync(docPath)) fail('docs/integrations/cursor.md missing for publish checklist');
+  else {
+    const body = read(docPath);
+    if (!/Marketplace publish checklist/i.test(body) && !/cursor-marketplace-publish/.test(body)) {
+      fail('cursor.md must include marketplace publish checklist');
+    } else ok('cursor.md has marketplace publish checklist');
+    if (!/cursor\.com\/marketplace\/publish/.test(body)) fail('checklist must point at publish flow, not a fake listing');
+    else ok('publish checklist points at cursor.com/marketplace/publish');
+    if (/cursor\.com\/marketplace\/adlc-cursor\/?/.test(body)) {
+      fail('docs must not fabricate a live marketplace listing URL before submit succeeds');
+    } else ok('no fabricated live marketplace listing URL');
+  }
 }
 
 if (failures) { console.error(`\ncursor-install-smoke: ${failures} failure(s)`); process.exit(2); }

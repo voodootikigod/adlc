@@ -1,6 +1,17 @@
 const STATUSES = new Set(['verified', 'killed', 'needs-human']);
 const SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
-const LENSES = new Set(['security', 'correctness', 'tests', 'behavior', 'integration', 'docs']);
+// Core prosecutor lenses (correctness/security/contract/diff/tests) plus legacy
+// recorder vocabulary kept for existing evidence packets.
+const LENSES = new Set([
+  'security',
+  'correctness',
+  'tests',
+  'contract',
+  'diff',
+  'behavior',
+  'integration',
+  'docs',
+]);
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;

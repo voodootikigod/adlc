@@ -10,8 +10,12 @@
 
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
-import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { globMatch, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
+import { detectTicketStore } from '@adlc/tickets';
+import {
+  resolveActiveTicketAgainst,
+  resolveActiveTicketId as resolveActiveTicketIdCanonical,
+} from './generated-active-ticket.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
@@ -146,6 +150,10 @@ export function resolveRailPath(filePath, root) {
  * Resolve the active ticket id from process.env.ADLC_TICKET OR
  * .adlc/current-ticket.json. If both are set and disagree, that is a tamper
  * signal — return { conflict: true } so the caller fails closed.
+ *
+ * Identity-only (used by advisory stop-audit). Rail enforcement uses
+ * `railPreconditions`, which applies `resolveActiveTicketAgainst` with
+ * `allowLegacyPointer: true` (T64) for hash/store fail-closed outcomes.
  */
 export function resolveActiveTicketId(root, env) {
   const resolved = resolveActiveTicketIdCanonical({ root, env });
@@ -164,7 +172,7 @@ export function resolveActiveTicketId(root, env) {
  * Returns one of:
  *  - { state: 'inactive', reason } — enforcement off, repo not initialized, or no
  *    active ticket → the gate is a no-op (allow);
- *  - { state: 'deny', reason } — a conflict, corrupt/unloadable tickets.json, an
+ *  - { state: 'deny', reason } — a conflict, corrupt/unloadable store, an
  *    active ticket that isn't found, or a malformed rail entry → fail closed;
  *  - { state: 'active', rails, activeId } — enforcing with a valid ticket + rails.
  */
@@ -172,46 +180,44 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { state: 'inactive', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
-  const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
-  const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
-  if (!ticketStoreExists(root, override)) {
-    return { state: 'inactive', reason: 'repo not ADLC-initialized (no supported ticket store)' };
+
+  let snapshot;
+  try {
+    snapshot = detectTicketStore({
+      root,
+      ticketStore: env.ADLC_TICKET_STORE,
+      legacyTickets: env.ADLC_TICKETS,
+      env,
+    }).load();
+  } catch (err) {
+    if (err?.code === 'STORE_NOT_FOUND') {
+      return { state: 'inactive', reason: 'repo not ADLC-initialized (no supported ticket store)' };
+    }
+    return {
+      state: 'deny',
+      reason: `ticket store failed to load (${err?.code ?? 'error'}: ${err?.message ?? err}) — failing closed`,
+    };
   }
-  const active = resolveActiveTicketId(root, env);
-  if (active.conflict) {
-    // Surface the canonical reason. Hardcoding an ADLC_TICKET-vs-pointer conflict
-    // here misreports every other fail-closed cause: an operator who typo'd an id
-    // key was sent hunting a nonexistent env conflict while the real diagnosis
-    // ("expected \"id\" ... found \"tickett\" ... to deactivate, delete the file")
-    // was computed and thrown away.
-    return { state: 'deny', reason: active.message ?? 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
+
+  const against = resolveActiveTicketAgainst(snapshot, { root, env, allowLegacyPointer: true });
+  if (!against.ok) {
+    return {
+      state: 'deny',
+      reason: against.message ?? 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)',
+    };
   }
-  if (!active.id) {
+  if (!against.value) {
     return { state: 'inactive', reason: 'no active ticket resolved' };
   }
-  // A corrupt/invalid tickets.json must FAIL CLOSED under active enforcement. core
-  // surfaces corruption three ways: it throws on some malformed schemas, returns an
-  // `errors` array on others, and returns an empty list when `tickets` is absent.
-  let tickets, errors;
-  try {
-    ({ tickets, errors } = loadTickets(ticketsPath));
-  } catch (err) {
-    return { state: 'deny', reason: `tickets.json failed to load (${err.message}) — failing closed` };
-  }
-  if (errors && errors.length) {
-    return { state: 'deny', reason: `tickets.json failed to validate (${errors.length} error(s)) — failing closed` };
-  }
-  const ticket = tickets.find((t) => t.id === active.id);
-  if (!ticket) {
-    return { state: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
-  }
+
+  const ticket = against.value.ticket;
   const declaredRails = ticket.rails ?? [];
   // core validates rails is an array but NOT its element types; a non-string entry
   // would make globMatch throw mid-match. Reject it here so it fails CLOSED.
   if (declaredRails.some((rail) => typeof rail !== 'string' || rail.length === 0)) {
-    return { state: 'deny', reason: `active ticket ${active.id} has a malformed rail entry — failing closed` };
+    return { state: 'deny', reason: `active ticket ${against.value.id} has a malformed rail entry — failing closed` };
   }
-  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS], activeId: active.id };
+  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS], activeId: against.value.id };
 }
 
 /**
