@@ -75,12 +75,22 @@ describe('adlc-prosecute cli', () => {
     // --input still points at the REAL bundled docs fixture via an absolute path
     // (read as-is, not cwd-resolved), but the transcript/review_packet paths INSIDE
     // that fixture are repo-relative and get resolved against `cwd` by run.mjs, and
-    // the ticket lookup reads `<cwd>/.adlc/tickets.json` — so both must be mirrored
-    // into the isolated repo for this fixture to still validate as it does for real.
+    // the ticket lookup reads the ticket store under `<cwd>/.adlc/` — so both must be
+    // mirrored into the isolated repo for this fixture to still validate as it does
+    // for real. Mirror whichever backend this repository currently uses: it has
+    // migrated from the legacy `.adlc/tickets.json` to the sharded `.adlc/tickets/`.
     const repo = gitRepo();
     try {
       mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      cpSync(join(repoRoot, '.adlc/tickets.json'), join(repo.dir, '.adlc/tickets.json'));
+      const shardedStore = join(repoRoot, '.adlc/tickets');
+      const legacyStore = join(repoRoot, '.adlc/tickets.json');
+      if (existsSync(shardedStore)) {
+        cpSync(shardedStore, join(repo.dir, '.adlc/tickets'), { recursive: true });
+      } else if (existsSync(legacyStore)) {
+        cpSync(legacyStore, join(repo.dir, '.adlc/tickets.json'));
+      } else {
+        throw new Error('no ticket store found at .adlc/tickets/ or .adlc/tickets.json');
+      }
       mkdirSync(join(repo.dir, '.omo/evidence'), { recursive: true });
       cpSync(join(repoRoot, '.omo/evidence'), join(repo.dir, '.omo/evidence'), { recursive: true });
       repo.g('add', '-A');
