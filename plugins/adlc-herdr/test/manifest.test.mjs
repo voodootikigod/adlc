@@ -86,6 +86,17 @@ test('parser fails closed on lines outside the supported subset', () => {
   assert.throws(() => parseManifest(42));
 });
 
+test('[[keys.command]] sections are known and carry no command-array requirement', () => {
+  const parsed = parseManifest([
+    'id = "adlc"', 'name = "ADLC"', 'version = "0.1.0"', 'min_herdr_version = "0.7.4"',
+    '[[keys.command]]',
+    'key = "prefix+l"',
+    'type = "plugin_action"',
+    'command = "adlc.board"',
+  ].join('\n'));
+  assert.deepEqual(validateManifest(parsed), []);
+});
+
 test('validator reports missing identity, malformed entrypoints, unknown sections', () => {
   const errs = validateManifest(parseManifest([
     'name = "x"',

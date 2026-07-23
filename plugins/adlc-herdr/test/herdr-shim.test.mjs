@@ -16,10 +16,15 @@ test('herdrArgv builds [bin, ...args] from HERDR_BIN_PATH, defaulting to "herdr"
   assert.deepEqual(herdrArgv(['status'], { env: {} }), ['herdr', 'status']);
 });
 
-test('herdrArgv fails closed on non-array or non-string args', () => {
+test('herdrArgv fails closed on non-array, empty, or non-string args', () => {
   assert.throws(() => herdrArgv('pane list', { env: {} }));
+  assert.throws(() => herdrArgv([], { env: {} }));
   assert.throws(() => herdrArgv(['pane', 42], { env: {} }));
   assert.throws(() => herdrArgv([null], { env: {} }));
+});
+
+test('herdrArgv respects any non-empty HERDR_BIN_PATH, even one character', () => {
+  assert.deepEqual(herdrArgv(['x'], { env: { HERDR_BIN_PATH: 'h' } }), ['h', 'x']);
 });
 
 test('runHerdr invokes the executor with an argv array and shell disabled', async () => {

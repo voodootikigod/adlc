@@ -59,6 +59,12 @@ test('single-character ESC sequences and lone ESC are removed', () => {
   assert.equal(sanitize('a\x1b]0;unterminated'), 'a'); // unterminated OSC
 });
 
+test('a CSI aborted by a non-CSI byte stops consuming; the text survives', () => {
+  // \n is neither a CSI param, intermediate, nor final byte — the malformed
+  // sequence ends there and the newline itself must not be swallowed.
+  assert.equal(sanitize('a\x1b[\nb'), 'a\nb');
+});
+
 test('raw C1 controls are consumed as full sequences, not leaked as text', () => {
   // 0x9B is 8-bit CSI: its parameter/final bytes must be consumed too.
   assert.equal(sanitize('\x9b31mred'), 'red');
