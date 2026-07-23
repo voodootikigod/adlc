@@ -243,6 +243,42 @@ test('withdrawing the completion commit does NOT destroy unrelated tracked work 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('withdrawal REFUSES when HEAD moved — it never uncommits another process work', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    // Another process commits on the shared integration branch after our completion.
+    writeFileSync(join(root, 'other.txt'), 'concurrent work\n');
+    git('add', '--', 'other.txt');
+    git('commit', '-q', '-m', 'concurrent commit by another process');
+    const headBefore = git('rev-parse', 'HEAD');
+
+    assert.throws(
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, git }),
+      /HEAD is .*no longer the completion commit/,
+      'it refuses rather than rewinding past a concurrent commit',
+    );
+    assert.equal(git('rev-parse', 'HEAD'), headBefore, 'the concurrent commit is still on the branch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('withdrawal REFUSES when the ledger gained a concurrent append — no false attestation left behind', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    // A concurrent recorder appends gate evidence after our completion commit.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}{"seq":98,"gate":"concurrent","ts":"2026-01-03T00:00:00.000Z","data":{},"prev":null}\n`);
+
+    assert.throws(
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, git }),
+      /evidence ledger changed since the completion commit/,
+      'it refuses rather than erasing their evidence or leaving ours to be swept into a later commit',
+    );
+    assert.ok(readFileSync(manifestPath, 'utf8').includes('concurrent'), 'the concurrent evidence is untouched');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 // ---- runFleet wiring: completion is gated on a passing post-merge gate --------
 
 const T = (id) => ({ id, title: id, scope: [`src/${id}/**`], edges: [] });

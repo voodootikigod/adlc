@@ -46,10 +46,34 @@ function restoreFile(absPath, priorBytes) {
  * concurrent evidence. An extra append-only evidence line is harmless; losing
  * another writer's evidence is not.
  */
-export function revertCompletionCommit({ repo, toSha, shardPath = null, git = defaultGit(repo) } = {}) {
+export function revertCompletionCommit({ repo, toSha, shardPath = null, completionSha = null, git = defaultGit(repo) } = {}) {
+  // Withdrawal is EXACT or it does not happen. Two preconditions, both checked against
+  // the shared checkout as it is RIGHT NOW:
+  //   1. HEAD is still our completion commit. Otherwise a --soft reset would silently
+  //      uncommit whatever another process committed on this shared branch.
+  //   2. The evidence ledger has not been appended to since our commit. Otherwise we
+  //      would have to choose between erasing a concurrent writer's evidence and
+  //      leaving a REJECTED completion's attestation on disk — where a later
+  //      completion's `git add` would sweep it into an unrelated commit, making the
+  //      ledger falsely attest a completion that was withdrawn.
+  // Failing either, we refuse. The caller escalates a refusal to a branch quarantine,
+  // which is the honest outcome: this branch needs a human, not more blind surgery.
+  const head = git('rev-parse', 'HEAD');
+  if (completionSha && head !== completionSha) {
+    throw new Error(`refusing to withdraw: HEAD is ${head}, no longer the completion commit ${completionSha} — another process committed on this branch`);
+  }
+  const committedManifest = git('show', `${head}:${MANIFEST_FILE}`);
+  const manifestAbs = join(repo, MANIFEST_FILE);
+  const liveManifest = existsSync(manifestAbs) ? readFileSync(manifestAbs, 'utf8').trimEnd() : '';
+  if (liveManifest !== committedManifest.trimEnd()) {
+    throw new Error('refusing to withdraw: the evidence ledger changed since the completion commit (concurrent append) — cannot remove our entry without disturbing another writer');
+  }
+
+  // Preconditions hold: nothing concurrent to lose, so restore BOTH owned paths
+  // exactly. Still path-scoped — never a checkout-wide reset --hard.
   git('reset', '-q', '--soft', toSha);
-  if (shardPath) git('restore', '--staged', '--worktree', '--', shardPath);
-  git('restore', '--staged', '--', MANIFEST_FILE);
+  const paths = shardPath ? [shardPath, MANIFEST_FILE] : [MANIFEST_FILE];
+  git('restore', '--staged', '--worktree', '--', ...paths);
   return { reverted: true, toSha };
 }
 
@@ -133,7 +157,10 @@ export function completeTicketOnIntegration({ repo, ticketId, git = defaultGit(r
       throw error;
     }
 
-    return { completed: true, preCompletionSha, shardPath: storePath };
+    // The exact commit we created — the withdrawal path requires HEAD to still be
+    // this, so it can never uncommit someone else's work.
+    const completionSha = git('rev-parse', 'HEAD');
+    return { completed: true, preCompletionSha, completionSha, shardPath: storePath };
   } finally {
     releaseTicketLock(lock);
   }
