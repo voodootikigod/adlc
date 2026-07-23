@@ -26,6 +26,10 @@ node_modules/
 !.adlc/tickets.json
 !.adlc/tickets.example.json
 !.adlc/specs/
+# P7 distilled defenses. The rest of .adlc/ is runtime evidence, but a lesson is
+# a permanent, reviewable defense — it has to reach a PR to be worth anything.
+!.adlc/lessons/
+!.adlc/lessons/**
 .adlc/tickets.lock
 
 # Local env files (may contain secrets, e.g. ATTIO_API_TOKEN)
