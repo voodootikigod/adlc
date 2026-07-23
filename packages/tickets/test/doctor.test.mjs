@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DirectoryTicketStore, doctorTicketStore } from '../index.mjs';
+import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename } from '../index.mjs';
 import { ticket, writeDirectory } from './helpers.mjs';
 
 test('doctor is read-only and reports active/archive/runtime health', () => {
@@ -108,6 +108,89 @@ test('doctor current-ticket: a pointer pinning no ticketHash is reported (strict
     assert.equal(d.check.ok, false);
     assert.equal(d.check.code, 'ACTIVE_TICKET_HASH_MISSING');
   } finally { d.cleanup(); }
+});
+
+// ---------------------------------------------------------------------------
+// storeHash ↔ manifest evidence binding (T77).
+//
+// doctor reported the live storeHash but never compared it to the storeHash the
+// last evidence-required transaction bound in .adlc/manifest.jsonl, so a silent
+// shard hand-edit between transactions went undetected. The check now binds them:
+//   - clean store (hash == last bound storeHash) → pass;
+//   - hash drifted but the evidenced ticket(s) still match → legit unevidenced
+//     non-sensitive op(s), REPORTED not failed;
+//   - an evidenced ticket that no longer matches its bound hash → tamper, FLAGGED.
+// ---------------------------------------------------------------------------
+
+/** A directory store with ticket A authored and COMPLETED (so A carries manifest evidence). */
+function storeWithEvidence(extra = []) {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-bind-'));
+  writeDirectory(root, []); // empty directory store (.store.json only)
+  const store = new DirectoryTicketStore(join(root, '.adlc', 'tickets'));
+  const service = new TicketService(store, { root });
+  service.apply(service.planCreate(ticket('A')));
+  for (const t of extra) service.apply(service.planCreate(t));
+  service.apply(service.planComplete('A')); // evidence-required → records bound storeHash + A's hash
+  return { root, store, service };
+}
+
+const bindCheck = (report) => report.checks.find((c) => c.name === 'storehash-manifest-bind');
+
+test('doctor storehash-manifest-bind: a clean store (unchanged since the last evidence) passes and binds', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.ok(check, 'the storeHash↔manifest check is present');
+    assert.equal(check.ok, true);
+    assert.equal(check.bound, true);
+    assert.notEqual(check.drift, true, 'no drift on a clean store');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a hand-edited shard (tamper) is flagged and fails the report', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // Hand-edit A's shard directly, bypassing the transaction machinery: keep the
+    // id (so the filename still matches) but change the title. A's hash — and the
+    // whole storeHash — now diverge from the evidence with no new manifest entry.
+    const shard = join(root, '.adlc', 'tickets', ticketFilename('A'));
+    const tampered = { ...JSON.parse(readFileSync(shard, 'utf8')), title: 'Silently edited' };
+    writeFileSync(shard, prettyCanonicalJson(tampered));
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, false, 'the tamper is flagged');
+    assert.equal(check.code, 'STOREHASH_MANIFEST_MISMATCH');
+    assert.equal(report.ok, false, 'a tampered store fails the whole report');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a legitimate unevidenced op (create) is reported as drift, not failed', () => {
+  const { root, store, service } = storeWithEvidence();
+  try {
+    // Creating B is a non-sensitive op that records NO manifest evidence, so the
+    // live storeHash drifts from the last bound one — but A (the evidenced ticket)
+    // is untouched. That is a legitimate state: reported, never failed.
+    service.apply(service.planCreate(ticket('B')));
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true, 'a legitimate unevidenced op does not fail the check');
+    assert.equal(check.drift, true, 'but the drift is surfaced');
+    assert.equal(report.ok, true, 'and the report stays green');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a store with no recorded evidence yet is inert (not a failure)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-noevidence-'));
+  try {
+    const path = writeDirectory(root, [ticket('A')]); // shards written directly; no manifest
+    const report = doctorTicketStore(new DirectoryTicketStore(path), { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true);
+    assert.equal(check.bound, false, 'nothing to bind against yet');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('doctor current-ticket: reports that it could not validate when the store is unreadable', () => {
