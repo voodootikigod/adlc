@@ -81,6 +81,22 @@ function parseLedger(content) {
 // scanning only `desc` left every other serialized field unchecked.
 const FINDINGS_LEDGER = 'findings';
 const MAX_FINDING_DESC = 600;
+// The ledger is committed + append-only, so a raw dump smuggled into ANY field — not just
+// `desc` — permanently bloats git history. These bound the WHOLE entry: a curated finding is
+// small and near-single-line; a transcript / diff hunk / stack trace / log paste is neither.
+// Generous relative to a real finding (desc alone is capped at 600) but far below a dump.
+const MAX_FINDING_ENTRY = 4000; // total serialized entry bytes
+const MAX_FINDING_LINES = 10;   // total newlines across all (nested) string values
+
+// Count literal newlines across every string in the entry, recursing into nested
+// objects/arrays. Counting the RAW values (not the JSON-escaped `\n` in the serialized
+// form) avoids miscounting an escaped backslash that precedes an 'n' in a path.
+function countEntryNewlines(value) {
+  if (typeof value === 'string') return (value.match(/[\r\n]/g) || []).length;
+  if (Array.isArray(value)) return value.reduce((n, v) => n + countEntryNewlines(v), 0);
+  if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + countEntryNewlines(v), 0);
+  return 0;
+}
 // KNOWN provider credential shapes. This list is necessarily incomplete — new formats
 // appear constantly — so it is a best-effort filter, NOT a proof of secret-freedom.
 // The high-entropy catch below covers unlabelled random secrets the list misses, and
@@ -130,8 +146,9 @@ function looksLikeRandomSecret(text) {
 }
 
 /**
- * Fail CLOSED on anything unfit for a committed ledger. Scans the WHOLE serialized
- * entry, not just `desc` — a secret pasted into any field is published just the same.
+ * Fail CLOSED on anything unfit for a committed ledger. Both boundaries — the secret scan
+ * AND the raw-dump size/line bounds — apply to the WHOLE serialized entry, not just `desc`:
+ * a secret or a multi-line dump pasted into any field is committed just the same.
  */
 export function assertPublishableFinding(entry) {
   // A committed ledger entry must be a USABLE finding, not just secret-free. A bare
@@ -160,6 +177,18 @@ export function assertPublishableFinding(entry) {
   }
   if (desc.length > MAX_FINDING_DESC) {
     throw new Error(`findings ledger: desc is ${desc.length} chars; curated descriptions are capped at ${MAX_FINDING_DESC} to keep dumps out of the committed ledger (ADR 0014)`);
+  }
+
+  // desc-only bounds above are not enough: a raw dump can be smuggled into evidence, body,
+  // exploit_scenario, or any other field, and (unlike a credential) a plain multi-line log
+  // paste matches no secret pattern and its whitespace defeats the high-entropy token scan.
+  // Bound the WHOLE entry so no field escapes (adversarial-review distillation round-12).
+  if (serialized.length > MAX_FINDING_ENTRY) {
+    throw new Error(`findings ledger: entry is ${serialized.length} bytes serialized; curated findings are capped at ${MAX_FINDING_ENTRY} to keep raw dumps out of the committed, append-only ledger (ADR 0014)`);
+  }
+  const newlines = countEntryNewlines(entry);
+  if (newlines > MAX_FINDING_LINES) {
+    throw new Error(`findings ledger: entry spans ${newlines} lines across its fields; a curated finding is near-single-line, so this looks like a raw multi-line dump (transcript, diff hunk, stack trace, log paste) — describe the failure class instead (ADR 0014)`);
   }
 }
 

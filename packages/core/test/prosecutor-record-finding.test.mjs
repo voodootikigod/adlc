@@ -152,6 +152,44 @@ describe('recordFinding', () => {
       reject('x'.repeat(601), /capped at/i);
     });
 
+    test('refuses an oversized raw dump smuggled into a NON-desc field', () => {
+      // desc is single-line + capped, but the ledger is committed and append-only, so a
+      // 2MB payload in `evidence` (or any other field) permanently bloats history just the
+      // same. The whole entry is bounded, not only desc.
+      const dir = mkDir();
+      try {
+        assert.throws(
+          () => appendEntry('findings', { file: 'a.mjs', desc: 'ok prose', evidence: 'x'.repeat(5000) }, dir),
+          /bytes serialized|capped at 4000/i,
+        );
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('refuses a many-line dump (log paste / diff hunk / stack trace) in a NON-desc field', () => {
+      const dir = mkDir();
+      try {
+        // A 30-line log paste in `evidence`: small in bytes, but unmistakably a raw dump.
+        const logPaste = Array.from({ length: 30 }, (_, i) => `  at frame ${i} (mod.mjs:${i})`).join('\n');
+        assert.throws(
+          () => appendEntry('findings', { file: 'a.mjs', desc: 'ok prose', evidence: logPaste }, dir),
+          /spans \d+ lines|raw multi-line dump/i,
+        );
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    test('still accepts a finding with a SHORT multi-line evidence quote', () => {
+      // The bound must not reject a legitimately curated finding that quotes a couple of
+      // lines of the offending code — only unbounded/dump-shaped payloads.
+      const dir = mkDir();
+      try {
+        assert.doesNotThrow(() => appendEntry('findings', {
+          file: 'a.mjs',
+          desc: 'guard failed open on invalid input',
+          evidence: 'if (ok) {\n  proceed();\n}',
+        }, dir));
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
     test('refuses a non-finding entry that would crash the P7 pipeline', () => {
       // A bare null/scalar/array is valid JSON that passes a secret scan but breaks
       // loadFindings (it dereferences .verdict / clusters on .desc). The committed-
