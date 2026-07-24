@@ -71,9 +71,10 @@ adlc lesson-foundry --gate
   surface them and run `/adlc-distill` to bank a defense.
 
 This deterministic, keyless gate is the decay-time owner of the P5 → P7 bridge. It
-is **not** wired into the maintenance cron: `.adlc/findings.jsonl` is machine-local,
-so the cluster set only exists in the session that holds the ledger — run it here,
-not in CI.
+is not yet wired into the maintenance cron, but it is portable now:
+`.adlc/findings.jsonl` is tracked in git (ADR 0014), so the cluster set travels with
+the repo and the gate returns the same verdict anywhere it is checked out —
+including CI.
 
 ## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 Only if a gate suite exists at `.adlc/gate-suite.json` (without one the tool

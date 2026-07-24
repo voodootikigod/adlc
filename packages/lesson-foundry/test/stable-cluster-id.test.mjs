@@ -24,13 +24,22 @@ function makeTempDir() {
 // ---------------------------------------------------------------------------
 // clusterId — the stable, prose-independent key
 // ---------------------------------------------------------------------------
-test('clusterId: deterministic, order-independent, and membership-sensitive', () => {
+test('clusterId: deterministic, order-independent, and STABLE as the cluster grows', () => {
   const a = { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'alpha' };
   const b = { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'beta' };
+  const c = { ts: 't3', file: 'c.mjs', line: 3, category: 'security', desc: 'gamma' };
+  const other = { ts: 't9', file: 'z.mjs', line: 9, category: 'style', desc: 'unrelated pattern' };
 
   assert.equal(clusterId([a, b]), clusterId([a, b]), 'same members → same id');
   assert.equal(clusterId([a, b]), clusterId([b, a]), 'member order must not change the id');
-  assert.notEqual(clusterId([a, b]), clusterId([a]), 'a different member set is a different cluster');
+  // THE property this id exists for. A recurring pattern accumulates occurrences; that
+  // is the ledger's normal lifecycle. Keying on the whole member set meant one more
+  // occurrence of an already-defended pattern re-keyed the cluster and orphaned its
+  // lesson — reporting a defended pattern as undistilled.
+  assert.equal(clusterId([a, b]), clusterId([a, b, c]), 'appending a new occurrence must NOT re-key the cluster');
+  assert.equal(clusterId([a]), clusterId([a, b, c]), 'nor does growth from a single founding occurrence');
+  // But genuinely different clusters remain distinct.
+  assert.notEqual(clusterId([a, b]), clusterId([other]), 'a different cluster is a different id');
   assert.match(clusterId([a, b]), /^[0-9a-f]+$/, 'id is a hex digest');
 });
 
@@ -100,6 +109,39 @@ test('spec-gap: a reworded lesson that dropped the legacy slug marker is still b
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('spec-gap: a defended cluster STAYS banked when the same pattern recurs again', () => {
+  // The lifecycle that matters: distil a lesson, then the pattern happens once more.
+  // The gate must still credit the existing defense — not re-report it as undistilled
+  // just because the ledger gained another occurrence of the thing it defends against.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const a = { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' };
+    const b = { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' };
+
+    const [banked] = buildClusters([a, b], 2);
+    assert.equal(banked.route, 'spec-gap');
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# Interrogation Template\n\n- [ ] **[security]** retention window + deletion trigger? <!-- cluster-id: ${banked.id} -->\n`,
+      'utf8',
+    );
+    assert.deepEqual(findUnbankedClusters([banked], outDir, existsSync), [], 'precondition: it is banked');
+
+    // The same pattern recurs a third time.
+    const c = { ts: 't3', file: 'c.mjs', line: 3, category: 'security', desc: 'unclear data retention policy for backups' };
+    const [grown] = buildClusters([a, b, c], 2);
+
+    assert.equal(grown.id, banked.id, 'the grown cluster keeps its identity');
+    assert.deepEqual(
+      findUnbankedClusters([grown], outDir, existsSync),
+      [],
+      'and the existing defense still counts — a recurrence does not un-bank it',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 // End-to-end order-independence: the marker is stamped from one member ordering

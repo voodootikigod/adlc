@@ -32,6 +32,7 @@ adlc lesson-foundry --gate
 
 A non-zero exit names each cluster in `.adlc/findings.jsonl` that recurs but still
 has no banked lesson; each is an undefended cluster. Bank or refine its lesson and
-re-run until the gate is green. It is deterministic and keyless, but not in the
-maintenance cron — `.adlc/findings.jsonl` is machine-local, so the cluster set only
-exists in the session that holds the ledger; run it here, not in CI.
+re-run until the gate is green. It is deterministic, keyless, and portable:
+`.adlc/findings.jsonl` is tracked in git (ADR 0014), so the cluster set travels with
+the repo and the gate returns the same verdict anywhere it is checked out. It is not
+yet wired into the maintenance cron.

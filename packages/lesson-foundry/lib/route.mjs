@@ -75,8 +75,23 @@ export function findingHash(finding) {
  * of clusters a ledger ever holds, short enough to embed in a marker.
  */
 export function clusterId(findings) {
-  const hashes = (findings ?? []).map(findingHash).sort();
-  return sha256(hashes.join('\n')).slice(0, 16);
+  const list = (findings ?? []).filter(Boolean);
+  if (list.length === 0) return sha256('adlc-cluster-v2\n').slice(0, 16);
+  // Identity is the occurrence that FOUNDED the cluster — deliberately NOT the whole
+  // member set. A recurring pattern accumulates members over time; that is the ledger's
+  // normal lifecycle, not an edge case. Hashing every member meant one more occurrence
+  // of an ALREADY-DEFENDED pattern produced a different id, orphaning the lesson's
+  // marker and reporting the cluster undistilled again — the precise failure this id
+  // exists to prevent. The earliest member is invariant under append.
+  //
+  // Ties on `ts` break on the content hash so the choice is deterministic, and sorting
+  // means input order cannot affect the result. (The ledger is append-only; pruning the
+  // founding occurrence would re-key the cluster, which is why entries are never
+  // removed.)
+  const founding = list
+    .map((f) => ({ ts: String(f?.ts ?? ''), hash: findingHash(f) }))
+    .sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : (x.hash < y.hash ? -1 : x.hash > y.hash ? 1 : 0)))[0];
+  return sha256(`adlc-cluster-v2\n${founding.hash}`).slice(0, 16);
 }
 
 /**
