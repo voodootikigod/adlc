@@ -1,7 +1,7 @@
 // File emission for lesson-foundry — generates defense artifacts.
 // Pure functions that return { path, content } pairs; caller writes them.
 
-import { clusterName, clusterId, extractLiteralPattern, escapeRegex } from './route.mjs';
+import { clusterName, clusterId, clusterMembers, extractLiteralPattern, escapeRegex } from './route.mjs';
 
 /**
  * Build the grep-gate JSON descriptor for a LINT cluster.
@@ -16,6 +16,8 @@ export function buildLintDescriptor(name, findings) {
     // this id even if the slug-derived filename below has since drifted or been
     // renamed during refinement. Kept first so it survives a hand-edit at the top.
     id: clusterId(findings),
+    // Durable banking identity: overlap with these survives growth AND merges.
+    members: clusterMembers(findings),
     name,
     pattern,
     paths: ['**'],
@@ -127,6 +129,7 @@ description: ${desc}
 category: ${category}
 mined-from: ${count} findings
 cluster-id: ${clusterId(findings)}
+cluster-members: ${clusterMembers(findings).join(' ')}
 triggers:
   - ${category}
   - recurring-finding
@@ -170,7 +173,8 @@ export function buildSpecGapLine(name, findings) {
   // stable cluster-id. The gate credits either, so rewording the question — even
   // dropping the slug annotation — cannot orphan the lesson as long as the id
   // marker survives.
-  return `- [ ] **[${category}]** ${desc} *(recurring in ${count} finding${count === 1 ? '' : 's'}, cluster: ${name}, cluster-id: ${id})*\n`;
+  const members = clusterMembers(findings).join(' ');
+  return `- [ ] **[${category}]** ${desc} *(recurring in ${count} finding${count === 1 ? '' : 's'}, cluster: ${name}, cluster-id: ${id}, cluster-members: ${members})*\n`;
 }
 
 /**

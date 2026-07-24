@@ -110,4 +110,44 @@ describe('recordFinding', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // The ledger is TRACKED in git (ADR 0014), so every description recorded here gets
+  // committed. "Curated prose, never raw dumps or secrets" was documented but not
+  // enforced — and an unenforced rule is not a boundary. These assert the direction of
+  // the check so it cannot silently drift back to fail-open.
+  describe('secret boundary on the committed ledger', () => {
+    const reject = (desc, re) => {
+      const dir = mkDir();
+      try { assert.throws(() => recordFinding({ file: 'a.mjs', desc }, dir), re); }
+      finally { rmSync(dir, { recursive: true, force: true }); }
+    };
+
+    test('refuses descriptions carrying credential-shaped values', () => {
+      reject('leaked AKIA1234567890ABCDEF in the config', /AWS access key/i);
+      reject('token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa was committed', /GitHub token/i);
+      reject('-----BEGIN RSA PRIVATE KEY----- MIIEowIBAAK', /private key/i);
+      reject('called with Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345', /bearer token/i);
+      reject('config had password: hunter2supersecret', /inline credential/i);
+    });
+
+    test('refuses raw multi-line tool output', () => {
+      reject('stack trace:\n  at foo (a.mjs:1)\n  at bar (b.mjs:2)', /single line of curated prose/i);
+    });
+
+    test('refuses a description long enough to be a dump', () => {
+      reject('x'.repeat(601), /capped at/i);
+    });
+
+    test('still accepts ordinary curated prose describing a failure class', () => {
+      const dir = mkDir();
+      try {
+        const entry = recordFinding({
+          file: 'packages/core/lib/prosecutor.mjs',
+          desc: 'survivesVerification used filter(Boolean), so a truthy-malformed vote stayed in the denominator and could silently drop a real blocker — the guard failed OPEN on invalid input',
+        }, dir);
+        assert.equal(entry.tool, 'prosecutor');
+        assert.match(entry.desc, /failed OPEN/);
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+  });
 });

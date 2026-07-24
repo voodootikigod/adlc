@@ -74,6 +74,28 @@ export function findingHash(finding) {
  * and drifts). Truncated to 64 bits: ample to avoid collision across the handful
  * of clusters a ledger ever holds, short enough to embed in a marker.
  */
+/**
+ * The cluster's MEMBER KEYS — the durable banking identity.
+ *
+ * No key DERIVED from the current member set can be stable, because the set changes in
+ * both directions: a recurrence appends a member, and — now that the ledger is tracked
+ * in git — a branch merge can introduce a member with an EARLIER timestamp. Keying on
+ * the whole set breaks on growth; keying on the earliest member breaks on merge.
+ *
+ * So banking does not derive a key at all. A lesson records the member keys it was
+ * distilled from, and a cluster counts as defended when it still shares a member with
+ * that lesson. Overlap survives both growth and out-of-order merges, because neither
+ * REMOVES the members the lesson already covers.
+ */
+export function clusterMembers(findings) {
+  return (findings ?? []).filter(Boolean).map((f) => findingHash(f).slice(0, 12)).sort();
+}
+
+/**
+ * Informational, human-facing cluster key. Retained so lessons banked before the
+ * overlap scheme keep being credited, and for `--json` output — but it is NOT the
+ * banking identity (see clusterMembers for why a derived key cannot be stable).
+ */
 export function clusterId(findings) {
   const list = (findings ?? []).filter(Boolean);
   if (list.length === 0) return sha256('adlc-cluster-v2\n').slice(0, 16);

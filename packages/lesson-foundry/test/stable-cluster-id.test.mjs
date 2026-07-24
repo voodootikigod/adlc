@@ -144,6 +144,40 @@ test('spec-gap: a defended cluster STAYS banked when the same pattern recurs aga
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('spec-gap: a merged OLDER occurrence does not un-bank a defended cluster', () => {
+  // Now that the ledger is tracked in git (T81), branches merge findings out of
+  // timestamp order as a matter of course: a record appended today can carry an
+  // earlier ts than one already banked. Any identity DERIVED from the member set
+  // breaks here — keying on the whole set breaks on growth, keying on the earliest
+  // member breaks on exactly this. Overlap survives both.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const a = { ts: '2026-02-01', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' };
+    const b = { ts: '2026-02-02', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' };
+
+    const [banked] = buildClusters([a, b], 2);
+    assert.equal(banked.route, 'spec-gap');
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# Interrogation Template\n\n- [ ] **[security]** retention window + deletion trigger? <!-- cluster-members: ${banked.members.join(' ')} -->\n`,
+      'utf8',
+    );
+    assert.deepEqual(findUnbankedClusters([banked], outDir, existsSync), [], 'precondition: banked');
+
+    // A long-running branch merges in an occurrence recorded BEFORE the banked ones.
+    const older = { ts: '2026-01-15', file: 'z.mjs', line: 9, category: 'security', desc: 'unclear data retention policy for backups' };
+    const [merged] = buildClusters([older, a, b], 2);
+
+    assert.deepEqual(
+      findUnbankedClusters([merged], outDir, existsSync),
+      [],
+      'the existing defense still counts after an out-of-order merge',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // End-to-end order-independence: the marker is stamped from one member ordering
 // and the gate re-clusters (possibly reordering members) before checking. This is
 // the property the whole ticket rests on — an order-dependent id would orphan the

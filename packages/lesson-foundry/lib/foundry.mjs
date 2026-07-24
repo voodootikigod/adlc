@@ -4,7 +4,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { readEntries } from '@adlc/core';
 import { clusterFindings } from './cluster.mjs';
-import { routeCluster, clusterName, clusterId } from './route.mjs';
+import { routeCluster, clusterName, clusterId, clusterMembers } from './route.mjs';
 import { planEmissions } from './emit.mjs';
 
 /**
@@ -67,8 +67,9 @@ export function buildClusters(findings, minSize, threshold = 0.5) {
       const route = routeCluster(clusterFinds);
       const name = clusterName(clusterFinds);
       const id = clusterId(clusterFinds);
+      const members = clusterMembers(clusterFinds);
       const sample = clusterFinds[0]?.desc ?? '';
-      return { id, name, indices, size: indices.length, route, sample };
+      return { id, members, name, indices, size: indices.length, route, sample };
     });
 }
 
@@ -115,29 +116,36 @@ export function findUnbankedClusters(
     return dirEntries;
   };
   // Is there any `suffix` file in outDir whose content carries this cluster's id?
-  const hasIdStampedArtifact = (suffix, id) => {
-    if (!id) return false; // no id → cannot false-credit; fall back to slug only
+  // Credit an artifact that shares a MEMBER KEY with this cluster (the durable
+  // identity), or that carries the legacy derived id. Overlap is what survives the
+  // cluster gaining a member (a recurrence) or a merge introducing an earlier one —
+  // neither removes the members an existing lesson already covers.
+  const hasStampedArtifact = (suffix, id, members = []) => {
+    const keys = [...members, ...(id ? [id] : [])];
+    if (keys.length === 0) return false; // nothing to match on; fall back to slug only
     for (const entry of listDir()) {
       if (!entry.endsWith(suffix)) continue;
       const content = readFile(`${outDir}/${entry}`);
-      if (content && content.includes(id)) return true;
+      if (content && keys.some((k) => content.includes(k))) return true;
     }
     return false;
   };
 
   return clusters.filter((cluster) => {
-    const { route, name, id } = cluster;
+    const { route, name, id, members = [] } = cluster;
 
     if (route === 'lint') {
       if (existsSync(`${outDir}/${name}.lint.json`)) return false; // legacy slug file
-      return !hasIdStampedArtifact('.lint.json', id);
+      return !hasStampedArtifact('.lint.json', id, members);
     }
     if (route === 'skill') {
       if (existsSync(`${outDir}/${name}.SKILL.md`)) return false; // legacy slug file
-      return !hasIdStampedArtifact('.SKILL.md', id);
+      return !hasStampedArtifact('.SKILL.md', id, members);
     }
-    // spec-gap: banked if the stable id marker OR the legacy slug marker is present.
+    // spec-gap: banked when the template still covers one of this cluster's members
+    // (durable), or carries the legacy derived id / slug marker (back-compat).
     const template = getTemplate();
+    if (members.some((m) => template.includes(m))) return false;
     if (id && template.includes(specGapIdMarker(id))) return false;
     return !template.includes(specGapMarker(name));
   });
