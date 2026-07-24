@@ -66,6 +66,12 @@ test('every gate is invoked EXACTLY as ci.yml invokes it', async () => {
   assert.match(ci, /guard-findings-ledger-append-only\.mjs "origin\/\$BASE_REF"/);
 });
 
+test('the findings gates name their ADR basis (pins the ADR 0014 reference against drift)', async () => {
+  const gates = buildGates('main');
+  assert.match(gates.find((g) => g.name === 'findings-ledger').why, /ADR 0014/, 'findings-ledger cites ADR 0014');
+  assert.match(gates.find((g) => g.name === 'findings-append-only').why, /ADR 0014/, 'findings-append-only cites ADR 0014');
+});
+
 test('--base selects the ref every diff-based gate compares against', async () => {
   assert.equal(parseBase(['node', 'preflight.mjs', '--base', 'release-2']), 'release-2');
   assert.equal(parseBase(['node', 'preflight.mjs']), 'main', 'defaults to main');

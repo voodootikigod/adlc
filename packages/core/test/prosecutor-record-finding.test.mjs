@@ -190,6 +190,20 @@ describe('recordFinding', () => {
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 
+    test('the entry-size cap is enforced at the EXACT boundary (an entry one byte over is rejected)', () => {
+      const dir = mkDir();
+      try {
+        const base = { file: 'a.mjs', desc: 'ok prose', evidence: '' };
+        const overhead = JSON.stringify(base).length;
+        const atLimit = { ...base, evidence: 'x'.repeat(4000 - overhead) };
+        const overLimit = { ...base, evidence: 'x'.repeat(4001 - overhead) };
+        assert.equal(JSON.stringify(atLimit).length, 4000, 'precondition: exactly at the cap');
+        assert.equal(JSON.stringify(overLimit).length, 4001, 'precondition: one byte over');
+        assert.doesNotThrow(() => appendEntry('findings', atLimit, dir), 'an entry exactly at the cap is accepted');
+        assert.throws(() => appendEntry('findings', overLimit, dir), /bytes serialized|capped at 4000/, 'one byte over is rejected');
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
     test('refuses a non-finding entry that would crash the P7 pipeline', () => {
       // A bare null/scalar/array is valid JSON that passes a secret scan but breaks
       // loadFindings (it dereferences .verdict / clusters on .desc). The committed-

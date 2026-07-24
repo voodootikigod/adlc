@@ -18,7 +18,7 @@ import { assertPublishableFinding } from '@adlc/core';
 // before buffered stdout/stderr is flushed, so a caller capturing our diagnostics (our
 // own tests, or a CI log) can see empty output on failure. Setting exitCode lets the
 // process end naturally once the streams drain.
-function scan(ledger) {
+export function scan(ledger) {
   if (!existsSync(ledger)) {
     console.log(`scan-findings-ledger: no ledger at ${ledger} — nothing to scan.`);
     return 0;
@@ -68,4 +68,8 @@ function scan(ledger) {
   return 0;
 }
 
-process.exitCode = scan(process.argv[2] ?? '.adlc/findings.jsonl');
+// CLI entry — skipped when this module is imported (so a unit test can assert scan()'s
+// exact return value without the top-level call scanning the importer's real ledger).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  process.exitCode = scan(process.argv[2] ?? '.adlc/findings.jsonl');
+}

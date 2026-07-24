@@ -8,8 +8,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { scan as scanInProcess } from '../scan-findings-ledger.mjs';
 
 const SCANNER = new URL('../scan-findings-ledger.mjs', import.meta.url).pathname;
+
+// The subprocess exit code cannot distinguish `return 0` from `return null` (both exit 0),
+// so pin the exact clean-case return value in-process — a strict 0, not any falsy value.
+test('scan() returns EXACTLY 0 (not null/undefined) for an absent ledger', () => {
+  assert.strictEqual(scanInProcess('/nonexistent/path/findings.jsonl'), 0);
+});
 
 function scan(ledgerPath) {
   try {

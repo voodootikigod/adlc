@@ -22,6 +22,24 @@ function makeTempDir() {
 }
 
 // ---------------------------------------------------------------------------
+// findingHash canonicalizes the WHOLE finding via canonicalJson, whose whole job is to be
+// order-independent: it recurses into objects and SORTS their keys. If its `value === null
+// || typeof value !== 'object'` guard is inverted, every non-null value short-circuits to a
+// bare JSON.stringify — no recursion, no key sort — so the hash becomes field-ORDER
+// dependent. Pin both: field-order invariance (the killer) and null-field handling.
+test('findingHash is invariant to field ORDER (canonicalJson sorts keys)', () => {
+  const a = { file: 'a.mjs', desc: 'guard failed open', line: 3, category: 'security' };
+  const b = { category: 'security', line: 3, desc: 'guard failed open', file: 'a.mjs' };
+  assert.equal(findingHash(a), findingHash(b), 'the same fields in a different order must hash the same');
+});
+
+test('findingHash: a null field value is canonicalized, not a crash', () => {
+  const withNull = { file: 'a.mjs', desc: 'x', line: null, meta: { nested: null } };
+  let hash;
+  assert.doesNotThrow(() => { hash = findingHash(withNull); }, 'a null field must not throw');
+  assert.match(hash, /^[0-9a-f]+$/, 'and still yields a hex digest');
+});
+
 // clusterId — the stable, prose-independent key
 // ---------------------------------------------------------------------------
 test('clusterId: deterministic, order-independent, and STABLE as the cluster grows', () => {
