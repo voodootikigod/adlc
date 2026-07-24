@@ -1,6 +1,7 @@
 {
   "body": "Implement `adlc ticket doctor` (read-only always; --json) per the spec 'doctor — read-only, offline (MVP)'. A flat list of offline checks; exit 2 if any error else 0. No --fix, no network, no registry (deferred to a follow-up spec). Checks: .adlc/config.json valid against adlc-config.schema.json; tickets.json loads via @adlc/core loadTickets with no errors (dup id / dangling edge / cycle / schema); committed JSON Schemas == regenerated (bedrock drift); sidecar valid, no two ids map to one nodeId, every synced ticket has a syncedHash, no stale pendingCreates; stale .adlc/tickets.lock (age-guarded, reported not removed). Depends on T3 (config/store/validity/sidecar).\n\nAcceptance criteria:\n1. test/doctor.test.mjs green: each check has a failing AND a passing fixture; exit codes correct (0 healthy, 2 problems).\n2. doctor performs zero network calls and zero writes (verify with an injected gh runner that throws on use, and a read-only assertion).",
   "category": "feature",
+  "completed": true,
   "duration": 1,
   "edges": [
     {

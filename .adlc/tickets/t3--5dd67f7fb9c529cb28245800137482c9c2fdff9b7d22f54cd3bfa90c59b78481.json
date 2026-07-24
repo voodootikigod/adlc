@@ -2,6 +2,7 @@
   "body": "Implements plan Phase B (§4.3, §7). Builds on the T1 MVP package. Write the plugin SDK hook implementing the two-phase stdio JSON cascade: extract prompts via --prompt-session, falling back to --prompt-only with stdin replay, and route them keylessly to isolated model sub-contexts, handling concurrent multi-round and multi-sample flows. This is the keyless path so model-backed gates need no API key inside OpenCode. Depends on the proposed SDK extension interfaces noted in plan §6.4; if absent, degrade to fresh-context isolation on the active session model and document the limitation. Acceptance: a unit test drives the cascade with a stubbed SDK and asserts prompt extraction + isolated dispatch; required for T5 (prosecutor lenses run in isolated contexts).",
   "budget": "frontier",
   "category": "feature",
+  "completed": true,
   "duration": 4,
   "edges": [
     {

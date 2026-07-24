@@ -2,6 +2,7 @@
   "body": "`adlc ticket-prune --write` returns on the first archive error (packages/ticket-prune/lib/run.mjs:155-161), so a completed tombstone that retains inbound edges (e.g. T9, T46/T47) fails closed with ARCHIVE_INBOUND_EDGE and wedges the whole sweep, leaving the store half-processed. Fix: (1) order archive candidates topologically so edge SOURCES are archived before their targets; (2) on a per-ticket archive failure, collect it into the report and CONTINUE the batch instead of returning, surfacing the failed/blocked set the way needsCeremony already is. Invariants: never archive a ticket before a dependency it points to is handled; a run with some blocked tickets still archives every eligible one and exits with a report rather than a hard failure; dry-run output must list what WOULD archive vs what is blocked. Verification: `node --test packages/ticket-prune/test/*.test.mjs` with NEW tests proving (a) a batch containing one inbound-edge-blocked ticket still archives the rest and names the blocked one, (b) archive order is topological. allow-suppression: none",
   "budget": "frontier",
   "category": "bug",
+  "completed": true,
   "duration": 3,
   "edges": [],
   "id": "T146",

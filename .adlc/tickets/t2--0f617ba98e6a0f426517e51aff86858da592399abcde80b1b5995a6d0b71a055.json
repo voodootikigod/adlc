@@ -2,6 +2,7 @@
   "body": "Implements plan Phase A (docs/opencode-integration-plan.md §7 on branch opencode-integration). Builds on the T1 MVP plugin package. Configure package mappings so first use never ENOENTs: the `adlc` dispatcher, `adlc-runner` (pending merge), and the 19 gate bins (behavior-diff, coldstart, consensus-fix, flail-detector, gate-fuzzing, gate-manifest, hollow-test, lesson-foundry, merge-forecast, model-ratchet, model-router, parallax, preflight, premortem, rails-guard, rejection-mining, review-calibration, skill-rot, spec-lint). Implement the slash-command surface scaffolded into .opencode/command/ by /adlc-init: /adlc-init (scaffolds .adlc/config.json and copies/symlinks command/agent/skill dirs into .opencode/ from the package source), /adlc-ticket (P0), /adlc-approve-spec (P1 G1), /adlc-spec (P1), /adlc-decompose (P2). Acceptance: a smoke test asserts each command file is present and /adlc-init scaffolds the .opencode/ layout per plan §4.1. Read the plan as the contract; do not re-derive it.",
   "budget": "frontier",
   "category": "feature",
+  "completed": true,
   "duration": 4,
   "edges": [
     {

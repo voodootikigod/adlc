@@ -2,6 +2,7 @@
   "body": "Root problem: fleet computes the merged-ticket set (packages/fleet/lib/run.mjs:122) and discards it; nothing in the ADLC lifecycle ever sets completed:true automatically, so shipped tickets accumulate open. In runFleet's merge effect (packages/fleet/lib/run.mjs:29-37), after postMergeGate PASSES for a ticket, invoke TicketService.planComplete(ticket.id) + apply() in the integration-branch worktree and commit the add-only completed:true diff onto the fleet run branch, so completion rides the single PR fleet already opens. Constraints: idempotent (an already-completed ticket is a no-op, never an error); a ticket whose merge/postMergeGate FAILED must NOT be completed; completion must go through the existing planComplete path so manifest evidence is recorded; rails-less tickets merge under rails-guard-ci's existing isCompletionAnnotationOnly exemption. Verification: `node --test packages/fleet/test/*.test.mjs` with a NEW test proving (a) a merged+gate-passed ticket ends completed:true on the run branch, (b) a gate-failed ticket stays open, (c) re-running over an already-completed ticket is a no-op. allow-suppression: none",
   "budget": "frontier",
   "category": "feature",
+  "completed": true,
   "duration": 3,
   "edges": [],
   "id": "T144",

@@ -2,6 +2,7 @@
   "body": "The pi plugin enumerates ALL tickets for argument completions (plugins/adlc-pi/lib/commands.mjs:166-168) and the interactive picker (line 204) with no completed!==true filter, and ticketLabel (line 55) doesn't even mark completed tickets, so 40 of 80 entries are closed tickets offered as activation candidates. Invariant #104 requires backlog ENUMERATIONS to filter completed:true. Fix: filter t.completed !== true in getArgumentCompletions and in the interactive picker options. Named-id activation of a completed ticket stays allowed (that is a lookup, not an enumeration) — only the offered lists are filtered. Verification: `node --test plugins/adlc-pi/test/*.test.mjs` with a NEW test proving the picker and completions exclude a completed ticket, still include an open one, and named activation of a completed id still resolves. allow-suppression: none",
   "budget": "mid",
   "category": "bug",
+  "completed": true,
   "duration": 1,
   "edges": [],
   "id": "T147",
