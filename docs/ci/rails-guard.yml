@@ -8,8 +8,14 @@
 # perl -i, …) still lands in the PR diff — this job rejects that PR when the rail
 # was already frozen on the base branch.
 #
-# It reads every rail glob declared in the trusted base .adlc/tickets.json and
-# runs the diff-based `adlc rails-guard` gate against the PR base. Once
+# It reads every rail glob declared in the trusted base ticket store — either the
+# legacy .adlc/tickets.json file or the canonical sharded directory store
+# (.adlc/tickets/ with a .store.json manifest) — and runs the diff-based
+# `adlc rails-guard` gate against the PR base. The .adlc/tickets/.store.json
+# manifest is itself a protected trust root, and a store-backend MIGRATION
+# (legacy<->directory) is denied in ordinary PRs: unlike scripts/rails-guard-ci.mjs
+# this self-contained template does not verify migration manifest evidence, so
+# migrations must go through the protected-base admin ceremony. Once
 # .adlc/config.json exists on the base branch, it also protects immutable ADLC
 # trust roots even if no ticket rails exist yet. Configure it as a required check
 # only after acknowledging the SECURITY LIMITATION below.
@@ -429,20 +435,46 @@ jobs:
               return r.stdout.trim();
             };
             const isShard = (p) => p.endsWith(".json") && p.split("/").pop() !== ".store.json";
+            // The canonical @adlc/tickets store manifest. Validate the .store.json
+            // CONTENT (not merely its existence) so a future/foreign store layout fails
+            // closed here instead of being misread as this v1 shard shape.
+            const EXPECTED_STORE = { format: "adlc-ticket-directory", version: 1 };
+            const validateStoreManifest = (raw, where) => {
+              let m; try { m = JSON.parse(raw); } catch (e) { fail("cannot parse " + where + " .adlc/tickets/.store.json: " + e.message); }
+              if (!m || typeof m !== "object" || m.format !== EXPECTED_STORE.format || m.version !== EXPECTED_STORE.version) fail(where + " .adlc/tickets/.store.json is not a supported ticket store (expected {format:\"adlc-ticket-directory\",version:1}) — failing closed; upgrade the gate to read this store");
+            };
             const readBaseStore = () => {
-              // Legacy takes precedence: a base that still has tickets.json is legacy
-              // at base even if a stray shard dir also exists.
-              if (gitLsBase(".adlc/tickets.json", "git ls-tree base tickets")) {
+              const hasLegacy = gitLsBase(".adlc/tickets.json", "git ls-tree base tickets");
+              const hasDir = gitLsBase(".adlc/tickets/.store.json", "git ls-tree base store");
+              // Ambiguous base (both backends committed) is a tooling/admin error. The
+              // canonical loader throws AMBIGUOUS_STORE; match it — never silently pick
+              // one backend and drop the other's rails (that is the #283 fail-open).
+              if (hasLegacy && hasDir) fail("base has BOTH .adlc/tickets.json and a .adlc/tickets/ store — ambiguous ticket store; failing closed");
+              if (hasLegacy) {
                 const show = git(["show", base + ":.adlc/tickets.json"], "git show base tickets");
                 if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
                 let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
                 return { backend: "legacy", tickets: validateTickets(d, "base") };
               }
-              if (!gitLsBase(".adlc/tickets/.store.json", "git ls-tree base store")) return { backend: "none", tickets: [] };
-              const listing = git(["ls-tree", "-r", "--name-only", base, "--", ".adlc/tickets/"], "git ls-tree base shards");
+              if (!hasDir) return { backend: "none", tickets: [] };
+              const storeShow = git(["show", base + ":.adlc/tickets/.store.json"], "git show base store manifest");
+              if (storeShow.status !== 0) fail("git show failed for base store manifest (operational) — failing closed");
+              validateStoreManifest(storeShow.stdout, "base");
+              // Non-recursive: shards are flat directly under .adlc/tickets/. Parse the
+              // ls-tree type column so a nested TREE (or a symlink/gitlink) is rejected,
+              // not walked — the canonical store forbids nesting, and base and HEAD must
+              // enumerate the SAME flat set (git show also never follows a symlink blob).
+              const listing = git(["ls-tree", base, "--", ".adlc/tickets/"], "git ls-tree base shards");
               if (listing.status !== 0) fail("git ls-tree failed for " + base + " shard dir (operational) — failing closed");
               const shards = [];
-              for (const shardPath of listing.stdout.split(/\r?\n/).map(x => x.trim()).filter(isShard).sort()) {
+              for (const line of listing.stdout.split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
+                const tab = line.indexOf("\t");
+                if (tab === -1) fail("unparseable base ls-tree entry — failing closed");
+                const [mode, type] = line.slice(0, tab).split(/\s+/);
+                const shardPath = line.slice(tab + 1);
+                if (shardPath.split("/").pop() === ".store.json") continue;
+                if (!isShard(shardPath)) fail("unexpected non-shard entry in base .adlc/tickets/: " + shardPath + " — failing closed");
+                if (type !== "blob" || mode !== "100644") fail("base shard " + shardPath + " is not a regular-file blob — failing closed");
                 const show = git(["show", base + ":" + shardPath], "git show base shard");
                 if (show.status !== 0) fail("git show failed for base shard " + shardPath + " (operational) — failing closed");
                 let t; try { t = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base shard " + shardPath + ": " + e.message); }
@@ -452,14 +484,22 @@ jobs:
             };
             const readHeadStore = () => {
               const fs = require("fs");
-              if (fs.existsSync(".adlc/tickets.json")) {
+              const hasLegacy = fs.existsSync(".adlc/tickets.json");
+              const hasDir = fs.existsSync(".adlc/tickets/.store.json");
+              if (hasLegacy && hasDir) deny("HEAD has BOTH .adlc/tickets.json and a .adlc/tickets/ store — ambiguous ticket store");
+              if (hasLegacy) {
                 return { backend: "legacy", tickets: validateTickets(JSON.parse(fs.readFileSync(".adlc/tickets.json", "utf8")), "head") };
               }
-              if (fs.existsSync(".adlc/tickets/.store.json")) {
+              if (hasDir) {
+                validateStoreManifest(fs.readFileSync(".adlc/tickets/.store.json", "utf8"), "head");
                 const shards = [];
-                for (const name of fs.readdirSync(".adlc/tickets").sort()) {
-                  if (!isShard(name)) continue;
-                  let t; try { t = JSON.parse(fs.readFileSync(".adlc/tickets/" + name, "utf8")); } catch (e) { fail("cannot parse head shard " + name + ": " + e.message); }
+                // withFileTypes → a symlink is isSymbolicLink() (readdir does not follow
+                // it) and a subdir is isDirectory(); skip both so readFileSync only ever
+                // reads a real flat shard, matching the base enumeration exactly.
+                for (const ent of fs.readdirSync(".adlc/tickets", { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+                  if (!ent.isFile()) continue;
+                  if (!isShard(ent.name)) continue;
+                  let t; try { t = JSON.parse(fs.readFileSync(".adlc/tickets/" + ent.name, "utf8")); } catch (e) { fail("cannot parse head shard " + ent.name + ": " + e.message); }
                   shards.push(t);
                 }
                 return { backend: "directory", tickets: validateTickets({ tickets: shards }, "head") };

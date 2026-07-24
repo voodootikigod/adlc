@@ -1042,7 +1042,8 @@ test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
 function writeDirStore(dir, tickets) {
   const ticketsDir = join(dir, '.adlc', 'tickets');
   mkdirSync(ticketsDir, { recursive: true });
-  writeFileSync(join(ticketsDir, '.store.json'), JSON.stringify({ version: 1, backend: 'directory' }));
+  // The real @adlc/tickets manifest shape; the template validates this content.
+  writeFileSync(join(ticketsDir, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
   for (const t of tickets) {
     writeFileSync(join(ticketsDir, `${t.id.toLowerCase()}--0000.json`), JSON.stringify(t));
   }
@@ -1099,11 +1100,13 @@ test('#283: directory-backend completed ticket rails auto-expire; active rails s
 });
 
 test('#283: directory-backend allows adding a new shard while preserving existing tickets', () => {
-  const { status } = runDirBackendCapture({
+  const { status, argv } = runDirBackendCapture({
     baseTickets: [{ id: 'T1', rails: ['src/critical/**'] }],
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't2--0000.json'), JSON.stringify({ id: 'T2', rails: [] })),
   });
   assert.equal(status, 0);
+  // The existing ticket's rail must STILL be frozen after a sibling shard is added.
+  assert.ok(argv.includes('src/critical/**'), 'base rail must remain frozen when a shard is added');
 });
 
 test('#283: directory-backend rejects removing a base rail from a shard', () => {
@@ -1139,5 +1142,71 @@ test('#283: a legacy→directory store migration in an ordinary PR is denied (ad
     },
   });
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /backend cannot change in a PR|ADLC trust root changed/);
+  // Exact message: .adlc/tickets/.store.json is a trust root, so the generic
+  // trust-root diff would ALSO deny here — asserting only the specific
+  // backend-change guard proves THAT guard fired, not the broader net.
+  assert.match(result.stderr, /ticket store backend cannot change in a PR \(base legacy -> head directory\)/);
+});
+
+test('#283: an ambiguous base (both tickets.json AND a directory store) fails closed', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }, // legacy file at base
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T2', rails: ['src/other/**'] }]), // AND a directory store
+  });
+  assert.equal(result.status, 1); // operational fail-closed, not a silent legacy-precedence
+  assert.match(result.stderr, /ambiguous ticket store/);
+});
+
+test('#283: directory-backend rejects two shards sharing a ticket id (dup-id shadowing)', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
+    // Add a second shard for the SAME id with empty rails — a Map keyed by id could
+    // otherwise let the empty copy shadow the frozen one.
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't1--ffff.json'), JSON.stringify({ id: 'T1', rails: [] })),
+  });
+  assert.equal(result.status, 1); // validateTickets rejects the duplicate id, failing closed
+  assert.match(result.stderr, /duplicate id T1/);
+});
+
+test('#283: a malformed base shard fails closed', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => {
+      writeDirStore(dir, []);
+      writeFileSync(join(dir, '.adlc', 'tickets', 't1--0000.json'), '{ not valid json');
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot parse base shard/);
+});
+
+test('#283: editing .adlc/tickets/.store.json in a PR is denied (trust root)', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1, tampered: true })),
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /ADLC trust root changed/);
+});
+
+test('#283: a base directory store with an unsupported manifest version fails closed', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => {
+      const ticketsDir = join(dir, '.adlc', 'tickets');
+      mkdirSync(ticketsDir, { recursive: true });
+      writeFileSync(join(ticketsDir, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 2 }));
+      writeFileSync(join(ticketsDir, 't1--0000.json'), JSON.stringify({ id: 'T1', rails: ['src/critical/**'] }));
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not a supported ticket store/);
 });
