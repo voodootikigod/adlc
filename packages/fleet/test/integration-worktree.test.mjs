@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -123,31 +123,52 @@ test('RESUME re-attaches a missing integration worktree before any work is dispa
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('RESUME resets a DIRTY integration worktree — orphaned completion artifacts never survive', () => {
-  // A crash after planComplete wrote the shard + manifest but before the completion
-  // commit leaves the worktree dirty. Resume must NOT reuse that as-is: a later
-  // completion would stage and commit the orphan alongside its own (false attestation).
-  const { root, git, baseSha } = makeRepo();
+test('RESUME reverts orphaned completion artifacts but PRESERVES unrelated work in the shared worktree', () => {
+  // Two truths must hold at once on resume of a dirty integration worktree:
+  //  (1) A crash after planComplete wrote the shard + manifest but before the completion
+  //      commit leaves those COMPLETION-OWNED paths dirty. Reusing them as-is would let a
+  //      later completion stage and commit the orphan alongside its own (false attestation),
+  //      so the orphan MUST be reverted.
+  //  (2) The integration worktree is a shared checkout a human may be using to investigate
+  //      a quarantined run — untracked diagnostics, an in-progress recovery edit. A
+  //      repo-wide `reset --hard`/`clean -fd` would destroy that. So cleanup MUST be scoped
+  //      to the completion-owned paths and leave everything else untouched.
+  const { root, git } = makeRepo();
   try {
+    // Seed HEAD with the completion-owned files (so there is a clean state to revert to)
+    // plus an unrelated tracked file.
+    mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets', 'T1--abc.json'), '{"id":"T1","completed":false}\n');
+    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+    writeFileSync(join(root, 'README.md'), 'project\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'seed store + ledger + readme');
+    const baseSha = git('rev-parse', 'HEAD');
+
     const { path } = ensureIntegrationWorktree(root, 'fleet/run-r', { baseSha, git });
     const wtGit = defaultGit(path);
     const headBefore = wtGit('rev-parse', 'HEAD');
 
-    // Simulate the crash orphan: an uncommitted tracked change AND an untracked file
-    // in the integration worktree.
-    writeFileSync(join(path, 'orphan-shard.json'), '{"completed":true}\n');
-    wtGit('add', 'orphan-shard.json');
-    writeFileSync(join(path, 'untracked-manifest-append.txt'), 'orphan\n');
+    // (1) Crash orphan in COMPLETION-OWNED paths: a modified shard + an appended manifest.
+    writeFileSync(join(path, '.adlc', 'tickets', 'T1--abc.json'), '{"id":"T1","completed":true}\n');
+    writeFileSync(join(path, '.adlc', 'manifest.jsonl'), '{"seq":1}\n{"seq":2,"orphan":true}\n');
+    // (2) Unrelated work a human left: a tracked edit OUTSIDE the owned paths, plus an
+    //     untracked diagnostic. Neither is a completion orphan; both must survive.
+    writeFileSync(join(path, 'README.md'), 'HUMAN RECOVERY EDIT\n');
+    writeFileSync(join(path, 'diagnostic.txt'), 'why did the run wedge?\n');
     assert.notEqual(wtGit('status', '--porcelain').trim(), '', 'precondition: worktree is dirty');
 
     // Resume (no baseSha — attach to the existing branch).
     const again = ensureIntegrationWorktree(root, 'fleet/run-r', { git });
 
     assert.equal(again.created, false, 'the worktree is reused, not rebuilt');
-    assert.equal(wtGit('status', '--porcelain').trim(), '', 'but reset CLEAN before reuse — no orphan survives');
+    // The orphan is reverted...
+    assert.equal(readFileSync(join(path, '.adlc', 'tickets', 'T1--abc.json'), 'utf8'), '{"id":"T1","completed":false}\n', 'the orphaned shard is reverted to HEAD');
+    assert.equal(readFileSync(join(path, '.adlc', 'manifest.jsonl'), 'utf8'), '{"seq":1}\n', 'the orphaned manifest append is reverted to HEAD');
+    // ...but unrelated work is untouched.
+    assert.equal(readFileSync(join(path, 'README.md'), 'utf8'), 'HUMAN RECOVERY EDIT\n', 'an unrelated tracked edit is PRESERVED — not a completion orphan');
+    assert.ok(existsSync(join(path, 'diagnostic.txt')), 'an untracked diagnostic file is PRESERVED');
     assert.equal(wtGit('rev-parse', 'HEAD'), headBefore, 'the committed history is preserved');
-    assert.ok(!existsSync(join(path, 'orphan-shard.json')), 'the staged orphan is gone');
-    assert.ok(!existsSync(join(path, 'untracked-manifest-append.txt')), 'the untracked orphan is gone');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

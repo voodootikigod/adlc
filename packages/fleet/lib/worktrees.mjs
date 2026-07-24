@@ -10,6 +10,19 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ACTIVE_DIRECTORY, LEGACY_FILE } from '@adlc/tickets';
+
+// The evidence ledger the completion appends to (mirrors complete.mjs's MANIFEST_FILE).
+const MANIFEST_FILE = '.adlc/manifest.jsonl';
+
+/**
+ * The ONLY paths a crashed completion can leave dirty in the integration worktree:
+ * the ticket store (sharded dir OR legacy file, whichever this repo uses) and the
+ * evidence ledger. Imported from @adlc/tickets so the store layout stays authoritative
+ * and cannot drift out from under the resume-cleanup scope. Used to bound the resume
+ * cleanup so it never touches untracked diagnostics or unrelated work.
+ */
+export const INTEGRATION_OWNED_PATHS = [ACTIVE_DIRECTORY, LEGACY_FILE, MANIFEST_FILE];
 
 export function defaultGit(repo) {
   return (...args) =>
@@ -61,15 +74,25 @@ export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = n
   // completion commit, leaves the worktree DIRTY with orphaned completion artifacts.
   // Reusing that as-is would let a later ticket's completion stage and commit the
   // orphan alongside its own — a false attestation that the crashed ticket completed.
-  // Everything legitimately merged lives in the branch's COMMITTED history, and the
-  // uncommitted delta here is only ever a crash orphan, so hard-reset to HEAD and drop
-  // untracked leftovers before reusing.
+  // Everything legitimately merged lives in the branch's COMMITTED history, so we revert
+  // the orphan before reusing — but scoped to the completion-owned paths only, never a
+  // repo-wide reset that would also erase a human's untracked diagnostics or in-progress
+  // recovery work in this shared worktree.
   try {
     const wtGit = gitAt(abs);
     if (wtGit('symbolic-ref', '--short', 'HEAD') === integrationBranch) {
-      if (wtGit('status', '--porcelain').trim()) {
-        wtGit('reset', '--hard', 'HEAD');
-        wtGit('clean', '-fd');
+      // Restore ONLY the completion-owned paths a crashed completion could have left
+      // dirty — the ticket store and the evidence ledger. A repo-wide `reset --hard` +
+      // `clean -fd` (the earlier fix) was too broad: it would also destroy untracked
+      // diagnostic files or manual recovery work a human may have left in this shared
+      // worktree while investigating a quarantined branch. `git checkout HEAD -- <path>`
+      // reverts only tracked changes under that path; untracked and unrelated work is
+      // untouched. Each path is restored independently so one absent from HEAD (e.g. the
+      // legacy store file in a sharded repo) does not skip the others.
+      if (wtGit('status', '--porcelain', '--', ...INTEGRATION_OWNED_PATHS).trim()) {
+        for (const p of INTEGRATION_OWNED_PATHS) {
+          try { wtGit('checkout', 'HEAD', '--', p); } catch { /* path may not exist in HEAD */ }
+        }
       }
       return { path: abs, created: false };
     }
