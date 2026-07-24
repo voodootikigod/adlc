@@ -41,3 +41,14 @@
 # The ticket store. The gate reads its rail set from the BASE version of this
 # file, so a change here changes what is enforced everywhere.
 /.adlc/tickets.json                                @voodootikigod
+/packages/rails-guard/lib/trust-root-authorization.mjs   @voodootikigod
+/.github/workflows/ci.yml                            @voodootikigod
+/packages/rails-guard/bin/rails-guard.mjs             @voodootikigod
+
+# #141: the enforcement engine's verdict-producing code. The in-gate trust-root
+# freeze cannot be transitively complete (the gate delegates through check.mjs ->
+# rails.mjs -> ... -> @adlc/tickets), so these subtrees rely on branch-protection
+# CODEOWNERS review as the un-forgeable backstop — the same gate the ceremony
+# rests on. REQUIRES: branch protection must require CODEOWNERS review here.
+/packages/rails-guard/                                @voodootikigod
+/packages/tickets/                                    @voodootikigod

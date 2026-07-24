@@ -30,7 +30,7 @@ function git(cwd, args) {
  * `seedFiles` path, then apply `mutate(dir)` on a feature branch. Returns the
  * script's exit code when run with base=main.
  */
-function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) {
+function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {}, env = {} }) {
   const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
   try {
     git(dir, ['init', '-q', '-b', 'main']);
@@ -63,7 +63,7 @@ function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) 
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'change']);
     try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, ...env } });
       return 0;
     } catch (e) {
       return e.status ?? 1;
@@ -905,4 +905,160 @@ test('#104: idempotent — a PR that leaves an already-completed base ticket unc
     mutate: (d) => writeFileSync(join(d, 'app.mjs'), 'changed\n'),
   });
   assert.equal(code, 0);
+});
+
+// ---- #141: trust-root change ceremony (authorized-path recognition) ----
+
+function writeEvent(author, labels, number = 7) {
+  const p = join(mkdtempSync(join(tmpdir(), 'rgci-event-')), 'event.json');
+  writeFileSync(p, JSON.stringify({
+    pull_request: { number, user: { login: author }, labels: labels.map((name) => ({ name })) },
+  }));
+  return p;
+}
+
+// A PR that changes a trust root (docs/ci/rails-guard.yml), with config present
+// so immutableTrustRoots is active. CODEOWNERS at base owns the changed path.
+const trustRootChange = (env) => runScenario({
+  baseTickets: '{"tickets":[]}',
+  seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml'],
+  seedFileContents: {
+    '.adlc/config.json': VALID_CONFIG,
+    '.adlc/manifest.jsonl': '',
+    CODEOWNERS: '/docs/ci/rails-guard.yml   @trusty\n',
+    'docs/ci/rails-guard.yml': 'orig\n',
+  },
+  mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
+  env,
+});
+
+test('#141: a trust-root change with no PR context is denied (exit 2)', () => {
+  assert.equal(trustRootChange({}), 2);
+});
+
+test('#141: label + non-author CODEOWNER approval AUTHORIZES the change (exit 0)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+  }), 0);
+});
+
+test('#141: author self-approval does NOT authorize (exit 2)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('trusty', ['trust-root-change']), // author is the owner
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+  }), 2);
+});
+
+test('#141: approval from a non-CODEOWNER is not enough (exit 2)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'random' }, state: 'APPROVED' }]),
+  }), 2);
+});
+
+test('#141: missing the label denies even with a CODEOWNER approval (exit 2)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', []),
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+  }), 2);
+});
+
+// #141 P5: the authorized-path lift must NOT over-lift a frozen ticket rail, and
+// a trust-root RENAME must be authorizable (both old+new paths handled).
+const RAILED_TRUST_ROOT_FILES = ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml', 'src/critical/auth.mjs'];
+const RAILED_TRUST_ROOT_CONTENTS = {
+  '.adlc/config.json': VALID_CONFIG,
+  '.adlc/manifest.jsonl': '',
+  CODEOWNERS: '/docs/ci/rails-guard.yml   @trusty\n',
+  'docs/ci/rails-guard.yml': 'orig\n',
+  'src/critical/auth.mjs': 'orig\n',
+};
+const authorizedEnv = () => ({
+  GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+  ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+});
+
+test('#141: an authorized trust-root change does NOT lift an unrelated frozen ticket rail', () => {
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
+    seedFiles: RAILED_TRUST_ROOT_FILES,
+    seedFileContents: RAILED_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => {
+      writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'); // authorized trust root
+      writeFileSync(join(dir, 'src/critical/auth.mjs'), 'sneak\n');     // out-of-scope ticket rail
+    },
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 2); // the frozen ticket rail edit is STILL denied
+});
+
+test('#141: the same authorized trust-root change alone (no ticket-rail edit) is allowed', () => {
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
+    seedFiles: RAILED_TRUST_ROOT_FILES,
+    seedFileContents: RAILED_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
+});
+
+test('#141: label present but the reviews payload is absent → clean deny, not a crash (exit 2)', () => {
+  // GITHUB_EVENT_PATH is set (real PR context, label applied) but ADLC_PR_REVIEWS
+  // is UNSET — the reviews fetch yielded nothing. readPrContext must treat that as
+  // "no approving review" and fall through to deny, NOT dereference undefined. This
+  // pins the `rawReviews && rawReviews.trim()` guard: swapping it to `||` makes
+  // `undefined || undefined.trim()` throw, and the trust-root block is not wrapped
+  // in a try/catch, so the throw would surface as exit 1 (crash) instead of 2.
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+    // ADLC_PR_REVIEWS intentionally omitted
+  }), 2);
+});
+
+test('#141: CODEOWNERS discovered only at docs/CODEOWNERS still resolves owners (authorized, exit 0)', () => {
+  // The owner of the changed trust root is declared ONLY in the third search
+  // location, docs/CODEOWNERS. codeownersOwnersFor must probe all three locations;
+  // dropping docs/CODEOWNERS from the search list would leave owners empty and
+  // deny an otherwise-authorized change. This pins that third location.
+  const status = runScenario({
+    baseTickets: '{"tickets":[]}',
+    seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'docs/CODEOWNERS', 'docs/ci/rails-guard.yml'],
+    seedFileContents: {
+      '.adlc/config.json': VALID_CONFIG,
+      '.adlc/manifest.jsonl': '',
+      'docs/CODEOWNERS': '/docs/ci/rails-guard.yml   @trusty\n',
+      'docs/ci/rails-guard.yml': 'orig\n',
+    },
+    mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
+});
+
+test('#141: an authorized trust-root RENAME between two trust roots is allowed (both path columns handled)', () => {
+  // CODEOWNERS -> .github/CODEOWNERS: BOTH are in immutableTrustRoots, so git
+  // emits a real `R100\told\tnew` row (a rename to a NON-trust-root dest would be
+  // pruned to a lone deletion by the pathspec and never exercise the capture).
+  // Base CODEOWNERS owns ONLY the OLD path, so the pre-fix (new-path-only) code
+  // finds no owner and denies; the fixed two-column capture resolves the OLD
+  // path's owner and authorizes — this test is RED without the fix.
+  const content = '/CODEOWNERS   @trusty\n';
+  const status = runScenario({
+    baseTickets: '{"tickets":[]}',
+    seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS'],
+    seedFileContents: {
+      '.adlc/config.json': VALID_CONFIG,
+      '.adlc/manifest.jsonl': '',
+      CODEOWNERS: content,
+    },
+    mutate: (dir) => {
+      rmSync(join(dir, 'CODEOWNERS'));
+      mkdirSync(join(dir, '.github'), { recursive: true });
+      writeFileSync(join(dir, '.github/CODEOWNERS'), content);
+    },
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
 });

@@ -275,9 +275,22 @@ jobs:
         run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
 
       - name: Rail-freeze gate
+        # #141 trust-root change ceremony: on a PR, fetch the review state so the
+        # gate can recognize an AUTHORIZED trust-root change (trust-root-change
+        # label + a non-author CODEOWNER approval) and go green instead of forcing
+        # an admin-override. Author + labels come from the event payload; the
+        # un-forgeable merge gate remains branch-protection CODEOWNERS review.
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
-        run: node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            ADLC_PR_REVIEWS="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate 2>/dev/null || echo '[]')"
+            export ADLC_PR_REVIEWS
+          fi
+          node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
 
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that

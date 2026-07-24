@@ -31,6 +31,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { DirectoryTicketStore, GitTreeTicketStore, detectTicketStore, storeHash, validateTickets } from '@adlc/tickets';
+import { classifyTrustRootAuthorization, codeownersMatch } from '@adlc/rails-guard/lib/trust-root-authorization.mjs';
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
 let trustedBase = base;
@@ -58,6 +59,96 @@ function parseJson(text, label) {
   } catch (err) {
     fail(`cannot parse ${label}: ${err.message}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// #141 — trust-root change ceremony (authorized-path recognition).
+//
+// A change to an immutable trust root is normally denied. It is AUTHORIZED when
+// the PR carries the `trust-root-change` label AND a non-author CODEOWNER of the
+// changed trust-root paths has an APPROVED review. The pure decision lives in
+// @adlc/rails-guard (unit-tested); here we only gather inputs and fail closed.
+//
+// Inputs the decision cannot forge from the PR: author + labels come from the
+// GitHub event payload; reviews are passed by the workflow as ADLC_PR_REVIEWS
+// (it makes the one `gh api pulls/<n>/reviews` call); owners are parsed from
+// CODEOWNERS at the BASE ref, so a PR cannot add itself as an owner. The
+// un-forgeable MERGE gate is GitHub branch protection requiring CODEOWNERS
+// review — this check only makes the rails-guard signal green + audited.
+
+// Read the PR authorization context. Returns null when not in a PR CI context
+// (a local run) so the caller fails closed to the existing deny.
+function readPrContext() {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath) return null; // not a PR CI context → fail closed to the existing deny
+  // No existsSync pre-check: readFileSync below is already wrapped in a try/catch
+  // that returns null on ANY read error (missing file, EISDIR, permissions), so a
+  // set-but-unreadable path fails closed there. An existsSync guard here would be
+  // redundant with that catch (identical null result) — and a redundant guard is
+  // an unkillable equivalent mutant, so it is deliberately absent.
+  let event;
+  try {
+    event = JSON.parse(readFileSync(eventPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  const pr = event.pull_request;
+  if (!pr) return null;
+  let reviews = [];
+  const rawReviews = process.env.ADLC_PR_REVIEWS;
+  if (rawReviews && rawReviews.trim()) {
+    let parsed;
+    try {
+      parsed = JSON.parse(rawReviews);
+    } catch {
+      return null; // malformed review payload → fail closed (treated as no context)
+    }
+    if (!Array.isArray(parsed)) return null;
+    reviews = parsed.map((r) => ({
+      user: r?.user?.login ?? r?.user,
+      state: r?.state,
+      submittedAt: r?.submitted_at ?? r?.submittedAt,
+    }));
+  }
+  return {
+    author: pr.user?.login,
+    labels: (Array.isArray(pr.labels) ? pr.labels : []).map((l) => l?.name ?? l),
+    reviews,
+  };
+}
+
+// Union of CODEOWNERS logins (without @) whose pattern matches any changed
+// trust-root path, read from the BASE ref (never HEAD).
+function codeownersOwnersFor(paths, baseRef) {
+  const owners = new Set();
+  for (const file of ['CODEOWNERS', '.github/CODEOWNERS', 'docs/CODEOWNERS']) {
+    const shown = git(['show', `${baseRef}:${file}`], `git show ${file}`);
+    if (shown.status !== 0) continue; // not present at base
+    for (const raw of shown.stdout.split('\n')) {
+      const line = raw.replace(/#.*$/, '').trim();
+      if (!line) continue;
+      const [pattern, ...logins] = line.split(/\s+/);
+      if (!logins.length) continue;
+      if (paths.some((changed) => codeownersMatch(pattern, changed))) {
+        for (const login of logins) owners.add(login.replace(/^@/, ''));
+      }
+    }
+  }
+  return [...owners];
+}
+
+// Decide whether the trust-root change is authorized by the ceremony.
+function authorizeTrustRootChange(changedPaths, baseRef) {
+  const ctx = readPrContext();
+  if (!ctx) {
+    return {
+      authorized: false,
+      approver: null,
+      reason: 'no PR CI context (labels/reviews unavailable); run in CI on a pull_request or use the protected-base admin path',
+    };
+  }
+  const owners = codeownersOwnersFor(changedPaths, baseRef);
+  return classifyTrustRootAuthorization({ labels: ctx.labels, reviews: ctx.reviews, author: ctx.author, owners });
 }
 
 function manifestLines(text, label) {
@@ -411,15 +502,31 @@ const immutableTrustRoots = rails.length || baseHasConfig
       ...(verifiedMigration ? [] : ['.adlc/tickets/.store.json']),
       '.adlc/admin.pub',
       '.github/workflows/adlc-rails-guard.yml',
+      // #141: the workflow that actually runs THIS gate and produces the
+      // ADLC_PR_REVIEWS the ceremony reads. Since the gate's authorized-path
+      // decision now depends on this file's integrity, it must be a trust root —
+      // tampering it to forge reviews is itself a trust-root change.
+      '.github/workflows/ci.yml',
       'CODEOWNERS',
       '.github/CODEOWNERS',
       'docs/CODEOWNERS',
       'docs/ci/rails-guard.yml',
       'scripts/rails-guard-ci.mjs',
+      'packages/rails-guard/lib/trust-root-authorization.mjs',
+      // The enforcement bin this script spawns to render the final verdict.
+      // Freezing it is defense-in-depth, but the in-gate freeze CANNOT be
+      // transitively complete: the bin is a thin CLI that delegates the verdict to
+      // packages/rails-guard/lib/** (check.mjs -> rails.mjs / suppressions.mjs),
+      // which in turn uses @adlc/tickets for the base-vs-head hash/contract
+      // comparisons. That whole enforcement engine (packages/rails-guard/**,
+      // packages/tickets/**) relies on branch-protection CODEOWNERS review as its
+      // un-forgeable backstop — now CODEOWNERS-covered — the same merge gate this
+      // entire ceremony rests on. (See #326 for tightening the trust-root tier.)
+      'packages/rails-guard/bin/rails-guard.mjs',
       'scripts/test/rails-guard-workflow-hashes.json',
     ]
   : [];
-const unique = [...new Set([...rails, ...immutableTrustRoots])];
+let unique = [...new Set([...rails, ...immutableTrustRoots])];
 if (unique.length === 0) {
   console.log(`rails-guard-ci: no rails declared at ${base} — nothing frozen.`);
   process.exit(0);
@@ -431,7 +538,42 @@ if (immutableTrustRoots.length) {
     fail('git diff trust roots failed (operational error) — failing closed.');
   }
   if (trustRootDiff.stdout.trim()) {
-    deny(`ADLC trust root changed, deleted, or renamed:\n${trustRootDiff.stdout.trim()}`);
+    const changedTrustRoots = trustRootDiff.stdout
+      .trim()
+      .split('\n')
+      // Capture EVERY path column, not just the last: a rename row is
+      // `R100\t<old>\t<new>`, and the frozen path in `unique` is the OLD one, so
+      // both must be considered for owner lookup and the lift (otherwise a
+      // legitimately-authorized rename is denied because only <new> is seen).
+      .flatMap((line) => line.split('\t').slice(1).map((s) => s.trim()))
+      .filter(Boolean);
+    const decision = authorizeTrustRootChange(changedTrustRoots, trustedBase);
+    if (decision.authorized) {
+      // Authorized via the #141 ceremony — allow. This log is a convenience
+      // pointer, NOT the authorization record: the approver is derived from the
+      // workflow-provided ADLC_PR_REVIEWS and is therefore self-reported and
+      // forgeable from the PR branch. The authoritative record is GitHub's own
+      // review data + branch-protection CODEOWNERS review, which is what actually
+      // gates the merge and cannot be faked from a PR. Do not treat this line as
+      // proof of who approved.
+      console.log(
+        'rails-guard-ci: trust-root change AUTHORIZED via the #141 ceremony.\n' +
+          `  ${decision.reason}\n` +
+          `  approver (self-reported; authoritative source is GitHub's review record): ${decision.approver}\n` +
+          `  changed: ${changedTrustRoots.join(', ')}`
+      );
+      // The authorized trust-root files must not be re-frozen by the rails-guard
+      // bin below (it would deny the very change the ceremony just authorized).
+      // Ticket-declared rails are untouched — only the authorized paths are lifted.
+      unique = unique.filter((rail) => !changedTrustRoots.includes(rail));
+    } else {
+      deny(
+        'ADLC trust root changed, deleted, or renamed and the change is NOT authorized ' +
+          `(${decision.reason}). To authorize: apply the "trust-root-change" label and obtain a ` +
+          'non-author CODEOWNER approval; otherwise use the protected-base admin path.\n' +
+          trustRootDiff.stdout.trim()
+      );
+    }
   }
 }
 
