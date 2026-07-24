@@ -20,9 +20,8 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   const w = clampWidth(width);
   const cut = (text) => sanitizeToken(String(text), w);
   const lines = [];
-  // Flat index of the currently-selected ticket row across all three sections
-  // (t-herdr-7). -1 / undefined = nothing selected → no row marked.
-  const sel = Number.isInteger(selected) ? selected : -1;
+  // `selected` is the flat index of the highlighted ticket row across all three
+  // sections (t-herdr-7); a non-integer or out-of-range value marks nothing.
   let ti = 0;
 
   const ticketLabel = active?.state === 'active' ? active.id : 'none';
@@ -41,7 +40,7 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
     for (const [name, list] of sections) {
       lines.push(`${BOLD}${cut(`${name} (${list.length})`)}${RESET}`);
       for (const ticket of list) {
-        const isSel = ti === sel;
+        const isSel = Number.isInteger(selected) && ti === selected;
         const line = cut(`${isSel ? '> ' : '  '}${ticket.id} · ${ticket.title ?? ''}`);
         lines.push(isSel ? `${BOLD}${line}${RESET}` : line);
         ti += 1;

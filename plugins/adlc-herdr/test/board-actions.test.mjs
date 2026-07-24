@@ -20,6 +20,13 @@ test('AC2 stepSelection with no rows returns -1 (nothing selectable), never a va
   assert.equal(stepSelection(-1, 'up', 0), -1);
 });
 
+test('stepSelection with exactly one row keeps that row selectable (rowCount boundary)', () => {
+  // Pins the `rowCount <= 0` guard: with a single row, up/down both stay on 0
+  // (a `<= 1` off-by-one would wrongly report nothing selectable).
+  assert.equal(stepSelection(0, 'down', 1), 0);
+  assert.equal(stepSelection(0, 'up', 1), 0);
+});
+
 // ---- AC3/AC4 row-action resolution ----
 
 test('AC3 resolveRowAction returns focus-pane + the mapped paneId', () => {
