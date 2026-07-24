@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport } from '../lib/adlc-state.mjs';
+import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 let repo;
@@ -120,6 +120,29 @@ test('readTicketsViaExport fails soft on exporter failure or a bad envelope', as
   assert.equal(await readTicketsViaExport(repo, { runExport: badExport }), null);
   const wrongShape = async (_r, outPath) => { writeFileSync(outPath, JSON.stringify([1])); return true; };
   assert.equal(await readTicketsViaExport(repo, { runExport: wrongShape }), null);
+});
+
+// ---- storeCacheKey (mtime-gate for the board's export cache) ----
+
+test('storeCacheKey uses the 0 sentinel when no store exists, keyed by repo', () => {
+  assert.equal(storeCacheKey(repo), `${repo}@0`); // .adlc has no tickets store yet
+});
+
+test('storeCacheKey reflects the store mtime and advances when the store changes', () => {
+  mkdirSync(join(repo, '.adlc', 'tickets'), { recursive: true });
+  const k1 = storeCacheKey(repo);
+  assert.notEqual(k1, `${repo}@0`, 'a real store must not use the 0 sentinel');
+  assert.ok(k1.startsWith(`${repo}@`));
+  // A later write bumps the tickets-dir mtime → a different key (cache invalidates).
+  writeFileSync(join(repo, '.adlc', 'tickets', 't-x1.json'), '{}');
+  const k2 = storeCacheKey(repo);
+  assert.notEqual(k2, k1, 'adding a shard must change the key');
+});
+
+test('storeCacheKey falls back to the legacy tickets.json file mtime', () => {
+  writeAdlc('tickets.json', '{"tickets":[]}'); // legacy single-file store
+  assert.ok(storeCacheKey(repo).startsWith(`${repo}@`));
+  assert.notEqual(storeCacheKey(repo), `${repo}@0`);
 });
 
 // ---- renderBoard ----

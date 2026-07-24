@@ -5,13 +5,13 @@
 // pane closes when this process exits. Thin glue: resolve the repo like
 // actions do, gather via the tested libs, redraw every few seconds and on
 // resize, quit on q / Ctrl-C.
-import { appendFileSync, statSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync } from 'node:fs';
 import { runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
 import {
-  readActiveTicket, readLatestPhase, groupBacklog, readLedgerByTicket, readTicketsViaExport,
+  readActiveTicket, readLatestPhase, groupBacklog, readLedgerByTicket,
+  readTicketsViaExport, storeCacheKey,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
@@ -20,27 +20,15 @@ const REFRESH_MS = 3_000;
 
 // mtime-gate the ticket-store export: the board redraws every 3s, but
 // `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
-// idle redraw drains battery/IO for nothing. The sharded store updates via
-// temp+rename (bumps the tickets-dir mtime) and the legacy store is a single
-// file — stat whichever exists and only re-export when it advances.
-// `key: null` is the empty-cache sentinel — no computed `repoRoot@mtime` key
-// ever equals null, so the first call always misses and re-exports.
+// idle redraw drains battery/IO for nothing. `storeCacheKey` (tested in lib)
+// changes only when the store's mtime advances; `key: null` is the empty-cache
+// sentinel — no computed key ever equals null, so the first call re-exports.
 let ticketCache = { key: null, tickets: null };
-function storeMtimeMs(repoRoot) {
-  for (const p of [join(repoRoot, '.adlc', 'tickets'), join(repoRoot, '.adlc', 'tickets.json')]) {
-    try {
-      if (existsSync(p)) return statSync(p).mtimeMs;
-    } catch {
-      // ignore — fall through to next candidate
-    }
-  }
-  return 0;
-}
 async function readBacklogTickets(repoRoot) {
-  const key = `${repoRoot}@${storeMtimeMs(repoRoot)}`;
+  const key = storeCacheKey(repoRoot);
   // Hit on KEY, even when the cached value is null — a repo with no ticket
-  // store (mtime 0, stable key) must be cached so an idle board doesn't
-  // re-spawn `adlc` every 3s just because the export returned null.
+  // store (stable key) must be cached so an idle board doesn't re-spawn `adlc`
+  // every 3s just because the export returned null.
   if (ticketCache.key === key) return ticketCache.tickets;
   const tickets = await readTicketsViaExport(repoRoot);
   ticketCache = { key, tickets };

@@ -3,7 +3,9 @@
 // throw into the daemon. Structured ticket data beyond these files comes from
 // the trusted `adlc` CLI, never from workspace imports (the installed plugin
 // is a bare clone with no node_modules).
-import { readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync } from 'node:fs';
+import {
+  readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -46,6 +48,30 @@ function readTailText(path, maxBytes) {
       }
     }
   }
+}
+
+/**
+ * A cache key for the repo's ticket store that changes only when the store's
+ * mtime advances. The sharded store updates via temp+rename (bumps the
+ * `.adlc/tickets` dir mtime); the legacy store is the single
+ * `.adlc/tickets.json` file — stat whichever exists. Returns
+ * `<repoRoot>@<mtimeMs>`, or `<repoRoot>@0` when no store exists (a stable
+ * key so an absent store is still cached, not re-exported every poll). The
+ * `0` sentinel is deliberate: a numeric mtime is never 0 for a real store.
+ */
+export function storeCacheKey(repoRoot) {
+  let mtime = 0;
+  for (const p of [join(repoRoot, '.adlc', 'tickets'), join(repoRoot, '.adlc', 'tickets.json')]) {
+    try {
+      if (existsSync(p)) {
+        mtime = statSync(p).mtimeMs;
+        break;
+      }
+    } catch {
+      // ignore — fall through to next candidate
+    }
+  }
+  return `${repoRoot}@${mtime}`;
 }
 
 /** Read the active-ticket pointer through the repo's generated reader — the
