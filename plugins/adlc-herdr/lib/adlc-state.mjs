@@ -4,7 +4,7 @@
 // the trusted `adlc` CLI, never from workspace imports (the installed plugin
 // is a bare clone with no node_modules).
 import {
-  readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync,
+  readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync, readdirSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -91,6 +91,42 @@ export function makeKeyedCache(keyFn, readFn) {
     cache = { key, hasValue: true, value };
     return value;
   };
+}
+
+/**
+ * Ticket ids present in a repo's store, read DIRECTLY from the filesystem —
+ * never by spawning a subprocess with the (untrusted, event-supplied) repo as
+ * cwd. Reading directory entries and files is a pure read: an attacker who
+ * controls the directory cannot gain code execution from it (unlike running a
+ * config-loading CLI there). Sharded store: `<id>--<hash>.json` filenames.
+ * Legacy store: the `tickets` array in `.adlc/tickets.json`. Fails soft to [].
+ */
+export function ticketIdsFromStore(repoRoot) {
+  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return [];
+  const ids = new Set();
+  const shardDir = join(repoRoot, '.adlc', 'tickets');
+  try {
+    if (existsSync(shardDir)) {
+      for (const name of readdirSync(shardDir)) {
+        if (!name.endsWith('.json')) continue;
+        const id = name.slice(0, name.indexOf('--'));
+        if (id) ids.add(id);
+      }
+    }
+  } catch {
+    // ignore — fall through to the legacy store
+  }
+  const legacy = join(repoRoot, '.adlc', 'tickets.json');
+  try {
+    if (existsSync(legacy)) {
+      const parsed = JSON.parse(readFileSync(legacy, 'utf8'));
+      const list = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
+      for (const t of list) if (typeof t?.id === 'string') ids.add(t.id);
+    }
+  } catch {
+    // malformed legacy store → ignore
+  }
+  return [...ids];
 }
 
 /** Read the active-ticket pointer through the repo's generated reader — the

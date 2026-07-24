@@ -7,10 +7,9 @@
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
-import { readActiveTicket } from '../lib/adlc-state.mjs';
+import { readActiveTicket, ticketIdsFromStore } from '../lib/adlc-state.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 import { buildPaneClearArgs } from '../lib/tokens.mjs';
 import { planEvent } from '../lib/event-plan.mjs';
@@ -28,22 +27,10 @@ async function resolveRepoForPane(paneId) {
   }
 }
 
-function listTicketIds(repoRoot) {
-  return new Promise((resolve) => {
-    // execFile does not use a shell (its default) — the argv is a fixed
-    // literal array with no interpolated/observed data.
-    execFile('adlc', ['ticket', 'list', '--json'], { cwd: repoRoot, timeout: 15_000 }, (error, stdout) => {
-      if (error) return resolve([]);
-      try {
-        const parsed = JSON.parse(stdout);
-        const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tickets) ? parsed.tickets : [];
-        resolve(list.map((t) => t?.id).filter((id) => typeof id === 'string'));
-      } catch {
-        resolve([]);
-      }
-    });
-  });
-}
+// Ticket ids come from a direct FILESYSTEM read of the store (never a
+// subprocess with the untrusted event repoRoot as cwd — a config-loading CLI
+// there would be a code-execution vector; a plain read is not).
+const listTicketIds = (repoRoot) => ticketIdsFromStore(repoRoot);
 
 // "Is a ticket already pointed at?" via the generated reader (never hand-parse
 // the pointer — the ticket-store boundary guard enforces exactly one reader).
@@ -81,12 +68,7 @@ async function main() {
     return; // malformed event JSON → do nothing
   }
   const plan = await planEvent(eventName, payload, {
-    resolveRepoForPane,
-    resolveRepo: (raw) => { try { return resolveRepoRoot(raw); } catch { return null; } },
-    listTicketIds,
-    readActiveTicket,
-    hasCurrentTicket,
-    claim,
+    resolveRepoForPane, listTicketIds, readActiveTicket, hasCurrentTicket, claim,
   });
   if (plan.kind === 'clear-pane') {
     await runHerdr(buildPaneClearArgs(plan.paneId));

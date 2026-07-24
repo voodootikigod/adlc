@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache } from '../lib/adlc-state.mjs';
+import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 let repo;
@@ -120,6 +120,29 @@ test('readTicketsViaExport fails soft on exporter failure or a bad envelope', as
   assert.equal(await readTicketsViaExport(repo, { runExport: badExport }), null);
   const wrongShape = async (_r, outPath) => { writeFileSync(outPath, JSON.stringify([1])); return true; };
   assert.equal(await readTicketsViaExport(repo, { runExport: wrongShape }), null);
+});
+
+// ---- ticketIdsFromStore (filesystem read — the RCE-safe worktree.created path) ----
+
+test('ticketIdsFromStore reads ids from sharded shard filenames', () => {
+  mkdirSync(join(repo, '.adlc', 'tickets'), { recursive: true });
+  writeFileSync(join(repo, '.adlc', 'tickets', 't-a--111.json'), '{}');
+  writeFileSync(join(repo, '.adlc', 'tickets', 't-b--222.json'), '{}');
+  writeFileSync(join(repo, '.adlc', 'tickets', 'notjson.txt'), 'x'); // ignored
+  assert.deepEqual(ticketIdsFromStore(repo).sort(), ['t-a', 't-b']);
+});
+
+test('ticketIdsFromStore falls back to the legacy tickets.json array', () => {
+  writeAdlc('tickets.json', JSON.stringify({ tickets: [{ id: 'T1' }, { id: 'T2' }, { nope: true }] }));
+  assert.deepEqual(ticketIdsFromStore(repo).sort(), ['T1', 'T2']);
+});
+
+test('ticketIdsFromStore fails soft to [] on a missing store, a bad root, or malformed legacy json', () => {
+  assert.deepEqual(ticketIdsFromStore(repo), []); // no store yet
+  assert.deepEqual(ticketIdsFromStore(null), []);
+  assert.deepEqual(ticketIdsFromStore(join(repo, 'does-not-exist')), []);
+  writeAdlc('tickets.json', '{not json');
+  assert.deepEqual(ticketIdsFromStore(repo), []);
 });
 
 // ---- storeCacheKey (mtime-gate for the board's export cache) ----

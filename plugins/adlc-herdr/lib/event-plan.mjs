@@ -22,18 +22,16 @@ function planPaneExited(data) {
   return { kind: 'clear-pane', paneId };
 }
 
-async function planWorktreeCreated(data, { resolveRepo, listTicketIds, hasCurrentTicket }) {
+async function planWorktreeCreated(data, { listTicketIds, hasCurrentTicket }) {
   const ws = isObj(data.workspace) ? data.workspace : null;
-  const rawRoot = ws && isObj(ws.worktree) ? ws.worktree.repo_root : null;
+  const repoRoot = ws && isObj(ws.worktree) ? ws.worktree.repo_root : null;
   const branch = ws ? ws.label : null;
-  if (typeof rawRoot !== 'string' || rawRoot.length === 0) return none('no repo root');
+  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return none('no repo root');
   if (typeof branch !== 'string' || branch.length === 0) return none('no branch');
-  // VALIDATE the untrusted payload path to a real repo root BEFORE any
-  // subprocess runs with it as cwd — otherwise a crafted worktree.created event
-  // could run `adlc` in an attacker-controlled directory (loading its config).
-  const repoRoot = await resolveRepo(rawRoot);
-  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return none('repo_root did not resolve to a git root');
   if (hasCurrentTicket(repoRoot)) return none('already has an active ticket'); // don't nag
+  // listTicketIds is a FILESYSTEM read of the store (see the glue) — it never
+  // spawns a subprocess with the untrusted repoRoot as cwd, so a crafted
+  // worktree.created payload cannot achieve code execution.
   const ids = await listTicketIds(repoRoot);
   if (!Array.isArray(ids) || !ids.includes(branch)) return none('branch is not a ticket id');
   return {

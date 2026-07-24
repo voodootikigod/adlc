@@ -13,12 +13,12 @@ import assert from 'node:assert/strict';
 import { planEvent } from '../lib/event-plan.mjs';
 
 // A deps object with sensible defaults; override per test.
-// resolveRepo validates/normalizes an untrusted path to a real repo root (or
-// null); claim atomically records a dedupe key, returning true only for the
-// first caller (race-safe across concurrent event processes).
+// listTicketIds is a FILESYSTEM read of the store (the glue never spawns a
+// subprocess in the untrusted event repoRoot); claim atomically records a
+// dedupe key, returning true only for the first caller (race-safe across the
+// concurrent per-event processes the host spawns).
 const deps = (over = {}) => ({
   resolveRepoForPane: async () => '/repo',
-  resolveRepo: async (raw) => raw, // identity = "valid" by default
   listTicketIds: async () => [],
   readActiveTicket: () => ({ state: 'absent' }),
   hasCurrentTicket: () => false,
@@ -114,14 +114,15 @@ test('worktree.created fails closed on a missing/garbage repo root', async () =>
   assert.equal(plan.kind, 'none');
 });
 
-test('worktree.created VALIDATES the untrusted repo_root — a path that does not resolve is refused, no listing', async () => {
-  let listed = false;
-  const plan = await planEvent('worktree.created', wtPayload('t-herdr-9', '/attacker/controlled'), deps({
-    resolveRepo: async () => null, // not a real repo root
-    listTicketIds: async () => { listed = true; return ['t-herdr-9']; },
+test('worktree.created resolves ticket ids via the injected reader (a filesystem read, never a subprocess in the payload dir)', async () => {
+  // The store reader is injected; the security property (no subprocess in an
+  // untrusted cwd) is a glue guarantee, verified end-to-end in on-event-e2e.
+  const seenRoots = [];
+  const plan = await planEvent('worktree.created', wtPayload('t-herdr-9', '/some/repo'), deps({
+    listTicketIds: async (root) => { seenRoots.push(root); return ['t-herdr-9']; },
   }));
-  assert.equal(plan.kind, 'none');
-  assert.equal(listed, false, 'must not run the ticket listing in an unvalidated cwd');
+  assert.equal(plan.kind, 'notify');
+  assert.deepEqual(seenRoots, ['/some/repo'], 'the reader is called with the payload repo root');
 });
 
 // ---- pane.agent_status_changed ----

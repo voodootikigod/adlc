@@ -16,6 +16,7 @@ const script = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'on
 let dir;
 let repo;
 let logPath;
+let adlcRan;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'adlc-herdr-onevent-'));
   logPath = join(dir, 'herdr-calls.log');
@@ -33,9 +34,13 @@ beforeEach(() => {
     'exit 0',
   ].join('\n'));
   chmodSync(herdr, 0o755);
-  // adlc stub: `ticket list --json` returns one ticket id matching a branch.
+  // A real on-disk ticket shard — ids are read from the FILESYSTEM, not a
+  // subprocess. A booby-trapped `adlc` stub proves the handler never runs it.
+  mkdirSync(join(repo, '.adlc', 'tickets'), { recursive: true });
+  writeFileSync(join(repo, '.adlc', 'tickets', 't-match--deadbeef.json'), JSON.stringify({ id: 't-match', title: 'x' }));
+  adlcRan = join(dir, 'adlc-ran');
   const adlc = join(dir, 'adlc');
-  writeFileSync(adlc, '#!/bin/sh\nif [ "$1 $2 $3" = "ticket list --json" ]; then echo \'[{"id":"t-match","title":"x"}]\'; fi\nexit 0\n');
+  writeFileSync(adlc, `#!/bin/sh\ntouch "${adlcRan}"\nexit 0\n`); // must NEVER run
   chmodSync(adlc, 0o755);
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -63,7 +68,7 @@ test('pane.exited clears that pane\'s ADLC tokens', () => {
   assert.ok(log.includes('--clear-token ticket'));
 });
 
-test('worktree.created for a branch matching a ticket fires a notification', () => {
+test('worktree.created matches the branch via a FILESYSTEM store read — notifies, and NEVER spawns adlc in the payload dir', () => {
   const payload = JSON.stringify({
     event: 'worktree_created',
     data: { workspace: { workspace_id: 'w9', label: 't-match', worktree: { repo_root: repo, checkout_path: repo } } },
@@ -72,23 +77,18 @@ test('worktree.created for a branch matching a ticket fires a notification', () 
   assert.equal(res.status, 0);
   assert.ok(calls().includes('notification show'), `no notification in: ${calls()}`);
   assert.ok(calls().includes('t-match'));
+  // The security property: no subprocess ran with the untrusted repo as cwd.
+  assert.ok(!existsSync(adlcRan), 'adlc must NEVER be executed for a worktree event (RCE guard)');
 });
 
-test('worktree.created with an unvalidated (non-git) repo_root refuses — no adlc runs in it', () => {
-  // Attacker-crafted payload pointing at a dir that is NOT a git repo.
-  const evil = join(dir, 'evil');
-  mkdirSync(evil, { recursive: true });
-  const adlcLog = join(dir, 'adlc-calls.log');
-  writeFileSync(join(dir, 'adlc'), `#!/bin/sh\necho "$@ (cwd=$PWD)" >> "${adlcLog}"\nexit 0\n`);
-  chmodSync(join(dir, 'adlc'), 0o755);
+test('worktree.created for a branch that matches NO on-disk ticket does nothing (and still runs no subprocess)', () => {
   const payload = JSON.stringify({
     event: 'worktree_created',
-    data: { workspace: { label: 't-match', worktree: { repo_root: evil, checkout_path: evil } } },
+    data: { workspace: { label: 'feature-x', worktree: { repo_root: repo, checkout_path: repo } } },
   });
-  const res = runEvent('worktree.created', payload);
-  assert.equal(res.status, 0);
-  assert.ok(!existsSync(adlcLog), 'adlc must NOT be executed in an unvalidated cwd');
-  assert.ok(!calls().includes('notification show'), 'no nudge for an unresolvable repo');
+  runEvent('worktree.created', payload);
+  assert.ok(!calls().includes('notification show'), 'no nudge when the branch is not a ticket id');
+  assert.ok(!existsSync(adlcRan));
 });
 
 test('worktree.created with a pointer already present does nothing', () => {
