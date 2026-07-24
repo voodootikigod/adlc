@@ -129,7 +129,18 @@ function looksLikeRandomSecret(text) {
  * entry, not just `desc` — a secret pasted into any field is published just the same.
  */
 export function assertPublishableFinding(entry) {
-  const serialized = JSON.stringify(entry ?? null);
+  // A committed ledger entry must be a USABLE finding, not just secret-free. A bare
+  // `null`, scalar, or array is syntactically valid JSON that passes a secret scan but
+  // crashes the P7 pipeline: loadFindings dereferences `.verdict` and clusters on
+  // `.desc`. Reject anything that is not a finding object with a clustering key, so the
+  // git-boundary scan cannot approve a ledger that breaks lesson-foundry.
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new Error('findings ledger: entry must be a finding object (a non-null, non-array object) — a bare null/scalar/array crashes the distillation pipeline (ADR 0014)');
+  }
+  if (typeof entry.desc !== 'string' || entry.desc.trim().length === 0) {
+    throw new Error('findings ledger: entry must carry a non-empty string `desc` (the clustering key) — an entry without it starves lesson-foundry (ADR 0014)');
+  }
+  const serialized = JSON.stringify(entry);
   for (const [pattern, what] of SECRET_PATTERNS) {
     if (pattern.test(serialized)) {
       throw new Error(`findings ledger: refusing to record — the entry appears to contain ${what}. This ledger is committed to git; describe the failure class instead of quoting the value (ADR 0014)`);

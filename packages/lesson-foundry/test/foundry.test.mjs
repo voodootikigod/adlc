@@ -41,6 +41,23 @@ test('loadFindings: reads entries from ledger', () => {
   }
 });
 
+test('loadFindings: a null/scalar/desc-less entry is skipped, not dereferenced (no crash)', () => {
+  // Defense in depth: a non-finding entry that bypassed the write boundary (a hand
+  // edit, a merge artifact) must not crash the pipeline by dereferencing .verdict.
+  const dir = makeTempDir();
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
+  try {
+    // Written raw (writeLedger would JSON.stringify a null into "null" too, but this is
+    // explicit about the exact bytes a corrupt ledger holds).
+    writeFileSync(join(adlcDir, 'findings.jsonl'), 'null\n42\n{"desc":"real one","verdict":"open"}\n{"tool":"x"}\n', 'utf8');
+    const { findings, skipped } = loadFindings('findings', adlcDir);
+    assert.strictEqual(findings.length, 1, 'only the one valid finding survives');
+    assert.strictEqual(findings[0].desc, 'real one');
+    assert.ok(skipped >= 3, 'the null, scalar, and desc-less entries are all skipped');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('loadFindings: skips entries with verdict=killed', () => {
   const dir = makeTempDir();
   try {

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { recordFinding } from '../lib/prosecutor.mjs';
-import { readEntries } from '../lib/ledger.mjs';
+import { readEntries, appendEntry } from '../lib/ledger.mjs';
 
 const mkDir = () => mkdtempSync(join(tmpdir(), 'adlc-record-finding-'));
 
@@ -136,6 +136,18 @@ describe('recordFinding', () => {
 
     test('refuses a description long enough to be a dump', () => {
       reject('x'.repeat(601), /capped at/i);
+    });
+
+    test('refuses a non-finding entry that would crash the P7 pipeline', () => {
+      // A bare null/scalar/array is valid JSON that passes a secret scan but breaks
+      // loadFindings (it dereferences .verdict / clusters on .desc). The committed-
+      // ledger boundary must reject it so CI cannot approve a pipeline-breaking ledger.
+      const dir = mkDir();
+      try {
+        for (const bad of [null, 42, 'a string', [1, 2], { tool: 'x' }, { tool: 'x', desc: '' }]) {
+          assert.throws(() => appendEntry('findings', bad, dir), /finding object|non-empty string `desc`/);
+        }
+      } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 
     test('still accepts ordinary curated prose describing a failure class', () => {

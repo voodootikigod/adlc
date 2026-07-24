@@ -38,13 +38,29 @@ test('extractJson: throws on no JSON', () => {
 test('ledger: append + read round-trip, malformed lines reported not swallowed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-ledger-'));
   try {
-    appendEntry('findings', { id: 1 }, dir);
-    appendEntry('findings', { id: 2 }, dir);
-    writeFileSync(join(dir, 'findings.jsonl'), '{"id":1}\nnot json\n{"id":3}\n');
-    const { entries, skipped } = readEntries('findings', dir);
+    // A GENERIC ledger name — `findings` now carries a publishability boundary that
+    // rejects non-finding entries, so this generic round-trip uses a neutral name.
+    appendEntry('scratch', { id: 1 }, dir);
+    appendEntry('scratch', { id: 2 }, dir);
+    writeFileSync(join(dir, 'scratch.jsonl'), '{"id":1}\nnot json\n{"id":3}\n');
+    const { entries, skipped } = readEntries('scratch', dir);
     assert.equal(entries.length, 2);
     assert.equal(skipped.length, 1);
     assert.equal(skipped[0].line, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ledger: the `findings` ledger enforces the finding boundary on append', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-ledger-findings-'));
+  try {
+    // A valid finding round-trips; a non-finding entry is rejected AT append.
+    appendEntry('findings', { tool: 't', file: 'a.mjs', desc: 'a real finding', verdict: 'open' }, dir);
+    assert.equal(readEntries('findings', dir).entries.length, 1);
+    assert.throws(() => appendEntry('findings', { id: 1 }, dir), /desc/);
+    assert.throws(() => appendEntry('findings', null, dir), /finding object/);
+    assert.equal(readEntries('findings', dir).entries.length, 1, 'a rejected entry never lands');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

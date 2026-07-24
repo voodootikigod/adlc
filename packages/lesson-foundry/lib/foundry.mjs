@@ -46,8 +46,16 @@ export function loadFindings(ledgerName, dir) {
 
   const live = [];
   let filtered = 0;
+  let malformed = 0;
 
   for (const e of entries) {
+    // Defense in depth against a non-finding entry that bypassed the write boundary
+    // (a hand edit, a merge artifact): a bare null/scalar/array or a finding with no
+    // desc has no clustering key. Skip it rather than dereference `.verdict` on null.
+    if (e === null || typeof e !== 'object' || Array.isArray(e) || typeof e.desc !== 'string' || e.desc.trim() === '') {
+      malformed++;
+      continue;
+    }
     if (e.verdict === 'killed') {
       filtered++;
     } else {
@@ -55,7 +63,7 @@ export function loadFindings(ledgerName, dir) {
     }
   }
 
-  return { findings: live, skipped: skipped.length, filtered };
+  return { findings: live, skipped: skipped.length + malformed, filtered };
 }
 
 /**
