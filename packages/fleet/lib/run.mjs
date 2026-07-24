@@ -231,6 +231,11 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   // Run end: open exactly ONE PR from the integration branch to base (§9), only
   // if something merged and the deps provide it. The fleet never pushes base.
   let prCount = 0;
+  // Set ONLY when a PR was attempted (merged, not quarantined, opener wired) and openPR
+  // REPORTED it did not open. It drives a non-zero exit so automation never treats a run
+  // whose merged work was never published as complete (adversarial-review round-33). It is
+  // deliberately NOT set when no opener is wired — that is a missing attempt, not a failure.
+  let prOpenFailed = false;
   // A quarantined branch is NEVER opened as a PR, however many other tickets merged
   // cleanly — the branch itself carries a commit that failed its gate.
   if (runState.contaminated) {
@@ -245,11 +250,12 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     if (pr && pr.opened) {
       prCount = 1;
     } else {
+      prOpenFailed = true;
       log(`FLEET: ${integrationBranch} merged ${merged} ticket(s) but the PR was NOT opened${pr?.reason ? ` — ${pr.reason}` : ''}. Push the branch and open the PR manually.`);
     }
   }
 
-  return { integrationBranch, results, merged, prCount, status, contaminated: runState.contaminated, contaminationReason: runState.contaminationReason };
+  return { integrationBranch, results, merged, prCount, prOpenFailed, status, contaminated: runState.contaminated, contaminationReason: runState.contaminationReason };
 }
 
 /**
@@ -261,10 +267,17 @@ export async function runFleet({ all, runId, config, deps, resume }) {
  * without touching it. Keying the exit code on failed/blocked states alone would report
  * 0 for that quarantined-no-work run — so `contaminated` is checked first.
  *
- * @returns {0|2} 2 = quarantined OR some ticket failed/blocked; 0 = clean.
+ * A PR-open failure is ALSO a non-zero exit: if every ticket merged but the PR could not be
+ * opened (gh unavailable, push or `gh pr create` failed), the merged work was never
+ * published. Exiting 0 there would let CI or an operator script mark the fleet operation
+ * complete when nothing is on a PR (adversarial-review round-33).
+ *
+ * @returns {0|2} 2 = quarantined, some ticket failed/blocked, OR the PR failed to open;
+ *   0 = clean.
  */
 export function runExitCode(summary) {
   if (summary?.contaminated) return 2;
+  if (summary?.prOpenFailed) return 2;
   const failed = Object.values(summary?.results ?? {}).filter((s) => s === 'failed' || s === 'blocked').length;
   return failed > 0 ? 2 : 0;
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runFleet, integrationBranchName } from '../lib/run.mjs';
+import { runFleet, integrationBranchName, runExitCode } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 
 const T = (id, opts = {}) => ({ id, title: id, scope: opts.scope ?? [`src/${id}/**`], edges: opts.edges ?? [] });
@@ -70,6 +70,8 @@ test('a REPORTED PR-open failure is not fabricated as success (round-31)', async
   assert.equal(summary.merged, 2, 'precondition: tickets merged, so a PR was attempted');
   assert.equal(rec.prs.length, 1, 'openPR was invoked');
   assert.equal(summary.prCount, 0, 'a reported open-failure is NOT counted as an opened PR');
+  assert.equal(summary.prOpenFailed, true, 'the attempted-but-failed open is recorded');
+  assert.equal(runExitCode(summary), 2, 'merged-but-unpublished exits non-zero so automation is not told it is complete');
 });
 
 test('no PR is opened when nothing merged', async () => {

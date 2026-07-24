@@ -28,3 +28,15 @@ test('a QUARANTINED run exits 2 even with only NONTERMINAL ticket states', () =>
 test('a QUARANTINED run exits 2 even if every ticket looks merged', () => {
   assert.equal(runExitCode({ results: { T1: 'merged' }, contaminated: true }), 2);
 });
+
+test('a run whose PR FAILED to open exits 2 even though every ticket merged', () => {
+  // The merged work was never published (gh unavailable, push or gh pr create failed).
+  // Exiting 0 would let automation mark the operation complete with nothing on a PR.
+  assert.equal(
+    runExitCode({ results: { T1: 'merged', T2: 'merged' }, contaminated: false, prOpenFailed: true }),
+    2,
+    'merged-but-unpublished is not a success',
+  );
+  // A successfully opened PR (or no PR attempt) stays 0.
+  assert.equal(runExitCode({ results: { T1: 'merged' }, contaminated: false, prOpenFailed: false }), 0);
+});
