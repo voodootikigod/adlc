@@ -55,7 +55,9 @@ test('pane id validation accepts the full boundary char set and rejects a leadin
   for (const id of ['Zz09Aa', ':_A9z0', 'a:_-9Z', 'A0', 'z9']) {
     assert.deepEqual(await planEvent('pane.exited', { data: { pane_id: id } }, deps()), { kind: 'clear-pane', paneId: id });
   }
-  for (const bad of ['-w0', 'w0/p1', 'w0.p1', 'w0 p1']) {
+  // Reject chars ADJACENT to each range endpoint (pins against a range
+  // widening off-by-one): '@'<'A', '['>'Z', '`'<'a', '{'>'z', '/'<'0'.
+  for (const bad of ['-w0', 'w0/p1', 'w0.p1', 'w0 p1', 'w@x', 'w[x', 'w`x', 'w{x', '@bc', '[bc']) {
     assert.equal((await planEvent('pane.exited', { data: { pane_id: bad } }, deps())).kind, 'none', `${bad} must reject`);
   }
 });
