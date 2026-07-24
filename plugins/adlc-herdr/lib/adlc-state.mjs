@@ -24,13 +24,10 @@ function readRegularFileBounded(path, maxBytes) {
     if (!st.isFile()) return null; // FIFO/dir/device → don't read
     const length = Math.min(st.size, maxBytes);
     const buf = Buffer.allocUnsafe(length);
-    let read = 0;
-    while (read < length) {
-      const n = readSync(fd, buf, read, length - read, read);
-      if (n <= 0) break;
-      read += n;
-    }
-    return buf.toString('utf8', 0, read);
+    // One bounded read — a regular file of this size fills in a single call; a
+    // (pathological) short read just yields partial JSON that fails to parse.
+    const n = readSync(fd, buf, 0, length, 0);
+    return buf.toString('utf8', 0, n);
   } catch {
     return null;
   } finally {
