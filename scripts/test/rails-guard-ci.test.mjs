@@ -1004,6 +1004,39 @@ test('#141: the same authorized trust-root change alone (no ticket-rail edit) is
   assert.equal(status, 0);
 });
 
+test('#141: label present but the reviews payload is absent → clean deny, not a crash (exit 2)', () => {
+  // GITHUB_EVENT_PATH is set (real PR context, label applied) but ADLC_PR_REVIEWS
+  // is UNSET — the reviews fetch yielded nothing. readPrContext must treat that as
+  // "no approving review" and fall through to deny, NOT dereference undefined. This
+  // pins the `rawReviews && rawReviews.trim()` guard: swapping it to `||` makes
+  // `undefined || undefined.trim()` throw, and the trust-root block is not wrapped
+  // in a try/catch, so the throw would surface as exit 1 (crash) instead of 2.
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+    // ADLC_PR_REVIEWS intentionally omitted
+  }), 2);
+});
+
+test('#141: CODEOWNERS discovered only at docs/CODEOWNERS still resolves owners (authorized, exit 0)', () => {
+  // The owner of the changed trust root is declared ONLY in the third search
+  // location, docs/CODEOWNERS. codeownersOwnersFor must probe all three locations;
+  // dropping docs/CODEOWNERS from the search list would leave owners empty and
+  // deny an otherwise-authorized change. This pins that third location.
+  const status = runScenario({
+    baseTickets: '{"tickets":[]}',
+    seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'docs/CODEOWNERS', 'docs/ci/rails-guard.yml'],
+    seedFileContents: {
+      '.adlc/config.json': VALID_CONFIG,
+      '.adlc/manifest.jsonl': '',
+      'docs/CODEOWNERS': '/docs/ci/rails-guard.yml   @trusty\n',
+      'docs/ci/rails-guard.yml': 'orig\n',
+    },
+    mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
+});
+
 test('#141: an authorized trust-root RENAME between two trust roots is allowed (both path columns handled)', () => {
   // CODEOWNERS -> .github/CODEOWNERS: BOTH are in immutableTrustRoots, so git
   // emits a real `R100\told\tnew` row (a rename to a NON-trust-root dest would be

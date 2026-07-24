@@ -80,7 +80,12 @@ function parseJson(text, label) {
 // (a local run) so the caller fails closed to the existing deny.
 function readPrContext() {
   const eventPath = process.env.GITHUB_EVENT_PATH;
-  if (!eventPath || !existsSync(eventPath)) return null;
+  if (!eventPath) return null; // not a PR CI context → fail closed to the existing deny
+  // No existsSync pre-check: readFileSync below is already wrapped in a try/catch
+  // that returns null on ANY read error (missing file, EISDIR, permissions), so a
+  // set-but-unreadable path fails closed there. An existsSync guard here would be
+  // redundant with that catch (identical null result) — and a redundant guard is
+  // an unkillable equivalent mutant, so it is deliberately absent.
   let event;
   try {
     event = JSON.parse(readFileSync(eventPath, 'utf8'));
