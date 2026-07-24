@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket,
-  flattenGroups, nextSelectedId, focusCommandFor, classifyKey,
+  flattenGroups, nextSelectedId, focusCommandFor, focusSelected, classifyKey,
 } from '../lib/board-nav.mjs';
 import { renderBoard, boardFooter } from '../lib/board-render.mjs';
 
@@ -73,6 +73,17 @@ test('focusCommandFor returns the fixed focus argv, or null when nothing to focu
   assert.deepEqual(focusCommandFor('b', rows, paneRows), ['pane', 'focus', 'w1:p2']);
   assert.equal(focusCommandFor('a', rows, paneRows), null); // ticket with no mapped pane
   assert.equal(focusCommandFor(null, rows, paneRows), null); // nothing selected
+});
+
+test('focusSelected invokes run with the focus argv ONLY when a pane exists', () => {
+  const groups = { ready: [{ id: 'a' }, { id: 'b' }], inFlight: [], blocked: [] };
+  const paneRows = [{ paneId: 'w1:p2', ticket: 'b' }];
+  const calls = [];
+  const run = (argv) => calls.push(argv);
+  focusSelected({ selectedId: 'b', groups, paneRows, run });
+  assert.deepEqual(calls, [['pane', 'focus', 'w1:p2']]);
+  focusSelected({ selectedId: 'a', groups, paneRows, run }); // ticket 'a' has no mapped pane
+  assert.equal(calls.length, 1, 'nothing is run when there is no pane to focus');
 });
 
 test('classifyKey routes each key to its board command', () => {

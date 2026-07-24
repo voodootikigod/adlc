@@ -16,7 +16,7 @@ import {
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard, boardFooter } from '../lib/board-render.mjs';
-import { indexOfTicket, flattenGroups, nextSelectedId, focusCommandFor, classifyKey } from '../lib/board-nav.mjs';
+import { indexOfTicket, flattenGroups, nextSelectedId, focusSelected, classifyKey } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
 
@@ -115,26 +115,22 @@ function move(direction) {
   redraw();
 }
 
-// Focus the selected ticket's mapped pane. focusCommandFor returns a fixed argv
-// (paneId from the trusted pane map) or null when there is nothing to focus.
-function focusSelected() {
-  const cmd = focusCommandFor(selectedId, flattenGroups(lastProps?.groups), lastProps?.paneRows);
-  if (cmd) runHerdr(cmd);
-}
-
 function armInput(onQuit) {
   // readline keypress events parse ANSI escape sequences and coalesced chunks
   // into atomic keys — a raw `data` chunk can carry several keystrokes (paste,
   // fast typing, SSH) and whole-chunk equality would drop them. classifyKey owns
-  // the routing decision (tested); the glue only fires the returned command.
+  // the routing decision and focusSelected owns the run decision (both tested);
+  // this glue only maps a command name to its effect.
   emitKeypressEvents(process.stdin);
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.resume();
-  const run = { quit: onQuit, up: () => move('up'), down: () => move('down'), focus: focusSelected };
-  process.stdin.on('keypress', (str, key) => {
-    const handler = run[classifyKey(str, key)];
-    if (handler) handler();
-  });
+  const commands = {
+    quit: onQuit,
+    up: () => move('up'),
+    down: () => move('down'),
+    focus: () => focusSelected({ selectedId, groups: lastProps?.groups, paneRows: lastProps?.paneRows, run: runHerdr }),
+  };
+  process.stdin.on('keypress', (str, key) => { commands[classifyKey(str, key)]?.(); });
 }
 
 // Last-start breadcrumb into the plugin's state dir — the supportability

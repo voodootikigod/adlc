@@ -62,6 +62,14 @@ export function focusCommandFor(selectedId, rows, paneRows) {
   return action.kind === 'focus-pane' ? focusPaneArgs(action.paneId) : null;
 }
 
+/** Focus the selected ticket's pane by invoking `run(argv)` — only when there is
+ *  a command to run. `run` (the herdr shim) is injected so the "run only when a
+ *  command exists" decision is unit-testable rather than buried in the glue. */
+export function focusSelected({ selectedId, groups, paneRows, run }) {
+  const cmd = focusCommandFor(selectedId, flattenGroups(groups), paneRows);
+  if (cmd) run(cmd);
+}
+
 /** Classify a raw keypress into a board command. `str` is the character, `key`
  *  is readline's parsed descriptor ({name, ctrl}). Keeps the input routing pure
  *  and testable; the glue only fires the returned command. */
