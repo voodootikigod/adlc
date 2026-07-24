@@ -115,9 +115,14 @@ function tokenEntropy(s) {
 // hashes findings legitimately cite) are EXEMPT, so this does not fire on the ledger's
 // own member keys or on quoted commit ids.
 function looksLikeRandomSecret(text) {
-  for (const token of String(text).split(/[\s"'`(){}\[\],]+/)) {
+  for (const token of String(text).split(/[\s"'`(){}\[\],:]+/)) {
     if (token.length < 32) continue;
-    if (/^[0-9a-f]+$/i.test(token)) continue; // pure hex → sha/hash/id, not a secret
+    // Pure hex up to a git-sha's 40 chars is exempt (a sha, a member key, a cluster
+    // id — things findings legitimately cite). A LONGER pure-hex run is NOT a git sha;
+    // treat it as a hex-encoded key or hash that belongs described, not quoted — the
+    // exact 64-char-hex-in-`evidence` bypass an unbounded hex exemption allowed.
+    if (/^[0-9a-f]{1,40}$/i.test(token)) continue;
+    if (/^[0-9a-f]{41,}$/i.test(token)) return true;
     if (!/[a-z]/.test(token) || !/[A-Z0-9]/.test(token)) continue; // needs real mixing
     if (tokenEntropy(token) >= 4.0) return true;
   }

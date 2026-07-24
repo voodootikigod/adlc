@@ -14,52 +14,58 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { assertPublishableFinding } from '@adlc/core';
 
-const LEDGER = process.argv[2] ?? '.adlc/findings.jsonl';
-
-if (!existsSync(LEDGER)) {
-  console.log(`scan-findings-ledger: no ledger at ${LEDGER} — nothing to scan.`);
-  process.exit(0);
-}
-
-let text;
-try {
-  text = readFileSync(LEDGER, 'utf8');
-} catch (err) {
-  console.error(`scan-findings-ledger: cannot read ${LEDGER}: ${err.message}`);
-  process.exit(1);
-}
-
-const lines = text.split('\n');
-const violations = [];
-for (let i = 0; i < lines.length; i++) {
-  const line = lines[i];
-  if (!line.trim()) continue;
-  let entry;
-  try {
-    entry = JSON.parse(line);
-  } catch {
-    // A malformed line is a violation on its own, not merely a secret risk. The ledger
-    // is committed and curated, and `readEntries` SILENTLY SKIPS an unparseable line —
-    // so a corrupt record would pass the gate while starving lesson-foundry of that
-    // finding. Fail on it. Also scan the raw text so a secret hidden in the corrupt
-    // bytes is named too.
-    violations.push({ line: i + 1, reason: 'malformed JSONL record — a committed ledger must be valid JSON (readEntries silently skips this, starving lesson-foundry)' });
-    try { assertPublishableFinding({ desc: line }); } catch (err) { violations.push({ line: i + 1, reason: err.message }); }
-    continue;
+// Set process.exitCode and RETURN — never process.exit() here. process.exit terminates
+// before buffered stdout/stderr is flushed, so a caller capturing our diagnostics (our
+// own tests, or a CI log) can see empty output on failure. Setting exitCode lets the
+// process end naturally once the streams drain.
+function scan(ledger) {
+  if (!existsSync(ledger)) {
+    console.log(`scan-findings-ledger: no ledger at ${ledger} — nothing to scan.`);
+    return 0;
   }
+
+  let text;
   try {
-    assertPublishableFinding(entry);
+    text = readFileSync(ledger, 'utf8');
   } catch (err) {
-    violations.push({ line: i + 1, reason: err.message });
+    console.error(`scan-findings-ledger: cannot read ${ledger}: ${err.message}`);
+    return 1;
   }
+
+  const lines = text.split('\n');
+  const violations = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      // A malformed line is a violation on its own, not merely a secret risk. The ledger
+      // is committed and curated, and `readEntries` SILENTLY SKIPS an unparseable line —
+      // so a corrupt record would pass the gate while starving lesson-foundry of that
+      // finding. Fail on it. Also scan the raw text so a secret hidden in the corrupt
+      // bytes is named too.
+      violations.push({ line: i + 1, reason: 'malformed JSONL record — a committed ledger must be valid JSON (readEntries silently skips this, starving lesson-foundry)' });
+      try { assertPublishableFinding({ desc: line }); } catch (err) { violations.push({ line: i + 1, reason: err.message }); }
+      continue;
+    }
+    try {
+      assertPublishableFinding(entry);
+    } catch (err) {
+      violations.push({ line: i + 1, reason: err.message });
+    }
+  }
+
+  if (violations.length > 0) {
+    console.error(`scan-findings-ledger: ${violations.length} line(s) in ${ledger} are not publishable:`);
+    for (const v of violations) console.error(`  line ${v.line}: ${v.reason}`);
+    console.error('\nThis file is committed to git. Describe the failure class instead of quoting the value (ADR 0014).');
+    return 2;
+  }
+
+  console.log(`scan-findings-ledger: ${lines.filter((l) => l.trim()).length} ledger line(s) clean.`);
+  return 0;
 }
 
-if (violations.length > 0) {
-  console.error(`scan-findings-ledger: ${violations.length} line(s) in ${LEDGER} are not publishable:`);
-  for (const v of violations) console.error(`  line ${v.line}: ${v.reason}`);
-  console.error('\nThis file is committed to git. Describe the failure class instead of quoting the value (ADR 0014).');
-  process.exit(2);
-}
-
-console.log(`scan-findings-ledger: ${lines.filter((l) => l.trim()).length} ledger line(s) clean.`);
-process.exit(0);
+process.exitCode = scan(process.argv[2] ?? '.adlc/findings.jsonl');

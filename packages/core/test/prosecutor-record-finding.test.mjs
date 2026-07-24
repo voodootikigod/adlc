@@ -134,6 +134,20 @@ describe('recordFinding', () => {
       reject('stack trace:\n  at foo (a.mjs:1)\n  at bar (b.mjs:2)', /single line of curated prose/i);
     });
 
+    test('refuses a long hex-encoded secret ANYWHERE in the entry, but exempts sha-length hex citations', () => {
+      const dir = mkDir();
+      try {
+        // A >40-char hex run is not a git sha — a hex-encoded key/hash placed in any
+        // field (here `evidence`) must be caught, not exempted as "just hex".
+        assert.throws(
+          () => appendEntry('findings', { file: 'a.mjs', desc: 'ok prose', evidence: 'a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00' }, dir),
+          /high-entropy token|key or secret/i,
+        );
+        // But findings legitimately cite a 40-char git sha and short hex ids.
+        appendEntry('findings', { file: 'a.mjs', desc: 'regression in d344a3545b24ccbd43949c39725aa64cf0079899; cluster 0e1fce8347ae' }, dir);
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
     test('refuses a description long enough to be a dump', () => {
       reject('x'.repeat(601), /capped at/i);
     });
