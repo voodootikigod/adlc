@@ -150,7 +150,45 @@ test('doctor storehash-manifest-bind: a clean store (unchanged since the last ev
     assert.equal(check.ok, true);
     assert.equal(check.bound, true);
     assert.notEqual(check.drift, true, 'no drift on a clean store');
+    // No ADLC_MANIFEST_KEY here → the binding is NOT cryptographically authenticated, and
+    // the check must say so rather than implying an attestation it did not make.
+    assert.equal(check.authenticated, false, 'without a key the checkpoint is not authenticated');
+    assert.match(check.warning ?? '', /not cryptographically authenticated|forgeable/i, 'and the unauthenticated risk is surfaced');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: WITHOUT a key, a coordinated shard+final-entry edit hides drift — but is flagged UNAUTHENTICATED', () => {
+  // The reviewer's exploit (round-34): with no key, an editor changes a shard, recomputes the
+  // public store hash, and rewrites the FINAL manifest entry's data.storeHash to match. The
+  // backward chain still validates and no drift shows, so a naive reading is "bound + clean".
+  // Doctor cannot DETECT this without a signing key — but it must not present it as attested:
+  // authenticated:false + a warning are the honest signal (WITH a key this same edit fails the
+  // signature check, proven separately).
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  delete process.env.ADLC_MANIFEST_KEY;
+  const { root, store } = storeWithEvidence();
+  try {
+    // 1) Tamper with A's shard.
+    const shard = join(root, '.adlc', 'tickets', ticketFilename('A'));
+    writeFileSync(shard, prettyCanonicalJson({ ...JSON.parse(readFileSync(shard, 'utf8')), title: 'Coordinated tamper' }));
+    const forgedHash = store.load().hash; // the new, public store hash
+
+    // 2) Rewrite the final manifest entry's bound storeHash to match — hiding the drift.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const mlines = readFileSync(manifestPath, 'utf8').split('\n').filter((l) => l.trim());
+    const last = JSON.parse(mlines[mlines.length - 1]);
+    last.data = { ...last.data, storeHash: forgedHash };
+    mlines[mlines.length - 1] = JSON.stringify(last);
+    writeFileSync(manifestPath, mlines.join('\n') + '\n');
+
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.notEqual(check.drift, true, 'the coordinated edit hides drift (why signatures are needed)');
+    assert.equal(check.authenticated, false, 'so doctor must NOT present it as authenticated');
+    assert.match(check.warning ?? '', /not cryptographically authenticated|forgeable/i, 'the forgeability is surfaced, not hidden');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+  }
 });
 
 test('doctor storehash-manifest-bind: a hand-edited shard surfaces as drift, deliberately NOT adjudicated as tamper', () => {

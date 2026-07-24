@@ -146,9 +146,20 @@ function storeHashBindingCheck(root, snapshot) {
   check.bound = true;
   check.storeHash = snapshot.hash;
   check.boundStoreHash = boundStoreHash;
-  // Honest about the strength of what was checked: with no key configured only the
-  // structural chain was verified, so the ledger is not cryptographically attested.
+  // Be honest about the STRENGTH of the binding, not just that one exists. With a key, every
+  // entry's signature was verified above, so the final checkpoint cannot be edited in place
+  // undetected. WITHOUT a key only the backward hash chain was checked — and nothing links
+  // forward from the FINAL entry, so an editor can change a ticket shard, recompute the
+  // (public) store hash, and rewrite that entry's data.storeHash: the chain still validates,
+  // no drift shows, and this check would otherwise present a fully forgeable checkpoint as a
+  // clean, bound one. Surface that limitation loudly (the emitted object is what the operator
+  // and any CI consumer see) instead of implying an attestation we did not make.
   check.signaturesVerified = key !== null;
+  check.authenticated = key !== null;
+  if (key === null) {
+    check.warning =
+      'manifest checkpoint is NOT cryptographically authenticated: ADLC_MANIFEST_KEY is not set, so only the backward hash chain was verified. The final checkpoint is therefore forgeable — a coordinated ticket-shard edit + recomputed final-entry storeHash would pass undetected (no signature to break, no drift to show). Set ADLC_MANIFEST_KEY to make the storeHash binding tamper-evident.';
+  }
 
   // This check does NOT attribute drift to specific tickets or claim tampering.
   // The ticket model permits ordinary UNEVIDENCED create/update between checkpoints,
