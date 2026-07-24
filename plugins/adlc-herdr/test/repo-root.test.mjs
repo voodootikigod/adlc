@@ -3,7 +3,7 @@
 // null outside a repo.
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -84,6 +84,16 @@ test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure wa
   const gitRoot = join(dir, 'g');
   mkdirSync(join(gitRoot, '.git', 'x'), { recursive: true });
   assert.equal(realpathSync(repoRootFromCwd(join(gitRoot, '.git'), 64)), realpathSync(gitRoot));
+});
+
+test('repoRootFromCwd follows symlinks to the PHYSICAL repo root', () => {
+  const real = join(dir, 'realproj');
+  mkdirSync(join(real, '.adlc'), { recursive: true });
+  const sub = join(real, 'a', 'b');
+  mkdirSync(sub, { recursive: true });
+  const link = join(dir, 'link-to-sub');
+  symlinkSync(sub, link); // pane cwd reached via a symlink
+  assert.equal(realpathSync(repoRootFromCwd(link, 64)), realpathSync(real));
 });
 
 test('repoRootFromCwd returns null outside any repo, and fails closed on a bad start', () => {

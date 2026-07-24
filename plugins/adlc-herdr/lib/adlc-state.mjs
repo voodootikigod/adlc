@@ -109,9 +109,11 @@ export function ticketIdsFromStore(repoRoot) {
     if (existsSync(shardDir)) {
       for (const name of readdirSync(shardDir)) {
         if (!name.endsWith('.json')) continue;
-        const sep = name.indexOf('--');
-        // `<id>--<hash>.json` normally; a file with no '--' (e.g. a hand-copied
-        // `<id>.json`) → strip the .json extension, don't negative-slice.
+        // The hash (hex) never contains '--', so the LAST '--' is the id/hash
+        // separator — using the first would truncate an id that itself contains
+        // '--' (e.g. `bug--login--<hash>.json` → id `bug--login`). A file with
+        // no '--' (e.g. a hand-copied `<id>.json`) → strip the .json extension.
+        const sep = name.lastIndexOf('--');
         const id = sep >= 0 ? name.slice(0, sep) : name.slice(0, -'.json'.length);
         if (id) ids.add(id);
       }

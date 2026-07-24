@@ -3,7 +3,7 @@
 // root — never the main checkout. Cached per directory; failures resolve to
 // null (pane excluded from the map, never a crash).
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join, delimiter, dirname, resolve } from 'node:path';
 
 const cache = new Map(); // dir -> { root, at }
@@ -23,9 +23,12 @@ export function repoRootFromCwd(startDir, maxLevels) {
   if (!Number.isFinite(maxLevels) || maxLevels < 1) return null;
   let dir;
   try {
-    dir = resolve(startDir);
+    // realpath so the upward walk follows PHYSICAL parents — a symlinked cwd
+    // (e.g. ~/my-repo → /mnt/work/repo) would otherwise `dirname` up the
+    // logical path and miss the real repo root. (A pure read; no subprocess.)
+    dir = realpathSync(resolve(startDir));
   } catch {
-    return null;
+    return null; // nonexistent/unreadable start → fail closed
   }
   for (let level = 0; level < maxLevels; level += 1) {
     if (existsSync(join(dir, '.adlc')) || existsSync(join(dir, '.git'))) return dir;
