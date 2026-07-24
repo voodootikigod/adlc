@@ -98,6 +98,11 @@ async function frame(repoRoot) {
   try {
     lastProps = await gather(repoRoot);
     redraw();
+  } catch (err) {
+    // A transient gather failure (an adlc/herdr subprocess hiccup) must never
+    // tear down the pane — keep the last good frame and retry next tick. This
+    // also covers the first, awaited frame, which would otherwise exit the board.
+    trace(`frame error: ${err && err.message ? err.message : err}`);
   } finally {
     framing = false;
   }
