@@ -963,3 +963,62 @@ test('#141: missing the label denies even with a CODEOWNER approval (exit 2)', (
     ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
   }), 2);
 });
+
+// #141 P5: the authorized-path lift must NOT over-lift a frozen ticket rail, and
+// a trust-root RENAME must be authorizable (both old+new paths handled).
+const RAILED_TRUST_ROOT_FILES = ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml', 'src/critical/auth.mjs'];
+const RAILED_TRUST_ROOT_CONTENTS = {
+  '.adlc/config.json': VALID_CONFIG,
+  '.adlc/manifest.jsonl': '',
+  CODEOWNERS: '/docs/ci/rails-guard.yml   @trusty\n',
+  'docs/ci/rails-guard.yml': 'orig\n',
+  'src/critical/auth.mjs': 'orig\n',
+};
+const authorizedEnv = () => ({
+  GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+  ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+});
+
+test('#141: an authorized trust-root change does NOT lift an unrelated frozen ticket rail', () => {
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
+    seedFiles: RAILED_TRUST_ROOT_FILES,
+    seedFileContents: RAILED_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => {
+      writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'); // authorized trust root
+      writeFileSync(join(dir, 'src/critical/auth.mjs'), 'sneak\n');     // out-of-scope ticket rail
+    },
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 2); // the frozen ticket rail edit is STILL denied
+});
+
+test('#141: the same authorized trust-root change alone (no ticket-rail edit) is allowed', () => {
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
+    seedFiles: RAILED_TRUST_ROOT_FILES,
+    seedFileContents: RAILED_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
+});
+
+test('#141: an authorized trust-root RENAME is allowed (old + new paths handled)', () => {
+  const status = runScenario({
+    baseTickets: '{"tickets":[]}',
+    seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml'],
+    seedFileContents: {
+      '.adlc/config.json': VALID_CONFIG,
+      '.adlc/manifest.jsonl': '',
+      CODEOWNERS: '/docs/ci/rails-guard.yml   @trusty\n',
+      'docs/ci/rails-guard.yml': 'orig content that stays identical\n',
+    },
+    mutate: (dir) => {
+      rmSync(join(dir, 'docs/ci/rails-guard.yml'));
+      writeFileSync(join(dir, 'docs/ci/rails-guard-v2.yml'), 'orig content that stays identical\n');
+    },
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
+});

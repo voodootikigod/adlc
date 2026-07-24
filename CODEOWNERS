@@ -42,3 +42,4 @@
 # file, so a change here changes what is enforced everywhere.
 /.adlc/tickets.json                                @voodootikigod
 /packages/rails-guard/lib/trust-root-authorization.mjs   @voodootikigod
+/.github/workflows/ci.yml                            @voodootikigod

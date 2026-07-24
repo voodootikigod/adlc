@@ -31,7 +31,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { DirectoryTicketStore, GitTreeTicketStore, detectTicketStore, storeHash, validateTickets } from '@adlc/tickets';
-import { classifyTrustRootAuthorization } from '@adlc/rails-guard/lib/trust-root-authorization.mjs';
+import { classifyTrustRootAuthorization, codeownersMatch } from '@adlc/rails-guard/lib/trust-root-authorization.mjs';
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
 let trustedBase = base;
@@ -110,22 +110,6 @@ function readPrContext() {
     labels: (Array.isArray(pr.labels) ? pr.labels : []).map((l) => l?.name ?? l),
     reviews,
   };
-}
-
-// Minimal CODEOWNERS pattern match. Patterns are gitignore-style; our trust-root
-// entries are root-anchored file paths and directory prefixes. `*` does not cross
-// `/`; `**` does; a trailing `/` matches a directory subtree.
-function codeownersMatch(pattern, path) {
-  let p = pattern;
-  const anchored = p.startsWith('/');
-  if (anchored) p = p.slice(1);
-  const dir = p.endsWith('/');
-  if (dir) p = p.slice(0, -1);
-  const rx = p
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*|\*/g, (m) => (m === '**' ? '.*' : '[^/]*'));
-  const re = new RegExp(dir ? `^${rx}(?:/.*)?$` : `^${rx}$`);
-  return re.test(path) || (!anchored && re.test(path.split('/').pop()));
 }
 
 // Union of CODEOWNERS logins (without @) whose pattern matches any changed
@@ -513,6 +497,11 @@ const immutableTrustRoots = rails.length || baseHasConfig
       ...(verifiedMigration ? [] : ['.adlc/tickets/.store.json']),
       '.adlc/admin.pub',
       '.github/workflows/adlc-rails-guard.yml',
+      // #141: the workflow that actually runs THIS gate and produces the
+      // ADLC_PR_REVIEWS the ceremony reads. Since the gate's authorized-path
+      // decision now depends on this file's integrity, it must be a trust root —
+      // tampering it to forge reviews is itself a trust-root change.
+      '.github/workflows/ci.yml',
       'CODEOWNERS',
       '.github/CODEOWNERS',
       'docs/CODEOWNERS',
@@ -537,18 +526,25 @@ if (immutableTrustRoots.length) {
     const changedTrustRoots = trustRootDiff.stdout
       .trim()
       .split('\n')
-      .map((line) => line.split('\t').pop().trim())
+      // Capture EVERY path column, not just the last: a rename row is
+      // `R100\t<old>\t<new>`, and the frozen path in `unique` is the OLD one, so
+      // both must be considered for owner lookup and the lift (otherwise a
+      // legitimately-authorized rename is denied because only <new> is seen).
+      .flatMap((line) => line.split('\t').slice(1).map((s) => s.trim()))
       .filter(Boolean);
     const decision = authorizeTrustRootChange(changedTrustRoots, trustedBase);
     if (decision.authorized) {
-      // Authorized via the #141 ceremony. Record an audit line — captured
-      // immutably in the CI log, alongside GitHub's own record of the label +
-      // CODEOWNER approval — and ALLOW. The un-forgeable merge gate remains
-      // branch-protection CODEOWNERS review; this only makes the signal green.
+      // Authorized via the #141 ceremony — allow. This log is a convenience
+      // pointer, NOT the authorization record: the approver is derived from the
+      // workflow-provided ADLC_PR_REVIEWS and is therefore self-reported and
+      // forgeable from the PR branch. The authoritative record is GitHub's own
+      // review data + branch-protection CODEOWNERS review, which is what actually
+      // gates the merge and cannot be faked from a PR. Do not treat this line as
+      // proof of who approved.
       console.log(
         'rails-guard-ci: trust-root change AUTHORIZED via the #141 ceremony.\n' +
           `  ${decision.reason}\n` +
-          `  approver: ${decision.approver}\n` +
+          `  approver (self-reported; authoritative source is GitHub's review record): ${decision.approver}\n` +
           `  changed: ${changedTrustRoots.join(', ')}`
       );
       // The authorized trust-root files must not be re-frozen by the rails-guard

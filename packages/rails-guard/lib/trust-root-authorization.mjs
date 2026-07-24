@@ -75,3 +75,23 @@ export function classifyTrustRootAuthorization({
     reason: 'no current approving review from a non-author trust-root CODEOWNER',
   };
 }
+
+// Minimal CODEOWNERS pattern matcher (gitignore-style), used to resolve the
+// owners of a changed trust-root path. A leading `/` anchors to the repo root;
+// `*` does not cross `/`; `**` crosses; a trailing `/` matches a directory
+// subtree; an un-anchored pattern also matches by basename (CODEOWNERS
+// semantics). Over-matching only WIDENS the owner set — an added owner must
+// still produce a real approving review — while under-matching removes owners
+// and denies, so both directions fail safe for authorization.
+export function codeownersMatch(pattern, path) {
+  let p = String(pattern ?? '');
+  const anchored = p.startsWith('/');
+  if (anchored) p = p.slice(1);
+  const dir = p.endsWith('/');
+  if (dir) p = p.slice(0, -1);
+  const rx = p
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*|\*/g, (m) => (m === '**' ? '.*' : '[^/]*'));
+  const re = new RegExp(dir ? `^${rx}(?:/.*)?$` : `^${rx}$`);
+  return re.test(path) || (!anchored && re.test(String(path ?? '').split('/').pop()));
+}

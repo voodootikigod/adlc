@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTrustRootAuthorization } from '../lib/trust-root-authorization.mjs';
+import { classifyTrustRootAuthorization, codeownersMatch } from '../lib/trust-root-authorization.mjs';
 
 // #141 (T77): the trust-root change ceremony. Authorization is a `trust-root-change`
 // LABEL (intent) plus a non-author CODEOWNER APPROVING review (authorization —
@@ -82,4 +82,30 @@ test('a non-default required label can be configured', () => {
   assert.equal(classifyTrustRootAuthorization(base(over)).authorized, true);
   // and the default label no longer authorizes under the custom name
   assert.equal(classifyTrustRootAuthorization(base({ requiredLabel: 'ceremony:trust-root' })).authorized, false);
+});
+
+// codeownersMatch — the owner-resolution glob (#141 P5 coverage: every branch).
+test('codeownersMatch: anchored exact path', () => {
+  assert.equal(codeownersMatch('/docs/ci/rails-guard.yml', 'docs/ci/rails-guard.yml'), true);
+  assert.equal(codeownersMatch('/docs/ci/rails-guard.yml', 'docs/ci/other.yml'), false);
+});
+
+test('codeownersMatch: directory subtree (trailing slash)', () => {
+  assert.equal(codeownersMatch('/docs/', 'docs/ci/rails-guard.yml'), true);
+  assert.equal(codeownersMatch('/docs/', 'scripts/x.mjs'), false);
+});
+
+test('codeownersMatch: single star does not cross a slash; double star does', () => {
+  assert.equal(codeownersMatch('/scripts/*.mjs', 'scripts/x.mjs'), true);
+  assert.equal(codeownersMatch('/scripts/*.mjs', 'scripts/sub/x.mjs'), false); // * stops at /
+  assert.equal(codeownersMatch('/scripts/**', 'scripts/sub/x.mjs'), true);     // ** crosses /
+});
+
+test('codeownersMatch: un-anchored pattern matches by basename, anchored does not', () => {
+  assert.equal(codeownersMatch('rails-guard-ci.mjs', 'scripts/rails-guard-ci.mjs'), true); // basename fallback
+  assert.equal(codeownersMatch('/rails-guard-ci.mjs', 'scripts/rails-guard-ci.mjs'), false); // anchored, no fallback
+});
+
+test('codeownersMatch: a pattern for a DIFFERENT path does not match (owners would be empty → deny)', () => {
+  assert.equal(codeownersMatch('/.adlc/admin.pub', 'scripts/rails-guard-ci.mjs'), false);
 });
