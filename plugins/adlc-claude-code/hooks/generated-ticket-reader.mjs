@@ -29,7 +29,14 @@ export function readStoreFileBounded(path, max = MAX_STORE_FILE_BYTES) {
     if (!stat.isFile()) throw new Error(`${path} is not a regular file`);
     if (stat.size > max) throw new Error(`${path} exceeds the ${max}-byte read cap`);
     const buf = Buffer.allocUnsafe(stat.size);
-    const read = readSync(fd, buf, 0, stat.size, 0);
+    // Loop: POSIX read(2) may return fewer bytes than requested (network/FUSE
+    // rsize caps), so a single readSync could truncate a legitimate large shard.
+    let read = 0;
+    while (read < stat.size) {
+      const n = readSync(fd, buf, read, stat.size - read, read);
+      if (n === 0) break; // end of file
+      read += n;
+    }
     return buf.toString('utf8', 0, read);
   } finally {
     try { closeSync(fd); } catch { /* best-effort: a throwing close must not mask the read */ }

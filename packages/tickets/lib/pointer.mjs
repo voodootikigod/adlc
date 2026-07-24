@@ -44,7 +44,14 @@ function readPointerFileBounded(path) {
     if (!stat.isFile()) return null; // FIFO / directory / device → refuse
     const length = Math.min(stat.size, MAX_POINTER_BYTES);
     const buf = Buffer.allocUnsafe(length);
-    const read = readSync(fd, buf, 0, length, 0);
+    // Loop: POSIX read(2) may return fewer bytes than requested (network/FUSE
+    // rsize caps), so a single readSync could truncate a larger pointer.
+    let read = 0;
+    while (read < length) {
+      const n = readSync(fd, buf, read, length - read, read);
+      if (n === 0) break; // end of file
+      read += n;
+    }
     return buf.toString('utf8', 0, read);
   } catch {
     return null;
