@@ -79,11 +79,11 @@ test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure wa
   const deep = join(root, 'a', 'b', 'c');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   mkdirSync(deep, { recursive: true });
-  assert.equal(realpathSync(repoRootFromCwd(deep)), realpathSync(root));
+  assert.equal(realpathSync(repoRootFromCwd(deep, 64)), realpathSync(root));
   // a .git-only root is also recognized
   const gitRoot = join(dir, 'g');
   mkdirSync(join(gitRoot, '.git', 'x'), { recursive: true });
-  assert.equal(realpathSync(repoRootFromCwd(join(gitRoot, '.git'))), realpathSync(gitRoot));
+  assert.equal(realpathSync(repoRootFromCwd(join(gitRoot, '.git'), 64)), realpathSync(gitRoot));
 });
 
 test('repoRootFromCwd returns null outside any repo, and fails closed on a bad start', () => {

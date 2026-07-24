@@ -22,7 +22,7 @@ async function resolveRepoForPane(paneId) {
   if (!dir) return null;
   // PURE upward walk — never spawn `git` inside the (untrusted) pane cwd, which
   // could trigger a malicious .git/config hook. Read-only existence checks only.
-  return repoRootFromCwd(dir);
+  return repoRootFromCwd(dir, 64); // bounded upward walk
 }
 
 // Ticket ids come from a direct FILESYSTEM read of the store (never a
