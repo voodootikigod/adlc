@@ -45,7 +45,7 @@ const hasCurrentTicket = (repoRoot) => readActiveTicket(repoRoot).state !== 'abs
 const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
   ? join(process.env.HERDR_PLUGIN_STATE_DIR, 'nudged')
   : null;
-const markerPath = (key) => (nudgeDir ? join(nudgeDir, createHash('sha256').update(key).digest('hex').slice(0, 32)) : null);
+const markerPath = (key) => (nudgeDir ? join(nudgeDir, createHash('sha256').update(key).digest('hex')) : null);
 const claim = async (key) => {
   const p = markerPath(key);
   if (!p) return true; // no state dir → can't dedupe; allow the nudge

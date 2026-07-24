@@ -145,6 +145,12 @@ test('ticketIdsFromStore fails soft to [] on a missing store, a bad root, or mal
   assert.deepEqual(ticketIdsFromStore(repo), []);
 });
 
+test('ticketIdsFromStore rejects an empty root — it must NOT read a relative ".adlc/tickets" from the cwd', () => {
+  // With an empty string, join('', '.adlc', 'tickets') is RELATIVE; reading it
+  // would leak whatever store sits in the process cwd. Must fail closed to [].
+  assert.deepEqual(ticketIdsFromStore(''), []);
+});
+
 // ---- storeCacheKey (mtime-gate for the board's export cache) ----
 
 test('storeCacheKey uses the 0 sentinel when no store exists, keyed by repo', () => {
