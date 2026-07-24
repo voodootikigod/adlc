@@ -4,7 +4,7 @@
 // HERDR_PLUGIN_EVENT_JSON the payload), wire the real repo-state readers, ask
 // the pure planner (lib/event-plan) what to do, and execute the single plan.
 // Fail soft everywhere — an event handler must never crash the herdr session.
-import { mkdirSync, openSync, closeSync, statSync, rmSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
@@ -35,48 +35,39 @@ const listTicketIds = (repoRoot) => ticketIdsFromStore(repoRoot);
 // present OR unreadable both count as "has a pointer" → don't nudge to seed.
 const hasCurrentTicket = (repoRoot) => readActiveTicket(repoRoot).state !== 'absent';
 
-// Dedupe markers: one file per (pane|ticket|status), named by hash so any id
-// characters are safe in the filename. `claim` returns true (nudge) only if we
-// have NOT already nudged this key within NUDGE_WINDOW_MS. The window — not a
-// permanent marker — is the point: a rapid status flap is suppressed, but a
-// genuine later idle (a new work cycle) re-nudges, so multi-turn workflows keep
-// getting nudged. Marker creation is atomic (openSync 'wx') so concurrent
-// per-event processes can't both pass a check-then-write race.
+// Dedupe markers: one file per (pane|ticket|status, TIME-BUCKET). The window is
+// encoded in the marker NAME (floor(now / windowMs)), so `claim` is a SINGLE
+// atomic op — openSync('wx') — with no stat/rmSync check-then-act to race. The
+// first process in a given window bucket wins and nudges; the rest get EEXIST
+// and suppress the flap. When the window advances, the bucket (and marker name)
+// changes, so a genuine later idle re-nudges — the point is a window, not a
+// permanent marker. windowMs<=0 disables dedupe entirely (always nudge).
 const NUDGE_WINDOW_MS = Number(process.env.ADLC_HERDR_NUDGE_WINDOW_MS ?? 30_000);
 const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
   ? join(process.env.HERDR_PLUGIN_STATE_DIR, 'nudged')
   : null;
-const markerPath = (key) => (nudgeDir ? join(nudgeDir, createHash('sha256').update(key).digest('hex')) : null);
+const markerPath = (name) => (nudgeDir ? join(nudgeDir, createHash('sha256').update(name).digest('hex')) : null);
 const claim = async (key) => {
-  const p = markerPath(key);
-  if (!p) return true; // no state dir → can't dedupe; allow the nudge
-  const now = Date.now();
+  if (!nudgeDir) return true; // no state dir → can't dedupe; allow the nudge
+  if (!Number.isFinite(NUDGE_WINDOW_MS) || NUDGE_WINDOW_MS <= 0) return true; // dedupe disabled
+  const bucket = Math.floor(Date.now() / NUDGE_WINDOW_MS);
+  const p = markerPath(`${key}|${bucket}`);
   try {
     mkdirSync(nudgeDir, { recursive: true });
-    closeSync(openSync(p, 'wx')); // first time for this key → nudge
-    return true;
-  } catch (error) {
-    if (error && error.code === 'EEXIST') {
-      let stale;
+    closeSync(openSync(p, 'wx')); // atomic: only the first in this window bucket wins
+    // Best-effort: drop this key's previous-bucket marker so files don't pile up.
+    const prev = markerPath(`${key}|${bucket - 1}`);
+    if (prev) {
       try {
-        stale = now - statSync(p).mtimeMs >= NUDGE_WINDOW_MS;
+        rmSync(prev, { force: true });
       } catch {
-        return true; // marker vanished/unreadable → nudge
-      }
-      if (!stale) return false; // within the window → suppress the flap
-      // Window elapsed → renew ATOMICALLY: remove the expired marker and
-      // re-create exclusively. Only the one process whose openSync('wx') wins
-      // returns true; concurrent racers get EEXIST → false. (A plain
-      // stat-then-utimes would let every racer renew and all nudge.)
-      try {
-        rmSync(p, { force: true });
-        closeSync(openSync(p, 'wx'));
-        return true;
-      } catch {
-        return false; // another process already renewed
+        // cleanup is best-effort
       }
     }
-    return true; // other errors: fail toward notifying (better one extra than a silent miss)
+    return true;
+  } catch (error) {
+    if (error && error.code === 'EEXIST') return false; // already nudged this window
+    return true; // other errors → fail toward notifying
   }
 };
 
