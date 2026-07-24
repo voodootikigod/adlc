@@ -35,8 +35,9 @@ function defaultGit(...args) {
  * failure that must NOT be silently treated as an empty base — that would let a deletion pass
  * on a misspelled/deleted/unfetched base).
  *
- * @returns { resolved: true, text } when the base resolves (text '' if the ledger is absent
- *          there), or { resolved: false } when the base ref cannot be resolved to a commit.
+ * @returns { resolved: true, text } when the base resolves (text '' ONLY when the ledger is
+ *          genuinely absent from the base tree), or { resolved: false } when the base ref
+ *          cannot be resolved OR the base ledger cannot be read for any operational reason.
  */
 export function baseLedger(baseRef, run = defaultGit) {
   let point = null;
@@ -47,8 +48,17 @@ export function baseLedger(baseRef, run = defaultGit) {
     try { point = run('rev-parse', '--verify', `${baseRef}^{commit}`).trim(); }
     catch { return { resolved: false }; } // the base ref itself does not resolve → fail closed
   }
+  // Separate "ledger genuinely absent at base" from an operational read failure. `git ls-tree`
+  // on a resolved commit exits 0 with EMPTY output when the path is not in the tree, and
+  // prints a tree entry when it is — so ONLY empty output is the safe "nothing to protect"
+  // case. A corrupt/missing object, an fs error, or the blob being present-but-unreadable must
+  // NOT be collapsed into an empty base (that would let a deletion pass); they fail closed.
+  let listed;
+  try { listed = run('ls-tree', point, '--', LEDGER); }
+  catch { return { resolved: false }; } // cannot even inspect the base tree → fail closed
+  if (!listed.trim()) return { resolved: true, text: '' }; // ledger genuinely absent at base
   try { return { resolved: true, text: run('show', `${point}:${LEDGER}`) }; }
-  catch { return { resolved: true, text: '' }; } // base resolved, ledger absent there → empty
+  catch { return { resolved: false }; } // present in the tree but unreadable → fail closed
 }
 
 /** The ledger content in the working tree ('' if absent). Reads the WORKING copy so an

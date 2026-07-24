@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { appendOnlyViolations } from '../guard-findings-ledger-append-only.mjs';
+import { appendOnlyViolations, baseLedger } from '../guard-findings-ledger-append-only.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'guard-findings-ledger-append-only.mjs');
 
@@ -46,6 +46,42 @@ test('rewriting an existing finding in place is a violation', () => {
 
 test('trailing-newline differences do not count as changes', () => {
   assert.deepEqual(appendOnlyViolations('{"a":1}', '{"a":1}\n'), []);
+});
+
+// ---- unit: baseLedger separates "absent at base" from an operational read failure --------
+
+// A fake git runner: each verb maps to a string to return or an Error to throw.
+const fakeRun = (handlers) => (...args) => {
+  const h = handlers[args[0]];
+  if (h instanceof Error) throw h;
+  if (h === undefined) throw new Error(`unexpected git ${args.join(' ')}`);
+  return h;
+};
+const ENTRY = '100644 blob abc123\t.adlc/findings.jsonl';
+
+test('baseLedger: ledger genuinely ABSENT at base (ls-tree empty) → resolved, empty text', () => {
+  const run = fakeRun({ 'merge-base': 'POINT', 'ls-tree': '' });
+  assert.deepEqual(baseLedger('main', run), { resolved: true, text: '' });
+});
+
+test('baseLedger: base ledger present and readable → resolved with its text', () => {
+  const run = fakeRun({ 'merge-base': 'POINT', 'ls-tree': ENTRY, 'show': '{"desc":"x"}\n' });
+  assert.deepEqual(baseLedger('main', run), { resolved: true, text: '{"desc":"x"}\n' });
+});
+
+test('baseLedger: present in the tree but `show` FAILS (corrupt/unreadable blob) → fail closed', () => {
+  const run = fakeRun({ 'merge-base': 'POINT', 'ls-tree': ENTRY, 'show': new Error('fatal: object corrupt') });
+  assert.deepEqual(baseLedger('main', run), { resolved: false });
+});
+
+test('baseLedger: cannot inspect the base tree (ls-tree fails) → fail closed', () => {
+  const run = fakeRun({ 'merge-base': 'POINT', 'ls-tree': new Error('fatal: bad tree object') });
+  assert.deepEqual(baseLedger('main', run), { resolved: false });
+});
+
+test('baseLedger: unresolvable base (no merge-base, rev-parse fails) → fail closed', () => {
+  const run = fakeRun({ 'merge-base': new Error('no merge base'), 'rev-parse': new Error('bad ref') });
+  assert.deepEqual(baseLedger('bogus', run), { resolved: false });
 });
 
 // ---- integration: the real CLI against a real git repo ----------------------------------
