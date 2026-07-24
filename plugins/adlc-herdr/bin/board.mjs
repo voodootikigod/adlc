@@ -23,7 +23,9 @@ const REFRESH_MS = 3_000;
 // idle redraw drains battery/IO for nothing. The sharded store updates via
 // temp+rename (bumps the tickets-dir mtime) and the legacy store is a single
 // file — stat whichever exists and only re-export when it advances.
-let ticketCache = { key: null, hit: false, tickets: null };
+// `key: null` is the empty-cache sentinel — no computed `repoRoot@mtime` key
+// ever equals null, so the first call always misses and re-exports.
+let ticketCache = { key: null, tickets: null };
 function storeMtimeMs(repoRoot) {
   for (const p of [join(repoRoot, '.adlc', 'tickets'), join(repoRoot, '.adlc', 'tickets.json')]) {
     try {
@@ -39,9 +41,9 @@ async function readBacklogTickets(repoRoot) {
   // Hit on KEY, even when the cached value is null — a repo with no ticket
   // store (mtime 0, stable key) must be cached so an idle board doesn't
   // re-spawn `adlc` every 3s just because the export returned null.
-  if (ticketCache.hit && ticketCache.key === key) return ticketCache.tickets;
+  if (ticketCache.key === key) return ticketCache.tickets;
   const tickets = await readTicketsViaExport(repoRoot);
-  ticketCache = { key, hit: true, tickets };
+  ticketCache = { key, tickets };
   return tickets;
 }
 
