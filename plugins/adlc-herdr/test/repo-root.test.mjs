@@ -87,12 +87,22 @@ test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure wa
 });
 
 test('repoRootFromCwd returns null outside any repo, and fails closed on a bad start', () => {
-  const plain = join(dir, 'plain', 'x');
-  mkdirSync(plain, { recursive: true });
-  // dir itself (mkdtemp under tmp) has no .adlc/.git ancestor up to fs root...
-  // guard against a stray ancestor by asserting the immediate structure is bare
   assert.equal(repoRootFromCwd(''), null);
   assert.equal(repoRootFromCwd(null), null);
+  assert.equal(repoRootFromCwd('/x', 0), null); // non-positive depth → nothing checked
+});
+
+test('repoRootFromCwd honors maxLevels precisely (counts the start dir as level 1)', () => {
+  const root = join(dir, 'lvl');
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  const child = join(root, 'sub');
+  mkdirSync(child, { recursive: true });
+  // maxLevels=1 checks ONLY the start dir: found when .adlc is right there...
+  assert.equal(realpathSync(repoRootFromCwd(root, 1)), realpathSync(root));
+  // ...but not when the root is one level up and only 1 level is allowed.
+  assert.equal(repoRootFromCwd(child, 1), null);
+  // 2 levels reaches the parent.
+  assert.equal(realpathSync(repoRootFromCwd(child, 2)), realpathSync(root));
 });
 
 test('evictIfFull drops the oldest entry at/over the bound, and is a no-op below it', () => {

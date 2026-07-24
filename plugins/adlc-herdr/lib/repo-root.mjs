@@ -15,17 +15,19 @@ const cache = new Map(); // dir -> { root, at }
  * spawns no subprocess, so it is safe to run against an UNTRUSTED cwd: a
  * malicious `.git/config` (e.g. an fsmonitor hook) can't be triggered by a
  * plain existence check. Use this for event-driven paths where the cwd comes
- * from an event payload. Bounded to 64 levels.
+ * from an event payload. Bounded to `maxLevels` ancestors (default 64),
+ * counting the start directory itself as the first level.
  */
-export function repoRootFromCwd(startDir) {
+export function repoRootFromCwd(startDir, maxLevels = 64) {
   if (typeof startDir !== 'string' || startDir.length === 0) return null;
+  if (!Number.isFinite(maxLevels) || maxLevels < 1) return null;
   let dir;
   try {
     dir = resolve(startDir);
   } catch {
     return null;
   }
-  for (let i = 0; i < 64; i += 1) {
+  for (let level = 0; level < maxLevels; level += 1) {
     if (existsSync(join(dir, '.adlc')) || existsSync(join(dir, '.git'))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break; // filesystem root
