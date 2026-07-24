@@ -123,82 +123,65 @@ test('RESUME re-attaches a missing integration worktree before any work is dispa
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('RESUME reverts ONLY the orphaned manifest append — shards and unrelated work survive', () => {
-  // The contamination vector is narrow: a completion commits path-scoped
-  // (`git commit -- <its-shard> .adlc/manifest.jsonl`), so the ONLY completion-owned file
-  // a LATER ticket's commit can accidentally capture is the shared manifest ledger. A
-  // per-ticket shard is private to its own completion's pathspec, so an orphan shard can
-  // never ride onto another ticket's commit. Therefore resume must revert exactly the
-  // orphaned manifest append and leave everything else — including a SECOND ticket's shard
-  // an operator was mid-edit — untouched. Reverting the whole shard directory (the earlier
-  // over-broad fix) would silently destroy that operator's unrelated work.
+test('RESUME REFUSES a DIRTY integration worktree instead of auto-cleaning — nothing is destroyed', () => {
+  // A crash between a completion's manifest append and its commit leaves the worktree dirty
+  // with an orphaned completion. But a human investigating a wedged run leaves dirty state
+  // too — recovery edits, diagnostics. The two are NOT distinguishable by any shape heuristic,
+  // so the fleet does not guess: it refuses to reuse a dirty worktree and destroys nothing.
+  // (This is the fail-closed guarantee: a dirty worktree is never reused, so an orphaned
+  // completion can never be swept into a later ticket's commit — without ever auto-reverting
+  // or deleting a file that might be real evidence.)
   const { root, git } = makeRepo();
   try {
-    // Seed HEAD: two committed shards, the ledger, and an unrelated tracked file.
     mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
     writeFileSync(join(root, '.adlc', 'tickets', 'T1--aaa.json'), '{"id":"T1","completed":false}\n');
-    writeFileSync(join(root, '.adlc', 'tickets', 'T2--bbb.json'), '{"id":"T2","completed":false}\n');
     writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
-    writeFileSync(join(root, 'README.md'), 'project\n');
     git('add', '-A');
-    git('commit', '-q', '-m', 'seed two shards + ledger + readme');
+    git('commit', '-q', '-m', 'seed shard + ledger');
     const baseSha = git('rev-parse', 'HEAD');
 
     const { path } = ensureIntegrationWorktree(root, 'fleet/run-r', { baseSha, git });
     const wtGit = defaultGit(path);
     const headBefore = wtGit('rev-parse', 'HEAD');
 
-    // The crash orphan: T1's completion wrote its shard AND appended to the shared ledger.
-    writeFileSync(join(path, '.adlc', 'tickets', 'T1--aaa.json'), '{"id":"T1","completed":true}\n');
+    // Dirty the worktree: an orphaned manifest append, a shard edit, and an untracked file.
     writeFileSync(join(path, '.adlc', 'manifest.jsonl'), '{"seq":1}\n{"seq":2,"orphan":true}\n');
-    // Unrelated in-flight work in the SHARED worktree: an operator's edit to a DIFFERENT
-    // ticket's shard, an unrelated tracked file edit, and an untracked diagnostic. None of
-    // these is a completion orphan; all must survive resume.
-    writeFileSync(join(path, '.adlc', 'tickets', 'T2--bbb.json'), '{"id":"T2","completed":false,"operatorNote":"under review"}\n');
-    writeFileSync(join(path, 'README.md'), 'HUMAN RECOVERY EDIT\n');
-    writeFileSync(join(path, 'diagnostic.txt'), 'why did the run wedge?\n');
+    writeFileSync(join(path, '.adlc', 'tickets', 'T1--aaa.json'), '{"id":"T1","completed":true}\n');
+    writeFileSync(join(path, 'recovery-notes.txt'), 'operator was here\n');
 
-    // Resume (no baseSha — attach to the existing branch).
-    const again = ensureIntegrationWorktree(root, 'fleet/run-r', { git });
-
-    assert.equal(again.created, false, 'the worktree is reused, not rebuilt');
-    // The one contamination vector is reverted...
-    assert.equal(readFileSync(join(path, '.adlc', 'manifest.jsonl'), 'utf8'), '{"seq":1}\n', 'the orphaned manifest append is reverted to HEAD');
-    // ...and NOTHING else is touched — not the orphan's own shard, and crucially not the
-    // operator's unrelated second shard.
-    assert.equal(readFileSync(join(path, '.adlc', 'tickets', 'T1--aaa.json'), 'utf8'), '{"id":"T1","completed":true}\n', "the orphan's own shard is left alone (never captured by another commit)");
-    assert.equal(readFileSync(join(path, '.adlc', 'tickets', 'T2--bbb.json'), 'utf8'), '{"id":"T2","completed":false,"operatorNote":"under review"}\n', "the operator's UNRELATED second shard is PRESERVED — no directory-level overreach");
-    assert.equal(readFileSync(join(path, 'README.md'), 'utf8'), 'HUMAN RECOVERY EDIT\n', 'an unrelated tracked edit is PRESERVED');
-    assert.ok(existsSync(join(path, 'diagnostic.txt')), 'an untracked diagnostic file is PRESERVED');
+    // Resume (no baseSha — attach to the existing branch) MUST refuse, not auto-clean.
+    assert.throws(
+      () => ensureIntegrationWorktree(root, 'fleet/run-r', { git }),
+      /uncommitted changes|manual recovery required/i,
+      'a dirty integration worktree is refused on resume, not silently reconciled',
+    );
+    // Every dirty artifact is left EXACTLY as found — nothing reverted, nothing deleted.
+    assert.equal(readFileSync(join(path, '.adlc', 'manifest.jsonl'), 'utf8'), '{"seq":1}\n{"seq":2,"orphan":true}\n', 'the ledger is untouched (not auto-reverted)');
+    assert.equal(readFileSync(join(path, '.adlc', 'tickets', 'T1--aaa.json'), 'utf8'), '{"id":"T1","completed":true}\n', 'the shard is untouched');
+    assert.ok(existsSync(join(path, 'recovery-notes.txt')), 'untracked recovery work is preserved');
     assert.equal(wtGit('rev-parse', 'HEAD'), headBefore, 'the committed history is preserved');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('RESUME REFUSES (does not destroy) when the manifest diverged in a non-append shape', () => {
-  // If the ledger is dirty in any way OTHER than a pure append, we cannot prove it is a
-  // disposable crash orphan — a rewritten or truncated line could be real evidence. Fail
-  // closed: throw to abort the resume, and critically do NOT fall through to recreate the
-  // worktree (which would --force-remove it and destroy the state a human needs).
-  const { root, git } = makeRepo();
+test('a NEW run REFUSES to force-remove a DIRTY integration worktree left on another run\'s branch', () => {
+  // The integration worktree survives across runs. A later run wants the path for its OWN
+  // integration branch, so the fixed path is on the wrong branch and the reuse guard does not
+  // apply. The old code fell straight through to `git worktree remove --force`, destroying any
+  // uncommitted work in it WITHOUT checking (adversarial-review round-28, high/0.98). The
+  // recreate path must therefore also refuse a dirty worktree rather than force-remove it.
+  const { root, git, baseSha } = makeRepo();
   try {
-    mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
-    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1}\n{"seq":2}\n');
-    git('add', '-A');
-    git('commit', '-q', '-m', 'seed ledger with two entries');
-    const baseSha = git('rev-parse', 'HEAD');
+    const { path } = ensureIntegrationWorktree(root, 'fleet/run-1', { baseSha, git });
+    // A human left uncommitted recovery work in run-1's integration worktree.
+    writeFileSync(join(path, 'run-1-recovery.txt'), 'do not delete me\n');
 
-    const { path } = ensureIntegrationWorktree(root, 'fleet/run-r', { baseSha, git });
-    // Rewrite an EXISTING committed line (not an append): committed line 1 is mutated.
-    writeFileSync(join(path, '.adlc', 'manifest.jsonl'), '{"seq":1,"TAMPERED":true}\n{"seq":2}\n');
-
+    // A NEW run (different integration branch) must NOT force-remove that dirty worktree.
     assert.throws(
-      () => ensureIntegrationWorktree(root, 'fleet/run-r', { git }),
-      /non-append shape|refusing to reuse/i,
-      'a non-append ledger divergence refuses rather than silently reverting',
+      () => ensureIntegrationWorktree(root, 'fleet/run-2', { baseSha, git }),
+      /uncommitted changes|manual recovery required/i,
+      'a dirty worktree on another branch is refused, not force-removed',
     );
-    // The worktree and its dirty state survive for manual recovery — NOT force-removed.
-    assert.ok(existsSync(join(path, '.adlc', 'manifest.jsonl')), 'the worktree is not destroyed by the refusal');
-    assert.equal(readFileSync(join(path, '.adlc', 'manifest.jsonl'), 'utf8'), '{"seq":1,"TAMPERED":true}\n{"seq":2}\n', 'the dirty state is left intact for a human to inspect');
+    assert.ok(existsSync(join(path, 'run-1-recovery.txt')), 'the prior run\'s uncommitted work survives — not force-deleted');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
