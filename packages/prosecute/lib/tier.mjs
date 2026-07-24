@@ -83,27 +83,58 @@ function isTestFile(path) {
   return /(^|\/)test\//.test(path) || /\.test\.(mjs|js|cjs)$/.test(path);
 }
 
+// Add-vs-alter calibration (#326). An ADDITIVE ticket-store write — a NEW ticket,
+// with no existing ticket's contract altered or removed — grants no privilege over
+// existing rails, exactly the distinction scripts/rails-guard-ci.mjs already draws
+// (a PR may add a ticket but never alter an existing one). Treating it as trust-root
+// tier would force a cross-model review on nearly every PR, which is why the gate
+// was never enforced. So the ticket-store surfaces (the exact `.adlc/tickets.json`
+// file and the `.adlc/tickets/` + `.adlc/ticket-archive/` prefixes) tier ONLY when
+// an existing ticket contract is altered.
+//
+// The caller — which has the base and head trees — decides this and passes the
+// verdict as `ticketContractAltered`:
+//   • true      → an existing ticket was altered/removed → tier.
+//   • false     → additive only → the ticket-store surfaces do NOT tier.
+//   • undefined → the caller could not compute it → FAIL CLOSED (tier), and keep
+//                 the legacy "touches trust-root …" wording for compatibility.
+// This narrowing is scoped to the ticket-store surfaces only; enforcement/producer
+// packages and rails deny-paths are unaffected.
+const TICKET_STORE_FILES = new Set(['.adlc/tickets.json']);
+
 /**
  * Classify a change as trust-root tier.
  *
  * @param {object} args
  * @param {string[]} [args.changedFiles]  repo-relative POSIX paths
- * @param {object[]} [args.tickets]       the array from .adlc/tickets.json
+ * @param {object[]} [args.tickets]       the base ticket array (rails deny-path source)
+ * @param {boolean} [args.ticketContractAltered]  whether an existing ticket contract
+ *   was altered/removed (add-vs-alter calibration, #326). Omit → fail closed.
  * @returns {{ isTrustRootTier: boolean, reasons: string[] }}
  */
-export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) {
+export function classifyTrustRootTier({ changedFiles = [], tickets = [], ticketContractAltered } = {}) {
   const reasons = [];
   const push = (reason) => { if (!reasons.includes(reason)) reasons.push(reason); };
+
+  // Additive-only ticket-store writes do not tier; true/undefined fail closed.
+  const ticketStoreTiers = ticketContractAltered !== false;
+  const ticketStoreReason = (surface) => (ticketContractAltered === true
+    ? `alters an existing ticket contract in ${surface}`
+    : `touches trust-root ticket store ${surface}`);
 
   for (const raw of changedFiles) {
     if (typeof raw !== 'string' || raw.trim() === '') continue;
     const path = toPosix(raw);
 
     if (TRUST_ROOT_FILES.includes(path)) {
-      push(`touches trust-root file ${path}`);
+      if (TICKET_STORE_FILES.has(path)) {
+        if (ticketStoreTiers) push(ticketStoreReason(path));
+      } else {
+        push(`touches trust-root file ${path}`);
+      }
     }
     for (const prefix of TRUST_ROOT_PREFIXES) {
-      if (path.startsWith(prefix)) push(`touches trust-root ticket store ${prefix}`);
+      if (path.startsWith(prefix) && ticketStoreTiers) push(ticketStoreReason(prefix));
     }
     // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
     // touches neither, so it is exempt here (#154/T41). The exact-file check

@@ -88,6 +88,68 @@ describe('classifyTrustRootTier — positive surface classes', () => {
   });
 });
 
+describe('classifyTrustRootTier — #326 add-vs-alter calibration', () => {
+  // An ADDITIVE ticket-store write (ticketContractAltered: false) grants no
+  // privilege over existing rails, so the ticket-store surfaces do NOT tier —
+  // matching scripts/rails-guard-ci.mjs's add-vs-alter rule.
+  it('FALSE for an additive .adlc/tickets.json write', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets.json'], tickets: TICKETS, ticketContractAltered: false });
+    assert.equal(r.isTrustRootTier, false);
+    assert.deepEqual(r.reasons, []);
+  });
+
+  it('FALSE for additive shard/archive writes', () => {
+    for (const f of ['.adlc/tickets/t99--abc.json', '.adlc/tickets/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: false });
+      assert.equal(r.isTrustRootTier, false, `${f} additive should NOT tier`);
+    }
+  });
+
+  it('TRUE when an existing ticket contract is altered', () => {
+    for (const f of ['.adlc/tickets.json', '.adlc/tickets/t64--abc.json', '.adlc/ticket-archive/t1--abc.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: true });
+      assert.equal(r.isTrustRootTier, true, `${f} altered should tier`);
+      assert.ok(r.reasons.some((x) => x.includes('alters an existing ticket contract')), `reason for ${f}`);
+    }
+  });
+
+  it('FAILS CLOSED (tier) when the alter/add signal is omitted', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets.json'], tickets: TICKETS });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('.adlc/tickets.json')));
+  });
+
+  // The calibration is SCOPED to the ticket-store surfaces. An additive ticket
+  // write bundled with an enforcement-package or trust-root-file edit still tiers
+  // via those independent surfaces.
+  it('additive ticket write does NOT exempt a co-changed enforcement package or trust-root file', () => {
+    const enforcement = classifyTrustRootTier({
+      changedFiles: ['.adlc/tickets.json', 'packages/prosecute/lib/run.mjs'],
+      tickets: TICKETS,
+      ticketContractAltered: false,
+    });
+    assert.equal(enforcement.isTrustRootTier, true);
+    assert.ok(enforcement.reasons.some((x) => x.includes('packages/prosecute/')));
+    assert.ok(!enforcement.reasons.some((x) => x.includes('tickets.json')), 'additive tickets.json must not contribute a reason');
+
+    const trustFile = classifyTrustRootTier({
+      changedFiles: ['.adlc/tickets.json', 'docs/ci/rails-guard.yml'],
+      tickets: TICKETS,
+      ticketContractAltered: false,
+    });
+    assert.equal(trustFile.isTrustRootTier, true);
+    assert.ok(trustFile.reasons.some((x) => x.includes('docs/ci/rails-guard.yml')));
+  });
+
+  // A rails deny-path hit is content-driven, not ticket-store-surface-driven, so
+  // the add-vs-alter signal does not relax it.
+  it('a rails deny-path hit still tiers regardless of the additive signal', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['test/auth/login.test.mjs'], tickets: TICKETS, ticketContractAltered: false });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('rails deny-path')));
+  });
+});
+
 describe('classifyTrustRootTier — negative / ordinary diffs', () => {
   it('FALSE for a lookalike path outside the ticket store directory', () => {
     for (const f of ['.adlc/tickets-notes.md', '.adlc/specs/x.md', 'docs/.adlc/tickets/x.json']) {
