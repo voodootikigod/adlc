@@ -10,8 +10,18 @@ import { runFleet } from '../lib/run.mjs';
 const T = (id, scope) => ({ id, title: id, scope, body: 'do', edges: [] });
 
 function fakeGit() {
+  // Track the checked-out branch so `symbolic-ref` answers like real git does. A stub
+  // that returned '' there would make branch-identity checks look broken when they are
+  // in fact correct (AGENTS.md: a mock cannot catch drift in the thing it imitates).
+  let branch = 'main';
   return () => (...args) => {
     const verb = args[0];
+    if (verb === 'checkout') {
+      const target = args.slice(1).filter((a) => !String(a).startsWith('-')).pop();
+      if (target) branch = target;
+      return '';
+    }
+    if (verb === 'symbolic-ref') return branch;
     if (verb === 'diff') return ''; // no out-of-scope changes (this test targets concurrency, not the gate)
     if (verb === 'status') return '';
     if (verb === 'show') throw new Error('no template at rev');

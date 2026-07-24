@@ -23,7 +23,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnAsync } from './spawn-async.mjs';
-import { completeTicketOnIntegration, revertCompletionCommit } from './complete.mjs';
+import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -289,7 +289,29 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     postMergeGate: ({ integrationBranch }) => {
       // Run the configured gate on the integration branch in the repo, sandboxed.
       repoGit('checkout', integrationBranch);
-      return runGates(sandboxFor(repo), config.gate, repoCmdEnv(repo));
+      // A gate verdict is only meaningful for the exact branch and commit it inspected.
+      // In a SHARED checkout an external switch between the checkout above and the gate
+      // below would have it examine a different branch entirely, and that pass would
+      // then be credited to the completion commit — admitting an ungated commit to the
+      // PR. Pin branch identity AND the SHA either side of the run, and fail closed on
+      // any drift rather than trusting a verdict we cannot attribute.
+      let gatedSha;
+      try {
+        assertOnBranch(repoGit, integrationBranch, 'before gating', 'trust the gate');
+        gatedSha = repoGit('rev-parse', 'HEAD');
+      } catch (error) {
+        return { ok: false, output: `${error.message}; refusing to gate` };
+      }
+      const result = runGates(sandboxFor(repo), config.gate, repoCmdEnv(repo));
+      try {
+        assertOnBranch(repoGit, integrationBranch, 'after gating', 'trust the gate');
+        if (repoGit('rev-parse', 'HEAD') !== gatedSha) {
+          throw new Error(`refusing to trust the gate: HEAD moved from ${gatedSha} while the gate ran`);
+        }
+      } catch (error) {
+        return { ok: false, output: `${error.message}; the gate result cannot be attributed to ${integrationBranch}` };
+      }
+      return result;
     },
 
     revertMerge: ({ integrationBranch, mergeSha, preMergeSha }) =>

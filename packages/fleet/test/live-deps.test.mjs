@@ -5,9 +5,19 @@ import { runFleet } from '../lib/run.mjs';
 
 // A permissive fake git: records calls, returns sensible defaults by verb.
 function fakeGit(rec) {
+  // Track the checked-out branch so `symbolic-ref` answers like real git does. Real git
+  // never returns '' there, and a stub that does makes correct branch-identity checks
+  // look broken (AGENTS.md: a mock cannot catch drift in the thing it imitates).
+  let branch = 'main';
   return (dir) => (...args) => {
     rec.git.push({ dir, args });
     const verb = args[0];
+    if (verb === 'checkout') {
+      const target = args.slice(1).filter((a) => !String(a).startsWith('-')).pop();
+      if (target) branch = target;
+      return '';
+    }
+    if (verb === 'symbolic-ref') return branch;
     if (verb === 'diff') return 'packages/fleet/lib/x.mjs'; // in-scope change
     if (verb === 'status') return ''; // no protected-path candidates
     if (verb === 'show') throw new Error('no such path at rev'); // no template

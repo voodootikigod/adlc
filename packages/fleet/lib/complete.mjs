@@ -35,7 +35,7 @@ function completionStorePath(store, id) {
  * DETECT a switch we could not prevent. The complete fix is not to share the checkout
  * at all — give the integration branch a dedicated worktree. Tracked as follow-up.
  */
-function assertOnBranch(git, branch, when, action = 'complete') {
+export function assertOnBranch(git, branch, when, action = 'complete') {
   const current = git('symbolic-ref', '--short', 'HEAD'); // throws on detached HEAD — fail closed
   if (current !== branch) {
     throw new Error(`refusing to ${action} (${when}): checkout is on "${current}", not the integration branch "${branch}"`);
