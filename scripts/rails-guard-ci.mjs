@@ -508,13 +508,15 @@ const immutableTrustRoots = rails.length || baseHasConfig
       'docs/ci/rails-guard.yml',
       'scripts/rails-guard-ci.mjs',
       'packages/rails-guard/lib/trust-root-authorization.mjs',
-      // The enforcement bin this script spawns to render the final verdict — its
-      // exit status becomes this gate's. Freeze it alongside the decision lib so a
-      // HEAD edit neutering it (e.g. `process.exit(0)`) is itself a trust-root
-      // change. NOTE: the @adlc/tickets engine driving the base-vs-head hash /
-      // contract comparisons is NOT frozen here (too broad); it relies on
-      // branch-protection CODEOWNERS over packages/tickets/** as its backstop —
-      // the same un-forgeable merge gate this whole ceremony rests on.
+      // The enforcement bin this script spawns to render the final verdict.
+      // Freezing it is defense-in-depth, but the in-gate freeze CANNOT be
+      // transitively complete: the bin is a thin CLI that delegates the verdict to
+      // packages/rails-guard/lib/** (check.mjs -> rails.mjs / suppressions.mjs),
+      // which in turn uses @adlc/tickets for the base-vs-head hash/contract
+      // comparisons. That whole enforcement engine (packages/rails-guard/**,
+      // packages/tickets/**) relies on branch-protection CODEOWNERS review as its
+      // un-forgeable backstop — now CODEOWNERS-covered — the same merge gate this
+      // entire ceremony rests on. (See #326 for tightening the trust-root tier.)
       'packages/rails-guard/bin/rails-guard.mjs',
       'scripts/test/rails-guard-workflow-hashes.json',
     ]
