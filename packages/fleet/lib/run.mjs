@@ -275,9 +275,14 @@ export async function runFleet({ all, runId, config, deps, resume }) {
  * @returns {0|2} 2 = quarantined, some ticket failed/blocked, OR the PR failed to open;
  *   0 = clean.
  */
+/** Count the tickets in a terminal non-success state. Shared by the exit code AND the CLI's
+ *  end-of-run summary line so the two can never disagree on what "failed/blocked" means. */
+export function failedBlockedCount(results) {
+  return Object.values(results ?? {}).filter((s) => s === 'failed' || s === 'blocked').length;
+}
+
 export function runExitCode(summary) {
   if (summary?.contaminated) return 2;
   if (summary?.prOpenFailed) return 2;
-  const failed = Object.values(summary?.results ?? {}).filter((s) => s === 'failed' || s === 'blocked').length;
-  return failed > 0 ? 2 : 0;
+  return failedBlockedCount(summary?.results) > 0 ? 2 : 0;
 }

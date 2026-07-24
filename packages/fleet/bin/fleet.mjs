@@ -15,7 +15,7 @@ import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
 import { runPreflight } from '../lib/preflight.mjs';
 import { reconcileRun } from '../lib/resume.mjs';
 import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
-import { runFleet, runExitCode } from '../lib/run.mjs';
+import { runFleet, runExitCode, failedBlockedCount } from '../lib/run.mjs';
 import { selfIdentity, lockProbes } from '../lib/proc.mjs';
 import { Sandbox } from '../lib/sandbox.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
@@ -203,7 +203,7 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
       console.error(`\nfleet run ${runId}: QUARANTINED — ${summary.contaminationReason}.` +
         ` Branch ${summary.integrationBranch} carries an ungated change and needs manual cleanup; no PR was opened.`);
     } else {
-      const failed = Object.values(summary.results).filter((s) => s === 'failed' || s === 'blocked').length;
+      const failed = failedBlockedCount(summary.results);
       console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
         `${summary.prCount ? ' (PR opened)' : ''}`);
     }

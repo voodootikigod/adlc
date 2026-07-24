@@ -191,14 +191,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // in the shared main checkout, so the whole class of "another process moved HEAD
       // under us" becomes impossible instead of merely detectable.
       worktrees.ensureIntegrationWorktree(repo, integrationBranch, { baseSha, git: repoGit, gitAt: io.git });
-      return integrationBranch;
     },
 
     // Resume counterpart: re-attach the dedicated worktree to an EXISTING integration
     // branch (no baseSha — the branch and its history must be preserved).
     ensureIntegrationWorktree: ({ integrationBranch }) => {
       io.ensureGitignore(repo, repoGit);
-      return worktrees.ensureIntegrationWorktree(repo, integrationBranch, { git: repoGit, gitAt: io.git });
+      worktrees.ensureIntegrationWorktree(repo, integrationBranch, { git: repoGit, gitAt: io.git });
     },
 
     createWorktree: async ({ ticket, integrationBranch }) => {

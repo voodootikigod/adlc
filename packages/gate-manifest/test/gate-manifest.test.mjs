@@ -375,6 +375,23 @@ describe('repairChain', () => {
     }
   });
 
+  it('CLI: a p6-accept record prints the ticket-completion reminder to stderr, a plain gate does not (T74)', () => {
+    const dir = makeTmp();
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    try {
+      // p6-accept names a ticket → the bin must print the "you still have to complete it"
+      // reminder on stderr (not stdout, so --json stays clean). Guards the `if (reminder)`
+      // print branch: inverting it drops the reminder here.
+      const accept = spawnSync(process.execPath, [bin, 'record', 'p6-accept', '--ticket', 'T9', '--dir', dir], { encoding: 'utf8' });
+      assert.equal(accept.status, 0, accept.stderr);
+      assert.match(accept.stderr, /adlc ticket complete T9 --write/, 'a p6-accept prints the completion reminder to stderr');
+      // A non-acceptance gate prints NO reminder (the other side of the same guard).
+      const plain = spawnSync(process.execPath, [bin, 'record', 'p4-gate', '--ticket', 'T9', '--dir', dir], { encoding: 'utf8' });
+      assert.equal(plain.status, 0, plain.stderr);
+      assert.doesNotMatch(plain.stderr, /ticket complete/, 'a non-acceptance gate prints no reminder');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('requires and audits explicit unsigned attestation through the CLI', () => {
     const dir = makeTmp();
     const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;

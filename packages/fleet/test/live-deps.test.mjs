@@ -165,6 +165,30 @@ test('postMergeGate AWAITS the gate before pinning HEAD — a commit landing DUR
   assert.match(r.output, /HEAD moved/);
 });
 
+test('postMergeGate REFUSES (ok:false) when the integration worktree is not on its branch BEFORE gating', async () => {
+  // The pre-gate assertOnBranch guard: if the integration worktree is not on the run branch
+  // when the gate is about to run, the gate must refuse rather than attribute a build to the
+  // wrong branch. Pins the `ok:false` refusal so a bool-flip to ok:true (a refused gate read
+  // as passing) is caught.
+  const io = {
+    git: () => (...args) => {
+      if (args[0] === 'symbolic-ref') return 'some-other-branch'; // NOT the run branch
+      if (args[0] === 'rev-parse') return 'SHA';
+      return '';
+    },
+    spawnWorker: async () => ({ status: 0, stdout: '', stderr: '' }),
+    mkdirp: () => {}, adlc: () => ({ status: 0, stdout: '' }), adlcAsync: async () => ({ status: 0, stdout: '' }),
+    appendLog: () => {}, readFile: () => undefined, exists: () => false, writeJson: () => {},
+    ensureGitignore: () => {}, hasGh: () => false, env,
+  };
+  const deps = buildLiveDeps({ repo: '/repo', config, statusDir: undefined, sandboxSpec, reviewRunner: () => ({ ok: true, findings: [] }), io });
+
+  const r = await deps.postMergeGate({ integrationBranch: 'fleet/run-z' });
+
+  assert.equal(r.ok, false, 'a wrong-branch worktree must make the gate refuse, not pass');
+  assert.match(r.output, /refusing to gate/);
+});
+
 test('runFleet driven by live deps advances a ticket build→gate→prosecute→merge (AC1)', async () => {
   const rec = newRec();
   const deps = makeDeps(rec);

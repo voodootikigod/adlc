@@ -4,7 +4,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runExitCode } from '../lib/run.mjs';
+import { runExitCode, failedBlockedCount } from '../lib/run.mjs';
+
+test('failedBlockedCount counts ONLY failed/blocked states (shared by exit code + CLI summary)', () => {
+  assert.equal(failedBlockedCount({ A: 'merged', B: 'failed', C: 'blocked', D: 'merging' }), 2);
+  assert.equal(failedBlockedCount({ A: 'merged', B: 'merged' }), 0);
+  assert.equal(failedBlockedCount({}), 0);
+  assert.equal(failedBlockedCount(undefined), 0);
+});
 
 test('a clean run (all merged) exits 0', () => {
   assert.equal(runExitCode({ results: { T1: 'merged', T2: 'merged' }, contaminated: false }), 0);

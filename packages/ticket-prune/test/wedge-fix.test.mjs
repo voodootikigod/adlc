@@ -100,6 +100,10 @@ test('a batch with one inbound-edge-blocked ticket still archives the rest and n
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['AAA'], 'the eligible ticket still archives');
     assert.deepEqual((result.blocked ?? []).map((b) => b.id), ['BBB'], 'the blocked ticket is named, not swallowed');
     assert.match(result.blocked[0].error ?? '', /inbound|referenced|CCC/i);
+    // The blocked entry carries the stale record's classification reason (from staleById),
+    // not null — a report that dropped the reason would tell the operator nothing.
+    assert.equal(typeof result.blocked[0].reason, 'string');
+    assert.ok(result.blocked[0].reason.length > 0, 'the blocked entry names WHY it was stale');
     // AAA really left the active store; BBB's shard is still there (never archived).
     assert.ok(!existsSync(join(dir, '.adlc', 'tickets', ticketFilename('AAA'))));
     assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('BBB'))));
