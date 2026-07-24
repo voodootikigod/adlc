@@ -84,8 +84,10 @@ if (flags.llm && clusters.length > 0) {
 // Plan emissions
 const plan = planEmissions(clusters, findings, outDir, llmRefinements);
 
-// Gate check: which clusters have no existing defense file?
-const unbanked = flags.gate
+// Gate check: which clusters have no existing defense file? Computed for --write too, so the
+// write path emits a spec-gap question for EXACTLY the clusters the gate deems unbanked — the
+// two can never disagree (see the template-append filter below).
+const unbanked = (flags.gate || flags.write)
   ? findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5)
   : [];
 
@@ -136,42 +138,31 @@ if (flags.write) {
           // Append only NEW questions, not the header, and never re-append a
           // question already present (dedup so N runs ≠ N copies).
           const existing = readFileSync(fullPath, 'utf8');
-          // Dedup a spec-gap question when its cluster OVERLAPS an already-distilled one by
-          // ANY member hash — the same durable identity banking uses (route.mjs
-          // clusterMembers). Two weaker keys were tried and both re-append duplicates:
-          //  - the greedy `cluster: ([^)]+)\)` swept in the mutable member list, so a cluster
-          //    GAINING a finding stopped matching (round-13); and
-          //  - the stable cluster-id fixes append but NOT an out-of-order ledger merge — now
-          //    that the ledger is tracked in git, a branch merge can introduce an
-          //    EARLIER-timestamped member, which changes the founding occurrence and thus the
-          //    cluster-id, orphaning the prior question (round-14).
-          // Member overlap survives both: neither append nor merge REMOVES the members the
-          // existing question already covers.
-          const membersOf = (line) => {
-            const m = line.match(/cluster-members: ([0-9a-f ]+)/);
-            return m ? m[1].trim().split(/\s+/).filter(Boolean) : [];
-          };
-          const legacyKeyOf = (line) => {
-            const id = line.match(/cluster-id: ([0-9a-f]+)/);
-            if (id) return `cluster-id: ${id[1]}`;
-            const name = line.match(/cluster: ([^,)]+)/);
-            return name ? `cluster: ${name[1].trim()}` : line.trim();
-          };
-          const existingMembers = new Set(
-            existing.split('\n').filter((l) => l.startsWith('- [ ]')).flatMap(membersOf),
+          // Append a spec-gap question ONLY for a cluster the gate deems UNBANKED, using the
+          // SAME coverage logic as --gate (findUnbankedClusters). This keeps the write path
+          // and the gate in lockstep, which no purely text-level dedup could:
+          //  - a cluster that merely GREW (round-13) or absorbed an out-of-order earlier
+          //    member (round-14) leaves a sub-minSize uncovered remainder → the gate credits
+          //    it as banked → its question is NOT re-appended; and
+          //  - a FUSED cluster whose uncovered members form their own recurring subcluster
+          //    stays unbanked → its question IS (re)emitted, instead of being suppressed for
+          //    overlapping the covered part (round-15).
+          // findUnbankedClusters read the template BEFORE this run's writes, so a question
+          // already present banks its cluster and drops out of the set (idempotent). The line
+          // is matched to its cluster by the in-run cluster-id, consistent within one run.
+          const unbankedIds = new Set(
+            unbanked.filter((c) => c.route === 'spec-gap').map((c) => c.id),
           );
-          const alreadyPresent = (line) => {
-            const members = membersOf(line);
-            // Overlap on the member set when we have one; else fall back to the id/name key
-            // (legacy or hand-written questions carrying no cluster-members annotation).
-            return members.length > 0
-              ? members.some((h) => existingMembers.has(h))
-              : existing.includes(legacyKeyOf(line));
-          };
+          const lineClusterId = (line) => (line.match(/cluster-id: ([0-9a-f]+)/) || [])[1];
           const newLines = file.content
             .split('\n')
             .filter((l) => l.startsWith('- [ ]'))
-            .filter((l) => !alreadyPresent(l));
+            .filter((l) => {
+              const id = lineClusterId(l);
+              // No id to classify by (never happens for generated lines) → fall back to a
+              // literal not-already-present check so a question is never silently dropped.
+              return id ? unbankedIds.has(id) : !existing.includes(l.trim());
+            });
           if (newLines.length > 0) {
             appendFileSync(fullPath, '\n' + newLines.join('\n') + '\n', 'utf8');
             if (!flags.json) console.log(`  appended: ${fullPath}`);

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { clusterId, findingHash } from '../lib/route.mjs';
 
 const BIN = resolve(new URL('../bin/lesson-foundry.mjs', import.meta.url).pathname);
 
@@ -298,6 +299,47 @@ test('CLI --write: an out-of-order merge introducing an OLDER member does not re
     const marker = 'cluster: unchecked-array-index-in-the-token-parser';
     const occurrences = template.split(marker).length - 1;
     assert.strictEqual(occurrences, 1, `an out-of-order merge must not duplicate the question, found ${occurrences}:\n${template}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI --write: a FUSED cluster whose uncovered members form a subcluster still gets a question (round-15)', () => {
+  // A prior lesson covers only PART of a recurring cluster; the uncovered members form their
+  // own recurring subcluster, so the gate deems the cluster UNBANKED (coverage invariant).
+  // The write path must still emit the cluster's question even though its members overlap the
+  // partially-covering one — the earlier overlap dedup suppressed it, leaving --gate failing
+  // forever (adversarial-review round-15).
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, '.adlc', 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const findings = [
+      { ts: '2025-07-01', tool: 'test', file: 'a.mjs', line: 1, category: 'correctness', severity: 'high', desc: 'off-by-one in the ring buffer index' },
+      { ts: '2025-07-02', tool: 'test', file: 'b.mjs', line: 2, category: 'correctness', severity: 'high', desc: 'off-by-one in the ring buffer index' },
+      { ts: '2025-07-03', tool: 'test', file: 'c.mjs', line: 3, category: 'correctness', severity: 'high', desc: 'off-by-one in the ring buffer index' },
+      { ts: '2025-07-04', tool: 'test', file: 'd.mjs', line: 4, category: 'correctness', severity: 'high', desc: 'off-by-one in the ring buffer index' },
+    ];
+    writeLedger(dir, findings);
+
+    // Pre-seed the template with a lesson covering only TWO of the four members. The other
+    // two remain uncovered and (same pattern) recluster — the coverage invariant fires.
+    const h = findings.map((f) => findingHash(f).slice(0, 12));
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# Interrogation Template\n\n- [ ] **[correctness]** partially covered *(recurring in 2 findings, cluster: partial, cluster-id: deadbeefdead, cluster-members: ${h[0]} ${h[1]})*\n`,
+      'utf8',
+    );
+
+    const r = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(r.code, 0, `--write should pass: ${r.stderr}`);
+
+    const template = readFileSync(join(outDir, 'interrogation-template.md'), 'utf8');
+    const fullId = clusterId(findings);
+    assert.ok(
+      template.includes(`cluster-id: ${fullId}`),
+      `the unbanked fused cluster's question must be emitted despite overlapping the partial lesson:\n${template}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
