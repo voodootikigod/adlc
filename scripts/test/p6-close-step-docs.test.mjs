@@ -1,9 +1,14 @@
 // T74 — the documented P6 lifecycle must conclude with ticket completion.
-// Before this, ADLC.md's P6 section and the adlc skill's P6 block ended at
-// "human behavioral acceptance" / "record gate-manifest" and never told the
-// operator to actually mark the ticket done, so accepted tickets stayed open
-// forever. These grep asserts pin the close step into BOTH docs so it can't
-// silently regress.
+// Before this, ADLC.md's P6 section ended at "human behavioral acceptance" and
+// never told the operator to actually mark the ticket done, so accepted tickets
+// stayed open forever. The close step is pinned into ADLC.md (the full process doc).
+//
+// It is DELIBERATELY NOT in the generated adlc-skill router (SKILL.md): that file is
+// the terse phase -> `adlc <gate>` skeleton, frozen by the consolidation routing guard
+// (scripts/router/check-consolidation.mjs). Adding `adlc ticket complete` to its P6
+// block registers a new routing token and fails that guard — the completion CEREMONY
+// is process detail, not a phase gate. Both directions are asserted so neither
+// regresses: ADLC.md must keep the step, the router must NOT grow it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,10 +36,12 @@ test('ADLC.md P6 section documents concluding acceptance with ticket completion'
   assert.match(p6, /--authorize/, 'P6 must note the railed-ticket authorization/ceremony');
 });
 
-test('adlc skill P6 block documents concluding acceptance with ticket completion', () => {
+test('the adlc-skill router P6 stays the terse gate-manifest routing (ceremony lives in ADLC.md)', () => {
   const skill = read('plugins/adlc-claude-code/skills/adlc/SKILL.md');
   const p6 = section(skill, '### P6 — Integrate (the human gate)');
-  assert.match(p6, /adlc ticket complete/, 'SKILL.md P6 must name the `adlc ticket complete` close step');
-  assert.match(p6, /gate-manifest record\s+p6-accept/, 'SKILL.md P6 must name recording the p6-accept verdict');
-  assert.match(p6, /--authorize/, 'SKILL.md P6 must note the railed-ticket authorization');
+  // The router's P6 routes to its gate (gate-manifest) and nothing more. The
+  // completion ceremony must NOT be here: `adlc ticket complete` would add a routing
+  // token and break the consolidation guard. This asserts the routing-freeze holds.
+  assert.match(p6, /adlc gate-manifest/, 'the router P6 still names its gate-manifest gate');
+  assert.doesNotMatch(p6, /adlc ticket complete/, 'the completion ceremony belongs in ADLC.md, not the frozen router');
 });

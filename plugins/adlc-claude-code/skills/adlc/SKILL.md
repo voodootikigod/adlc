@@ -126,11 +126,6 @@ downstream reads the logical store.
 This gate is a human decision, not something an agent passes. Surface the
 evidence: `adlc gate-manifest show` and the `behavior-diff compare` output, then
 let the human decide. Record outcomes with `adlc gate-manifest record <gate>`.
-Once the human accepts, **close the ticket**: `adlc gate-manifest record
-p6-accept --ticket <id>` then `adlc ticket complete <id> --write` (add
-`--authorize` when the ticket is railed). Completion sets `completed:true` so the
-ticket stops surfacing in backlog enumerations — acceptance without it leaves the
-ticket open forever.
 
 ### P7 — Distill (turn findings into defenses) → `/adlc:adlc-distill`
 - `adlc lesson-foundry --prompt-only` — mine repeated findings into deterministic
