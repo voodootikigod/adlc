@@ -136,9 +136,21 @@ if (flags.write) {
           // Append only NEW questions, not the header, and never re-append a
           // question already present (dedup so N runs ≠ N copies).
           const existing = readFileSync(fullPath, 'utf8');
+          // Dedup on the STABLE cluster-id ONLY. The emitted marker also carries the
+          // occurrence count, the cluster NAME slug (drifts when a human rewords the
+          // lesson), and cluster-MEMBERS (grows every time the pattern recurs). Keying on
+          // the whole suffix — as the greedy `cluster: ([^)]+)\)` did — meant that when a
+          // new finding joined an already-distilled cluster, the changed member list made
+          // the prior question unrecognizable and a duplicate was appended (adversarial-
+          // review round-13). cluster-id is derived from the founding occurrence and is
+          // invariant under member append, so it is the right idempotency key.
           const questionMarker = (line) => {
-            const m = line.match(/cluster: ([^)]+)\)/);
-            return m ? `cluster: ${m[1]}` : line.trim();
+            const id = line.match(/cluster-id: ([0-9a-f]+)/);
+            if (id) return `cluster-id: ${id[1]}`;
+            // Legacy/hand-written lines with no cluster-id: fall back to the name slug,
+            // captured up to the first comma/paren so the mutable suffix is excluded.
+            const name = line.match(/cluster: ([^,)]+)/);
+            return name ? `cluster: ${name[1].trim()}` : line.trim();
           };
           const newLines = file.content
             .split('\n')

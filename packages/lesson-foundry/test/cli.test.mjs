@@ -234,6 +234,39 @@ test('CLI --write: repeated runs do not duplicate interrogation questions', () =
   }
 });
 
+test('CLI --write: a cluster GAINING a finding does not re-append its question (round-13)', () => {
+  // The realistic lifecycle for a now-durable, append-only ledger: an already-distilled
+  // cluster gains another occurrence. The occurrence count and member list both change, but
+  // the cluster-id (founding occurrence) does not. Dedup must key on that stable id, or the
+  // changed member suffix makes the prior question unrecognizable and it is duplicated.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, '.adlc', 'lessons');
+    writeLedger(dir, [
+      { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+      { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+    ]);
+    const first = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(first.code, 0, `first --write should pass: ${first.stderr}`);
+
+    // A THIRD occurrence joins the SAME cluster (same desc) — count 2→3, members grow.
+    writeLedger(dir, [
+      { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+      { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+      { ts: '2025-01-03', tool: 'test', file: 'c.mjs', line: 3, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+    ]);
+    const second = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(second.code, 0, `second --write should pass: ${second.stderr}`);
+
+    const template = readFileSync(join(outDir, 'interrogation-template.md'), 'utf8');
+    const marker = 'cluster: missing-null-check-in-database-query';
+    const occurrences = template.split(marker).length - 1;
+    assert.strictEqual(occurrences, 1, `a grown cluster must not duplicate its question, found ${occurrences}:\n${template}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI --json --gate: exit 0 with valid JSON when all banked', () => {
   const dir = makeTempDir();
   try {
