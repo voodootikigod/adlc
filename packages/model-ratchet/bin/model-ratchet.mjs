@@ -177,19 +177,27 @@ for (const row of selected) {
     continue;
   }
 
-  const findings = parseFindingsFromOutput(result.stdout, row.file);
+  const parsed = parseFindingsFromOutput(result.stdout, row.file);
 
-  // Append each finding to the ledger
-  for (const finding of findings) {
+  // Append each finding, but only COUNT the ones that actually landed. A finding the
+  // ledger boundary rejects (a secret, a raw dump — now that the ledger is tracked and
+  // filtered) must NOT be reported as recorded: automation reads totalFindings and the
+  // JSON result as the P5→P7 trail, and a silent drop reproduces the exact gap the
+  // bridge exists to close. A rejection is an operational error, not partial data.
+  const findings = [];
+  const rejected = [];
+  for (const finding of parsed) {
     try {
       appendEntry('findings', finding);
+      findings.push(finding);
     } catch (err) {
-      // Surface but don't abort — partial data rule
-      process.stderr.write(`warn: could not append finding to ledger: ${err.message}\n`);
+      process.stderr.write(`error: finding for ${row.file} was NOT recorded: ${err.message}\n`);
+      rejected.push({ file: row.file, error: err.message });
+      operationalError = true;
     }
   }
 
-  fileResults.push({ file: row.file, findings, exitCode: result.exitCode });
+  fileResults.push({ file: row.file, findings, rejected, exitCode: result.exitCode });
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +205,7 @@ for (const row of selected) {
 // ---------------------------------------------------------------------------
 
 const totalFindings = fileResults.reduce((n, r) => n + r.findings.length, 0);
+const totalRejected = fileResults.reduce((n, r) => n + (r.rejected?.length ?? 0), 0);
 
 if (values.json) {
   printJson({
@@ -205,14 +214,18 @@ if (values.json) {
     churnLimit,
     reviewCmd,
     files: selected,
-    results: fileResults.map(({ file, findings, exitCode, error }) => ({
+    results: fileResults.map(({ file, findings, rejected, exitCode, error }) => ({
       file,
       exitCode: exitCode ?? null,
       error: error ?? null,
       findingCount: findings.length,
       findings,
+      // Findings parsed but REJECTED by the ledger boundary — reported, never
+      // counted as recorded (they are not in `findings` or `totalFindings`).
+      rejected: rejected ?? [],
     })),
     totalFindings,
+    totalRejected,
     operationalError,
   });
 } else {

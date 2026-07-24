@@ -59,6 +59,11 @@ export function buildGates(base) {
       why: 'changed code has tests that notice it being broken',
       argv: ['node', ['scripts/mutation-gate.mjs', `origin/${base}`, '--max', '12']],
     },
+    {
+      name: 'findings-ledger',
+      why: 'the committed findings ledger carries no secret or raw dump (git-boundary backstop, ADR 0014)',
+      argv: ['node', ['scripts/scan-findings-ledger.mjs']],
+    },
   ];
 }
 

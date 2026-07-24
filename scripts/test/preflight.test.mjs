@@ -67,8 +67,15 @@ test('--base selects the ref every diff-based gate compares against', async () =
   assert.equal(parseBase(['node', 'preflight.mjs']), 'main', 'defaults to main');
   assert.equal(parseBase(['node', 'preflight.mjs', '--base']), 'main', 'a dangling --base is not a ref');
 
-  for (const g of buildGates('release-2').filter((x) => x.name !== 'tests')) {
+  // Only the DIFF-based gates compare against the base. `tests` runs the whole suite
+  // and `findings-ledger` scans the entire committed ledger — both are base-independent
+  // by design, so they must NOT carry an origin/<base> ref.
+  const DIFF_BASED = new Set(['rail-freeze', 'mutation-gate']);
+  for (const g of buildGates('release-2').filter((x) => DIFF_BASED.has(x.name))) {
     assert.ok(flat(g).includes('origin/release-2'), `${g.name} must honor --base`);
+  }
+  for (const g of buildGates('release-2').filter((x) => !DIFF_BASED.has(x.name))) {
+    assert.ok(!flat(g).includes('origin/release-2'), `${g.name} is base-independent and must not carry a base ref`);
   }
 });
 
