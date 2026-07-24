@@ -4,11 +4,11 @@
 // HERDR_PLUGIN_EVENT_JSON the payload), wire the real repo-state readers, ask
 // the pure planner (lib/event-plan) what to do, and execute the single plan.
 // Fail soft everywhere — an event handler must never crash the herdr session.
-import { mkdirSync, openSync, closeSync, rmSync, readdirSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { repoRootFromCwd } from '../lib/repo-root.mjs';
-import { readActiveTicket, ticketIdsFromStore } from '../lib/adlc-state.mjs';
+import { readActiveTicket, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 import { buildPaneClearArgs } from '../lib/tokens.mjs';
 import { planEvent } from '../lib/event-plan.mjs';
@@ -49,20 +49,21 @@ const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
 
 // After winning a bucket, sweep EVERY marker older than the current bucket (any
 // key), so spaced-out idles don't orphan markers — this bounds the directory to
-// the current window's markers. Best-effort; delete races are benign.
+// the current window's markers. Best-effort; delete races are benign. The read
+// is BOUNDED (readdirBounded, not readdirSync): a nudge dir flooded with markers
+// — a burst of unique pane events, or local tampering — must never load an
+// unbounded listing into memory and block this event handler. Per sweep we clear
+// up to the cap; a genuinely over-full dir just drains across successive sweeps.
+const MAX_SWEEP_ENTRIES = 10_000;
 function sweepStaleMarkers(currentBucket) {
-  try {
-    for (const name of readdirSync(nudgeDir)) {
-      if (isStaleMarker(name, currentBucket)) {
-        try {
-          rmSync(join(nudgeDir, name), { force: true });
-        } catch {
-          // best-effort
-        }
+  for (const name of readdirBounded(nudgeDir, MAX_SWEEP_ENTRIES)) {
+    if (isStaleMarker(name, currentBucket)) {
+      try {
+        rmSync(join(nudgeDir, name), { force: true });
+      } catch {
+        // best-effort
       }
     }
-  } catch {
-    // best-effort
   }
 }
 
