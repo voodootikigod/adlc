@@ -37,7 +37,7 @@ beforeEach(() => {
   // A real on-disk ticket shard — ids are read from the FILESYSTEM, not a
   // subprocess. A booby-trapped `adlc` stub proves the handler never runs it.
   mkdirSync(join(repo, '.adlc', 'tickets'), { recursive: true });
-  writeFileSync(join(repo, '.adlc', 'tickets', 't-match--deadbeef.json'), JSON.stringify({ id: 't-match', title: 'x' }));
+  writeFileSync(join(repo, '.adlc', 'tickets', `t-match--${'a'.repeat(64)}.json`), JSON.stringify({ id: 't-match', title: 'x' }));
   adlcRan = join(dir, 'adlc-ran');
   const adlc = join(dir, 'adlc');
   writeFileSync(adlc, `#!/bin/sh\ntouch "${adlcRan}"\nexit 0\n`); // must NEVER run

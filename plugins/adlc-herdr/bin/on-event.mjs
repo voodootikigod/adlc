@@ -108,12 +108,14 @@ async function main() {
 }
 
 // Fail SOFT (never crash the herdr session) but not SILENT — log to stderr so
-// the host captures the failure in the plugin log for diagnosis.
+// the host captures the failure. Set exitCode instead of calling process.exit,
+// so the event loop drains and the stderr write actually flushes to the host
+// pipe before the process ends (a synchronous exit could truncate it).
 main().catch((err) => {
   try {
     console.error('[adlc on-event]', err instanceof Error ? err.stack || err.message : String(err));
   } catch {
     // logging must never itself throw
   }
-  process.exit(0);
+  process.exitCode = 0;
 });

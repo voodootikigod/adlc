@@ -124,15 +124,16 @@ test('readTicketsViaExport fails soft on exporter failure or a bad envelope', as
 
 // ---- ticketIdsFromStore (filesystem read — the RCE-safe worktree.created path) ----
 
-test('ticketIdsFromStore reads ids from sharded shard filenames', () => {
+test('ticketIdsFromStore reads ids from sharded shard filenames (hash-shape aware)', () => {
+  const h = 'a'.repeat(64); // a real shard hash is 64-hex
   mkdirSync(join(repo, '.adlc', 'tickets'), { recursive: true });
-  writeFileSync(join(repo, '.adlc', 'tickets', 't-a--111.json'), '{}');
-  writeFileSync(join(repo, '.adlc', 'tickets', 't-b--222.json'), '{}');
+  writeFileSync(join(repo, '.adlc', 'tickets', `t-a--${h}.json`), '{}');
+  writeFileSync(join(repo, '.adlc', 'tickets', `t-b--${h}.json`), '{}');
   writeFileSync(join(repo, '.adlc', 'tickets', 'notjson.txt'), 'x'); // ignored
-  writeFileSync(join(repo, '.adlc', 'tickets', 't-c.json'), '{}'); // no '--' → strip .json, not truncate
-  writeFileSync(join(repo, '.adlc', 'tickets', '--nohead.json'), '{}'); // '--' at index 0 → empty id, skipped
-  writeFileSync(join(repo, '.adlc', 'tickets', 'bug--login--abc.json'), '{}'); // id CONTAINS '--' → keep it whole
-  assert.deepEqual(ticketIdsFromStore(repo).sort(), ['bug--login', 't-a', 't-b', 't-c']);
+  writeFileSync(join(repo, '.adlc', 'tickets', 't-c.json'), '{}'); // no '--' → strip .json
+  writeFileSync(join(repo, '.adlc', 'tickets', `bug--login--${h}.json`), '{}'); // id has '--', real hash → id kept
+  writeFileSync(join(repo, '.adlc', 'tickets', 'feat--copy.json'), '{}'); // hand-copied, '--' in id, NO hash → whole id
+  assert.deepEqual(ticketIdsFromStore(repo).sort(), ['bug--login', 'feat--copy', 't-a', 't-b', 't-c']);
 });
 
 test('ticketIdsFromStore falls back to the legacy tickets.json array', () => {
