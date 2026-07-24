@@ -16,10 +16,14 @@ const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? wid
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane
  *  would scroll and duplicate every refresh. A truncated frame ends with a
  *  "…N more" marker. */
-export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger }) {
+export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
   const w = clampWidth(width);
   const cut = (text) => sanitizeToken(String(text), w);
   const lines = [];
+  // Flat index of the currently-selected ticket row across all three sections
+  // (t-herdr-7). -1 / undefined = nothing selected → no row marked.
+  const sel = Number.isInteger(selected) ? selected : -1;
+  let ti = 0;
 
   const ticketLabel = active?.state === 'active' ? active.id : 'none';
   lines.push(`${BOLD}${cut(`ADLC board · repo ${repoRoot} · ticket ${ticketLabel}${phase ? ` · ${phase}` : ''}`)}${RESET}`);
@@ -37,7 +41,10 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
     for (const [name, list] of sections) {
       lines.push(`${BOLD}${cut(`${name} (${list.length})`)}${RESET}`);
       for (const ticket of list) {
-        lines.push(cut(`  ${ticket.id} · ${ticket.title ?? ''}`));
+        const isSel = ti === sel;
+        const line = cut(`${isSel ? '> ' : '  '}${ticket.id} · ${ticket.title ?? ''}`);
+        lines.push(isSel ? `${BOLD}${line}${RESET}` : line);
+        ti += 1;
       }
     }
   }

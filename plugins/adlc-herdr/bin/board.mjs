@@ -6,7 +6,7 @@
 // actions do, gather via the tested libs, redraw every few seconds and on
 // resize, quit on q / Ctrl-C.
 import { appendFileSync } from 'node:fs';
-import { runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
+import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
 import {
@@ -15,8 +15,17 @@ import {
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
+import { stepSelection, resolveRowAction, focusPaneArgs } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
+
+// Row-selection state (t-herdr-7): `selected` is the flat index of the
+// highlighted ticket row across ready/in-flight/blocked (-1 = none). `lastProps`
+// is the last gathered frame so input handlers can resolve a row without
+// re-gathering. `flatTickets` mirrors renderBoard's section order exactly.
+let selected = -1;
+let lastProps = null;
+const flatTickets = (groups) => [...(groups?.ready ?? []), ...(groups?.inFlight ?? []), ...(groups?.blocked ?? [])];
 
 // mtime-gate the ticket-store export: the board redraws every 3s, but
 // `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
@@ -70,7 +79,7 @@ function draw(body) {
   // Probed 2026-07-23: \x1b[2J leaves a herdr pane blank AND unreadable via
   // `pane read` — redraw with cursor-home + per-line erase-to-EOL + erase-
   // below instead of a full clear.
-  const footer = `\x1b[2mq to quit · refreshes every ${REFRESH_MS / 1000}s\x1b[0m`;
+  const footer = `\x1b[2m↑↓/jk select · ↵ focus pane · q quit · refreshes every ${REFRESH_MS / 1000}s\x1b[0m`;
   const frameText = `${body}\n\n${footer}`.split('\n').map((line) => `${line}\x1b[K`).join('\n');
   process.stdout.write(`\x1b[H${frameText}\n\x1b[0J`);
 }
@@ -85,10 +94,16 @@ async function frame(repoRoot) {
   if (framing) return;
   framing = true;
   try {
-    draw(renderBoard(await gather(repoRoot)));
+    lastProps = await gather(repoRoot);
+    draw(renderBoard({ ...lastProps, selected }));
   } finally {
     framing = false;
   }
+}
+
+// Redraw from the cached frame (no re-gather) — used for instant selection feedback.
+function redraw() {
+  if (lastProps) draw(renderBoard({ ...lastProps, selected }));
 }
 
 function armInput(onQuit) {
@@ -96,7 +111,16 @@ function armInput(onQuit) {
   process.stdin.resume();
   process.stdin.on('data', (chunk) => {
     const key = chunk.toString();
-    if (key === 'q' || key === 'Q' || key === '\x03') onQuit();
+    if (key === 'q' || key === 'Q' || key === '\x03') { onQuit(); return; }
+    const rows = flatTickets(lastProps?.groups);
+    if (key === '\x1b[A' || key === 'k') { selected = stepSelection(selected, 'up', rows.length); redraw(); }
+    else if (key === '\x1b[B' || key === 'j') { selected = stepSelection(selected, 'down', rows.length); redraw(); }
+    else if (key === '\r' || key === '\n') {
+      // Focus the pane mapped to the selected ticket; a fixed argv, paneId from
+      // the trusted pane map. No mapped pane → nothing happens.
+      const action = resolveRowAction(rows[selected], lastProps?.paneRows);
+      if (action.kind === 'focus-pane') runHerdr(focusPaneArgs(action.paneId));
+    }
   });
 }
 
