@@ -267,6 +267,42 @@ test('CLI --write: a cluster GAINING a finding does not re-append its question (
   }
 });
 
+test('CLI --write: an out-of-order merge introducing an OLDER member does not re-append (round-14)', () => {
+  // Now that the ledger is tracked in git, a branch merge can introduce an occurrence with
+  // an EARLIER timestamp than the current founding member. That changes cluster-id (which is
+  // derived from the founding occurrence), so cluster-id dedup would treat the cluster as new
+  // and re-append its question. Member-overlap dedup — the same identity banking uses —
+  // survives it, because the merge does not remove the members already covered.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, '.adlc', 'lessons');
+    const desc = 'unchecked array index in the token parser';
+    writeLedger(dir, [
+      { ts: '2025-06-02', tool: 'test', file: 'a.mjs', line: 1, category: 'correctness', severity: 'high', desc },
+      { ts: '2025-06-03', tool: 'test', file: 'b.mjs', line: 2, category: 'correctness', severity: 'high', desc },
+    ]);
+    const first = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(first.code, 0, `first --write should pass: ${first.stderr}`);
+
+    // A merge brings in an OLDER occurrence (earliest ts) — the founding member, and thus
+    // cluster-id, changes; the member set still overlaps the original two.
+    writeLedger(dir, [
+      { ts: '2025-06-01', tool: 'test', file: 'z.mjs', line: 9, category: 'correctness', severity: 'high', desc },
+      { ts: '2025-06-02', tool: 'test', file: 'a.mjs', line: 1, category: 'correctness', severity: 'high', desc },
+      { ts: '2025-06-03', tool: 'test', file: 'b.mjs', line: 2, category: 'correctness', severity: 'high', desc },
+    ]);
+    const second = runCli(['--write', '--out-dir', outDir], dir);
+    assert.strictEqual(second.code, 0, `second --write should pass: ${second.stderr}`);
+
+    const template = readFileSync(join(outDir, 'interrogation-template.md'), 'utf8');
+    const marker = 'cluster: unchecked-array-index-in-the-token-parser';
+    const occurrences = template.split(marker).length - 1;
+    assert.strictEqual(occurrences, 1, `an out-of-order merge must not duplicate the question, found ${occurrences}:\n${template}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI --json --gate: exit 0 with valid JSON when all banked', () => {
   const dir = makeTempDir();
   try {

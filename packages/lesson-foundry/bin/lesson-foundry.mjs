@@ -136,26 +136,42 @@ if (flags.write) {
           // Append only NEW questions, not the header, and never re-append a
           // question already present (dedup so N runs ≠ N copies).
           const existing = readFileSync(fullPath, 'utf8');
-          // Dedup on the STABLE cluster-id ONLY. The emitted marker also carries the
-          // occurrence count, the cluster NAME slug (drifts when a human rewords the
-          // lesson), and cluster-MEMBERS (grows every time the pattern recurs). Keying on
-          // the whole suffix — as the greedy `cluster: ([^)]+)\)` did — meant that when a
-          // new finding joined an already-distilled cluster, the changed member list made
-          // the prior question unrecognizable and a duplicate was appended (adversarial-
-          // review round-13). cluster-id is derived from the founding occurrence and is
-          // invariant under member append, so it is the right idempotency key.
-          const questionMarker = (line) => {
+          // Dedup a spec-gap question when its cluster OVERLAPS an already-distilled one by
+          // ANY member hash — the same durable identity banking uses (route.mjs
+          // clusterMembers). Two weaker keys were tried and both re-append duplicates:
+          //  - the greedy `cluster: ([^)]+)\)` swept in the mutable member list, so a cluster
+          //    GAINING a finding stopped matching (round-13); and
+          //  - the stable cluster-id fixes append but NOT an out-of-order ledger merge — now
+          //    that the ledger is tracked in git, a branch merge can introduce an
+          //    EARLIER-timestamped member, which changes the founding occurrence and thus the
+          //    cluster-id, orphaning the prior question (round-14).
+          // Member overlap survives both: neither append nor merge REMOVES the members the
+          // existing question already covers.
+          const membersOf = (line) => {
+            const m = line.match(/cluster-members: ([0-9a-f ]+)/);
+            return m ? m[1].trim().split(/\s+/).filter(Boolean) : [];
+          };
+          const legacyKeyOf = (line) => {
             const id = line.match(/cluster-id: ([0-9a-f]+)/);
             if (id) return `cluster-id: ${id[1]}`;
-            // Legacy/hand-written lines with no cluster-id: fall back to the name slug,
-            // captured up to the first comma/paren so the mutable suffix is excluded.
             const name = line.match(/cluster: ([^,)]+)/);
             return name ? `cluster: ${name[1].trim()}` : line.trim();
+          };
+          const existingMembers = new Set(
+            existing.split('\n').filter((l) => l.startsWith('- [ ]')).flatMap(membersOf),
+          );
+          const alreadyPresent = (line) => {
+            const members = membersOf(line);
+            // Overlap on the member set when we have one; else fall back to the id/name key
+            // (legacy or hand-written questions carrying no cluster-members annotation).
+            return members.length > 0
+              ? members.some((h) => existingMembers.has(h))
+              : existing.includes(legacyKeyOf(line));
           };
           const newLines = file.content
             .split('\n')
             .filter((l) => l.startsWith('- [ ]'))
-            .filter((l) => !existing.includes(questionMarker(l)));
+            .filter((l) => !alreadyPresent(l));
           if (newLines.length > 0) {
             appendFileSync(fullPath, '\n' + newLines.join('\n') + '\n', 'utf8');
             if (!flags.json) console.log(`  appended: ${fullPath}`);

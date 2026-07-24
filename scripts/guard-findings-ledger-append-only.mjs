@@ -29,13 +29,26 @@ function defaultGit(...args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
-/** The ledger content at the merge-base of `baseRef` and HEAD ('' if absent there). */
-export function baseLedgerText(baseRef, run = defaultGit) {
-  let point;
+/**
+ * Resolve the base ledger content, distinguishing "base is a real commit with no ledger yet"
+ * (legitimately nothing to protect) from "base ref does not resolve at all" (an operational
+ * failure that must NOT be silently treated as an empty base — that would let a deletion pass
+ * on a misspelled/deleted/unfetched base).
+ *
+ * @returns { resolved: true, text } when the base resolves (text '' if the ledger is absent
+ *          there), or { resolved: false } when the base ref cannot be resolved to a commit.
+ */
+export function baseLedger(baseRef, run = defaultGit) {
+  let point = null;
+  // Prefer the merge-base so findings other PRs added to the base are not counted removed.
   try { point = run('merge-base', baseRef, 'HEAD').trim(); }
-  catch { point = baseRef; } // detached / unrelated history — fall back to the ref itself
-  try { return run('show', `${point}:${LEDGER}`); }
-  catch { return ''; } // ledger did not exist at the base — nothing to protect yet
+  catch { /* no merge-base (unrelated/shallow history) — verify the ref directly below */ }
+  if (!point) {
+    try { point = run('rev-parse', '--verify', `${baseRef}^{commit}`).trim(); }
+    catch { return { resolved: false }; } // the base ref itself does not resolve → fail closed
+  }
+  try { return { resolved: true, text: run('show', `${point}:${LEDGER}`) }; }
+  catch { return { resolved: true, text: '' }; } // base resolved, ledger absent there → empty
 }
 
 /** The ledger content in the working tree ('' if absent). Reads the WORKING copy so an
@@ -74,7 +87,19 @@ export function appendOnlyViolations(baseText, headText) {
 }
 
 export function guard(baseRef, { run = defaultGit, read = readFileSync, exists = existsSync } = {}) {
-  const violations = appendOnlyViolations(baseLedgerText(baseRef, run), headLedgerText(read, exists));
+  const base = baseLedger(baseRef, run);
+  if (!base.resolved) {
+    // Fail CLOSED (operational error), never fall through to an empty-base pass: an
+    // unresolvable base means we cannot verify the ledger at all, and treating that as
+    // "nothing to protect" would let a deletion or rewrite slip through on a bad base.
+    console.error(
+      `guard-findings-ledger-append-only: base ref '${baseRef}' does not resolve to a commit ` +
+      `(unfetched, misspelled, or deleted). Refusing to verify the ledger against an unknown ` +
+      `base — fetch/spell the base ref correctly and re-run.`,
+    );
+    return 1;
+  }
+  const violations = appendOnlyViolations(base.text, headLedgerText(read, exists));
   if (violations.length > 0) {
     console.error(`guard-findings-ledger-append-only: ${LEDGER} is not append-only vs ${baseRef}:`);
     for (const v of violations) console.error(`  - ${v}`);

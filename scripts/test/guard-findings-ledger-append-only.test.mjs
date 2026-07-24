@@ -111,3 +111,45 @@ test('CLI: an UNCOMMITTED deletion in the working tree also fails (not only comm
     assert.match(r.out, /removed|deletion or truncation/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('CLI: an UNRESOLVABLE base fails closed (op error), never silently passes as an empty base', () => {
+  // A misspelled / deleted / unfetched base ref must NOT be collapsed into "empty base →
+  // nothing to protect → pass": that would let a ledger deletion slip through whenever the
+  // base cannot be resolved (adversarial-review round-14). Even with the ledger DELETED, an
+  // unresolvable base must exit 1 (operational), not 0.
+  const { root } = makeRepo();
+  try {
+    rmSync(join(root, '.adlc', 'findings.jsonl')); // a deletion that would pass on a fail-open base
+    const r = (() => {
+      try {
+        const out = execFileSync('node', [SCRIPT, 'no-such-base-xyz'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        return { code: 0, out };
+      } catch (err) { return { code: err.status, out: `${err.stdout ?? ''}${err.stderr ?? ''}` }; }
+    })();
+    assert.equal(r.code, 1, 'an unresolvable base is an operational failure, not a pass');
+    assert.match(r.out, /does not resolve|unknown base/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('CLI: a resolvable base with NO ledger yet still passes (a brand-new ledger is append-only)', () => {
+  // Distinct from an unresolvable base: here the base commit is real, it simply has no
+  // ledger, so adding one is a legitimate append.
+  const root = mkdtempSync(join(tmpdir(), 'ledger-guard-'));
+  try {
+    const git = (...args) =>
+      execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=g@t', '-c', 'user.name=g', ...args], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+    git('init', '-b', 'main');
+    git('commit', '--allow-empty', '-q', '-m', 'root with no ledger');
+    git('checkout', '-q', '-b', 'feature');
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'findings.jsonl'), '{"desc":"a brand new finding"}\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'introduce the ledger');
+
+    const r = runGuard(root);
+    assert.equal(r.code, 0, 'introducing a ledger where the base had none is append-only');
+    assert.match(r.out, /append-only/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
