@@ -300,6 +300,14 @@ jobs:
           fi
           node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
 
+      # The durable findings ledger (.adlc/findings.jsonl, ADR 0014) is append-only P5->P7
+      # memory. The single-tree secret scanner cannot see a DELETION (nothing left to scan),
+      # so this base-diff backstop fails a PR that removes, truncates, or rewrites it.
+      - name: Findings-ledger append-only gate
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: node scripts/guard-findings-ledger-append-only.mjs "origin/$BASE_REF"
+
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that
     # notices it being removed — code that is correct but unverified.

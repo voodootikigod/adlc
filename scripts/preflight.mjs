@@ -64,6 +64,11 @@ export function buildGates(base) {
       why: 'the committed findings ledger carries no secret or raw dump (git-boundary backstop, ADR 0014)',
       argv: ['node', ['scripts/scan-findings-ledger.mjs']],
     },
+    {
+      name: 'findings-append-only',
+      why: 'the durable findings ledger is only extended, never deleted/truncated/rewritten (ADR 0014)',
+      argv: ['node', ['scripts/guard-findings-ledger-append-only.mjs', `origin/${base}`]],
+    },
   ];
 }
 
@@ -71,9 +76,10 @@ const BASE = parseBase(process.argv);
 const GATES = buildGates(BASE);
 
 /**
- * The rail-freeze and mutation gates both diff against `origin/<base>`. A stale
- * or missing remote ref makes them compare against the wrong tree and quietly
- * pass — the exact "green locally, red in CI" gap this script exists to close.
+ * The rail-freeze, mutation, and findings-append-only gates all diff against
+ * `origin/<base>`. A stale or missing remote ref makes them compare against the
+ * wrong tree and quietly pass — the exact "green locally, red in CI" gap this
+ * script exists to close.
  */
 export function refreshBase(base = BASE, run = defaultFetch) {
   try {
