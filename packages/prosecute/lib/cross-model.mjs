@@ -88,27 +88,48 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
  * Everything else fails closed. gate-manifest writes entries under `gate`;
  * prosecute's own evidence writer uses `type` — normalize both.
  */
+// Shared per-entry predicate. `ticket` is OPTIONAL: the per-ticket runner gate
+// (hasCrossModelApprove) requires it; the CI tier gate (#326,
+// hasCrossModelApproveForRevision) omits it and binds to the REVISION only — a
+// trust-root change (e.g. an enforcement-package edit) need not map to one ticket,
+// and the revision hash is the anti-stale anchor that stops a prior attestation
+// from clearing a fresh diff.
+function entrySatisfies(entry, { ticket, revision, runAuthor }) {
+  if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) return false;
+  if (ticket !== undefined && entry.ticket !== ticket) return false;
+  const data = entry.data;
+  if (!data || typeof data !== 'object') return false;
+  if (data.verdict !== 'approve') return false;
+  if (data.revision !== revision) return false;
+  const provider = normalizeProvider(data.provider);
+  const entryAuthor = normalizeProvider(data.authorProvider);
+  if (provider === '' || entryAuthor === '' || runAuthor === '') return false;
+  // Write-side belt-and-suspenders: the attestation must not be same-provider.
+  if (provider === entryAuthor) return false;
+  // Author anchored to the run: the reviewer must differ from the real
+  // (run-declared) author, and the record must be for THIS author. All compared
+  // normalized so a whitespace/case variant cannot fake distinctness.
+  if (provider === runAuthor) return false;
+  if (entryAuthor !== runAuthor) return false;
+  return true;
+}
+
 export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } = {}) {
   if (!ticket || !revision || !authorProvider) return false;
   const { entries } = readEntries('manifest', dir);
-  return entries.some((entry) => {
-    if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) return false;
-    if (entry.ticket !== ticket) return false;
-    const data = entry.data;
-    if (!data || typeof data !== 'object') return false;
-    if (data.verdict !== 'approve') return false;
-    if (data.revision !== revision) return false;
-    const provider = normalizeProvider(data.provider);
-    const entryAuthor = normalizeProvider(data.authorProvider);
-    const runAuthor = normalizeProvider(authorProvider);
-    if (provider === '' || entryAuthor === '' || runAuthor === '') return false;
-    // Write-side belt-and-suspenders: the attestation must not be same-provider.
-    if (provider === entryAuthor) return false;
-    // Author anchored to the prosecution run: the reviewer must differ from the
-    // real (prosecution-declared) author, and the record must be for THIS author.
-    // All compared normalized so a whitespace/case variant cannot fake distinctness.
-    if (provider === runAuthor) return false;
-    if (entryAuthor !== runAuthor) return false;
-    return true;
-  });
+  const runAuthor = normalizeProvider(authorProvider);
+  return entries.some((entry) => entrySatisfies(entry, { ticket, revision, runAuthor }));
+}
+
+/**
+ * True iff the manifest holds a distinct-provider cross-model `approve` bound to
+ * `revision`, recorded for author `authorProvider` — REGARDLESS of ticket. The CI
+ * trust-root-tier gate (#326) uses this: it verifies the reviewed revision was
+ * cross-model approved without requiring the change to name a single ticket.
+ */
+export function hasCrossModelApproveForRevision({ dir, revision, authorProvider } = {}) {
+  if (!revision || !authorProvider) return false;
+  const { entries } = readEntries('manifest', dir);
+  const runAuthor = normalizeProvider(authorProvider);
+  return entries.some((entry) => entrySatisfies(entry, { ticket: undefined, revision, runAuthor }));
 }

@@ -1,0 +1,137 @@
+// Concern: bin/adlc-prosecute.mjs `tier-check` subcommand (#326) — the CI trust-root
+// cross-model gate, end-to-end at the process boundary in a real git repo.
+//
+// Properties pinned:
+//   - a non-trust-root change exits 0 and says so (AC3 visibility);
+//   - a trust-root change with NO attestation exits 2 (AC1);
+//   - the same change exits 0 once a distinct-provider approve bound to the
+//     tier-check revision is recorded;
+//   - the add-vs-alter calibration (#326): an ADDITIVE ticket write does NOT tier,
+//     while ALTERING an existing ticket contract DOES;
+//   - a tiered change with no --author-provider fails closed (exit 1).
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+
+function runBin(args, cwd, env = {}) {
+  try {
+    const stdout = execFileSync(process.execPath, [BIN, ...args], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env },
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (err) {
+    return { status: err.status, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
+  }
+}
+
+// Scratch repo: base `.adlc/tickets.json` = baseTickets, committed on main; then on
+// a feat branch apply mutate(dir) and commit. Rails default to src/** so the ticket
+// store file itself is not a rails-deny-path match — the ticket-store surface is
+// exercised purely through the add-vs-alter calibration.
+function scratchRepo({ baseTickets, mutate }) {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-tier-check-'));
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(dir, 'README.md'), 'baseline\n');
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: baseTickets }));
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'app.mjs'), 'export const x = 0;\n');
+  g('add', '-A'); g('commit', '-qm', 'baseline');
+  g('checkout', '-q', '-b', 'feat');
+  mutate(dir, g);
+  g('add', '-A'); g('commit', '-qm', 'change');
+  return { dir, g };
+}
+
+const T = (over = {}) => ({ id: 'T1', title: 'x', scope: ['src/**'], rails: ['src/**'], edges: [], ...over });
+const cleanup = (dir) => rmSync(dir, { recursive: true, force: true });
+
+describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
+  it('exits 0 and reports NOT trust-root tier for an ordinary change', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 0);
+      assert.match(r.stdout, /NOT trust-root tier/);
+    } finally { cleanup(dir); }
+  });
+
+  it('exits 2 for a trust-root change (enforcement package) with no attestation', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+      mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+      writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+    } });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /TRUST-ROOT tier/);
+      assert.match(r.stderr, /NO cross-model attestation/);
+    } finally { cleanup(dir); }
+  });
+
+  it('exits 0 once a distinct-provider approve bound to the tier-check revision is recorded', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+      mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+      writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+    } });
+    try {
+      const before = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
+      assert.equal(before.status, 2);
+      const { revision } = JSON.parse(before.stdout);
+      assert.ok(revision, 'tier-check surfaces the revision');
+
+      const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revision, '--dir', '.adlc'], dir);
+      assert.equal(rec.status, 0);
+
+      const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(after.status, 0);
+      assert.match(after.stdout, /cross-model approve found/);
+    } finally { cleanup(dir); }
+  });
+
+  it('CALIBRATION: an ADDITIVE ticket write does NOT tier (exit 0)', () => {
+    const { dir } = scratchRepo({
+      baseTickets: [T()],
+      mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T(), { id: 'T2', title: 'new', scope: ['src/**'], rails: [], edges: [] }] })),
+    });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 0);
+      assert.match(r.stdout, /NOT trust-root tier/);
+    } finally { cleanup(dir); }
+  });
+
+  it('CALIBRATION: ALTERING an existing ticket contract DOES tier (exit 2)', () => {
+    const { dir } = scratchRepo({
+      baseTickets: [T({ rails: ['src/critical/**'] })],
+      // Change T1's rails — an alteration of an existing contract.
+      mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T({ rails: [] })] })),
+    });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /alters an existing ticket contract/);
+    } finally { cleanup(dir); }
+  });
+
+  it('fails closed (exit 1) on a tiered change with no --author-provider', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+      mkdirSync(join(d, 'packages', 'gate-manifest', 'lib'), { recursive: true });
+      writeFileSync(join(d, 'packages', 'gate-manifest', 'lib', 'x.mjs'), 'export const z = 1;\n');
+    } });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--dir', '.adlc'], dir, { ADLC_AUTHOR_PROVIDER: '' });
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /no --author-provider/);
+    } finally { cleanup(dir); }
+  });
+});

@@ -5,7 +5,7 @@ import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFil
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
-import { recordCrossModelReview } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -130,6 +130,38 @@ function renamedSources(base, root) {
   ];
 }
 
+// #326 add-vs-alter calibration. Whether an EXISTING base ticket's contract was
+// altered or removed at head — the signal classifyTrustRootTier uses to decide
+// whether a ticket-store change tiers. Mirrors scripts/rails-guard-ci.mjs exactly,
+// INCLUDING the rail-less completion-annotation exemption (a PR may stamp
+// `completed:true` on a rail-less base ticket without it counting as an
+// alteration). A purely additive write (new tickets only) returns false.
+function stableTicket(value) {
+  const sort = (v) => (Array.isArray(v)
+    ? v.map(sort)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort(v[k])]))
+      : v);
+  return JSON.stringify(sort(value));
+}
+function isCompletionAnnotationOnly(base, head) {
+  const baseRails = Array.isArray(base.rails) ? base.rails : [];
+  if (baseRails.length > 0) return false;
+  if (Object.prototype.hasOwnProperty.call(base, 'completed')) return false;
+  if (head.completed !== true) return false;
+  const { completed, ...headWithoutCompleted } = head;
+  return stableTicket(headWithoutCompleted) === stableTicket(base);
+}
+function ticketContractAltered(baseTickets, headTickets) {
+  const headById = new Map((Array.isArray(headTickets) ? headTickets : []).map((t) => [t.id, t]));
+  for (const base of Array.isArray(baseTickets) ? baseTickets : []) {
+    const head = headById.get(base.id);
+    if (!head) return true; // an existing ticket was removed
+    if (stableTicket(head) !== stableTicket(base) && !isCompletionAnnotationOnly(base, head)) return true;
+  }
+  return false;
+}
+
 function loadTicketsForTier(dir, root, base) {
   // UNION, never replace: rails from the base and from the worktree both apply.
   // The classifier ORs deny-paths across tickets, so adding a source can only
@@ -243,6 +275,70 @@ if (positionals[0] === 'record-cross-model') {
     console.log(`recorded cross-model ${entry.data.verdict} for ${values.ticket} @ ${revision} (${entry.data.provider} vs author ${entry.data.authorProvider})`);
   }
   process.exit(0);
+}
+
+// --- tier-check subcommand (#326: the CI trust-root cross-model gate) ---
+// Classify the change; if trust-root tier, REQUIRE a distinct-provider cross-model
+// approve bound to the reviewed revision (fail closed). Always surfaces the tier
+// decision so "no review required" and "review missing" are distinguishable.
+if (positionals[0] === 'tier-check') {
+  let root;
+  let changed;
+  let baseTickets;
+  let headTickets;
+  try {
+    root = repoRoot();
+    const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
+    const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
+      .split('\0').filter(Boolean);
+    changed = [...new Set([...tracked, ...untracked, ...renamedSources(values.base, root)])];
+    baseTickets = readBaseTickets(root, values.base);
+    headTickets = readCanonicalTickets(root);
+  } catch (err) {
+    opError(`tier-check: cannot determine the changed-file set — base ref '${values.base}' unresolvable. Fetch it (git fetch origin ${values.base}) or pass --base <ref>. Underlying: ${err.message}`);
+  }
+  let tier;
+  try {
+    tier = classifyTrustRootTier({
+      changedFiles: changed,
+      tickets: [...baseTickets, ...headTickets],
+      ticketContractAltered: ticketContractAltered(baseTickets, headTickets),
+    });
+  } catch (err) {
+    opError(`tier-check: cannot classify the change: ${err.message}`);
+  }
+
+  // AC3: the tier decision is ALWAYS visible — tiered or not.
+  if (!tier.isTrustRootTier) {
+    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
+    else console.log('tier-check: NOT trust-root tier — no cross-model review required.');
+    process.exit(0);
+  }
+  console.error('tier-check: TRUST-ROOT tier — a distinct-provider cross-model approve is REQUIRED. Reasons:');
+  for (const reason of tier.reasons) console.error(`  - ${reason}`);
+
+  const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROVIDER;
+  if (!authorProvider) {
+    opError('tier-check: trust-root tier but no --author-provider / ADLC_AUTHOR_PROVIDER — distinctness cannot be proven; failing closed');
+  }
+  const revision = resolveProsecutionRevision({ dir: values.dir, revision: values.revision });
+  if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
+
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider });
+  if (values.json) {
+    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision });
+    process.exit(satisfied ? 0 : 2);
+  }
+  if (satisfied) {
+    console.log(`tier-check: cross-model approve found for revision ${revision} (reviewer distinct from author ${authorProvider}). PASS.`);
+    process.exit(0);
+  }
+  console.error(
+    `tier-check: NO cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +
+    `Record one after a distinct-provider adversarial review:\n` +
+    `  adlc-prosecute record-cross-model --ticket <id> --provider <distinct-provider> --author-provider ${authorProvider} --verdict approve --revision ${revision}`
+  );
+  process.exit(2);
 }
 
 // --- record-finding mode (P5 → P7 bridge) ---

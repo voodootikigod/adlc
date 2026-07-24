@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { recordCrossModelReview, hasCrossModelApprove } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 
 function tmp() {
@@ -176,6 +176,53 @@ describe('hasCrossModelApprove — round-trip and binding', () => {
       assert.equal(entry.gate, 'cross-model-review');
       assert.equal(entry.ticket, 'T1');
       assert.deepEqual(entry.data, { provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', revision: 'rev-1' });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('hasCrossModelApproveForRevision — #326 CI tier gate (ticket-agnostic)', () => {
+  it('TRUE for a distinct-provider approve at the revision, regardless of the attestation ticket', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T-anything', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('FALSE when the revision does not match (stale attestation cannot clear a fresh diff)', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-OLD', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-NEW', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('FALSE when the reviewer provider is not distinct from the run author', () => {
+    const dir = tmp();
+    try {
+      // Recorded as openai-reviews-anthropic, but the run author is really openai → not cross-model.
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'openai' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('FALSE for a needs-attention verdict and for missing args (fail closed)', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: '', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: '' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('the record must be FOR this author (entry.authorProvider must equal the run author)', () => {
+    const dir = tmp();
+    try {
+      // Reviewer gemini reviewed for author anthropic; a run claiming author openai must not be cleared.
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'gemini', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'openai' }), false);
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

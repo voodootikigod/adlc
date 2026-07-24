@@ -308,6 +308,51 @@ jobs:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: node scripts/guard-findings-ledger-append-only.mjs "origin/$BASE_REF"
 
+  cross-model-gate:
+    # #326: the trust-root cross-model review gate, finally INVOKED. A trust-root-
+    # tier change — an enforcement/producer package, a rails deny-path, a trust-root
+    # file, or an ALTERATION of an existing ticket contract — requires a distinct-
+    # provider cross-model adversarial `approve` bound to the reviewed revision.
+    # ADDITIVE ticket writes do NOT tier (add-vs-alter, aligned with rails-guard-ci).
+    # Fails closed: a tiered change with no matching attestation reddens this check.
+    # PR-only (a push has no base diff to gate).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The PR HEAD, NOT the merge commit: the gate hashes the worktree to a
+          # revision, and the attestation the author recorded must bind to the SAME
+          # tree. The manifest lives under .adlc/ (revision-ignored), so a committed
+          # attestation does not shift the hash.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm install
+
+      - name: Fetch base ref
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Trust-root cross-model gate
+        # The tier decision is always printed (a non-tiered PR passes and says so),
+        # so "no review required" and "review missing" are never both silent.
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+          # This repo's default PR author provider; distinctness is checked against
+          # it, so a same-provider review never satisfies the gate. Override with an
+          # ADLC_AUTHOR_PROVIDER repository variable if the author model changes.
+          ADLC_AUTHOR_PROVIDER: ${{ vars.ADLC_AUTHOR_PROVIDER || 'anthropic' }}
+        run: node packages/prosecute/bin/adlc-prosecute.mjs tier-check --base "origin/$BASE_REF" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
+
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that
     # notices it being removed — code that is correct but unverified.
