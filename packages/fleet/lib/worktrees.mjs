@@ -156,11 +156,17 @@ export function revertMerge(repo, integrationBranch, { mergeSha, preMergeSha }, 
     git('reset', '--hard', preMergeSha);
     return { method: 'reset', ok: true };
   }
-  // HEAD moved: a blind reset would discard the intervening commit. Revert the
-  // known merge commit instead (creates a new commit; loses nothing).
+  // HEAD moved: an intervening commit landed on top of our merge. Two truths hold at
+  // once. (1) A blind reset would DISCARD that commit, so we revert our known merge
+  // instead — the intervening commit is preserved (AC9/F4/N2). (2) But that intervening
+  // commit was never covered by a passing gate, and reverting our merge does not remove
+  // it. Treating this as clean recovery (ok:true) would carry an UNGATED commit into the
+  // fleet PR. So the revert succeeds AND the branch is quarantined: ok:false, which the
+  // caller routes to quarantine — no further merge lands, no PR opens. A human decides
+  // what to do with the preserved-but-ungated commit.
   try {
     git('revert', '--no-edit', '-m', '1', mergeSha);
-    return { method: 'revert', ok: true, reason: 'integration HEAD moved during gate; used git revert to avoid dropping unrelated work' };
+    return { method: 'revert', ok: false, reason: `integration HEAD moved to ${head} during the gate; our merge was reverted but the intervening commit is UNGATED — quarantined so it cannot reach the PR` };
   } catch (e) {
     return { method: 'refused', ok: false, reason: `integration HEAD moved and git revert failed (${e.message}); manual recovery required` };
   }

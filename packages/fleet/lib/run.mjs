@@ -44,7 +44,10 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         // further merge lands and no PR opens from the contaminated branch. Reporting
         // `reverted: true` here (ignoring rev.ok) let that merge ride into the PR.
         if (!rev.ok) {
-          const reason = `post-merge gate failed and its merge could NOT be withdrawn (${rev.reason ?? rev.method}) — ${integrationBranch} carries a gate-rejected merge`;
+          // revertMerge returns ok:false both when it could not withdraw the merge AND
+          // when it withdrew ours but an UNGATED intervening commit remains. Its reason
+          // is accurate for either; surface it verbatim rather than assuming which.
+          const reason = rev.reason ?? `post-merge gate failed and the merge could not be safely withdrawn (${rev.method}) on ${integrationBranch}`;
           markContaminated(reason);
           return { ok: false, output: `${reason}; integration branch quarantined` };
         }

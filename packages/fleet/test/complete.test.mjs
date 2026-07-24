@@ -654,10 +654,36 @@ test('a REFUSED merge-revert quarantines the branch — the gate-rejected merge 
   const summary = await runFleet({ all: [T('T1'), T('T2')], runId: 'r', config, deps });
 
   assert.equal(summary.contaminated, true, 'a refused merge-revert quarantines the run');
-  assert.match(summary.contaminationReason ?? '', /could NOT be withdrawn/);
+  // The quarantine reason is surfaced verbatim from revertMerge.
+  assert.match(summary.contaminationReason ?? '', /git revert failed|HEAD moved/);
   assert.deepEqual(rec.prs, [], 'no PR is opened carrying the gate-rejected merge');
   assert.equal(rec.merges.length, 1, 'no further merge lands on the quarantined branch');
   assert.notEqual(summary.results.T1, 'merged');
+});
+
+test('a moved-HEAD revert (ungated intervening commit) QUARANTINES the run — no PR', async () => {
+  // revertMerge returns ok:false when it reverted our merge but an UNGATED intervening
+  // commit remains on the branch. That must quarantine, exactly like a refused revert.
+  const rec = { prs: [] };
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => {},
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
+    dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+    gate: () => ({ ok: true }),
+    prosecute: () => ({ verdict: 'pass' }),
+    flail: () => ({ flail: false }),
+    mergeToIntegration: () => ({ mergeSha: 'M', preMergeSha: 'P' }),
+    postMergeGate: () => ({ ok: false }),
+    revertMerge: () => ({ method: 'revert', ok: false, reason: 'HEAD moved; merge reverted but the intervening commit is UNGATED' }),
+    openPR: ({ integrationBranch }) => { rec.prs.push(integrationBranch); },
+  };
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1'), T('T2')], runId: 'r', config, deps });
+
+  assert.equal(summary.contaminated, true, 'the ungated intervening commit quarantines the run');
+  assert.match(summary.contaminationReason ?? '', /UNGATED/);
+  assert.deepEqual(rec.prs, [], 'no PR carrying the ungated commit');
 });
 
 test('runFleet does NOT complete a ticket whose post-merge gate failed (T73 b)', async () => {
