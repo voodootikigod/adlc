@@ -17,6 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ensureIntegrationWorktree, INTEGRATION_WORKTREE, defaultGit } from '../lib/worktrees.mjs';
+import { runFleet } from '../lib/run.mjs';
+import { resolveRunConfig } from '../lib/config.mjs';
 
 function makeRepo() {
   const root = mkdtempSync(join(tmpdir(), 'fleet-integ-wt-'));
@@ -70,6 +72,54 @@ test('a second call reuses the existing worktree (resume) instead of recreating 
     assert.equal(again.created, false, 'the live worktree is reused, not rebuilt');
     assert.equal(again.path, first.path);
     assert.equal(defaultGit(again.path)('symbolic-ref', '--short', 'HEAD'), 'fleet/run-x');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('RESUME re-attaches a missing integration worktree before any work is dispatched', async () => {
+  // A resumed run continues an existing integration branch, but its worktree may have
+  // been removed by cleanup or a crash — and every integration step now needs it. The
+  // re-attach must happen BEFORE dispatch, or the run burns worker time on tickets that
+  // cannot possibly merge.
+  const { root, git, baseSha } = makeRepo();
+  try {
+    ensureIntegrationWorktree(root, 'fleet/run-r', { baseSha, git });
+    const priorSha = defaultGit(join(root, INTEGRATION_WORKTREE))('rev-parse', 'HEAD');
+    // The worktree vanishes; the BRANCH survives (this is what resume must cope with).
+    rmSync(join(root, INTEGRATION_WORKTREE), { recursive: true, force: true });
+    git('worktree', 'prune');
+    assert.ok(!existsSync(join(root, INTEGRATION_WORKTREE)), 'precondition: worktree gone');
+    assert.equal(git('rev-parse', 'fleet/run-r'), priorSha, 'precondition: branch survives');
+
+    const order = [];
+    const deps = {
+      baseSha: 'BASE',
+      ensureIntegrationWorktree: ({ integrationBranch }) => {
+        order.push('ensure');
+        return ensureIntegrationWorktree(root, integrationBranch, { git });
+      },
+      createWorktree: ({ ticket }) => { order.push('dispatch-setup'); return { path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }; },
+      dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+      gate: () => ({ ok: true }),
+      prosecute: () => ({ verdict: 'pass' }),
+      flail: () => ({ flail: false }),
+      mergeToIntegration: () => ({ mergeSha: 'M', preMergeSha: 'P' }),
+      postMergeGate: () => ({ ok: true }),
+      revertMerge: () => ({ method: 'reset', ok: true }),
+      openPR: () => {},
+    };
+    const status = { runId: 'r', base: 'main', baseSha: 'BASE', integrationBranch: 'fleet/run-r', concurrency: 1, tickets: {} };
+    await runFleet({
+      all: [{ id: 'T1', title: 'T1', scope: ['src/T1/**'], edges: [] }],
+      runId: 'r',
+      config: { ...resolveRunConfig({}, {}), baseSha: 'BASE' },
+      deps,
+      resume: { status, integrationBranch: 'fleet/run-r' },
+    });
+
+    assert.ok(existsSync(join(root, INTEGRATION_WORKTREE)), 'the worktree is restored on resume');
+    assert.equal(defaultGit(join(root, INTEGRATION_WORKTREE))('symbolic-ref', '--short', 'HEAD'), 'fleet/run-r');
+    assert.equal(git('rev-parse', 'fleet/run-r'), priorSha, 'and the branch history is preserved, not reset to base');
+    assert.equal(order[0], 'ensure', 'the re-attach happens BEFORE any ticket work is set up');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

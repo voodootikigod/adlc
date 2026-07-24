@@ -117,6 +117,12 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   const integrationBranch = resuming ? resume.integrationBranch : integrationBranchName(runId);
   if (!resuming) {
     await deps.createIntegrationBranch?.({ integrationBranch, baseSha: config.baseSha });
+  } else {
+    // Resume: the branch survives in the repo, but its dedicated worktree may not —
+    // cleanup, a crash, or manual tidying can remove it, and EVERY integration step now
+    // requires it. Re-attach before dispatching anything, so a recoverable run fails
+    // fast here instead of after burning worker time on tickets that cannot merge.
+    await deps.ensureIntegrationWorktree?.({ integrationBranch });
   }
 
   let status = resuming ? resume.status : newStatus({
