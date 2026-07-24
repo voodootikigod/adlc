@@ -16,7 +16,7 @@ import {
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard, boardFooter } from '../lib/board-render.mjs';
-import { indexOfTicket, flattenGroups, nextSelectedId, focusSelected, classifyKey } from '../lib/board-nav.mjs';
+import { flattenGroups, nextSelectedId, focusSelected, classifyKey, redrawBoard } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
 
@@ -28,7 +28,6 @@ const REFRESH_MS = 3_000;
 // without re-gathering. `flatTickets` mirrors renderBoard's section order.
 let selectedId = null;
 let lastProps = null;
-const currentIndex = () => indexOfTicket(flattenGroups(lastProps?.groups), selectedId);
 
 // mtime-gate the ticket-store export: the board redraws every 3s, but
 // `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
@@ -98,16 +97,17 @@ async function frame(repoRoot) {
   framing = true;
   try {
     lastProps = await gather(repoRoot);
-    draw(renderBoard({ ...lastProps, selected: currentIndex() }));
+    redraw();
   } finally {
     framing = false;
   }
 }
 
 // Redraw from the cached frame (no re-gather) — instant selection feedback.
-// renderBoard tolerates absent props, so no guard is needed before the first frame.
+// redrawBoard suppresses the draw until the first frame has loaded, so an early
+// keypress can't wipe the "loading…" screen.
 function redraw() {
-  draw(renderBoard({ ...lastProps, selected: currentIndex() }));
+  redrawBoard({ props: lastProps, selectedId, render: renderBoard, draw });
 }
 
 function move(direction) {

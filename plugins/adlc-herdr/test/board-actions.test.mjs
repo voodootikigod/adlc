@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket,
-  flattenGroups, nextSelectedId, focusCommandFor, focusSelected, classifyKey,
+  flattenGroups, nextSelectedId, focusCommandFor, focusSelected, classifyKey, redrawBoard,
 } from '../lib/board-nav.mjs';
 import { renderBoard, boardFooter } from '../lib/board-render.mjs';
 
@@ -42,6 +42,10 @@ test('AC4 resolveRowAction returns none when the ticket has no mapped pane (noth
   assert.equal(resolveRowAction(null, []).kind, 'none');
 });
 
+test('resolveRowAction refuses a pane id that fails validation (leading-hyphen guard)', () => {
+  assert.equal(resolveRowAction({ id: 't-a' }, [{ paneId: '-x', ticket: 't-a' }]).kind, 'none');
+});
+
 test('indexOfTicket re-derives the selection index from a stable ticket id', () => {
   const rows = [{ id: 't-a' }, { id: 't-b' }, { id: 't-c' }];
   assert.equal(indexOfTicket(rows, 't-b'), 1);
@@ -70,7 +74,7 @@ test('nextSelectedId steps by stable id, clamps, and snaps a removed selection',
 test('focusCommandFor returns the fixed focus argv, or null when nothing to focus', () => {
   const rows = [{ id: 'a' }, { id: 'b' }];
   const paneRows = [{ paneId: 'w1:p2', ticket: 'b' }];
-  assert.deepEqual(focusCommandFor('b', rows, paneRows), ['pane', 'focus', 'w1:p2']);
+  assert.deepEqual(focusCommandFor('b', rows, paneRows), ['pane', 'focus', '--pane', 'w1:p2']);
   assert.equal(focusCommandFor('a', rows, paneRows), null); // ticket with no mapped pane
   assert.equal(focusCommandFor(null, rows, paneRows), null); // nothing selected
 });
@@ -81,7 +85,7 @@ test('focusSelected invokes run with the focus argv ONLY when a pane exists', ()
   const calls = [];
   const run = (argv) => calls.push(argv);
   focusSelected({ selectedId: 'b', groups, paneRows, run });
-  assert.deepEqual(calls, [['pane', 'focus', 'w1:p2']]);
+  assert.deepEqual(calls, [['pane', 'focus', '--pane', 'w1:p2']]);
   focusSelected({ selectedId: 'a', groups, paneRows, run }); // ticket 'a' has no mapped pane
   assert.equal(calls.length, 1, 'nothing is run when there is no pane to focus');
 });
@@ -103,10 +107,22 @@ test('boardFooter shows the refresh interval in whole seconds', () => {
   assert.ok(boardFooter(5000).includes('every 5s'));
 });
 
+test('redrawBoard draws ONLY after the first frame loads (no early wipe of the loading screen)', () => {
+  const draws = [];
+  const render = (args) => args; // identity, so we can inspect the props
+  const draw = (x) => draws.push(x);
+  redrawBoard({ props: null, selectedId: null, render, draw }); // keypress before the first gather
+  assert.equal(draws.length, 0, 'nothing is drawn before the first frame');
+  const props = { groups: { ready: [{ id: 'a' }, { id: 'b' }], inFlight: [], blocked: [] } };
+  redrawBoard({ props, selectedId: 'b', render, draw });
+  assert.equal(draws.length, 1);
+  assert.equal(draws[0].selected, 1, 're-derives the render index from the selected id');
+});
+
 // ---- AC5 fixed focus argv ----
 
 test('AC5 focusPaneArgs builds exactly the fixed herdr focus argv', () => {
-  assert.deepEqual(focusPaneArgs('w1:p2'), ['pane', 'focus', 'w1:p2']);
+  assert.deepEqual(focusPaneArgs('w1:p2'), ['pane', 'focus', '--pane', 'w1:p2']);
 });
 
 // ---- AC6 render highlight ----

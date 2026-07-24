@@ -16,19 +16,27 @@ export function stepSelection(current, key, rowCount) {
   return next;
 }
 
+// A pane id must be a plain token (no leading hyphen): it becomes the value of
+// the `--pane` flag, and a hyphen-leading value could be mis-parsed as a flag.
+const PANE_ID_RE = /^[A-Za-z0-9:_][A-Za-z0-9:_-]*$/;
+
 /** What selecting a ticket row does: focus its mapped pane, or nothing. The
- *  paneId is taken ONLY from the trusted pane map, never from ticket content. */
+ *  paneId is taken ONLY from the trusted pane map, and is still validated as a
+ *  plain token before it can reach an argv. */
 export function resolveRowAction(selectedTicket, paneRows) {
   const id = selectedTicket && typeof selectedTicket.id === 'string' ? selectedTicket.id : null;
   if (!id || !Array.isArray(paneRows)) return { kind: 'none', reason: 'no selectable ticket' };
   const row = paneRows.find((r) => r && r.ticket === id && typeof r.paneId === 'string');
   if (!row) return { kind: 'none', reason: 'ticket has no mapped pane' };
+  if (!PANE_ID_RE.test(row.paneId)) return { kind: 'none', reason: 'pane id fails validation' };
   return { kind: 'focus-pane', paneId: row.paneId };
 }
 
-/** The fixed herdr argv to focus a pane — paneId is from the trusted pane map. */
+/** The fixed herdr argv to focus a specific pane. `herdr pane focus` takes the
+ *  id as the VALUE of `--pane` (not a positional), which also keeps the
+ *  validated paneId out of positional/flag ambiguity. */
 export function focusPaneArgs(paneId) {
-  return ['pane', 'focus', paneId];
+  return ['pane', 'focus', '--pane', paneId];
 }
 
 /** Flat index of the ticket with `id`, or -1. The board tracks the selection by
@@ -68,6 +76,15 @@ export function focusCommandFor(selectedId, rows, paneRows) {
 export function focusSelected({ selectedId, groups, paneRows, run }) {
   const cmd = focusCommandFor(selectedId, flattenGroups(groups), paneRows);
   if (cmd) run(cmd);
+}
+
+/** Draw the board for the current selection, but ONLY once a frame has loaded.
+ *  A keypress before the first gather completes must not wipe the "loading…"
+ *  screen with a render built from absent state. `render`/`draw` are injected so
+ *  the "not before the first frame" guard is unit-testable, not untested glue. */
+export function redrawBoard({ props, selectedId, render, draw }) {
+  if (!props) return;
+  draw(render({ ...props, selected: indexOfTicket(flattenGroups(props.groups), selectedId) }));
 }
 
 /** Classify a raw keypress into a board command. `str` is the character, `key`
