@@ -117,3 +117,47 @@ test('parseLog: tool_input / parameters file_path variants are surfaced', () => 
   assert.ok(lines.includes('Writing src/a.mjs'));
   assert.ok(lines.includes('Writing src/b.mjs'));
 });
+
+// #114: the write target must be surfaced regardless of the container key. An
+// earlier version only pulled file_path from input/tool_input/parameters, so
+// these shapes were silently invisible to the scope-violation / churn signals.
+
+const countWrites = (lines, path) => lines.filter((l) => l === `Writing ${path}`).length;
+
+test('#114: file_path under an unrecognized container (toolInput) is surfaced EXACTLY once', () => {
+  const content = JSON.stringify({ type: 'tool_call', name: 'write_file', toolInput: { file_path: '/etc/passwd' } });
+  const { lines } = parseLog(content);
+  // Exact count (not just presence): a single occurrence must yield exactly one
+  // synthetic line, so an over-collecting rewrite that pushes at both the
+  // container and the child node cannot inflate churn undetected.
+  assert.equal(countWrites(lines, '/etc/passwd'), 1, `got: ${JSON.stringify(lines)}`);
+});
+
+test('#114: file_path nested under toolCall.args is surfaced EXACTLY once', () => {
+  const content = JSON.stringify({ type: 'tool_call', name: 'write_file', toolCall: { args: { file_path: '/etc/shadow' } } });
+  const { lines } = parseLog(content);
+  assert.equal(countWrites(lines, '/etc/shadow'), 1, `got: ${JSON.stringify(lines)}`);
+});
+
+test('#114: churn preserved on a NEW container — same path twice under toolInput.edits → exactly 2', () => {
+  // Ties the two #114 properties in one test: surfaced under an unrecognized
+  // container AND one-entry-per-occurrence (no double-count from the walk also
+  // visiting the parent). The old container-restricted extractor missed this
+  // shape entirely; a double-collecting rewrite would report 4.
+  const content = JSON.stringify({ type: 'tool_call', name: 'multi', toolInput: { edits: [{ file_path: 'src/a.mjs' }, { file_path: 'src/a.mjs' }] } });
+  const { lines } = parseLog(content);
+  assert.equal(countWrites(lines, 'src/a.mjs'), 2, `expected 2 (churn), got: ${JSON.stringify(lines)}`);
+});
+
+test('#114: the legacy input.edits[] MultiEdit shape still surfaces one entry per occurrence', () => {
+  const content = JSON.stringify({ type: 'tool_use', name: 'MultiEdit', input: { edits: [{ file_path: 'src/a.mjs' }, { file_path: 'src/a.mjs' }] } });
+  const { lines } = parseLog(content);
+  assert.equal(countWrites(lines, 'src/a.mjs'), 2, `expected 2 (churn), got: ${JSON.stringify(lines)}`);
+});
+
+test('#114: a single-character file_path (length 1) is surfaced; an empty one is not', () => {
+  // Pins the `fp.length > 0` boundary: a 1-char path must surface (kills a
+  // `> 1` off-by-one), and an empty file_path must not (guards the exclusion).
+  assert.equal(countWrites(parseLog(JSON.stringify({ type: 'tool_use', name: 'Write', input: { file_path: 'x' } })).lines, 'x'), 1);
+  assert.equal(countWrites(parseLog(JSON.stringify({ type: 'tool_use', name: 'Write', input: { file_path: '' } })).lines, ''), 0);
+});
