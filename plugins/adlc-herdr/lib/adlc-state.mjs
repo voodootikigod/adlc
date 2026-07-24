@@ -4,10 +4,39 @@
 // the trusted `adlc` CLI, never from workspace imports (the installed plugin
 // is a bare clone with no node_modules).
 import {
-  readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync, readdirSync,
+  readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync, opendirSync,
   constants as fsConstants,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
+
+/**
+ * List up to `maxEntries` names in a directory via a streaming `opendirSync`
+ * iterator — never allocates an array of ALL entries, so an attacker-supplied
+ * directory with millions of files can't OOM the process. Returns [] on any
+ * error (missing dir, not a dir, etc.).
+ */
+export function readdirBounded(dir, maxEntries) {
+  let handle;
+  try {
+    handle = opendirSync(dir);
+    try {
+      const names = [];
+      let entry;
+      // eslint-disable-next-line no-cond-assign
+      while (names.length < maxEntries && (entry = handle.readSync()) !== null) {
+        names.push(entry.name);
+      }
+      return names;
+    } finally {
+      handle.closeSync();
+    }
+  } catch {
+    return [];
+  }
+}
+
+// Hard cap on shard-directory entries scanned (DoS bound for an untrusted root).
+const MAX_SHARD_ENTRIES = 100_000;
 
 /**
  * Read up to `maxBytes` of a REGULAR file, safely, from a possibly-untrusted
@@ -140,23 +169,20 @@ export function ticketIdsFromStore(repoRoot) {
   if (typeof repoRoot !== 'string' || !isAbsolute(repoRoot)) return [];
   const ids = new Set();
   const shardDir = join(repoRoot, '.adlc', 'tickets');
-  try {
-    if (existsSync(shardDir)) {
-      for (const name of readdirSync(shardDir)) {
-        if (!name.endsWith('.json')) continue;
-        // `<id>--<64-hex-hash>.json`. The id may itself contain '--' (e.g.
-        // `bug--login`), and a hand-copied file may have NO hash at all
-        // (`bug--login.json`). Disambiguate by shape: the trailing segment is
-        // the separator's hash ONLY if it's a 64-hex sha256; otherwise the whole
-        // base name (minus .json) is the id.
-        const base = name.slice(0, -'.json'.length);
-        const sep = base.lastIndexOf('--');
-        const id = sep >= 0 && /^[0-9a-f]{64}$/.test(base.slice(sep + 2)) ? base.slice(0, sep) : base;
-        if (id) ids.add(id);
-      }
-    }
-  } catch {
-    // ignore — fall through to the legacy store
+  // `readdirBounded` fails soft to [] (missing/oversized dir), and every loop
+  // operation below acts on a string entry name, so this scan cannot throw —
+  // no try/catch needed around it (a dead catch would be an equivalent mutant).
+  for (const name of readdirBounded(shardDir, MAX_SHARD_ENTRIES)) {
+    if (!name.endsWith('.json')) continue;
+    // `<id>--<64-hex-hash>.json`. The id may itself contain '--' (e.g.
+    // `bug--login`), and a hand-copied file may have NO hash at all
+    // (`bug--login.json`). Disambiguate by shape: the trailing segment is
+    // the separator's hash ONLY if it's a 64-hex sha256; otherwise the whole
+    // base name (minus .json) is the id.
+    const base = name.slice(0, -'.json'.length);
+    const sep = base.lastIndexOf('--');
+    const id = sep >= 0 && /^[0-9a-f]{64}$/.test(base.slice(sep + 2)) ? base.slice(0, sep) : base;
+    if (id) ids.add(id);
   }
   const legacy = join(repoRoot, '.adlc', 'tickets.json');
   try {

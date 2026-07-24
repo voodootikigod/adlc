@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore } from '../lib/adlc-state.mjs';
+import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 let repo;
@@ -161,6 +161,26 @@ test('ticketIdsFromStore skips a legacy store that is not a regular file (FIFO/d
   // read — a synchronous read of a FIFO would hang the event process.
   mkdirSync(join(repo, '.adlc', 'tickets.json'), { recursive: true });
   assert.deepEqual(ticketIdsFromStore(repo), []);
+});
+
+// ---- readdirBounded (DoS bound on an untrusted shard directory) ----
+
+test('readdirBounded stops at maxEntries — a huge dir can never be fully materialized', () => {
+  const d = join(repo, 'many');
+  mkdirSync(d, { recursive: true });
+  for (let i = 0; i < 5; i += 1) writeFileSync(join(d, `f${i}`), '');
+  // 5 files on disk, but a cap of 3 must return exactly 3 (never 4/5): pins the
+  // `names.length < maxEntries` bound so a mutation to <= or removal is caught.
+  assert.equal(readdirBounded(d, 3).length, 3);
+  // A cap at/above the count returns them all.
+  assert.equal(readdirBounded(d, 10).length, 5);
+});
+
+test('readdirBounded fails soft to [] for a missing or non-directory path', () => {
+  assert.deepEqual(readdirBounded(join(repo, 'nope'), 100), []);
+  const f = join(repo, 'afile');
+  writeFileSync(f, 'x');
+  assert.deepEqual(readdirBounded(f, 100), []); // a file is not a directory
 });
 
 // ---- storeCacheKey (mtime-gate for the board's export cache) ----
