@@ -30,6 +30,9 @@ async function resolveRepoForPane(paneId) {
 
 function listTicketIds(repoRoot) {
   return new Promise((resolve) => {
+    // `shell: false` is defense-in-depth: the argv is a fixed literal array
+    // with no interpolated/observed data, so a shell could not inject even if
+    // enabled — a mutation of this flag is behaviorally inert (accepted).
     execFile('adlc', ['ticket', 'list', '--json'], { cwd: repoRoot, timeout: 15_000, shell: false }, (error, stdout) => {
       if (error) return resolve([]);
       try {

@@ -104,6 +104,20 @@ test('agent idle nudge is deduped — a second identical transition does not not
   assert.equal(after, before, 'the same idle transition must not nudge twice (state-dir dedupe)');
 });
 
+test('a pane exposing only cwd (no foreground_cwd) still resolves to its repo', () => {
+  writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-active', ticketHash: 'x' }));
+  // herdr stub returns a pane with cwd only — exercises the cwd fallback.
+  writeFileSync(join(dir, 'herdr'), [
+    '#!/bin/sh', `echo "$@" >> "${logPath}"`,
+    'case "$1 $2" in', `  "pane get") echo '{"result":{"pane":{"cwd":"${repo}"}}}' ;;`, 'esac', 'exit 0',
+  ].join('\n'));
+  const payload = JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p2', agent_status: 'done' } });
+  const res = runEvent('pane.agent_status_changed', payload);
+  assert.equal(res.status, 0);
+  assert.ok(calls().includes('notification show'), `cwd fallback must resolve the repo: ${calls()}`);
+  assert.ok(calls().includes('t-active'));
+});
+
 test('agent idle in a non-repo pane does nothing (resolveRepoRoot → null)', () => {
   // point the herdr stub at a plain (non-git) dir
   const plain = join(dir, 'plain');

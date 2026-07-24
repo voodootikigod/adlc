@@ -50,9 +50,9 @@ test('pane.exited with a hostile pane id fails closed (no clear)', async () => {
 });
 
 test('pane id validation accepts the full boundary char set and rejects a leading hyphen / stray char', async () => {
-  // Digits 0 and 9, letters, ':' and '_' must all be accepted (pins the regex
-  // char-class boundaries).
-  for (const id of ['w0:p9', 'A9z0', 'a:_-9']) {
+  // Every range endpoint must be accepted (A,Z,a,z,0,9 plus :,_ as first char,
+  // and '-' in the tail) — pins each char-class boundary against an off-by-one.
+  for (const id of ['Zz09Aa', ':_A9z0', 'a:_-9Z', 'A0', 'z9']) {
     assert.deepEqual(await planEvent('pane.exited', { data: { pane_id: id } }, deps()), { kind: 'clear-pane', paneId: id });
   }
   for (const bad of ['-w0', 'w0/p1', 'w0.p1', 'w0 p1']) {
