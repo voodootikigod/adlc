@@ -985,14 +985,65 @@ function rails(input) {
   // declared fails closed below (an edit we can't verify is not allowed).
   const fps = targetFilePaths(input);
 
-  const bypass = process.env.ADLC_RAILS_BYPASS === '1';
+  // ADLC_RAILS_BYPASS: an audited, deliberate override. `1` = session-wide,
+  // UNSCOPED (backward compatible); any other non-empty value = a glob that
+  // authorizes ONLY rail hits whose path matches it, so an override granted for
+  // one area cannot silently authorize edits to another (#204 AC2). Unset/empty
+  // = no bypass.
+  const bypassRaw = process.env.ADLC_RAILS_BYPASS;
+  // Only unset/empty or an explicitly-inert sentinel disables the bypass; every
+  // other value is meaningful (`1` = session-wide, anything else = a path glob).
+  // The prior boolean `=== '1'` treated `=0`/`=false` as OFF — keep that intuition
+  // so those do not silently become a (no-op) active scoped bypass (#204 review).
+  const INERT_BYPASS = new Set(['', '0', 'false', 'no', 'off']);
+  const bypassActive = typeof bypassRaw === 'string' && !INERT_BYPASS.has(bypassRaw.trim().toLowerCase());
+  const bypassUnscoped = bypassRaw === '1';
+  // A pure-wildcard "scope" (`*`, `**`, `**/*`) authorizes EVERYTHING session-wide
+  // yet would present as a narrow `scope "…"` and suppress the loud unscoped notice
+  // — refuse it, so a session-wide bypass cannot be spelled around the AC3 honest
+  // disclosure (#204 review). A deliberate session-wide override must use `=1`.
+  const bypassWildcardOnly = bypassActive && !bypassUnscoped && /^[*/]+$/.test(bypassRaw.trim());
+  const bypassScopeDesc = bypassUnscoped ? 'UNSCOPED, session-wide' : `scope "${bypassRaw}"`;
+  const bypassAuthorizes = (relPath) => bypassActive && (bypassUnscoped || globMatch(bypassRaw, relPath));
   const subject = fps.length ? fps.join(', ') : `(unparsed ${input.tool_name ?? 'edit'} target)`;
 
-  // A bypass is only honored if it can be AUDITED. If recording fails (adlc
-  // missing, .adlc unwritable, record errors), an unaudited override is refused.
+  // An honored bypass is NOT silent (#204 AC3): every allowed override emits a
+  // visible in-session notice, so a stale bypass is seen rather than inferred.
+  // The bare `=1` notice states plainly that it is unscoped, session-lifetime,
+  // and not revoked by deleting a settings file — the divergence #204 reported.
+  const emitBypassNotice = (paths) => {
+    emit({
+      systemMessage:
+        `ADLC_RAILS_BYPASS active (${bypassScopeDesc}) — allowed an otherwise-blocked edit to ` +
+        `${paths.join(', ')} (recorded to the gate-manifest).` +
+        (bypassUnscoped
+          ? ` This is an UNSCOPED, session-wide override: it stays in effect for the rest of this ` +
+            `session and deleting a settings file does NOT revoke it — unset ADLC_RAILS_BYPASS and ` +
+            `restart the session, or scope it with ADLC_RAILS_BYPASS=<glob>.`
+          : ``),
+    });
+  };
+
+  // A bypass is only honored if it is IN SCOPE and can be AUDITED. Out of scope →
+  // deny. If recording fails (adlc missing, .adlc unwritable, record errors), an
+  // unaudited override is refused.
   const bypassOrDeny = (tag, denyReason) => {
-    if (bypass) {
-      if (recordBypass(subject, tag)) return; // audited override → allow
+    if (bypassActive) {
+      if (bypassWildcardOnly) {
+        return denyRail(
+          `ADLC_RAILS_BYPASS="${bypassRaw}" is a wildcard-only scope that would authorize every rail. ` +
+            `Use ADLC_RAILS_BYPASS=1 for a deliberate session-wide override, or a specific path glob. ${denyReason}`
+        );
+      }
+      const targets = fps.length ? fps.map((fp) => toRepoRelative(fp)) : [subject];
+      const inScope = bypassUnscoped || targets.every((t) => globMatch(bypassRaw, t));
+      if (!inScope) {
+        return denyRail(`ADLC_RAILS_BYPASS is ${bypassScopeDesc} and does not authorize ${subject}. ${denyReason}`);
+      }
+      if (recordBypass(subject, tag)) {
+        emitBypassNotice(targets);
+        return; // audited, in-scope override → allow
+      }
       return denyRail(
         `ADLC_RAILS_BYPASS is set but the override could not be recorded to the gate-manifest ` +
           `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
@@ -1148,17 +1199,37 @@ function rails(input) {
   }
   if (hits.length === 0) return; // no target path hit a rail → allow
 
-  if (bypass) {
+  if (bypassActive) {
+    if (bypassWildcardOnly) {
+      return denyRail(
+        `ADLC_RAILS_BYPASS="${bypassRaw}" is a wildcard-only scope that would authorize every frozen rail. ` +
+          `Use ADLC_RAILS_BYPASS=1 for a deliberate session-wide override, or a specific path glob.`
+      );
+    }
+    // A scoped bypass authorizes ONLY the hits it matches; any hit outside the
+    // granted scope is still denied — a bypass must not silently authorize edits
+    // outside the scope it was granted for (#204 AC2). (`=1` matches every hit.)
+    const outOfScope = hits.filter((h) => !bypassAuthorizes(h.rel));
+    if (outOfScope.length > 0) {
+      return denyRail(
+        `ADLC_RAILS_BYPASS is ${bypassScopeDesc} and does not authorize frozen rail(s) ` +
+          `${outOfScope.map((h) => h.rel).join(', ')}. Widen the scope (ADLC_RAILS_BYPASS=<glob>) ` +
+          `or override those paths separately.`
+      );
+    }
     // Honor the override only if EVERY hit is durably audited; otherwise refuse.
     let allRecorded = true;
     for (const h of hits) {
       if (!recordBypass(h.rel, `rail ${h.glob} (ticket ${h.ticket})`)) allRecorded = false;
     }
-    if (allRecorded) return; // every bypass recorded → allow
-    return denyRail(
-      `ADLC_RAILS_BYPASS is set but a rail override could not be recorded to the gate-manifest ` +
-        `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
-    );
+    if (!allRecorded) {
+      return denyRail(
+        `ADLC_RAILS_BYPASS is set but a rail override could not be recorded to the gate-manifest ` +
+          `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
+      );
+    }
+    emitBypassNotice(hits.map((h) => h.rel)); // observable (#204 AC3)
+    return; // every hit in scope + recorded → allow
   }
 
   const h = hits[0];

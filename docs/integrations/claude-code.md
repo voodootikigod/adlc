@@ -162,7 +162,7 @@ mutated via Bash is seen by neither the in-session hook (Bash isn't gated) nor
 the CI diff gate. Declare rails on tracked files (tests, type contracts, configs)
 — which is their normal use.
 
-**Rail bypass — two distinct layers.** `ADLC_RAILS_BYPASS=1` overrides the
+**Rail bypass — two distinct layers.** `ADLC_RAILS_BYPASS` overrides the
 *in-session* PreToolUse hook only, and only if the override is recorded to the
 gate-manifest (an un-auditable bypass is refused). The *commit-time* CI gate is
 deliberately **not** env-bypassable — that is the whole point of an unbypassable
@@ -172,6 +172,25 @@ overrides the required `rails-guard` check (admin merge) — which is the correc
 posture, since changing a frozen rail is exactly the kind of decision that should
 require a human, not an environment variable. Once any rail is declared,
 `.adlc/tickets.json` itself is frozen so the rail set can't be quietly edited away.
+
+**Scope, lifetime, and visibility of the override.** Two forms:
+
+- `ADLC_RAILS_BYPASS=<glob>` — **scoped**: authorizes only rail hits whose path
+  matches the glob (same glob semantics as the rails themselves). An edit to a
+  frozen path outside the glob is still denied, so an override granted for one
+  area cannot silently authorize edits to another. Prefer this form.
+- `ADLC_RAILS_BYPASS=1` — **unscoped, session-wide**, kept for backward
+  compatibility. It authorizes every frozen rail for the rest of the session.
+
+Be aware of the actual **lifetime**: when the variable is set through a harness
+`env` block (e.g. `.claude/settings.local.json`), it is loaded into the running
+agent process and is **session-lifetime** — *deleting the settings file does not
+unset it*. To revoke, unset `ADLC_RAILS_BYPASS` and restart the session. Because
+this diverges from the "per-edit" mental model, every honored bypass now emits a
+visible in-session notice (a `systemMessage`) on the allowed edit — naming the
+scope, and, for the unscoped `=1` form, stating plainly that it is session-wide
+and not revoked by deleting a settings file. A stale bypass is therefore seen,
+not silently in effect.
 
 ### MCP server
 

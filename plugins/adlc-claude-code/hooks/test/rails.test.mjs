@@ -23,6 +23,19 @@ import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 
+// Hermetic harness (#204): a developer with ADLC_RAILS_BYPASS set in their own
+// shell would otherwise have it inherited by every hook spawn below, silently
+// inverting the deny-tests to allow (a gate whose suite is disarmed by the same
+// variable that disarms the gate). Scrub it from the ambient env once, and give
+// spawns a builder that scrubs per-call too, so even a value set MID-test does
+// not leak. A test that WANTS a bypass passes it explicitly in `env`.
+delete process.env.ADLC_RAILS_BYPASS;
+function childEnv(env = {}) {
+  const e = { ...process.env, ...env };
+  if (!('ADLC_RAILS_BYPASS' in env)) delete e.ADLC_RAILS_BYPASS;
+  return e;
+}
+
 /**
  * Run the rails hook in a throwaway repo.
  * @returns {{ verdict: 'deny'|'allow', out: string, dir: string }}
@@ -53,7 +66,7 @@ function runRails(ticketsJson, relPath, { env = {}, keepDir = false, rawFilePath
       out = execFileSync(process.execPath, [HOOK, 'rails'], {
         input,
         encoding: 'utf8',
-        env: { ...process.env, ...env },
+        env: childEnv(env),
       });
     } catch (e) {
       out = e.stdout ?? '';
@@ -288,7 +301,7 @@ function runPayload(ticketsJson, toolInput, { env = {}, cwdOverride = null } = {
       out = execFileSync(process.execPath, [HOOK, 'rails'], {
         input,
         encoding: 'utf8',
-        env: { ...process.env, CLAUDE_PROJECT_DIR: '', ...env },
+        env: childEnv({ CLAUDE_PROJECT_DIR: '', ...env }),
       });
     } catch (e) {
       if (e.status === 2 && !e.stdout) return 'deny'; // fail-closed exit 2 with no payload
@@ -741,5 +754,84 @@ test('bypass on a multi-file edit hitting two rails → allow + BOTH audited', (
     assert.equal(bypassEntries, 2); // BOTH rail hits audited, not just the first
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+// ---- #204: hermetic suite, scoped bypass, in-session observability ----
+// (out is raw JSON with backslash-escaped quotes — match unquoted fragments only.)
+
+test('#204 (AC1): an ambient ADLC_RAILS_BYPASS in the parent env does not disarm a deny-test', () => {
+  // The reported self-blinding: with the var live in the process env, ~43/57
+  // deny-tests inverted to passing-as-allow. childEnv scrubs it per-call, so a
+  // rail edit still DENIES even when the parent has it set.
+  const prev = process.env.ADLC_RAILS_BYPASS;
+  process.env.ADLC_RAILS_BYPASS = '1';
+  try {
+    const r = runRails('{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}', 'test/auth/login.test.mjs');
+    assert.equal(r.verdict, 'deny');
+  } finally {
+    if (prev === undefined) delete process.env.ADLC_RAILS_BYPASS;
+    else process.env.ADLC_RAILS_BYPASS = prev;
+  }
+});
+
+test('#204 (AC2): a scoped ADLC_RAILS_BYPASS=<glob> authorizes only matching rails', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/auth/**","src/types/api.d.ts"]}]}';
+  // In scope → allow (and audited).
+  const rIn = runRails(t, 'test/auth/login.test.mjs', { env: { ADLC_RAILS_BYPASS: 'test/auth/**', PATH: WITH_ADLC } });
+  assert.equal(rIn.verdict, 'allow');
+  assert.match(rIn.manifest, /rails-bypass/);
+  // Out of scope → deny, naming the scope (a bypass must not silently authorize
+  // outside the scope it was granted for).
+  const rOut = runRails(t, 'src/types/api.d.ts', { env: { ADLC_RAILS_BYPASS: 'test/auth/**', PATH: WITH_ADLC } });
+  assert.equal(rOut.verdict, 'deny');
+  assert.match(rOut.out, /does not authorize/i);
+});
+
+test('#204 (AC3): the unscoped =1 bypass emits a visible notice disclosing its session lifetime', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}';
+  const r = runRails(t, 'test/auth/login.test.mjs', { env: { ADLC_RAILS_BYPASS: '1', PATH: WITH_ADLC } });
+  assert.equal(r.verdict, 'allow');
+  assert.match(r.out, /ADLC_RAILS_BYPASS active/i);
+  assert.match(r.out, /UNSCOPED, session-wide/i);
+  assert.match(r.out, /deleting a settings file does NOT revoke it/i);
+  // …and the concrete revocation guidance (the four AC3 pillars: what/scope,
+  // lifetime, not-revoked-by-settings, how-to-revoke).
+  assert.match(r.out, /unset ADLC_RAILS_BYPASS and restart the session/i);
+  assert.match(r.out, /scope it with ADLC_RAILS_BYPASS=<glob>/i);
+});
+
+test('#204 (AC3): a scoped bypass notice names the scope and omits the session-wide disclosure', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}';
+  const r = runRails(t, 'test/auth/login.test.mjs', { env: { ADLC_RAILS_BYPASS: 'test/auth/**', PATH: WITH_ADLC } });
+  assert.equal(r.verdict, 'allow');
+  assert.match(r.out, /ADLC_RAILS_BYPASS active \(scope/i);
+  assert.match(r.out, /test\/auth\/\*\*/);
+  assert.doesNotMatch(r.out, /session-wide/i);
+});
+
+test('#204: an inert sentinel (=0 / =false / =off) is NOT a bypass — a rail edit still denies', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}';
+  for (const v of ['0', 'false', 'off']) {
+    const r = runRails(t, 'test/auth/login.test.mjs', { env: { ADLC_RAILS_BYPASS: v, PATH: WITH_ADLC } });
+    assert.equal(r.verdict, 'deny', `=${v} must not authorize a rail edit`);
+    assert.doesNotMatch(r.out, /ADLC_RAILS_BYPASS active/i); // no bypass notice
+    assert.doesNotMatch(r.manifest, /rails-bypass/);          // no audit entry
+    // Crucially, an inert value takes the NORMAL frozen-rail deny path — it is
+    // NOT consulted as a bypass at all. If it were mistakenly treated as an
+    // active (empty) scope, the deny would instead say "does not authorize".
+    assert.match(r.out, /frozen rail declared by ticket/i);
+    assert.doesNotMatch(r.out, /does not authorize|wildcard-only/i);
+  }
+});
+
+test('#204: a wildcard-only scope (=** / =* / =**/*) is refused — session-wide requires =1', () => {
+  const t = '{"tickets":[{"id":"T1","rails":["test/auth/**"]}]}';
+  for (const v of ['**', '*', '**/*']) {
+    const r = runRails(t, 'test/auth/login.test.mjs', { env: { ADLC_RAILS_BYPASS: v, PATH: WITH_ADLC } });
+    assert.equal(r.verdict, 'deny', `=${v} must be refused as a scope`);
+    assert.match(r.out, /wildcard-only scope|ADLC_RAILS_BYPASS=1 for a deliberate/i);
+    assert.doesNotMatch(r.out, /ADLC_RAILS_BYPASS active/i); // refused, not honored
   }
 });
