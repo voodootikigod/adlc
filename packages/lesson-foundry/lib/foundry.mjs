@@ -4,7 +4,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { readEntries } from '@adlc/core';
 import { clusterFindings } from './cluster.mjs';
-import { routeCluster, clusterName, clusterId, clusterMembers } from './route.mjs';
+import { routeCluster, clusterName, clusterId, clusterMembers, findingHash } from './route.mjs';
 import { planEmissions } from './emit.mjs';
 
 /**
@@ -109,7 +109,9 @@ export function findUnbankedClusters(
   existsSync,
   readFile = defaultReadFile,
   readDir = defaultReadDir,
-  minSize = 2
+  minSize = 2,
+  findings = null,
+  threshold = 0.5
 ) {
   const templatePath = `${outDir}/interrogation-template.md`;
   // Read the template once; reuse across spec-gap clusters.
@@ -142,7 +144,13 @@ export function findUnbankedClusters(
     // its existence stand as a whole-cluster legacy credit.
     if (suffix && existsSync(`${outDir}/${name}${suffix}`)) {
       const slugContent = readFile(`${outDir}/${name}${suffix}`) || '';
-      if (!members.some((m) => slugContent.includes(m))) return false;
+      // Grant filename-based legacy credit ONLY to an artifact that records no member
+      // metadata (genuinely pre-overlap). If it records members — whether ours or a
+      // DIFFERENT cluster's that merely shares the 50-char-truncated slug — fall through
+      // to the coverage/collision logic, which credits it only for the members it
+      // actually covers. Checking `!members.some(...)` here was the bug: a colliding
+      // artifact records none of OUR members, so it slipped through as a false credit.
+      if (!RECORDS_MEMBERS.test(slugContent)) return false;
     }
 
     // Gather the artifact content that actually references THIS cluster — by member
@@ -179,9 +187,25 @@ export function findUnbankedClusters(
     // the normal path. Crediting on *any* covered member fails the same way, because
     // clustering is transitive and a bridging finding can fuse two patterns.
     //
-    // So judge by what is NOT covered: a recurrence leaves a small uncovered remainder
-    // (the new occurrences), while a fused-in undefended pattern leaves one large
-    // enough to be a cluster in its own right. Reuse the caller's clustering threshold.
+    // The question is whether the UNCOVERED members form a cluster of their own. If they
+    // do, an undefended pattern was fused in and the cluster must be surfaced; if they
+    // are just stray recurrences that each bridged to the defended pattern, it stays
+    // banked. When the caller supplies the findings, decide this EXACTLY by
+    // reclustering the uncovered findings — a bare count is only a proxy and misfires
+    // when unrelated occurrences bridge to different covered members without clustering
+    // with each other.
+    const coveredSet = new Set(covered);
+    if (Array.isArray(findings) && Array.isArray(cluster.indices)) {
+      const uncoveredFindings = cluster.indices
+        .map((i) => findings[i])
+        .filter((f) => f && !coveredSet.has(findingHash(f).slice(0, 12)));
+      if (uncoveredFindings.length < minSize) return false; // too few to form a cluster
+      const subclusters = clusterFindings(uncoveredFindings, threshold);
+      return subclusters.some((sub) => sub.length >= minSize);
+    }
+    // No findings available (a caller that passes clusters only): fall back to the count
+    // proxy — sound for a recurrence vs a wholesale fusion, imprecise only for the
+    // bridged-but-unrelated case the reclustering path above handles.
     return members.length - covered.length >= minSize;
   });
 }

@@ -99,6 +99,13 @@ commit; the rule above is what keeps every future entry safe to track.
   entries curated prose, secret-free. A raw dump or a secret in `.adlc/findings.jsonl`
   is now a tracked-file leak, not a local-only smell. Treat a would-be secret in a
   finding the way any secret-in-source is treated.
+- **The primary guarantee is the curated-prose discipline above, not an automated
+  filter.** `assertPublishableFinding` (at the single ledger-write boundary,
+  `appendEntries`) rejects known credential formats, long high-entropy tokens,
+  multi-line output, and dump-length descriptions — but a format-based check is
+  best-effort and inherently fail-open for shapes it does not know. It is a backstop
+  against an obvious slip, not a substitute for writing pattern descriptions rather
+  than quoting values, nor for a real secret scanner in CI.
 - Because the file is inside the `.adlc/` trust boundary, edits to it are subject
   to the same trust-root review as the rest of that boundary.
 

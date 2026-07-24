@@ -86,7 +86,7 @@ const plan = planEmissions(clusters, findings, outDir, llmRefinements);
 
 // Gate check: which clusters have no existing defense file?
 const unbanked = flags.gate
-  ? findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize)
+  ? findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5)
   : [];
 
 // Output (human or JSON)

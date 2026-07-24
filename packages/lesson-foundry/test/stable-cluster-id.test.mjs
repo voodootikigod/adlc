@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildClusters, findUnbankedClusters } from '../lib/foundry.mjs';
-import { clusterId, clusterName } from '../lib/route.mjs';
+import { clusterId, clusterName, findingHash } from '../lib/route.mjs';
 import { buildSpecGapLine, buildSkillStub, buildLintDescriptor } from '../lib/emit.mjs';
 
 function makeTempDir() {
@@ -274,6 +274,75 @@ test('spec-gap: a different cluster sharing a slug is NOT credited by the other 
       findUnbankedClusters([other], outDir, existsSync, undefined, undefined, 2),
       [],
       'legacy slug-only lessons are still credited',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('coverage: uncovered occurrences that do not cluster with EACH OTHER keep the cluster banked', () => {
+  // The count proxy over-reports here. Transitive clustering can put two unrelated
+  // findings in one cluster because each bridges to a DIFFERENT covered finding, while
+  // not clustering with each other. Those are stray recurrences, not a fused pattern —
+  // reclustering the uncovered set (given the findings) decides it exactly.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const covered0 = { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' };
+    const covered1 = { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' };
+    // Two uncovered findings, mutually DISSIMILAR (different words entirely).
+    const strayA = { ts: 't3', file: 'c.mjs', line: 3, category: 'security', desc: 'flaky timeout waiting on the network socket' };
+    const strayB = { ts: 't4', file: 'd.mjs', line: 4, category: 'security', desc: 'missing null check dereferences the parser node' };
+    const findings = [covered0, covered1, strayA, strayB];
+    const coveredKeys = [covered0, covered1].map((f) => findingHash(f).slice(0, 12));
+
+    // Lesson records ONLY the two covered members.
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# T\n\n- [ ] **[security]** retention? *(cluster: x, cluster-id: y, cluster-members: ${coveredKeys.join(' ')})*\n`,
+      'utf8',
+    );
+    const cluster = {
+      route: 'spec-gap', name: 'x', id: 'y',
+      members: findings.map((f) => findingHash(f).slice(0, 12)).sort(),
+      indices: [0, 1, 2, 3], size: 4,
+    };
+
+    // count proxy would say unbanked (2 uncovered ≥ minSize); reclustering says banked.
+    assert.deepEqual(
+      findUnbankedClusters([cluster], outDir, existsSync, undefined, undefined, 2, findings, 0.5),
+      [],
+      'stray non-clustering recurrences do not un-bank the cluster',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('coverage: uncovered occurrences that DO cluster together surface the cluster', () => {
+  // The contrast: an undefended pattern genuinely fused in. Its occurrences cluster
+  // with each other, forming a subcluster ≥ minSize → the cluster must be surfaced.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const covered0 = { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' };
+    const covered1 = { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' };
+    const undef0 = { ts: 't3', file: 'c.mjs', line: 3, category: 'security', desc: 'secrets printed into build logs verbatim' };
+    const undef1 = { ts: 't4', file: 'd.mjs', line: 4, category: 'security', desc: 'secrets printed into build logs on failure' };
+    const findings = [covered0, covered1, undef0, undef1];
+    const coveredKeys = [covered0, covered1].map((f) => findingHash(f).slice(0, 12));
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# T\n\n- [ ] **[security]** retention? *(cluster: x, cluster-id: y, cluster-members: ${coveredKeys.join(' ')})*\n`,
+      'utf8',
+    );
+    const cluster = {
+      route: 'spec-gap', name: 'x', id: 'y',
+      members: findings.map((f) => findingHash(f).slice(0, 12)).sort(),
+      indices: [0, 1, 2, 3], size: 4,
+    };
+    assert.deepEqual(
+      findUnbankedClusters([cluster], outDir, existsSync, undefined, undefined, 2, findings, 0.5).map((c) => c.name),
+      ['x'],
+      'a fused-in pattern whose occurrences cluster is surfaced',
     );
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
