@@ -443,7 +443,21 @@ then the run tab/tail-pane/notification bridge.
   `herdr plugin list --json` shows plugin id `adlc` enabled, and the board pane
   opens via `herdr plugin pane open --plugin adlc --entrypoint board`.
 
-## 11. Open questions
+## 11. Known limitations (accepted for Phase 1)
+
+- **Synchronous repo-root resolution.** `resolveRepoRoot` shells out to
+  `git rev-parse --show-toplevel` via `execFileSync` (5s timeout). On a slow
+  or unresponsive filesystem (NFS/FUSE) the first resolution of a directory can
+  block the event loop for up to that timeout. Mitigated by the resolver cache
+  — git runs **once per new directory** (positive results are cached
+  permanently, negatives for 30s), so steady-state refreshes and the board's
+  redraw do not re-invoke git. Surfaced by the cross-model prosecution (round
+  8, HIGH). Deferred rather than fixed in Phase 1 because making it async
+  ripples through `buildPaneMap` and `resolveTarget`, both **frozen rails**
+  (t-herdr-2 / t-herdr-3); the async conversion is a tracked fast-follow that
+  will amend those rail contracts deliberately.
+
+## 12. Open questions
 
 1. Socket `EventMatch` subscription ergonomics from a plugin daemon (probed
    schema only) — if awkward, v1 falls back to `api snapshot` polling.
