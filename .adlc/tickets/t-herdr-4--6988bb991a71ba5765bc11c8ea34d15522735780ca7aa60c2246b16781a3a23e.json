@@ -2,6 +2,7 @@
   "body": "Implement bin/board.mjs for the [[panes]] overlay entrypoint per docs/herdr-integration-plan.md section 5.2. Zero-dep ANSI TUI rendering: backlog list read via the trusted adlc CLI (adlc ticket store export --output <tmp> — the full envelope; ticket list --json is a projection WITHOUT completed/edges, verified live under t-herdr-2; never import workspace packages at runtime — the installed plugin is a bare GitHub subdir clone with no node_modules), filtering completed:true — repo invariant #104 grouped ready/in-flight/blocked-by-edges; the ticket-to-pane mapping published by the watcher; the most recent gate-evidence records per ticket from .adlc/manifest.jsonl. Read-only in v1 (no row actions). Every rendered string passes through lib/sanitize.mjs. Probe the [[panes]] stdin/resize/exit contract with a hello-world pane first (plan open question 2) and record the probed facts in the plugin README. Verification: node --test plugins/adlc-herdr/test/board.test.mjs. allow-suppression: none",
   "budget": "mid",
   "category": "feature",
+  "completed": true,
   "duration": 2,
   "edges": [],
   "id": "t-herdr-4",

@@ -2,6 +2,7 @@
   "body": "Implement bin/action.mjs dispatched on HERDR_PLUGIN_ACTION_ID per docs/herdr-integration-plan.md section 5.3. Resolve the target repo from HERDR_PLUGIN_CONTEXT_JSON (schema-validated, fail closed on malformed input). Actions: ticket-show (spawn a split pane rendering the active ticket via the plugin's own sanitizing renderer — probed 2026-07-23: popups are singletons without pane ids/lifecycle, so a split spawn via herdr agent start is the robust shape), gate (run adlc gate-manifest verify --json for the pane's repo, result as a notification only — token refresh is the watcher's job via its file watches; actions never write tokens themselves), prosecute (spawn adversarial-review --base main from trusted PATH in a split pane — adlc prosecute is the P5 evidence recorder, not a runnable review loop; fail closed with a notification if the binary is not on PATH). All child processes use fixed argv arrays with binaries resolved from trusted PATH — never from repo config or observed state (fleet K1/A2 rule, plan section 6.2). All output rendered into terminals passes lib/sanitize.mjs. Verification: node --test plugins/adlc-herdr/test/action.test.mjs. allow-suppression: none",
   "budget": "mid",
   "category": "feature",
+  "completed": true,
   "duration": 2,
   "edges": [],
   "id": "t-herdr-3",
