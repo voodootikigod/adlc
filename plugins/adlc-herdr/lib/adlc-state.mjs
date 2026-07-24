@@ -19,25 +19,24 @@ import { join, isAbsolute } from 'node:path';
 function readRegularFileBounded(path, maxBytes) {
   let fd;
   try {
+    // open is OUTSIDE the inner try: if it throws, the outer catch handles it
+    // and there is no descriptor to close (so no `fd !== undefined` guard to
+    // get flipped). Inside, fd is always valid, so close is unconditional.
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
-    const st = fstatSync(fd);
-    if (!st.isFile()) return null; // FIFO/dir/device → don't read
-    const length = Math.min(st.size, maxBytes);
-    const buf = Buffer.allocUnsafe(length);
-    // One bounded read — a regular file of this size fills in a single call; a
-    // (pathological) short read just yields partial JSON that fails to parse.
-    const n = readSync(fd, buf, 0, length, 0);
-    return buf.toString('utf8', 0, n);
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile()) return null; // FIFO/dir/device → don't read
+      const length = Math.min(st.size, maxBytes);
+      const buf = Buffer.allocUnsafe(length);
+      // One bounded read — a regular file of this size fills in a single call;
+      // a (pathological) short read just yields partial JSON that fails to parse.
+      const n = readSync(fd, buf, 0, length, 0);
+      return buf.toString('utf8', 0, n);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return null;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // best-effort
-      }
-    }
   }
 }
 import { tmpdir } from 'node:os';
