@@ -8,21 +8,28 @@
 // unit-testable without a real repository.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { ACTIVE_DIRECTORY, LEGACY_FILE } from '@adlc/tickets';
+import { LEGACY_FILE } from '@adlc/tickets';
 
-// The evidence ledger the completion appends to (mirrors complete.mjs's MANIFEST_FILE).
+// The evidence ledger every completion appends to (mirrors complete.mjs's MANIFEST_FILE).
 const MANIFEST_FILE = '.adlc/manifest.jsonl';
 
 /**
- * The ONLY paths a crashed completion can leave dirty in the integration worktree:
- * the ticket store (sharded dir OR legacy file, whichever this repo uses) and the
- * evidence ledger. Imported from @adlc/tickets so the store layout stays authoritative
- * and cannot drift out from under the resume-cleanup scope. Used to bound the resume
- * cleanup so it never touches untracked diagnostics or unrelated work.
+ * The completion commits path-scoped: `git commit -- <its-shard> .adlc/manifest.jsonl`.
+ * That means the ONLY completion-owned files another ticket's commit can accidentally
+ * capture are the ones EVERY completion names and that ACCUMULATE across tickets — the
+ * SHARED files. A per-ticket shard is private to its own completion's pathspec, so a
+ * dirty orphan shard can never ride onto another ticket's commit and must be left alone
+ * on resume (reverting the whole shard directory would destroy an operator's unrelated
+ * in-flight edit). The shared, contamination-prone files are:
+ *   - the manifest ledger — always in the pathspec; a crash orphan appends to it, and
+ *     that append is a provable, disposable shape we can safely revert; and
+ *   - the legacy single-file store — every ticket lives in this one file, so in a
+ *     pre-shard repo it is shared too; its orphan shape is NOT distinguishable from a
+ *     legitimate edit, so a dirty one is refused (never auto-destroyed).
  */
-export const INTEGRATION_OWNED_PATHS = [ACTIVE_DIRECTORY, LEGACY_FILE, MANIFEST_FILE];
+const SHARED_COMPLETION_FILES = { manifest: MANIFEST_FILE, legacyStore: LEGACY_FILE };
 
 export function defaultGit(repo) {
   return (...args) =>
@@ -71,32 +78,25 @@ export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = n
   const abs = join(repo, INTEGRATION_WORKTREE);
   // Resume: a live worktree already on the right branch is reused — but NOT blindly.
   // A crash after planComplete wrote the shard + manifest, yet before the path-scoped
-  // completion commit, leaves the worktree DIRTY with orphaned completion artifacts.
-  // Reusing that as-is would let a later ticket's completion stage and commit the
-  // orphan alongside its own — a false attestation that the crashed ticket completed.
-  // Everything legitimately merged lives in the branch's COMMITTED history, so we revert
-  // the orphan before reusing — but scoped to the completion-owned paths only, never a
-  // repo-wide reset that would also erase a human's untracked diagnostics or in-progress
-  // recovery work in this shared worktree.
+  // completion commit, leaves the worktree DIRTY with an orphaned completion. Reusing
+  // that as-is could let a later ticket's completion stage and commit the orphaned SHARED
+  // ledger append alongside its own — a false attestation that the crashed ticket
+  // completed. We reconcile that ONE contamination vector and nothing else (see
+  // reconcileResumeOrphan): shards and unrelated work are never touched.
+  //
+  // Determine "on the right branch" inside a guarded probe, but run the reconciliation
+  // OUTSIDE it — a reconcile that refuses (throws) must ABORT the resume, not fall through
+  // to the recreate path below, which would `--force`-remove the worktree and destroy the
+  // very dirty state a human needs for recovery.
+  let wtGit = null;
   try {
-    const wtGit = gitAt(abs);
-    if (wtGit('symbolic-ref', '--short', 'HEAD') === integrationBranch) {
-      // Restore ONLY the completion-owned paths a crashed completion could have left
-      // dirty — the ticket store and the evidence ledger. A repo-wide `reset --hard` +
-      // `clean -fd` (the earlier fix) was too broad: it would also destroy untracked
-      // diagnostic files or manual recovery work a human may have left in this shared
-      // worktree while investigating a quarantined branch. `git checkout HEAD -- <path>`
-      // reverts only tracked changes under that path; untracked and unrelated work is
-      // untouched. Each path is restored independently so one absent from HEAD (e.g. the
-      // legacy store file in a sharded repo) does not skip the others.
-      if (wtGit('status', '--porcelain', '--', ...INTEGRATION_OWNED_PATHS).trim()) {
-        for (const p of INTEGRATION_OWNED_PATHS) {
-          try { wtGit('checkout', 'HEAD', '--', p); } catch { /* path may not exist in HEAD */ }
-        }
-      }
-      return { path: abs, created: false };
-    }
+    const probe = gitAt(abs);
+    if (probe('symbolic-ref', '--short', 'HEAD') === integrationBranch) wtGit = probe;
   } catch { /* not a usable worktree — fall through and (re)create */ }
+  if (wtGit) {
+    reconcileResumeOrphan(abs, wtGit);
+    return { path: abs, created: false };
+  }
 
   try { git('worktree', 'remove', '--force', INTEGRATION_WORKTREE); } catch { /* none */ }
   try { git('worktree', 'prune'); } catch { /* best effort */ }
@@ -107,6 +107,73 @@ export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = n
     git('worktree', 'add', INTEGRATION_WORKTREE, integrationBranch);
   }
   return { path: abs, created: true };
+}
+
+/**
+ * Neutralize a crash orphan in the resumed integration worktree WITHOUT destroying any
+ * work we cannot prove is a disposable orphan.
+ *
+ * Scope is deliberately minimal (see SHARED_COMPLETION_FILES): the manifest ledger is the
+ * only file a later ticket's path-scoped completion commit can accidentally capture, so it
+ * is the only file we ever revert — and only when its dirty delta has the provable shape of
+ * a crash orphan. Everything else (per-ticket shards, untracked diagnostics, an operator's
+ * unrelated edits) is left exactly as found.
+ *
+ *  - Manifest UNTRACKED (never committed): the whole file is an uncommitted orphan; remove
+ *    it (no committed evidence exists to lose).
+ *  - Manifest TRACKED and dirty as a pure APPEND on top of HEAD: the crash-orphan shape;
+ *    revert to HEAD, dropping the orphaned append.
+ *  - Manifest dirty any OTHER way, or the legacy single-file store dirty at all: we cannot
+ *    prove a benign orphan, so REFUSE — throw to abort the resume for manual recovery
+ *    rather than silently destroy state. (The caller does NOT swallow this into recreate.)
+ */
+export function reconcileResumeOrphan(worktreeAbs, wtGit) {
+  const { manifest, legacyStore } = SHARED_COMPLETION_FILES;
+
+  const manifestStatus = wtGit('status', '--porcelain', '--', manifest).trim();
+  if (manifestStatus) {
+    if (manifestStatus[0] === '?') {
+      // Untracked: entirely uncommitted → removing it drops the orphan and only the orphan.
+      rmSync(join(worktreeAbs, manifest), { force: true });
+    } else if (manifestIsAppendOrphan(worktreeAbs, wtGit, manifest)) {
+      wtGit('checkout', 'HEAD', '--', manifest);
+    } else {
+      throw new Error(
+        `integration worktree ${manifest} diverged from HEAD in a non-append shape on ` +
+        `resume; cannot prove a benign crash orphan — refusing to reuse (manual recovery ` +
+        `required so no committed evidence is silently discarded)`,
+      );
+    }
+  }
+
+  // The legacy single-file store is shared across every ticket, so an orphan and a
+  // legitimate edit are indistinguishable in it. Never auto-destroy — refuse.
+  if (wtGit('status', '--porcelain', '--', legacyStore).trim()) {
+    throw new Error(
+      `integration worktree ${legacyStore} is dirty on resume; the legacy single-file ` +
+      `store cannot be proven a crash orphan (all tickets share the file) — refusing to ` +
+      `reuse (manual recovery required)`,
+    );
+  }
+}
+
+/**
+ * True iff the working manifest is exactly the committed ledger plus zero-or-more appended
+ * lines — the shape a crash between append and commit leaves. Compared line-by-line so a
+ * trailing-newline difference does not matter. A working copy that is NOT a superset-prefix
+ * of HEAD (rewritten or truncated lines) is NOT an append orphan.
+ */
+function manifestIsAppendOrphan(worktreeAbs, wtGit, manifest) {
+  let committed;
+  try { committed = wtGit('show', `HEAD:${manifest}`); }
+  catch { return false; } // not in HEAD → no committed baseline to append onto
+  const working = readFileSync(join(worktreeAbs, manifest), 'utf8');
+  const committedLines = committed.split('\n').filter((l) => l !== '');
+  const workingLines = working.split('\n').filter((l) => l !== '');
+  return (
+    workingLines.length >= committedLines.length &&
+    committedLines.every((line, i) => workingLines[i] === line)
+  );
 }
 
 /**
