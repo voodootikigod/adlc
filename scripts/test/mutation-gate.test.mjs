@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { testTargetFor, hollowTestWouldMutate, classify } from '../mutation-gate.mjs';
+import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles } from '../mutation-gate.mjs';
 import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
 
 function fixtureRoot(dirs = [], files = []) {
@@ -476,4 +476,46 @@ test('this file itself is what makes mutation-gate.mjs classify as fast-path cov
   const result = classify(['scripts/mutation-gate.mjs'], 12);
   assert.equal(result.kind, 'fast', 'scripts/mutation-gate.mjs must resolve to the fast path in the real repo');
   assert.equal(result.testCmd, 'node --test scripts/test/mutation-gate.test.mjs');
+});
+
+// -------------------------------------------------------------- mutableChangedFiles (#329)
+//
+// A deletion-only diff previously fast-pathed the removed source file into
+// hollow-test, which mutates files IN PLACE and then errored "nothing to
+// mutate" (exit 1) — failing the required gate on EVERY dead-code-removal PR.
+// A path not present on disk has no post-image to mutate, so it must be dropped
+// before classify(). The filter lives at the git-diff seam, NOT inside classify
+// (which stays pure over path strings — see the non-existent-path fixtures above).
+
+test('mutableChangedFiles drops paths not present on disk (deletions / rename-old)', () => {
+  const root = fixtureRoot(['pkg/lib'], ['pkg/lib/present.mjs']);
+  try {
+    assert.deepEqual(
+      mutableChangedFiles(['pkg/lib/present.mjs', 'pkg/lib/deleted.mjs'], root),
+      ['pkg/lib/present.mjs'],
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#329: a deletion-only diff classifies as nothing, not fast', () => {
+  // The test dir exists so the deleted source WOULD map to a fast target; the
+  // source file itself is absent (deleted). Guard first that the raw, unfiltered
+  // diff still fast-paths it (reproducing the bug), then that filtering fixes it.
+  const root = fixtureRoot(['packages/foo/test'], []);
+  try {
+    const raw = ['packages/foo/lib/gone.mjs', 'packages/foo/test/x.test.mjs'];
+    assert.equal(classify(raw, 12, root).kind, 'fast',
+      'guard: the unfiltered diff fast-paths the deleted file — this is #329');
+    assert.equal(classify(mutableChangedFiles(raw, root), 12, root).kind, 'nothing',
+      'a deletion-only diff must classify as nothing, not hard-fail in hollow-test');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#329: an added/modified source file is unaffected — still covered', () => {
+  const root = fixtureRoot(['packages/foo/lib', 'packages/foo/test'], ['packages/foo/lib/x.mjs']);
+  try {
+    const changed = mutableChangedFiles(['packages/foo/lib/x.mjs'], root);
+    assert.deepEqual(changed, ['packages/foo/lib/x.mjs'], 'present source is kept');
+    assert.equal(classify(changed, 12, root).kind, 'fast', 'present source stays mutated');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
