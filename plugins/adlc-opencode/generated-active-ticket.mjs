@@ -17,10 +17,41 @@
 // understand as "no pointer" is a fail-OPEN hole in a trust root: it silently
 // disables enforcement. Deactivation is deleting the file, not writing `{}`.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 
 export const CURRENT_TICKET_FILE = '.adlc/current-ticket.json';
+
+// The pointer is a tiny JSON object ({"id":…,"ticketHash":…}); cap the read far
+// above any legitimate pointer so a hostile giant file can never be slurped whole.
+const MAX_POINTER_BYTES = 64 * 1024;
+
+// Read up to MAX_POINTER_BYTES of a REGULAR file without blocking. The pointer
+// root can be untrusted (issue #341: a harness may resolve it from an event
+// payload), so open O_NONBLOCK — a FIFO/device then never blocks the reader —
+// verify the type on the OPEN fd (a path swap after the check cannot matter; the
+// fd is bound to the inode), and read a bounded amount. Returns the text, or null
+// for a non-regular file or any error; the caller fails CLOSED on null.
+function readPointerFileBounded(path) {
+  let fd;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null; // FIFO / directory / device → refuse
+    const length = Math.min(stat.size, MAX_POINTER_BYTES);
+    const buf = Buffer.allocUnsafe(length);
+    const read = readSync(fd, buf, 0, length, 0);
+    return buf.toString('utf8', 0, read);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** The canonical id key. A pointer we write always uses this one. */
 export const CANONICAL_ID_KEY = 'id';
@@ -65,11 +96,9 @@ export function readActiveTicketPointer(root = '.') {
   const path = join(root, CURRENT_TICKET_FILE);
   if (!existsSync(path)) return ok({ present: false });
 
-  let raw;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch (error) {
-    return fail('operational', 'INVALID_CURRENT_TICKET', `cannot read ${CURRENT_TICKET_FILE}: ${error.message}`);
+  const raw = readPointerFileBounded(path);
+  if (raw === null) {
+    return fail('operational', 'INVALID_CURRENT_TICKET', `cannot read ${CURRENT_TICKET_FILE} as a bounded regular file`);
   }
 
   let parsed;
