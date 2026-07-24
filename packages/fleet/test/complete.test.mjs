@@ -175,12 +175,44 @@ test('a checkout switch DURING the commit is detected, not silently accepted', (
       if (args[0] === 'commit' && !switched) { switched = true; git('checkout', '-q', 'main'); }
       return out;
     };
-    assert.throws(
-      () => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: switchingGit }),
-      /after committing/,
-      'the post-commit verification catches the switch',
-    );
+    let caught = null;
+    try { completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: switchingGit }); }
+    catch (error) { caught = error; }
+
+    assert.ok(caught, 'the post-commit verification catches the switch');
+    assert.match(caught.message, /after committing/);
+    // Detection alone is not enough: the commit LANDED, the caller's re-gate never
+    // runs, so this must quarantine rather than be logged and swallowed.
+    assert.equal(caught.branchContaminated, true, 'it is flagged as branch contamination');
+    // And it must NOT have written files into whatever checkout we ended up on.
+    assert.equal(git('symbolic-ref', '--short', 'HEAD'), 'main', 'we ended up on the other branch');
+    assert.equal(git('status', '--porcelain'), '', 'no paths were restored into the unknown checkout');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('runFleet QUARANTINES when the checkout switched during the completion commit', async () => {
+  const rec = { prs: [] };
+  const contaminating = Object.assign(new Error('refusing to complete (after committing): checkout is on "main"'), { branchContaminated: true });
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => {},
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
+    dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+    gate: () => ({ ok: true }),
+    prosecute: () => ({ verdict: 'pass' }),
+    flail: () => ({ flail: false }),
+    mergeToIntegration: () => ({ mergeSha: 'M', preMergeSha: 'P' }),
+    postMergeGate: () => ({ ok: true }),
+    revertMerge: () => ({ method: 'reset', ok: true }),
+    completeTicket: () => { throw contaminating; },
+    openPR: ({ integrationBranch }) => { rec.prs.push(integrationBranch); },
+  };
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1')], runId: 'r', config, deps });
+
+  assert.equal(summary.contaminated, true, 'an ungated commit on the branch quarantines the run');
+  assert.match(summary.contaminationReason ?? '', /UNGATED completion commit/);
+  assert.deepEqual(rec.prs, [], 'no PR is opened carrying the ungated commit');
 });
 
 test('completion REFUSES without an integrationBranch to verify against', () => {

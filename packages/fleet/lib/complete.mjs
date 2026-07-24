@@ -192,6 +192,7 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
 
     // Commit ONLY the completion artifacts (the shard/legacy file + the evidence
     // ledger). A path-scoped add + commit never sweeps in unrelated build output.
+    let committed = false;
     try {
       // Re-verify immediately before staging/committing: an external checkout switch
       // between entry and here would otherwise land this lifecycle commit on whatever
@@ -199,11 +200,24 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
       assertOnBranch(git, integrationBranch, 'before committing');
       git('add', '--', storePath, MANIFEST_FILE);
       git('commit', '-q', '-m', `chore(${ticketId}): mark completed after passing merge gate`, '--', storePath, MANIFEST_FILE);
-      // And DETECT the switch we cannot prevent: if the checkout moved mid-commit, the
-      // commit landed somewhere we do not own. Surface it as a hard, quarantining
-      // failure rather than reporting a completion that is not on the run's branch.
+      committed = true;
+      // DETECT the switch we cannot prevent. Note this can only fail AFTER the commit
+      // landed, which is a materially different situation from a failed commit.
       assertOnBranch(git, integrationBranch, 'after committing');
     } catch (error) {
+      if (committed) {
+        // The commit LANDED and then the checkout moved under us. Two consequences, and
+        // neither is a "degrade quietly" case:
+        //   - We must NOT restore any path: we no longer know which branch is checked
+        //     out, so writing files here would corrupt an unrelated checkout.
+        //   - The caller's post-completion re-gate never runs (we are throwing), so an
+        //     UNGATED completion commit is sitting on the integration branch. Left as a
+        //     plain error it would be logged and swallowed, and the run could still open
+        //     a PR carrying it.
+        // Flag contamination so the run quarantines the branch instead of publishing it.
+        error.branchContaminated = true;
+        throw error;
+      }
       // A failed commit (e.g. a rejecting hook) must NOT leave the shared integration
       // checkout dirty. Restore the two owned paths to their exact pre-completion
       // bytes and unstage them, then re-throw so the caller degrades to "merged, not

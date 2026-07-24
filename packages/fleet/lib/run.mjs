@@ -78,8 +78,10 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         // A completion that failed but left its evidence append behind is NOT a
         // degradation we can shrug off: the ledger now attests a completion that never
         // landed, and a later completion's `git add` would commit it. Quarantine.
-        if (error?.ledgerDirty) {
-          const reason = `completion evidence could not be withdrawn after a failed commit (${error.message})`;
+        if (error?.ledgerDirty || error?.branchContaminated) {
+          const reason = error.branchContaminated
+            ? `the checkout switched during the completion commit — an UNGATED completion commit may be on ${integrationBranch} (${error.message})`
+            : `completion evidence could not be withdrawn after a failed commit (${error.message})`;
           markContaminated(reason);
           return { ok: false, output: `${reason}; integration branch quarantined` };
         }
