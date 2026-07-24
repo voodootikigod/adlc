@@ -5,8 +5,44 @@
 // is a bare clone with no node_modules).
 import {
   readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync, readdirSync,
+  constants as fsConstants,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
+
+/**
+ * Read up to `maxBytes` of a REGULAR file, safely, from a possibly-untrusted
+ * path. Opens with O_NONBLOCK so opening a FIFO/device never blocks, then
+ * checks the type on the OPEN fd (no stat→read TOCTOU: the fd is bound to the
+ * inode even if the path is swapped) and reads a bounded amount. Returns null
+ * for a non-regular file or any error.
+ */
+function readRegularFileBounded(path, maxBytes) {
+  let fd;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null; // FIFO/dir/device → don't read
+    const length = Math.min(st.size, maxBytes);
+    const buf = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const n = readSync(fd, buf, read, length - read, read);
+      if (n <= 0) break;
+      read += n;
+    }
+    return buf.toString('utf8', 0, read);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { readActiveTicketPointer } from './generated-active-ticket.mjs';
@@ -128,11 +164,12 @@ export function ticketIdsFromStore(repoRoot) {
   }
   const legacy = join(repoRoot, '.adlc', 'tickets.json');
   try {
-    // Only read a REGULAR file — a synchronous read of a FIFO/device at this
-    // (untrusted) path would block the event process indefinitely; an attacker
-    // spamming events could exhaust processes. statSync follows the symlink.
-    if (existsSync(legacy) && statSync(legacy).isFile()) {
-      const parsed = JSON.parse(readFileSync(legacy, 'utf8'));
+    // Non-blocking, type-checked-on-fd, size-bounded read: an attacker-supplied
+    // FIFO can't block us and can't be swapped in via a stat→read TOCTOU, and a
+    // giant file can't exhaust memory.
+    const text = readRegularFileBounded(legacy, 8 * 1024 * 1024);
+    if (text !== null) {
+      const parsed = JSON.parse(text);
       const list = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
       for (const t of list) if (typeof t?.id === 'string') ids.add(t.id);
     }
