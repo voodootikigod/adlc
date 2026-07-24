@@ -3,8 +3,11 @@
 // render highlight. bin/board.mjs stays thin glue over these.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket } from '../lib/board-nav.mjs';
-import { renderBoard } from '../lib/board-render.mjs';
+import {
+  stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket,
+  flattenGroups, nextSelectedId, focusCommandFor, classifyKey,
+} from '../lib/board-nav.mjs';
+import { renderBoard, boardFooter } from '../lib/board-render.mjs';
 
 // ---- AC1/AC2 selection navigation ----
 
@@ -44,6 +47,49 @@ test('indexOfTicket re-derives the selection index from a stable ticket id', () 
   assert.equal(indexOfTicket(rows, 't-b'), 1);
   assert.equal(indexOfTicket(rows, 'gone'), -1); // removed by a refresh → caller snaps
   assert.equal(indexOfTicket(null, 't-a'), -1);
+});
+
+// ---- extracted glue decisions (thin-glue discipline: bin/board.mjs only wires) ----
+
+test('flattenGroups concatenates ready, then in-flight, then blocked (renderBoard order)', () => {
+  const groups = { ready: [{ id: 'a' }], inFlight: [{ id: 'b' }], blocked: [{ id: 'c' }] };
+  assert.deepEqual(flattenGroups(groups).map((t) => t.id), ['a', 'b', 'c']);
+  assert.deepEqual(flattenGroups(undefined), []);
+});
+
+test('nextSelectedId steps by stable id, clamps, and snaps a removed selection', () => {
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  assert.equal(nextSelectedId(null, 'down', rows), 'a');    // from nothing → first
+  assert.equal(nextSelectedId('a', 'down', rows), 'b');
+  assert.equal(nextSelectedId('c', 'down', rows), 'c');     // clamp at end
+  assert.equal(nextSelectedId('a', 'up', rows), 'a');       // clamp at top
+  assert.equal(nextSelectedId('gone', 'down', rows), 'a');  // vanished on refresh → snap to first
+  assert.equal(nextSelectedId('a', 'down', []), null);      // nothing selectable
+});
+
+test('focusCommandFor returns the fixed focus argv, or null when nothing to focus', () => {
+  const rows = [{ id: 'a' }, { id: 'b' }];
+  const paneRows = [{ paneId: 'w1:p2', ticket: 'b' }];
+  assert.deepEqual(focusCommandFor('b', rows, paneRows), ['pane', 'focus', 'w1:p2']);
+  assert.equal(focusCommandFor('a', rows, paneRows), null); // ticket with no mapped pane
+  assert.equal(focusCommandFor(null, rows, paneRows), null); // nothing selected
+});
+
+test('classifyKey routes each key to its board command', () => {
+  assert.equal(classifyKey('q', {}), 'quit');
+  assert.equal(classifyKey('Q', {}), 'quit');
+  assert.equal(classifyKey('', { ctrl: true, name: 'c' }), 'quit');
+  assert.equal(classifyKey('', { name: 'up' }), 'up');
+  assert.equal(classifyKey('k', {}), 'up');
+  assert.equal(classifyKey('', { name: 'down' }), 'down');
+  assert.equal(classifyKey('j', {}), 'down');
+  assert.equal(classifyKey('', { name: 'return' }), 'focus');
+  assert.equal(classifyKey('x', {}), 'none');
+});
+
+test('boardFooter shows the refresh interval in whole seconds', () => {
+  assert.ok(boardFooter(3000).includes('every 3s'), boardFooter(3000));
+  assert.ok(boardFooter(5000).includes('every 5s'));
 });
 
 // ---- AC5 fixed focus argv ----

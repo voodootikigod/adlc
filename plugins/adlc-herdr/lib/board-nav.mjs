@@ -39,3 +39,37 @@ export function indexOfTicket(rows, id) {
   if (!Array.isArray(rows) || typeof id !== 'string') return -1;
   return rows.findIndex((t) => t && t.id === id);
 }
+
+/** The flat ticket list in the SAME order renderBoard shows it (ready, then
+ *  in-flight, then blocked). Kept here so the glue and the renderer can't drift. */
+export function flattenGroups(groups) {
+  return [...(groups?.ready ?? []), ...(groups?.inFlight ?? []), ...(groups?.blocked ?? [])];
+}
+
+/** New selected ticket id after a nav key — resolve the current index from the
+ *  id, step it, map back to an id (null when nothing is selectable). */
+export function nextSelectedId(selectedId, direction, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const next = stepSelection(indexOfTicket(list, selectedId), direction, list.length);
+  return list[next]?.id ?? null;
+}
+
+/** The herdr argv to focus the selected ticket's mapped pane, or null when the
+ *  ticket has no pane (or nothing is selected). */
+export function focusCommandFor(selectedId, rows, paneRows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const action = resolveRowAction(list[indexOfTicket(list, selectedId)], paneRows);
+  return action.kind === 'focus-pane' ? focusPaneArgs(action.paneId) : null;
+}
+
+/** Classify a raw keypress into a board command. `str` is the character, `key`
+ *  is readline's parsed descriptor ({name, ctrl}). Keeps the input routing pure
+ *  and testable; the glue only fires the returned command. */
+export function classifyKey(str, key) {
+  const k = key || {};
+  if (str === 'q' || str === 'Q' || (k.ctrl && k.name === 'c')) return 'quit';
+  if (k.name === 'up' || str === 'k') return 'up';
+  if (k.name === 'down' || str === 'j') return 'down';
+  if (k.name === 'return') return 'focus';
+  return 'none';
+}

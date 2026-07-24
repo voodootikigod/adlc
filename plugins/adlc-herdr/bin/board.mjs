@@ -15,8 +15,8 @@ import {
   readTicketsViaExport, storeCacheKey, makeKeyedCache,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
-import { renderBoard } from '../lib/board-render.mjs';
-import { stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket } from '../lib/board-nav.mjs';
+import { renderBoard, boardFooter } from '../lib/board-render.mjs';
+import { indexOfTicket, flattenGroups, nextSelectedId, focusCommandFor, classifyKey } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
 
@@ -28,8 +28,7 @@ const REFRESH_MS = 3_000;
 // without re-gathering. `flatTickets` mirrors renderBoard's section order.
 let selectedId = null;
 let lastProps = null;
-const flatTickets = (groups) => [...(groups?.ready ?? []), ...(groups?.inFlight ?? []), ...(groups?.blocked ?? [])];
-const currentIndex = () => indexOfTicket(flatTickets(lastProps?.groups), selectedId);
+const currentIndex = () => indexOfTicket(flattenGroups(lastProps?.groups), selectedId);
 
 // mtime-gate the ticket-store export: the board redraws every 3s, but
 // `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
@@ -83,7 +82,7 @@ function draw(body) {
   // Probed 2026-07-23: \x1b[2J leaves a herdr pane blank AND unreadable via
   // `pane read` — redraw with cursor-home + per-line erase-to-EOL + erase-
   // below instead of a full clear.
-  const footer = `\x1b[2m↑↓/jk select · ↵ focus pane · q quit · refreshes every ${REFRESH_MS / 1000}s\x1b[0m`;
+  const footer = boardFooter(REFRESH_MS);
   const frameText = `${body}\n\n${footer}`.split('\n').map((line) => `${line}\x1b[K`).join('\n');
   process.stdout.write(`\x1b[H${frameText}\n\x1b[0J`);
 }
@@ -106,39 +105,35 @@ async function frame(repoRoot) {
 }
 
 // Redraw from the cached frame (no re-gather) — instant selection feedback.
+// renderBoard tolerates absent props, so no guard is needed before the first frame.
 function redraw() {
-  if (lastProps) draw(renderBoard({ ...lastProps, selected: currentIndex() }));
+  draw(renderBoard({ ...lastProps, selected: currentIndex() }));
 }
 
-// Move the selection by a direction, keeping it as a stable ticket id.
 function move(direction) {
-  const rows = flatTickets(lastProps?.groups);
-  const next = stepSelection(currentIndex(), direction, rows.length);
-  selectedId = rows[next]?.id ?? null;
+  selectedId = nextSelectedId(selectedId, direction, flattenGroups(lastProps?.groups));
   redraw();
 }
 
-// Focus the pane mapped to the selected ticket; fixed argv, paneId from the
-// trusted pane map. No selection or no mapped pane → nothing happens.
+// Focus the selected ticket's mapped pane. focusCommandFor returns a fixed argv
+// (paneId from the trusted pane map) or null when there is nothing to focus.
 function focusSelected() {
-  const rows = flatTickets(lastProps?.groups);
-  const action = resolveRowAction(rows[currentIndex()], lastProps?.paneRows);
-  if (action.kind === 'focus-pane') runHerdr(focusPaneArgs(action.paneId));
+  const cmd = focusCommandFor(selectedId, flattenGroups(lastProps?.groups), lastProps?.paneRows);
+  if (cmd) runHerdr(cmd);
 }
 
 function armInput(onQuit) {
   // readline keypress events parse ANSI escape sequences and coalesced chunks
   // into atomic keys — a raw `data` chunk can carry several keystrokes (paste,
-  // fast typing, SSH) and whole-chunk equality would drop them.
+  // fast typing, SSH) and whole-chunk equality would drop them. classifyKey owns
+  // the routing decision (tested); the glue only fires the returned command.
   emitKeypressEvents(process.stdin);
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.resume();
+  const run = { quit: onQuit, up: () => move('up'), down: () => move('down'), focus: focusSelected };
   process.stdin.on('keypress', (str, key) => {
-    const k = key || {};
-    if (str === 'q' || str === 'Q' || (k.ctrl && k.name === 'c')) { onQuit(); return; }
-    if (k.name === 'up' || str === 'k') move('up');
-    else if (k.name === 'down' || str === 'j') move('down');
-    else if (k.name === 'return') focusSelected();
+    const handler = run[classifyKey(str, key)];
+    if (handler) handler();
   });
 }
 

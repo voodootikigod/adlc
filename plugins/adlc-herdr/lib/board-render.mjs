@@ -11,6 +11,12 @@ const RESET = '\x1b[0m';
 
 const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? width : 80, 400));
 
+/** The board's footer hint line (with its own SGR). Pure so the refresh-seconds
+ *  arithmetic is testable rather than buried in the stdout glue. */
+export function boardFooter(refreshMs) {
+  return `${DIM}↑↓/jk select · ↵ focus pane · q quit · refreshes every ${refreshMs / 1000}s${RESET}`;
+}
+
 /** Render the full board frame as a string of newline-joined rows. When
  *  `height` is given, the output is clamped to that many lines — the redraw
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane
