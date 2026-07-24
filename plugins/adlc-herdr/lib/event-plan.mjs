@@ -29,9 +29,9 @@ async function planWorktreeCreated(data, { listTicketIds, hasCurrentTicket }) {
   if (typeof repoRoot !== 'string' || repoRoot.length === 0) return none('no repo root');
   if (typeof branch !== 'string' || branch.length === 0) return none('no branch');
   if (hasCurrentTicket(repoRoot)) return none('already has an active ticket'); // don't nag
-  // listTicketIds is a FILESYSTEM read of the store (see the glue) — it never
-  // spawns a subprocess with the untrusted repoRoot as cwd, so a crafted
-  // worktree.created payload cannot achieve code execution.
+  // listTicketIds reads the store directly from the filesystem: the untrusted
+  // repoRoot is only ever a read target, and is never passed as a subprocess
+  // working directory.
   const ids = await listTicketIds(repoRoot);
   if (!Array.isArray(ids) || !ids.includes(branch)) return none('branch is not a ticket id');
   return {
