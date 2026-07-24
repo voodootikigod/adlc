@@ -27,6 +27,14 @@ function specGapIdMarker(id) {
 }
 
 /**
+ * Does an artifact record member keys at all? Spec-gap lines and skill frontmatter
+ * carry `cluster-members:`; the lint descriptor is JSON with a `members` array. Used
+ * to tell a pre-overlap defense (creditable by id/slug) from a current one that simply
+ * belongs to a different cluster.
+ */
+const RECORDS_MEMBERS = /cluster-members|"members"\s*:/;
+
+/**
  * Load findings from the ledger.
  * Returns { findings, skipped, filtered }
  * - findings: valid entries with verdict !== 'killed'
@@ -125,8 +133,17 @@ export function findUnbankedClusters(
     const suffix = route === 'lint' ? '.lint.json' : route === 'skill' ? '.SKILL.md' : null;
     const template = suffix ? null : getTemplate();
 
-    // A slug-NAMED defense file is a whole-cluster legacy credit of its own.
-    if (suffix && existsSync(`${outDir}/${name}${suffix}`)) return false;
+    // The slug-NAMED defense file. Its mere existence must NOT credit the cluster:
+    // every normally emitted lint/skill artifact is slug-named, so an existence check
+    // here would short-circuit the coverage invariant below for all of them — the same
+    // bypass the cluster-id match caused for spec-gap. Read it instead: if it records
+    // member keys it takes part in coverage like any other artifact; only when it
+    // records none (a pre-overlap artifact, where coverage cannot be evaluated) does
+    // its existence stand as a whole-cluster legacy credit.
+    if (suffix && existsSync(`${outDir}/${name}${suffix}`)) {
+      const slugContent = readFile(`${outDir}/${name}${suffix}`) || '';
+      if (!members.some((m) => slugContent.includes(m))) return false;
+    }
 
     // Gather the artifact content that actually references THIS cluster — by member
     // key, by the derived id, or by the legacy slug. For spec-gap the template holds
@@ -144,10 +161,16 @@ export function findUnbankedClusters(
     // Which of this cluster's members does the matched defense actually record?
     const covered = members.filter((m) => related.some((c) => c.includes(m)));
 
-    // No member keys recorded → the defense matched by id or slug alone. That is a
-    // pre-overlap or hand-refined lesson, and coverage cannot be evaluated against it,
-    // so credit the whole cluster (this is the ONLY path legacy matches may bank on).
-    if (covered.length === 0) return false;
+    // The defense matched by id or slug but covers none of THIS cluster's members.
+    // Two very different situations, and they must not be conflated:
+    //   - it records NO member keys at all → a pre-overlap or hand-refined lesson;
+    //     coverage cannot be evaluated against it, so credit the whole cluster. This
+    //     is the only remaining thing id/slug markers may bank on.
+    //   - it DOES record member keys, just not ours → it belongs to a different
+    //     cluster that merely shares a slug (clusterName truncates to 50 chars, so
+    //     distinct patterns can collide) or an id. Crediting from it would be a false
+    //     pass, so leave this cluster unbanked.
+    if (covered.length === 0) return related.some((c) => RECORDS_MEMBERS.test(c));
 
     // COVERAGE INVARIANT — deliberately evaluated INSTEAD OF, not after, an id match.
     // Every normally emitted lesson stamps the id AND the member keys, and clusterId is

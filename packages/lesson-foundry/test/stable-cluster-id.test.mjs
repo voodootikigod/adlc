@@ -221,6 +221,63 @@ test('spec-gap: a defended cluster fused with an UNDEFENDED one is still reporte
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('lint: a slug-NAMED artifact does not bypass the coverage invariant', () => {
+  // Every normally emitted lint/skill artifact is named by the cluster slug, so
+  // crediting on the filename alone would short-circuit coverage for all of them —
+  // the same bypass the cluster-id match caused for spec-gap.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const a = { ts: 't1', file: 'a.mjs', line: 1, category: 'style', desc: 'stray "TODO" marker left in shipped code' };
+    const b = { ts: 't2', file: 'b.mjs', line: 2, category: 'style', desc: 'stray "TODO" marker left in a handler' };
+    const [cluster] = buildClusters([a, b], 2);
+    assert.equal(cluster.route, 'lint');
+
+    // Emitted by the REAL emitter, at its real slug-derived filename.
+    const descriptor = buildLintDescriptor(cluster.name, [a, b]);
+    writeFileSync(join(outDir, `${cluster.name}.lint.json`), descriptor.content ?? descriptor, 'utf8');
+    assert.deepEqual(findUnbankedClusters([cluster], outDir, existsSync, undefined, undefined, 2), [], 'precondition: banked');
+
+    const fused = { ...cluster, members: [...cluster.members, 'ffffffffff01', 'ffffffffff02', 'ffffffffff03'], size: 5 };
+    assert.deepEqual(
+      findUnbankedClusters([fused], outDir, existsSync, undefined, undefined, 2).map((c) => c.name),
+      [fused.name],
+      'the slug-named file must not credit a cluster it only partly covers',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('spec-gap: a different cluster sharing a slug is NOT credited by the other lesson', () => {
+  // clusterName truncates to 50 chars, so distinct patterns can slugify identically.
+  // A CURRENT lesson (one that records member keys) must only bank the cluster whose
+  // members it actually covers.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      '# T\n\n- [ ] **[security]** q? *(cluster: shared-slug, cluster-id: aaaa, cluster-members: aaaaaaaaaaa1 aaaaaaaaaaa2)*\n',
+      'utf8',
+    );
+    const other = { route: 'spec-gap', name: 'shared-slug', id: 'bbbb', members: ['bbbbbbbbbbb1', 'bbbbbbbbbbb2'], size: 2 };
+    assert.deepEqual(
+      findUnbankedClusters([other], outDir, existsSync, undefined, undefined, 2).map((c) => c.name),
+      ['shared-slug'],
+      'a slug collision with a members-recording lesson is not a defense',
+    );
+
+    // But a pre-overlap lesson (no member keys at all) still grants legacy credit.
+    writeFileSync(join(outDir, 'interrogation-template.md'), '# T\n\n- [ ] **[security]** q? *(cluster: shared-slug)*\n', 'utf8');
+    assert.deepEqual(
+      findUnbankedClusters([other], outDir, existsSync, undefined, undefined, 2),
+      [],
+      'legacy slug-only lessons are still credited',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // End-to-end order-independence: the marker is stamped from one member ordering
 // and the gate re-clusters (possibly reordering members) before checking. This is
 // the property the whole ticket rests on — an order-dependent id would orphan the
