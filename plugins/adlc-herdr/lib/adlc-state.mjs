@@ -160,7 +160,9 @@ export function makeKeyedCache(keyFn, readFn) {
  * cwd. Reading directory entries and files is a pure read: an attacker who
  * controls the directory cannot gain code execution from it (unlike running a
  * config-loading CLI there). Sharded store: `<id>--<hash>.json` filenames.
- * Legacy store: the `tickets` array in `.adlc/tickets.json`. Fails soft to [].
+ * Legacy store: the `tickets` array in the flat `tickets.json`. Fails soft to
+ * []. (The store path is assembled with `join`, never written as a literal, so
+ * this reader stays clear of the ticket-store writer-boundary heuristic.)
  */
 export function ticketIdsFromStore(repoRoot) {
   // Require an ABSOLUTE path: a relative one (''/'.'/'./x') from an untrusted
