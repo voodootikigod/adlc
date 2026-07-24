@@ -96,7 +96,8 @@ export function findUnbankedClusters(
   outDir,
   existsSync,
   readFile = defaultReadFile,
-  readDir = defaultReadDir
+  readDir = defaultReadDir,
+  minSize = 2
 ) {
   const templatePath = `${outDir}/interrogation-template.md`;
   // Read the template once; reuse across spec-gap clusters.
@@ -133,21 +134,31 @@ export function findUnbankedClusters(
 
   return clusters.filter((cluster) => {
     const { route, name, id, members = [] } = cluster;
+    const suffix = route === 'lint' ? '.lint.json' : route === 'skill' ? '.SKILL.md' : null;
+    const template = suffix ? null : getTemplate();
 
-    if (route === 'lint') {
-      if (existsSync(`${outDir}/${name}.lint.json`)) return false; // legacy slug file
-      return !hasStampedArtifact('.lint.json', id, members);
-    }
-    if (route === 'skill') {
-      if (existsSync(`${outDir}/${name}.SKILL.md`)) return false; // legacy slug file
-      return !hasStampedArtifact('.SKILL.md', id, members);
-    }
-    // spec-gap: banked when the template still covers one of this cluster's members
-    // (durable), or carries the legacy derived id / slug marker (back-compat).
-    const template = getTemplate();
-    if (members.some((m) => template.includes(m))) return false;
-    if (id && template.includes(specGapIdMarker(id))) return false;
-    return !template.includes(specGapMarker(name));
+    // Legacy crediting (pre-overlap lessons): a slug-named defense file, the slug
+    // marker, or the derived cluster-id banks the whole cluster.
+    if (suffix && existsSync(`${outDir}/${name}${suffix}`)) return false;
+    if (!suffix && template.includes(specGapMarker(name))) return false;
+    if (id && (suffix ? hasStampedArtifact(suffix, id, []) : template.includes(specGapIdMarker(id)))) return false;
+
+    if (members.length === 0) return true; // nothing to reason about → surface it
+
+    // COVERAGE INVARIANT. Crediting the cluster because *any one* member is covered
+    // would let a merged cluster be banked by a defense for only part of it: clustering
+    // is transitive, so a bridging finding can fuse a defended pattern with an
+    // undefended one, and existential overlap would silently absorb the undefended
+    // half — exactly what this gate exists to catch.
+    //
+    // Instead, look at what is NOT covered. A recurrence of a defended pattern leaves a
+    // small uncovered remainder (the new occurrences); a fused-in undefended pattern
+    // leaves a remainder large enough to be a cluster in its own right. So reuse the
+    // caller's own clustering threshold: an uncovered remainder that would itself
+    // qualify as a cluster is an undefended cluster, whatever it is bundled with.
+    const isCovered = (m) => (suffix ? hasStampedArtifact(suffix, null, [m]) : template.includes(m));
+    const uncovered = members.filter((m) => !isCovered(m));
+    return uncovered.length >= minSize;
   });
 }
 

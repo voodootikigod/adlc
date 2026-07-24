@@ -45,35 +45,6 @@ import { appendEntry } from './ledger.mjs';
  * @param {string} [dir]  ledger dir; defaults to the ADLC_DIR appendEntry uses.
  * @returns {object} the appended entry
  */
-// The findings ledger is TRACKED in git (ADR 0014), so every recorded description is
-// committed. "Findings are curated prose, never raw dumps or secrets" was documented
-// but unenforced — and a rule that only exists in prose is not a boundary. These
-// checks make it one, at the single writer every recording path goes through.
-const SECRET_PATTERNS = [
-  [/\bAKIA[0-9A-Z]{16}\b/, 'an AWS access key id'],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, 'a GitHub token'],
-  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, 'a Slack token'],
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'a private key block'],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, 'a bearer token'],
-  [/\b(?:api[-_]?key|secret|passwd|password|token)\b\s*[:=]\s*\S{8,}/i, 'an inline credential assignment'],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, 'a JWT'],
-];
-const MAX_DESC = 600;
-
-/** Reject anything that is not a single line of curated prose. Fails CLOSED. */
-function assertRecordable(desc) {
-  if (/[\r\n]/.test(desc)) {
-    throw new Error('recordFinding: finding.desc must be a single line of curated prose — raw multi-line tool output is not recordable (the ledger is committed; see ADR 0014)');
-  }
-  if (desc.length > MAX_DESC) {
-    throw new Error(`recordFinding: finding.desc is ${desc.length} chars; curated descriptions are capped at ${MAX_DESC} to keep raw dumps out of the committed ledger (ADR 0014)`);
-  }
-  for (const [pattern, what] of SECRET_PATTERNS) {
-    if (pattern.test(desc)) {
-      throw new Error(`recordFinding: refusing to record — finding.desc appears to contain ${what}. The ledger is committed to git; describe the failure class instead of quoting the value (ADR 0014)`);
-    }
-  }
-}
 
 export function recordFinding(finding, dir) {
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
@@ -83,7 +54,8 @@ export function recordFinding(finding, dir) {
   const desc = typeof finding.desc === 'string' ? finding.desc.trim() : '';
   if (!file) throw new Error('recordFinding: finding.file is required');
   if (!desc) throw new Error('recordFinding: finding.desc is required (it is the clustering key)');
-  assertRecordable(desc);
+  // The publishability boundary lives in the ledger writer (assertPublishableFinding),
+  // so EVERY producer is covered — not just this one. Nothing to duplicate here.
 
   const str = (v, fallback) => (typeof v === 'string' && v.trim() ? v.trim() : fallback);
   const entry = {

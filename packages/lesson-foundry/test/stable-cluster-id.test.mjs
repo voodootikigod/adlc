@@ -178,6 +178,49 @@ test('spec-gap: a merged OLDER occurrence does not un-bank a defended cluster', 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('spec-gap: a defended cluster fused with an UNDEFENDED one is still reported unbanked', () => {
+  // Clustering is transitive, so a bridging finding can fuse two previously distinct
+  // patterns. Crediting the fused cluster because ONE member is covered would silently
+  // absorb the undefended half — precisely what this gate exists to catch.
+  const dir = makeTempDir();
+  try {
+    const outDir = join(dir, 'lessons');
+    mkdirSync(outDir, { recursive: true });
+    const defended = [
+      { ts: 't1', file: 'a.mjs', line: 1, category: 'security', desc: 'unclear data retention policy across services' },
+      { ts: 't2', file: 'b.mjs', line: 2, category: 'security', desc: 'unclear data retention policy for logs' },
+    ];
+    const [banked] = buildClusters(defended, 2);
+    writeFileSync(
+      join(outDir, 'interrogation-template.md'),
+      `# Interrogation Template\n\n- [ ] **[security]** retention? <!-- cluster-members: ${banked.members.join(' ')} -->\n`,
+      'utf8',
+    );
+    assert.deepEqual(findUnbankedClusters([banked], outDir, existsSync, undefined, undefined, 2), [], 'precondition: banked');
+
+    // A separate, never-defended pattern that clustering later fuses in.
+    const fused = {
+      ...banked,
+      members: [...banked.members, 'ffffffffff01', 'ffffffffff02', 'ffffffffff03'],
+      size: 5,
+    };
+
+    assert.deepEqual(
+      findUnbankedClusters([fused], outDir, existsSync, undefined, undefined, 2).map((c) => c.name),
+      [fused.name],
+      'the fused cluster is NOT banked by the defense that covers only part of it',
+    );
+
+    // ...while a mere recurrence (one new occurrence) still counts as defended.
+    const recurred = { ...banked, members: [...banked.members, 'ffffffffff01'], size: 3 };
+    assert.deepEqual(
+      findUnbankedClusters([recurred], outDir, existsSync, undefined, undefined, 2),
+      [],
+      'a recurrence does not un-bank the cluster',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // End-to-end order-independence: the marker is stamped from one member ordering
 // and the gate re-clusters (possibly reordering members) before checking. This is
 // the property the whole ticket rests on — an order-dependent id would orphan the

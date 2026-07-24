@@ -130,6 +130,14 @@ export function readEntries<T = unknown>(
   dir?: string
 ): { entries: T[]; skipped: Array<{ line: number; error: string }> };
 export function ledgerPath(name: string, dir?: string): string;
+/**
+ * Fail closed on a findings entry unfit for the COMMITTED ledger (ADR 0014):
+ * credential shapes anywhere in the serialized entry, multi-line `desc`, or a
+ * dump-length `desc`. Applied automatically by appendEntries for the `findings`
+ * ledger, so every producer is covered.
+ */
+export function assertPublishableFinding(entry: unknown): void;
+
 export function sha256(input: string | Uint8Array): string;
 export function canonicalJson(value: unknown): string;
 export function hashFiles(

@@ -73,6 +73,44 @@ function parseLedger(content) {
  * acquired and receives the byte-exact current ledger state, so callers can safely
  * allocate sequence numbers and hash-chain links without a read/append race.
  */
+// ─── Tracked-ledger secret boundary ────────────────────────────────────────────
+// `.adlc/findings.jsonl` is COMMITTED to git (ADR 0014), so every entry is published.
+// "Curated prose, never raw dumps or secrets" must therefore be enforced, and enforced
+// HERE — at the single write boundary every producer funnels through. Validating in one
+// producer (recordFinding) left model-ratchet and gate-fuzzing writing unchecked, and
+// scanning only `desc` left every other serialized field unchecked.
+const FINDINGS_LEDGER = 'findings';
+const MAX_FINDING_DESC = 600;
+const SECRET_PATTERNS = [
+  [/\bAKIA[0-9A-Z]{16}\b/, 'an AWS access key id'],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, 'a GitHub token'],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, 'a Slack token'],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'a private key block'],
+  [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, 'a bearer token'],
+  [/\b(?:api[-_]?key|secret|passwd|password|token)\b\s*[:=]\s*\S{8,}/i, 'an inline credential assignment'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, 'a JWT'],
+];
+
+/**
+ * Fail CLOSED on anything unfit for a committed ledger. Scans the WHOLE serialized
+ * entry, not just `desc` — a secret pasted into any field is published just the same.
+ */
+export function assertPublishableFinding(entry) {
+  const serialized = JSON.stringify(entry ?? null);
+  for (const [pattern, what] of SECRET_PATTERNS) {
+    if (pattern.test(serialized)) {
+      throw new Error(`findings ledger: refusing to record — the entry appears to contain ${what}. This ledger is committed to git; describe the failure class instead of quoting the value (ADR 0014)`);
+    }
+  }
+  const desc = typeof entry?.desc === 'string' ? entry.desc : '';
+  if (/[\r\n]/.test(desc)) {
+    throw new Error('findings ledger: desc must be a single line of curated prose — raw multi-line tool output is not recordable (ADR 0014)');
+  }
+  if (desc.length > MAX_FINDING_DESC) {
+    throw new Error(`findings ledger: desc is ${desc.length} chars; curated descriptions are capped at ${MAX_FINDING_DESC} to keep dumps out of the committed ledger (ADR 0014)`);
+  }
+}
+
 export function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const p = ledgerPath(name, dir);
@@ -82,6 +120,9 @@ export function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
     const additions = typeof entriesOrFactory === 'function' ? entriesOrFactory(state) : entriesOrFactory;
     if (!Array.isArray(additions)) throw new TypeError('ledger append batch must be an array');
     if (additions.length === 0) return [];
+    // Validate BEFORE any bytes are written, so a rejected entry leaves the ledger
+    // untouched rather than half-appended.
+    if (name === FINDINGS_LEDGER) for (const entry of additions) assertPublishableFinding(entry);
     const descriptor = openSync(p, 'a');
     try {
       writeFileSync(descriptor, additions.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
