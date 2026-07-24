@@ -4,15 +4,15 @@
 // HERDR_PLUGIN_EVENT_JSON the payload), wire the real repo-state readers, ask
 // the pure planner (lib/event-plan) what to do, and execute the single plan.
 // Fail soft everywhere — an event handler must never crash the herdr session.
-import { mkdirSync, openSync, closeSync, rmSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { repoRootFromCwd } from '../lib/repo-root.mjs';
 import { readActiveTicket, ticketIdsFromStore } from '../lib/adlc-state.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 import { buildPaneClearArgs } from '../lib/tokens.mjs';
 import { planEvent } from '../lib/event-plan.mjs';
+import { bucketFor, markerName, isStaleMarker } from '../lib/nudge.mjs';
 
 async function resolveRepoForPane(paneId) {
   const res = await runHerdrJson(paneInfoArgs(paneId));
@@ -46,29 +46,46 @@ const NUDGE_WINDOW_MS = Number(process.env.ADLC_HERDR_NUDGE_WINDOW_MS ?? 30_000)
 const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
   ? join(process.env.HERDR_PLUGIN_STATE_DIR, 'nudged')
   : null;
-const markerPath = (name) => (nudgeDir ? join(nudgeDir, createHash('sha256').update(name).digest('hex')) : null);
-const claim = async (key) => {
-  if (!nudgeDir) return true; // no state dir → can't dedupe; allow the nudge
-  if (!Number.isFinite(NUDGE_WINDOW_MS) || NUDGE_WINDOW_MS <= 0) return true; // dedupe disabled
-  const bucket = Math.floor(Date.now() / NUDGE_WINDOW_MS);
-  const p = markerPath(`${key}|${bucket}`);
+
+// After winning a bucket, sweep EVERY marker older than the current bucket (any
+// key), so spaced-out idles don't orphan markers — this bounds the directory to
+// the current window's markers. Best-effort; delete races are benign.
+function sweepStaleMarkers(currentBucket) {
   try {
-    mkdirSync(nudgeDir, { recursive: true });
-    closeSync(openSync(p, 'wx')); // atomic: only the first in this window bucket wins
-    // Best-effort: drop this key's previous-bucket marker so files don't pile up.
-    const prev = markerPath(`${key}|${bucket - 1}`);
-    if (prev) {
-      try {
-        rmSync(prev, { force: true });
-      } catch {
-        // cleanup is best-effort
+    for (const name of readdirSync(nudgeDir)) {
+      if (isStaleMarker(name, currentBucket)) {
+        try {
+          rmSync(join(nudgeDir, name), { force: true });
+        } catch {
+          // best-effort
+        }
       }
     }
+  } catch {
+    // best-effort
+  }
+}
+
+const claim = async (key) => {
+  if (!nudgeDir) return true; // no state dir → can't dedupe; allow the nudge
+  const bucket = bucketFor(Date.now(), NUDGE_WINDOW_MS);
+  if (bucket === null) return true; // dedupe disabled (windowMs<=0)
+  // Make the dir OUTSIDE the collision try — an mkdir failure must fail OPEN
+  // (nudge), not be mistaken for a marker collision (which would suppress).
+  try {
+    mkdirSync(nudgeDir, { recursive: true });
+  } catch {
     return true;
+  }
+  const p = join(nudgeDir, markerName(key, bucket));
+  try {
+    closeSync(openSync(p, 'wx')); // atomic: only the first in this window bucket wins
   } catch (error) {
     if (error && error.code === 'EEXIST') return false; // already nudged this window
     return true; // other errors → fail toward notifying
   }
+  sweepStaleMarkers(bucket);
+  return true;
 };
 
 async function main() {
