@@ -110,7 +110,7 @@ pre-squash commits and conflicts throughout.
 
 This repo is the toolkit, and it uses it: author a ticket (P0), check
 executability (`adlc coldstart <id> --prompt-only`, P2), and prosecute before
-merge (`/adlc:adlc-prosecute`, P5). Two rules that carry real weight:
+merge (`/adlc:adlc-prosecute`, P5). Three rules that carry real weight:
 
 - **Fail-open vs fail-closed is a deliberate choice, never an accident.** Several
   gates fail open on purpose so an unverifiable signal cannot kill real work.
@@ -119,6 +119,14 @@ merge (`/adlc:adlc-prosecute`, P5). Two rules that carry real weight:
   every fixture mocked a tool's output in a shape that tool has never produced.
   For contract tests, drive the real binary, and export the production adapter
   so tests use *it* rather than a copy of it.
+- **An unused parameter that every caller passes is a missing check, not dead
+  code.** `completeTicketOnIntegration` accepted `integrationBranch`, ignored it,
+  and committed to whatever happened to be checked out. A lint cleanup read
+  "declared but never read" and deleted the parameter; review later found the
+  real defect underneath — a concurrent checkout switch could land a lifecycle
+  commit on the wrong branch. When every call site faithfully supplies a value
+  the callee ignores, the fix is to make it load-bearing (verify against it),
+  not to delete it. Deleting it removes the evidence of the missing guard.
 
 Changes under `packages/rails-guard`, `prosecute`, `gate-manifest`, or
 `build-gate` are trust-root tier: a same-model P5 is not sufficient, and a

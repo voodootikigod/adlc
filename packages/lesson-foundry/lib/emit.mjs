@@ -1,7 +1,7 @@
 // File emission for lesson-foundry — generates defense artifacts.
 // Pure functions that return { path, content } pairs; caller writes them.
 
-import { clusterName, extractLiteralPattern, escapeRegex } from './route.mjs';
+import { clusterName, clusterId, clusterMembers, extractLiteralPattern, escapeRegex } from './route.mjs';
 
 /**
  * Build the grep-gate JSON descriptor for a LINT cluster.
@@ -12,6 +12,12 @@ export function buildLintDescriptor(name, findings) {
   const pattern = literal ? escapeRegex(literal) : clusterName(findings).replace(/-/g, '.*');
 
   const descriptor = {
+    // Stable, prose-independent cluster key. The gate credits the descriptor by
+    // this id even if the slug-derived filename below has since drifted or been
+    // renamed during refinement. Kept first so it survives a hand-edit at the top.
+    id: clusterId(findings),
+    // Durable banking identity: overlap with these survives growth AND merges.
+    members: clusterMembers(findings),
     name,
     pattern,
     paths: ['**'],
@@ -122,6 +128,8 @@ name: ${displayName}
 description: ${desc}
 category: ${category}
 mined-from: ${count} findings
+cluster-id: ${clusterId(findings)}
+cluster-members: ${clusterMembers(findings).join(' ')}
 triggers:
   - ${category}
   - recurring-finding
@@ -160,7 +168,13 @@ export function buildSpecGapLine(name, findings) {
   const count = findings.length;
   const desc = findings[0]?.desc ?? name;
   const category = findings[0]?.category ?? 'unknown';
-  return `- [ ] **[${category}]** ${desc} *(recurring in ${count} finding${count === 1 ? '' : 's'}, cluster: ${name})*\n`;
+  const id = clusterId(findings);
+  // Two markers: the human-readable slug (legacy, kept for back-compat) and the
+  // stable cluster-id. The gate credits either, so rewording the question — even
+  // dropping the slug annotation — cannot orphan the lesson as long as the id
+  // marker survives.
+  const members = clusterMembers(findings).join(' ');
+  return `- [ ] **[${category}]** ${desc} *(recurring in ${count} finding${count === 1 ? '' : 's'}, cluster: ${name}, cluster-id: ${id}, cluster-members: ${members})*\n`;
 }
 
 /**

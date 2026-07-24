@@ -8,8 +8,14 @@
 # perl -i, …) still lands in the PR diff — this job rejects that PR when the rail
 # was already frozen on the base branch.
 #
-# It reads every rail glob declared in the trusted base .adlc/tickets.json and
-# runs the diff-based `adlc rails-guard` gate against the PR base. Once
+# It reads every rail glob declared in the trusted base ticket store — either the
+# legacy .adlc/tickets.json file or the canonical sharded directory store
+# (.adlc/tickets/ with a .store.json manifest) — and runs the diff-based
+# `adlc rails-guard` gate against the PR base. The .adlc/tickets/.store.json
+# manifest is itself a protected trust root, and a store-backend MIGRATION
+# (legacy<->directory) is denied in ordinary PRs: unlike scripts/rails-guard-ci.mjs
+# this self-contained template does not verify migration manifest evidence, so
+# migrations must go through the protected-base admin ceremony. Once
 # .adlc/config.json exists on the base branch, it also protects immutable ADLC
 # trust roots even if no ticket rails exist yet. Configure it as a required check
 # only after acknowledging the SECURITY LIMITATION below.
@@ -389,12 +395,12 @@ jobs:
               const { completed, ...headWithoutCompleted } = headTicket;
               return stable(headWithoutCompleted) === stable(baseTicket);
             };
-            const assertBaseTicketsPreserved = (baseTickets, headTickets) => {
+            const assertBaseTicketsPreserved = (baseTickets, headTickets, storeLabel) => {
               const headById = new Map(headTickets.map(t => [t.id, t]));
               for (const baseTicket of baseTickets) {
                 const headTicket = headById.get(baseTicket.id);
-                if (!headTicket) deny("base ticket " + baseTicket.id + " cannot be removed from .adlc/tickets.json in a PR");
-                if (stable(headTicket) !== stable(baseTicket) && !isCompletionAnnotationOnly(baseTicket, headTicket)) deny("base ticket " + baseTicket.id + " contract cannot change in .adlc/tickets.json in a PR");
+                if (!headTicket) deny("base ticket " + baseTicket.id + " cannot be removed from " + storeLabel + " in a PR");
+                if (stable(headTicket) !== stable(baseTicket) && !isCompletionAnnotationOnly(baseTicket, headTicket)) deny("base ticket " + baseTicket.id + " contract cannot change in " + storeLabel + " in a PR");
               }
             };
             // Confirm the base REF resolves first — git show returns non-zero for
@@ -413,29 +419,109 @@ jobs:
               process.exit(0);
             }
             if (!baseConfig.stdout.trim()) fail("base .adlc/config.json is absent; rail-freeze gate cannot run without bootstrap acknowledgement");
-            const immutableTrustRoots = [".adlc/config.json", ".adlc/admin.pub", ".github/workflows/adlc-rails-guard.yml", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
+            const immutableTrustRoots = [".adlc/config.json", ".adlc/admin.pub", ".adlc/tickets/.store.json", ".github/workflows/adlc-rails-guard.yml", "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS", "docs/ci/rails-guard.yml", "scripts/rails-guard-ci.mjs", "scripts/test/rails-guard-workflow-hashes.json"];
             // Distinguish a genuinely absent file from an operational git error:
             // ls-tree non-zero = operational (fail closed); empty = file absent
             // (nothing frozen). Read the TRUSTED base file, not PR-controlled HEAD.
-            const ls = git(["ls-tree", "--name-only", base, "--", ".adlc/tickets.json"], "git ls-tree base tickets");
-            if (ls.status !== 0) fail("git ls-tree failed for " + base + " (operational) — failing closed");
-            let show = { stdout: "{\"tickets\":[]}", status: 0 };
-            if (!ls.stdout.trim()) {
-              console.log("no .adlc/tickets.json at " + base + " — protecting ADLC trust roots only.");
-            } else {
-              show = git(["show", base + ":.adlc/tickets.json"], "git show base tickets");
-              if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
-            }
-            let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
-            const baseTickets = validateTickets(d, "base");
+            // Ticket-store backend detection (#283). The canonical backend is the
+            // sharded directory (.adlc/tickets/ with a .store.json manifest); the
+            // legacy single file (.adlc/tickets.json) is still supported. Read rails
+            // from whichever the TRUSTED base uses — a repo that migrated to the
+            // directory store must still have its ticket rails CI-enforced, so
+            // reading only tickets.json (dropping shard rails) would fail OPEN.
+            const gitLsBase = (path, label) => {
+              const r = git(["ls-tree", "--name-only", base, "--", path], label);
+              if (r.status !== 0) fail(label + " (operational) — failing closed");
+              return r.stdout.trim();
+            };
+            const isShard = (p) => p.endsWith(".json") && p.split("/").pop() !== ".store.json";
+            // The canonical @adlc/tickets store manifest. Validate the .store.json
+            // CONTENT (not merely its existence) so a future/foreign store layout fails
+            // closed here instead of being misread as this v1 shard shape.
+            const EXPECTED_STORE = { format: "adlc-ticket-directory", version: 1 };
+            const validateStoreManifest = (raw, where) => {
+              let m; try { m = JSON.parse(raw); } catch (e) { fail("cannot parse " + where + " .adlc/tickets/.store.json: " + e.message); }
+              if (!m || typeof m !== "object" || m.format !== EXPECTED_STORE.format || m.version !== EXPECTED_STORE.version) fail(where + " .adlc/tickets/.store.json is not a supported ticket store (expected {format:\"adlc-ticket-directory\",version:1}) — failing closed; upgrade the gate to read this store");
+            };
+            const readBaseStore = () => {
+              const hasLegacy = gitLsBase(".adlc/tickets.json", "git ls-tree base tickets");
+              const hasDir = gitLsBase(".adlc/tickets/.store.json", "git ls-tree base store");
+              // Ambiguous base (both backends committed) is a tooling/admin error. The
+              // canonical loader throws AMBIGUOUS_STORE; match it — never silently pick
+              // one backend and drop the other's rails (that is the #283 fail-open).
+              if (hasLegacy && hasDir) fail("base has BOTH .adlc/tickets.json and a .adlc/tickets/ store — ambiguous ticket store; failing closed");
+              if (hasLegacy) {
+                const show = git(["show", base + ":.adlc/tickets.json"], "git show base tickets");
+                if (show.status !== 0) fail("git show failed for an existing base ticket file (operational) — failing closed");
+                let d; try { d = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base tickets: " + e.message); }
+                return { backend: "legacy", tickets: validateTickets(d, "base") };
+              }
+              if (!hasDir) return { backend: "none", tickets: [] };
+              const storeShow = git(["show", base + ":.adlc/tickets/.store.json"], "git show base store manifest");
+              if (storeShow.status !== 0) fail("git show failed for base store manifest (operational) — failing closed");
+              validateStoreManifest(storeShow.stdout, "base");
+              // Non-recursive: shards are flat directly under .adlc/tickets/. Parse the
+              // ls-tree type column so a nested TREE (or a symlink/gitlink) is rejected,
+              // not walked — the canonical store forbids nesting, and base and HEAD must
+              // enumerate the SAME flat set (git show also never follows a symlink blob).
+              const listing = git(["ls-tree", base, "--", ".adlc/tickets/"], "git ls-tree base shards");
+              if (listing.status !== 0) fail("git ls-tree failed for " + base + " shard dir (operational) — failing closed");
+              const shards = [];
+              for (const line of listing.stdout.split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
+                const tab = line.indexOf("\t");
+                if (tab === -1) fail("unparseable base ls-tree entry — failing closed");
+                const [mode, type] = line.slice(0, tab).split(/\s+/);
+                const shardPath = line.slice(tab + 1);
+                if (shardPath.split("/").pop() === ".store.json") continue;
+                if (!isShard(shardPath)) fail("unexpected non-shard entry in base .adlc/tickets/: " + shardPath + " — failing closed");
+                if (type !== "blob" || mode !== "100644") fail("base shard " + shardPath + " is not a regular-file blob — failing closed");
+                const show = git(["show", base + ":" + shardPath], "git show base shard");
+                if (show.status !== 0) fail("git show failed for base shard " + shardPath + " (operational) — failing closed");
+                let t; try { t = JSON.parse(show.stdout); } catch (e) { fail("cannot parse base shard " + shardPath + ": " + e.message); }
+                shards.push(t);
+              }
+              return { backend: "directory", tickets: validateTickets({ tickets: shards }, "base") };
+            };
+            const readHeadStore = () => {
+              const fs = require("fs");
+              const hasLegacy = fs.existsSync(".adlc/tickets.json");
+              const hasDir = fs.existsSync(".adlc/tickets/.store.json");
+              if (hasLegacy && hasDir) deny("HEAD has BOTH .adlc/tickets.json and a .adlc/tickets/ store — ambiguous ticket store");
+              if (hasLegacy) {
+                return { backend: "legacy", tickets: validateTickets(JSON.parse(fs.readFileSync(".adlc/tickets.json", "utf8")), "head") };
+              }
+              if (hasDir) {
+                validateStoreManifest(fs.readFileSync(".adlc/tickets/.store.json", "utf8"), "head");
+                const shards = [];
+                // withFileTypes → a symlink is isSymbolicLink() (readdir does not follow
+                // it) and a subdir is isDirectory(); skip both so readFileSync only ever
+                // reads a real flat shard, matching the base enumeration exactly.
+                for (const ent of fs.readdirSync(".adlc/tickets", { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+                  if (!ent.isFile()) continue;
+                  if (!isShard(ent.name)) continue;
+                  let t; try { t = JSON.parse(fs.readFileSync(".adlc/tickets/" + ent.name, "utf8")); } catch (e) { fail("cannot parse head shard " + ent.name + ": " + e.message); }
+                  shards.push(t);
+                }
+                return { backend: "directory", tickets: validateTickets({ tickets: shards }, "head") };
+              }
+              return { backend: "none", tickets: [] };
+            };
+            const baseStore = readBaseStore();
+            const baseTickets = baseStore.tickets;
+            if (baseStore.backend === "none") console.log("no ticket store at " + base + " — protecting ADLC trust roots only.");
             const rails = [];
             // T36: a completed ticket's rails auto-expire (skip `completed === true`;
             // admin-set + contract-protected — see scripts/rails-guard-ci.mjs).
             for (const t of baseTickets) { if (t.completed === true) continue; for (const r of t.rails ?? []) rails.push(r); }
-            if (ls.stdout.trim()) {
-              if (!require("fs").existsSync(".adlc/tickets.json")) deny(".adlc/tickets.json exists at base but is absent at HEAD");
-              const headTickets = JSON.parse(require("fs").readFileSync(".adlc/tickets.json", "utf8"));
-              assertBaseTicketsPreserved(baseTickets, validateTickets(headTickets, "head"));
+            if (baseStore.backend !== "none") {
+              const headStore = readHeadStore();
+              if (headStore.backend === "none") deny("the base ticket store exists at base but is absent at HEAD");
+              // A store-backend migration (legacy<->directory) is an admin-ceremony
+              // operation, not an ordinary PR: this self-contained template does not
+              // replicate scripts/rails-guard-ci.mjs's manifest-evidence migration
+              // check, so it fails closed and routes migrations to the protected base.
+              if (headStore.backend !== baseStore.backend) deny("ticket store backend cannot change in a PR (base " + baseStore.backend + " -> head " + headStore.backend + "); migrate through the protected-base admin ceremony");
+              assertBaseTicketsPreserved(baseTickets, headStore.tickets, baseStore.backend === "legacy" ? ".adlc/tickets.json" : "the .adlc/tickets/ store");
             }
             const manifestLs = git(["ls-tree", "--name-only", base, "--", ".adlc/manifest.jsonl"], "git ls-tree base manifest");
             if (manifestLs.status !== 0) fail("git ls-tree failed for " + base + " manifest (operational) — failing closed");

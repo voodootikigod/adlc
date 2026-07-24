@@ -90,6 +90,7 @@ test('toJson projects exactly the machine-readable fields, defaulting the new ar
     archived: [],
     ceremonyCompleted: [],
     needsCeremony: [],
+    blocked: [],
   });
 });
 

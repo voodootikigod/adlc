@@ -192,6 +192,70 @@ test('AC2: /adlc-ticket getArgumentCompletions completes ticket ids by prefix', 
 });
 
 // =========================================================================
+// #104 (T76) — completed tickets are filtered OUT of BOTH enumerations (the
+// argument completions and the interactive picker), so 40 shipped tickets stop
+// being offered as activation candidates. Named-id activation of a completed
+// ticket stays allowed — that is a lookup, not an enumeration.
+// =========================================================================
+
+const T2_DONE = { ...T2, completed: true };
+
+test('#104: getArgumentCompletions excludes a completed ticket and keeps the open one', async () => {
+  const root = makeRepo({ tickets: [T1, T2_DONE], current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    const all = pi.commands['adlc-ticket'].getArgumentCompletions('');
+    assert.deepEqual(all.map((i) => i.value), ['T1'], 'the completed ticket is not offered as a completion');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#104: the interactive picker offers only open tickets, and activates the right one', async () => {
+  const root = makeRepo({ tickets: [T1, T2_DONE], current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    let offered = null;
+    const ctx = fakeCtx(root, { select: (_title, options) => { offered = options; return options[0]; } });
+    await pi.commands['adlc-ticket'].handler('', ctx);
+    assert.equal(offered.length, 1, 'the completed ticket is not an option');
+    assert.ok(offered[0].startsWith('T1'), 'the open ticket is the only option');
+    // The picked label maps back to the OPEN ticket, not a filtered-away index.
+    const pointer = JSON.parse(readFileSync(join(root, '.adlc', 'current-ticket.json'), 'utf8'));
+    assert.equal(pointer.id, 'T1');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#104: the selection maps back through the FILTERED list, not the raw ticket index', async () => {
+  // Regression guard for the index remap: the completed ticket sorts FIRST, so
+  // the open ticket lives at openTickets[0] but tickets[1]. If the handler mapped
+  // the pick through the unfiltered `tickets` it would activate the COMPLETED
+  // ticket the human never saw. A fixture whose open ticket sorts first cannot
+  // tell the two apart — this one deliberately puts the completed ticket first.
+  const root = makeRepo({ tickets: [{ ...T1, completed: true }, T2], current: 'T2' });
+  try {
+    const { pi } = await boot(root);
+    let offered = null;
+    const ctx = fakeCtx(root, { select: (_title, options) => { offered = options; return options[0]; } });
+    await pi.commands['adlc-ticket'].handler('', ctx);
+    assert.equal(offered.length, 1, 'only the open ticket is offered');
+    assert.ok(offered[0].startsWith('T2'), 'the single option is the open ticket');
+    const pointer = JSON.parse(readFileSync(join(root, '.adlc', 'current-ticket.json'), 'utf8'));
+    assert.equal(pointer.id, 'T2', 'activates the open ticket that was picked, not the completed one at the same raw index');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#104: a completed ticket is still activatable by explicit id (lookup, not enumeration)', async () => {
+  const root = makeRepo({ tickets: [T1, T2_DONE], current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    const ctx = fakeCtx(root);
+    await pi.commands['adlc-ticket'].handler('T2', ctx);
+    assert.ok(!ctx.notices.some((n) => n.level === 'error'), 'no error activating a completed id by name');
+    const pointer = JSON.parse(readFileSync(join(root, '.adlc', 'current-ticket.json'), 'utf8'));
+    assert.equal(pointer.id, 'T2', 'named activation of a completed ticket resolves');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// =========================================================================
 // AC3 — /adlc-ticket with no args surfaces ui.select; undefined leaves state
 // =========================================================================
 

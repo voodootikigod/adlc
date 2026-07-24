@@ -1,6 +1,7 @@
 {
   "body": "Document the feature and add an env-gated real-gh smoke test per the spec 'Testing' and staging step 6. Deliver: packages/ticket-sync/README.md, docs/ticket-sync.md (pull/push/sync/doctor guide, flag matrix, config, token scopes, sidecar policy), a synced-ids + sidecar note in docs/ticket-authoring.md, and a scripts smoke (env-gated like codex-install-smoke, not part of the default offline suite). Depends on T4 and T5 (documents the whole surface).\n\nAcceptance criteria:\n1. docs/ticket-sync.md documents every subcommand and flag exactly as implemented (verify against bin/ticket-sync.mjs --help output).\n2. The live smoke is opt-in (skipped without the documented env var) and does not run in the default `npm test`.\n3. README links resolve and match the shipped commands.",
   "category": "docs",
+  "completed": true,
   "duration": 1,
   "edges": [],
   "id": "T11",

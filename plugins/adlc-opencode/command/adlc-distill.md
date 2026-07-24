@@ -20,5 +20,21 @@ recur. Target scope: **$ARGUMENTS** (default to recent history).
    the completed ticket's still-frozen rails (advisory deviation from strict
    post-merge P7 — warn the user; never edit frozen rails).
 
+## Close the loop — the lesson-foundry gate must be green
+
+Distillation is done only when no recurring finding cluster is left undefended.
+After writing and refining the defenses above (only *materialized* lessons count),
+run the gate as the closing check:
+
+```
+adlc lesson-foundry --gate
+```
+
+It must exit `0`. A non-zero exit names each cluster in `.adlc/findings.jsonl`
+that recurs but still has no banked lesson — write or refine its lesson and re-run
+until the gate is green. In an advisory or headless run where nothing was
+materialized, expect the gate to stay red: report the named unbanked clusters as
+the outstanding P7 work rather than treating red as complete.
+
 ## Summarize
 Report the defenses created/proposed and any decayed skills flagged.

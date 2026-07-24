@@ -109,6 +109,22 @@ adlc rejection-mining --prompt-only
   a reusable **review lens** (a question a future prosecutor should ask). Present
   the lenses; materialize with `--write` only after approval.
 
+## Close the loop — the lesson-foundry gate must be green
+
+Distillation is done only when no recurring finding cluster is left undefended.
+After writing and refining the lessons above (only *materialized* lessons count),
+run the gate as the closing check:
+
+```
+adlc lesson-foundry --gate
+```
+
+It must exit `0`. A non-zero exit names each cluster in `.adlc/findings.jsonl`
+that recurs but still has no banked lesson — write or refine its lesson and re-run
+until the gate is green. In an advisory or headless run where nothing was
+materialized, expect the gate to stay red: report the named unbanked clusters as
+the outstanding P7 work rather than treating red as complete.
+
 ## 3. Summarize
 
 Report: how many finding clusters and rejection lenses were found, the concrete

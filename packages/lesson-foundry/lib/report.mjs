@@ -65,6 +65,11 @@ export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult 
     clusters: clusters.map((c) => {
       const p = plan.find((e) => e.cluster === c);
       return {
+        id: c.id,
+        // The durable banking identity — a lesson is credited while it still covers
+        // one of these. Surfaced so --json consumers (and a human stamping a marker by
+        // hand) can see what actually banks the cluster, not just the display id.
+        members: c.members,
         name: c.name,
         size: c.size,
         route: c.route,

@@ -232,6 +232,22 @@ describe('integration: review-cmd findings ledger', () => {
     }
   });
 
+  it('a finding REJECTED by the ledger boundary is not reported as recorded', () => {
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
+    // Fake review command whose finding desc carries a secret — the tracked-ledger
+    // boundary must reject it, and model-ratchet must not count it as recorded.
+    const reviewCmd = `node -e "console.log('- leaked token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa in {file}')"`;
+    const result = spawnSync('node', [bin, '--top', '3', '--review-cmd', reviewCmd, '--json'], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.totalFindings, 0, 'a rejected finding is NOT counted as recorded');
+    assert.ok(out.totalRejected >= 1, 'the rejection is surfaced');
+    assert.equal(out.operationalError, true, 'and it is an operational error, not partial data');
+    assert.notEqual(result.status, 0, 'so model-ratchet exits non-zero rather than reporting success');
+  });
+
   it('appends findings to .adlc/findings.jsonl ledger', () => {
     const ledgerFile = join(adlcDir, 'findings.jsonl');
     assert.ok(existsSync(ledgerFile), 'findings.jsonl should exist after review run');

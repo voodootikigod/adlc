@@ -59,6 +59,23 @@ Run `adlc ticket-prune --json`.
   bulk `ticket-prune --ceremony` (evidence-less, legacy-store-only; #208).
 
 
+## Unbanked-cluster gate — recurring findings with no defense yet (P7 owner)
+
+```
+adlc lesson-foundry --gate
+```
+
+- Exit `0`: every recurring finding cluster in `.adlc/findings.jsonl` has a banked
+  lesson.
+- Exit non-zero: it names the clusters that recur but are still undefended —
+  surface them and run `/adlc-distill` to bank a defense.
+
+This deterministic, keyless gate is the decay-time owner of the P5 → P7 bridge. It
+is not yet wired into the maintenance cron, but it is portable now:
+`.adlc/findings.jsonl` is tracked in git (ADR 0014), so the cluster set travels with
+the repo and the gate returns the same verdict anywhere it is checked out —
+including CI.
+
 ## 4. Gate fuzzing — can hostile candidates defeat the gates? (calibration)
 Only if a gate suite exists at `.adlc/gate-suite.json` (without one the tool
 exits `1` — note that calibration was skipped):

@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { classifyTicket, classifyTickets, ceremonyDisposition, listTrackedFiles } from './detect.mjs';
 import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs';
+import { orderArchiveCandidates } from './archive-order.mjs';
 import { DirectoryTicketStore, archiveTicket, detectTicketStore } from '@adlc/tickets';
 
 /**
@@ -126,7 +127,16 @@ export function runTicketPrune(options = {}) {
     // `adlc ticket complete`, exactly as on the legacy backend.
     const archivedEntries = [];
     const needsCeremony = [];
-    for (const item of stale) {
+    const blocked = [];
+    // Archive edge SOURCES before their TARGETS (T75). archiveTicket fails closed
+    // on inbound edges, so a candidate referenced by another IN-BATCH candidate
+    // must be archived only AFTER that referencing source is gone. Ordering by the
+    // initial snapshot's edges is enough — each iteration still re-reads and
+    // re-classifies against the CURRENT store below.
+    const staleById = new Map(stale.map((r) => [r.id, r]));
+    const orderedIds = orderArchiveCandidates(stale.map((r) => r.id), ticketsById);
+    for (const id of orderedIds) {
+      const item = staleById.get(id);
       try {
         // Re-read and re-classify against the CURRENT snapshot, then pass THAT
         // snapshot's hash to archiveTicket, so the disposition and the CAS come
@@ -135,7 +145,7 @@ export function runTicketPrune(options = {}) {
         // status changed, completed:false set) slip a reclassified ticket through
         // the CAS. This mirrors the legacy path's under-lock re-read.
         const current = canonicalStore.load();
-        const ticket = current.get(item.id);
+        const ticket = current.get(id);
         if (!ticket) continue; // vanished under us since the first pass
         const reclassified = classifyTicket(ticket, trackedFiles);
         if (!reclassified.stale) continue; // un-staled since the first pass
@@ -145,22 +155,39 @@ export function runTicketPrune(options = {}) {
           needsCeremony.push(disposition.entry); // rails-freeze / preexisting-completed-field → reported, not archived
           continue;
         }
-        const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), item.id, {
+        const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), id, {
           root: cwd,
           expectedSnapshotHash: current.hash,
-          reason: item.reason,
+          // The RE-classified reason, not the first pass's: archiveTicket embeds this
+          // permanently in _adlcArchive, and the disposition + CAS already come from
+          // `current`. Using the stale reason would immortalise a pre-edit rationale.
+          reason: reclassified.reason,
           authorized: true,
         });
         archivedEntries.push(result.archived);
       } catch (error) {
-        // Each archive is its own committed transaction. On failure mid-batch,
-        // report what ALREADY archived (and which id failed) alongside the error,
-        // so the caller can recover rather than see a bare {ok:false} after an
-        // in-place mutation already landed.
-        return { ok: false, error: error.message, archived: archivedEntries, needsCeremony, failedId: item.id };
+        // ONLY the expected, per-ticket, recoverable block is swallowed-and-continued:
+        // ARCHIVE_INBOUND_EDGE, where a ticket OUTSIDE this batch still references
+        // `id`. That is the wedge T75 exists to fix — collect it (like needsCeremony)
+        // and keep archiving the rest. EVERYTHING else — a corrupt/unreadable store,
+        // a lock or CAS failure, an I/O or disk error, a transaction fault — is NOT
+        // recoverable and must fail the sweep, or automation reading exit 0 would take
+        // a broken store for a clean one. Preserve what was archived + the blocked set.
+        if (error?.code === 'ARCHIVE_INBOUND_EDGE') {
+          blocked.push({ id, reason: item?.reason ?? null, code: 'ARCHIVE_INBOUND_EDGE', error: error.message });
+          continue;
+        }
+        return {
+          ok: false,
+          baseRef, write, ceremony, stale, active,
+          archived: archivedEntries, needsCeremony, blocked,
+          failedId: id,
+          code: error?.code ?? 'ARCHIVE_FAILED',
+          error: `archiving ${id} failed: ${error.message}`,
+        };
       }
     }
-    return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony };
+    return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony, blocked };
   }
 
   const locked = acquireLock(cwd);

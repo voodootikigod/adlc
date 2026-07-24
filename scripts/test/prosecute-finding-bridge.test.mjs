@@ -20,8 +20,19 @@ import { fileURLToPath } from 'node:url';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 /**
- * DISCOVERED from disk, never a hardcoded list — a sixth harness must not be
+ * DISCOVERED from disk, never a hardcoded list — a further harness must not be
  * able to ship a prosecution workflow that silently starves P7.
+ *
+ * Two layouts ship a prosecute workflow. Command-layout harnesses (claude-code,
+ * cursor, opencode, pi) keep it in command/commands/prompts/adlc-prosecute.md.
+ * Skills-layout harnesses (codex, copilot, antigravity) express the same
+ * loop as a SKILL.md under skills/<name>/ where <name> matches /prosecut/
+ * (adlc-prosecute, antigravity's adlc-prosecutor). We consult the skills layout
+ * only when a harness ships no command-layout doc, so a harness like pi — whose
+ * skills-layout adlc-prosecute is an evidence-recording helper that does NOT run
+ * the finding-surfacing loop — stays covered by its command-layout (prompts/)
+ * workflow rather than being double-counted against a doc that legitimately has
+ * no findings to record.
  *
  * Walked with readdirSync rather than fs.globSync: globSync is Node 22+, and
  * this repo's CI runs the suite on Node 18, 20 and 22.
@@ -31,8 +42,22 @@ function discoverProsecuteDocs() {
   const pluginsDir = resolve(REPO, 'plugins');
   for (const plugin of readdirSync(pluginsDir, { withFileTypes: true })) {
     if (!plugin.isDirectory()) continue;
+
+    let found = false;
     for (const sub of ['command', 'commands', 'prompts']) {
       const p = `plugins/${plugin.name}/${sub}/adlc-prosecute.md`;
+      if (existsSync(resolve(REPO, p))) {
+        out.push({ path: p, text: readFileSync(resolve(REPO, p), 'utf8') });
+        found = true;
+      }
+    }
+    if (found) continue;
+
+    const skillsDir = resolve(REPO, `plugins/${plugin.name}/skills`);
+    if (!existsSync(skillsDir)) continue;
+    for (const skill of readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!skill.isDirectory() || !/prosecut/i.test(skill.name)) continue;
+      const p = `plugins/${plugin.name}/skills/${skill.name}/SKILL.md`;
       if (existsSync(resolve(REPO, p))) out.push({ path: p, text: readFileSync(resolve(REPO, p), 'utf8') });
     }
   }
@@ -43,9 +68,12 @@ const DOCS = discoverProsecuteDocs();
 
 test('the harness prosecute docs are actually discovered', async () => {
   // A walk that finds nothing would make every assertion below vacuous.
-  assert.ok(DOCS.length >= 4, `expected the harness prosecute docs, found ${DOCS.length}`);
+  assert.ok(DOCS.length >= 7, `expected the harness prosecute docs, found ${DOCS.length}`);
   const harnesses = new Set(DOCS.map((d) => d.path.split('/')[1]));
-  for (const h of ['adlc-claude-code', 'adlc-cursor', 'adlc-opencode', 'adlc-pi']) {
+  for (const h of [
+    'adlc-claude-code', 'adlc-cursor', 'adlc-opencode', 'adlc-pi',
+    'adlc-codex', 'adlc-copilot', 'adlc-antigravity',
+  ]) {
     assert.ok(harnesses.has(h), `${h} must have a discoverable prosecute workflow`);
   }
 });

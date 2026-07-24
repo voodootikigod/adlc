@@ -45,6 +45,7 @@ import { appendEntry } from './ledger.mjs';
  * @param {string} [dir]  ledger dir; defaults to the ADLC_DIR appendEntry uses.
  * @returns {object} the appended entry
  */
+
 export function recordFinding(finding, dir) {
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
     throw new Error('recordFinding: finding must be an object');
@@ -53,6 +54,8 @@ export function recordFinding(finding, dir) {
   const desc = typeof finding.desc === 'string' ? finding.desc.trim() : '';
   if (!file) throw new Error('recordFinding: finding.file is required');
   if (!desc) throw new Error('recordFinding: finding.desc is required (it is the clustering key)');
+  // The publishability boundary lives in the ledger writer (assertPublishableFinding),
+  // so EVERY producer is covered — not just this one. Nothing to duplicate here.
 
   const str = (v, fallback) => (typeof v === 'string' && v.trim() ? v.trim() : fallback);
   const entry = {

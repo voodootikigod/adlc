@@ -1,0 +1,16 @@
+{
+  "body": ".adlc/findings.jsonl is machine-local (gitignored) by the 0da039e design, so findings recorded in fleet worktrees or CI die with the workspace and the --gate can never run in CI — the compounding P5-to-P7 loop stalls. Decision (default, reversible via the ADR): TRACK the ledger like .adlc/manifest.jsonl (d344a35 already negated manifest). Entries are curated prose descriptions with repo-relative paths; all 16 current entries were reviewed and contain no secrets. Implement: (1) add a `!.adlc/findings.jsonl` negation to .gitignore positioned after the blanket `.adlc/*` rule (mirroring the manifest/lessons negations); (2) a gitignore-negation-effective test guarding it against future shadowing (mirror scripts/test/gitignore-negations-effective.test.mjs); (3) an ADR under docs/adr/ recording the track-vs-export choice, the no-secrets basis, and the standing rule that findings must be curated prose (never raw tool dumps or secrets). Trust note: this edits .gitignore inside the .adlc/ trust boundary — expect the change to be visible to rails-guard/trust-root review; keep the diff minimal and additive. Verification: `git check-ignore .adlc/findings.jsonl` exits non-zero (now tracked); `node --test scripts/test/gitignore-negations-effective.test.mjs`. allow-suppression: none",
+  "budget": "mid",
+  "category": "chore",
+  "duration": 1,
+  "edges": [],
+  "id": "T81",
+  "rails": [],
+  "scope": [
+    ".gitignore",
+    "docs/adr/**",
+    "scripts/test/**",
+    ".adlc/findings.jsonl"
+  ],
+  "title": "distill: make the findings ledger portable — track .adlc/findings.jsonl + ADR"
+}

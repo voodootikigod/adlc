@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runFleet, integrationBranchName } from '../lib/run.mjs';
+import { runFleet, integrationBranchName, runExitCode } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 
 const T = (id, opts = {}) => ({ id, title: id, scope: opts.scope ?? [`src/${id}/**`], edges: opts.edges ?? [] });
 
 // A deps harness that records every git-ish interaction so we can assert base is
 // never written and merges land on the integration branch.
-function harness({ prosecuteVerdict = () => ({ verdict: 'pass' }), postMerge = () => ({ ok: true }) } = {}) {
+function harness({ prosecuteVerdict = () => ({ verdict: 'pass' }), postMerge = () => ({ ok: true }), openPR } = {}) {
   const rec = { merges: [], worktreeStartShas: [], prosecutedStartShas: [], gatedStartShas: [], prs: [], baseWrites: [] };
   const deps = {
     baseSha: 'BASE',
@@ -28,7 +28,9 @@ function harness({ prosecuteVerdict = () => ({ verdict: 'pass' }), postMerge = (
     },
     postMergeGate: postMerge,
     revertMerge: () => ({ method: 'reset', ok: true }),
-    openPR: ({ integrationBranch, base }) => { rec.prs.push({ integrationBranch, base }); },
+    // The real openPR reports { opened, reason }. Default models a successful open; a test
+    // can override to model gh being unavailable or a push/creation failure.
+    openPR: openPR ?? (({ integrationBranch, base }) => { rec.prs.push({ integrationBranch, base }); return { opened: true }; }),
   };
   return { deps, rec };
 }
@@ -46,13 +48,30 @@ test('merges land on fleet/run-<runId>, base is never written (AC13 i)', async (
   assert.deepEqual(Object.values(summary.results).sort(), ['merged', 'merged']);
 });
 
-test('run end opens at most ONE PR to base (AC13 i)', async () => {
+test('run end opens at most ONE PR to base and counts it only when opened (AC13 i)', async () => {
   const all = [T('T1'), T('T2'), T('T3')];
   const { deps, rec } = harness();
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
-  await runFleet({ all, runId: 'abc', config, deps });
+  const summary = await runFleet({ all, runId: 'abc', config, deps });
   assert.equal(rec.prs.length, 1, 'exactly one PR at run end');
   assert.equal(rec.prs[0].base, 'main');
+  assert.equal(summary.prCount, 1, 'the opened PR is counted');
+});
+
+test('a REPORTED PR-open failure is not fabricated as success (round-31)', async () => {
+  // merged > 0, but openPR reports { opened:false } (e.g. gh unavailable, or the push /
+  // gh pr create failed). The run must NOT claim a PR exists — prCount stays 0.
+  const all = [T('T1'), T('T2')];
+  const { deps, rec } = harness({
+    openPR: ({ integrationBranch, base }) => { rec.prs.push({ integrationBranch, base }); return { opened: false, reason: 'gh CLI not available' }; },
+  });
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all, runId: 'abc', config, deps });
+  assert.equal(summary.merged, 2, 'precondition: tickets merged, so a PR was attempted');
+  assert.equal(rec.prs.length, 1, 'openPR was invoked');
+  assert.equal(summary.prCount, 0, 'a reported open-failure is NOT counted as an opened PR');
+  assert.equal(summary.prOpenFailed, true, 'the attempted-but-failed open is recorded');
+  assert.equal(runExitCode(summary), 2, 'merged-but-unpublished exits non-zero so automation is not told it is complete');
 });
 
 test('no PR is opened when nothing merged', async () => {

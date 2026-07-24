@@ -9,9 +9,29 @@ import { runFleet } from '../lib/run.mjs';
 
 const T = (id, scope) => ({ id, title: id, scope, body: 'do', edges: [] });
 
+// Models git's PER-WORKTREE HEAD (see the note in live-deps.test.mjs): each worktree
+// carries its own branch, set by `worktree add -b`, and real git never returns '' from
+// symbolic-ref.
 function fakeGit() {
-  return () => (...args) => {
+  const headOf = new Map();
+  const branchFor = (dir) => {
+    for (const [p, b] of headOf) if (String(dir).endsWith(p)) return b;
+    return headOf.get(String(dir)) ?? 'main';
+  };
+  return (dir) => (...args) => {
     const verb = args[0];
+    if (verb === 'worktree' && args[1] === 'add') {
+      const i = args.indexOf('-b');
+      if (i >= 0) headOf.set(String(args[i + 2]), String(args[i + 1]));
+      else headOf.set(String(args[2]), String(args[3] ?? 'main'));
+      return '';
+    }
+    if (verb === 'checkout') {
+      const target = args.slice(1).filter((a) => !String(a).startsWith('-')).pop();
+      if (target) headOf.set(String(dir), String(target));
+      return '';
+    }
+    if (verb === 'symbolic-ref') return branchFor(dir);
     if (verb === 'diff') return ''; // no out-of-scope changes (this test targets concurrency, not the gate)
     if (verb === 'status') return '';
     if (verb === 'show') throw new Error('no template at rev');

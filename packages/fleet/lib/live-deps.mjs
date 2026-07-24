@@ -23,6 +23,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnAsync } from './spawn-async.mjs';
+import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -140,6 +141,11 @@ function parseStatusPaths(out) {
  */
 export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunner, io = defaultIo() }) {
   const repoGit = io.git(repo);
+  // EVERY integration-branch operation runs in the run's dedicated worktree, never in
+  // the shared main checkout. The path is deterministic so it resolves identically on
+  // a resume, before createIntegrationBranch has run.
+  const integrationPath = join(repo, worktrees.INTEGRATION_WORKTREE);
+  const integrationGit = io.git(integrationPath);
   // Resolve the configured worker harness (T44). Fails closed on an unknown name.
   const adapter = getAdapter(config.adapter ?? 'claude-code');
   const review = reviewRunner ?? makeReviewRunner({
@@ -180,7 +186,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     createIntegrationBranch: ({ integrationBranch, baseSha }) => {
       io.ensureGitignore(repo, repoGit);
-      worktrees.createIntegrationBranch(repo, integrationBranch, baseSha, repoGit);
+      // Create the branch AND its dedicated worktree in one step. From here on the
+      // integration branch is checked out ONLY there — git will refuse to check it out
+      // in the shared main checkout, so the whole class of "another process moved HEAD
+      // under us" becomes impossible instead of merely detectable.
+      worktrees.ensureIntegrationWorktree(repo, integrationBranch, { baseSha, git: repoGit, gitAt: io.git });
+    },
+
+    // Resume counterpart: re-attach the dedicated worktree to an EXISTING integration
+    // branch (no baseSha — the branch and its history must be preserved).
+    ensureIntegrationWorktree: ({ integrationBranch }) => {
+      io.ensureGitignore(repo, repoGit);
+      worktrees.ensureIntegrationWorktree(repo, integrationBranch, { git: repoGit, gitAt: io.git });
     },
 
     createWorktree: async ({ ticket, integrationBranch }) => {
@@ -283,16 +300,59 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       { adlcBin, exec: flailExec(io) },
     ),
 
-    mergeToIntegration: ({ branch, integrationBranch }) => worktrees.mergeToIntegration(repo, branch, integrationBranch, repoGit),
+    // Rebase inside the ticket's own worktree, merge inside the integration worktree —
+    // no checkout switching anywhere, and the shared checkout is never involved.
+    mergeToIntegration: ({ branch, integrationBranch, worktree }) => worktrees.mergeToIntegration({
+      branch,
+      integrationBranch,
+      ticketGit: io.git(worktree),
+      integrationGit,
+    }),
 
-    postMergeGate: ({ integrationBranch }) => {
-      // Run the configured gate on the integration branch in the repo, sandboxed.
-      repoGit('checkout', integrationBranch);
-      return runGates(sandboxFor(repo), config.gate, repoCmdEnv(repo));
+    postMergeGate: async ({ integrationBranch }) => {
+      // Gate inside the integration worktree — no checkout, nothing shared. The branch
+      // identity and SHA are pinned either side: the worktree removes the
+      // external-interference class, and these assertions keep the verdict provably
+      // attributable to the commit being approved (defence in depth, and they cost
+      // two git calls).
+      let gatedSha;
+      try {
+        assertOnBranch(integrationGit, integrationBranch, 'before gating', 'trust the gate');
+        gatedSha = integrationGit('rev-parse', 'HEAD');
+      } catch (error) {
+        return { ok: false, output: `${error.message}; refusing to gate` };
+      }
+      // MUST await: runGates is async (it runs build/test to completion). Reading HEAD
+      // before awaiting would pin it BEFORE the gate's commands ever ran, so a commit or
+      // ref movement DURING the build/test would be invisible and a stale passing verdict
+      // would be trusted (adversarial-review round-30). The whole point of the after-gate
+      // pin is to observe the branch tip AS IT WAS while the gate executed.
+      const result = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath));
+      try {
+        assertOnBranch(integrationGit, integrationBranch, 'after gating', 'trust the gate');
+        if (integrationGit('rev-parse', 'HEAD') !== gatedSha) {
+          throw new Error(`refusing to trust the gate: HEAD moved from ${gatedSha} while the gate ran`);
+        }
+      } catch (error) {
+        return { ok: false, output: `${error.message}; the gate result cannot be attributed to ${integrationBranch}` };
+      }
+      return result;
     },
 
     revertMerge: ({ integrationBranch, mergeSha, preMergeSha }) =>
-      worktrees.revertMerge(repo, integrationBranch, { mergeSha, preMergeSha }, repoGit),
+      worktrees.revertMerge(integrationPath, integrationBranch, { mergeSha, preMergeSha }, integrationGit),
+
+    // T73: after the post-merge gate passes, complete the ticket ON the integration
+    // branch (checked out at `repo` by postMergeGate) via the same planComplete +
+    // apply path the CLI uses, committing the add-only completed:true diff so it
+    // rides the single PR. Idempotent and best-effort at the call site (§run.mjs).
+    completeTicket: ({ ticket, integrationBranch }) =>
+      completeTicketOnIntegration({ repo: integrationPath, ticketId: ticket.id, integrationBranch, git: integrationGit }),
+
+    // Withdraw ONLY the completion commit when the gate re-run over it fails; the
+    // shipped merge underneath is never touched.
+    revertCompletion: ({ toSha, shardPath, completionSha, integrationBranch }) =>
+      revertCompletionCommit({ repo: integrationPath, toSha, shardPath, completionSha, integrationBranch, git: integrationGit }),
 
     cleanup: ({ worktree, state }) => {
       // Keep failed worktrees for inspection; remove merged ones.
@@ -306,11 +366,17 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       catch { /* evidence is best-effort */ }
     },
 
-    openPR: ({ integrationBranch, base }) => {
+    openPR: async ({ integrationBranch, base }) => {
       if (!io.hasGh()) return { opened: false, reason: 'gh CLI not available' };
       try {
-        repoGit('push', '-u', 'origin', integrationBranch);
-        io.spawnWorker('gh', ['pr', 'create', '--base', base, '--head', integrationBranch, '--fill'], { cwd: repo });
+        integrationGit('push', '-u', 'origin', integrationBranch);
+        // AWAIT the creation: spawnWorker is async, so a fire-and-forget call would
+        // report success before `gh pr create` ran and could miss its failure entirely.
+        const res = await io.spawnWorker('gh', ['pr', 'create', '--base', base, '--head', integrationBranch, '--fill'], { cwd: repo });
+        if (res?.error) throw res.error;
+        if (typeof res?.status === 'number' && res.status !== 0) {
+          return { opened: false, reason: `gh pr create exited ${res.status}: ${(res.stderr ?? '').trim()}`.trim() };
+        }
         return { opened: true };
       } catch (e) { return { opened: false, reason: e.message }; }
     },

@@ -15,7 +15,7 @@ import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
 import { runPreflight } from '../lib/preflight.mjs';
 import { reconcileRun } from '../lib/resume.mjs';
 import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
-import { runFleet } from '../lib/run.mjs';
+import { runFleet, runExitCode, failedBlockedCount } from '../lib/run.mjs';
 import { selfIdentity, lockProbes } from '../lib/proc.mjs';
 import { Sandbox } from '../lib/sandbox.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
@@ -30,6 +30,7 @@ Usage:
 
 Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked.`;
 
+function runCli() {
 const raw = process.argv.slice(2);
 const sub = raw[0];
 
@@ -139,9 +140,24 @@ if (sub === 'run') {
 if (!['run', 'status', 'unlock'].includes(sub)) {
   gateFail(`unknown subcommand: ${sub}\n\n${USAGE}`);
 }
+}
 
-async function runLive({ repo, dir, all, config, onlyIds }) {
-  const io = defaultIo();
+// Dispatch the CLI ONLY when run as the entry point. Importing this module (e.g. a unit
+// test importing runLive) must not parse argv, hit process.exit, or gateFail.
+if (import.meta.url === `file://${process.argv[1]}`) runCli();
+
+// Collaborators are injectable (defaulting to the real implementations) purely for
+// testability: the production call site passes no overrides, so behavior is unchanged, but a
+// unit test can drive the preflight / run / exit-code path without a real sandbox.
+export async function runLive({ repo, dir, all, config, onlyIds }, {
+  io = defaultIo(),
+  preflight = runPreflight,
+  build = buildLiveDeps,
+  run = runFleet,
+  loadPrior = loadStatus,
+  reconcile = reconcileRun,
+  release = releaseLock,
+} = {}) {
   const repoGit = io.git(repo);
 
   // Preflight (spec §8.0): resolve+require sandbox, lock, clean tree, rail-hook
@@ -168,7 +184,7 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
     finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
   };
 
-  const pre = await runPreflight({
+  const pre = await preflight({
     repo, config, statusDir: dir, io,
     self: selfIdentity(), probes: lockProbes(),
     railHookInstalled,
@@ -182,29 +198,35 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
     // work by integration-branch ancestry; refuse on missing/moved anchors; and
     // CONTINUE that run (reuse its runId/integration branch/reconciled status)
     // rather than starting fresh (adversarial-review L3).
-    const prior = loadStatus(dir);
+    const prior = loadPrior(dir);
     let resume;
     if (prior) {
-      const rec = reconcileRun({ all, status: prior, repo, io });
+      const rec = reconcile({ all, status: prior, repo, io });
       if (rec.refused) { console.error(`cannot resume: ${rec.reason}`); return 1; }
       if (rec.resume) { resume = { status: rec.status, integrationBranch: rec.status.integrationBranch }; console.error(`resuming run ${rec.status.runId} on ${rec.status.integrationBranch}`); }
     }
 
     const runId = resume ? resume.status.runId : `${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
     const baseSha = resume ? resume.status.baseSha : repoGit('rev-parse', config.base);
-    const deps = buildLiveDeps({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io });
-    const summary = await runFleet({
+    const deps = build({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io });
+    const summary = await run({
       all, runId, resume,
       config: { ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date().toISOString() },
       deps,
     });
 
-    const states = Object.values(summary.results);
-    const failed = states.filter((s) => s === 'failed' || s === 'blocked').length;
-    console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
-      `${summary.prCount ? ' (PR opened)' : ''}`);
-    return failed > 0 ? 2 : 0;
+    if (summary.contaminated) {
+      console.error(`\nfleet run ${runId}: QUARANTINED — ${summary.contaminationReason}.` +
+        ` Branch ${summary.integrationBranch} carries an ungated change and needs manual cleanup; no PR was opened.`);
+    } else {
+      const failed = failedBlockedCount(summary.results);
+      console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
+        `${summary.prCount ? ' (PR opened)' : ''}`);
+    }
+    // Exit code keys on quarantine FIRST — see runExitCode. A quarantined-no-work resume
+    // must not report success just because no ticket reached a failed/blocked state.
+    return runExitCode(summary);
   } finally {
-    releaseLock(dir); // always release the preflight-held lock
+    release(dir); // always release the preflight-held lock
   }
 }

@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DirectoryTicketStore, doctorTicketStore } from '../index.mjs';
+import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename } from '../index.mjs';
 import { ticket, writeDirectory } from './helpers.mjs';
 
 test('doctor is read-only and reports active/archive/runtime health', () => {
@@ -108,6 +109,248 @@ test('doctor current-ticket: a pointer pinning no ticketHash is reported (strict
     assert.equal(d.check.ok, false);
     assert.equal(d.check.code, 'ACTIVE_TICKET_HASH_MISSING');
   } finally { d.cleanup(); }
+});
+
+// ---------------------------------------------------------------------------
+// storeHash ↔ manifest evidence binding (T77).
+//
+// doctor reported the live storeHash but never compared it to the storeHash the
+// last evidence-required transaction bound in .adlc/manifest.jsonl. The check now
+// binds the store to that last evidenced CHECKPOINT and reports honestly — it does
+// NOT adjudicate per-ticket tamper (unsound in this model: the ticket layer permits
+// ordinary unevidenced updates, so a "changed since its evidence" signal both
+// false-flags legitimately-edited evidenced tickets and misses hand-edits to
+// never-evidenced ones — sound tamper-detection needs a store hash per transaction,
+// a follow-up). Contract:
+//   - clean store (hash == last bound storeHash) → pass, no drift;
+//   - hash differs from the checkpoint → drift, REPORTED not failed (git history is
+//     the record for the changed shards).
+// ---------------------------------------------------------------------------
+
+/** A directory store with ticket A authored and COMPLETED (so A carries manifest evidence). */
+function storeWithEvidence(extra = []) {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-bind-'));
+  writeDirectory(root, []); // empty directory store (.store.json only)
+  const store = new DirectoryTicketStore(join(root, '.adlc', 'tickets'));
+  const service = new TicketService(store, { root });
+  service.apply(service.planCreate(ticket('A')));
+  for (const t of extra) service.apply(service.planCreate(t));
+  service.apply(service.planComplete('A')); // evidence-required → records bound storeHash + A's hash
+  return { root, store, service };
+}
+
+const bindCheck = (report) => report.checks.find((c) => c.name === 'storehash-manifest-bind');
+
+test('doctor storehash-manifest-bind: a clean store (unchanged since the last evidence) passes and binds', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.ok(check, 'the storeHash↔manifest check is present');
+    assert.equal(check.ok, true);
+    assert.equal(check.bound, true);
+    assert.notEqual(check.drift, true, 'no drift on a clean store');
+    // No ADLC_MANIFEST_KEY here → the binding is NOT cryptographically authenticated, and
+    // the check must say so rather than implying an attestation it did not make.
+    assert.equal(check.authenticated, false, 'without a key the checkpoint is not authenticated');
+    assert.match(check.warning ?? '', /not cryptographically authenticated|forgeable/i, 'and the unauthenticated risk is surfaced');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: WITHOUT a key, a coordinated shard+final-entry edit hides drift — but is flagged UNAUTHENTICATED', () => {
+  // The reviewer's exploit (round-34): with no key, an editor changes a shard, recomputes the
+  // public store hash, and rewrites the FINAL manifest entry's data.storeHash to match. The
+  // backward chain still validates and no drift shows, so a naive reading is "bound + clean".
+  // Doctor cannot DETECT this without a signing key — but it must not present it as attested:
+  // authenticated:false + a warning are the honest signal (WITH a key this same edit fails the
+  // signature check, proven separately).
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  delete process.env.ADLC_MANIFEST_KEY;
+  const { root, store } = storeWithEvidence();
+  try {
+    // 1) Tamper with A's shard.
+    const shard = join(root, '.adlc', 'tickets', ticketFilename('A'));
+    writeFileSync(shard, prettyCanonicalJson({ ...JSON.parse(readFileSync(shard, 'utf8')), title: 'Coordinated tamper' }));
+    const forgedHash = store.load().hash; // the new, public store hash
+
+    // 2) Rewrite the final manifest entry's bound storeHash to match — hiding the drift.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const mlines = readFileSync(manifestPath, 'utf8').split('\n').filter((l) => l.trim());
+    const last = JSON.parse(mlines[mlines.length - 1]);
+    last.data = { ...last.data, storeHash: forgedHash };
+    mlines[mlines.length - 1] = JSON.stringify(last);
+    writeFileSync(manifestPath, mlines.join('\n') + '\n');
+
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.notEqual(check.drift, true, 'the coordinated edit hides drift (why signatures are needed)');
+    assert.equal(check.authenticated, false, 'so doctor must NOT present it as authenticated');
+    assert.match(check.warning ?? '', /not cryptographically authenticated|forgeable/i, 'the forgeability is surfaced, not hidden');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+  }
+});
+
+test('doctor storehash-manifest-bind: a hand-edited shard surfaces as drift, deliberately NOT adjudicated as tamper', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // Hand-edit A's shard directly, bypassing the transaction machinery. The store
+    // hash now diverges from the last evidenced checkpoint. This check reports the
+    // drift but must NOT claim tamper — a per-ticket tamper signal is unsound here
+    // (see the file header), so the honest output is drift, with git history as the
+    // record for the changed shard.
+    const shard = join(root, '.adlc', 'tickets', ticketFilename('A'));
+    const edited = { ...JSON.parse(readFileSync(shard, 'utf8')), title: 'Silently edited' };
+    writeFileSync(shard, prettyCanonicalJson(edited));
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.drift, true, 'the divergence from the checkpoint is surfaced');
+    assert.notEqual(check.code, 'STOREHASH_MANIFEST_MISMATCH', 'but no false tamper claim is made');
+    assert.equal(check.ok, true, 'and it is not failed — this check does not adjudicate tamper');
+    assert.equal(report.ok, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a legit later update of an EVIDENCED ticket is NOT flagged as tamper (no false positive)', () => {
+  // The round-2 adversarial-review finding: an evidenced ticket that later receives
+  // an ordinary non-sensitive update (permitted, unevidenced) must not be reported
+  // as tampering. It is drift, reported, never a failure.
+  const { root, store, service } = storeWithEvidence();
+  try {
+    const current = store.load().get('A');
+    service.apply(service.planUpdate('A', { ...current, title: 'Legitimately edited later' }));
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true, 'a legit unevidenced update of an evidenced ticket does not fail');
+    assert.notEqual(check.code, 'STOREHASH_MANIFEST_MISMATCH', 'no false tamper claim');
+    assert.equal(check.drift, true, 'it is surfaced as drift');
+    assert.equal(report.ok, true, 'the report stays green on a valid repo');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a legitimate unevidenced op (create) is reported as drift, not failed', () => {
+  const { root, store, service } = storeWithEvidence();
+  try {
+    // Creating B is a non-sensitive op that records NO manifest evidence, so the
+    // live storeHash drifts from the last bound one — but A (the evidenced ticket)
+    // is untouched. That is a legitimate state: reported, never failed.
+    service.apply(service.planCreate(ticket('B')));
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true, 'a legitimate unevidenced op does not fail the check');
+    assert.equal(check.drift, true, 'but the drift is surfaced');
+    assert.equal(report.ok, true, 'and the report stays green');
+    // The message is honest that the drift is unverified by this check, not a claim
+    // that the store is confirmed clean.
+    assert.match(check.message, /does not verify|git history/i, 'the drift is reported as unverified, not adjudicated');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a forged / chain-broken manifest is NOT trusted (no arbitrary checkpoint)', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // Append a forged entry asserting an arbitrary storeHash but with a broken
+    // prev-link and out-of-sequence seq. The check must verify the hash chain and
+    // refuse to adopt the forged hash — reporting the ledger unverifiable instead of
+    // silently trusting the last syntactically-valid storeHash.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const forged = JSON.stringify({ seq: 999, gate: 'forged', ts: '2026-01-01T00:00:00.000Z', data: { storeHash: 'deadbeefdeadbeef', bindingScope: 'store' }, prev: 'not-a-real-hash' });
+    writeFileSync(manifestPath, readFileSync(manifestPath, 'utf8') + forged + '\n');
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, false, 'a chain-invalid manifest FAILS the integrity check');
+    assert.equal(report.ok, false, 'and fails the overall report — a detected corruption is never reported healthy');
+    assert.notEqual(check.boundStoreHash, 'deadbeefdeadbeef', 'the forged storeHash is never adopted');
+    assert.match(check.reason ?? '', /chain|FAILED|malformed/i, 'the broken chain is reported');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Signature verification (adversarial-review round 6): the backward hash chain
+// leaves the FINAL entry unprotected, so with a key configured every entry must
+// also carry a valid HMAC or the last entry's storeHash could be edited in place.
+function signManifestEntry(key, entry) {
+  const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
+  if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
+  if (entry.data !== undefined) canonical.data = entry.data;
+  canonical.files = entry.files;
+  canonical.prev = entry.prev;
+  return createHmac('sha256', key).update(JSON.stringify(canonical)).digest('hex');
+}
+
+function writeSignedManifest(root, key, { storeHash }) {
+  const entry = { seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', data: { storeHash, bindingScope: 'store' }, files: {}, prev: null };
+  entry.sig = signManifestEntry(key, entry);
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${JSON.stringify(entry)}\n`);
+  return entry;
+}
+
+test('doctor storehash-manifest-bind: with a key set, a validly-signed manifest verifies (signaturesVerified)', () => {
+  const { root, store } = storeWithEvidence();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  try {
+    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
+    const live = store.load().hash;
+    writeSignedManifest(root, 'test-signing-key', { storeHash: live });
+
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, true, 'a correctly-signed ledger verifies');
+    assert.equal(check.signaturesVerified, true, 'and reports that signatures WERE checked');
+    assert.notEqual(check.drift, true, 'the bound hash matches the live store');
+  } finally {
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('doctor storehash-manifest-bind: an in-place edit of the FINAL entry storeHash fails signature verification', () => {
+  const { root, store } = storeWithEvidence();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  try {
+    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
+    const entry = writeSignedManifest(root, 'test-signing-key', { storeHash: store.load().hash });
+    // The exploit: rewrite the last entry's storeHash but leave its signature (and
+    // the chain, which does not protect the final line) untouched.
+    const forged = { ...entry, data: { ...entry.data, storeHash: 'deadbeefdeadbeef' } };
+    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${JSON.stringify(forged)}\n`);
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, false, 'the tampered final entry fails verification');
+    assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');
+    assert.equal(report.ok, false, 'and fails the overall report');
+    assert.notEqual(check.boundStoreHash, 'deadbeefdeadbeef', 'the forged storeHash is never adopted');
+  } finally {
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('doctor storehash-manifest-bind: with NO key configured, it reports signatures were not verified', () => {
+  const { root, store } = storeWithEvidence();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  try {
+    delete process.env.ADLC_MANIFEST_KEY;
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.signaturesVerified, false, 'no false assurance — only the structural chain was checked');
+  } finally {
+    if (prevKey !== undefined) process.env.ADLC_MANIFEST_KEY = prevKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('doctor storehash-manifest-bind: a store with no recorded evidence yet is inert (not a failure)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-noevidence-'));
+  try {
+    const path = writeDirectory(root, [ticket('A')]); // shards written directly; no manifest
+    const report = doctorTicketStore(new DirectoryTicketStore(path), { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true);
+    assert.equal(check.bound, false, 'nothing to bind against yet');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('doctor current-ticket: reports that it could not validate when the store is unreadable', () => {

@@ -33,6 +33,14 @@ jobs:
       - name: Test
         run: npm test
 
+      # Git-boundary secret/dump scan of the COMMITTED findings ledger (ADR 0014).
+      # Mirrors the `findings-ledger` gate in scripts/preflight.mjs. The write-time
+      # filter in appendEntries only sees the append API; a manual edit or `git add`
+      # of a hand-crafted line bypasses it, so this required, base-independent scan is
+      # the merge-time backstop. Runs on every matrix leg (no binary/base needed).
+      - name: Findings-ledger secret scan
+        run: node scripts/scan-findings-ledger.mjs
+
       # AC2 — the adlc-copilot offline contract + deny-shape proof runs on EVERY
       # test matrix leg (no binary needed). It behaviorally pins the verified
       # Copilot deny shape ({reason} on stdout + exit 0), so a refactor that
@@ -291,6 +299,14 @@ jobs:
             export ADLC_PR_REVIEWS
           fi
           node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
+
+      # The durable findings ledger (.adlc/findings.jsonl, ADR 0014) is append-only P5->P7
+      # memory. The single-tree secret scanner cannot see a DELETION (nothing left to scan),
+      # so this base-diff backstop fails a PR that removes, truncates, or rewrites it.
+      - name: Findings-ledger append-only gate
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: node scripts/guard-findings-ledger-append-only.mjs "origin/$BASE_REF"
 
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that

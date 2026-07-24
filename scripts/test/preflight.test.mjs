@@ -23,9 +23,10 @@ const flat = (g) => [g.argv[0], ...g.argv[1]].join(' ');
 // gate -> (how CI invokes it, what preflight must run). Kept as a pair so the
 // assertion fails loudly if CI stops running a gate OR preflight stops matching.
 const GATES = [
-  { gate: 'tests',         ci: 'npm test',                     preflight: 'scripts/run-tests.mjs' },
-  { gate: 'rail-freeze',   ci: 'scripts/rails-guard-ci.mjs',   preflight: 'scripts/rails-guard-ci.mjs' },
-  { gate: 'mutation-gate', ci: 'scripts/mutation-gate.mjs',    preflight: 'scripts/mutation-gate.mjs' },
+  { gate: 'tests',                ci: 'npm test',                                  preflight: 'scripts/run-tests.mjs' },
+  { gate: 'rail-freeze',          ci: 'scripts/rails-guard-ci.mjs',                preflight: 'scripts/rails-guard-ci.mjs' },
+  { gate: 'mutation-gate',        ci: 'scripts/mutation-gate.mjs',                 preflight: 'scripts/mutation-gate.mjs' },
+  { gate: 'findings-append-only', ci: 'scripts/guard-findings-ledger-append-only.mjs', preflight: 'scripts/guard-findings-ledger-append-only.mjs' },
 ];
 
 test('preflight runs every gate CI blocks a PR on', async () => {
@@ -52,14 +53,23 @@ test('every gate is invoked EXACTLY as ci.yml invokes it', async () => {
   // positional and defaults to origin/main, so `--base main` silently diffs
   // against a different ref than CI. A grep for the script name cannot see that.
   const [tests, rail, mutation] = buildGates('main');
+  const appendOnly = buildGates('main').find((g) => g.name === 'findings-append-only');
 
   assert.deepEqual(tests.argv[1], ['scripts/run-tests.mjs']);
   assert.deepEqual(rail.argv[1], ['scripts/rails-guard-ci.mjs', 'origin/main']);
   assert.deepEqual(mutation.argv[1], ['scripts/mutation-gate.mjs', 'origin/main', '--max', '12']);
+  assert.deepEqual(appendOnly.argv[1], ['scripts/guard-findings-ledger-append-only.mjs', 'origin/main']);
 
   // ...and CI really does use the positional + --max form.
   assert.match(ci, /mutation-gate\.mjs "origin\/\$BASE_REF" --max 12/);
   assert.match(ci, /rails-guard-ci\.mjs "origin\/\$BASE_REF"/);
+  assert.match(ci, /guard-findings-ledger-append-only\.mjs "origin\/\$BASE_REF"/);
+});
+
+test('the findings gates name their ADR basis (pins the ADR 0014 reference against drift)', async () => {
+  const gates = buildGates('main');
+  assert.match(gates.find((g) => g.name === 'findings-ledger').why, /ADR 0014/, 'findings-ledger cites ADR 0014');
+  assert.match(gates.find((g) => g.name === 'findings-append-only').why, /ADR 0014/, 'findings-append-only cites ADR 0014');
 });
 
 test('--base selects the ref every diff-based gate compares against', async () => {
@@ -67,8 +77,16 @@ test('--base selects the ref every diff-based gate compares against', async () =
   assert.equal(parseBase(['node', 'preflight.mjs']), 'main', 'defaults to main');
   assert.equal(parseBase(['node', 'preflight.mjs', '--base']), 'main', 'a dangling --base is not a ref');
 
-  for (const g of buildGates('release-2').filter((x) => x.name !== 'tests')) {
+  // Only the DIFF-based gates compare against the base. `tests` runs the whole suite
+  // and `findings-ledger` scans the entire committed ledger — both are base-independent
+  // by design, so they must NOT carry an origin/<base> ref. `findings-append-only` IS
+  // diff-based: it proves the ledger was only extended relative to the base.
+  const DIFF_BASED = new Set(['rail-freeze', 'mutation-gate', 'findings-append-only']);
+  for (const g of buildGates('release-2').filter((x) => DIFF_BASED.has(x.name))) {
     assert.ok(flat(g).includes('origin/release-2'), `${g.name} must honor --base`);
+  }
+  for (const g of buildGates('release-2').filter((x) => !DIFF_BASED.has(x.name))) {
+    assert.ok(!flat(g).includes('origin/release-2'), `${g.name} is base-independent and must not carry a base ref`);
   }
 });
 

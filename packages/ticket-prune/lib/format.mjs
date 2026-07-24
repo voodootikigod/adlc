@@ -1,7 +1,7 @@
 // format.mjs — human-readable + JSON rendering for a runTicketPrune() result.
 
 export function renderReport(result) {
-  const { baseRef, write, stale, active, tombstoned = [], archived = [], needsCeremony = [] } = result;
+  const { baseRef, write, stale, active, tombstoned = [], archived = [], needsCeremony = [], blocked = [] } = result;
   const lines = [];
   // `--ceremony` is deprecated (#208) and returns before rendering, so the only
   // in-place write this tool reports is tombstoning under --write.
@@ -56,6 +56,15 @@ export function renderReport(result) {
     for (const t of manual) lines.push(`  - ${t.id}: ${t.reason}`);
   }
 
+  if (blocked.length > 0) {
+    // Eligible for archive but blocked by an inbound edge from a ticket that is
+    // NOT being archived (T75). The sweep skipped past them rather than wedging —
+    // they need the referencing ticket handled first, or the edge removed.
+    lines.push('');
+    lines.push(`Skipped — still referenced by a ticket that is not being archived (${blocked.length}):`);
+    for (const b of blocked) lines.push(`  - ${b.id}: ${b.error ?? b.code ?? 'archive blocked'}`);
+  }
+
   lines.push('');
   lines.push(`Active tickets (${active.length}):`);
   if (active.length === 0) {
@@ -68,8 +77,10 @@ export function renderReport(result) {
 }
 
 export function toJson(result) {
-  const { baseRef, write, ceremony = false, stale, active, tombstoned = [], archived = [], ceremonyCompleted = [], needsCeremony = [] } = result;
+  const { baseRef, write, ceremony = false, stale, active, tombstoned = [], archived = [], ceremonyCompleted = [], needsCeremony = [], blocked = [] } = result;
   // `archived` is the directory-store mutation (moved shards); omitting it would
   // make `--json` under-report what --write actually changed on that backend.
-  return { baseRef, write, ceremony, stale, active, tombstoned, archived, ceremonyCompleted, needsCeremony };
+  // `blocked` is the skip-and-continue set (T75) — tickets left unarchived because
+  // a ticket outside the batch still references them.
+  return { baseRef, write, ceremony, stale, active, tombstoned, archived, ceremonyCompleted, needsCeremony, blocked };
 }

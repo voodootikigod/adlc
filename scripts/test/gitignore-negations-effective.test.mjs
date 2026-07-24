@@ -68,6 +68,19 @@ test('every .gitignore negation is effective, not shadowed by a later blanket ru
   );
 });
 
+test('.adlc/findings.jsonl is tracked (its negation is live), so the P7 ledger is portable', () => {
+  // ADR 0014: the curated findings ledger is tracked like the manifest so the
+  // P5 to P7 bridge survives fleet worktrees and CI, and the lesson-foundry gate
+  // can run against real data. A reorder that strands this negation silently
+  // stops git tracking the ledger — pin it BY NAME here, not only via the generic
+  // scan above, so the decision has a dedicated guard.
+  assert.equal(
+    isIgnored('.adlc/findings.jsonl'),
+    false,
+    '.adlc/findings.jsonl must be un-ignored (tracked); its `!` negation is missing or stranded above the .adlc/* blanket',
+  );
+});
+
 test('the guard itself detects a stranded negation (self-test)', () => {
   // Pins the mechanism the assertion above depends on. Without this, a bug that
   // made isIgnored() always return false would leave the real test green while

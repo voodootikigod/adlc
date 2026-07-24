@@ -26,3 +26,27 @@ never rewarded for volume.
 5. **Zero findings is a verdict, not a failure.** If the diff survives the
    charge sheet, say so plainly: `{"findings": [], "verdict": "ship"}`.
 6. Output exactly the JSON contract requested — no prose around it.
+
+## Bank every surviving finding before the verdict (the P5 → P7 bridge)
+
+A finding that survives the charge sheet is fixed and then gone; a finding that
+was never recorded cannot be clustered by `lesson-foundry` (P7), so the lifecycle
+stops compounding. Before the verdict is emitted and before any surviving finding
+is handed off to be fixed, the prosecuting session records each one — exactly
+once, at the moment it is confirmed real:
+
+```
+adlc prosecute --record-finding \
+  --file <repo-relative path> \
+  --desc "<plain prose: the pattern, not this instance>" \
+  --category <spec|scope|correctness|tests|security> \
+  --severity <critical|high|medium|low>
+```
+
+`--file` and `--desc` are required — the recorder fails closed rather than
+appending a junk entry. Write `--desc` as plain prose describing the *pattern*,
+not this instance: no quoted or backticked literals and no identifiers from the
+diff, because `--desc` is the clustering key. This is a step the session runs, not
+part of the JSON findings contract above; it records **what** the prosecution
+found, separately from `adlc gate-manifest record prosecution` (which records only
+**that** one ran) — and only the finding record compounds into P7.

@@ -73,6 +73,22 @@ adlc ticket-prune --json
   `completed: true` and expires its rails (T36). Do **not** use the deprecated
   bulk `ticket-prune --ceremony` (evidence-less, legacy-store-only; #208).
 
+## Unbanked-cluster gate — recurring findings with no defense yet (P7 owner)
+
+```
+adlc lesson-foundry --gate
+```
+
+- Exit `0`: every recurring finding cluster in `.adlc/findings.jsonl` has a banked
+  lesson.
+- Exit non-zero: it names the clusters that recur but are still undefended —
+  surface them and run `/adlc-distill` to bank a defense.
+
+This gate is deterministic, keyless, and portable: `.adlc/findings.jsonl` is tracked
+in git (ADR 0014), so the cluster set travels with the repo and the gate returns the
+same verdict anywhere it is checked out — including CI. It is not yet wired into the
+`docs/ci/adlc-maintenance.yml` cron; run it in this session.
+
 ## 4. Gate fuzzing — NOT run automatically (needs a model AND a sandbox)
 
 `adlc gate-fuzzing` is doubly constrained: it is **LLM-backed** (an adversary

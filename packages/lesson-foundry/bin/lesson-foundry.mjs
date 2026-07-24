@@ -84,9 +84,11 @@ if (flags.llm && clusters.length > 0) {
 // Plan emissions
 const plan = planEmissions(clusters, findings, outDir, llmRefinements);
 
-// Gate check: which clusters have no existing defense file?
-const unbanked = flags.gate
-  ? findUnbankedClusters(clusters, outDir, existsSync)
+// Gate check: which clusters have no existing defense file? Computed for --write too, so the
+// write path emits a spec-gap question for EXACTLY the clusters the gate deems unbanked — the
+// two can never disagree (see the template-append filter below).
+const unbanked = (flags.gate || flags.write)
+  ? findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5)
   : [];
 
 // Output (human or JSON)
@@ -136,14 +138,31 @@ if (flags.write) {
           // Append only NEW questions, not the header, and never re-append a
           // question already present (dedup so N runs ≠ N copies).
           const existing = readFileSync(fullPath, 'utf8');
-          const questionMarker = (line) => {
-            const m = line.match(/cluster: ([^)]+)\)/);
-            return m ? `cluster: ${m[1]}` : line.trim();
-          };
+          // Append a spec-gap question ONLY for a cluster the gate deems UNBANKED, using the
+          // SAME coverage logic as --gate (findUnbankedClusters). This keeps the write path
+          // and the gate in lockstep, which no purely text-level dedup could:
+          //  - a cluster that merely GREW (round-13) or absorbed an out-of-order earlier
+          //    member (round-14) leaves a sub-minSize uncovered remainder → the gate credits
+          //    it as banked → its question is NOT re-appended; and
+          //  - a FUSED cluster whose uncovered members form their own recurring subcluster
+          //    stays unbanked → its question IS (re)emitted, instead of being suppressed for
+          //    overlapping the covered part (round-15).
+          // findUnbankedClusters read the template BEFORE this run's writes, so a question
+          // already present banks its cluster and drops out of the set (idempotent). The line
+          // is matched to its cluster by the in-run cluster-id, consistent within one run.
+          const unbankedIds = new Set(
+            unbanked.filter((c) => c.route === 'spec-gap').map((c) => c.id),
+          );
+          const lineClusterId = (line) => (line.match(/cluster-id: ([0-9a-f]+)/) || [])[1];
           const newLines = file.content
             .split('\n')
             .filter((l) => l.startsWith('- [ ]'))
-            .filter((l) => !existing.includes(questionMarker(l)));
+            .filter((l) => {
+              const id = lineClusterId(l);
+              // No id to classify by (never happens for generated lines) → fall back to a
+              // literal not-already-present check so a question is never silently dropped.
+              return id ? unbankedIds.has(id) : !existing.includes(l.trim());
+            });
           if (newLines.length > 0) {
             appendFileSync(fullPath, '\n' + newLines.join('\n') + '\n', 'utf8');
             if (!flags.json) console.log(`  appended: ${fullPath}`);

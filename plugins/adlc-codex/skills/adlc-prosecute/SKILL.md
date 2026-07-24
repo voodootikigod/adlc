@@ -41,6 +41,30 @@ implement — Codex reuses the identical pure orchestration logic
 `@adlc/core` via `plugins/adlc-codex/lib/prosecutor.mjs`, driven by a skill-instructed
 sequential loop instead of a host-level fan-out primitive.
 
+## Record every surviving finding (the P5 → P7 bridge)
+
+As soon as a finding **survives** verification (step 4) — and before you fix it in
+step 5 — record it. Once you fix it the finding stops existing, and a finding that
+was never recorded cannot be clustered by `lesson-foundry` (P7), so the lifecycle
+stops compounding. Run this exactly once per surviving finding, at verification
+time (not deferred to the end):
+
+```
+adlc prosecute --record-finding \
+  --file <repo-relative path> \
+  --desc "<plain prose: the pattern, not this instance>" \
+  --category <correctness|security|contract|diff|tests> \
+  --severity <high|medium|low>
+```
+
+`--file` and `--desc` are required — the recorder fails closed rather than
+appending a junk entry. Write `--desc` as **plain prose describing the pattern**,
+with no quoted or backticked literals and no identifiers from this diff: `--desc`
+is the clustering key, so a description tied to one instance clusters with nothing.
+This is distinct from the `adlc prosecute --input` / `adlc run p5` evidence in
+"Recording evidence" below, which records **that** a prosecution ran; this records
+**what it found** — only the second one compounds.
+
 ## Automatic Stop-time reminder
 
 A native Stop hook checks the session's changed files against the risk-tier

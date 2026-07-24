@@ -4,7 +4,7 @@
 // while holding the ledger lock; parsed/re-serialized entries are never used.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { sha256, hashFiles, appendEntries, ledgerPath, ADLC_DIR } from '@adlc/core';
+import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 
@@ -154,4 +154,23 @@ export function record({ gate, ticket, rawData, rawFiles, dir = ADLC_DIR }) {
   if (data !== undefined) payload.data = data;
   payload.files = filePaths.length > 0 ? hashFiles(filePaths) : {};
   return appendManifestEntry(payload, dir, { signatureVersion: 1 });
+}
+
+/**
+ * A one-line, side-effect-free reminder to conclude P6 by completing the ticket
+ * (T74). Recording a `p6-accept` verdict is evidence, NOT completion — this
+ * bridge never mutates a ticket, it only points the operator at the command that
+ * does. Returns null when the gate is not a P6 acceptance gate or no ticket was
+ * named, so there is nothing to remind about. The `p6-accept` prefix also matches
+ * the `p6-acceptance-packet` gate the acceptance path records.
+ *
+ * @param {string} gate  the recorded gate name
+ * @param {string|undefined} ticket  the --ticket id, if any
+ * @returns {string|null}
+ */
+export function ticketCompletionReminder(gate, ticket) {
+  if (typeof gate !== 'string' || typeof ticket !== 'string' || ticket === '') return null;
+  if (!/^p6-accept/.test(gate)) return null;
+  return `reminder: recording ${gate} is evidence, not completion — conclude P6 with ` +
+    `\`adlc ticket complete ${ticket} --write\` (add \`--authorize\` when the ticket is railed).`;
 }
