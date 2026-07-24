@@ -8,6 +8,7 @@ test('bucketFor floors now/window; disabled (null) for a non-positive or non-fin
   assert.equal(bucketFor(29_999, 30_000), 0);
   assert.equal(bucketFor(30_000, 30_000), 1);
   assert.equal(bucketFor(61_000, 30_000), 2);
+  assert.equal(bucketFor(5, 1), 5); // a 1ms window is VALID (enabled), not disabled
   assert.equal(bucketFor(1000, 0), null); // window 0 → dedupe disabled
   assert.equal(bucketFor(1000, -5), null);
   assert.equal(bucketFor(Infinity, 30_000), null);
