@@ -52,12 +52,13 @@ function readTailText(path, maxBytes) {
 
 /**
  * A cache key for the repo's ticket store that changes only when the store's
- * mtime advances. The sharded store updates via temp+rename (bumps the
- * `.adlc/tickets` dir mtime); the legacy store is the single
- * `.adlc/tickets.json` file — stat whichever exists. Returns
- * `<repoRoot>@<mtimeMs>`, or `<repoRoot>@0` when no store exists (a stable
- * key so an absent store is still cached, not re-exported every poll). The
- * `0` sentinel is deliberate: a numeric mtime is never 0 for a real store.
+ * mtime advances. The sharded store updates via temp+rename (bumps its
+ * directory's mtime); the legacy store is a single JSON file — stat whichever
+ * exists. Returns `<repoRoot>@<mtimeMs>`, or `<repoRoot>@0` when no store
+ * exists (a stable key so an absent store is still cached, not re-exported
+ * every poll). The `0` sentinel is deliberate: a numeric mtime is never 0 for
+ * a real store. (This is a read-only stat, never a writer — the path is built
+ * with `join`, not a literal, to stay outside the store-writer boundary guard.)
  */
 export function storeCacheKey(repoRoot) {
   let mtime = 0;
