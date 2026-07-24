@@ -35,13 +35,13 @@ function completionStorePath(store, id) {
  * DETECT a switch we could not prevent. The complete fix is not to share the checkout
  * at all — give the integration branch a dedicated worktree. Tracked as follow-up.
  */
-function assertOnBranch(git, branch, when) {
+function assertOnBranch(git, branch, when, action = 'complete') {
   const current = git('symbolic-ref', '--short', 'HEAD'); // throws on detached HEAD — fail closed
   if (current !== branch) {
-    throw new Error(`refusing to complete (${when}): checkout is on "${current}", not the integration branch "${branch}"`);
+    throw new Error(`refusing to ${action} (${when}): checkout is on "${current}", not the integration branch "${branch}"`);
   }
   if (git('rev-parse', 'HEAD') !== git('rev-parse', branch)) {
-    throw new Error(`refusing to complete (${when}): HEAD does not point at "${branch}"`);
+    throw new Error(`refusing to ${action} (${when}): HEAD does not point at "${branch}"`);
   }
 }
 
@@ -67,7 +67,13 @@ function restoreFile(absPath, priorBytes) {
  * concurrent evidence. An extra append-only evidence line is harmless; losing
  * another writer's evidence is not.
  */
-export function revertCompletionCommit({ repo, toSha, shardPath = null, completionSha = null, git = defaultGit(repo) } = {}) {
+export function revertCompletionCommit({ repo, toSha, shardPath = null, completionSha = null, integrationBranch, git = defaultGit(repo) } = {}) {
+  // Branch IDENTITY, not just commit identity. A SHA match alone is insufficient:
+  // another branch can legitimately point at the completion commit, so if the shared
+  // checkout switched to one of those, every SHA precondition below would pass and the
+  // `reset --soft` would rewind THAT branch — leaving the rejected completion sitting
+  // on the integration branch. Same guard completeTicketOnIntegration uses.
+  if (!integrationBranch) throw new Error('revertCompletionCommit requires integrationBranch to verify the checkout before rewinding');
   // Withdrawal is EXACT or it does not happen. Two preconditions, both checked against
   // the shared checkout as it is RIGHT NOW:
   //   1. HEAD is still our completion commit. Otherwise a --soft reset would silently
@@ -86,9 +92,13 @@ export function revertCompletionCommit({ repo, toSha, shardPath = null, completi
   // the shard without this lock would silently erase that update.
   const lock = acquireTicketLock(repo, { command: 'fleet:withdraw-completion' });
   try {
+  assertOnBranch(git, integrationBranch, 'before rewinding', 'withdraw');
   const head = git('rev-parse', 'HEAD');
   if (completionSha && head !== completionSha) {
     throw new Error(`refusing to withdraw: HEAD is ${head}, no longer the completion commit ${completionSha} — another process committed on this branch`);
+  }
+  if (completionSha && git('rev-parse', integrationBranch) !== completionSha) {
+    throw new Error(`refusing to withdraw: "${integrationBranch}" no longer points at the completion commit ${completionSha}`);
   }
   const committedManifest = git('show', `${head}:${MANIFEST_FILE}`);
   const manifestAbs = join(repo, MANIFEST_FILE);

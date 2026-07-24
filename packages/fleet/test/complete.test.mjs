@@ -381,7 +381,7 @@ test('withdrawing the completion commit does NOT destroy unrelated tracked work 
     writeFileSync(unrelated, 'work in progress\n');
     git('add', '--', 'unrelated.txt');
 
-    revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, git });
+    revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, integrationBranch, git });
 
     assert.equal(isCompleted(root, 'T1'), false, 'the completion annotation is withdrawn');
     assert.equal(git('rev-parse', 'HEAD'), res.preCompletionSha, 'HEAD is back at the pre-completion commit');
@@ -401,11 +401,34 @@ test('withdrawal REFUSES when HEAD moved — it never uncommits another process 
     const headBefore = git('rev-parse', 'HEAD');
 
     assert.throws(
-      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, git }),
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, integrationBranch, git }),
       /HEAD is .*no longer the completion commit/,
       'it refuses rather than rewinding past a concurrent commit',
     );
     assert.equal(git('rev-parse', 'HEAD'), headBefore, 'the concurrent commit is still on the branch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('withdrawal REFUSES on a DIFFERENT branch pointing at the same commit — it never rewinds the wrong branch', () => {
+  // SHA identity is not branch identity. Another branch can legitimately point at the
+  // completion commit; if the shared checkout switched to it, every SHA precondition
+  // would pass and `reset --soft` would rewind THAT branch, leaving the rejected
+  // completion on the integration branch.
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    // A sibling branch at the very same commit, and an external switch onto it.
+    git('branch', 'sibling-at-same-commit');
+    git('checkout', '-q', 'sibling-at-same-commit');
+    assert.equal(git('rev-parse', 'HEAD'), res.completionSha, 'precondition: SHA checks would all pass');
+
+    assert.throws(
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, integrationBranch, git }),
+      /refusing to withdraw \(before rewinding\).*sibling-at-same-commit/s,
+      'branch identity is verified, not just the commit SHA',
+    );
+    assert.equal(git('rev-parse', 'sibling-at-same-commit'), res.completionSha, 'the sibling branch was not rewound');
+    assert.equal(git('rev-parse', integrationBranch), res.completionSha, 'and the integration branch is untouched');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -423,7 +446,7 @@ test('withdrawal REFUSES when the shard gained a concurrent update — it never 
     writeFileSync(shardAbs, `${JSON.stringify(edited, null, 2)}\n`);
 
     assert.throws(
-      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, git }),
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, integrationBranch, git }),
       /ticket shard changed since the completion commit/,
       'it refuses rather than reverting the concurrent edit away',
     );
@@ -440,7 +463,7 @@ test('withdrawal REFUSES when the ledger gained a concurrent append — no false
     writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}{"seq":98,"gate":"concurrent","ts":"2026-01-03T00:00:00.000Z","data":{},"prev":null}\n`);
 
     assert.throws(
-      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, git }),
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, integrationBranch, git }),
       /evidence ledger changed since the completion commit/,
       'it refuses rather than erasing their evidence or leaving ours to be swept into a later commit',
     );
