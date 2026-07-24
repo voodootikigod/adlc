@@ -238,3 +238,20 @@ export async function runFleet({ all, runId, config, deps, resume }) {
 
   return { integrationBranch, results, merged, prCount, status, contaminated: runState.contaminated, contaminationReason: runState.contaminationReason };
 }
+
+/**
+ * Derive the process exit code from a fleet run summary.
+ *
+ * A QUARANTINED run is a failure no matter what the per-ticket states say. Quarantine
+ * is persisted the instant it occurs, but a crash between that write and a ticket's own
+ * state update can leave the ticket nonterminal ('merging'); a resume then fails closed
+ * without touching it. Keying the exit code on failed/blocked states alone would report
+ * 0 for that quarantined-no-work run — so `contaminated` is checked first.
+ *
+ * @returns {0|2} 2 = quarantined OR some ticket failed/blocked; 0 = clean.
+ */
+export function runExitCode(summary) {
+  if (summary?.contaminated) return 2;
+  const failed = Object.values(summary?.results ?? {}).filter((s) => s === 'failed' || s === 'blocked').length;
+  return failed > 0 ? 2 : 0;
+}

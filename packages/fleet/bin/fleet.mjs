@@ -15,7 +15,7 @@ import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
 import { runPreflight } from '../lib/preflight.mjs';
 import { reconcileRun } from '../lib/resume.mjs';
 import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
-import { runFleet } from '../lib/run.mjs';
+import { runFleet, runExitCode } from '../lib/run.mjs';
 import { selfIdentity, lockProbes } from '../lib/proc.mjs';
 import { Sandbox } from '../lib/sandbox.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
@@ -199,11 +199,17 @@ async function runLive({ repo, dir, all, config, onlyIds }) {
       deps,
     });
 
-    const states = Object.values(summary.results);
-    const failed = states.filter((s) => s === 'failed' || s === 'blocked').length;
-    console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
-      `${summary.prCount ? ' (PR opened)' : ''}`);
-    return failed > 0 ? 2 : 0;
+    if (summary.contaminated) {
+      console.error(`\nfleet run ${runId}: QUARANTINED — ${summary.contaminationReason}.` +
+        ` Branch ${summary.integrationBranch} carries an ungated change and needs manual cleanup; no PR was opened.`);
+    } else {
+      const failed = Object.values(summary.results).filter((s) => s === 'failed' || s === 'blocked').length;
+      console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
+        `${summary.prCount ? ' (PR opened)' : ''}`);
+    }
+    // Exit code keys on quarantine FIRST — see runExitCode. A quarantined-no-work resume
+    // must not report success just because no ticket reached a failed/blocked state.
+    return runExitCode(summary);
   } finally {
     releaseLock(dir); // always release the preflight-held lock
   }
