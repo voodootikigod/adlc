@@ -21,9 +21,9 @@ export function readdirBounded(dir, maxEntries) {
     handle = opendirSync(dir);
     try {
       const names = [];
-      let entry;
-      // eslint-disable-next-line no-cond-assign
-      while (names.length < maxEntries && (entry = handle.readSync()) !== null) {
+      while (names.length < maxEntries) {
+        const entry = handle.readSync();
+        if (entry === null) break; // directory exhausted
         names.push(entry.name);
       }
       return names;
