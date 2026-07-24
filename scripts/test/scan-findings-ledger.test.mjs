@@ -53,6 +53,18 @@ test('catches a secret smuggled into a NON-parseable line (raw-text fallback)', 
   assert.equal(r.code, 2, 'a malformed line is scanned as raw text, not skipped');
 });
 
+test('FAILS on a malformed line even with no secret — readEntries would silently skip it', () => {
+  // A corrupt committed ledger passes nothing downstream: readEntries drops the line
+  // and lesson-foundry never sees that finding. The gate must catch the corruption
+  // itself, not only a secret hiding in it.
+  const r = withLedger([
+    { tool: 'prosecutor', file: 'a.mjs', desc: 'a normal finding' },
+    'this line is not valid json and harmless',
+  ], (p) => scan(p));
+  assert.equal(r.code, 2, 'a malformed record fails the scan on its own');
+  assert.match(r.out, /malformed JSONL record/);
+});
+
 test('tolerates a missing ledger (exit 0, nothing to scan)', () => {
   assert.equal(scan('/nonexistent/path/findings.jsonl').code, 0);
 });

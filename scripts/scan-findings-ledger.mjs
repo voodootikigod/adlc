@@ -37,11 +37,15 @@ for (let i = 0; i < lines.length; i++) {
   let entry;
   try {
     entry = JSON.parse(line);
-  } catch (err) {
-    // A malformed line is itself suspect in a committed, curated ledger. Scan the raw
-    // text so a secret smuggled into un-parseable bytes is still caught.
-    entry = { desc: line };
-    void err;
+  } catch {
+    // A malformed line is a violation on its own, not merely a secret risk. The ledger
+    // is committed and curated, and `readEntries` SILENTLY SKIPS an unparseable line —
+    // so a corrupt record would pass the gate while starving lesson-foundry of that
+    // finding. Fail on it. Also scan the raw text so a secret hidden in the corrupt
+    // bytes is named too.
+    violations.push({ line: i + 1, reason: 'malformed JSONL record — a committed ledger must be valid JSON (readEntries silently skips this, starving lesson-foundry)' });
+    try { assertPublishableFinding({ desc: line }); } catch (err) { violations.push({ line: i + 1, reason: err.message }); }
+    continue;
   }
   try {
     assertPublishableFinding(entry);
