@@ -4,7 +4,7 @@
 // HERDR_PLUGIN_EVENT_JSON the payload), wire the real repo-state readers, ask
 // the pure planner (lib/event-plan) what to do, and execute the single plan.
 // Fail soft everywhere — an event handler must never crash the herdr session.
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -51,23 +51,24 @@ function listTicketIds(repoRoot) {
 const hasCurrentTicket = (repoRoot) => readActiveTicket(repoRoot).state !== 'absent';
 
 // Dedupe markers: one empty file per (pane|ticket|status), named by hash so any
-// id characters are safe in the filename.
+// id characters are safe in the filename. `claim` creates the marker
+// ATOMICALLY (openSync 'wx' = exclusive create): it returns true only for the
+// first process to create it, so concurrent event processes (herdr spawns one
+// per event) can't all pass a check-then-write race and spam notifications.
 const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
   ? join(process.env.HERDR_PLUGIN_STATE_DIR, 'nudged')
   : null;
 const markerPath = (key) => (nudgeDir ? join(nudgeDir, createHash('sha256').update(key).digest('hex').slice(0, 32)) : null);
-const seen = (key) => {
+const claim = async (key) => {
   const p = markerPath(key);
-  return p ? existsSync(p) : false;
-};
-const markSeen = (key) => {
-  const p = markerPath(key);
-  if (!p) return;
+  if (!p) return true; // no state dir → can't dedupe; allow the nudge
   try {
     mkdirSync(nudgeDir, { recursive: true });
-    writeFileSync(p, '');
-  } catch {
-    // dedupe is best-effort; a failed marker just risks one extra nudge
+    closeSync(openSync(p, 'wx')); // EEXIST if another process already claimed it
+    return true;
+  } catch (error) {
+    if (error && error.code === 'EEXIST') return false; // lost the race — already nudged
+    return true; // other errors: fail toward notifying (better one extra than a silent miss)
   }
 };
 
@@ -80,7 +81,12 @@ async function main() {
     return; // malformed event JSON → do nothing
   }
   const plan = await planEvent(eventName, payload, {
-    resolveRepoForPane, listTicketIds, readActiveTicket, hasCurrentTicket, seen, markSeen,
+    resolveRepoForPane,
+    resolveRepo: (raw) => { try { return resolveRepoRoot(raw); } catch { return null; } },
+    listTicketIds,
+    readActiveTicket,
+    hasCurrentTicket,
+    claim,
   });
   if (plan.kind === 'clear-pane') {
     await runHerdr(buildPaneClearArgs(plan.paneId));

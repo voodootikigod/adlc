@@ -74,6 +74,23 @@ test('worktree.created for a branch matching a ticket fires a notification', () 
   assert.ok(calls().includes('t-match'));
 });
 
+test('worktree.created with an unvalidated (non-git) repo_root refuses — no adlc runs in it', () => {
+  // Attacker-crafted payload pointing at a dir that is NOT a git repo.
+  const evil = join(dir, 'evil');
+  mkdirSync(evil, { recursive: true });
+  const adlcLog = join(dir, 'adlc-calls.log');
+  writeFileSync(join(dir, 'adlc'), `#!/bin/sh\necho "$@ (cwd=$PWD)" >> "${adlcLog}"\nexit 0\n`);
+  chmodSync(join(dir, 'adlc'), 0o755);
+  const payload = JSON.stringify({
+    event: 'worktree_created',
+    data: { workspace: { label: 't-match', worktree: { repo_root: evil, checkout_path: evil } } },
+  });
+  const res = runEvent('worktree.created', payload);
+  assert.equal(res.status, 0);
+  assert.ok(!existsSync(adlcLog), 'adlc must NOT be executed in an unvalidated cwd');
+  assert.ok(!calls().includes('notification show'), 'no nudge for an unresolvable repo');
+});
+
 test('worktree.created with a pointer already present does nothing', () => {
   writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-match', ticketHash: 'x' }));
   const payload = JSON.stringify({

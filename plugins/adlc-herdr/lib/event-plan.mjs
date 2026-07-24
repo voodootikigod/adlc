@@ -22,12 +22,17 @@ function planPaneExited(data) {
   return { kind: 'clear-pane', paneId };
 }
 
-async function planWorktreeCreated(data, { listTicketIds, hasCurrentTicket }) {
+async function planWorktreeCreated(data, { resolveRepo, listTicketIds, hasCurrentTicket }) {
   const ws = isObj(data.workspace) ? data.workspace : null;
-  const repoRoot = ws && isObj(ws.worktree) ? ws.worktree.repo_root : null;
+  const rawRoot = ws && isObj(ws.worktree) ? ws.worktree.repo_root : null;
   const branch = ws ? ws.label : null;
-  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return none('no repo root');
+  if (typeof rawRoot !== 'string' || rawRoot.length === 0) return none('no repo root');
   if (typeof branch !== 'string' || branch.length === 0) return none('no branch');
+  // VALIDATE the untrusted payload path to a real repo root BEFORE any
+  // subprocess runs with it as cwd — otherwise a crafted worktree.created event
+  // could run `adlc` in an attacker-controlled directory (loading its config).
+  const repoRoot = await resolveRepo(rawRoot);
+  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return none('repo_root did not resolve to a git root');
   if (hasCurrentTicket(repoRoot)) return none('already has an active ticket'); // don't nag
   const ids = await listTicketIds(repoRoot);
   if (!Array.isArray(ids) || !ids.includes(branch)) return none('branch is not a ticket id');
@@ -39,7 +44,7 @@ async function planWorktreeCreated(data, { listTicketIds, hasCurrentTicket }) {
   };
 }
 
-async function planAgentStatusChanged(data, { resolveRepoForPane, readActiveTicket, seen, markSeen }) {
+async function planAgentStatusChanged(data, { resolveRepoForPane, readActiveTicket, claim }) {
   const status = data.agent_status;
   if (typeof status !== 'string' || !IDLE_STATES.has(status)) return none('not an idle/done transition');
   const paneId = data.pane_id;
@@ -48,9 +53,11 @@ async function planAgentStatusChanged(data, { resolveRepoForPane, readActiveTick
   if (typeof repoRoot !== 'string' || repoRoot.length === 0) return none('pane not in a repo');
   const active = readActiveTicket(repoRoot);
   if (!active || active.state !== 'active') return none('no active ticket to gate');
+  // Atomic claim: only the FIRST process to record this (pane,ticket,status)
+  // notifies — herdr spawns one process per event, so a check-then-write would
+  // race under a status flap and spam. `claim` returns true only for the winner.
   const key = `${paneId}|${active.id}|${status}`;
-  if (seen(key)) return none('already nudged for this transition');
-  markSeen(key);
+  if (!(await claim(key))) return none('already nudged for this transition');
   return {
     kind: 'notify',
     title: 'ADLC',

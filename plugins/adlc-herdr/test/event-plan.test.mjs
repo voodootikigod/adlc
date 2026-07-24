@@ -13,13 +13,16 @@ import assert from 'node:assert/strict';
 import { planEvent } from '../lib/event-plan.mjs';
 
 // A deps object with sensible defaults; override per test.
+// resolveRepo validates/normalizes an untrusted path to a real repo root (or
+// null); claim atomically records a dedupe key, returning true only for the
+// first caller (race-safe across concurrent event processes).
 const deps = (over = {}) => ({
   resolveRepoForPane: async () => '/repo',
+  resolveRepo: async (raw) => raw, // identity = "valid" by default
   listTicketIds: async () => [],
   readActiveTicket: () => ({ state: 'absent' }),
   hasCurrentTicket: () => false,
-  seen: () => false,
-  markSeen: () => {},
+  claim: async () => true, // first claim wins by default
   ...over,
 });
 
@@ -111,6 +114,16 @@ test('worktree.created fails closed on a missing/garbage repo root', async () =>
   assert.equal(plan.kind, 'none');
 });
 
+test('worktree.created VALIDATES the untrusted repo_root — a path that does not resolve is refused, no listing', async () => {
+  let listed = false;
+  const plan = await planEvent('worktree.created', wtPayload('t-herdr-9', '/attacker/controlled'), deps({
+    resolveRepo: async () => null, // not a real repo root
+    listTicketIds: async () => { listed = true; return ['t-herdr-9']; },
+  }));
+  assert.equal(plan.kind, 'none');
+  assert.equal(listed, false, 'must not run the ticket listing in an unvalidated cwd');
+});
+
 // ---- pane.agent_status_changed ----
 
 const statusPayload = (status, paneId = 'w4:p2') => ({ data: { pane_id: paneId, agent_status: status, agent: 'claude' } });
@@ -145,16 +158,23 @@ test('agent idle with NO active ticket plans nothing (nothing to gate)', async (
   assert.equal(plan.kind, 'none');
 });
 
-test('a repeated (pane, ticket, status) is deduped — no second nudge, and markSeen is called on the first', async () => {
-  const marks = [];
+test('a repeated (pane, ticket, status) is deduped via an ATOMIC claim — no second nudge', async () => {
+  const claimed = new Set();
   const base = deps({
     readActiveTicket: () => ({ state: 'active', id: 't-x' }),
-    seen: (key) => marks.includes(key),
-    markSeen: (key) => marks.push(key),
+    // atomic claim: true only for the first caller of a key (race-safe)
+    claim: async (key) => (claimed.has(key) ? false : (claimed.add(key), true)),
   });
   const first = await planEvent('pane.agent_status_changed', statusPayload('idle'), base);
   assert.equal(first.kind, 'notify');
-  assert.equal(marks.length, 1, 'the first nudge records a dedupe marker');
   const second = await planEvent('pane.agent_status_changed', statusPayload('idle'), base);
   assert.equal(second.kind, 'none', 'the same idle transition must not nudge twice');
+});
+
+test('the nudge is gated on the claim WINNING — a lost claim (concurrent process) does not notify', async () => {
+  const plan = await planEvent('pane.agent_status_changed', statusPayload('idle'), deps({
+    readActiveTicket: () => ({ state: 'active', id: 't-x' }),
+    claim: async () => false, // another process already claimed this key
+  }));
+  assert.equal(plan.kind, 'none');
 });
