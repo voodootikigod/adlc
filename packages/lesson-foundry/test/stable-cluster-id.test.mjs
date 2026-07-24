@@ -161,7 +161,7 @@ test('spec-gap: a merged OLDER occurrence does not un-bank a defended cluster', 
     assert.equal(banked.route, 'spec-gap');
     writeFileSync(
       join(outDir, 'interrogation-template.md'),
-      `# Interrogation Template\n\n- [ ] **[security]** retention window + deletion trigger? <!-- cluster-members: ${banked.members.join(' ')} -->\n`,
+      `# Interrogation Template\n\n${buildSpecGapLine(banked.name, [a, b])}`,
       'utf8',
     );
     assert.deepEqual(findUnbankedClusters([banked], outDir, existsSync), [], 'precondition: banked');
@@ -193,7 +193,7 @@ test('spec-gap: a defended cluster fused with an UNDEFENDED one is still reporte
     const [banked] = buildClusters(defended, 2);
     writeFileSync(
       join(outDir, 'interrogation-template.md'),
-      `# Interrogation Template\n\n- [ ] **[security]** retention? <!-- cluster-members: ${banked.members.join(' ')} -->\n`,
+      `# Interrogation Template\n\n${buildSpecGapLine(banked.name, defended)}`,
       'utf8',
     );
     assert.deepEqual(findUnbankedClusters([banked], outDir, existsSync, undefined, undefined, 2), [], 'precondition: banked');

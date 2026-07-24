@@ -82,11 +82,15 @@ export function buildClusters(findings, minSize, threshold = 0.5) {
  *   because the template file exists. Otherwise the first banked spec-gap would
  *   silently defend every future spec-gap cluster.
  *
- * Banking is credited by the STABLE cluster id first (so a hand-refined lesson —
- * a reworded spec-gap question, or a lint/skill artifact renamed away from its
- * slug — is still recognized), then by the legacy slug (so lessons committed
- * before the id existed are not orphaned). A cluster carrying no id (older
- * callers) falls back to slug-only detection.
+ * Crediting works off the MEMBER KEYS a defense records, not a derived key: no key
+ * derived from the member set can be stable, because the set grows on every
+ * recurrence and can also gain an earlier member when a branch merges.
+ *
+ * When the matched defense records member keys, the coverage invariant decides —
+ * a cluster is undefended when the members it does NOT cover would themselves form
+ * a cluster (see below). When the defense matched only by cluster-id or slug — a
+ * pre-overlap or hand-refined lesson, where coverage cannot be evaluated — the
+ * whole cluster is credited, which is the only remaining use of those markers.
  *
  * `readFile`/`readDir` are injected for testability; they default to real fs reads
  * that return '' / [] when the path is absent or unreadable.
@@ -116,49 +120,46 @@ export function findUnbankedClusters(
     if (dirEntries === null) dirEntries = readDir(outDir);
     return dirEntries;
   };
-  // Is there any `suffix` file in outDir whose content carries this cluster's id?
-  // Credit an artifact that shares a MEMBER KEY with this cluster (the durable
-  // identity), or that carries the legacy derived id. Overlap is what survives the
-  // cluster gaining a member (a recurrence) or a merge introducing an earlier one —
-  // neither removes the members an existing lesson already covers.
-  const hasStampedArtifact = (suffix, id, members = []) => {
-    const keys = [...members, ...(id ? [id] : [])];
-    if (keys.length === 0) return false; // nothing to match on; fall back to slug only
-    for (const entry of listDir()) {
-      if (!entry.endsWith(suffix)) continue;
-      const content = readFile(`${outDir}/${entry}`);
-      if (content && keys.some((k) => content.includes(k))) return true;
-    }
-    return false;
-  };
-
   return clusters.filter((cluster) => {
     const { route, name, id, members = [] } = cluster;
     const suffix = route === 'lint' ? '.lint.json' : route === 'skill' ? '.SKILL.md' : null;
     const template = suffix ? null : getTemplate();
 
-    // Legacy crediting (pre-overlap lessons): a slug-named defense file, the slug
-    // marker, or the derived cluster-id banks the whole cluster.
+    // A slug-NAMED defense file is a whole-cluster legacy credit of its own.
     if (suffix && existsSync(`${outDir}/${name}${suffix}`)) return false;
-    if (!suffix && template.includes(specGapMarker(name))) return false;
-    if (id && (suffix ? hasStampedArtifact(suffix, id, []) : template.includes(specGapIdMarker(id)))) return false;
 
-    if (members.length === 0) return true; // nothing to reason about → surface it
+    // Gather the artifact content that actually references THIS cluster — by member
+    // key, by the derived id, or by the legacy slug. For spec-gap the template holds
+    // many lessons, so match per LINE; one lesson's marker must not credit another's.
+    const candidates = suffix
+      ? listDir().filter((e) => e.endsWith(suffix)).map((e) => readFile(`${outDir}/${e}`) || '')
+      : template.split('\n');
+    const related = candidates.filter((c) =>
+      members.some((m) => c.includes(m))
+      || (id && c.includes(specGapIdMarker(id)))
+      || c.includes(specGapMarker(name)));
 
-    // COVERAGE INVARIANT. Crediting the cluster because *any one* member is covered
-    // would let a merged cluster be banked by a defense for only part of it: clustering
-    // is transitive, so a bridging finding can fuse a defended pattern with an
-    // undefended one, and existential overlap would silently absorb the undefended
-    // half — exactly what this gate exists to catch.
+    if (related.length === 0) return true; // nothing defends this cluster
+
+    // Which of this cluster's members does the matched defense actually record?
+    const covered = members.filter((m) => related.some((c) => c.includes(m)));
+
+    // No member keys recorded → the defense matched by id or slug alone. That is a
+    // pre-overlap or hand-refined lesson, and coverage cannot be evaluated against it,
+    // so credit the whole cluster (this is the ONLY path legacy matches may bank on).
+    if (covered.length === 0) return false;
+
+    // COVERAGE INVARIANT — deliberately evaluated INSTEAD OF, not after, an id match.
+    // Every normally emitted lesson stamps the id AND the member keys, and clusterId is
+    // anchored on the founding occurrence, so a fused cluster still matches the old id.
+    // Letting that id match return "banked" first made this invariant unreachable in
+    // the normal path. Crediting on *any* covered member fails the same way, because
+    // clustering is transitive and a bridging finding can fuse two patterns.
     //
-    // Instead, look at what is NOT covered. A recurrence of a defended pattern leaves a
-    // small uncovered remainder (the new occurrences); a fused-in undefended pattern
-    // leaves a remainder large enough to be a cluster in its own right. So reuse the
-    // caller's own clustering threshold: an uncovered remainder that would itself
-    // qualify as a cluster is an undefended cluster, whatever it is bundled with.
-    const isCovered = (m) => (suffix ? hasStampedArtifact(suffix, null, [m]) : template.includes(m));
-    const uncovered = members.filter((m) => !isCovered(m));
-    return uncovered.length >= minSize;
+    // So judge by what is NOT covered: a recurrence leaves a small uncovered remainder
+    // (the new occurrences), while a fused-in undefended pattern leaves one large
+    // enough to be a cluster in its own right. Reuse the caller's clustering threshold.
+    return members.length - covered.length >= minSize;
   });
 }
 
