@@ -6,6 +6,7 @@
 // actions do, gather via the tested libs, redraw every few seconds and on
 // resize, quit on q / Ctrl-C.
 import { appendFileSync } from 'node:fs';
+import { emitKeypressEvents } from 'node:readline';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
@@ -15,17 +16,20 @@ import {
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
-import { stepSelection, resolveRowAction, focusPaneArgs } from '../lib/board-nav.mjs';
+import { stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
 
-// Row-selection state (t-herdr-7): `selected` is the flat index of the
-// highlighted ticket row across ready/in-flight/blocked (-1 = none). `lastProps`
-// is the last gathered frame so input handlers can resolve a row without
-// re-gathering. `flatTickets` mirrors renderBoard's section order exactly.
-let selected = -1;
+// Row-selection state (t-herdr-7). The selection is tracked by stable ticket
+// *id* (`selectedId`), NOT by row index — the 3s background refresh can reorder
+// or drop tickets, and a raw index would then point at a different ticket (and
+// confirm on the wrong one). The render index is re-derived from the id on every
+// draw. `lastProps` is the last gathered frame so input handlers resolve rows
+// without re-gathering. `flatTickets` mirrors renderBoard's section order.
+let selectedId = null;
 let lastProps = null;
 const flatTickets = (groups) => [...(groups?.ready ?? []), ...(groups?.inFlight ?? []), ...(groups?.blocked ?? [])];
+const currentIndex = () => indexOfTicket(flatTickets(lastProps?.groups), selectedId);
 
 // mtime-gate the ticket-store export: the board redraws every 3s, but
 // `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
@@ -95,32 +99,46 @@ async function frame(repoRoot) {
   framing = true;
   try {
     lastProps = await gather(repoRoot);
-    draw(renderBoard({ ...lastProps, selected }));
+    draw(renderBoard({ ...lastProps, selected: currentIndex() }));
   } finally {
     framing = false;
   }
 }
 
-// Redraw from the cached frame (no re-gather) — used for instant selection feedback.
+// Redraw from the cached frame (no re-gather) — instant selection feedback.
 function redraw() {
-  if (lastProps) draw(renderBoard({ ...lastProps, selected }));
+  if (lastProps) draw(renderBoard({ ...lastProps, selected: currentIndex() }));
+}
+
+// Move the selection by a direction, keeping it as a stable ticket id.
+function move(direction) {
+  const rows = flatTickets(lastProps?.groups);
+  const next = stepSelection(currentIndex(), direction, rows.length);
+  selectedId = rows[next]?.id ?? null;
+  redraw();
+}
+
+// Focus the pane mapped to the selected ticket; fixed argv, paneId from the
+// trusted pane map. No selection or no mapped pane → nothing happens.
+function focusSelected() {
+  const rows = flatTickets(lastProps?.groups);
+  const action = resolveRowAction(rows[currentIndex()], lastProps?.paneRows);
+  if (action.kind === 'focus-pane') runHerdr(focusPaneArgs(action.paneId));
 }
 
 function armInput(onQuit) {
+  // readline keypress events parse ANSI escape sequences and coalesced chunks
+  // into atomic keys — a raw `data` chunk can carry several keystrokes (paste,
+  // fast typing, SSH) and whole-chunk equality would drop them.
+  emitKeypressEvents(process.stdin);
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on('data', (chunk) => {
-    const key = chunk.toString();
-    if (key === 'q' || key === 'Q' || key === '\x03') { onQuit(); return; }
-    const rows = flatTickets(lastProps?.groups);
-    if (key === '\x1b[A' || key === 'k') { selected = stepSelection(selected, 'up', rows.length); redraw(); }
-    else if (key === '\x1b[B' || key === 'j') { selected = stepSelection(selected, 'down', rows.length); redraw(); }
-    else if (key === '\r' || key === '\n') {
-      // Focus the pane mapped to the selected ticket; a fixed argv, paneId from
-      // the trusted pane map. No mapped pane → nothing happens.
-      const action = resolveRowAction(rows[selected], lastProps?.paneRows);
-      if (action.kind === 'focus-pane') runHerdr(focusPaneArgs(action.paneId));
-    }
+  process.stdin.on('keypress', (str, key) => {
+    const k = key || {};
+    if (str === 'q' || str === 'Q' || (k.ctrl && k.name === 'c')) { onQuit(); return; }
+    if (k.name === 'up' || str === 'k') move('up');
+    else if (k.name === 'down' || str === 'j') move('down');
+    else if (k.name === 'return') focusSelected();
   });
 }
 

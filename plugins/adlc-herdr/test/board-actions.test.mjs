@@ -3,7 +3,7 @@
 // render highlight. bin/board.mjs stays thin glue over these.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stepSelection, resolveRowAction, focusPaneArgs } from '../lib/board-nav.mjs';
+import { stepSelection, resolveRowAction, focusPaneArgs, indexOfTicket } from '../lib/board-nav.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 // ---- AC1/AC2 selection navigation ----
@@ -37,6 +37,13 @@ test('AC3 resolveRowAction returns focus-pane + the mapped paneId', () => {
 test('AC4 resolveRowAction returns none when the ticket has no mapped pane (nothing to focus)', () => {
   assert.equal(resolveRowAction({ id: 't-x' }, [{ paneId: 'w1:p2', ticket: 't-a' }]).kind, 'none');
   assert.equal(resolveRowAction(null, []).kind, 'none');
+});
+
+test('indexOfTicket re-derives the selection index from a stable ticket id', () => {
+  const rows = [{ id: 't-a' }, { id: 't-b' }, { id: 't-c' }];
+  assert.equal(indexOfTicket(rows, 't-b'), 1);
+  assert.equal(indexOfTicket(rows, 'gone'), -1); // removed by a refresh → caller snaps
+  assert.equal(indexOfTicket(null, 't-a'), -1);
 });
 
 // ---- AC5 fixed focus argv ----

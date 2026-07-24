@@ -30,3 +30,12 @@ export function resolveRowAction(selectedTicket, paneRows) {
 export function focusPaneArgs(paneId) {
   return ['pane', 'focus', paneId];
 }
+
+/** Flat index of the ticket with `id`, or -1. The board tracks the selection by
+ *  stable ticket id and re-derives the index each refresh, so a background
+ *  reorder/removal can never leave the selection pointing at a different
+ *  ticket (which would confirm an action on the wrong one). */
+export function indexOfTicket(rows, id) {
+  if (!Array.isArray(rows) || typeof id !== 'string') return -1;
+  return rows.findIndex((t) => t && t.id === id);
+}
