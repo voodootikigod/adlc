@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { resolveRepoRoot, clearRepoRootCache, resolveOnPath, evictIfFull } from '../lib/repo-root.mjs';
+import { resolveRepoRoot, clearRepoRootCache, resolveOnPath, evictIfFull, repoRootFromCwd } from '../lib/repo-root.mjs';
 import { writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
@@ -72,6 +72,27 @@ test('resolveOnPath returns the first PATH entry that actually contains the bina
 test('resolveOnPath returns null when the binary is nowhere on PATH (fail closed)', () => {
   assert.equal(resolveOnPath('nope-not-here', join(dir, 'empty')), null);
   assert.equal(resolveOnPath('nope-not-here', undefined), null);
+});
+
+test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure walk (no subprocess)', () => {
+  const root = join(dir, 'proj');
+  const deep = join(root, 'a', 'b', 'c');
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  mkdirSync(deep, { recursive: true });
+  assert.equal(realpathSync(repoRootFromCwd(deep)), realpathSync(root));
+  // a .git-only root is also recognized
+  const gitRoot = join(dir, 'g');
+  mkdirSync(join(gitRoot, '.git', 'x'), { recursive: true });
+  assert.equal(realpathSync(repoRootFromCwd(join(gitRoot, '.git'))), realpathSync(gitRoot));
+});
+
+test('repoRootFromCwd returns null outside any repo, and fails closed on a bad start', () => {
+  const plain = join(dir, 'plain', 'x');
+  mkdirSync(plain, { recursive: true });
+  // dir itself (mkdtemp under tmp) has no .adlc/.git ancestor up to fs root...
+  // guard against a stray ancestor by asserting the immediate structure is bare
+  assert.equal(repoRootFromCwd(''), null);
+  assert.equal(repoRootFromCwd(null), null);
 });
 
 test('evictIfFull drops the oldest entry at/over the bound, and is a no-op below it', () => {

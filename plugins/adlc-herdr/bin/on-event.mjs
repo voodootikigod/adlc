@@ -4,11 +4,11 @@
 // HERDR_PLUGIN_EVENT_JSON the payload), wire the real repo-state readers, ask
 // the pure planner (lib/event-plan) what to do, and execute the single plan.
 // Fail soft everywhere — an event handler must never crash the herdr session.
-import { mkdirSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, statSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
-import { resolveRepoRoot } from '../lib/repo-root.mjs';
+import { repoRootFromCwd } from '../lib/repo-root.mjs';
 import { readActiveTicket, ticketIdsFromStore } from '../lib/adlc-state.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 import { buildPaneClearArgs } from '../lib/tokens.mjs';
@@ -20,11 +20,9 @@ async function resolveRepoForPane(paneId) {
   const dir = (pane && typeof pane.foreground_cwd === 'string' && pane.foreground_cwd)
     || (pane && typeof pane.cwd === 'string' && pane.cwd) || null;
   if (!dir) return null;
-  try {
-    return resolveRepoRoot(dir);
-  } catch {
-    return null;
-  }
+  // PURE upward walk — never spawn `git` inside the (untrusted) pane cwd, which
+  // could trigger a malicious .git/config hook. Read-only existence checks only.
+  return repoRootFromCwd(dir);
 }
 
 // Ticket ids come from a direct FILESYSTEM read of the store (never a
@@ -59,16 +57,24 @@ const claim = async (key) => {
     return true;
   } catch (error) {
     if (error && error.code === 'EEXIST') {
+      let stale;
       try {
-        if (now - statSync(p).mtimeMs >= NUDGE_WINDOW_MS) {
-          utimesSync(p, now / 1000, now / 1000); // window elapsed → renew + nudge
-          return true;
-        }
+        stale = now - statSync(p).mtimeMs >= NUDGE_WINDOW_MS;
       } catch {
-        // marker vanished/unreadable → fall through and nudge
-        return true;
+        return true; // marker vanished/unreadable → nudge
       }
-      return false; // within the window → suppress the flap
+      if (!stale) return false; // within the window → suppress the flap
+      // Window elapsed → renew ATOMICALLY: remove the expired marker and
+      // re-create exclusively. Only the one process whose openSync('wx') wins
+      // returns true; concurrent racers get EEXIST → false. (A plain
+      // stat-then-utimes would let every racer renew and all nudge.)
+      try {
+        rmSync(p, { force: true });
+        closeSync(openSync(p, 'wx'));
+        return true;
+      } catch {
+        return false; // another process already renewed
+      }
     }
     return true; // other errors: fail toward notifying (better one extra than a silent miss)
   }
