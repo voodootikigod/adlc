@@ -38,6 +38,40 @@ export function createIntegrationBranch(repo, integrationBranch, baseSha, git = 
   return integrationBranch;
 }
 
+/** Repo-relative path of the run's dedicated integration worktree. */
+export const INTEGRATION_WORKTREE = join('.worktrees', 'fleet-integration');
+
+/**
+ * Give the integration branch its OWN worktree, so no integration-branch operation
+ * ever runs in the shared main checkout.
+ *
+ * This is a correctness boundary, not a convenience. Every integration step used to
+ * `git checkout <integrationBranch>` in the shared repo and then act on ambient HEAD,
+ * which an external process could move at any moment — merges, gates, completions and
+ * withdrawals could all be attributed to the wrong branch. A worktree has its own HEAD
+ * and index, and git REFUSES to check out a branch that is already checked out in
+ * another worktree, so the collision becomes impossible rather than merely detected.
+ *
+ * `baseSha` creates the branch fresh; omit it to attach to an existing branch (resume).
+ */
+export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = null, git = defaultGit(repo), gitAt = defaultGit } = {}) {
+  const abs = join(repo, INTEGRATION_WORKTREE);
+  // Resume: a live worktree already on the right branch is reused as-is.
+  try {
+    if (gitAt(abs)('symbolic-ref', '--short', 'HEAD') === integrationBranch) return { path: abs, created: false };
+  } catch { /* not a usable worktree — fall through and (re)create */ }
+
+  try { git('worktree', 'remove', '--force', INTEGRATION_WORKTREE); } catch { /* none */ }
+  try { git('worktree', 'prune'); } catch { /* best effort */ }
+  if (baseSha !== null) {
+    try { git('branch', '-D', integrationBranch); } catch { /* none */ }
+    git('worktree', 'add', '-b', integrationBranch, INTEGRATION_WORKTREE, baseSha);
+  } else {
+    git('worktree', 'add', INTEGRATION_WORKTREE, integrationBranch);
+  }
+  return { path: abs, created: true };
+}
+
 /**
  * Create a worktree + branch for a ticket, cut from the current integration tip.
  * Returns { path, branch, startSha } — startSha is the integration tip the
@@ -77,12 +111,19 @@ export function commitWorker(worktreePath, ticketId, git = defaultGit(worktreePa
  * as a strike — conflicts were scheduled away by scope serialization; one
  * appearing means the plan lied, not something to auto-resolve).
  */
-export function mergeToIntegration(repo, branch, integrationBranch, git = defaultGit(repo)) {
-  const preMergeSha = git('rev-parse', integrationBranch);
-  git('rebase', integrationBranch, branch);
-  git('checkout', integrationBranch);
-  git('merge', '--no-ff', '--no-edit', branch);
-  const mergeSha = git('rev-parse', integrationBranch);
+/**
+ * Merge a ticket branch into the integration branch WITHOUT any checkout switching.
+ *
+ * Each branch is operated on in the worktree that already has it checked out: the
+ * ticket branch rebases inside its own worktree, and the merge runs inside the
+ * integration worktree. Nothing touches the shared main checkout, and no step depends
+ * on ambient HEAD being what we last set it to.
+ */
+export function mergeToIntegration({ branch, integrationBranch, ticketGit, integrationGit }) {
+  const preMergeSha = integrationGit('rev-parse', integrationBranch);
+  ticketGit('rebase', integrationBranch); // the ticket branch is checked out here
+  integrationGit('merge', '--no-ff', '--no-edit', branch);
+  const mergeSha = integrationGit('rev-parse', integrationBranch);
   return { mergeSha, preMergeSha };
 }
 

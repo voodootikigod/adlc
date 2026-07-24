@@ -141,6 +141,11 @@ function parseStatusPaths(out) {
  */
 export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunner, io = defaultIo() }) {
   const repoGit = io.git(repo);
+  // EVERY integration-branch operation runs in the run's dedicated worktree, never in
+  // the shared main checkout. The path is deterministic so it resolves identically on
+  // a resume, before createIntegrationBranch has run.
+  const integrationPath = join(repo, worktrees.INTEGRATION_WORKTREE);
+  const integrationGit = io.git(integrationPath);
   // Resolve the configured worker harness (T44). Fails closed on an unknown name.
   const adapter = getAdapter(config.adapter ?? 'claude-code');
   const review = reviewRunner ?? makeReviewRunner({
@@ -181,7 +186,11 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     createIntegrationBranch: ({ integrationBranch, baseSha }) => {
       io.ensureGitignore(repo, repoGit);
-      worktrees.createIntegrationBranch(repo, integrationBranch, baseSha, repoGit);
+      // Create the branch AND its dedicated worktree in one step. From here on the
+      // integration branch is checked out ONLY there — git will refuse to check it out
+      // in the shared main checkout, so the whole class of "another process moved HEAD
+      // under us" becomes impossible instead of merely detectable.
+      worktrees.ensureIntegrationWorktree(repo, integrationBranch, { baseSha, git: repoGit, gitAt: io.git });
     },
 
     createWorktree: async ({ ticket, integrationBranch }) => {
@@ -284,28 +293,32 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       { adlcBin, exec: flailExec(io) },
     ),
 
-    mergeToIntegration: ({ branch, integrationBranch }) => worktrees.mergeToIntegration(repo, branch, integrationBranch, repoGit),
+    // Rebase inside the ticket's own worktree, merge inside the integration worktree —
+    // no checkout switching anywhere, and the shared checkout is never involved.
+    mergeToIntegration: ({ branch, integrationBranch, worktree }) => worktrees.mergeToIntegration({
+      branch,
+      integrationBranch,
+      ticketGit: io.git(worktree),
+      integrationGit,
+    }),
 
     postMergeGate: ({ integrationBranch }) => {
-      // Run the configured gate on the integration branch in the repo, sandboxed.
-      repoGit('checkout', integrationBranch);
-      // A gate verdict is only meaningful for the exact branch and commit it inspected.
-      // In a SHARED checkout an external switch between the checkout above and the gate
-      // below would have it examine a different branch entirely, and that pass would
-      // then be credited to the completion commit — admitting an ungated commit to the
-      // PR. Pin branch identity AND the SHA either side of the run, and fail closed on
-      // any drift rather than trusting a verdict we cannot attribute.
+      // Gate inside the integration worktree — no checkout, nothing shared. The branch
+      // identity and SHA are still pinned either side: the worktree removes the
+      // external-interference class, and these assertions keep the verdict provably
+      // attributable to the commit being approved (defence in depth, and they cost
+      // two git calls).
       let gatedSha;
       try {
-        assertOnBranch(repoGit, integrationBranch, 'before gating', 'trust the gate');
-        gatedSha = repoGit('rev-parse', 'HEAD');
+        assertOnBranch(integrationGit, integrationBranch, 'before gating', 'trust the gate');
+        gatedSha = integrationGit('rev-parse', 'HEAD');
       } catch (error) {
         return { ok: false, output: `${error.message}; refusing to gate` };
       }
-      const result = runGates(sandboxFor(repo), config.gate, repoCmdEnv(repo));
+      const result = runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath));
       try {
-        assertOnBranch(repoGit, integrationBranch, 'after gating', 'trust the gate');
-        if (repoGit('rev-parse', 'HEAD') !== gatedSha) {
+        assertOnBranch(integrationGit, integrationBranch, 'after gating', 'trust the gate');
+        if (integrationGit('rev-parse', 'HEAD') !== gatedSha) {
           throw new Error(`refusing to trust the gate: HEAD moved from ${gatedSha} while the gate ran`);
         }
       } catch (error) {
@@ -315,19 +328,19 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     revertMerge: ({ integrationBranch, mergeSha, preMergeSha }) =>
-      worktrees.revertMerge(repo, integrationBranch, { mergeSha, preMergeSha }, repoGit),
+      worktrees.revertMerge(integrationPath, integrationBranch, { mergeSha, preMergeSha }, integrationGit),
 
     // T73: after the post-merge gate passes, complete the ticket ON the integration
     // branch (checked out at `repo` by postMergeGate) via the same planComplete +
     // apply path the CLI uses, committing the add-only completed:true diff so it
     // rides the single PR. Idempotent and best-effort at the call site (§run.mjs).
     completeTicket: ({ ticket, integrationBranch }) =>
-      completeTicketOnIntegration({ repo, ticketId: ticket.id, integrationBranch, git: repoGit }),
+      completeTicketOnIntegration({ repo: integrationPath, ticketId: ticket.id, integrationBranch, git: integrationGit }),
 
     // Withdraw ONLY the completion commit when the gate re-run over it fails; the
     // shipped merge underneath is never touched.
     revertCompletion: ({ toSha, shardPath, completionSha, integrationBranch }) =>
-      revertCompletionCommit({ repo, toSha, shardPath, completionSha, integrationBranch, git: repoGit }),
+      revertCompletionCommit({ repo: integrationPath, toSha, shardPath, completionSha, integrationBranch, git: integrationGit }),
 
     cleanup: ({ worktree, state }) => {
       // Keep failed worktrees for inspection; remove merged ones.
@@ -344,7 +357,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     openPR: ({ integrationBranch, base }) => {
       if (!io.hasGh()) return { opened: false, reason: 'gh CLI not available' };
       try {
-        repoGit('push', '-u', 'origin', integrationBranch);
+        integrationGit('push', '-u', 'origin', integrationBranch);
         io.spawnWorker('gh', ['pr', 'create', '--base', base, '--head', integrationBranch, '--fill'], { cwd: repo });
         return { opened: true };
       } catch (e) { return { opened: false, reason: e.message }; }

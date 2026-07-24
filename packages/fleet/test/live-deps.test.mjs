@@ -4,20 +4,32 @@ import { buildLiveDeps } from '../lib/live-deps.mjs';
 import { runFleet } from '../lib/run.mjs';
 
 // A permissive fake git: records calls, returns sensible defaults by verb.
+// Model git's PER-WORKTREE HEAD. Each worktree has its own checked-out branch, which
+// `worktree add -b <branch> <path>` establishes — there is no `checkout` in the
+// integration flow at all any more. A stub that returned a single global branch (or
+// '', which real git never returns) would make correct branch-identity checks look
+// broken (AGENTS.md: a mock cannot catch drift in the thing it imitates).
 function fakeGit(rec) {
-  // Track the checked-out branch so `symbolic-ref` answers like real git does. Real git
-  // never returns '' there, and a stub that does makes correct branch-identity checks
-  // look broken (AGENTS.md: a mock cannot catch drift in the thing it imitates).
-  let branch = 'main';
+  const headOf = new Map(); // worktree path suffix → its checked-out branch
+  const branchFor = (dir) => {
+    for (const [p, b] of headOf) if (String(dir).endsWith(p)) return b;
+    return headOf.get(String(dir)) ?? 'main';
+  };
   return (dir) => (...args) => {
     rec.git.push({ dir, args });
     const verb = args[0];
-    if (verb === 'checkout') {
-      const target = args.slice(1).filter((a) => !String(a).startsWith('-')).pop();
-      if (target) branch = target;
+    if (verb === 'worktree' && args[1] === 'add') {
+      const i = args.indexOf('-b');
+      if (i >= 0) headOf.set(String(args[i + 2]), String(args[i + 1])); // add -b <branch> <path>
+      else headOf.set(String(args[2]), String(args[3] ?? 'main'));       // add <path> <branch>
       return '';
     }
-    if (verb === 'symbolic-ref') return branch;
+    if (verb === 'checkout') {
+      const target = args.slice(1).filter((a) => !String(a).startsWith('-')).pop();
+      if (target) headOf.set(String(dir), String(target));
+      return '';
+    }
+    if (verb === 'symbolic-ref') return branchFor(dir);
     if (verb === 'diff') return 'packages/fleet/lib/x.mjs'; // in-scope change
     if (verb === 'status') return ''; // no protected-path candidates
     if (verb === 'show') throw new Error('no such path at rev'); // no template

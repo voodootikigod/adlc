@@ -33,7 +33,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
       if (runState?.contaminated) {
         return { ok: false, output: `integration branch quarantined: ${runState.contaminationReason}` };
       }
-      const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch });
+      const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch, worktree: wt.path });
       const post = await deps.postMergeGate({ ticket, integrationBranch });
       if (!post.ok) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
