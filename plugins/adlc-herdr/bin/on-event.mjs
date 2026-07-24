@@ -107,4 +107,13 @@ async function main() {
   // kind === 'none' → nothing
 }
 
-main().catch(() => process.exit(0));
+// Fail SOFT (never crash the herdr session) but not SILENT — log to stderr so
+// the host captures the failure in the plugin log for diagnosis.
+main().catch((err) => {
+  try {
+    console.error('[adlc on-event]', err instanceof Error ? err.stack || err.message : String(err));
+  } catch {
+    // logging must never itself throw
+  }
+  process.exit(0);
+});
