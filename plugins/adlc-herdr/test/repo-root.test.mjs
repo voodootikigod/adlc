@@ -87,8 +87,10 @@ test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure wa
 });
 
 test('repoRootFromCwd returns null outside any repo, and fails closed on a bad start', () => {
-  assert.equal(repoRootFromCwd(''), null);
-  assert.equal(repoRootFromCwd(null), null);
+  // Empty start with a VALID depth: must fail closed, NOT resolve('') = cwd and
+  // walk the current repo (pins the length===0 guard).
+  assert.equal(repoRootFromCwd('', 64), null);
+  assert.equal(repoRootFromCwd(null, 64), null);
   assert.equal(repoRootFromCwd('/x', 0), null); // non-positive depth → nothing checked
 });
 
