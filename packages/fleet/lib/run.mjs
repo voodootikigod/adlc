@@ -37,6 +37,17 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
       const post = await deps.postMergeGate({ ticket, integrationBranch });
       if (!post.ok) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
+        // revertMerge returns { ok: false, method: 'refused' } when it cannot safely
+        // undo the merge (HEAD moved and `git revert` also failed). That leaves the
+        // GATE-REJECTED merge on the shared branch — the same hazard a failed completion
+        // withdrawal creates, and it must get the same treatment: quarantine, so no
+        // further merge lands and no PR opens from the contaminated branch. Reporting
+        // `reverted: true` here (ignoring rev.ok) let that merge ride into the PR.
+        if (!rev.ok) {
+          const reason = `post-merge gate failed and its merge could NOT be withdrawn (${rev.reason ?? rev.method}) — ${integrationBranch} carries a gate-rejected merge`;
+          markContaminated(reason);
+          return { ok: false, output: `${reason}; integration branch quarantined` };
+        }
         return { ok: false, reverted: true, output: `post-merge gate failed; recovery=${rev.method}` };
       }
       // Post-merge gate PASSED (T73): mark the ticket completed on the integration

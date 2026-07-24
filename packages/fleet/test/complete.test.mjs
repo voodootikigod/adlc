@@ -629,6 +629,37 @@ test('quarantine is persisted and survives RESUME — a resumed run refuses to w
   assert.deepEqual(rec2.merges, [], 'nothing merges onto the quarantined branch');
 });
 
+test('a REFUSED merge-revert quarantines the branch — the gate-rejected merge never reaches a PR', async () => {
+  // The post-merge gate FAILURE path (older than T73) must honor rev.ok: revertMerge
+  // returns { ok:false, method:'refused' } when it cannot undo the merge, leaving a
+  // gate-rejected merge on the shared branch. That is the same hazard the completion
+  // withdrawal path quarantines for, and it must be treated identically.
+  const rec = { prs: [], merges: [] };
+  const deps = {
+    baseSha: 'BASE',
+    createIntegrationBranch: () => {},
+    createWorktree: ({ ticket }) => ({ path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'tip' }),
+    dispatch: () => ({ exitCode: 0, output: 'TICKET-DONE' }),
+    gate: () => ({ ok: true }),
+    prosecute: () => ({ verdict: 'pass' }),
+    flail: () => ({ flail: false }),
+    mergeToIntegration: ({ ticket }) => { rec.merges.push(ticket.id); return { mergeSha: 'M', preMergeSha: 'P' }; },
+    // T1's post-merge gate fails; T2's would pass — but the branch is already quarantined.
+    postMergeGate: ({ ticket }) => ({ ok: ticket.id !== 'T1' }),
+    revertMerge: () => ({ method: 'refused', ok: false, reason: 'integration HEAD moved and git revert failed' }),
+    completeTicket: () => ({ completed: true, preCompletionSha: 'PRE' }),
+    openPR: ({ integrationBranch }) => { rec.prs.push(integrationBranch); },
+  };
+  const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
+  const summary = await runFleet({ all: [T('T1'), T('T2')], runId: 'r', config, deps });
+
+  assert.equal(summary.contaminated, true, 'a refused merge-revert quarantines the run');
+  assert.match(summary.contaminationReason ?? '', /could NOT be withdrawn/);
+  assert.deepEqual(rec.prs, [], 'no PR is opened carrying the gate-rejected merge');
+  assert.equal(rec.merges.length, 1, 'no further merge lands on the quarantined branch');
+  assert.notEqual(summary.results.T1, 'merged');
+});
+
 test('runFleet does NOT complete a ticket whose post-merge gate failed (T73 b)', async () => {
   const { deps, rec } = harness({ postMerge: () => ({ ok: false }) });
   const config = { ...resolveRunConfig({}, {}), baseSha: 'BASE' };
