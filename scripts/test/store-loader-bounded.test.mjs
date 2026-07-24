@@ -6,7 +6,7 @@
 // rails) and open an enforcement hole.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,6 +54,18 @@ test('readStoreFileBounded does not block on a FIFO (POSIX)', { skip: process.pl
   const p = join(root, 'fifo');
   execFileSync('mkfifo', [p]);
   assert.throws(() => readStoreFileBounded(p), /not a regular file/); // returns, never hangs
+});
+
+test('readStoreFileBounded accumulates POSIX short reads — never truncates a large file', () => {
+  const root = tmp();
+  const p = join(root, 'big.json');
+  const content = 'x'.repeat(5000);
+  writeFileSync(p, content);
+  // Simulate an rsize-capped filesystem: every read returns at most 3 bytes. A
+  // single-read implementation would return 3 bytes and truncate; the loop must
+  // accumulate the whole file.
+  const shortRead = (fd, buf, off, len, pos) => readSync(fd, buf, off, Math.min(len, 3), pos);
+  assert.equal(readStoreFileBounded(p, 1 << 20, shortRead), content);
 });
 
 // ---- readdirEntriesBounded (directory read) ----

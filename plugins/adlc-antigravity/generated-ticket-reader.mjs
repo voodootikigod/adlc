@@ -17,7 +17,7 @@ const MAX_STORE_ENTRIES = 100_000;
 // blocks), check the type on the OPEN fd (no stat→read TOCTOU), refuse an
 // over-cap size, and read it. Throws on any of these — the callers already wrap
 // reads in try/catch and rethrow as a store error.
-export function readStoreFileBounded(path, max = MAX_STORE_FILE_BYTES) {
+export function readStoreFileBounded(path, max = MAX_STORE_FILE_BYTES, readImpl = readSync) {
   let fd;
   try {
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
@@ -30,10 +30,12 @@ export function readStoreFileBounded(path, max = MAX_STORE_FILE_BYTES) {
     if (stat.size > max) throw new Error(`${path} exceeds the ${max}-byte read cap`);
     const buf = Buffer.allocUnsafe(stat.size);
     // Loop: POSIX read(2) may return fewer bytes than requested (network/FUSE
-    // rsize caps), so a single readSync could truncate a legitimate large shard.
+    // rsize caps), so a single read could truncate a legitimate large shard.
+    // `readImpl` is a test seam (defaults to the real readSync) so a short read
+    // can be simulated deterministically.
     let read = 0;
     while (read < stat.size) {
-      const n = readSync(fd, buf, read, stat.size - read, read);
+      const n = readImpl(fd, buf, read, stat.size - read, read);
       if (n === 0) break; // end of file
       read += n;
     }
