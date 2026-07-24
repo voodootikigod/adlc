@@ -135,6 +135,21 @@ test('a pane exposing only cwd (no foreground_cwd) still resolves to its repo', 
   assert.ok(calls().includes('t-active'));
 });
 
+test('with NO state dir the nudge still fires (can\'t dedupe → allow, not suppress)', () => {
+  writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-active', ticketHash: 'x' }));
+  const env = {
+    ...process.env,
+    PATH: `${dir}:/usr/bin:/bin`,
+    HERDR_BIN_PATH: join(dir, 'herdr'),
+    HERDR_PLUGIN_EVENT: 'pane.agent_status_changed',
+    HERDR_PLUGIN_EVENT_JSON: JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p2', agent_status: 'idle' } }),
+  };
+  delete env.HERDR_PLUGIN_STATE_DIR; // no dedupe store available
+  const res = spawnSync(process.execPath, [script], { encoding: 'utf8', timeout: 15_000, env });
+  assert.equal(res.status, 0);
+  assert.ok(calls().includes('notification show'), 'without a dedupe store, still nudge (allow, not suppress)');
+});
+
 test('agent idle in a non-repo pane does nothing (resolveRepoRoot → null)', () => {
   // point the herdr stub at a plain (non-git) dir
   const plain = join(dir, 'plain');
