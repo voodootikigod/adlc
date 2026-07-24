@@ -79,6 +79,13 @@ export function revertCompletionCommit({ repo, toSha, shardPath = null, completi
   //      ledger falsely attest a completion that was withdrawn.
   // Failing either, we refuse. The caller escalates a refusal to a branch quarantine,
   // which is the honest outcome: this branch needs a human, not more blind surgery.
+  // Reacquire the TICKET lock for the withdrawal. completeTicketOnIntegration released
+  // it when it returned, and the caller then ran a potentially long post-completion
+  // gate — during which a legal non-sensitive ticket update can land (such updates
+  // record no manifest evidence, so the ledger check below cannot see them). Restoring
+  // the shard without this lock would silently erase that update.
+  const lock = acquireTicketLock(repo, { command: 'fleet:withdraw-completion' });
+  try {
   const head = git('rev-parse', 'HEAD');
   if (completionSha && head !== completionSha) {
     throw new Error(`refusing to withdraw: HEAD is ${head}, no longer the completion commit ${completionSha} — another process committed on this branch`);
@@ -97,14 +104,28 @@ export function revertCompletionCommit({ repo, toSha, shardPath = null, completi
     if (liveManifest !== committedManifest.trimEnd()) {
       throw new Error('refusing to withdraw: the evidence ledger changed since the completion commit (concurrent append) — cannot remove our entry without disturbing another writer');
     }
-    // Preconditions hold AND no recorder can interleave while we hold the lock, so
-    // restore both owned paths exactly. Still path-scoped — never a checkout-wide
-    // reset --hard.
+    // Same exactness rule for the SHARD: it must still be byte-for-byte what the
+    // completion commit recorded. A concurrent non-sensitive update leaves no evidence
+    // trail, so this content check is the only thing standing between a withdrawal and
+    // silently reverting someone else's legitimate edit.
+    if (shardPath) {
+      const committedShard = git('show', `${head}:${shardPath}`);
+      const shardAbs = join(repo, shardPath);
+      const liveShard = existsSync(shardAbs) ? readFileSync(shardAbs, 'utf8').trimEnd() : '';
+      if (liveShard !== committedShard.trimEnd()) {
+        throw new Error('refusing to withdraw: the ticket shard changed since the completion commit (concurrent update) — restoring would erase it');
+      }
+    }
+
+    // Preconditions hold AND neither a recorder nor a ticket writer can interleave
+    // while we hold both locks, so restore both owned paths exactly. Still
+    // path-scoped — never a checkout-wide reset --hard.
     git('reset', '-q', '--soft', toSha);
     const paths = shardPath ? [shardPath, MANIFEST_FILE] : [MANIFEST_FILE];
     git('restore', '--staged', '--worktree', '--', ...paths);
     return { reverted: true, toSha };
   });
+  } finally { releaseTicketLock(lock); }
 }
 
 /**

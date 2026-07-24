@@ -377,6 +377,28 @@ test('withdrawal REFUSES when HEAD moved — it never uncommits another process 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('withdrawal REFUSES when the shard gained a concurrent update — it never erases another writer edit', () => {
+  // The gap this closes: the ticket lock is released when completion returns, and the
+  // caller then runs a potentially long post-completion gate. A legal non-sensitive
+  // ticket update during that window records NO manifest evidence, so the ledger check
+  // cannot see it — only a shard content check can.
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+
+    const shardAbs = join(root, res.shardPath);
+    const edited = { ...JSON.parse(readFileSync(shardAbs, 'utf8')), title: 'legitimately retitled during the gate' };
+    writeFileSync(shardAbs, `${JSON.stringify(edited, null, 2)}\n`);
+
+    assert.throws(
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, git }),
+      /ticket shard changed since the completion commit/,
+      'it refuses rather than reverting the concurrent edit away',
+    );
+    assert.match(readFileSync(shardAbs, 'utf8'), /legitimately retitled during the gate/, 'the concurrent edit survives');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('withdrawal REFUSES when the ledger gained a concurrent append — no false attestation left behind', () => {
   const { root, git, integrationBranch } = makeRepo();
   try {
