@@ -15,6 +15,7 @@ import {
   loadTicketStoreReadOnly,
   readStoreFileBounded,
   readdirEntriesBounded,
+  addBounded,
   ticketFilename,
 } from '../ticket-readers/read-only-loader.mjs';
 
@@ -67,6 +68,18 @@ test('readdirEntriesBounded fails CLOSED past the entry cap (does not truncate t
   assert.throws(() => readdirEntriesBounded(dir, 3), /exceeds 3 entries/);
   // At/above the count, it returns every entry.
   assert.equal(readdirEntriesBounded(dir, 10).length, 5);
+});
+
+// ---- addBounded (aggregate byte cap) ----
+
+test('addBounded fails CLOSED once the running total exceeds the aggregate cap', () => {
+  // Individually-fine additions that SUM past the cap must throw — this is what
+  // stops many under-per-file-cap shards from adding up to an OOM.
+  let total = 0;
+  total = addBounded(total, 4, 10); // 4
+  total = addBounded(total, 4, 10); // 8
+  assert.equal(total, 8);
+  assert.throws(() => addBounded(total, 4, 10), /aggregate cap/); // 12 > 10
 });
 
 // ---- integration: loadTicketStoreReadOnly over a hostile store ----

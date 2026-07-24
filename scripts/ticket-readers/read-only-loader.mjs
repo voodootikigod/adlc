@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 // silently skipping content would be a fail-OPEN enforcement hole (a dropped
 // shard is a ticket, and its rails, that stop being seen).
 const MAX_STORE_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_STORE_TOTAL_BYTES = 64 * 1024 * 1024;
 const MAX_STORE_ENTRIES = 100_000;
 
 // Read a REGULAR file without blocking: open O_NONBLOCK (a FIFO/device then never
@@ -31,7 +32,7 @@ export function readStoreFileBounded(path, max = MAX_STORE_FILE_BYTES) {
     const read = readSync(fd, buf, 0, stat.size, 0);
     return buf.toString('utf8', 0, read);
   } finally {
-    closeSync(fd);
+    try { closeSync(fd); } catch { /* best-effort: a throwing close must not mask the read */ }
   }
 }
 
@@ -53,8 +54,17 @@ export function readdirEntriesBounded(path, max = MAX_STORE_ENTRIES) {
     }
     return entries;
   } finally {
-    dir.closeSync();
+    try { dir.closeSync(); } catch { /* best-effort */ }
   }
+}
+
+// Accumulate shard bytes and FAIL CLOSED past the aggregate cap: the per-file and
+// per-entry caps still let many individually-under-cap shards sum to an OOM
+// (e.g. 500 × 8MB = 4GB), so the running total is bounded too.
+export function addBounded(total, bytes, max) {
+  const next = total + bytes;
+  if (next > max) throw new Error(`ticket store exceeds the ${max}-byte aggregate cap`);
+  return next;
 }
 
 const ACTIVE_MANIFEST = { format: 'adlc-ticket-directory', version: 1 };
@@ -134,13 +144,19 @@ function loadDirectory(path) {
   try { manifest = JSON.parse(readStoreFileBounded(join(path, '.store.json'))); } catch (error) { throw new Error(`cannot read ${path}/.store.json: ${error.message}`); }
   if (canonicalJson(manifest) !== canonicalJson(ACTIVE_MANIFEST)) throw new Error(`${path} has an unsupported store manifest`);
   const tickets = []; const lower = new Set();
+  let totalBytes = 0;
   for (const entry of readdirEntriesBounded(path)) {
     if (entry.name === '.store.json') continue;
     if (!entry.isFile() || !entry.name.endsWith('.json')) throw new Error(`unrecognized ticket-store entry: ${entry.name}`);
     if (lower.has(entry.name.toLowerCase())) throw new Error(`case-insensitive shard collision: ${entry.name}`);
     lower.add(entry.name.toLowerCase());
+    let raw;
+    try { raw = readStoreFileBounded(join(path, entry.name)); } catch (error) { throw new Error(`cannot parse shard ${entry.name}: ${error.message}`); }
+    // Bound the AGGREGATE, not just each shard: many under-cap shards must not
+    // sum to an OOM. Fail closed on the running total before parsing more.
+    totalBytes = addBounded(totalBytes, Buffer.byteLength(raw, 'utf8'), MAX_STORE_TOTAL_BYTES);
     let ticket;
-    try { ticket = JSON.parse(readStoreFileBounded(join(path, entry.name))); } catch (error) { throw new Error(`cannot parse shard ${entry.name}: ${error.message}`); }
+    try { ticket = JSON.parse(raw); } catch (error) { throw new Error(`cannot parse shard ${entry.name}: ${error.message}`); }
     if (!ticket || typeof ticket.id !== 'string' || entry.name !== ticketFilename(ticket.id)) throw new Error(`shard filename does not match ticket id: ${entry.name}`);
     tickets.push(ticket);
   }

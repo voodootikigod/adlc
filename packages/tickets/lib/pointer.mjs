@@ -49,7 +49,9 @@ function readPointerFileBounded(path) {
   } catch {
     return null;
   } finally {
-    closeSync(fd);
+    // Best-effort: a throwing close (e.g. EIO on a network/FUSE mount) must not
+    // escape and break this reader's never-throw contract.
+    try { closeSync(fd); } catch { /* ignore */ }
   }
 }
 
