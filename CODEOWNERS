@@ -43,3 +43,4 @@
 /.adlc/tickets.json                                @voodootikigod
 /packages/rails-guard/lib/trust-root-authorization.mjs   @voodootikigod
 /.github/workflows/ci.yml                            @voodootikigod
+/packages/rails-guard/bin/rails-guard.mjs             @voodootikigod

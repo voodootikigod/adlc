@@ -1004,19 +1004,26 @@ test('#141: the same authorized trust-root change alone (no ticket-rail edit) is
   assert.equal(status, 0);
 });
 
-test('#141: an authorized trust-root RENAME is allowed (old + new paths handled)', () => {
+test('#141: an authorized trust-root RENAME between two trust roots is allowed (both path columns handled)', () => {
+  // CODEOWNERS -> .github/CODEOWNERS: BOTH are in immutableTrustRoots, so git
+  // emits a real `R100\told\tnew` row (a rename to a NON-trust-root dest would be
+  // pruned to a lone deletion by the pathspec and never exercise the capture).
+  // Base CODEOWNERS owns ONLY the OLD path, so the pre-fix (new-path-only) code
+  // finds no owner and denies; the fixed two-column capture resolves the OLD
+  // path's owner and authorizes — this test is RED without the fix.
+  const content = '/CODEOWNERS   @trusty\n';
   const status = runScenario({
     baseTickets: '{"tickets":[]}',
-    seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml'],
+    seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS'],
     seedFileContents: {
       '.adlc/config.json': VALID_CONFIG,
       '.adlc/manifest.jsonl': '',
-      CODEOWNERS: '/docs/ci/rails-guard.yml   @trusty\n',
-      'docs/ci/rails-guard.yml': 'orig content that stays identical\n',
+      CODEOWNERS: content,
     },
     mutate: (dir) => {
-      rmSync(join(dir, 'docs/ci/rails-guard.yml'));
-      writeFileSync(join(dir, 'docs/ci/rails-guard-v2.yml'), 'orig content that stays identical\n');
+      rmSync(join(dir, 'CODEOWNERS'));
+      mkdirSync(join(dir, '.github'), { recursive: true });
+      writeFileSync(join(dir, '.github/CODEOWNERS'), content);
     },
     env: authorizedEnv(),
   });
