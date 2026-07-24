@@ -56,9 +56,23 @@ export const INTEGRATION_WORKTREE = join('.worktrees', 'fleet-integration');
  */
 export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = null, git = defaultGit(repo), gitAt = defaultGit } = {}) {
   const abs = join(repo, INTEGRATION_WORKTREE);
-  // Resume: a live worktree already on the right branch is reused as-is.
+  // Resume: a live worktree already on the right branch is reused — but NOT blindly.
+  // A crash after planComplete wrote the shard + manifest, yet before the path-scoped
+  // completion commit, leaves the worktree DIRTY with orphaned completion artifacts.
+  // Reusing that as-is would let a later ticket's completion stage and commit the
+  // orphan alongside its own — a false attestation that the crashed ticket completed.
+  // Everything legitimately merged lives in the branch's COMMITTED history, and the
+  // uncommitted delta here is only ever a crash orphan, so hard-reset to HEAD and drop
+  // untracked leftovers before reusing.
   try {
-    if (gitAt(abs)('symbolic-ref', '--short', 'HEAD') === integrationBranch) return { path: abs, created: false };
+    const wtGit = gitAt(abs);
+    if (wtGit('symbolic-ref', '--short', 'HEAD') === integrationBranch) {
+      if (wtGit('status', '--porcelain').trim()) {
+        wtGit('reset', '--hard', 'HEAD');
+        wtGit('clean', '-fd');
+      }
+      return { path: abs, created: false };
+    }
   } catch { /* not a usable worktree — fall through and (re)create */ }
 
   try { git('worktree', 'remove', '--force', INTEGRATION_WORKTREE); } catch { /* none */ }

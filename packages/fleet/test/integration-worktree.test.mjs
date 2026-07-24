@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -120,6 +120,34 @@ test('RESUME re-attaches a missing integration worktree before any work is dispa
     assert.equal(defaultGit(join(root, INTEGRATION_WORKTREE))('symbolic-ref', '--short', 'HEAD'), 'fleet/run-r');
     assert.equal(git('rev-parse', 'fleet/run-r'), priorSha, 'and the branch history is preserved, not reset to base');
     assert.equal(order[0], 'ensure', 'the re-attach happens BEFORE any ticket work is set up');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('RESUME resets a DIRTY integration worktree — orphaned completion artifacts never survive', () => {
+  // A crash after planComplete wrote the shard + manifest but before the completion
+  // commit leaves the worktree dirty. Resume must NOT reuse that as-is: a later
+  // completion would stage and commit the orphan alongside its own (false attestation).
+  const { root, git, baseSha } = makeRepo();
+  try {
+    const { path } = ensureIntegrationWorktree(root, 'fleet/run-r', { baseSha, git });
+    const wtGit = defaultGit(path);
+    const headBefore = wtGit('rev-parse', 'HEAD');
+
+    // Simulate the crash orphan: an uncommitted tracked change AND an untracked file
+    // in the integration worktree.
+    writeFileSync(join(path, 'orphan-shard.json'), '{"completed":true}\n');
+    wtGit('add', 'orphan-shard.json');
+    writeFileSync(join(path, 'untracked-manifest-append.txt'), 'orphan\n');
+    assert.notEqual(wtGit('status', '--porcelain').trim(), '', 'precondition: worktree is dirty');
+
+    // Resume (no baseSha — attach to the existing branch).
+    const again = ensureIntegrationWorktree(root, 'fleet/run-r', { git });
+
+    assert.equal(again.created, false, 'the worktree is reused, not rebuilt');
+    assert.equal(wtGit('status', '--porcelain').trim(), '', 'but reset CLEAN before reuse — no orphan survives');
+    assert.equal(wtGit('rev-parse', 'HEAD'), headBefore, 'the committed history is preserved');
+    assert.ok(!existsSync(join(path, 'orphan-shard.json')), 'the staged orphan is gone');
+    assert.ok(!existsSync(join(path, 'untracked-manifest-append.txt')), 'the untracked orphan is gone');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
