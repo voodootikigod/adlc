@@ -37,34 +37,22 @@ function extractStrings(obj) {
  * message string values), so the scope-violation and edit-churn signals —
  * which key off file paths — could never fire on the one format that exists.
  *
- * This walks the structure and collects `file_path` values from the known
- * tool-input container keys: `input`, `tool_input`, `parameters`. It also
- * collects any bare nested `file_path` string as a defensive fallback.
+ * This walks the whole structure and collects EVERY nested `file_path` string,
+ * regardless of the parent container's name. An earlier version only pulled from
+ * a fixed set of container keys (`input`, `tool_input`, `parameters`), so a write
+ * target under any other shape — `{toolInput:{file_path}}`, `{toolCall:{args:
+ * {file_path}}}`, or a future variant — was invisible to `detectScopeViolations`
+ * / `detectEditChurn` rather than conservatively surfaced (#114). Failing OPEN on
+ * an unrecognized transcript shape — surface, don't silently drop — is the safe
+ * direction for an under-detection gate (docs/review-lenses/text-scanning-gates.md).
+ * The container-agnostic walk also reaches MultiEdit `edits[]` / `files[]` entries
+ * for free, since each element's `file_path` is collected at its own node.
  *
  * Returns an array of file-path strings (one entry per occurrence, so a path
  * edited twice yields two entries — preserving churn counts).
  */
 function extractFileTargets(obj) {
-  const TOOL_INPUT_KEYS = ['input', 'tool_input', 'parameters'];
   const results = [];
-
-  const pushFromContainer = (container) => {
-    if (!container || typeof container !== 'object') return;
-    const fp = container.file_path;
-    if (typeof fp === 'string' && fp.length > 0) {
-      results.push(fp);
-    }
-    // MultiEdit-style: an `edits`/`files` array each carrying a file_path.
-    for (const key of ['edits', 'files']) {
-      if (Array.isArray(container[key])) {
-        for (const item of container[key]) {
-          if (item && typeof item === 'object' && typeof item.file_path === 'string') {
-            results.push(item.file_path);
-          }
-        }
-      }
-    }
-  };
 
   const walk = (node) => {
     if (Array.isArray(node)) {
@@ -73,14 +61,15 @@ function extractFileTargets(obj) {
     }
     if (!node || typeof node !== 'object') return;
 
-    // Known tool-input containers: pull file_path directly.
-    for (const key of TOOL_INPUT_KEYS) {
-      if (node[key] && typeof node[key] === 'object') {
-        pushFromContainer(node[key]);
-      }
+    // Collect a bare `file_path` at THIS node regardless of the parent key —
+    // the documented defensive fallback, now the primary mechanism.
+    const fp = node.file_path;
+    if (typeof fp === 'string' && fp.length > 0) {
+      results.push(fp);
     }
 
-    // Recurse into all object/array children to find nested tool_use blocks.
+    // Recurse into all object/array children (this reaches nested tool_use
+    // blocks and MultiEdit edits[]/files[] items — one push per occurrence).
     for (const key of Object.keys(node)) {
       const val = node[key];
       if (val && typeof val === 'object') {
