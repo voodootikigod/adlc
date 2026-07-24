@@ -37,6 +37,26 @@ herdr plugin install voodootikigod/adlc/plugins/adlc-herdr
 Requires herdr ≥ 0.7.4 (`min_herdr_version`). The plugin is zero-dependency
 Node and declares no `[[build]]` commands — installation executes nothing.
 
+## Keybindings
+
+The board and the palette actions are reachable from herdr's action palette out
+of the box; these are the *recommended* bindings to add to your herdr keymap so
+the common flows are one keystroke. Bindings invoke a plugin entrypoint by id —
+they never shell out — so they inherit the same trusted-PATH, fail-closed
+guarantees as the palette.
+
+| Suggested key | Binding | What it does |
+| --- | --- | --- |
+| `<leader> a b` | `plugin pane open --plugin adlc --entrypoint board` | Open the **board** overlay (backlog · pane map · gate ledger) |
+| `<leader> a t` | `plugin action invoke --plugin adlc --action ticket-show` | **ticket-show** — split pane rendering the pane's active ticket |
+| `<leader> a g` | `plugin action invoke --plugin adlc --action gate` | **gate** — notify pass/FAIL of `gate-manifest verify` for the repo |
+| `<leader> a p` | `plugin action invoke --plugin adlc --action prosecute` | **prosecute** — spawn the P5 `adversarial-review` in a split |
+| `<leader> a c` | `plugin action invoke --plugin adlc --action ticket-complete` | **ticket-complete** — preview completing the active ticket (dry-run; you drive the write) |
+| `<leader> a i` | `plugin action invoke --plugin adlc --action adlc-init` | **adlc-init** — bootstrap `.adlc/` in the pane's repo |
+
+Inside the **board** overlay: `↑`/`↓` (or `k`/`j`) select a ticket row, `Enter`
+focuses that ticket's pane when it is mapped, `q` closes it.
+
 ## Layout
 
 - `herdr-plugin.toml` — manifest (v0.2.0): identity plus the shipped

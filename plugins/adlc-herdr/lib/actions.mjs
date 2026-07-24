@@ -86,6 +86,35 @@ export function planAction(actionId, target, active, opts = {}) {
         ],
         echo,
       };
+    case 'ticket-complete': {
+      // Completing writes the trust root, so this action only PREVIEWS: it spawns
+      // `adlc ticket complete <id>` as a dry-run (no --write); the human drives
+      // the actual completion in the pane. The id comes from .adlc/ state, so it
+      // is validated (a leading hyphen would be arg-injection into adlc).
+      if (!active || active.state !== 'active') return refuse(`no active ticket to complete (${echo})`);
+      if (!TICKET_ID_RE.test(active.id)) return refuse('active ticket id fails validation');
+      return {
+        kind: 'spawn-pane',
+        requiresBin: 'adlc',
+        herdrArgs: [
+          'agent', 'start', 'adlc-complete', '--cwd', repoRoot, '--split', 'down', '--',
+          'adlc', 'ticket', 'complete', active.id,
+        ],
+        echo,
+      };
+    }
+    case 'adlc-init':
+      // Bootstraps .adlc/ in the pane's repo — no active ticket required (this is
+      // how a repo GETS one). Fixed argv of the trusted `adlc` binary.
+      return {
+        kind: 'spawn-pane',
+        requiresBin: 'adlc',
+        herdrArgs: [
+          'agent', 'start', 'adlc-init', '--cwd', repoRoot, '--split', 'down', '--',
+          'adlc', 'init',
+        ],
+        echo,
+      };
     default:
       return refuse(`unknown action: ${actionId}`);
   }

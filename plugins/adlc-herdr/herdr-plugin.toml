@@ -51,3 +51,15 @@ id = "prosecute"
 title = "ADLC: prosecute this pane's worktree (P5 review)"
 contexts = ["pane"]
 command = ["node", "bin/action.mjs"]
+
+[[actions]]
+id = "ticket-complete"
+title = "ADLC: preview completing this pane's active ticket"
+contexts = ["pane"]
+command = ["node", "bin/action.mjs"]
+
+[[actions]]
+id = "adlc-init"
+title = "ADLC: initialize .adlc in this pane's repo"
+contexts = ["pane"]
+command = ["node", "bin/action.mjs"]
