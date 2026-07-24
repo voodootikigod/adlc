@@ -26,8 +26,8 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     assert.ok(r.reasons.some((x) => x.includes('scripts/rails-guard-ci.mjs')));
   });
 
-  it('TRUE for the CI workflow template and hash pin and tickets.json', () => {
-    for (const f of ['docs/ci/rails-guard.yml', 'scripts/test/rails-guard-workflow-hashes.json', '.adlc/tickets.json']) {
+  it('TRUE for the CI workflow template and hash pin', () => {
+    for (const f of ['docs/ci/rails-guard.yml', 'scripts/test/rails-guard-workflow-hashes.json']) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
       assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
       assert.ok(r.reasons.some((x) => x.includes(f)));
@@ -61,103 +61,30 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     assert.ok(r.reasons.some((x) => x.includes('T7') && x.includes('test/auth/**')));
   });
 
-  // The sharded backend is the SAME trust root as `.adlc/tickets.json`. When a
-  // repo migrates, the exact-file entry stops matching and every shard edit would
-  // declassify unless the store directory itself is a trust-root surface.
-  it('TRUE for a shard in the sharded ticket store', () => {
-    const r = classifyTrustRootTier({
-      changedFiles: ['.adlc/tickets/t64--ec791ef8cffb458098b48e73556d0f644cd8c1845bf94cc167060c1e3aca4a42.json'],
-      tickets: TICKETS,
-    });
-    assert.equal(r.isTrustRootTier, true);
-    assert.ok(r.reasons.some((x) => x.includes('.adlc/tickets/')));
-  });
-
-  it('TRUE for the sharded store manifest and for the archive', () => {
-    for (const f of ['.adlc/tickets/.store.json', '.adlc/ticket-archive/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
-      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
-      assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
-    }
-  });
-
-  // The test-path exemption applies to package prefixes only. A shard is DATA the
-  // gate reads, so a ticket id that happens to look test-ish must not exempt it.
-  it('TRUE for a shard whose name would trip the test-file heuristic', () => {
-    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets/t-test--abc.test.mjs'], tickets: TICKETS });
-    assert.equal(r.isTrustRootTier, true);
-  });
 });
 
-describe('classifyTrustRootTier — #326 add-vs-alter calibration', () => {
-  // An ADDITIVE ticket-store write (ticketContractAltered: false) grants no
-  // privilege over existing rails, so the ticket-store surfaces do NOT tier —
-  // matching scripts/rails-guard-ci.mjs's add-vs-alter rule.
-  it('FALSE for an additive .adlc/tickets.json write', () => {
-    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets.json'], tickets: TICKETS, ticketContractAltered: false });
-    assert.equal(r.isTrustRootTier, false);
-    assert.deepEqual(r.reasons, []);
-  });
-
-  it('FALSE for an additive ACTIVE ticket write (tickets.json + active shard)', () => {
-    for (const f of ['.adlc/tickets.json', '.adlc/tickets/t99--abc.json']) {
-      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: false });
-      assert.equal(r.isTrustRootTier, false, `${f} additive should NOT tier`);
+describe('classifyTrustRootTier — the ticket store is NOT a tier surface (#326)', () => {
+  // rails-guard-ci owns the ticket store (add-vs-alter contract); routing it through
+  // the cross-model tier too made every ticketed PR tier for no added protection and
+  // could not be soundly attested (the reviewed revision excludes the store). So a
+  // ticket-store change is trust-root tier ONLY if it also hits a rails deny-path.
+  it('FALSE for the legacy file, active shards, the store index, and the archive', () => {
+    for (const f of [
+      '.adlc/tickets.json',
+      '.adlc/tickets/t64--ec791ef8cffb458098b48e73556d0f644cd8c1845bf94cc167060c1e3aca4a42.json',
+      '.adlc/tickets/.store.json',
+      '.adlc/ticket-archive/.store.json',
+      '.adlc/ticket-archive/t1--abc.json',
+    ]) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, false, `${f} must NOT tier on the ticket-store surface alone`);
     }
   });
 
-  // #326 P5 (cross-model finding): the active-tickets signal is BLIND to the store
-  // INDEX and the ARCHIVE, so those tier unconditionally — suppressing them on an
-  // additive verdict would fail open (an archive rewrite / backend swap looks
-  // "additive" to a signal that only reads the active store).
-  it('the store INDEX and the ARCHIVE tier UNCONDITIONALLY, even on an additive verdict', () => {
-    for (const f of ['.adlc/tickets/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
-      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: false });
-      assert.equal(r.isTrustRootTier, true, `${f} must tier regardless of the additive signal`);
-    }
-  });
-
-  it('TRUE when an existing ACTIVE ticket contract is altered', () => {
-    for (const f of ['.adlc/tickets.json', '.adlc/tickets/t64--abc.json']) {
-      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: true });
-      assert.equal(r.isTrustRootTier, true, `${f} altered should tier`);
-      assert.ok(r.reasons.some((x) => x.includes('alters an existing ticket contract')), `reason for ${f}`);
-    }
-  });
-
-  it('FAILS CLOSED (tier) when the alter/add signal is omitted', () => {
-    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets.json'], tickets: TICKETS });
+  it('a ticket-store change co-changed with an enforcement package still tiers (via the package)', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets.json', 'packages/prosecute/lib/run.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, true);
-    assert.ok(r.reasons.some((x) => x.includes('.adlc/tickets.json')));
-  });
-
-  // The calibration is SCOPED to the ticket-store surfaces. An additive ticket
-  // write bundled with an enforcement-package or trust-root-file edit still tiers
-  // via those independent surfaces.
-  it('additive ticket write does NOT exempt a co-changed enforcement package or trust-root file', () => {
-    const enforcement = classifyTrustRootTier({
-      changedFiles: ['.adlc/tickets.json', 'packages/prosecute/lib/run.mjs'],
-      tickets: TICKETS,
-      ticketContractAltered: false,
-    });
-    assert.equal(enforcement.isTrustRootTier, true);
-    assert.ok(enforcement.reasons.some((x) => x.includes('packages/prosecute/')));
-    assert.ok(!enforcement.reasons.some((x) => x.includes('tickets.json')), 'additive tickets.json must not contribute a reason');
-
-    const trustFile = classifyTrustRootTier({
-      changedFiles: ['.adlc/tickets.json', 'docs/ci/rails-guard.yml'],
-      tickets: TICKETS,
-      ticketContractAltered: false,
-    });
-    assert.equal(trustFile.isTrustRootTier, true);
-    assert.ok(trustFile.reasons.some((x) => x.includes('docs/ci/rails-guard.yml')));
-  });
-
-  // A rails deny-path hit is content-driven, not ticket-store-surface-driven, so
-  // the add-vs-alter signal does not relax it.
-  it('a rails deny-path hit still tiers regardless of the additive signal', () => {
-    const r = classifyTrustRootTier({ changedFiles: ['test/auth/login.test.mjs'], tickets: TICKETS, ticketContractAltered: false });
-    assert.equal(r.isTrustRootTier, true);
-    assert.ok(r.reasons.some((x) => x.includes('rails deny-path')));
+    assert.ok(r.reasons.every((x) => !x.includes('tickets')), 'the ticket file contributes no reason');
   });
 });
 

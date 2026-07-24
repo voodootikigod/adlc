@@ -127,6 +127,33 @@ jobs:
         if: matrix.node-version == 22
         run: node scripts/pi-live-prosecute.mjs
 
+      # #326: the trust-root cross-model review gate, finally INVOKED — and FOLDED
+      # into this REQUIRED job (a separate job could not be made a required check on
+      # this repo's plan, so it would enforce nothing). A trust-root-tier change (an
+      # enforcement/producer package, a rails deny-path, or a trust-root file)
+      # requires a distinct-provider cross-model `approve` bound to the reviewed
+      # revision; fails closed (exit 2) with no matching attestation. The ticket
+      # STORE is deliberately NOT a tier surface — rails-guard-ci owns it. Runs on
+      # the Node 20 leg only, LAST, and on PRs only (a push has no base diff).
+      - name: Trust-root cross-model gate (#326)
+        if: matrix.node-version == 20 && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # This repo's default PR author provider; distinctness is checked against
+          # it, so a same-provider review never satisfies the gate. Override with an
+          # ADLC_AUTHOR_PROVIDER repository variable if the author model changes.
+          ADLC_AUTHOR_PROVIDER: ${{ vars.ADLC_AUTHOR_PROVIDER || 'anthropic' }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          git fetch --no-tags origin "$HEAD_SHA"
+          # Check out the PR HEAD (this job otherwise runs on the merge commit) with
+          # --force, so the worktree is the exact committed head tree the author
+          # recorded the attestation against — undoing any install-time lockfile
+          # churn. node_modules (gitignored) is untouched, so the gate still runs.
+          git checkout --quiet --force "$HEAD_SHA"
+          node packages/prosecute/bin/adlc-prosecute.mjs tier-check --base "origin/$BASE_REF" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
+
   # T31 drift canary: the SAME two OpenCode live proofs against opencode-ai@latest.
   # ADVISORY by design (continue-on-error): upstream releases near-daily, and a
   # latest-version break must be VISIBLE same-day without blocking unrelated
@@ -307,53 +334,6 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: node scripts/guard-findings-ledger-append-only.mjs "origin/$BASE_REF"
-
-  cross-model-gate:
-    # #326: the trust-root cross-model review gate, finally INVOKED. A trust-root-
-    # tier change — an enforcement/producer package, a rails deny-path, a trust-root
-    # file, or an ALTERATION of an existing ticket contract — requires a distinct-
-    # provider cross-model adversarial `approve` bound to the reviewed revision.
-    # ADDITIVE ticket writes do NOT tier (add-vs-alter, aligned with rails-guard-ci).
-    # Fails closed: a tiered change with no matching attestation reddens this check.
-    # PR-only (a push has no base diff to gate).
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The PR HEAD, NOT the merge commit: the gate hashes the worktree to a
-          # revision, and the attestation the author recorded must bind to the SAME
-          # tree. The manifest lives under .adlc/ (revision-ignored), so a committed
-          # attestation does not shift the hash.
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 20
-
-      - name: Install
-        # npm ci (not npm install) so the checkout is not perturbed by a lockfile
-        # rewrite, keeping the CI-computed revision equal to the recorded one.
-        run: npm ci
-
-      - name: Fetch base ref
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
-
-      - name: Trust-root cross-model gate
-        # The tier decision is always printed (a non-tiered PR passes and says so),
-        # so "no review required" and "review missing" are never both silent.
-        env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-          # This repo's default PR author provider; distinctness is checked against
-          # it, so a same-provider review never satisfies the gate. Override with an
-          # ADLC_AUTHOR_PROVIDER repository variable if the author model changes.
-          ADLC_AUTHOR_PROVIDER: ${{ vars.ADLC_AUTHOR_PROVIDER || 'anthropic' }}
-        run: node packages/prosecute/bin/adlc-prosecute.mjs tier-check --base "origin/$BASE_REF" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
 
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that
