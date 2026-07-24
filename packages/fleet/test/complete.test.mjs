@@ -11,8 +11,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { initializeTicketStores, TicketService, detectTicketStore, ticketFilename, readTicketLock } from '@adlc/tickets';
 import { runFleet, integrationBranchName } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
@@ -247,6 +248,29 @@ test('the completion commit is CI-shaped — completed:true-only shard + append-
     // Manifest diff is append-only — what rails-guard-ci requires (HEAD starts with base).
     const headManifest = git('show', 'HEAD:.adlc/manifest.jsonl');
     assert.ok(headManifest.startsWith(baseManifest), 'the manifest is append-only');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// The assertion above independently RE-IMPLEMENTS what rails-guard-ci accepts. A model of
+// the consumer cannot catch drift in the real consumer (AGENTS.md), so this test round-trips
+// an actual fleet completion commit through the REAL scripts/rails-guard-ci.mjs gate that CI
+// runs on the PR — the producer→consumer contract, not a fleet-side approximation of it
+// (adversarial-review round-32).
+const RAILS_GUARD_CI = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'rails-guard-ci.mjs');
+
+test('PRODUCER→CONSUMER: a fleet completion commit is ACCEPTED by the real rails-guard-ci gate', () => {
+  const { root, git, integrationBranch } = makeRepo();
+  try {
+    const base = git('rev-parse', 'HEAD'); // the pre-completion tip; the diff base CI uses
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    assert.equal(res.completed, true, 'precondition: a real completion commit was produced');
+
+    // Run the ACTUAL gate against the ACTUAL commit, in the repo, exactly as CI would.
+    const r = spawnSync(process.execPath, [RAILS_GUARD_CI, base], { cwd: root, encoding: 'utf8' });
+    assert.equal(
+      r.status, 0,
+      `the real rails-guard-ci must accept the fleet completion commit (exit ${r.status}):\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`,
+    );
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
