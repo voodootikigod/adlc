@@ -236,7 +236,17 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   if (runState.contaminated) {
     log(`FLEET QUARANTINE: ${integrationBranch} not opened as a PR — ${runState.contaminationReason}. Inspect and clean the branch manually.`);
   } else if (merged > 0 && deps.openPR) {
-    deps.openPR({ integrationBranch, base: config.base }); prCount = 1;
+    // Trust openPR's REPORTED outcome — never fabricate success. It returns
+    // { opened:false, reason } when gh is unavailable or the push / PR creation fails,
+    // and counting that as an opened PR would tell the operator a PR exists when none
+    // does (adversarial-review round-31). await it: the real openPR runs `gh pr create`
+    // asynchronously, so an un-awaited call could miss a creation failure entirely.
+    const pr = await deps.openPR({ integrationBranch, base: config.base });
+    if (pr && pr.opened) {
+      prCount = 1;
+    } else {
+      log(`FLEET: ${integrationBranch} merged ${merged} ticket(s) but the PR was NOT opened${pr?.reason ? ` — ${pr.reason}` : ''}. Push the branch and open the PR manually.`);
+    }
   }
 
   return { integrationBranch, results, merged, prCount, status, contaminated: runState.contaminated, contaminationReason: runState.contaminationReason };

@@ -175,4 +175,7 @@ test('runFleet driven by live deps advances a ticket build→gate→prosecute→
   // The merge targeted the integration branch via rebase-first.
   assert.ok(rec.git.some((g) => g.args[0] === 'merge'), 'a merge occurred');
   assert.ok(rec.git.some((g) => g.args[0] === 'rebase'), 'rebase-first before merge');
+  // fakeIo.hasGh() is false, so the REAL openPR reports { opened:false } — the run must
+  // not fabricate a PR count from that (round-31).
+  assert.equal(summary.prCount, 0, 'no gh → openPR reports not-opened → prCount stays 0, not fabricated');
 });

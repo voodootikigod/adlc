@@ -367,11 +367,17 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       catch { /* evidence is best-effort */ }
     },
 
-    openPR: ({ integrationBranch, base }) => {
+    openPR: async ({ integrationBranch, base }) => {
       if (!io.hasGh()) return { opened: false, reason: 'gh CLI not available' };
       try {
         integrationGit('push', '-u', 'origin', integrationBranch);
-        io.spawnWorker('gh', ['pr', 'create', '--base', base, '--head', integrationBranch, '--fill'], { cwd: repo });
+        // AWAIT the creation: spawnWorker is async, so a fire-and-forget call would
+        // report success before `gh pr create` ran and could miss its failure entirely.
+        const res = await io.spawnWorker('gh', ['pr', 'create', '--base', base, '--head', integrationBranch, '--fill'], { cwd: repo });
+        if (res?.error) throw res.error;
+        if (typeof res?.status === 'number' && res.status !== 0) {
+          return { opened: false, reason: `gh pr create exited ${res.status}: ${(res.stderr ?? '').trim()}`.trim() };
+        }
         return { opened: true };
       } catch (e) { return { opened: false, reason: e.message }; }
     },
