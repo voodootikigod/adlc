@@ -1,10 +1,9 @@
 # ADLC × herdr plugin manifest.
 #
 # Entrypoints land with their tickets: [[startup]] watcher (t-herdr-2),
-# [[actions]] (t-herdr-3), [[panes]] board (t-herdr-4). The [[events]]
-# entrypoints that t-herdr-1 enumerated are intentionally DEFERRED to Phase 2
-# (event glue — plan §5.4/§8); no bin/on-event.mjs exists yet. No [[build]]
-# commands ever — the plugin ships runnable, zero-dep (plan §6.6).
+# [[actions]] (t-herdr-3), [[panes]] board (t-herdr-4), [[events]] glue
+# (t-herdr-5). No [[build]] commands ever — the plugin ships runnable,
+# zero-dep (plan §6.6).
 id = "adlc"
 name = "ADLC"
 version = "0.2.0"
@@ -14,6 +13,20 @@ platforms = ["linux", "macos"]
 
 [[startup]]
 command = ["node", "bin/watcher.mjs"]
+
+# Event glue (t-herdr-5). Names are DOTTED (probed live 2026-07-24); the
+# payload's own `event`/`type` fields use underscores.
+[[events]]
+on = "worktree.created"
+command = ["node", "bin/on-event.mjs"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "bin/on-event.mjs"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "bin/on-event.mjs"]
 
 [[panes]]
 id = "board"

@@ -1,0 +1,15 @@
+{
+  "body": "Phase 2 event glue (docs/herdr-integration-plan.md §5.4). Implement bin/on-event.mjs (the [[events]] dispatcher) and lib/event-plan.mjs (pure decision logic), and add three [[events]] entries to herdr-plugin.toml. PROBED LIVE 2026-07-24 (herdr 0.7.4): manifest `on` uses DOTTED names (`worktree.created`, `pane.agent_status_changed`, `pane.exited`); the handler receives HERDR_PLUGIN_EVENT (dotted) and HERDR_PLUGIN_EVENT_JSON. Payload shapes: pane.exited = {event:'pane_exited', data:{pane_id, workspace_id}} (HERDR_PANE_ID also = the exited pane); worktree.created = {event:'worktree_created', data:{workspace:{workspace_id, label:<branch>, worktree:{repo_root, checkout_path}}}}; pane.agent_status_changed = {event, data:{pane_id, agent_status, agent}} (NEW status only, no previous). Dispatch on HERDR_PLUGIN_EVENT; parse HERDR_PLUGIN_EVENT_JSON schema-validated, fail closed on malformed (no spawn, no notification spam). Handlers via the pure planner lib/event-plan.mjs (given event name + parsed payload + injected repo-state readers -> a plan: notify | clear-tokens | none): (1) pane.exited -> clear that pane's ADLC tokens (reuse lib/tokens buildPaneClearArgs). (2) worktree.created -> resolve the new worktree repo_root from data.workspace.worktree; if its branch (label) matches a ticket id present in that repo's store (via the trusted `adlc ticket list --json` CLI) AND .adlc/current-ticket.json is absent, emit an ADVISORY notification offering to seed ticket context (never auto-write current-ticket.json — advisory only per §5.4). (3) pane.agent_status_changed -> when data.agent_status is idle or done for a pane whose repo has an active ticket (resolve the pane's repo the same way actions/board already do: `herdr pane get <pane_id>` -> foreground_cwd -> lib/repo-root.resolveRepoRoot, then lib/adlc-state.readActiveTicket), emit an advisory 'gate <ticket>?' notification; dedupe per (pane_id, ticket, status) using HERDR_PLUGIN_STATE_DIR so a status flap does not spam. All rendered strings pass lib/sanitize; never execute anything derived from event/observed data (fixed argvs, trusted PATH — fleet K1/A2). bin/on-event.mjs is thin glue; all decision logic in lib/event-plan.mjs and pinned. Verification: node --test 'plugins/adlc-herdr/test/*.test.mjs' (glob form; the bare-dir form fails on Node 24). allow-suppression: none",
+  "budget": "mid",
+  "category": "feature",
+  "duration": 3,
+  "edges": [],
+  "id": "t-herdr-5",
+  "rails": [
+    "plugins/adlc-herdr/test/event-plan.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-herdr/**"
+  ],
+  "title": "herdr [[events]] handlers: worktree-created seeding nudge, agent-idle gate nudge, pane-exited token clear"
+}
