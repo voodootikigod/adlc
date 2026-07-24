@@ -41,3 +41,4 @@
 # The ticket store. The gate reads its rail set from the BASE version of this
 # file, so a change here changes what is enforced everywhere.
 /.adlc/tickets.json                                @voodootikigod
+/packages/rails-guard/lib/trust-root-authorization.mjs   @voodootikigod

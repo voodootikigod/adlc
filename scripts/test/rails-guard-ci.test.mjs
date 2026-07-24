@@ -30,7 +30,7 @@ function git(cwd, args) {
  * `seedFiles` path, then apply `mutate(dir)` on a feature branch. Returns the
  * script's exit code when run with base=main.
  */
-function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) {
+function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {}, env = {} }) {
   const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
   try {
     git(dir, ['init', '-q', '-b', 'main']);
@@ -63,7 +63,7 @@ function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {} }) 
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'change']);
     try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, ...env } });
       return 0;
     } catch (e) {
       return e.status ?? 1;
@@ -905,4 +905,61 @@ test('#104: idempotent — a PR that leaves an already-completed base ticket unc
     mutate: (d) => writeFileSync(join(d, 'app.mjs'), 'changed\n'),
   });
   assert.equal(code, 0);
+});
+
+// ---- #141: trust-root change ceremony (authorized-path recognition) ----
+
+function writeEvent(author, labels, number = 7) {
+  const p = join(mkdtempSync(join(tmpdir(), 'rgci-event-')), 'event.json');
+  writeFileSync(p, JSON.stringify({
+    pull_request: { number, user: { login: author }, labels: labels.map((name) => ({ name })) },
+  }));
+  return p;
+}
+
+// A PR that changes a trust root (docs/ci/rails-guard.yml), with config present
+// so immutableTrustRoots is active. CODEOWNERS at base owns the changed path.
+const trustRootChange = (env) => runScenario({
+  baseTickets: '{"tickets":[]}',
+  seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml'],
+  seedFileContents: {
+    '.adlc/config.json': VALID_CONFIG,
+    '.adlc/manifest.jsonl': '',
+    CODEOWNERS: '/docs/ci/rails-guard.yml   @trusty\n',
+    'docs/ci/rails-guard.yml': 'orig\n',
+  },
+  mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
+  env,
+});
+
+test('#141: a trust-root change with no PR context is denied (exit 2)', () => {
+  assert.equal(trustRootChange({}), 2);
+});
+
+test('#141: label + non-author CODEOWNER approval AUTHORIZES the change (exit 0)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+  }), 0);
+});
+
+test('#141: author self-approval does NOT authorize (exit 2)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('trusty', ['trust-root-change']), // author is the owner
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+  }), 2);
+});
+
+test('#141: approval from a non-CODEOWNER is not enough (exit 2)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'random' }, state: 'APPROVED' }]),
+  }), 2);
+});
+
+test('#141: missing the label denies even with a CODEOWNER approval (exit 2)', () => {
+  assert.equal(trustRootChange({
+    GITHUB_EVENT_PATH: writeEvent('contributor', []),
+    ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
+  }), 2);
 });
