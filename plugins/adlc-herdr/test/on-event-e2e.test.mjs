@@ -111,14 +111,25 @@ test('agent going idle with an active ticket nudges to gate it (drives pane→re
   assert.ok(calls().includes('t-active'));
 });
 
-test('agent idle nudge is deduped — a second identical transition does not notify again', () => {
+test('a rapid re-idle within the dedupe window does not notify again', () => {
   writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-active', ticketHash: 'x' }));
   const payload = JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p2', agent_status: 'idle' } });
-  runEvent('pane.agent_status_changed', payload); // first: notifies + marks
+  runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '60000' }); // first: notify + mark
   const before = (calls().match(/notification show/g) || []).length;
-  runEvent('pane.agent_status_changed', payload); // second: deduped
+  runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '60000' }); // within window: suppressed
   const after = (calls().match(/notification show/g) || []).length;
-  assert.equal(after, before, 'the same idle transition must not nudge twice (state-dir dedupe)');
+  assert.equal(after, before, 'a flap within the window must not nudge twice');
+});
+
+test('a later idle (window elapsed) re-nudges — dedupe is a window, NOT permanent suppression', () => {
+  writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-active', ticketHash: 'x' }));
+  const payload = JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p2', agent_status: 'idle' } });
+  // window 0 = every idle is a new cycle → must re-nudge (guards the HIGH bug).
+  runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '0' });
+  const before = (calls().match(/notification show/g) || []).length;
+  runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '0' });
+  const after = (calls().match(/notification show/g) || []).length;
+  assert.equal(after, before + 1, 'a new idle cycle after the window must nudge again');
 });
 
 test('a pane exposing only cwd (no foreground_cwd) still resolves to its repo', () => {

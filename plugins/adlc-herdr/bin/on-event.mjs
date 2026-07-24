@@ -4,7 +4,7 @@
 // HERDR_PLUGIN_EVENT_JSON the payload), wire the real repo-state readers, ask
 // the pure planner (lib/event-plan) what to do, and execute the single plan.
 // Fail soft everywhere — an event handler must never crash the herdr session.
-import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runHerdr, runHerdrJson, paneInfoArgs } from '../lib/herdr.mjs';
@@ -37,11 +37,14 @@ const listTicketIds = (repoRoot) => ticketIdsFromStore(repoRoot);
 // present OR unreadable both count as "has a pointer" → don't nudge to seed.
 const hasCurrentTicket = (repoRoot) => readActiveTicket(repoRoot).state !== 'absent';
 
-// Dedupe markers: one empty file per (pane|ticket|status), named by hash so any
-// id characters are safe in the filename. `claim` creates the marker
-// ATOMICALLY (openSync 'wx' = exclusive create): it returns true only for the
-// first process to create it, so concurrent event processes (herdr spawns one
-// per event) can't all pass a check-then-write race and spam notifications.
+// Dedupe markers: one file per (pane|ticket|status), named by hash so any id
+// characters are safe in the filename. `claim` returns true (nudge) only if we
+// have NOT already nudged this key within NUDGE_WINDOW_MS. The window — not a
+// permanent marker — is the point: a rapid status flap is suppressed, but a
+// genuine later idle (a new work cycle) re-nudges, so multi-turn workflows keep
+// getting nudged. Marker creation is atomic (openSync 'wx') so concurrent
+// per-event processes can't both pass a check-then-write race.
+const NUDGE_WINDOW_MS = Number(process.env.ADLC_HERDR_NUDGE_WINDOW_MS ?? 30_000);
 const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
   ? join(process.env.HERDR_PLUGIN_STATE_DIR, 'nudged')
   : null;
@@ -49,12 +52,24 @@ const markerPath = (key) => (nudgeDir ? join(nudgeDir, createHash('sha256').upda
 const claim = async (key) => {
   const p = markerPath(key);
   if (!p) return true; // no state dir → can't dedupe; allow the nudge
+  const now = Date.now();
   try {
     mkdirSync(nudgeDir, { recursive: true });
-    closeSync(openSync(p, 'wx')); // EEXIST if another process already claimed it
+    closeSync(openSync(p, 'wx')); // first time for this key → nudge
     return true;
   } catch (error) {
-    if (error && error.code === 'EEXIST') return false; // lost the race — already nudged
+    if (error && error.code === 'EEXIST') {
+      try {
+        if (now - statSync(p).mtimeMs >= NUDGE_WINDOW_MS) {
+          utimesSync(p, now / 1000, now / 1000); // window elapsed → renew + nudge
+          return true;
+        }
+      } catch {
+        // marker vanished/unreadable → fall through and nudge
+        return true;
+      }
+      return false; // within the window → suppress the flap
+    }
     return true; // other errors: fail toward notifying (better one extra than a silent miss)
   }
 };

@@ -129,7 +129,8 @@ test('ticketIdsFromStore reads ids from sharded shard filenames', () => {
   writeFileSync(join(repo, '.adlc', 'tickets', 't-a--111.json'), '{}');
   writeFileSync(join(repo, '.adlc', 'tickets', 't-b--222.json'), '{}');
   writeFileSync(join(repo, '.adlc', 'tickets', 'notjson.txt'), 'x'); // ignored
-  assert.deepEqual(ticketIdsFromStore(repo).sort(), ['t-a', 't-b']);
+  writeFileSync(join(repo, '.adlc', 'tickets', 't-c.json'), '{}'); // no '--' → strip .json, not truncate
+  assert.deepEqual(ticketIdsFromStore(repo).sort(), ['t-a', 't-b', 't-c']);
 });
 
 test('ticketIdsFromStore falls back to the legacy tickets.json array', () => {
