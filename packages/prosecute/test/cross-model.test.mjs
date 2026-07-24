@@ -226,3 +226,35 @@ describe('hasCrossModelApproveForRevision — #326 CI tier gate (ticket-agnostic
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe('cross-model latest-verdict revocation (#326 P5 finding)', () => {
+  it('a later needs-attention from the same provider REVOKES an earlier approve (same revision)', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a later approve after a needs-attention RESTORES the gate', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a DIFFERENT provider standing approve still counts after another provider revokes', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'gemini', authorProvider: 'anthropic', verdict: 'approve', dir });
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
+      // gemini's approve still stands.
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

@@ -98,15 +98,26 @@ describe('classifyTrustRootTier — #326 add-vs-alter calibration', () => {
     assert.deepEqual(r.reasons, []);
   });
 
-  it('FALSE for additive shard/archive writes', () => {
-    for (const f of ['.adlc/tickets/t99--abc.json', '.adlc/tickets/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
+  it('FALSE for an additive ACTIVE ticket write (tickets.json + active shard)', () => {
+    for (const f of ['.adlc/tickets.json', '.adlc/tickets/t99--abc.json']) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: false });
       assert.equal(r.isTrustRootTier, false, `${f} additive should NOT tier`);
     }
   });
 
-  it('TRUE when an existing ticket contract is altered', () => {
-    for (const f of ['.adlc/tickets.json', '.adlc/tickets/t64--abc.json', '.adlc/ticket-archive/t1--abc.json']) {
+  // #326 P5 (cross-model finding): the active-tickets signal is BLIND to the store
+  // INDEX and the ARCHIVE, so those tier unconditionally — suppressing them on an
+  // additive verdict would fail open (an archive rewrite / backend swap looks
+  // "additive" to a signal that only reads the active store).
+  it('the store INDEX and the ARCHIVE tier UNCONDITIONALLY, even on an additive verdict', () => {
+    for (const f of ['.adlc/tickets/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: false });
+      assert.equal(r.isTrustRootTier, true, `${f} must tier regardless of the additive signal`);
+    }
+  });
+
+  it('TRUE when an existing ACTIVE ticket contract is altered', () => {
+    for (const f of ['.adlc/tickets.json', '.adlc/tickets/t64--abc.json']) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS, ticketContractAltered: true });
       assert.equal(r.isTrustRootTier, true, `${f} altered should tier`);
       assert.ok(r.reasons.some((x) => x.includes('alters an existing ticket contract')), `reason for ${f}`);

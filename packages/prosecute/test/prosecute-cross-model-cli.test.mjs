@@ -335,7 +335,9 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
         writePasses({ ...repo, revision: 'fixed-rev' });
         const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
         assert.equal(res.status, 2, `moving a shard out of ${storeDir} must tier`);
-        assert.match(res.stderr, /trust-root ticket store/);
+        // #326: the active store and the archive now carry distinct reasons
+        // ("ticket store" vs "ticket archive"); both are trust-root surfaces.
+        assert.match(res.stderr, /trust-root ticket (store|archive)/);
       } finally {
         rmSync(repo.dir, { recursive: true, force: true });
       }

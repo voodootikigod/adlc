@@ -94,31 +94,48 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
 // trust-root change (e.g. an enforcement-package edit) need not map to one ticket,
 // and the revision hash is the anti-stale anchor that stops a prior attestation
 // from clearing a fresh diff.
-function entrySatisfies(entry, { ticket, revision, runAuthor }) {
-  if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) return false;
-  if (ticket !== undefined && entry.ticket !== ticket) return false;
+// A candidate cross-model review entry for (revision, author, [ticket]) from a
+// DISTINCT reviewer. Returns { provider, verdict } for a valid approve/needs-
+// attention entry, or null. `ticket` optional (the revision gate omits it).
+function candidateReview(entry, { ticket, revision, runAuthor }) {
+  if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) return null;
+  if (ticket !== undefined && entry.ticket !== ticket) return null;
   const data = entry.data;
-  if (!data || typeof data !== 'object') return false;
-  if (data.verdict !== 'approve') return false;
-  if (data.revision !== revision) return false;
+  if (!data || typeof data !== 'object') return null;
+  if (data.revision !== revision) return null;
+  if (data.verdict !== 'approve' && data.verdict !== 'needs-attention') return null;
   const provider = normalizeProvider(data.provider);
   const entryAuthor = normalizeProvider(data.authorProvider);
-  if (provider === '' || entryAuthor === '' || runAuthor === '') return false;
+  if (provider === '' || entryAuthor === '' || runAuthor === '') return null;
   // Write-side belt-and-suspenders: the attestation must not be same-provider.
-  if (provider === entryAuthor) return false;
+  if (provider === entryAuthor) return null;
   // Author anchored to the run: the reviewer must differ from the real
   // (run-declared) author, and the record must be for THIS author. All compared
   // normalized so a whitespace/case variant cannot fake distinctness.
-  if (provider === runAuthor) return false;
-  if (entryAuthor !== runAuthor) return false;
-  return true;
+  if (provider === runAuthor) return null;
+  if (entryAuthor !== runAuthor) return null;
+  return { provider, verdict: data.verdict };
+}
+
+// The gate is satisfied iff some distinct-provider reviewer's LATEST verdict for
+// this revision is `approve`. Entries are chronological (append-only manifest), so
+// the last entry per provider wins — a later `needs-attention` REVOKES an earlier
+// `approve` from that provider (#326 P5 finding), while a different provider's
+// standing approve still counts.
+function crossModelSatisfied(entries, match) {
+  const latestByProvider = new Map();
+  for (const entry of entries) {
+    const review = candidateReview(entry, match);
+    if (review) latestByProvider.set(review.provider, review.verdict);
+  }
+  for (const verdict of latestByProvider.values()) if (verdict === 'approve') return true;
+  return false;
 }
 
 export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } = {}) {
   if (!ticket || !revision || !authorProvider) return false;
   const { entries } = readEntries('manifest', dir);
-  const runAuthor = normalizeProvider(authorProvider);
-  return entries.some((entry) => entrySatisfies(entry, { ticket, revision, runAuthor }));
+  return crossModelSatisfied(entries, { ticket, revision, runAuthor: normalizeProvider(authorProvider) });
 }
 
 /**
@@ -130,6 +147,5 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } =
 export function hasCrossModelApproveForRevision({ dir, revision, authorProvider } = {}) {
   if (!revision || !authorProvider) return false;
   const { entries } = readEntries('manifest', dir);
-  const runAuthor = normalizeProvider(authorProvider);
-  return entries.some((entry) => entrySatisfies(entry, { ticket: undefined, revision, runAuthor }));
+  return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider) });
 }

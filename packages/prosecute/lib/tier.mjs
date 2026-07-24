@@ -29,10 +29,16 @@ const TRUST_ROOT_FILES = [
 //
 // Unconditional, like TRUST_ROOT_FILES: these are DATA the gate reads, so the
 // test-path exemption that applies to package prefixes must not apply here.
-const TRUST_ROOT_PREFIXES = [
-  '.adlc/tickets/',
-  '.adlc/ticket-archive/',
-];
+//
+// #326 sub-classification of the ticket-store surfaces. The add-vs-alter
+// calibration applies ONLY to ACTIVE ticket CONTENT the caller's signal (computed
+// from the ACTIVE store) can observe. The store INDEX and the ARCHIVE are
+// signal-blind and tier UNCONDITIONALLY, so suppressing them on an additive
+// verdict would fail OPEN (an archive rewrite or a store-backend swap looks
+// "additive" to the active-tickets signal).
+const ACTIVE_SHARD_PREFIX = '.adlc/tickets/';       // active shards → add-vs-alter calibrated
+const ACTIVE_STORE_INDEX = '.adlc/tickets/.store.json'; // structural (migration) → unconditional
+const ARCHIVE_PREFIX = '.adlc/ticket-archive/';     // rewrites gate history → unconditional
 
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
 //    "the gate passes" means, so a same-model review of the author's own tests
@@ -127,15 +133,20 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [], ticketC
     const path = toPosix(raw);
 
     if (TRUST_ROOT_FILES.includes(path)) {
-      if (TICKET_STORE_FILES.has(path)) {
+      if (TICKET_STORE_FILES.has(path)) {          // .adlc/tickets.json — active content
         if (ticketStoreTiers) push(ticketStoreReason(path));
       } else {
         push(`touches trust-root file ${path}`);
       }
     }
-    for (const prefix of TRUST_ROOT_PREFIXES) {
-      if (path.startsWith(prefix) && ticketStoreTiers) push(ticketStoreReason(prefix));
-    }
+    // Archive: unconditional (rewrites gate history; the active-tickets signal is
+    // blind to it, so an archive mutation must never be declassified as additive).
+    if (path.startsWith(ARCHIVE_PREFIX)) push(`touches trust-root ticket archive ${ARCHIVE_PREFIX}`);
+    // Active store INDEX: unconditional (a .store.json change is structural, not an
+    // additive ticket write). Checked before the shard branch since it shares the prefix.
+    if (path === ACTIVE_STORE_INDEX) push(`touches trust-root ticket store index ${ACTIVE_STORE_INDEX}`);
+    // Active shards: add-vs-alter calibrated via the observable signal.
+    else if (path.startsWith(ACTIVE_SHARD_PREFIX) && ticketStoreTiers) push(ticketStoreReason(ACTIVE_SHARD_PREFIX));
     // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
     // touches neither, so it is exempt here (#154/T41). The exact-file check
     // above and the rails-deny-path check below stay unconditional.

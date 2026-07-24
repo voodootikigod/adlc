@@ -335,7 +335,9 @@ jobs:
           node-version: 20
 
       - name: Install
-        run: npm install
+        # npm ci (not npm install) so the checkout is not perturbed by a lockfile
+        # rewrite, keeping the CI-computed revision equal to the recorded one.
+        run: npm ci
 
       - name: Fetch base ref
         env:
