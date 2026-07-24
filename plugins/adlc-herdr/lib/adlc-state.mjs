@@ -6,7 +6,7 @@
 import {
   readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync, readdirSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { readActiveTicketPointer } from './generated-active-ticket.mjs';
@@ -102,7 +102,10 @@ export function makeKeyedCache(keyFn, readFn) {
  * Legacy store: the `tickets` array in `.adlc/tickets.json`. Fails soft to [].
  */
 export function ticketIdsFromStore(repoRoot) {
-  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return [];
+  // Require an ABSOLUTE path: a relative one (''/'.'/'./x') from an untrusted
+  // event payload would `join` against the process CWD and leak the HOST's
+  // store, not the worktree's. herdr supplies absolute worktree roots.
+  if (typeof repoRoot !== 'string' || !isAbsolute(repoRoot)) return [];
   const ids = new Set();
   const shardDir = join(repoRoot, '.adlc', 'tickets');
   try {
@@ -125,7 +128,10 @@ export function ticketIdsFromStore(repoRoot) {
   }
   const legacy = join(repoRoot, '.adlc', 'tickets.json');
   try {
-    if (existsSync(legacy)) {
+    // Only read a REGULAR file — a synchronous read of a FIFO/device at this
+    // (untrusted) path would block the event process indefinitely; an attacker
+    // spamming events could exhaust processes. statSync follows the symlink.
+    if (existsSync(legacy) && statSync(legacy).isFile()) {
       const parsed = JSON.parse(readFileSync(legacy, 'utf8'));
       const list = Array.isArray(parsed?.tickets) ? parsed.tickets : [];
       for (const t of list) if (typeof t?.id === 'string') ids.add(t.id);

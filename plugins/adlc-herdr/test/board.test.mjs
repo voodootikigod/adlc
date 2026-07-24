@@ -149,10 +149,18 @@ test('ticketIdsFromStore fails soft to [] on a missing store, a bad root, or mal
   assert.deepEqual(ticketIdsFromStore(repo), []);
 });
 
-test('ticketIdsFromStore rejects an empty root — it must NOT read a relative ".adlc/tickets" from the cwd', () => {
-  // With an empty string, join('', '.adlc', 'tickets') is RELATIVE; reading it
-  // would leak whatever store sits in the process cwd. Must fail closed to [].
-  assert.deepEqual(ticketIdsFromStore(''), []);
+test('ticketIdsFromStore rejects any RELATIVE root — must not read a store from the process cwd', () => {
+  // Empty, '.', './x' would all `join` against the cwd and leak the host store.
+  for (const rel of ['', '.', './x', 'relative/path', '..']) {
+    assert.deepEqual(ticketIdsFromStore(rel), [], `${JSON.stringify(rel)} must fail closed`);
+  }
+});
+
+test('ticketIdsFromStore skips a legacy store that is not a regular file (FIFO/dir → no blocking read)', () => {
+  // A non-regular file at tickets.json (here: a directory) must be skipped, not
+  // read — a synchronous read of a FIFO would hang the event process.
+  mkdirSync(join(repo, '.adlc', 'tickets.json'), { recursive: true });
+  assert.deepEqual(ticketIdsFromStore(repo), []);
 });
 
 // ---- storeCacheKey (mtime-gate for the board's export cache) ----
