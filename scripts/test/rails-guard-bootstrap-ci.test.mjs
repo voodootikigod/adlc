@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1209,4 +1209,66 @@ test('#283: a base directory store with an unsupported manifest version fails cl
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /not a supported ticket store/);
+});
+
+// #283 P5 verification round: exercise the fail-closed enumeration defenses
+// (non-blob/symlink/nested at base, symlink-skip + malformed at head) — this is
+// the security-defense code, so a silent regression must break a test.
+
+test('#283: a base shard that is a symlink (non-100644 blob) fails closed', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => {
+      writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]);
+      // A symlink named like a shard: git records it as mode 120000, which the
+      // base loop rejects instead of git-showing the link target.
+      symlinkSync('../../elsewhere.json', join(dir, '.adlc', 'tickets', 't2--0000.json'));
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /is not a regular-file blob/);
+});
+
+test('#283: a stray non-.json entry in the base store dir fails closed', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => {
+      writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]);
+      writeFileSync(join(dir, '.adlc', 'tickets', 'NOTES.txt'), 'not a shard\n');
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unexpected non-shard entry/);
+});
+
+test('#283: a malformed HEAD shard fails closed', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't2--0000.json'), '{ broken'),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot parse head shard/);
+});
+
+test('#283: a HEAD shard replaced by a symlink is skipped, not followed (base ticket reads as removed)', () => {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => {
+      const shard = join(dir, '.adlc', 'tickets', 't1--0000.json');
+      unlinkSync(shard);
+      // If readHeadStore FOLLOWED this symlink it would read the decoy and see T1
+      // with empty rails (a contract-change deny); skipping it (correct) makes T1
+      // look removed. Asserting the removal message proves the link was not read.
+      writeFileSync(join(dir, 'decoy.json'), JSON.stringify({ id: 'T1', rails: [] }));
+      symlinkSync('../../decoy.json', shard);
+    },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /cannot be removed from the \.adlc\/tickets\/ store/);
 });
