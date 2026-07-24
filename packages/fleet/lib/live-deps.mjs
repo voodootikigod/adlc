@@ -310,9 +310,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       integrationGit,
     }),
 
-    postMergeGate: ({ integrationBranch }) => {
+    postMergeGate: async ({ integrationBranch }) => {
       // Gate inside the integration worktree — no checkout, nothing shared. The branch
-      // identity and SHA are still pinned either side: the worktree removes the
+      // identity and SHA are pinned either side: the worktree removes the
       // external-interference class, and these assertions keep the verdict provably
       // attributable to the commit being approved (defence in depth, and they cost
       // two git calls).
@@ -323,7 +323,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       } catch (error) {
         return { ok: false, output: `${error.message}; refusing to gate` };
       }
-      const result = runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath));
+      // MUST await: runGates is async (it runs build/test to completion). Reading HEAD
+      // before awaiting would pin it BEFORE the gate's commands ever ran, so a commit or
+      // ref movement DURING the build/test would be invisible and a stale passing verdict
+      // would be trusted (adversarial-review round-30). The whole point of the after-gate
+      // pin is to observe the branch tip AS IT WAS while the gate executed.
+      const result = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath));
       try {
         assertOnBranch(integrationGit, integrationBranch, 'after gating', 'trust the gate');
         if (integrationGit('rev-parse', 'HEAD') !== gatedSha) {

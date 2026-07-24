@@ -121,6 +121,50 @@ test('prosecute drives the review runner over the ticket startSha (AC1)', async 
   assert.equal(r.verdict, 'pass');
 });
 
+test('postMergeGate AWAITS the gate before pinning HEAD — a commit landing DURING the gate is caught (F4/N2)', async () => {
+  // runGates is async: it runs the build/test commands to completion. The post-gate branch
+  // and SHA assertions exist to reject a verdict whose commit moved WHILE the gate ran. If
+  // postMergeGate reads HEAD without awaiting runGates, those assertions fire BEFORE the
+  // gate's commands ever execute, so the HEAD move is invisible and a stale passing verdict
+  // is trusted (adversarial-review round-30, high/0.99).
+  //
+  // This test moves HEAD asynchronously, from inside the gate's spawn — the flip lands only
+  // after a microtask, i.e. AFTER the point where the un-awaited code already ran its
+  // assertions. So the buggy (sync) version pins the pre-gate SHA and returns ok; only the
+  // awaited version observes the moved HEAD and refuses.
+  let head = 'PRE';
+  const io = {
+    git: () => (...args) => {
+      if (args[0] === 'symbolic-ref') return 'fleet/run-z'; // still on the branch throughout
+      if (args[0] === 'rev-parse') return head;
+      return '';
+    },
+    // The gate's build/test run through here. Simulate an external commit landing mid-gate,
+    // but only AFTER a microtask so it cannot be observed by an assertion that skipped the await.
+    spawnWorker: async () => { await Promise.resolve(); head = 'POST'; return { status: 0, stdout: '', stderr: '' }; },
+    mkdirp: () => {},
+    adlc: () => ({ status: 0, stdout: '' }),
+    adlcAsync: async () => ({ status: 0, stdout: '' }),
+    appendLog: () => {},
+    readFile: () => undefined,
+    exists: () => false,
+    writeJson: () => {},
+    ensureGitignore: () => {},
+    hasGh: () => false,
+    env,
+  };
+  const deps = buildLiveDeps({
+    repo: '/repo', config, statusDir: undefined, sandboxSpec,
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    io,
+  });
+
+  const r = await deps.postMergeGate({ integrationBranch: 'fleet/run-z' });
+
+  assert.equal(r.ok, false, 'a HEAD move DURING the gate must fail the post-merge gate, not pass');
+  assert.match(r.output, /HEAD moved/);
+});
+
 test('runFleet driven by live deps advances a ticket build→gate→prosecute→merge (AC1)', async () => {
   const rec = newRec();
   const deps = makeDeps(rec);
