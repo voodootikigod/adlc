@@ -1,0 +1,15 @@
+{
+  "body": "doctorTicketStore (packages/tickets/lib/doctor.mjs:39-65) reports the current storeHash but never compares it to the most recent ticket-op entry in .adlc/manifest.jsonl, so a silent local shard edit between transactions (hand-editing a ticket file) goes undetected — .store.json is a format marker, not a content bind. Add a READ-ONLY doctor check: the live storeHash equals the storeHash bound in the last evidence-required manifest entry, OR report N unevidenced non-sensitive ops since (a legitimate state, reported not failed). A genuine mismatch (tamper) is flagged. Verification: `node --test packages/tickets/test/doctor*.test.mjs` (or the tickets doctor test file) with a NEW test proving (a) a tampered shard makes doctor flag a storeHash/manifest mismatch, (b) a clean store passes, (c) legitimate unevidenced non-sensitive ops are reported, not failed. allow-suppression: none",
+  "budget": "frontier",
+  "category": "feature",
+  "duration": 2,
+  "edges": [],
+  "id": "T148",
+  "rails": [],
+  "scope": [
+    "packages/tickets/lib/doctor.mjs",
+    "packages/tickets/lib/**",
+    "packages/tickets/test/**"
+  ],
+  "title": "ticket doctor: bind the live storeHash to the last recorded manifest evidence entry"
+}

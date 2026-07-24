@@ -1,0 +1,19 @@
+{
+  "body": "The documented lifecycle has no completion step: ADLC.md's P6 section (~lines 352-373) ends at 'human behavioral acceptance' and the word 'completed' never appears; the adlc skill P6 block (plugins/adlc-claude-code/skills/adlc/SKILL.md:125-128) says only 'record gate-manifest'. Add the missing close step in the process docs: (1) ADLC.md P6 section and (2) the adlc skill P6 block must state that acceptance concludes with `adlc gate-manifest record p6-accept --ticket <id>` then `adlc ticket complete <id> --write` (plus --authorize/ceremony when the ticket is railed). (3) Thin optional convenience: when `gate-manifest record` is given --ticket for a p6-accept gate, print a one-line reminder of the `ticket complete` command (no change to recording semantics, no auto-mutation). Verification: a docs-lint/grep test asserting ADLC.md P6 and SKILL.md P6 both mention `ticket complete`; if the gate-manifest reminder is added, `node --test packages/gate-manifest/test/*.test.mjs` stays green and covers the reminder line. allow-suppression: none",
+  "budget": "mid",
+  "category": "docs",
+  "duration": 2,
+  "edges": [],
+  "id": "T145",
+  "rails": [],
+  "scope": [
+    "ADLC.md",
+    "plugins/adlc-claude-code/skills/adlc/SKILL.md",
+    "plugins/adlc-claude-code/commands/**",
+    "packages/gate-manifest/lib/**",
+    "packages/gate-manifest/test/**",
+    "docs/**",
+    "scripts/test/**"
+  ],
+  "title": "P6: make acceptance conclude with ticket completion (docs + gate-manifest bridge)"
+}
