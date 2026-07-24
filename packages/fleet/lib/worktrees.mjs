@@ -80,10 +80,25 @@ export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = n
 
   // Recreate: the fixed path is on another run's branch, detached, or unusable, so it must be
   // rebuilt. The integration worktree survives across runs and may hold a human's in-progress
-  // recovery work, so before force-removing it we refuse if it holds uncommitted changes.
-  // Only a clean — or already-gone — worktree is safe to force-remove.
-  if (existsSync(abs) && probe) {
-    assertIntegrationWorktreeClean(abs, probe, `the existing integration worktree at ${INTEGRATION_WORKTREE}`);
+  // recovery work, so a force-remove is only safe once we have PROVEN the path holds nothing
+  // uncommitted. Fail closed on uncertainty:
+  //   - absent path (nothing on disk)     → nothing to lose; fall through to prune + recreate.
+  //   - readable worktree (probe worked)  → require a clean status (refuse if dirty), then remove.
+  //   - EXISTS but UNREADABLE (probe null) → its git state can't be read (damaged .git, a
+  //     permissions change, an interrupted git op), so we CANNOT prove it is empty of
+  //     uncommitted work → REFUSE rather than blindly force-remove it.
+  if (existsSync(abs)) {
+    if (probe) {
+      assertIntegrationWorktreeClean(abs, probe, `the existing integration worktree at ${INTEGRATION_WORKTREE}`);
+    } else {
+      throw new Error(
+        `the integration worktree path ${abs} exists but its git state could not be read ` +
+        `(damaged .git metadata, a permissions change, or an interrupted git operation). ` +
+        `Refusing to force-remove it: it may hold uncommitted recovery work that cannot be ` +
+        `recovered once deleted. Inspect it and remove it deliberately, then re-run (manual ` +
+        `recovery required).`,
+      );
+    }
   }
 
   try { git('worktree', 'remove', '--force', INTEGRATION_WORKTREE); } catch { /* none */ }
@@ -104,13 +119,22 @@ export function ensureIntegrationWorktree(repo, integrationBranch, { baseSha = n
  * point of view, so we never auto-clean, revert, or force-remove a dirty worktree. The
  * caller must NOT swallow this — a throw here aborts the run so a human resolves the state.
  *
- * A worktree that cannot be stat'd (stale/removed directory) is treated as nothing-to-lose:
- * the status probe throws, we return, and the caller's remove/recreate handles it.
+ * Callers only invoke this once they have established the worktree is readable (a resume on
+ * the right branch, or a recreate whose probe succeeded). If `git status` nonetheless fails
+ * here, the worktree's state is UNKNOWN — we fail closed and refuse, never assume it is safe
+ * to reuse or delete (a fail-open assumption there could discard uncommitted recovery work).
  */
 export function assertIntegrationWorktreeClean(worktreeAbs, wtGit, label) {
   let dirty;
   try { dirty = wtGit('status', '--porcelain').trim(); }
-  catch { return; /* not a live worktree — no committed state to protect */ }
+  catch (e) {
+    throw new Error(
+      `${label} could not be read (${e.message.trim()}). Refusing to reuse or force-remove ` +
+      `it while its state is unknown — it may hold uncommitted recovery work. Inspect the ` +
+      `worktree at ${worktreeAbs} and resolve it deliberately, then re-run (manual recovery ` +
+      `required).`,
+    );
+  }
   if (dirty) {
     throw new Error(
       `${label} has uncommitted changes:\n${dirty}\n\n` +

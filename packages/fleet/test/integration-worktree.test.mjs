@@ -185,6 +185,29 @@ test('a NEW run REFUSES to force-remove a DIRTY integration worktree left on ano
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a NEW run REFUSES to force-remove an integration worktree whose git state is UNREADABLE', () => {
+  // The path exists but its git metadata cannot be read (damaged .git, a permissions change,
+  // an interrupted git op), so the branch/status probe throws. That is precisely the state
+  // where we cannot prove the worktree is empty of uncommitted work — force-removing it would
+  // destroy recovery edits we simply could not read (adversarial-review round-29, high/0.88).
+  // Fail closed: refuse, do not force-remove.
+  const { root, git, baseSha } = makeRepo();
+  try {
+    const { path } = ensureIntegrationWorktree(root, 'fleet/run-1', { baseSha, git });
+    writeFileSync(join(path, 'unreadable-recovery.txt'), 'precious and unreadable\n');
+
+    // Simulate unreadable git metadata: every git command in the worktree throws.
+    const throwingGitAt = () => () => { throw new Error('fatal: not a git repository (damaged .git)'); };
+
+    assert.throws(
+      () => ensureIntegrationWorktree(root, 'fleet/run-2', { baseSha, git, gitAt: throwingGitAt }),
+      /could not be read|manual recovery required/i,
+      'an existing-but-unreadable worktree is refused, not force-removed',
+    );
+    assert.ok(existsSync(join(path, 'unreadable-recovery.txt')), 'uncommitted recovery work survives — the unreadable worktree was not force-deleted');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('a stale worktree directory is rebuilt rather than inherited', () => {
   const { root, git, baseSha } = makeRepo();
   try {
