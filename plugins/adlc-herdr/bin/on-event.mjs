@@ -45,7 +45,10 @@ function listTicketIds(repoRoot) {
   });
 }
 
-const hasCurrentTicket = (repoRoot) => existsSync(join(repoRoot, '.adlc', 'current-ticket.json'));
+// "Is a ticket already pointed at?" via the generated reader (never hand-parse
+// the pointer — the ticket-store boundary guard enforces exactly one reader).
+// present OR unreadable both count as "has a pointer" → don't nudge to seed.
+const hasCurrentTicket = (repoRoot) => readActiveTicket(repoRoot).state !== 'absent';
 
 // Dedupe markers: one empty file per (pane|ticket|status), named by hash so any
 // id characters are safe in the filename.
