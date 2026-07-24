@@ -75,6 +75,24 @@ export function storeCacheKey(repoRoot) {
   return `${repoRoot}@${mtime}`;
 }
 
+/**
+ * A single-slot cache keyed by `keyFn(arg)`: it calls the async `readFn(arg)`
+ * only when the key changes, returning the cached value (even `null`) on a
+ * hit. Used by the board so an idle 3s redraw doesn't re-spawn `adlc` while the
+ * store is unchanged. `keyFn`/`readFn` are injected so the hit/miss behaviour
+ * is unit-testable.
+ */
+export function makeKeyedCache(keyFn, readFn) {
+  let cache = { key: null, hasValue: false, value: null };
+  return async (arg) => {
+    const key = keyFn(arg);
+    if (cache.hasValue && cache.key === key) return cache.value;
+    const value = await readFn(arg);
+    cache = { key, hasValue: true, value };
+    return value;
+  };
+}
+
 /** Read the active-ticket pointer through the repo's generated reader — the
  *  pointer file is parsed in exactly ONE canonical place, and the
  *  ticket-store boundary guard enforces that nobody (including this plugin)

@@ -11,7 +11,7 @@ import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
 import {
   readActiveTicket, readLatestPhase, groupBacklog, readLedgerByTicket,
-  readTicketsViaExport, storeCacheKey,
+  readTicketsViaExport, storeCacheKey, makeKeyedCache,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
@@ -20,20 +20,10 @@ const REFRESH_MS = 3_000;
 
 // mtime-gate the ticket-store export: the board redraws every 3s, but
 // `readTicketsViaExport` spawns an `adlc` process, so re-exporting on every
-// idle redraw drains battery/IO for nothing. `storeCacheKey` (tested in lib)
-// changes only when the store's mtime advances; `key: null` is the empty-cache
-// sentinel — no computed key ever equals null, so the first call re-exports.
-let ticketCache = { key: null, tickets: null };
-async function readBacklogTickets(repoRoot) {
-  const key = storeCacheKey(repoRoot);
-  // Hit on KEY, even when the cached value is null — a repo with no ticket
-  // store (stable key) must be cached so an idle board doesn't re-spawn `adlc`
-  // every 3s just because the export returned null.
-  if (ticketCache.key === key) return ticketCache.tickets;
-  const tickets = await readTicketsViaExport(repoRoot);
-  ticketCache = { key, tickets };
-  return tickets;
-}
+// idle redraw drains battery/IO for nothing. The keyed cache re-exports only
+// when `storeCacheKey` advances (the store changed); a stable key — including
+// an absent store — serves the cached value, even `null`.
+const readBacklogTickets = makeKeyedCache(storeCacheKey, readTicketsViaExport);
 
 async function resolveRepo() {
   const parsed = parseContext(process.env.HERDR_PLUGIN_CONTEXT_JSON);

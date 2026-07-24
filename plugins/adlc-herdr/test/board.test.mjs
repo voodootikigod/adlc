@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey } from '../lib/adlc-state.mjs';
+import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 let repo;
@@ -143,6 +143,31 @@ test('storeCacheKey falls back to the legacy tickets.json file mtime', () => {
   writeAdlc('tickets.json', '{"tickets":[]}'); // legacy single-file store
   assert.ok(storeCacheKey(repo).startsWith(`${repo}@`));
   assert.notEqual(storeCacheKey(repo), `${repo}@0`);
+});
+
+// ---- makeKeyedCache (the board's mtime-gated export cache) ----
+
+test('makeKeyedCache reads once, serves the cache on a stable key, re-reads when it changes', async () => {
+  let reads = 0;
+  let key = 'k1';
+  let value = 'A';
+  const cached = makeKeyedCache(() => key, async () => { reads += 1; return value; });
+  assert.equal(await cached('repo'), 'A');
+  assert.equal(reads, 1, 'first call must read');
+  assert.equal(await cached('repo'), 'A');
+  assert.equal(reads, 1, 'a stable key must NOT re-read (cache hit)'); // kills key===key inversion
+  key = 'k2';
+  value = 'B';
+  assert.equal(await cached('repo'), 'B');
+  assert.equal(reads, 2, 'a changed key must re-read');
+});
+
+test('makeKeyedCache caches a null value (does not treat null as empty and re-read)', async () => {
+  let reads = 0;
+  const cached = makeKeyedCache(() => 'same', async () => { reads += 1; return null; });
+  assert.equal(await cached('x'), null);
+  assert.equal(await cached('x'), null);
+  assert.equal(reads, 1, 'null must be cached, not re-read every call');
 });
 
 // ---- renderBoard ----
