@@ -107,6 +107,19 @@ test('blocks that cannot be verified offline take the wide side', () => {
   assert.equal(displayWidth('\u{18CFF}'), 2, 'U+18CFF, in the old Khitan gap');
 });
 
+test('emoji width does not depend on the runtime ICU version', () => {
+  // \p{Emoji_Presentation} reads the Unicode data bundled with the running Node
+  // build: 15.1 on Node 18, 16 on Node 22. Emoji added after 15.1 therefore
+  // measured 1 cell on the oldest supported runtime and 2 on the newest — the
+  // board would wrap on Node 18 in a modern terminal, and no test could see it
+  // because the suite ran on Node 22. The emoji planes are covered by an
+  // explicit range so the answer is the same on every runtime.
+  assert.equal(displayWidth('\u{1FAE9}'), 2, 'added after Unicode 15.1');
+  assert.equal(displayWidth('\u{1FAF8}'), 2, 'symbols and pictographs extended-A');
+  assert.equal(displayWidth('\u{1F7F0}'), 2, 'symbols and pictographs extended');
+  assert.equal(displayWidth('\u{1FAFF}'), 2, 'end of the covered span');
+});
+
 test('clearly Ambiguous characters stay one cell', () => {
   // The wide bias is not indiscriminate: East_Asian_Width=A characters are
   // narrow in a non-East-Asian locale, and widening them would shrink every row

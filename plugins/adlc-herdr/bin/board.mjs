@@ -67,7 +67,10 @@ async function gather(repoRoot) {
     width: process.stdout.columns ?? 80,
     // Reserve two lines for the blank + footer draw() adds, so the whole frame
     // fits the pane and cursor-home redraw never scrolls/duplicates.
-    height: process.stdout.rows ? Math.max(4, process.stdout.rows - 2) : null,
+    // Ask for rows-2 (blank + footer) but never less than 1: a pane shorter
+    // than the chrome used to floor at 4 and then emit 6. composeFrame is the
+    // backstop that sheds the chrome when even that does not fit.
+    height: process.stdout.rows ? Math.max(1, process.stdout.rows - 2) : null,
     repoRoot,
     active,
     phase,
@@ -82,7 +85,7 @@ function draw(body) {
   // `pane read` — redraw with cursor-home + per-line erase-to-EOL + erase-
   // below instead of a full clear.
   const footer = boardFooter(REFRESH_MS, process.stdout.columns ?? 80);
-  process.stdout.write(composeFrame(body, footer));
+  process.stdout.write(composeFrame(body, footer, process.stdout.rows));
 }
 
 // Single-flight latch: gather() runs several herdr subprocess calls plus an

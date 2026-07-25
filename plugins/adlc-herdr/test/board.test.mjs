@@ -498,6 +498,32 @@ test('composeFrame emits no trailing newline — a bottom-row line feed scrolls'
   }
 });
 
+test('the frame never exceeds a tiny pane, shedding chrome before content', () => {
+  // gather() floored the body at four rows and composeFrame always added two,
+  // so a pane of 1-5 rows received six lines and scrolled on every redraw —
+  // the failure the whole height clamp exists to prevent, at the one size
+  // nothing tested. The blank separator goes first, then the footer.
+  for (const rows of [1, 2, 3, 4, 5, 6, 10]) {
+    const state = baseState();
+    state.width = 40;
+    state.height = Math.max(1, rows - 2); // exactly what gather() asks for
+    state.groups.ready = Array.from({ length: 30 }, (_, i) => t(`t-${i}`));
+    const frame = composeFrame(renderBoard(state), boardFooter(3000, 40), rows);
+    const lines = frame.split('\n');
+    assert.ok(lines.length <= rows, `rows ${rows}: emitted ${lines.length} physical rows`);
+    assert.ok(lines.length > 0, `rows ${rows}: something must render`);
+  }
+});
+
+test('renderBoard honors a one-row height with exactly one row', () => {
+  // slice(0, max(1, height - 1)) kept one line and then pushed the "…more"
+  // marker, so a one-row budget produced two rows.
+  const state = baseState();
+  state.height = 1;
+  state.groups.ready = Array.from({ length: 30 }, (_, i) => t(`t-${i}`));
+  assert.equal(renderBoard(state).split('\n').length, 1);
+});
+
 test('composeFrame writes exactly the rows gather() reserved', () => {
   // height = rows - 2, plus the blank and the footer, must equal `rows`. One
   // more physical line than that is what scrolls the pane.

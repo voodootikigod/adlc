@@ -120,6 +120,13 @@ const WIDE = [
   [0x1f000, 0x1f0ff], // mahjong, dominoes, cards — deliberately over-counted
   [0x1f1e6, 0x1f1ff], // regional indicators — a flag is one cluster, two cells
   [0x1f200, 0x1f265], // enclosed ideographic supplement
+  // The emoji planes, covered EXPLICITLY rather than left to the property
+  // escape below. \p{Emoji_Presentation} reads whichever Unicode version the
+  // running Node bundles — 15.1 on Node 18, 16 on Node 22 — so an emoji added
+  // after 15.1 measured one cell on the oldest supported runtime and two on the
+  // newest. A width helper whose answer depends on the interpreter is a width
+  // helper that wraps rows on somebody's machine and nowhere else.
+  [0x1f300, 0x1faff],
   [0x20000, 0x2fffd], // CJK extension B and beyond
   [0x30000, 0x3fffd],
 ];

@@ -141,8 +141,22 @@ export function boardFooter(refreshMs, width = 80) {
  *
  * Pure so the invariant is pinned here rather than in the stdout glue.
  */
-export function composeFrame(body, footer) {
-  const rows = `${body}\n\n${footer}`.split('\n').map((line) => `${line}\x1b[K`).join('\n');
+export function composeFrame(body, footer, terminalRows) {
+  const bodyLines = String(body ?? '').split('\n');
+  let lines = [...bodyLines, '', footer];
+
+  // A pane can be shorter than the chrome. gather() floors the body at four
+  // rows and composeFrame adds two, so a 1-5 row pane received six lines and
+  // scrolled on every redraw. Shed the chrome before shedding content: the
+  // blank separator first, then the footer, then the body itself.
+  if (Number.isFinite(terminalRows) && terminalRows > 0) {
+    const limit = Math.floor(terminalRows);
+    if (lines.length > limit) lines = [...bodyLines, footer];
+    if (lines.length > limit) lines = [...bodyLines];
+    if (lines.length > limit) lines = lines.slice(0, limit);
+  }
+
+  const rows = lines.map((line) => `${line}\x1b[K`).join('\n');
   return `\x1b[H${rows}\x1b[0J`;
 }
 
@@ -152,7 +166,6 @@ export function composeFrame(body, footer) {
  *  would scroll and duplicate every refresh. A truncated frame ends with a
  *  "…N more" marker. */
 export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
-  const w = clampWidth(width);
   const emit = emitWidth(width); // never write past the real pane, floor or not
   // Truncate by terminal CELLS. sanitizeToken's cap is code units, so a row of
   // CJK text passed its check at `w` characters and then occupied 2w columns.
@@ -205,8 +218,11 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   }
 
   if (Number.isFinite(height) && height > 0 && lines.length > height) {
+    // height 1 has no room for both a kept line and the marker; slicing to
+    // max(1, height-1) and then pushing produced TWO rows for a one-row budget.
+    if (height === 1) return `${DIM}${cut(`…${lines.length} rows (resize)`)}${RESET}`;
     const hidden = lines.length - height;
-    const kept = lines.slice(0, Math.max(1, height - 1));
+    const kept = lines.slice(0, height - 1);
     kept.push(`${DIM}${cut(`  …${hidden + 1} more (resize to see all)`)}${RESET}`);
     return kept.join('\n');
   }
