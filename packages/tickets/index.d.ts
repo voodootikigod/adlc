@@ -1,3 +1,7 @@
+/// <reference types="node" />
+// Node types are a real dependency of these declarations, not an accident:
+// generateTicketId runtime-checks Buffer.isBuffer, so widening its entropy
+// parameter to Uint8Array would declare a call that throws.
 export type Ticket = { id: string; title: string; scope?: string[]; rails?: string[]; edges?: Array<{ to: string; [key: string]: unknown }>; [key: string]: unknown };
 export type TicketErrorKind = 'operational' | 'invalid' | 'conflict' | 'policy';
 export class TicketStoreError extends Error { kind: TicketErrorKind; code: string; details?: unknown }
@@ -41,6 +45,91 @@ export function renderCommandHelp(command: string | undefined): string | null;
 export function renderUsage(): string;
 export function ticketJsonSchema(): Record<string, unknown>;
 export function serializeTicketJsonSchema(): string;
+// ---- store layout and hash domains ----
+export type TicketManifest = Readonly<{ format: string; version: number }>;
+export const ACTIVE_MANIFEST: TicketManifest;
+export const ARCHIVE_MANIFEST: TicketManifest;
+export const ACTIVE_DIRECTORY: string;
+export const ARCHIVE_DIRECTORY: string;
+export const LEGACY_FILE: string;
+export const LEGACY_ARCHIVE_FILE: string;
+export const LOCK_DIRECTORY: string;
+export const TRANSACTION_DIRECTORY: string;
+export const TICKET_HASH_DOMAIN: string;
+export const STORE_HASH_DOMAIN: string;
+
+// ---- canonicalization ----
+/** Sort order for ticket ids; negative, zero, or positive like any comparator. */
+export function compareTicketIds(left: string, right: string): number;
+/** The canonical (key-sorted, normalized) form of a value, before serialization. */
+export function canonicalValue(value: unknown): unknown;
+export function sha256(value: string | Uint8Array): string;
+export function ticketSlug(id: string): string;
+export function deepClone<T>(value: T): T;
+export function deepFreeze<T>(value: T): Readonly<T>;
+
+// ---- store constructors ----
+export function activeDirectoryStore(root?: string): DirectoryTicketStore;
+export function archiveDirectoryStore(root?: string): DirectoryTicketStore;
+
+// ---- lock ----
+export type TicketLockMetadata = {
+  version: number;
+  pid: number;
+  hostname: string;
+  startedAt: string;
+  command: string;
+  transactionId: string | null;
+};
+/** The current lock holder's metadata, or null when unlocked or unreadable. */
+export function readTicketLock(root?: string): TicketLockMetadata | null;
+
+// ---- active-ticket pointer ----
+export const CURRENT_TICKET_FILE: string;
+/** The one id key a pointer should use; the aliases below are 1.x-only. */
+export const CANONICAL_ID_KEY: 'id';
+/** Accepted but deprecated pointer id keys, removed in 2.0. */
+export const DEPRECATED_ID_KEYS: readonly string[];
+/** Every pointer read returns this discriminated union; `ok: false` is fail-closed. */
+export type TicketOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; kind: TicketErrorKind; code: string; message: string };
+export type ActiveTicketPointer = {
+  present: boolean;
+  id?: string;
+  ticketHash?: string | null;
+  legacyString?: boolean;
+  deprecatedAlias?: string;
+};
+export type ActiveTicketSelection = {
+  id: string;
+  pointerPresent: boolean;
+  ticketHash: string | null;
+  legacyString: boolean;
+  deprecatedAlias?: string;
+};
+export type ActiveTicketResolution = {
+  id: string;
+  ticket: Readonly<Ticket>;
+  ticketHash: string;
+  storeHash: string;
+  warnings: string[];
+  deprecatedAlias?: string;
+};
+export function readActiveTicketPointer(root?: string): TicketOutcome<ActiveTicketPointer>;
+/** Identity only — no store is consulted, so staleness is not decidable here.
+ *  `value: null` means "no active ticket", the only allow-with-no-ticket outcome. */
+export function resolveActiveTicketId(options?: { root?: string; env?: Record<string, string | undefined> }): TicketOutcome<ActiveTicketSelection | null>;
+/** Resolves against a loaded snapshot and verifies the pinned hash.
+ *  `allowLegacyPointer` is the documented 1.x bridge for a hash-less pointer;
+ *  a hash that IS present is always verified. */
+export function resolveActiveTicketAgainst(
+  snapshot: TicketSnapshot,
+  options?: { root?: string; env?: Record<string, string | undefined>; allowLegacyPointer?: boolean },
+): TicketOutcome<ActiveTicketResolution | null>;
+/** Writes the canonical `{id, ticketHash}` pointer atomically; returns its path. */
+export function writeActiveTicket(root: string, pointer: { id: string; ticketHash: string }): string;
+
 export type EditorRunner = (editor: string, path: string) => void;
 export const spawnEditor: EditorRunner;
 export function planEditSession(service: TicketService, id: string, options?: { authorized?: boolean; editor?: string; runEditor?: EditorRunner }): TicketPlan;
