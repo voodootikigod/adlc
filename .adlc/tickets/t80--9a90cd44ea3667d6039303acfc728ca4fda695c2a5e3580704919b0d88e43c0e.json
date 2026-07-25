@@ -2,6 +2,7 @@
   "body": "Bank detection (findUnbankedClusters, packages/lesson-foundry/lib/foundry.mjs:101-103) keys on the exact cluster-name slug that clusterName (route.mjs:50-58) derives from the FIRST finding's desc. When a human refines the scaffolded lesson prose the derived slug changes and the marker orphans — the gate can never credit the lesson and the real cluster stays 'unbanked' forever (observed on the one committed lesson). Fix: stamp a STABLE cluster id independent of prose — sha256 of the sorted member finding hashes (or an equivalent content-stable key) — into both the emitted lesson marker (emit.mjs) and the bank-detection key (foundry.mjs), so banking survives rewording. Back-compat: still credit a legacy slug-only marker if present, so already-committed lessons are not orphaned by this change. Verification: `node --test packages/lesson-foundry/test/*.test.mjs` with NEW tests proving (a) a lesson whose prose/slug was changed is still detected as banked via the stable id, (b) a genuinely-missing cluster is still reported unbanked, (c) a legacy slug marker still credits. allow-suppression: none",
   "budget": "frontier",
   "category": "bug",
+  "completed": true,
   "duration": 3,
   "edges": [],
   "id": "T80",
