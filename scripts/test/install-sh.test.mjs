@@ -128,6 +128,40 @@ test('install.sh is POSIX sh and free of the common bashisms', () => {
   assert.match(read(INSTALL_SH), /^#!\/bin\/sh$/m, 'install.sh must declare #!/bin/sh');
 });
 
+test('install.sh survives truncation: a partial download executes nothing', () => {
+  // `sh` reads a pipe incrementally and runs what it has, so `curl … | sh` on a
+  // dropped connection executes whatever prefix arrived.
+  //
+  // Wrapping only the RUN SEQUENCE is not enough — a cut landing between two
+  // complete top-level function definitions still parses, and sh exits 0 having
+  // done nothing, which reports success for a truncated install. The whole body
+  // therefore lives inside one function, so any truncation leaves its brace
+  // unclosed and sh refuses the file outright.
+  const full = read(INSTALL_SH);
+  assert.match(full, /^adlc_installer_main "\$@"$/m, 'the body must be invoked on the last line');
+  assert.match(full, /^adlc_installer_main\(\) \{$/m, 'the whole body must be wrapped in one function');
+
+  const box = sandbox({ bins: ['node', 'npm', 'codex'] });
+  try {
+    // Cut at several points; every prefix must refuse to run and touch nothing.
+    for (const fraction of [0.25, 0.5, 0.75, 0.95]) {
+      const truncated = path.join(box.root, `truncated-${fraction}.sh`);
+      writeFileSync(truncated, full.slice(0, Math.floor(full.length * fraction)));
+      writeFileSync(box.log, '');
+
+      const result = spawnSync('sh', [truncated], { encoding: 'utf8', env: box.env, timeout: 30_000 });
+      assert.notEqual(result.status, 0, `a ${fraction * 100}% download must not report success`);
+      assert.equal(
+        box.commands(),
+        '',
+        `a ${fraction * 100}% download installed something:\n${box.commands()}`,
+      );
+    }
+  } finally {
+    box.cleanup();
+  }
+});
+
 test('install.sh refuses to run without Node and installs nothing', () => {
   const box = sandbox({ bins: ['npm'] }); // npm present, node absent
   try {
@@ -241,6 +275,41 @@ test('install.sh does not run project-scoped installers from the caller\'s direc
     );
     assert.match(result.stdout, /manual step needed for: .*OpenCode/);
     assert.match(result.stdout, /INSIDE your repo/, 'the summary must say where to run it instead');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh skips pi on a Node below its 22.19 floor', () => {
+  // @adlc/pi needs a HIGHER Node than the toolkit (22.19 vs 18). Installing it
+  // on Node 18 would "succeed" and then fail at runtime, which is worse than
+  // not installing it.
+  const box = sandbox({ bins: ['node', 'npm', 'pi'], nodeVersion: 'v18.20.4' });
+  try {
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, 'a too-old Node for pi must not fail the whole install');
+    assert.ok(
+      !box.commands().includes('pi install'),
+      'pi must not be installed on a Node below its floor',
+    );
+    assert.match(result.stdout, /requires Node >= 22\.19/, 'the reason must be stated');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh installs the Copilot native plugin from its marketplace', () => {
+  // Copilot ships a real native plugin (rails hook, build-gate, MCP, agents) via
+  // its Git marketplace. The marketplace path does not go through npm, so the
+  // unpublished @adlc/copilot package is no reason to downgrade this to a
+  // manual step.
+  const box = sandbox({ bins: ['node', 'npm', 'copilot'] });
+  try {
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+    assert.match(box.commands(), /copilot plugin marketplace add voodootikigod\/adlc/);
+    assert.match(box.commands(), /copilot plugin install adlc-copilot@adlc/);
+    assert.match(result.stdout, /installed for: .*Copilot/);
   } finally {
     box.cleanup();
   }

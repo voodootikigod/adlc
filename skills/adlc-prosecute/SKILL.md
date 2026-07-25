@@ -61,10 +61,17 @@ not an independent review.
 
 ## 5. Record the evidence
 
+`adlc prosecute` **requires** `--input <passes.json>` — the review-evidence file
+recording your two consecutive dry passes. It is the evidence recorder, not a
+review trigger, so invoking it without `--input` fails rather than prosecuting
+anything:
+
 ```sh
-adlc prosecute --ticket <id> --base <ref>
+adlc prosecute --input passes.json --ticket <id> --base <ref>
 adlc gate-manifest record P5
 ```
+
+Run `adlc prosecute --help` for the exact `passes.json` shape before writing one.
 
 Evidence is ticket- and revision-bound. Evidence recorded against a different
 revision is not evidence for this one.
@@ -81,6 +88,11 @@ author**, bound to the reviewed revision:
 adlc prosecute record-cross-model --ticket <id> \
   --provider <p> --author-provider <a> --verdict approve
 ```
+
+Pass the **same** `--input`/`--revision` you use for the gate run: the revision
+is a content hash of the worktree, and an attestation bound to a different one
+does not satisfy the gate. Record an approve only after a review actually ran —
+nothing in the tool verifies that it did.
 
 You cannot self-approve this tier. If you authored the change, a different model
 has to review it.

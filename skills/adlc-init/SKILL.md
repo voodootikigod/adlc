@@ -65,10 +65,17 @@ commit a newly generated one over it.
 
 In-session rail enforcement is best-effort and harness-dependent. The
 **commit-time diff gate is the real control** — wire it and make it a required
-check:
+check.
+
+`docs/ci/rails-guard.yml` lives in the ADLC **source repository**. It is not
+shipped inside `@adlc/cli` (that package publishes only `bin/`, `lib/`,
+`README.md`, and `LICENSE`) and `adlc init` does not create it, so a normal
+downstream repo has no local copy to `cp`. Fetch it:
 
 ```sh
-cp docs/ci/rails-guard.yml .github/workflows/rails-guard.yml
+mkdir -p .github/workflows
+curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \
+  -o .github/workflows/rails-guard.yml
 ```
 
 Then mark it required in the repository's branch-protection settings. Without

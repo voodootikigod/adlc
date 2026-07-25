@@ -20,6 +20,18 @@
 
 set -eu
 
+# EVERYTHING below — constants, helpers, and the run sequence — lives inside this
+# single function, which is invoked on the last line of the file.
+#
+# This is the `curl … | sh` truncation defense. sh reads a pipe incrementally and
+# executes as it goes, so a dropped connection runs whatever prefix arrived.
+# Wrapping only the run sequence is NOT enough: a cut landing between two
+# complete top-level function definitions still parses, so sh exits 0 having
+# silently done nothing — a truncated install that reports success. With the
+# whole body inside one function, ANY truncation leaves this brace unclosed, so
+# sh fails with a syntax error and executes nothing.
+adlc_installer_main() {
+
 CLI_PACKAGE="@adlc/cli"
 CLI_TAG="${ADLC_CLI_TAG:-latest}"
 SITE="https://www.agenticlifecycle.ai"
@@ -141,9 +153,18 @@ install_opencode() {
 # `pi install -l` is likewise the PROJECT install. The no-flag form is
 # user-global, which is what a machine-level installer should do; the project
 # form belongs in the repo, and the summary says so.
+#
+# @adlc/pi needs a HIGHER Node floor than the toolkit (22.19 vs 18). Installing
+# it on Node 18 would "succeed" and then fail at runtime, so it is skipped with
+# an explanation rather than installed into a broken state.
 install_pi() {
     have pi || return 0
     log "pi detected"
+    if [ "$node_major" -lt 22 ]; then
+        warn "pi: @adlc/pi requires Node >= 22.19 (found ${node_version}) — skipped"
+        record_manual "pi"
+        return 0
+    fi
     try "pi" pi install npm:@adlc/pi
 }
 
@@ -181,12 +202,21 @@ install_cursor() {
     record_manual "Cursor"
 }
 
-# @adlc/copilot is not published to npm yet. Detecting Copilot and printing the
-# current path is honest; pretending there is an automated one is not.
+# Copilot ships a real native plugin via its Git marketplace (plugins/adlc-copilot:
+# rails hook, build-gate, MCP, agents). An earlier version of this script called it
+# a manual `adlc init --harness copilot` step because the @adlc/copilot NPM package
+# is unpublished — but the marketplace path does not go through npm, so that
+# under-delivered the integration that actually exists.
 install_copilot() {
     have copilot || return 0
     log "GitHub Copilot CLI detected"
-    record_manual "GitHub Copilot"
+    if copilot plugin marketplace add voodootikigod/adlc && copilot plugin install adlc-copilot@adlc; then
+        ok "GitHub Copilot"
+        record_installed "GitHub Copilot"
+    else
+        warn "GitHub Copilot: install command failed — see ${SITE}/integrations"
+        record_failed "GitHub Copilot"
+    fi
 }
 
 install_harnesses() {
@@ -219,7 +249,7 @@ summary() {
         printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
         printf '      Copilot:  adlc init --harness copilot   (the plugin package is not yet on npm)\n'
         printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
-        printf '      pi:       installed user-global; run "pi install -l npm:@adlc/pi" inside a repo to share it with teammates\n'
+        printf '      pi:       needs Node >= 22.19; then "pi install npm:@adlc/pi", or "-l" inside a repo to share with teammates\n'
     fi
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"
@@ -242,9 +272,13 @@ summary
 
 # A harness failure must not ABORT the run — the other harnesses on the machine
 # are still worth installing — but it must not be reported as success either.
-# `curl … | sh` surfaces this script's exit status to whatever automation
-# invoked it, and a partial install that exits 0 is a silent lie to that caller.
+# `curl … | sh` surfaces this exit status to whatever automation invoked it, and
+# a partial install that exits 0 is a silent lie to that caller.
 if [ -n "$FAILED" ]; then
-    exit 1
+    return 1
 fi
-exit 0
+return 0
+
+} # end adlc_installer_main — a truncated download never reaches this brace
+
+adlc_installer_main "$@"

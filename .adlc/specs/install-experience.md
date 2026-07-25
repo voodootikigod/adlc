@@ -12,11 +12,16 @@ the guide describes the skills.sh channel.
 
 ## P1 review boundary
 
-This file is the **P1 contract**. Approval ships the contract, not the I1–I3
-implementations. Adversarial review of this artifact judges the accuracy and
-completeness of the pinned decisions and acceptance criteria. Absence of
-`apps/docs/public/install.sh` or a top-level `skills/` directory in the working
-tree is expected until P4 build and is **not** a P1 no-ship reason.
+This file is the **P1 contract**. Approval ships the contract, not the I1–I4
+implementations, so at P1 the artifacts described below may not exist in the
+working tree yet.
+
+That context is offered to a reviewer as information, **not as a constraint on
+what a review may report**. An earlier draft stated that a missing
+`install.sh` or `skills/` directory was "not a P1 no-ship reason" — a
+cross-model review of PR #351 flagged that as repository text instructing
+adversarial reviewers what cannot block approval, and it was right. Nothing in
+this file limits what a reviewer may raise.
 
 **Relates to:** [ADR-0009](../../docs/adr/0009-universal-install-via-plugins.md)
 governs the `npx plugins add` recommendation. This spec does not overturn it;
