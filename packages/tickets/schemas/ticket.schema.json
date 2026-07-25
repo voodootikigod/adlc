@@ -20,11 +20,9 @@
       "description": "One imperative line naming the work."
     },
     "body": {
-      "type": "string",
       "description": "The self-contained ticket text: what to build, the acceptance criteria, and the concrete command that verifies each one. A fresh agent sees only this — never the conversation that produced it. coldstart audits it for gaps."
     },
     "category": {
-      "type": "string",
       "description": "Routing hint, not a free-form label. model-router sends contract, spec, and architecture to a frontier model and routes the rest from empirical priors. Keep to the set ticket-sync accepts or a synced ticket cannot converge: feature, bug, bugfix, refactor, docs, chore, test, spec, contract, architecture."
     },
     "duration": {

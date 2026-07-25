@@ -101,6 +101,20 @@ test('update help does not claim a guard the CLI does not enforce', () => {
   assert.match(help, /last-writer-wins/i, 'the help must name what omitting it costs');
 });
 
+test('update and edit help document the authorization flag they actually need', () => {
+  // --authorize is inert for `complete` (no protected ids are configured) but
+  // load-bearing here: planUpdate throws AUTHORIZATION_REQUIRED for rail
+  // narrowing or scope widening. Help that omits it sends an author into a
+  // policy error with no documented way out — the exact relearning loop this
+  // module exists to end.
+  for (const command of ['update', 'edit']) {
+    const help = renderCommandHelp(command);
+    assert.match(help, /--authorize/, `${command} help must document --authorize`);
+    assert.match(help, /narrow/i, `${command} help must name rail narrowing`);
+    assert.match(help, /widen/i, `${command} help must name scope widening`);
+  }
+});
+
 test('complete/archive help describe the real authorization policy', () => {
   // The CLI constructs TicketService with no protectedIds, so --authorize gates
   // nothing by default; planComplete only enforces it for a protected id.
@@ -164,27 +178,30 @@ function satisfies(value, schema) {
 test('the schema never rejects a ticket the validator accepts', () => {
   // The published schema carries a fixed $id, so constraining a field the store
   // does not police silently narrows v1: a store that loads fine stops
-  // validating for any editor or CI consumer that resolves that same $id.
-  // `budget` is the live case — model-router ignores a non-positive or
-  // non-numeric budget rather than rejecting it, and neither does validateTicket.
-  const corpus = [
-    { id: 'T1', title: 'minimal' },
-    { id: 'T1', title: 'loose budget', budget: 'cheap' },
-    { id: 'T1', title: 'negative budget', budget: -5 },
-    { id: 'T1', title: 'free-form category', category: 'anything-at-all' },
-    { id: 'T1', title: 'empty collections', body: '', scope: [], rails: [], edges: [], duration: 1 },
-    { id: 'T1', title: 'edges', edges: [{ to: 'T2', note: 'extra' }] },
-  ];
+  // validating for any editor or CI consumer resolving that same $id.
+  //
+  // DERIVED, not a hand-written corpus. The first version listed example
+  // tickets and missed `body: 7` and `category: 7` — both accepted by the
+  // validator, both rejected by the schema — because every entry happened to
+  // use a string. Probing each documented field with off-type values closes
+  // that by construction, and covers fields added later.
+  const PROBES = [7, -1, 0, true, false, null, {}, [], 'text', ['x'], [{ to: 'T2' }]];
   const { properties } = ticketJsonSchema();
-  for (const ticket of corpus) {
-    assert.deepEqual(validateTicket(ticket), [], `corpus entry must be valid: ${ticket.title}`);
-    for (const [field, value] of Object.entries(ticket)) {
+  let checked = 0;
+  for (const field of TICKET_FIELDS) {
+    for (const probe of PROBES) {
+      const ticket = { id: 'T1', title: 'probe', [field.name]: probe };
+      if (validateTicket(ticket).length > 0) continue; // validator rejects it too — schema may
+      checked += 1;
       assert.ok(
-        satisfies(value, properties[field]),
-        `schema rejects ${field}=${JSON.stringify(value)} which validateTicket accepts`,
+        satisfies(probe, properties[field.name]),
+        `schema rejects ${field.name}=${JSON.stringify(probe)} which validateTicket accepts`,
       );
     }
   }
+  // DENOMINATOR: a probe set the validator rejected wholesale would make every
+  // assertion above vacuous.
+  assert.ok(checked > 40, `expected the probes to exercise the schema, got ${checked}`);
 });
 
 test('the schema still constrains what the validator DOES police', () => {

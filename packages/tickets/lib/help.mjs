@@ -19,6 +19,14 @@ export const SCHEMA_ID = 'https://adlc.dev/schemas/ticket-v1.json';
  * `required` is author-facing: the only field a create input must carry.
  * The JSON Schema below additionally requires `id`, because it describes a
  * *stored* ticket — the service mints the id on the way in.
+ *
+ * `type` is guidance for an author; `schema` is what the store ENFORCES, and the
+ * two are deliberately not the same. The emitted schema publishes a fixed $id,
+ * so a constraint on a field `validateTicket` does not police would narrow v1
+ * without a version bump: a store this package loads happily would start
+ * failing for any editor or CI consumer resolving that identity. Fields left
+ * `{}` here are exactly the ones the validator ignores. test/help.test.mjs
+ * derives this rule by probing rather than trusting the comment.
  */
 export const TICKET_FIELDS = [
   {
@@ -40,7 +48,7 @@ export const TICKET_FIELDS = [
     type: 'string',
     required: false,
     summary: 'The self-contained ticket text: what to build, the acceptance criteria, and the concrete command that verifies each one. A fresh agent sees only this — never the conversation that produced it. coldstart audits it for gaps.',
-    schema: { type: 'string' },
+    schema: {}, // unpoliced by validateTicket — see the `schema` note below
   },
   {
     name: 'category',
@@ -51,7 +59,7 @@ export const TICKET_FIELDS = [
     // remote provider and then fails closed on the next sync. Name the set here
     // so the choice is made once, at authoring time.
     summary: 'Routing hint, not a free-form label. model-router sends contract, spec, and architecture to a frontier model and routes the rest from empirical priors. Keep to the set ticket-sync accepts or a synced ticket cannot converge: feature, bug, bugfix, refactor, docs, chore, test, spec, contract, architecture.',
-    schema: { type: 'string' },
+    schema: {}, // unpoliced by validateTicket — see the `schema` note below
   },
   {
     name: 'duration',
@@ -148,6 +156,16 @@ const INPUT_DOCUMENT = [
   'Unknown fields are preserved as-is; the store never strips them.',
 ];
 
+/** Shared by update and edit: the one flag whose absence turns a legitimate
+ *  edit into a policy error, with no hint in the error about which flag. */
+const AUTHORIZE_NOTE = [
+  '--authorize is REQUIRED for a change the service treats as sensitive, and',
+  'there are exactly two: narrowing rails (dropping a path the ticket froze)',
+  'and widening scope (adding a path it may touch). Either one without the flag',
+  'fails AUTHORIZATION_REQUIRED and writes nothing. Everything else — title,',
+  'body, category, duration, budget, edges — needs no authorization.',
+];
+
 const COMMAND_HELP = {
   create: () => [
     'adlc ticket create --input <path|-> [--write] [--json]',
@@ -163,10 +181,12 @@ const COMMAND_HELP = {
     createExampleJson(),
   ],
   update: () => [
-    'adlc ticket update <id> --input <path|-> [--expect <ticketHash>] [--write] [--json]',
+    'adlc ticket update <id> --input <path|-> [--expect <ticketHash>] [--authorize] [--write] [--json]',
     '',
     'Replace a ticket in place. The input must carry the same id — use reassign',
     'for an identity change.',
+    '',
+    ...AUTHORIZE_NOTE,
     '',
     '--expect is optional but strongly recommended. Give it the current',
     'ticketHash from `adlc ticket show <id>` or `adlc ticket list --json` and the',
@@ -177,10 +197,12 @@ const COMMAND_HELP = {
     ...INPUT_DOCUMENT,
   ],
   edit: () => [
-    'adlc ticket edit <id> [--write] [--json]',
+    'adlc ticket edit <id> [--authorize] [--write] [--json]',
     '',
     'Open the ticket in $EDITOR (or $VISUAL) and plan the result as an update.',
     'The expected hash is supplied for you. Dry-run by default.',
+    '',
+    ...AUTHORIZE_NOTE,
     '',
     ...INPUT_DOCUMENT,
   ],

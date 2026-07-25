@@ -86,6 +86,28 @@ test('the documented create example is accepted by the real create path', () => 
   });
 });
 
+test('a scope-widening update fails without --authorize and succeeds with it', () => {
+  // Pins the claim `update --help` now makes. Without this the help could drift
+  // back to omitting the flag and only a user hitting AUTHORIZATION_REQUIRED
+  // would find out.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { scope: ['src/a/**'] })]);
+    const widened = JSON.stringify({ ...ticket('T1', { scope: ['src/a/**', 'src/b/**'] }) });
+    const attempt = (args) => spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', ...args], {
+      encoding: 'utf8', cwd: root, input: widened,
+    });
+
+    const denied = attempt(['--json']);
+    assert.equal(denied.status, 2, denied.stderr);
+    assert.match(denied.stderr, /AUTHORIZATION_REQUIRED/);
+    assert.match(denied.stderr, /scope-widening/);
+
+    const allowed = attempt(['--authorize', '--json']);
+    assert.equal(allowed.status, 0, allowed.stderr);
+    assert.equal(JSON.parse(allowed.stdout).dryRun, true);
+  });
+});
+
 test('the generic usage still lists the commands and points at per-command help', () => {
   withTemp((root) => {
     const result = run(['--help'], root);
