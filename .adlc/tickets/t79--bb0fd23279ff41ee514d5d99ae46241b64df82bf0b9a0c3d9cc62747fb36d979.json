@@ -2,6 +2,7 @@
   "body": "`adlc lesson-foundry --gate` detects unbanked finding clusters (it is RED today on the operative-vs-inert suppression cluster) but NOTHING invokes it — not CI, preflight, /adlc-maintain, or the /adlc-distill doc — so distillation only runs on manual whim and leaves clusters undefended. The gate cannot go in CI while findings.jsonl is machine-local, so wire it where the ledger lives: (1) add `adlc lesson-foundry --gate` as the CLOSING verification step of every /adlc-distill doc across the plugins that ship one (after writing/refining lessons, the gate MUST exit 0 — a red gate means a cluster is still undefended), and (2) add it to the /adlc-maintain decay-driven checks. If findings.jsonl becomes tracked (T81, sibling workstream — do not depend on it), a follow-up can also add the gate to maintenance CI; do not wire CI here. Verification: a docs-lint/grep test asserting the distill and maintain docs invoke `lesson-foundry --gate`; `node --test packages/lesson-foundry/test/*.test.mjs` stays green. allow-suppression: none",
   "budget": "mid",
   "category": "feature",
+  "completed": true,
   "duration": 2,
   "edges": [],
   "id": "T79",

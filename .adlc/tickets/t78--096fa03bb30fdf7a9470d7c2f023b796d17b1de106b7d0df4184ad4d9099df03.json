@@ -2,6 +2,7 @@
   "body": "The T72 bridge parity test (scripts/test/prosecute-finding-bridge.test.mjs) discovers only command-layout prosecute docs, so codex, copilot and antigravity — whose prosecute flows live in plugins/*/skills/*/SKILL.md — run the full 5-lens loop but record NOTHING to .adlc/findings.jsonl, silently breaking the 'no harness ships without the bridge' guarantee. Fix in two parts, test first (RED): (1) extend discoverProsecuteDocs() in the parity test to ALSO walk plugins/*/skills/*/SKILL.md whose directory name matches /prosecut/ (covers adlc-prosecute and antigravity's adlc-prosecutor), and raise the discovered/asserted set to include adlc-codex, adlc-copilot, adlc-antigravity; (2) add the `adlc prosecute --record-finding` step at verification time to the three SKILL.md prosecute docs, matching the claude-code doc's placement (before the final verdict step). Constraint: the recording step must be worded so a fresh agent actually runs it; do not merely mention the flag. Verification: `node --test scripts/test/prosecute-finding-bridge.test.mjs` — RED before the doc edits, GREEN after, asserting all recording harnesses incl. the 3 skills-layout ones document --record-finding. allow-suppression: none",
   "budget": "frontier",
   "category": "bug",
+  "completed": true,
   "duration": 2,
   "edges": [],
   "id": "T78",
