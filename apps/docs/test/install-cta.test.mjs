@@ -1,0 +1,133 @@
+// install-cta.test.mjs — install has to be the first actionable thing on the
+// page, and the command has to exist in exactly one place.
+//
+// Both properties decay silently. A section reorder that pushes install back
+// below the fold looks like a harmless refactor in review, and a hand-typed
+// `curl | sh` in a second component keeps working right up until the served
+// script moves and one copy is left pointing at a 404.
+//
+// These assert over component SOURCE ORDER, matching the convention in
+// codex-docs-current.test.mjs. The docs app has no React test renderer, and
+// adding one to check ordering that is statically determined would buy nothing.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+import { UNIVERSAL_INSTALL, UNIVERSAL_INSTALL_WINDOWS, SKILLS_INSTALL } from '../lib/install-commands.mjs';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const docsRoot = path.join(repoRoot, 'apps/docs');
+const read = (relative) => readFileSync(path.join(repoRoot, relative), 'utf8');
+
+const DETAIL = 'apps/docs/components/marketing/integration-detail.tsx';
+const INDEX = 'apps/docs/app/(home)/integrations/page.tsx';
+const HOME = 'apps/docs/app/(home)/page.tsx';
+
+/** Source index of a needle, asserted present so an ordering check can never pass vacuously. */
+function indexOf(source, needle, where) {
+  const at = source.indexOf(needle);
+  assert.notEqual(at, -1, `${where}: expected to find ${JSON.stringify(needle)}`);
+  return at;
+}
+
+test('the integration hero leads with install, above the surfaces section', () => {
+  const source = read(DETAIL);
+  const heroInstall = indexOf(source, '<IntegrationCard integration={integration} />', DETAIL);
+  const surfaces = indexOf(source, 'integration.surfacesSection.kicker', DETAIL);
+
+  assert.ok(
+    heroInstall < surfaces,
+    'the install card must render in the hero, before the Native surfaces section',
+  );
+});
+
+test('the native bundle tree still renders, relocated below the hero install', () => {
+  const source = read(DETAIL);
+  const heroInstall = indexOf(source, '<IntegrationCard integration={integration} />', DETAIL);
+  const bundle = indexOf(source, '<NativeBundle integration={integration} />', DETAIL);
+
+  assert.ok(bundle > heroInstall, 'the bundle tree must move below the hero install card');
+  assert.match(source, /function NativeBundle/, 'the bundle tree must not be deleted, only moved');
+});
+
+test('the full install section stays at the bottom with operate commands and resource nav', () => {
+  const source = read(DETAIL);
+  const installSection = indexOf(source, 'integration.installSection.kicker', DETAIL);
+  const operate = indexOf(source, '<OperatingCommands integration={integration} />', DETAIL);
+  const resources = indexOf(source, '<ResourceNav integration={integration} />', DETAIL);
+
+  assert.ok(installSection < operate, 'operate commands belong inside the install section');
+  assert.ok(operate < resources, 'the resource nav closes the page');
+
+  // The bottom section must remain the LAST section — moving install up is not
+  // licence to strand a reader who scrolled the whole page.
+  const surfaces = indexOf(source, 'integration.surfacesSection.kicker', DETAIL);
+  const phases = indexOf(source, 'integration.phaseSection.kicker', DETAIL);
+  const rails = indexOf(source, 'integration.railsSection.kicker', DETAIL);
+  assert.ok(
+    installSection > surfaces && installSection > phases && installSection > rails,
+    'the full install section must remain the last section on the page',
+  );
+});
+
+test('the integrations index leads with the universal install command', () => {
+  const source = read(INDEX);
+  const install = indexOf(source, 'UNIVERSAL_INSTALL', INDEX);
+  const grid = indexOf(source, 'INTEGRATIONS.map(', INDEX);
+
+  assert.ok(install < grid, 'the universal install must render before the harness picker');
+  assert.ok(
+    source.includes('UNIVERSAL_INSTALL_WINDOWS'),
+    'the index must offer the Windows command alongside the POSIX one',
+  );
+  assert.match(source, /beta/, 'the Windows command must be labeled beta');
+});
+
+test('the homepage hero carries the install command', () => {
+  const source = read(HOME);
+  const install = indexOf(source, 'UNIVERSAL_INSTALL', HOME);
+  const problem = indexOf(source, 'The problem', HOME);
+
+  assert.ok(install < problem, 'install must appear in the hero, before the first content section');
+});
+
+/** Every .ts/.tsx/.mjs file under a docs subtree, excluding build output. */
+function sourceFiles(relativeDir) {
+  const out = [];
+  const walk = (abs) => {
+    for (const entry of readdirSync(abs)) {
+      if (entry.startsWith('.')) continue;
+      const child = path.join(abs, entry);
+      if (statSync(child).isDirectory()) walk(child);
+      else if (/\.(tsx?|mjs)$/.test(entry)) out.push(child);
+    }
+  };
+  walk(path.join(docsRoot, relativeDir));
+  return out;
+}
+
+test('install commands are defined once and imported, never hand-typed into a page', () => {
+  const definingModule = path.join(docsRoot, 'lib/install-commands.mjs');
+  const COMMANDS = [
+    ['UNIVERSAL_INSTALL', UNIVERSAL_INSTALL],
+    ['UNIVERSAL_INSTALL_WINDOWS', UNIVERSAL_INSTALL_WINDOWS],
+    ['SKILLS_INSTALL', SKILLS_INSTALL],
+  ];
+
+  const files = [...sourceFiles('app'), ...sourceFiles('components'), ...sourceFiles('lib')];
+
+  for (const file of files) {
+    if (file === definingModule) continue;
+    const source = readFileSync(file, 'utf8');
+    for (const [name, literal] of COMMANDS) {
+      assert.ok(
+        !source.includes(literal),
+        `${path.relative(repoRoot, file)} hand-types the ${name} command.\n` +
+          `  Import it from @/lib/install-commands.mjs instead — a second copy drifts the moment the served script moves.`,
+      );
+    }
+  }
+});
