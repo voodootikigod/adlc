@@ -46,6 +46,15 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 // in the tested fleet-bridge planner/executor; this glue only supplies the herdr
 // effects + this per-repo state, and fails soft so a fleet hiccup never crashes
 // the daemon.
+//
+// KNOWN LIMITATION (out of scope for t-herdr-9; deferred): this state is
+// in-memory. If the daemon restarts mid-run it re-initialises empty, re-opens the
+// run tab, and re-tails — orphaning the prior run's panes. A sound fix must adopt
+// or close the pre-existing panes on startup, which needs herdr to expose each
+// pane's agent/command in `api snapshot` (today it carries only pane_id + cwd —
+// see lib/panemap.mjs) so a fleet tail pane can be identified; persisting the ids
+// alone is unsound (they are stale if herdr itself also restarted). Tracked as a
+// Phase-4 follow-up alongside the notification-action API (see fleet-bridge.mjs).
 const fleetState = new Map();
 
 async function bridgeFleet(repoRoot) {

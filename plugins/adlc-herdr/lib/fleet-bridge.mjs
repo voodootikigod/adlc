@@ -20,15 +20,20 @@ const TERMINAL = new Set(['merged', 'failed', 'blocked']);
 const ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 const safeId = (id) => typeof id === 'string' && ID_RE.test(id) && !id.includes('..');
 
-const EMPTY = () => ({ degrade: false, openTab: null, tailPanes: [], notifications: [], boardRows: [] });
+// `observed` marks a plan built from a VALID status this beat — the only case in
+// which absence of a ticket is evidence it left the in-flight set. A null status
+// (no run / transient read error) or a degrade yields observed:false, so the
+// executor never tears panes down on missing data (that would churn the UI and
+// lose scrollback on a one-beat read blip).
+const EMPTY = () => ({ degrade: false, observed: false, openTab: null, tailPanes: [], notifications: [], boardRows: [] });
 
 /**
  * Plan the observer's side effects for a fleet-status transition.
- * @returns {{degrade:boolean, openTab:{runId:string,title:string}|null,
+ * @returns {{degrade:boolean, observed:boolean, openTab:{runId:string,title:string}|null,
  *   tailPanes:Array, notifications:Array, boardRows:Array}}
  */
 export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) {
-  if (!curr || typeof curr !== 'object') return EMPTY(); // no run in progress
+  if (!curr || typeof curr !== 'object') return EMPTY(); // no run in progress (observed:false)
   if (curr.schemaVersion !== knownSchemaVersion) return { ...EMPTY(), degrade: true };
   if (!safeId(curr.runId)) return { ...EMPTY(), degrade: true }; // malformed run → can't observe safely
   const runId = curr.runId;
@@ -43,6 +48,7 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
   const seen = seenRunIds instanceof Set ? seenRunIds : new Set();
 
   const out = EMPTY();
+  out.observed = true; // a valid status: absence of a tracked ticket now means it left in-flight
   out.openTab = seen.has(runId) ? null : { runId, title: `fleet: run-${sanitizeToken(runId)}` };
 
   for (const [id, rec] of Object.entries(tickets)) {
@@ -117,17 +123,47 @@ export function shouldMarkRunSeen(plan, runState) {
  * notification, and the caller advances `prev` past them so they never re-fire.
  * A single isolated failure loses only that one ephemeral effect (the board row
  * still reflects state); it is surfaced to `log`, not hidden.
+ *
+ * Pane teardown is driven by the plan's authority over the state:
+ *   - degrade (schema no longer understood) → close ALL tracked panes and poll;
+ *   - observed (a valid status) → reconcile: close every tracked pane whose
+ *     ticket is no longer in-flight (terminal, vanished, or unknown state);
+ *   - NOT observed (null / unreadable status) → touch no panes: absence of data
+ *     is not evidence a ticket ended, and wiping panes on a one-beat read blip
+ *     would churn the UI and destroy scrollback.
+ * A pane is forgotten only after its close SUCCEEDS, so a transient close failure
+ * is retried on the next beat rather than leaking the tail process.
  */
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, log }) {
-  if (!plan || plan.degrade) return;
+  if (!plan) return;
   const safeCall = async (label, fn, ...args) => {
     try { return await fn(...args); } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
   };
-  const safeClose = (paneId) => (paneId ? safeCall('pane-close', closePane, paneId) : null);
+  // Close best-effort; report success so the caller keeps + retries the entry on
+  // a transient IPC failure (a genuinely-gone pane clears at the next run's reset).
+  const safeClose = async (paneId) => {
+    if (!paneId) return true;
+    try { await closePane(paneId); return true; } catch (err) { log?.('adlc-herdr fleet pane-close failed', err); return false; }
+  };
+  // Reconcile tracked panes down to `keep`: close every tracked ticket NOT in
+  // `keep`, forgetting it only once the close succeeds.
+  const closeExcept = async (keep) => {
+    for (const [ticketId, paneId] of [...state.tailed]) {
+      if (keep.has(ticketId)) continue;
+      if (await safeClose(paneId)) state.tailed.delete(ticketId);
+    }
+  };
+  if (plan.degrade) {
+    // We can see the run but no longer understand its schema: tear down the panes
+    // we can no longer manage and fall back to polling, so they don't leak for
+    // the rest of the run.
+    await closeExcept(new Set());
+    return;
+  }
   if (plan.openTab) {
-    // A new run: close the PREVIOUS run's tail panes (they belong to the old
-    // tab) and reset, so a restarted run never abandons/leaks panes.
-    for (const paneId of state.tailed.values()) await safeClose(paneId);
+    // A new run: close the PREVIOUS run's tail panes (they belong to the old tab)
+    // and reset, so a restarted run never abandons/leaks panes.
+    await closeExcept(new Set());
     state.tailed.clear();
     state.tabId = null;
     const tabId = await safeCall('open-tab', openTab, plan.openTab.title);
@@ -142,16 +178,8 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
     // beat, not be cached as "already tailed" and deprive the ticket of logs.
     if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
   }
-  // Reconcile: close the tail pane of ANY tracked ticket no longer in the desired
-  // in-flight set — whether it reached a terminal state, vanished from the status
-  // file, or entered an unknown state. Coupling closure to a TERMINAL transition
-  // alone leaks the pane on removal/unknown states. Iterate a snapshot and forget
-  // the entry FIRST, so a throwing close can't leave it to be retried every beat.
-  for (const [ticketId, paneId] of [...state.tailed]) {
-    if (desired.has(ticketId)) continue;
-    state.tailed.delete(ticketId);
-    await safeClose(paneId);
-  }
+  // Only a valid observation authorizes tearing panes down (see the doc comment).
+  if (plan.observed) await closeExcept(desired);
   for (const n of plan.notifications) await safeCall('notify', notify, n.title, n.body, n.sound);
 }
 

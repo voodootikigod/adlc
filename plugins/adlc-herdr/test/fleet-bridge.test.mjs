@@ -16,9 +16,15 @@ const V = 1; // knownSchemaVersion under test
 const status = (over = {}) => ({ schemaVersion: V, runId: 'r1', tickets: {}, ...over });
 const plan = (over, seen = []) => planFleetBridge({ prev: over.prev ?? null, curr: over.curr, knownSchemaVersion: V, seenRunIds: new Set(seen) });
 
-test('AC1 no run → an empty plan (nothing to do, not a degrade)', () => {
+test('AC1 no run → an empty plan (nothing to do, not a degrade, not observed)', () => {
   const p = planFleetBridge({ prev: null, curr: null, knownSchemaVersion: V, seenRunIds: new Set() });
-  assert.deepEqual(p, { degrade: false, openTab: null, tailPanes: [], notifications: [], boardRows: [] });
+  assert.deepEqual(p, { degrade: false, observed: false, openTab: null, tailPanes: [], notifications: [], boardRows: [] });
+});
+
+test('observed flags a plan built from a VALID status only (null/degrade are not observed)', () => {
+  assert.equal(plan({ curr: null }).observed, false, 'no run → not observed');
+  assert.equal(plan({ curr: status({ schemaVersion: 999 }) }).observed, false, 'degrade → not observed');
+  assert.equal(plan({ curr: status({ tickets: { 't-a': { state: 'building' } } }) }).observed, true, 'a valid status → observed');
 });
 
 test('AC2 unknown/absent schemaVersion → degrade (poll instead of trusting the file)', () => {
@@ -145,7 +151,7 @@ test('runFleetPlan opens the tab, tails each ticket ONCE, then CLOSES the pane o
     notify: async (...n) => { calls.notify.push(n); },
   };
   const building = {
-    degrade: false, openTab: { runId: 'r1', title: 'fleet: run-r1' },
+    degrade: false, observed: true, openTab: { runId: 'r1', title: 'fleet: run-r1' },
     tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }],
     notifications: [], boardRows: [],
   };
@@ -159,7 +165,7 @@ test('runFleetPlan opens the tab, tails each ticket ONCE, then CLOSES the pane o
   assert.equal(calls.spawn.length, 1, 'tailed exactly once');
   assert.equal(calls.close.length, 0);
   // t-a terminates → its tail pane is closed exactly once and forgotten
-  const merged = { degrade: false, openTab: null, tailPanes: [], notifications: [], boardRows: [{ ticketId: 't-a', state: 'merged' }] };
+  const merged = { degrade: false, observed: true, openTab: null, tailPanes: [], notifications: [], boardRows: [{ ticketId: 't-a', state: 'merged' }] };
   await runFleetPlan({ plan: merged, ...deps });
   assert.deepEqual(calls.close, ['w4:p5']);
   assert.equal(state.tailed.has('t-a'), false);
@@ -189,18 +195,23 @@ test('runFleetPlan RETRIES a tail pane whose spawn failed (null is not cached)',
   assert.equal(state.tailed.get('t-a'), 'w4:p9', 'retried and cached on the next success');
 });
 
-test('runFleetPlan TOLERATES a closePane failure — entry forgotten, notifications still fire', async () => {
+test('runFleetPlan RETAINS a pane on a transient close failure so it retries — but notifications still fire that beat', async () => {
   const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]) };
   const notified = [];
-  const plan = { degrade: false, openTab: null, tailPanes: [], notifications: [{ title: 'x', body: 'y', sound: 'done' }], boardRows: [{ ticketId: 't-a', state: 'merged' }] };
-  await runFleetPlan({
-    plan, repoRoot: '/r', state,
+  let fail = true; // the close fails transiently on the first beat, succeeds on the next
+  const plan = { degrade: false, observed: true, openTab: null, tailPanes: [], notifications: [{ title: 'x', body: 'y', sound: 'done' }], boardRows: [] };
+  const deps = {
+    repoRoot: '/r', state,
     openTab: async () => {}, spawn: async () => {},
-    closePane: async () => { throw new Error('pane already gone'); },
+    closePane: async () => { if (fail) throw new Error('socket busy'); },
     notify: async (...a) => { notified.push(a); },
-  });
-  assert.equal(state.tailed.has('t-a'), false, 'entry forgotten despite the close failure');
-  assert.equal(notified.length, 1, 'notifications still fire after a close failure');
+  };
+  await runFleetPlan({ plan, ...deps });
+  assert.equal(state.tailed.get('t-a'), 'w4:p5', 'a transient close failure KEEPS the entry (leaking it would be worse)');
+  assert.equal(notified.length, 1, 'the close failure does not abort the beat — notifications still fire');
+  fail = false;
+  await runFleetPlan({ plan, ...deps }); // next beat retries the close, now succeeds
+  assert.equal(state.tailed.has('t-a'), false, 'the retried close succeeds and the entry is forgotten');
 });
 
 test('runFleetPlan ISOLATES a notify failure — the remaining notifications still fire and it is logged', async () => {
@@ -230,7 +241,7 @@ test('runFleetPlan RECONCILES panes — closes a ticket that left the in-flight 
   const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa'], ['t-b', 'w4:pb']]) };
   await runFleetPlan({
     plan: {
-      degrade: false, openTab: null, boardRows: [], notifications: [],
+      degrade: false, observed: true, openTab: null, boardRows: [], notifications: [],
       tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }],
     },
     repoRoot: '/r', state,
@@ -241,11 +252,31 @@ test('runFleetPlan RECONCILES panes — closes a ticket that left the in-flight 
   assert.equal(state.tailed.has('t-a'), true, 'the still-in-flight ticket keeps its pane');
 });
 
-test('runFleetPlan on a degrade performs no effects', async () => {
-  let touched = false;
-  const mark = async () => { touched = true; };
-  await runFleetPlan({ plan: { degrade: true }, repoRoot: '/r', state: { tabId: null, tailed: new Map() }, openTab: mark, spawn: mark, closePane: mark, notify: mark });
-  assert.equal(touched, false);
+test('runFleetPlan does NOT touch panes on an UNOBSERVED plan — a null/unreadable status must not churn the UI', async () => {
+  const closed = [];
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]) };
+  // observed:false is exactly what planFleetBridge returns for curr===null.
+  await runFleetPlan({
+    plan: { degrade: false, observed: false, openTab: null, tailPanes: [], notifications: [], boardRows: [] },
+    repoRoot: '/r', state,
+    openTab: async () => {}, spawn: async () => {}, closePane: async (p) => closed.push(p), notify: async () => {},
+  });
+  assert.deepEqual(closed, [], 'no pane is closed on a missing observation');
+  assert.equal(state.tailed.get('t-a'), 'w4:pa', 'the tail pane is preserved across a transient read blip');
+});
+
+test('runFleetPlan on a DEGRADE tears down every tracked pane (clean fallback to polling), then no other effect', async () => {
+  const closed = [];
+  let otherTouched = false;
+  const mark = async () => { otherTouched = true; };
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa'], ['t-b', 'w4:pb']]) };
+  await runFleetPlan({
+    plan: { degrade: true }, repoRoot: '/r', state,
+    openTab: mark, spawn: mark, notify: mark, closePane: async (p) => closed.push(p),
+  });
+  assert.deepEqual(closed.sort(), ['w4:pa', 'w4:pb'], 'the panes we can no longer manage are closed, not leaked');
+  assert.equal(state.tailed.size, 0, 'and forgotten');
+  assert.equal(otherTouched, false, 'degrade opens no tab, spawns no pane, sends no notification');
 });
 
 test('the board renders a fleet section for terminal rows, and omits it with no run', () => {
