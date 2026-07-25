@@ -30,7 +30,3 @@ export const AGENT_GUIDE_URL = 'https://www.agenticlifecycle.ai/agent-guide.md';
  * stale.
  */
 export const AGENT_PROMPT = `Help me set up the ADLC (Agentic Development Lifecycle) in this repo. Read ${AGENT_GUIDE_URL} first, then walk me through it step by step.`;
-
-/** What the installer actually does, for surfaces that need to set expectations. */
-export const INSTALL_SUMMARY =
-  'Installs the gate toolkit and the native integration for every agent harness on your machine. Requires Node 18+.';

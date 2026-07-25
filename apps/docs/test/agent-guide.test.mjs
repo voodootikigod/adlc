@@ -50,8 +50,15 @@ test('the served response is a 200 markdown document', async () => {
 
 test('the route delegates to the tested response builder', () => {
   const source = readFileSync(GUIDE_ROUTE, 'utf8');
-  assert.match(source, /agentGuideResponse/, 'the route must serve the generated response');
   assert.match(source, /export function GET/, 'the route must export a GET handler');
+  // Assert the RETURN, not just a mention: `agentGuideResponse` also appears on
+  // the import line, so a route whose body was replaced by `return null` would
+  // still satisfy a bare mention — hollow-test proved exactly that mutant lived.
+  assert.match(
+    source,
+    /return agentGuideResponse\(\);/,
+    'the route must return the generated response, not a placeholder',
+  );
   // Static forever: the guide is generated at build time from repo data, so
   // revalidation would only add cost and cache churn.
   assert.match(source, /export const revalidate = false/, 'the guide must be statically generated');
