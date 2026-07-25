@@ -123,6 +123,28 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     } finally { cleanup(altering.dir); }
   });
 
+  it('classifies an UNTRACKED trust-root file when a non-trust-root path sorts ahead of it (guards the -z NUL-split of the untracked walk)', () => {
+    // The untracked-file walk uses `git ls-files --others -z` + split('\0'). Drop
+    // the -z and git emits NEWLINE-separated paths, so split('\0') collapses ALL
+    // untracked files into ONE joined string. Its prefix is whatever sorts FIRST,
+    // so a trust-root file that sorts after a benign one is no longer prefix-matched
+    // → the change silently fails to tier (a fail-OPEN). This fixture makes the
+    // benign root file (`a-untracked.md`) sort before the enforcement-package file
+    // and leaves BOTH untracked; the tracked diff is only a benign src change, so
+    // the untracked prosecute file is the SOLE trust-root trigger. With -z it tiers
+    // (exit 2); without -z it would exit 0 — which is what the mutation gate caught.
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
+    try {
+      writeFileSync(join(dir, 'a-untracked.md'), 'benign, sorts first\n');
+      mkdirSync(join(dir, 'packages', 'prosecute', 'lib'), { recursive: true });
+      writeFileSync(join(dir, 'packages', 'prosecute', 'lib', 'untracked.mjs'), 'export const z = 1;\n');
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /TRUST-ROOT tier/);
+      assert.match(r.stderr, /packages\/prosecute\//);
+    } finally { cleanup(dir); }
+  });
+
   it('fails closed (exit 1) on a tiered change with no --author-provider', () => {
     const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
       mkdirSync(join(d, 'packages', 'gate-manifest', 'lib'), { recursive: true });
