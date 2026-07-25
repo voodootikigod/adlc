@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, BOUNDED_SPAWN_ATTEMPTS } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, BOUNDED_SPAWN_ATTEMPTS, MAX_TAIL_PANES } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -86,6 +86,13 @@ test('a failed/blocked pane is RETAINED so the executor keeps it open (round 18)
   const mergedPlan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [{ ticketId: 't-a', state: 'merged' }], tailPanes: [] };
   await runFleetPlan({ plan: mergedPlan, repoRoot: '/r', state, openTab: async () => {}, spawn: async () => {}, closePane: async (p) => closed.push(p), notify: async () => {} });
   assert.deepEqual(closed, ['w4:pa'], 'a merged ticket pane IS closed');
+});
+
+test('planFleetBridge CAPS tail panes at MAX_TAIL_PANES — an untrusted status cannot spawn thousands of panes (DoS guard, round 22)', () => {
+  const tickets = {};
+  for (let i = 0; i < MAX_TAIL_PANES + 30; i += 1) tickets[`t-${i}`] = { state: 'building' };
+  const p = plan({ curr: status({ tickets }) });
+  assert.equal(p.tailPanes.length, MAX_TAIL_PANES, 'tail panes are bounded regardless of the ticket count in the file');
 });
 
 test('AC5 a hostile ticket id is skipped entirely (no tail pane, no board row, no path)', () => {

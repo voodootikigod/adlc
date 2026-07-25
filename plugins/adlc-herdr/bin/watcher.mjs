@@ -47,21 +47,18 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 // effects + this per-repo state, and fails soft so a fleet hiccup never crashes
 // the daemon.
 //
-// KNOWN LIMITATION (out of scope for t-herdr-9; deferred to Phase 4): this state
-// is in-memory. If the daemon restarts mid-run it re-initialises empty, opens a
-// fresh run tab, and re-tails. The prior instance's panes are ORPHANED: the new
-// daemon has none of their ids, so it can never close them — they persist (idle
-// `tail -F` on the finished log) until the user closes them or herdr restarts,
-// NOT reaped when the run ends. Low-harm (idle), but a real leak. This is a
-// DELIBERATE safe choice:
-// a persisted-pane-id recovery was prototyped and rejected because herdr reuses
-// pane ids after a herdr-daemon restart (its counter resets), so a persisted id
-// can match an UNRELATED pane the user has since opened — adopting then closing
-// it would destroy the user's session. A sound fix needs herdr to expose a pane's
-// agent/command in `api snapshot` (today it carries only pane_id + cwd — see
-// lib/panemap.mjs) so a fleet tail pane can be identified unambiguously. Until
-// then, orphaning is strictly safer than risking an unrelated pane. Tracked as a
-// Phase-4 follow-up alongside the notification-action API (see fleet-bridge.mjs).
+// Restart behaviour: this state is in-memory. If the daemon restarts mid-run it
+// re-initialises empty, opens a fresh run tab, and re-tails; the prior instance's
+// panes are orphaned — the new daemon has none of their ids, so it cannot close
+// them, and they persist (an idle `tail -F` on the finished log) until the user
+// closes them or herdr restarts.
+//
+// Recovering the panes by persisting their ids is not sound with the current
+// herdr contract: herdr reuses pane ids after a herdr-daemon restart, so a
+// persisted id can match an unrelated pane the user has since opened, and closing
+// it would kill that pane. Reliable adoption/teardown needs herdr to expose a
+// pane's agent/command in `api snapshot` (today it carries only pane_id + cwd —
+// see lib/panemap.mjs) so a fleet tail pane can be identified unambiguously.
 const fleetState = new Map();
 
 async function bridgeFleet(repoRoot, full) {

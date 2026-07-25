@@ -15,6 +15,13 @@ export const KNOWN_FLEET_SCHEMA_VERSION = 1;
 
 const IN_FLIGHT = new Set(['building', 'gating', 'prosecuting', 'fixing', 'merging']);
 const TERMINAL = new Set(['merged', 'failed', 'blocked']);
+// Hard cap on live tail panes per run. fleet-status.json is UNTRUSTED: a file
+// padded with thousands of in-flight tickets (well within the 8MB read bound)
+// must not make the executor spawn thousands of `herdr agent start` processes and
+// block the global watcher event loop. Board rows are NOT capped (cheap, no
+// spawn) so the summary stays complete; only the process-spawning panes are
+// bounded. Exported for the test.
+export const MAX_TAIL_PANES = 24;
 // A safe run/ticket id is a plain token: no '/', no '..', no leading '-' — so it
 // can never traverse a path or be read as a CLI flag.
 const ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
@@ -61,7 +68,7 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
     const state = rec && typeof rec.state === 'string' ? rec.state : null;
     if (!state) continue;
     if (IN_FLIGHT.has(state)) {
-      out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
+      if (out.tailPanes.length < MAX_TAIL_PANES) out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
     } else if (TERMINAL.has(state)) {
       out.boardRows.push({ ticketId: id, state });
       // RETAIN the tail pane for a FAILED/BLOCKED ticket so its final output (the
@@ -70,7 +77,7 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
       // more to show, so its pane is released. Retained panes persist until a new
       // run resets the tab (keeping one in `tailPanes` keeps the executor from
       // retiring it, and re-tags it with the terminal state).
-      if (state !== 'merged') out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
+      if (state !== 'merged' && out.tailPanes.length < MAX_TAIL_PANES) out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
       if (sameRun && prevState !== state) {
         if (state === 'merged') {
