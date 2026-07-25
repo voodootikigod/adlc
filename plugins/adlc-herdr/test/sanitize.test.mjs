@@ -104,3 +104,24 @@ test('sanitizeToken() fails closed on a non-positive length cap', () => {
   assert.equal(sanitizeToken('abc', 0), '');
   assert.equal(sanitizeToken('abc', -5), '');
 });
+
+test('bidi overrides, embeddings and isolates are stripped', () => {
+  // Trojan Source (CVE-2021-42574). scripts/test/source-hygiene.test.mjs already
+  // treats these as serious in SOURCE files, for the reason that rendered text
+  // can differ from real text — but the runtime sanitizer let them through, so
+  // an untrusted ticket title could reorder a board row and make an operator
+  // focus the wrong pane. Same threat, same characters, opposite direction.
+  for (const code of [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0x200e, 0x200f, 0x061c]) {
+    const hostile = `safe${String.fromCharCode(code)}text`;
+    assert.equal(sanitize(hostile), 'safetext', `U+${code.toString(16).toUpperCase()} must not survive`);
+    assert.ok(!sanitizeToken(hostile).includes(String.fromCharCode(code)));
+  }
+});
+
+test('stripping bidi leaves ordinary text and legitimate joiners alone', () => {
+  // ZWJ and ZWNJ are load-bearing in Indic clusters and emoji sequences —
+  // removing them would corrupt real content rather than protect anyone.
+  assert.equal(sanitize('ticket t-b - P4'), 'ticket t-b - P4');
+  assert.ok(sanitize('\u{1F468}‍\u{1F469}').includes('‍'), 'ZWJ must survive');
+  assert.ok(sanitize('क्‌ष').includes('‌'), 'ZWNJ must survive');
+});

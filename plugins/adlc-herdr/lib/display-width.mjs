@@ -203,15 +203,27 @@ export function displayWidth(text) {
   return total;
 }
 
+/**
+ * A cell budget alone does not bound OUTPUT. Mn/Me/Cf code points cost zero
+ * cells, and a base plus thousands of combining marks is a single grapheme, so
+ * a six-cell row could still emit thousands of code units — every three
+ * seconds, for every visible row. This ceiling is the second bound: generous
+ * against real text (a cluster needs a handful of code points) and firm against
+ * a title built to exploit the first one.
+ */
+const codeUnitCeiling = (max) => max * 16 + 64;
+
 /** Longest prefix fitting `max` cells, cut on cluster boundaries. Stops at the
  *  budget, so the work is proportional to `max` rather than to the input. */
 export function truncateToWidth(text, max) {
   if (!(max > 0)) return '';
+  const ceiling = codeUnitCeiling(max);
   let out = '';
   let used = 0;
   for (const cluster of clusters(text)) {
     const width = clusterWidth(cluster);
     if (used + width > max) break;
+    if (out.length + cluster.length > ceiling) break;
     out += cluster;
     used += width;
   }
@@ -232,11 +244,13 @@ export function tailToWidth(text, max) {
     ? value
     : trimLeadingLowSurrogate(value.slice(value.length - (max * 32 + 64)));
   const parts = [...clusters(window)];
+  const ceiling = codeUnitCeiling(max);
   let out = '';
   let used = 0;
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     const width = clusterWidth(parts[index]);
     if (used + width > max) break;
+    if (out.length + parts[index].length > ceiling) break;
     out = parts[index] + out;
     used += width;
   }

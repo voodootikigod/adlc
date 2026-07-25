@@ -171,7 +171,15 @@ async function main() {
   await frame(repoRoot);
   trace('first frame done');
   const timer = setInterval(() => frame(repoRoot).catch(() => {}), REFRESH_MS);
-  process.stdout.on('resize', () => frame(repoRoot).catch(() => {}));
+  process.stdout.on('resize', () => {
+    // Redraw the CACHED frame at the new geometry first. frame() awaits
+    // gather(), which runs herdr subprocesses and a ticket-store export with
+    // a 15s timeout — and the single-flight latch may drop this call outright.
+    // Waiting for it leaves the old geometry on screen, wrapping and scrolling,
+    // for as long as collection takes, or forever if collection keeps failing.
+    redraw();
+    frame(repoRoot).catch(() => {});
+  });
   armInput(() => {
     clearInterval(timer);
     process.exit(0);

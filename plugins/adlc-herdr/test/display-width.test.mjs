@@ -252,3 +252,23 @@ test('summing code points does not double-count emoji clusters', () => {
   assert.equal(displayWidth('❤️'), 2, 'base plus VS16');
   assert.equal(displayWidth('1⃣'), 2, 'keycap');
 });
+
+test('a pathological zero-width cluster cannot bypass the truncation bound', () => {
+  // truncateToWidth stopped only when accumulated CELLS exceeded max, and
+  // Mn/Me/Cf code points contribute zero — so one base plus thousands of
+  // combining marks is a single grapheme that emitted in full into a six-cell
+  // row. The cell budget needs a code-unit ceiling behind it.
+  const bomb = `a${'́'.repeat(20_000)}`;
+  const head = truncateToWidth(bomb, 6);
+  const tail = tailToWidth(bomb, 6);
+  assert.ok(head.length < 2_000, `head emitted ${head.length} code units for a 6-cell budget`);
+  assert.ok(tail.length < 2_000, `tail emitted ${tail.length} code units for a 6-cell budget`);
+  assert.ok(displayWidth(head) <= 6);
+  assert.ok(displayWidth(tail) <= 6);
+});
+
+test('zero-width-only input stays empty rather than accumulating', () => {
+  const marks = '́'.repeat(5_000);
+  assert.equal(displayWidth(truncateToWidth(marks, 10)), 0);
+  assert.ok(truncateToWidth(marks, 10).length < 2_000);
+});

@@ -6,6 +6,22 @@ const ESC = 0x1b;
 const BEL = 0x07;
 const ST = 0x9c;
 
+/**
+ * Bidirectional overrides, embeddings, isolates and directional marks — the
+ * Trojan Source class (CVE-2021-42574). They make rendered text differ from
+ * real text, which is why scripts/test/source-hygiene.test.mjs already refuses
+ * them in source files. The same characters reaching a terminal from an
+ * untrusted ticket title let a board row impersonate another ticket's id or
+ * status, so an operator focuses the wrong pane.
+ *
+ * ZWJ (U+200D) and ZWNJ (U+200C) are deliberately absent: they are load-bearing
+ * in Indic clusters and emoji sequences, and removing them corrupts real
+ * content instead of protecting anyone.
+ */
+const isBidiControl = (code) => (code >= 0x202a && code <= 0x202e)
+  || (code >= 0x2066 && code <= 0x2069)
+  || code === 0x200e || code === 0x200f || code === 0x061c;
+
 const isCsiParam = (c) => c >= 0x30 && c <= 0x3f;
 const isCsiIntermediate = (c) => c >= 0x20 && c <= 0x2f;
 const isCsiFinal = (c) => c >= 0x40 && c <= 0x7e;
@@ -63,6 +79,7 @@ export function sanitize(value) {
     }
     if (c >= 0x80 && c <= 0x9f) { i += 1; continue; } // other C1
     if (c === 0x7f) { i += 1; continue; } // DEL
+    if (isBidiControl(c)) { i += 1; continue; } // Trojan Source — see above
     if (c < 0x20 && c !== 0x0a && c !== 0x09) { i += 1; continue; } // C0 except \n \t
     out.push(value[i]);
     i += 1;
