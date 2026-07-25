@@ -61,7 +61,7 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
     const state = rec && typeof rec.state === 'string' ? rec.state : null;
     if (!state) continue;
     if (IN_FLIGHT.has(state)) {
-      out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log` });
+      out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
     } else if (TERMINAL.has(state)) {
       out.boardRows.push({ ticketId: id, state });
       // RETAIN the tail pane for a FAILED/BLOCKED ticket so its final output (the
@@ -70,7 +70,7 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
       // more to show, so its pane is released. Retained panes persist until a new
       // run resets the tab (keeping one in `tailPanes` keeps the executor from
       // retiring it, and re-tags it with the terminal state).
-      if (state !== 'merged') out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log` });
+      if (state !== 'merged') out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
       if (sameRun && prevState !== state) {
         if (state === 'merged') {
@@ -95,12 +95,17 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
 export function fleetTabArgs(title) {
   return ['tab', 'create', '--label', title, '--no-focus'];
 }
-export function fleetTailPaneArgs({ tabId, repoRoot, logPath, ticketId }) {
+export function fleetTailPaneArgs({ tabId, repoRoot, logPath, ticketId, runId }) {
   // The agent NAME carries the pane's identity — `agent start` has no --label
   // (0.7.4: only --cwd/--env/--split), so a per-ticket name is what makes N
-  // concurrent tail panes distinguishable in herdr's UI. `ticketId` is a
-  // validated token upstream; fall back to the generic name if it's absent.
-  const agentName = typeof ticketId === 'string' && ticketId ? `adlc-fleet-${ticketId}` : 'adlc-fleet-tail';
+  // concurrent tail panes distinguishable in herdr's UI. It MUST be namespaced by
+  // `runId`: herdr agent names are global across the multiplexer, but the daemon
+  // observes many repos at once, so two concurrent runs sharing a ticket id (e.g.
+  // two clones) would otherwise collide and blind the second. `runId`/`ticketId`
+  // are validated tokens upstream; fall back to the generic name if either is absent.
+  const agentName = typeof runId === 'string' && runId && typeof ticketId === 'string' && ticketId
+    ? `adlc-fleet-${runId}-${ticketId}`
+    : 'adlc-fleet-tail';
   // `tail -F` (= --follow=name --retry), NOT -f: the fleet orchestrator creates
   // `.adlc/fleet-logs/<id>.log` a beat AFTER the ticket enters `building`, and
   // plain `tail -f` on a not-yet-existent file exits 1 immediately (dead pane,
@@ -261,7 +266,7 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
     if ((state.spawnFails.get(pane.ticketId) ?? 0) >= BOUNDED_SPAWN_ATTEMPTS) continue; // gave up — stop hammering
-    const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath, ticketId: pane.ticketId }));
+    const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath, ticketId: pane.ticketId, runId: pane.runId }));
     if (typeof paneId === 'string' && paneId) {
       // A REAL pane — remember it and reset this ticket's failure count.
       state.tailed.set(pane.ticketId, paneId);

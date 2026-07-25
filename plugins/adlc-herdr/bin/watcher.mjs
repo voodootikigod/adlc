@@ -49,8 +49,11 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 //
 // KNOWN LIMITATION (out of scope for t-herdr-9; deferred to Phase 4): this state
 // is in-memory. If the daemon restarts mid-run it re-initialises empty, opens a
-// fresh run tab, and re-tails — leaving the prior run's panes as harmless orphans
-// until the run ends or the user closes them. This is a DELIBERATE safe choice:
+// fresh run tab, and re-tails. The prior instance's panes are ORPHANED: the new
+// daemon has none of their ids, so it can never close them — they persist (idle
+// `tail -F` on the finished log) until the user closes them or herdr restarts,
+// NOT reaped when the run ends. Low-harm (idle), but a real leak. This is a
+// DELIBERATE safe choice:
 // a persisted-pane-id recovery was prototyped and rejected because herdr reuses
 // pane ids after a herdr-daemon restart (its counter resets), so a persisted id
 // can match an UNRELATED pane the user has since opened — adopting then closing

@@ -69,7 +69,7 @@ test('EVERY terminal state yields a board row + a transition notification (pins 
     // A merged ticket releases its pane; a failed/blocked ticket RETAINS it so the
     // failure output stays readable (round 18).
     assert.equal(p.tailPanes.length, s === 'merged' ? 0 : 1, `${s} pane retention`);
-    if (s !== 'merged') assert.deepEqual(p.tailPanes[0], { ticketId: 't-x', state: s, logPath: '.adlc/fleet-logs/t-x.log' });
+    if (s !== 'merged') assert.deepEqual(p.tailPanes[0], { ticketId: 't-x', state: s, logPath: '.adlc/fleet-logs/t-x.log', runId: 'r1' });
   }
 });
 
@@ -492,12 +492,18 @@ test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async 
 
 test('AC8 fixed-argv builders: a shell-free tail -F argv (waits for a not-yet-created log), tab create, pane close', () => {
   assert.deepEqual(fleetTabArgs('fleet: run-r1'), ['tab', 'create', '--label', 'fleet: run-r1', '--no-focus']);
-  // A per-ticket agent NAME makes concurrent panes distinguishable (agent start has no --label).
+  // A run-namespaced, per-ticket agent NAME makes concurrent panes distinguishable
+  // AND globally unique (agent start has no --label; herdr names are global).
   assert.deepEqual(
-    fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log', ticketId: 't-a' }),
-    ['agent', 'start', 'adlc-fleet-t-a', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-F', '--', '.adlc/fleet-logs/t-a.log'],
+    fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log', ticketId: 't-a', runId: 'r9' }),
+    ['agent', 'start', 'adlc-fleet-r9-t-a', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-F', '--', '.adlc/fleet-logs/t-a.log'],
   );
-  // Falls back to the generic name when no ticket id is supplied.
+  // Two concurrent runs sharing a ticket id get DISTINCT agent names (no collision).
+  assert.notEqual(
+    fleetTailPaneArgs({ tabId: 't', repoRoot: '/a', logPath: '/l', ticketId: 't-1', runId: 'rA' })[2],
+    fleetTailPaneArgs({ tabId: 't', repoRoot: '/b', logPath: '/l', ticketId: 't-1', runId: 'rB' })[2],
+  );
+  // Falls back to the generic name when the run/ticket id is absent.
   assert.equal(fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '/l' })[2], 'adlc-fleet-tail');
   assert.deepEqual(fleetPaneCloseArgs('w4:p5'), ['pane', 'close', 'w4:p5']);
 });
