@@ -195,6 +195,18 @@ is the integration tip the ticket was cut from, used as the diff base for the
 scope/prosecution gates (§8.3, N3). Written atomically (temp file + rename) after
 every transition.
 
+**Read-only observation surface.** The file carries a top-level `schemaVersion`
+(`FLEET_STATUS_SCHEMA_VERSION`, currently `1`) so it can be read by external
+**observers** — notably the herdr plugin's fleet bridge — not only fleet itself.
+The observed fields are `schemaVersion`, `runId`, `integrationBranch`, `baseSha`,
+and `tickets` (a map of ticket id → at least `{ state }`, where `state` is one of
+`building`, `gating`, `prosecuting`, `fixing`, `merging`, `merged`, `failed`,
+`blocked`). Fleet still **owns** the file (it remains gitignored/evidence-ignored
+and writers may extend per-ticket records); observers must treat it as read-only and, on an **unknown or absent
+`schemaVersion`**, degrade to polling `fleet status --json` rather than trust an
+unversioned shape. `schemaVersion` is bumped only on a breaking change to the
+fields above.
+
 ### 6.3 Worktree lifecycle
 
 - **Create**: `.worktrees/fleet-<id>/` on branch `fleet/<id>` cut from the
