@@ -537,19 +537,22 @@ if (manifestLs.stdout.trim()) {
   if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, head.text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (verifiedMigration) {
   // Verified migration ceremony (protected-base runner): the migration evidence lives in
-  // the gitignored WORKING-TREE manifest by design, so read it here as before. The diff
-  // shape and CODEOWNERS attestation were already verified upstream, which is what makes
-  // trusting this local file sound in this branch only.
+  // the gitignored WORKING-TREE manifest by design. Read it EXACTLY ONCE and make both the
+  // presence and validation decisions on that single snapshot — a two-read pattern (validate
+  // one snapshot, presence-check a second) is a TOCTOU fail-open: an empty file skips
+  // validation, then a swapped non-empty file satisfies presence with evidence never checked
+  // (#314 round 4). The diff shape and CODEOWNERS attestation were verified upstream, which
+  // is what makes trusting this local file sound in this branch only.
   const headManifest = workingManifestText();
-  if (headManifest.trim()) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+  // validateMigrationEvidence itself denies empty/whitespace evidence (appended.length 0),
+  // so ONE read + one unconditional validation covers both presence and content — no second
+  // read to race against.
+  validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (committedManifestAtHead().text.trim()) {
   // Ordinary PR (#314): only a TRACKED manifest ADDED by the diff with non-empty evidence
   // denies. An untracked gitignored manifest reads as '' (not tracked at HEAD) and passes,
   // so the local verdict equals CI's clean checkout.
   deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
-}
-if (verifiedMigration && !workingManifestText().trim()) {
-  deny('legacy-to-directory migration requires hash-bound migration evidence');
 }
 
 const immutableTrustRoots = rails.length || baseHasConfig
