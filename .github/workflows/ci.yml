@@ -127,6 +127,51 @@ jobs:
         if: matrix.node-version == 22
         run: node scripts/pi-live-prosecute.mjs
 
+  # I2: substantiate the beta Windows claim. The site serves install.ps1, so the
+  # statement "the core gates run on Windows" needs evidence, not optimism — this
+  # job IS that evidence, and it is required.
+  #
+  # It runs scripts/windows-core-tests.mjs rather than `npm test`: run-tests.mjs
+  # shells its segments with `*` globs that cmd.exe does not expand, and several
+  # of its segments shell out through /bin/sh. packages/fleet is excluded and the
+  # runner prints the exclusion, so a green log here can never be misread as full
+  # POSIX parity.
+  windows-core:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install
+        run: npm install
+
+      - name: Core gate suites (packages/fleet excluded — POSIX-only)
+        run: node scripts/windows-core-tests.mjs
+
+      # The served Windows installer must at minimum PARSE on the platform it
+      # targets. A syntax error in install.ps1 reaches every `irm | iex` user
+      # and is invisible to every POSIX check in this workflow.
+      - name: Parse install.ps1
+        shell: pwsh
+        run: |
+          $source = Get-Content -Raw apps/docs/public/install.ps1
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host $_ }
+            throw "install.ps1 failed to parse ($($errors.Count) error(s))"
+          }
+          Write-Host 'install.ps1 parsed cleanly'
+
   # T31 drift canary: the SAME two OpenCode live proofs against opencode-ai@latest.
   # ADVISORY by design (continue-on-error): upstream releases near-daily, and a
   # latest-version break must be VISIBLE same-day without blocking unrelated

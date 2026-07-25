@@ -28,6 +28,33 @@ product.
 
 ## Install
 
+One command installs the gate toolkit **and** the native ADLC integration for
+every agent harness it finds on your machine:
+
+```sh
+curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh
+```
+
+```powershell
+# Windows (beta)
+irm https://www.agenticlifecycle.ai/install.ps1 | iex
+```
+
+Then `cd` into a repo and run `adlc init`.
+
+Requires **Node.js 18+** — the installer checks and stops if it is missing
+rather than installing a runtime for you. Harnesses you do not have are left
+alone. Cursor and GitHub Copilot need one manual step, which the installer
+prints. On Windows, `adlc fleet` is POSIX-only and unavailable; every other gate
+runs, and the core suites are covered by a `windows-latest` CI job.
+
+Piping a remote script to a shell is a real tradeoff — see
+[ADR-0010](./docs/adr/0010-first-party-curl-installer.md) for why we serve one
+and what controls sit behind it. To read it first:
+`curl -fsSL https://www.agenticlifecycle.ai/install.sh -o install.sh`.
+
+### Just the toolkit
+
 Each package publishes independently under the `@adlc` npm scope. For normal use,
 install the dispatcher and run tools through the stable `adlc <tool>` surface:
 
