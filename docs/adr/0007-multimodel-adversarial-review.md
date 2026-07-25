@@ -207,3 +207,25 @@ deliberately did **not** sign the provider assertion with a CI-held key — that
 what stops the stale-attestation bypass. The gate raises the bar and makes the omission visible
 in an auditable ledger; it is defense in depth behind the unbypassable rails-guard CI diff gate,
 not a cryptographic proof of review.
+
+**Honest limitation — the gate shares a runner with candidate code (#326).** The tier gate
+is *folded into the required `test` job* because a separate job cannot be made a required
+check on this repo's plan (it would enforce nothing). That job necessarily installs and runs
+candidate code, so any candidate-controlled code that executes in the runner *before* the gate
+step can shim `node`/`npm` (e.g. onto `$GITHUB_PATH`, which GitHub persists to later steps) and
+make the gate — and every other check in the job — pass without an attestation. Cross-model
+prosecution of #326 surfaced a ladder of these: an untiered root/nested `package.json`
+`postinstall`; a workspace `bin` named `node` linked into `node_modules/.bin` and hit during a
+rebuild; a candidate `.npmrc`. **The tractable layers are closed** — the root install manifests
+(`package.json`/`package-lock.json`) are a tier surface (a dependency/version/script change
+tiers → requires an attestation); the gate's job installs with `--ignore-scripts` and rebuilds
+only a lockfile-pinned trusted-native allowlist (a drift guard keeps the allowlist complete),
+so no *first-party* lifecycle script runs; the attestation read fails closed on a manifest whose
+hash chain does not `verify()`. **The residual is the general limit, not a unique weakness:** a
+PR that executes arbitrary code in the runner defeats `npm test`, `rails-guard`, and
+`mutation-gate` too, so the cross-model gate is no weaker than any other required check, and
+every such attack requires *visibly-malicious build config in the PR diff* — which is exactly
+what the branch-protection **CODEOWNERS / human-review backstop** exists to catch (the same
+backstop the trust-root code itself relies on). Fully closing this needs a truly isolated
+required job, which the repo's plan does not allow; until then it is accepted, documented, and
+deliberately not chased into an infinite regress of runner-escape variants.
