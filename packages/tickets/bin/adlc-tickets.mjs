@@ -20,27 +20,11 @@ import {
   recoverDirectoryTransaction,
   recoverMigration,
   restoreTicket,
+  renderCommandHelp,
+  renderUsage,
   serializePlan,
+  ticketJsonSchema,
 } from '../index.mjs';
-
-function usage() {
-  console.log(`adlc ticket <command> [options]
-
-Commands:
-  list | show <id>
-  create --input <path|-> [--write]
-  update <id> --input <path|-> --expect <ticket-hash> [--write]
-  edit <id> [--write]
-  discard <id> [--write]
-  complete <id> [--write --authorize]
-  archive <id> [--write --authorize] | restore <id> [--write --authorize]
-  doctor [--archive] | store status
-  store migrate [--write --yes] | store recover (--complete|--rollback)
-  store export --output <path>
-
-All mutations are dry-run by default. New override: --ticket-store/ADLC_TICKET_STORE.
-Legacy --tickets/ADLC_TICKETS remains available through 1.x.`);
-}
 
 function parse(argv) {
   const flags = {};
@@ -78,9 +62,16 @@ function emit(value, json) {
 
 async function main() {
   const { flags, positionals } = parse(process.argv.slice(2));
-  if (flags.help || positionals.length === 0) { usage(); return; }
-  const root = resolve(flags.root ?? '.');
   const command = positionals[0];
+  // Resolve --help against the command BEFORE anything touches the store, so
+  // `create --help` answers "what shape is the input document?" rather than
+  // reprinting the generic usage, and answers it in a repo with no store yet.
+  if (flags.help || positionals.length === 0) {
+    console.log((command && renderCommandHelp(command)) || renderUsage());
+    return;
+  }
+  if (command === 'schema') { emit(ticketJsonSchema(), true); return; }
+  const root = resolve(flags.root ?? '.');
   const storeCommand = command === 'store' ? positionals[1] : null;
   if (storeCommand === 'migrate') {
     emit(migrateLegacyStore(root, { write: Boolean(flags.write), yes: Boolean(flags.yes) }), flags.json);

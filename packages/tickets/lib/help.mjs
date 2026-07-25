@@ -1,0 +1,280 @@
+/**
+ * Self-describing help for `adlc ticket`.
+ *
+ * The input document a ticket mutation takes used to be discoverable only by
+ * reading an existing ticket out of the store, so every author re-derived the
+ * same field set — and re-derived it wrong, because `id` looks required and is
+ * not. `TICKET_FIELDS` is the one place that shape is written down: the CLI
+ * help, the published JSON Schema, and the drift test in test/help.test.mjs all
+ * read from it, so none of them can disagree.
+ *
+ * Prose here must not contain a `{` before the worked example — the example is
+ * extracted by brace span so it can be piped straight into `create --input -`,
+ * and both test/help.test.mjs and test/cli-help.test.mjs execute it.
+ */
+
+export const SCHEMA_ID = 'https://adlc.dev/schemas/ticket-v1.json';
+
+/**
+ * `required` is author-facing: the only field a create input must carry.
+ * The JSON Schema below additionally requires `id`, because it describes a
+ * *stored* ticket — the service mints the id on the way in.
+ */
+export const TICKET_FIELDS = [
+  {
+    name: 'id',
+    type: 'string',
+    required: false,
+    summary: 'Ticket id. Omit it on create and the store mints a ULID (T-01K...); supply one only to keep an existing T<n> id.',
+    schema: { type: 'string', minLength: 1 },
+  },
+  {
+    name: 'title',
+    type: 'string',
+    required: true,
+    summary: 'One imperative line naming the work.',
+    schema: { type: 'string', minLength: 1 },
+  },
+  {
+    name: 'body',
+    type: 'string',
+    required: false,
+    summary: 'The self-contained ticket text: what to build, the acceptance criteria, and the concrete command that verifies each one. A fresh agent sees only this — never the conversation that produced it. coldstart audits it for gaps.',
+    schema: { type: 'string' },
+  },
+  {
+    name: 'category',
+    type: 'string',
+    required: false,
+    summary: 'Routing hint, not a free-form label: model-router sends contract, spec, and architecture to a frontier model and routes everything else from empirical priors.',
+    schema: { type: 'string' },
+  },
+  {
+    name: 'duration',
+    type: 'number > 0',
+    required: false,
+    summary: 'Relative build-time estimate used to order the ticket DAG. Defaults to 1.',
+    schema: { type: 'number', exclusiveMinimum: 0 },
+  },
+  {
+    name: 'budget',
+    type: 'number > 0',
+    required: false,
+    summary: 'Optional token ceiling honoured by model-router and flail-detector. Omit it to take the tier default.',
+    schema: { type: 'number', exclusiveMinimum: 0 },
+  },
+  {
+    name: 'scope',
+    type: 'string[]',
+    required: false,
+    summary: 'Path globs this ticket may touch, e.g. src/auth/**.',
+    schema: { type: 'array', items: { type: 'string' } },
+  },
+  {
+    name: 'rails',
+    type: 'string[]',
+    required: false,
+    summary: 'Path globs frozen for the duration of the build; rails-guard denies edits to them. Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1.',
+    schema: { type: 'array', items: { type: 'string' } },
+  },
+  {
+    name: 'edges',
+    type: 'array of "to" objects',
+    required: false,
+    summary: 'Ordering constraints, prerequisite to dependent. An edge with "to": "TX" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here.',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['to'],
+        properties: { to: { type: 'string', minLength: 1 } },
+        additionalProperties: true,
+      },
+    },
+  },
+];
+
+const CREATE_EXAMPLE = {
+  title: 'Reject unsigned webhook deliveries',
+  body: 'Verify the HMAC signature on every inbound webhook before dispatch.\n\nAcceptance criteria:\n1. An unsigned delivery is rejected with 401. Verify: node --test test/webhook.test.mjs\n2. A delivery signed with a stale secret is rejected. Verify: node --test test/webhook.test.mjs',
+  category: 'security',
+  duration: 2,
+  scope: ['src/webhook/**', 'test/webhook.test.mjs'],
+  rails: [],
+  edges: [],
+};
+
+const FIELD_INDENT = '  ';
+
+/** Greedy word wrap; every emitted line carries `indent`. */
+function wrap(text, width, indent) {
+  const lines = [];
+  let line = '';
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (line && `${line} ${word}`.length > width) { lines.push(indent + line); line = word; }
+    else line = line ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(indent + line);
+  return lines;
+}
+
+function fieldTable() {
+  const width = Math.max(...TICKET_FIELDS.map((field) => field.name.length));
+  const body = FIELD_INDENT.repeat(3);
+  const lines = [];
+  for (const field of TICKET_FIELDS) {
+    lines.push(`${FIELD_INDENT}${field.name.padEnd(width)}  ${field.type}${field.required ? ' (required)' : ''}`);
+    lines.push(...wrap(field.summary, 92 - body.length, body));
+  }
+  return lines;
+}
+
+/** The worked example, exactly as `create --help` prints it. */
+const createExampleJson = () => JSON.stringify(CREATE_EXAMPLE, null, 2);
+
+const INPUT_DOCUMENT = [
+  'Input document (--input <path> or - for stdin; see `adlc ticket schema`):',
+  '',
+  ...fieldTable(),
+  '',
+  'Unknown fields are preserved as-is; the store never strips them.',
+];
+
+const COMMAND_HELP = {
+  create: () => [
+    'adlc ticket create --input <path|-> [--write] [--json]',
+    '',
+    'Plan a new ticket. Dry-run by default: the plan, validation, graph effects,',
+    'file operations, and resulting hashes print, and nothing is written until',
+    '--write. The command never stages or commits.',
+    '',
+    ...INPUT_DOCUMENT,
+    '',
+    'Example (pipe it straight in: `adlc ticket create --input - < ticket.json`):',
+    '',
+    createExampleJson(),
+  ],
+  update: () => [
+    'adlc ticket update <id> --input <path|-> --expect <ticketHash> [--write] [--json]',
+    '',
+    'Replace a ticket in place. --expect takes the current ticketHash from',
+    '`adlc ticket show <id>` or `adlc ticket list --json`; the write is a',
+    'compare-and-swap and fails STALE_TICKET if the ticket moved underneath you.',
+    'The input must carry the same id — use reassign for an identity change.',
+    '',
+    ...INPUT_DOCUMENT,
+  ],
+  edit: () => [
+    'adlc ticket edit <id> [--write] [--json]',
+    '',
+    'Open the ticket in $EDITOR (or $VISUAL) and plan the result as an update.',
+    'The expected hash is supplied for you. Dry-run by default.',
+    '',
+    ...INPUT_DOCUMENT,
+  ],
+  discard: () => [
+    'adlc ticket discard <id> [--write] [--json]',
+    '',
+    'Remove a ticket that was never built. Dry-run by default. Use archive to',
+    'retire a ticket whose history must be kept.',
+  ],
+  complete: () => [
+    'adlc ticket complete <id> [--write --authorize] [--json]',
+    '',
+    'Mark a ticket complete. --authorize records that a human approved the',
+    'state change; without it the write is refused.',
+  ],
+  archive: () => [
+    'adlc ticket archive <id> [--write --authorize] [--json]',
+    '',
+    'Move a ticket into .adlc/ticket-archive with evidence. Requires a directory',
+    'store. `adlc ticket restore <id>` is the inverse.',
+  ],
+  restore: () => [
+    'adlc ticket restore <id> [--write --authorize] [--json]',
+    '',
+    'Move an archived ticket back into the active store. Requires a directory',
+    'store.',
+  ],
+  list: () => [
+    'adlc ticket list [--json]',
+    '',
+    'Print every active ticket as id, title, and ticketHash. The hash is what',
+    '`update --expect` takes.',
+  ],
+  show: () => [
+    'adlc ticket show <id> [--json]',
+    '',
+    'Print one ticket with its ticketHash and the store hash.',
+  ],
+  doctor: () => [
+    'adlc ticket doctor [--archive] [--json]',
+    '',
+    'Diagnose the store: manifest, shard integrity, the active-ticket pointer,',
+    'and any pending transaction awaiting recovery.',
+  ],
+  schema: () => [
+    'adlc ticket schema [--json]',
+    '',
+    'Print the JSON Schema for a stored ticket. It describes the same fields',
+    '`create --help` documents; `id` is required there because the service has',
+    'already minted it by the time a ticket is stored.',
+  ],
+  store: () => [
+    'adlc ticket store <status|migrate|recover|export> [options]',
+    '',
+    '  status                       backend, format version, ticket count, hashes',
+    '  migrate [--write --yes]      preview or apply the legacy -> sharded migration',
+    '  recover (--complete|--rollback)  finish or undo an interrupted transaction',
+    '  export --output <path>       write a legacy-shaped snapshot',
+  ],
+};
+
+/** Per-command help text, or null when the command has none. */
+export function renderCommandHelp(command) {
+  const render = COMMAND_HELP[command];
+  return render ? render().join('\n') : null;
+}
+
+export function renderUsage() {
+  return [
+    'adlc ticket <command> [options]',
+    '',
+    'Commands:',
+    '  list | show <id>',
+    '  create --input <path|-> [--write]',
+    '  update <id> --input <path|-> --expect <ticket-hash> [--write]',
+    '  edit <id> [--write]',
+    '  discard <id> [--write]',
+    '  complete <id> [--write --authorize]',
+    '  archive <id> [--write --authorize] | restore <id> [--write --authorize]',
+    '  doctor [--archive] | schema | store status',
+    '  store migrate [--write --yes] | store recover (--complete|--rollback)',
+    '  store export --output <path>',
+    '',
+    'Run `adlc ticket <command> --help` for the flags and input document of one',
+    'command, or `adlc ticket schema` for the ticket JSON Schema.',
+    '',
+    'All mutations are dry-run by default. New override: --ticket-store/ADLC_TICKET_STORE.',
+    'Legacy --tickets/ADLC_TICKETS remains available through 1.x.',
+  ].join('\n');
+}
+
+/** The published ticket schema, built from the same field table as the help. */
+export function ticketJsonSchema() {
+  return {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $id: SCHEMA_ID,
+    title: 'ADLC ticket',
+    description: 'A stored ADLC ticket. `adlc ticket create` accepts the same document without `id`, which the store mints as a ULID.',
+    type: 'object',
+    required: ['id', 'title'],
+    properties: Object.fromEntries(
+      TICKET_FIELDS.map((field) => [field.name, { ...field.schema, description: field.summary }]),
+    ),
+    additionalProperties: true,
+  };
+}
+
+/** Exactly the bytes committed to schemas/ticket.schema.json. */
+export const serializeTicketJsonSchema = () => `${JSON.stringify(ticketJsonSchema(), null, 2)}\n`;
