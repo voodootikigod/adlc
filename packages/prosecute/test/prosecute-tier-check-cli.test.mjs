@@ -62,6 +62,11 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
       const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
       assert.equal(r.status, 0);
       assert.match(r.stdout, /NOT trust-root tier/);
+
+      // --json contract: a non-tier change reports satisfied:true, crossModelRequired:false.
+      const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
+      assert.equal(j.status, 0);
+      assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
     } finally { cleanup(dir); }
   });
 
@@ -86,8 +91,14 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     try {
       const before = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
       assert.equal(before.status, 2);
-      const { revision } = JSON.parse(before.stdout);
+      const beforeJson = JSON.parse(before.stdout);
+      const { revision } = beforeJson;
       assert.ok(revision, 'tier-check surfaces the revision');
+      // --json contract for a tiered-but-unattested change: the fields must reflect
+      // trust-root tier and an unmet requirement, not just the exit code.
+      assert.equal(beforeJson.trustRootTier, true);
+      assert.equal(beforeJson.crossModelRequired, true);
+      assert.equal(beforeJson.satisfied, false);
 
       const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revision, '--dir', '.adlc'], dir);
       assert.equal(rec.status, 0);
@@ -142,6 +153,19 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
       assert.equal(r.status, 2);
       assert.match(r.stderr, /TRUST-ROOT tier/);
       assert.match(r.stderr, /packages\/prosecute\//);
+    } finally { cleanup(dir); }
+  });
+
+  it('fails closed (exit 1) with actionable guidance when the --base ref is unresolvable', () => {
+    // An unresolvable base means the changed-file set cannot be computed, so the gate
+    // must FAIL rather than silently treat the change as empty/non-tier. The error
+    // names the fix (fetch the ref / pass --base <ref>) so CI is not a dead end.
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
+    try {
+      const r = runBin(['tier-check', '--base', 'no-such-ref-xyz', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /cannot determine the changed-file set/);
+      assert.match(r.stderr, /--base <ref>/);
     } finally { cleanup(dir); }
   });
 

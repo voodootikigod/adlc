@@ -305,3 +305,34 @@ describe('cross-model manifest-tamper fail-closed (#326 Codex F2)', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+// Malformed-but-chain-valid entries (injected past recordCrossModelReview's write-side
+// validation) must be IGNORED by the read-side predicate, never crash it and never be
+// mistaken for a revocation. These pin the candidateReview() guards.
+describe('cross-model read-side entry-shape guards (#326)', () => {
+  it('an entry whose data is not an object is ignored (no crash) — guards the null-data check', () => {
+    const dir = tmp();
+    try {
+      // rawData "null" → entry.data === null. The predicate must return early, not
+      // dereference data.revision. (A same-provider real approve is present so the
+      // gate would be TRUE if the null entry were merely skipped; the point here is
+      // that reading it does not throw.)
+      record({ gate: 'cross-model-review', ticket: 'T1', rawData: 'null', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('an entry with an INVALID verdict is ignored, NOT treated as a revocation of a standing approve', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      // Inject a later same-provider entry with a bogus verdict (bypassing the writer).
+      // It must be discarded by the verdict guard — the standing approve still holds.
+      // If the guard were removed, this would become the "latest" verdict and wrongly
+      // revoke the approve.
+      record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'openai', authorProvider: 'anthropic', verdict: 'bogus', revision: 'rev-1' }), dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
