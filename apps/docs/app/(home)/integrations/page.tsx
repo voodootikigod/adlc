@@ -24,16 +24,21 @@ export default function IntegrationsPage() {
       <MarketingSection headingLevel={1} kicker="Integrations" title="Install it now">
         <p className="mb-8 max-w-2xl leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
           One command installs the gate toolkit and the native ADLC integration for
-          every agent harness on your machine. Harnesses you don&apos;t have are left
-          alone. Requires Node 18+.
+          each agent harness it finds on your machine. Harnesses you don&apos;t have
+          are left alone. Requires Node 18+.
         </p>
         <div className="flex flex-col gap-4 lg:max-w-2xl">
           <InstallCommand command={UNIVERSAL_INSTALL} label="macOS / Linux" />
           <InstallCommand command={UNIVERSAL_INSTALL_WINDOWS} label="Windows" beta />
         </div>
-        <p className="mt-6 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
+        <p className="mt-6 max-w-2xl text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
           Then <code style={{ color: '#4fb4d8' }}>cd</code> into a repo and run{' '}
-          <code style={{ color: '#4fb4d8' }}>adlc init</code>. On Windows,{' '}
+          <code style={{ color: '#4fb4d8' }}>adlc init</code>. Two exceptions the
+          installer will tell you about: <strong style={{ color: '#cbcdd2' }}>Cursor</strong>{' '}
+          installs plugins through its in-app marketplace, and{' '}
+          <strong style={{ color: '#cbcdd2' }}>GitHub Copilot</strong>&apos;s plugin
+          package isn&apos;t on npm yet — both are detected and reported as a manual
+          step rather than guessed at. On Windows,{' '}
           <code style={{ color: '#4fb4d8' }}>adlc fleet</code> is POSIX-only and
           unavailable; every other gate runs. Prefer to install by hand? Every
           harness&apos;s native path is below.

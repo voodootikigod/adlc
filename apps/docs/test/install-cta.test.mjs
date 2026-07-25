@@ -86,6 +86,24 @@ test('the integrations index leads with the universal install command', () => {
   assert.match(source, /beta/, 'the Windows command must be labeled beta');
 });
 
+test('the surface that sells the one-liner also names its exceptions', () => {
+  // ADR-0009 Decision 4: we document only the coverage a channel actually has.
+  // The installer cannot automate Cursor (in-app marketplace only) or Copilot
+  // (@adlc/copilot unpublished). "Installs for every harness" would be a claim
+  // we cannot back, and an adopter discovering the gap after running a
+  // `curl | sh` has every reason to distrust the rest of the page.
+  const source = read(INDEX);
+
+  assert.match(source, /Cursor/, 'the index must name the Cursor exception');
+  assert.match(source, /Copilot/, 'the index must name the Copilot exception');
+  assert.match(source, /manual\s*\n?\s*step/, 'the exceptions must be described as a manual step');
+  assert.match(
+    source,
+    /POSIX-only/,
+    'the index offers the Windows command and must state the fleet exclusion',
+  );
+});
+
 test('the homepage hero carries the install command', () => {
   const source = read(HOME);
   const install = indexOf(source, 'UNIVERSAL_INSTALL', HOME);
