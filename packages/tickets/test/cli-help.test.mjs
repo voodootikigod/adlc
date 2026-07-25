@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeDirectory, ticket } from './helpers.mjs';
+import { renderCommandHelp } from '../lib/help.mjs';
 
 const BIN = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'bin', 'adlc-tickets.mjs');
 
@@ -125,5 +126,103 @@ test('an unknown command still fails as an unknown command', () => {
     const result = run(['nope'], root);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /UNKNOWN_COMMAND/);
+  });
+});
+
+test('the documented show-to-update round trip actually works', () => {
+  // The help used to say "start from `show <id> --json`" full stop. That emits
+  // an envelope — ticket/ticketHash/storeHash — so feeding it back to update
+  // fails IDENTITY_CHANGE_REQUIRES_REASSIGN: the id sits one level down. The
+  // help now names the extraction, and this drives it end to end.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { title: 'original' })]);
+    const shown = JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], {
+      encoding: 'utf8', cwd: root,
+    }).stdout);
+
+    // The envelope on its own is rejected — that is the trap being documented.
+    const envelope = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(shown),
+    });
+    assert.equal(envelope.status, 2);
+    assert.match(envelope.stderr, /IDENTITY_CHANGE_REQUIRES_REASSIGN/);
+
+    // `.ticket` plus `.ticketHash` — exactly what the help prints — succeeds.
+    const edited = { ...shown.ticket, title: 'revised' };
+    const result = spawnSync(process.execPath, [
+      BIN, 'update', 'T1', '--input', '-', '--expect', shown.ticketHash, '--write', '--json',
+    ], { encoding: 'utf8', cwd: root, input: JSON.stringify(edited) });
+    assert.equal(result.status, 0, result.stderr);
+
+    const after = JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], {
+      encoding: 'utf8', cwd: root,
+    }).stdout);
+    assert.equal(after.ticket.title, 'revised');
+  });
+});
+
+test('the update help spells out the extraction, not just the source command', () => {
+  const help = renderCommandHelp('update');
+  assert.match(help, /\.ticket\b/, 'the help must name the field to extract');
+  assert.match(help, /IDENTITY_CHANGE_REQUIRES_REASSIGN/, 'and the error the envelope produces');
+});
+
+test('update --write refuses to replace a ticket without --expect', () => {
+  // The lost update this closes: two authors export T1, the first writes, the
+  // second submits their older document. update REPLACES, so the second write
+  // silently discards the first author's title, scope, or lifecycle state.
+  // Documenting that (as this branch first did) makes it public contract; the
+  // guard fails closed instead, and names both ways forward.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { title: 'original' })]);
+    const stale = JSON.stringify(ticket('T1', { title: 'stale' }));
+
+    const refused = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: stale,
+    });
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(refused.stderr, /EXPECT_REQUIRED/);
+    assert.match(refused.stderr, /--force/, 'the error must name the escape hatch');
+    assert.equal(
+      JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], { encoding: 'utf8', cwd: root }).stdout).ticket.title,
+      'original',
+      'nothing may be written when the guard refuses',
+    );
+  });
+});
+
+test('a stale --expect is rejected, and --force is the documented override', () => {
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { title: 'original' })]);
+    const hash = JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], { encoding: 'utf8', cwd: root }).stdout).ticketHash;
+
+    // Author one lands a write, invalidating author two's hash.
+    spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--expect', hash, '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(ticket('T1', { title: 'first' })),
+    });
+
+    const stale = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--expect', hash, '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(ticket('T1', { title: 'second' })),
+    });
+    assert.equal(stale.status, 2, 'a stale hash must still fail STALE_TICKET');
+    assert.match(stale.stderr, /STALE_TICKET/);
+
+    const forced = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--force', '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(ticket('T1', { title: 'forced' })),
+    });
+    assert.equal(forced.status, 0, forced.stderr);
+  });
+});
+
+test('planning an update without --expect still works — only --write is gated', () => {
+  // Dry runs are how an author inspects a plan before committing to it;
+  // requiring the hash to look would make the safe path the awkward one.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1')]);
+    const result = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(ticket('T1', { title: 'proposed' })),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).dryRun, true);
   });
 });

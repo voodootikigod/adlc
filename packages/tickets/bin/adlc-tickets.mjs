@@ -28,7 +28,7 @@ import {
 function parse(argv) {
   const flags = {};
   const positionals = [];
-  const boolean = new Set(['write', 'json', 'yes', 'authorize', 'archive', 'complete', 'rollback', 'help']);
+  const boolean = new Set(['write', 'json', 'yes', 'authorize', 'archive', 'complete', 'rollback', 'help', 'force']);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (!value.startsWith('--')) { positionals.push(value); continue; }
@@ -128,6 +128,18 @@ async function main() {
     plan = service.planCreate(await readInput(flags.input));
   } else if (command === 'update') {
     if (!flags.input) throw new TicketStoreError('invalid', 'INPUT_REQUIRED', 'update requires --input');
+    // update REPLACES the ticket, so a document exported before someone else's
+    // write silently discards their work. Applying that without a hash is
+    // last-writer-wins on a trust root, so --write fails closed. Planning is
+    // deliberately still open: a dry run is how you inspect a change safely.
+    if (flags.write && !flags.expect && !flags.force) {
+      throw new TicketStoreError(
+        'policy',
+        'EXPECT_REQUIRED',
+        'update --write requires --expect <ticketHash> so a concurrent write cannot be silently overwritten. '
+        + 'Take the hash from `adlc ticket show <id> --json`, or pass --force to replace whatever is there now.',
+      );
+    }
     plan = service.planUpdate(positionals[1], await readInput(flags.input), { expect: flags.expect, authorized: Boolean(flags.authorize) });
   } else if (command === 'edit') {
     plan = planEditSession(service, positionals[1], { authorized: Boolean(flags.authorize), editor: process.env.EDITOR || process.env.VISUAL });

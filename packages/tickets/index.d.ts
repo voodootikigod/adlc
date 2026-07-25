@@ -4,7 +4,19 @@
 // parameter to Uint8Array would declare a call that throws.
 export type Ticket = { id: string; title: string; scope?: string[]; rails?: string[]; edges?: Array<{ to: string; [key: string]: unknown }>; [key: string]: unknown };
 export type TicketErrorKind = 'operational' | 'invalid' | 'conflict' | 'policy';
-export class TicketStoreError extends Error { kind: TicketErrorKind; code: string; details?: unknown }
+export class TicketStoreError extends Error {
+  constructor(kind: TicketErrorKind, code: string, message: string, details?: unknown);
+  kind: TicketErrorKind;
+  code: string;
+  details?: unknown;
+}
+/** Error factories, one per kind. Exported at runtime and used by every tool
+ *  that raises a store error, so they belong in the published surface. */
+export type TicketErrorFactory = (code: string, message: string, details?: unknown) => TicketStoreError;
+export const invalid: TicketErrorFactory;
+export const conflict: TicketErrorFactory;
+export const policy: TicketErrorFactory;
+export const operational: TicketErrorFactory;
 export class TicketSnapshot {
   readonly backend: 'legacy' | 'directory' | 'git-revision';
   readonly formatVersion: number;

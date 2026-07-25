@@ -12,7 +12,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,4 +49,38 @@ test('the compile gate actually fails on a broken declaration', {
   // non-zero exit.
   const result = compile(['scripts/test/fixtures/broken.d.ts']);
   assert.notEqual(result.status, 0, 'the gate must reject a declaration that does not compile');
+});
+
+test('a TypeScript consumer can import every runtime export', { skip: !existsSync(TSC) && 'typescript not installed' }, async () => {
+  // This REPLACES a regex parity check that searched index.d.ts for each export
+  // name as a bare word. It reported success for `invalid`, `conflict`, `policy`
+  // and `operational` — none of which were declared — because those words
+  // appear inside the TicketErrorKind union literal. A gate that matches prose
+  // is not a gate.
+  //
+  // Compiling a real consumer is the only version that cannot be fooled: tsc
+  // resolves the package's own "types" entry and reports TS2305 for anything
+  // the declarations do not actually export.
+  const runtime = await import('../../packages/tickets/index.mjs');
+  const names = Object.keys(runtime).sort();
+  assert.ok(names.length > 80, `expected the full export surface, got ${names.length}`);
+
+  // Inside the repo: '@adlc/tickets' resolves by walking up to the workspace
+  // link in node_modules, which a system temp dir cannot reach.
+  const dir = mkdtempSync(join(ROOT, 'node_modules', '.adlc-dts-consumer-'));
+  try {
+    const fixture = join(dir, 'consumer.ts');
+    writeFileSync(fixture, [
+      `import { ${names.join(', ')} } from '@adlc/tickets';`,
+      `export const used: unknown[] = [${names.join(', ')}];`,
+      '',
+    ].join('\n'));
+    const result = spawnSync(process.execPath, [
+      TSC, '--noEmit', '--strict', '--lib', 'es2022', '--types', 'node',
+      '--module', 'nodenext', '--moduleResolution', 'nodenext', fixture,
+    ], { encoding: 'utf8', cwd: ROOT });
+    assert.equal(result.status, 0, `a TS consumer cannot import the published surface:\n${result.stdout}${result.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

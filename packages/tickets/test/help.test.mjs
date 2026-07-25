@@ -11,7 +11,6 @@ import {
   ticketJsonSchema,
 } from '../lib/help.mjs';
 import { validateTicket } from '../lib/schema.mjs';
-import * as runtime from '../index.mjs';
 
 const PACKAGE = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const fieldNames = () => TICKET_FIELDS.map((field) => field.name);
@@ -98,8 +97,9 @@ test('update help does not claim a guard the CLI does not enforce', () => {
   // Help that reads as though the guard is unconditional is worse than none:
   // it invites a scripted caller to omit the flag and assume it is still safe.
   const help = renderCommandHelp('update');
-  assert.match(help, /optional/i, 'the help must say --expect is optional');
-  assert.match(help, /last-writer-wins/i, 'the help must name what omitting it costs');
+  assert.match(help, /REQUIRED to --write/, 'the help must state that --write demands the hash');
+  assert.match(help, /EXPECT_REQUIRED/, 'and name the error it raises');
+  assert.match(help, /--force/, 'and the documented override');
 });
 
 test('update and edit help document the authorization flag they actually need', () => {
@@ -238,17 +238,14 @@ test('the schema still constrains what the validator DOES police', () => {
   assert.ok(!satisfies('x', properties.scope), 'scope must be an array');
 });
 
-test('every runtime export is declared in index.d.ts', () => {
-  // The package export map sends TypeScript consumers to index.d.ts, so a
-  // runtime export missing from it is an import Node loads happily and tsc
-  // rejects. Nothing compared the two files, which is how 26 exports — and
-  // then `planEditSession` — came to be undeclared.
-  const declarations = readFileSync(join(PACKAGE, 'index.d.ts'), 'utf8');
-  const undeclared = Object.keys(runtime).filter((name) => !new RegExp(`\\b${name}\\b`).test(declarations));
-  assert.deepEqual(undeclared, [], 'index.d.ts must declare every runtime export');
-  // DENOMINATOR: an empty or broken namespace import would pass vacuously.
-  assert.ok(Object.keys(runtime).length > 80, `expected the full export surface, got ${Object.keys(runtime).length}`);
-});
+// Declaration parity lives in scripts/test/type-declarations.test.mjs, where
+// the root typescript devDependency is available (CONVENTIONS rule 1 keeps it
+// out of this package). It compiles a real consumer that imports every runtime
+// export, which is the only form that cannot be fooled: the regex version that
+// used to live here searched index.d.ts for each name as a bare word, and so
+// reported success for `invalid`, `conflict`, `policy` and `operational` —
+// none of them declared — because those words appear inside the
+// TicketErrorKind union literal.
 
 test('the generated schema keeps its published identity', () => {
   const schema = ticketJsonSchema();
