@@ -92,6 +92,11 @@ const WIDE = [
   [0x3190, 0x321e],
   [0x3220, 0x3247],
   [0x3250, 0x4dbf], // enclosed CJK, CJK extension A
+  // Yijing hexagrams. Earlier revisions of this file (and a test) asserted this
+  // block is Neutral. That could not be verified offline and a review reports
+  // it as W, so it takes the safe side: over-counting under-fills a row,
+  // under-counting wraps it.
+  [0x4dc0, 0x4dff],
   [0x4e00, 0xa48c], // CJK unified ideographs, Yi syllables
   [0xa490, 0xa4c6], // Yi radicals
   [0xa960, 0xa97c], // Hangul Jamo extended-A
@@ -106,10 +111,12 @@ const WIDE = [
   [0x16fe0, 0x16fe4], // Tangut/Nushu iteration marks
   [0x16ff0, 0x16ff1],
   [0x17000, 0x187f7], // Tangut
-  [0x18800, 0x18cd5], // Tangut components
-  [0x18d00, 0x18d08], // Tangut supplement
+  // Tangut components, Khitan Small Script and Tangut Supplement as one span
+  // (block boundaries, per the policy above — U+18CFF sat in the old gap).
+  [0x18800, 0x18dff],
   [0x1aff0, 0x1affe], // Kana extended-B
-  [0x1b000, 0x1b2fb], // Kana supplement, Kana extended-A, Nushu
+  [0x1b000, 0x1b2ff], // Kana supplement, Kana extended-A, Nushu
+  [0x1d300, 0x1d37f], // Tai Xuan Jing symbols, counting rod numerals
   [0x1f000, 0x1f0ff], // mahjong, dominoes, cards — deliberately over-counted
   [0x1f1e6, 0x1f1ff], // regional indicators — a flag is one cluster, two cells
   [0x1f200, 0x1f265], // enclosed ideographic supplement

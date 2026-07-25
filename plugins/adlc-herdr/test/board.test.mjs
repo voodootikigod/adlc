@@ -284,17 +284,35 @@ test('renderBoard truncates rows to the pane width', () => {
   }
 });
 
-test('renderBoard pins the width floor at 20 on a content row, not just the separator', () => {
-  const state = baseState();
-  state.width = 5; // below the floor — clamp must land exactly on 20
-  state.groups.ready = [t('t-long', { title: 'y'.repeat(100) })];
-  const lines = renderBoard(state).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
-  assert.ok(lines.every((l) => l.length <= 20), 'no line may overflow the floor');
-  // The long ticket row must itself truncate to exactly 20 — a separator being
-  // 20 wide must not be what satisfies this.
-  const contentRow = lines.find((l) => l.includes('t-long'));
-  assert.ok(contentRow, 'the long ticket row must be present');
-  assert.equal(contentRow.length, 20, 'the content row fills exactly to the floor');
+test('renderBoard emits to the REAL pane width, not the 20-column layout floor', () => {
+  // This test previously required a content row to fill exactly 20 cells at
+  // width 5 — it pinned the floor as an EMISSION width. That is what made a
+  // sub-20-column pane wrap every row: clampWidth's floor exists to keep the
+  // layout arithmetic from degenerating, and is not a licence to write past the
+  // terminal. The invariant is now "never wider than the pane we were given".
+  for (const width of [1, 5, 12, 19, 20, 40]) {
+    const state = baseState();
+    state.width = width;
+    state.groups.ready = [t('t-long', { title: 'y'.repeat(100) })];
+    const lines = renderBoard(state).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    for (const line of lines) {
+      assert.ok(displayWidth(line) <= width, `width ${width}: line is ${displayWidth(line)} cells: ${line}`);
+    }
+    // A content row must still FILL the pane — truncating everything to nothing
+    // would satisfy the bound above while rendering an empty board.
+    assert.ok(lines.some((l) => displayWidth(l) === width), `width ${width}: no row fills the pane`);
+  }
+});
+
+test('an absent or invalid width still falls back to the 80-column default', () => {
+  for (const width of [undefined, null, NaN, -5, 0]) {
+    const state = baseState();
+    state.width = width;
+    const lines = renderBoard(state).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    for (const line of lines) {
+      assert.ok(displayWidth(line) <= 80, `width ${JSON.stringify(width)}: line is ${displayWidth(line)} cells`);
+    }
+  }
 });
 
 test('renderBoard clamps to `height`, ending with a "…N more" marker (no scroll)', () => {

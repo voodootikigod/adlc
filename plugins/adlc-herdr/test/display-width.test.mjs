@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { bounded, displayWidth, graphemes, tailToWidth, truncateToWidth } from '../lib/display-width.mjs';
+import { boardFooter } from '../lib/board-render.mjs';
 
 test('ASCII width is its length', () => {
   assert.equal(displayWidth('ticket t-b · P4'), 15);
@@ -94,15 +95,37 @@ test('characters added by later Unicode releases inside covered blocks are wide'
   assert.equal(displayWidth('㇤'), 2, 'unassigned inside a wide block counts wide');
 });
 
-test('Ambiguous and Neutral characters stay one cell', () => {
-  // The bias is toward wide, but not indiscriminately: East_Asian_Width=A and
-  // =N must stay narrow or every row shrinks for no reason. A review reported
-  // U+4DC0 as a missed wide character — the UCD classifies the Yijing hexagram
-  // block as Neutral, so one cell is correct and widening it would be the bug.
-  assert.equal(displayWidth('䷀'), 1, 'U+4DC0 hexagram is Neutral');
-  assert.equal(displayWidth('㉈'), 1, 'U+3248 is Ambiguous');
-  assert.equal(displayWidth('①'), 1, 'U+2460 is Ambiguous');
-  assert.equal(displayWidth('°'), 1, 'U+00B0 is Ambiguous');
+test('blocks that cannot be verified offline take the wide side', () => {
+  // An earlier version of this test asserted U+4DC0 is Neutral and therefore
+  // one cell. That classification could not be checked without the UCD data
+  // file, and a review reports the block as W. Where the answer is genuinely
+  // uncertain the tie goes to WIDE, because over-counting under-fills a row
+  // while under-counting wraps it — and a wrapped row corrupts every later
+  // refresh. Asserting the unverified narrow answer locked the risky side in.
+  assert.equal(displayWidth('䷀'), 2, 'U+4DC0 Yijing hexagram');
+  assert.equal(displayWidth('\u{1D300}'), 2, 'U+1D300 Tai Xuan Jing');
+  assert.equal(displayWidth('\u{18CFF}'), 2, 'U+18CFF, in the old Khitan gap');
+});
+
+test('clearly Ambiguous characters stay one cell', () => {
+  // The wide bias is not indiscriminate: East_Asian_Width=A characters are
+  // narrow in a non-East-Asian locale, and widening them would shrink every row
+  // on every board for no reason. These are unambiguous about being Ambiguous.
+  assert.equal(displayWidth('①'), 1, 'U+2460 circled digit');
+  assert.equal(displayWidth('°'), 1, 'U+00B0 degree sign');
+  assert.equal(displayWidth('§'), 1, 'U+00A7 section sign');
+  assert.equal(displayWidth('α'), 1, 'U+03B1 greek small alpha');
+});
+
+test('emission never exceeds the real pane, even below the layout floor', () => {
+  // clampWidth floors the LAYOUT at 20 so its arithmetic stays sane. That floor
+  // was also being used for emission, so a 5-column pane got 20-cell rows and
+  // an 18-cell footer — every one of them wrapping, which is exactly what the
+  // clamping exists to prevent.
+  for (let width = 1; width <= 19; width += 1) {
+    const footer = boardFooter(3000, width).replace(/\x1b\[[0-9;]*m/g, '');
+    assert.ok(displayWidth(footer) <= width, `width ${width}: footer is ${displayWidth(footer)} cells: ${footer}`);
+  }
 });
 
 test('a keycap without VS16 is still a wide cluster', () => {

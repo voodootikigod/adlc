@@ -10,7 +10,21 @@ const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
+/** Layout width: floored at 20 so the arithmetic below never degenerates. */
 const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? width : 80, 400));
+
+/**
+ * Emission width: what may actually be WRITTEN, which is the real pane and has
+ * no floor.
+ *
+ * The layout floor was being used for both, so a pane narrower than 20 columns
+ * got 20-cell rows and an 18-cell footer — wrapping every one of them, which is
+ * the corruption the clamping exists to prevent. A floor is a reasonable way to
+ * keep layout math sane; it is never a licence to write past the terminal.
+ */
+const emitWidth = (width) => (Number.isFinite(width) && width > 0
+  ? Math.min(Math.floor(width), clampWidth(width))
+  : clampWidth(width));
 
 /** Shortest elided root worth rendering: the ellipsis plus a few leaf chars.
  *  Narrower than this, a root says nothing and is dropped entirely rather than
@@ -103,7 +117,7 @@ function headerText(repoRoot, ticketLabel, phase, width) {
  * go, because a user who cannot read the footer most needs the way out.
  */
 export function boardFooter(refreshMs, width = 80) {
-  const w = clampWidth(width);
+  const w = emitWidth(width);
   const tiers = [
     `↑↓/jk select · ↵ focus pane · q quit · refreshes every ${refreshMs / 1000}s`,
     '↑↓/jk select · ↵ focus · q quit',
@@ -139,17 +153,18 @@ export function composeFrame(body, footer) {
  *  "…N more" marker. */
 export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
   const w = clampWidth(width);
+  const emit = emitWidth(width); // never write past the real pane, floor or not
   // Truncate by terminal CELLS. sanitizeToken's cap is code units, so a row of
   // CJK text passed its check at `w` characters and then occupied 2w columns.
-  const cut = (text) => truncateToWidth(clean(text), w);
+  const cut = (text) => truncateToWidth(clean(text), emit);
   const lines = [];
   // `selected` is the flat index of the highlighted ticket row across all three
   // sections (t-herdr-7); a non-integer or out-of-range value marks nothing.
   let ti = 0;
 
   const ticketLabel = active?.state === 'active' ? active.id : 'none';
-  lines.push(`${BOLD}${cut(headerText(repoRoot, ticketLabel, phase, w))}${RESET}`);
-  lines.push(`${DIM}${'─'.repeat(Math.min(w, 80))}${RESET}`);
+  lines.push(`${BOLD}${cut(headerText(repoRoot, ticketLabel, phase, emit))}${RESET}`);
+  lines.push(`${DIM}${'─'.repeat(Math.min(emit, 80))}${RESET}`);
 
   const sections = [
     ['ready', groups?.ready ?? []],
