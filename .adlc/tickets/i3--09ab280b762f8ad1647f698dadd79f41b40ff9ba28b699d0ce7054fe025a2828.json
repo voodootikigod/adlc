@@ -1,0 +1,17 @@
+{
+  "body": "Spec: .adlc/specs/install-experience.md (I3 section is binding). Blocked by I2: this ticket renders the universal install command I2 defines and MUST NOT publish a `curl | sh` string the installer does not yet serve.\n\n=== CONTEXT ===\nIntegrationDetailPage currently orders its sections hero -> surfaces -> phase routing -> rails -> install (LAST). The hero's right column renders NativeBundle, a decorative file tree. The /integrations index is a bare card grid with no install command, and the marketing homepage hero offers only a link (\"Install for your agent\") rather than a command. Time to first install is the metric; the CTA is buried on every surface.\n\nThe docs test suite asserts over component SOURCE ORDER (see apps/docs/test/codex-docs-current.test.mjs). It does not render React and no renderer is available. Verification must follow that convention.\n\n=== TASK ===\n1. In integration-detail.tsx, swap the hero's right column from <NativeBundle> to <IntegrationCard>, and relocate <NativeBundle> into the Native surfaces section. Keep the bottom install section intact with its OperatingCommands and ResourceNav.\n2. Add apps/docs/lib/install-commands.mjs exporting a single UNIVERSAL_INSTALL constant. Every surface imports it; no page hand-types an install string. integration-facts.mjs remains the source of truth for the per-harness lines.\n3. Add the universal command atop apps/docs/app/(home)/integrations/page.tsx, before the integration card grid.\n4. Add the copy-able universal command to the homepage hero in apps/docs/app/(home)/page.tsx, before the \"The problem\" section.\n5. Add apps/docs/test/install-cta.test.mjs asserting the source-order and single-source properties below.\n\n=== ACCEPTANCE CRITERIA ===\n- AC3.1: In integration-detail.tsx the <IntegrationCard usage index is greater than the hero MarketingSection opening index and less than the surfacesSection usage index. VERIFY: `node --test apps/docs/test/install-cta.test.mjs` hero-order case passes.\n- AC3.2: <NativeBundle still appears, at a source index greater than <IntegrationCard. VERIFY: `node --test apps/docs/test/install-cta.test.mjs` bundle case passes.\n- AC3.3: installSection, <OperatingCommands, and <ResourceNav all still appear, with <ResourceNav last. VERIFY: `node --test apps/docs/test/install-cta.test.mjs` tail case passes.\n- AC3.4: UNIVERSAL_INSTALL is used in app/(home)/integrations/page.tsx before INTEGRATIONS.map(. VERIFY: `node --test apps/docs/test/install-cta.test.mjs` index case passes.\n- AC3.5: UNIVERSAL_INSTALL is used in app/(home)/page.tsx before the \"The problem\" kicker. VERIFY: `node --test apps/docs/test/install-cta.test.mjs` homepage case passes.\n- AC3.6: The UNIVERSAL_INSTALL literal appears in no file under apps/docs/app/ or apps/docs/components/ other than its defining module. VERIFY: `node --test apps/docs/test/install-cta.test.mjs` single-source case passes.",
+  "budget": "direct",
+  "category": "feat",
+  "duration": 1,
+  "edges": [],
+  "id": "I3",
+  "rails": [],
+  "scope": [
+    "apps/docs/components/marketing/integration-detail.tsx",
+    "apps/docs/app/(home)/page.tsx",
+    "apps/docs/app/(home)/integrations/page.tsx",
+    "apps/docs/lib/install-commands.mjs",
+    "apps/docs/test/install-cta.test.mjs"
+  ],
+  "title": "Lift the install CTA above the fold on the homepage, the integrations index, and every integration detail page"
+}

@@ -96,6 +96,25 @@ Each agent tool has its own native integration. See the guides:
 - **[OpenCode](./docs/integrations/opencode.md)** — full phase-router coverage.
 - **[Pi](./docs/integrations/pi.md)** — TypeScript Extension integration.
 
+## Use it in any other agent
+
+For the ~70 harnesses that support [skills.sh](https://skills.sh) but have no
+native ADLC plugin, the harness-neutral skill catalog is one command:
+
+```sh
+npx skills add voodootikigod/adlc   # the harness-neutral skill catalog
+npm install -g @adlc/cli            # the gate toolkit the skills shell out to
+adlc init                           # bootstrap .adlc/ in your repo (once)
+```
+
+This channel installs **skills only** — the phase router, the bootstrap guide,
+and the P5 prosecution workflow, all driven through the `adlc` CLI. It does
+**not** install hooks, MCP tools, agents, or in-session rail enforcement. If
+your agent is one of the seven with a native plugin above, install that
+instead: it is a strictly stronger integration. With the skills catalog, the CI
+`rails-guard` job in [docs/ci/rails-guard.yml](./docs/ci/rails-guard.yml) is
+your only rail control — wire it and make it a required check.
+
 ## Project layout
 
 | Directory | Contents |
