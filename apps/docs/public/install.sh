@@ -155,7 +155,24 @@ install_claude_code() {
     # The Claude Code marketplace commands are slash commands inside the app,
     # not shell commands. The `plugins` installer is the documented shell path
     # (ADR-0009).
-    try "Claude Code" npx --yes plugins add voodootikigod/adlc
+    #
+    # Run it from a scratch directory with an explicit @latest tag. npx resolves
+    # a BARE package name against the current project first, so a repository
+    # containing a workspace or dependency named `plugins` would have its own
+    # binary executed instead — and the agent-led flow runs from inside exactly
+    # such a repository. A version spec forces registry resolution, and the
+    # neutral cwd means there is no local project to resolve against. This is
+    # not the version-pinning ADR-0009 Decision 3 rejects: @latest pins nothing,
+    # it only refuses local shadowing.
+    npx_dir=$(mktemp -d) || { record_failed "Claude Code"; return 0; }
+    if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc); then
+        ok "Claude Code"
+        record_installed "Claude Code"
+    else
+        warn "Claude Code: install command failed — see ${SITE}/integrations/claude-code"
+        record_failed "Claude Code"
+    fi
+    rm -rf "$npx_dir"
 }
 
 install_codex() {
@@ -289,6 +306,13 @@ summary() {
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"
         printf '      Native integrations: %s/integrations\n' "$SITE"
+    fi
+
+    # Say plainly when a detected harness was NOT wired up. "installed for: …"
+    # alone reads as full coverage, and a machine whose only harness needs a
+    # manual step would otherwise see a success banner and nothing installed.
+    if [ -z "$INSTALLED" ] && [ -n "$MANUAL" ]; then
+        warn "no harness was installed automatically — the step(s) above are still outstanding"
     fi
 
     printf '\n'

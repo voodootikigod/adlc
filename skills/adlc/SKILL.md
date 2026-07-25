@@ -97,8 +97,8 @@ out the surface. **All mutations are dry-run without `--write`.**
   `npx adversarial-review --prompt-only` over the declared rail set + ticket.
 
 ### P4 — Build (supervised execution)
-- `adlc build-gate` — deny starting a high-risk ticket build in a degraded
-  (context-rot) session unless audited.
+- `adlc build-gate <ticket-id>` — deny starting a high-risk ticket build in a
+  degraded (context-rot) session unless audited. The ticket id is required.
 - `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
   scope violations, edit churn, oversized logs.
 - `adlc consensus-fix --test-cmd "…" --files a.mjs,b.mjs` — for a hard failing
@@ -112,7 +112,9 @@ out the surface. **All mutations are dry-run without `--write`.**
   behavior change visible for the P6 human gate.
 - `adlc review-calibration --review-cmd "… {base} …"` — measure reviewer recall
   by scoring whether review catches injected mutants ("who reviews the reviewer").
-- `adlc prosecute` — record ticket- and revision-bound P5 prosecution evidence.
+- `adlc prosecute --input <passes.json> --ticket <id>` — record ticket- and
+  revision-bound P5 prosecution evidence. It is an evidence *recorder*: both
+  flags are required, and it does not itself run a review.
 - `npx adversarial-review --providers <a,b> [--verify]` — ≥2 distinct providers,
   cross-model and fresh-context, on the risk gate; loop until `exit 0 = SHIP`.
 - **Cross-model is GATED (not just advised) for the trust-root tier.** If the

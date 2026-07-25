@@ -24,6 +24,9 @@ import path from 'node:path';
 import { TOOLS } from '../../packages/cli/lib/registry.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+// The workspace dispatcher, so `--help` reflects THIS tree rather than whatever
+// @adlc/cli happens to be installed globally on the runner.
+const ADLC_BIN = path.join(repoRoot, 'packages/cli/bin/adlc.mjs');
 const catalogDir = path.join(repoRoot, 'skills');
 const read = (abs) => readFileSync(abs, 'utf8');
 
@@ -141,6 +144,97 @@ test('the neutral router does not drift from the Claude Code phase router', () =
   for (const phase of ['P0', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7']) {
     assert.ok(namesTool(neutral, phase), `skills/adlc/SKILL.md must route phase ${phase}`);
   }
+});
+
+/**
+ * Required arguments for a tool, DERIVED from its own `--help` rather than
+ * hard-coded here. Hard-coding is what let `adlc build-gate` (needs a positional
+ * ticket id) and `adlc prosecute` (needs --input) ship in published skills: a
+ * fixed list only catches the mistakes someone already thought of.
+ *
+ * Usage-line convention: `<foo>` is required, `[bar]` is optional.
+ */
+function helpTextFor(tool) {
+  const help = spawnSync(process.execPath, [ADLC_BIN, tool, '--help'], {
+    encoding: 'utf8',
+    cwd: repoRoot,
+    timeout: 20_000,
+  });
+  return `${help.stdout ?? ''}${help.stderr ?? ''}`;
+}
+
+function requiredArgsFor(tool) {
+  const text = helpTextFor(tool);
+  const usage = text
+    .split(/\r?\n/)
+    .find((line) => new RegExp(`(^|\\s)(adlc-)?${tool}\\s`).test(line));
+  if (!usage) return { positionals: [], flags: [] };
+
+  // Strip optional groups, then read what survives.
+  const after = usage.slice(usage.indexOf(tool) + tool.length);
+  const withoutOptional = after.replace(/\[[^\]]*\]/g, '');
+  const flags = [...withoutOptional.matchAll(/(--[a-z][\w-]*)/g)].map((m) => m[1]);
+  // A `<foo>` that follows a flag is that FLAG'S argument, not a standalone
+  // positional: in `--input <passes.json> --ticket id`, <passes.json> belongs to
+  // --input. Drop flag+argument pairs before reading positionals, or every
+  // flag-taking tool reports a phantom missing positional.
+  const positionalsOnly = withoutOptional
+    .replace(/--[a-z][\w-]*\s+<[^>]+>/g, '')
+    .replace(/--[a-z][\w-]*\s+\S+/g, '');
+  return {
+    positionals: [...positionalsOnly.matchAll(/<([^>]+)>/g)].map((m) => m[1]),
+    flags,
+  };
+}
+
+test('every catalog skill teaches invocations that satisfy each tool\'s required arguments', () => {
+  // Scans EVERY `adlc <tool>` occurrence — fenced blocks, inline backticks, and
+  // routing-table rows alike. An earlier version scanned only fenced lines, which
+  // is precisely how `adlc build-gate` (invalid without a ticket id) survived in
+  // the router's routing table.
+  const DISPATCHER_VERBS = new Set(['run', 'accept', 'init', 'ticket', '--version', '--help']);
+  const problems = [];
+
+  for (const skill of catalogSkills()) {
+    const text = body(skill.text);
+    for (const [, tool, rest] of text.matchAll(/adlc ([a-z][\w-]*)([^\n`]*)/g)) {
+      if (DISPATCHER_VERBS.has(tool)) continue;
+      if (!CANONICAL_TOOLS.includes(tool)) {
+        problems.push(`skills/${skill.dir}: "adlc ${tool}" is not a registered tool`);
+        continue;
+      }
+
+      const { positionals, flags } = requiredArgsFor(tool);
+      // A bare mention inside prose ("the adlc prosecute runner") is not an
+      // invocation; only treat it as one when it is followed by args or ends a
+      // command-looking span.
+      const args = rest.trim();
+      if (args === '' && positionals.length === 0 && flags.length === 0) continue;
+
+      // Subcommands carry their own contract: `prosecute record-cross-model`
+      // does not need the parent's --input. Recognised by asking the tool's own
+      // help, so a subcommand that disappears upstream is caught as an invalid
+      // command rather than silently exempted.
+      const leading = args.split(/\s+/).filter(Boolean)[0];
+      if (leading && !leading.startsWith('-') && helpTextFor(tool).includes(leading)) continue;
+
+      for (const flag of flags) {
+        if (!args.includes(flag)) {
+          problems.push(`skills/${skill.dir}: "adlc ${tool}" is missing required ${flag}`);
+        }
+      }
+      if (positionals.length > 0) {
+        const firstToken = args.split(/\s+/).filter(Boolean)[0];
+        if (!firstToken || firstToken.startsWith('-')) {
+          problems.push(
+            `skills/${skill.dir}: "adlc ${tool}" is missing required positional <${positionals[0]}>`,
+          );
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], `published skills teach invalid commands:\n  ${problems.join('\n  ')}`);
 });
 
 test('every catalog skill teaches commands that actually exist', () => {

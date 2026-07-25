@@ -61,7 +61,8 @@ not an independent review.
 
 ## 5. Record the evidence
 
-`adlc prosecute` **requires** `--input <passes.json>` — the review-evidence file
+`adlc prosecute --input <passes.json> --ticket <id>` requires both flags — the
+review-evidence file
 recording your two consecutive dry passes. It is the evidence recorder, not a
 review trigger, so invoking it without `--input` fails rather than prosecuting
 anything:
@@ -71,7 +72,8 @@ adlc prosecute --input passes.json --ticket <id> --base <ref>
 adlc gate-manifest record P5
 ```
 
-Run `adlc prosecute --help` for the exact `passes.json` shape before writing one.
+Run `adlc prosecute --input passes.json --ticket <id> --help` — or just
+`adlc --help` — for the exact `passes.json` shape before writing one.
 
 Evidence is ticket- and revision-bound. Evidence recorded against a different
 revision is not evidence for this one.

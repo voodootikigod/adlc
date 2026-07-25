@@ -371,6 +371,32 @@ test('install.sh installs the Copilot native plugin from its marketplace', () =>
   }
 });
 
+test('install.sh cannot be hijacked by a repo-local package named "plugins"', () => {
+  // npx resolves a BARE package name against the current project first, so a
+  // malicious repo shipping a workspace/dependency named `plugins` would have
+  // its binary executed. The agent-led flow runs from inside the target repo,
+  // which is precisely where that attack lands.
+  const box = sandbox({ bins: ['node', 'npm', 'npx', 'claude', 'mktemp'] });
+  try {
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+
+    const npxLine = box.commands().split('\n').find((line) => line.startsWith('npx '));
+    assert.ok(npxLine, `expected an npx invocation; log was:\n${box.commands()}`);
+    assert.match(
+      npxLine,
+      /plugins@/,
+      'the package must carry a version spec so npx resolves from the registry, not the local project',
+    );
+    assert.ok(
+      !/(^|\s)plugins(\s|$)/.test(npxLine.replace('plugins@latest', '')),
+      'no bare `plugins` specifier may remain',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
 test('install.sh detects Cursor by config directory and asks for the manual step', () => {
   // Cursor is a GUI app: no `cursor` binary is guaranteed, and its plugin
   // install has no shell command. Detecting it must not invent one.

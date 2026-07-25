@@ -131,9 +131,25 @@ shared bin-resolution path builds \`D:\\D:\\...\` from an already-absolute
 Windows path. If the human is on Windows, tell them plainly and point them at
 WSL. Do not install into a native Windows shell and hope.
 
-**Ask before running this.** It pipes a remote script into a shell. If the human
-would rather read it first, fetch it and show it to them:
-\`curl -fsSL ${SITE_URL}/install.sh -o install.sh\`.
+**Ask before running this.** It pipes a remote script into a shell.
+
+If the human would rather read it first — or you are scripting this — fetch to a
+**temporary path**, not into their repository, and run it as a separate step:
+
+${fence([
+  'tmp=$(mktemp -d)',
+  `curl -fsSL ${SITE_URL}/install.sh -o "$tmp/install.sh"`,
+  'less "$tmp/install.sh"   # read it',
+  'sh "$tmp/install.sh"',
+])}
+
+Two reasons this form and not \`curl … -o install.sh\`. \`curl -o\` truncates
+an existing file without asking, and you are running inside the human's
+repository — a project with its own \`install.sh\` would lose it. And in the
+piped one-liner the exit status is **sh's, not curl's**: if the download fails
+or returns an empty body, \`sh\` reads nothing, exits 0, and the command reports
+success having installed nothing. Fetching first makes a failed download a
+failed step.
 
 ## Install: native, per harness
 

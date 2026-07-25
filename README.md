@@ -49,8 +49,19 @@ fixed. (`adlc fleet` is POSIX-only by design regardless.)
 
 Piping a remote script to a shell is a real tradeoff — see
 [ADR-0010](./docs/adr/0010-first-party-curl-installer.md) for why we serve one
-and what controls sit behind it. To read it first:
-`curl -fsSL https://www.agenticlifecycle.ai/install.sh -o install.sh`.
+and what controls sit behind it.
+
+**For CI, or to read it first**, fetch and run as separate steps:
+
+```sh
+tmp=$(mktemp -d)
+curl -fsSL https://www.agenticlifecycle.ai/install.sh -o "$tmp/install.sh"
+sh "$tmp/install.sh"
+```
+
+In the piped one-liner the exit status is `sh`'s, not `curl`'s — a failed or
+empty download makes `sh` read nothing and exit 0, reporting success having
+installed nothing. Two steps make a failed download fail.
 
 ### Just the toolkit
 
