@@ -10,12 +10,14 @@ import { join } from 'node:path';
 import { runHerdr, runHerdrJson, makeCachedReader } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
-import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport } from '../lib/adlc-state.mjs';
+import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport, readFleetStatus } from '../lib/adlc-state.mjs';
 import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
+import { planFleetBridge, runFleetPlan, fleetTabArgs, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
@@ -37,6 +39,38 @@ const readBacklog = makeCachedReader((repoRoot) => readTicketsViaExport(repoRoot
 let prevPane = new Map();
 let prevWorkspace = new Map();
 const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
+
+// Fleet observer state per repo (t-herdr-9, §5.5): the last-seen status (for
+// transition detection), the runIds whose tab we already opened, and the current
+// run's tab id + which tickets already have a tail pane. All the decisions live
+// in the tested fleet-bridge planner/executor; this glue only supplies the herdr
+// effects + this per-repo state, and fails soft so a fleet hiccup never crashes
+// the daemon.
+const fleetState = new Map();
+
+async function bridgeFleet(repoRoot) {
+  try {
+    const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Set() } };
+    const curr = readFleetStatus(repoRoot);
+    const plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
+    if (plan.openTab) { st.seen.add(plan.openTab.runId); st.runState = { tabId: null, tailed: new Set() }; }
+    await runFleetPlan({
+      plan,
+      repoRoot,
+      state: st.runState,
+      openTab: async (title) => {
+        const r = await runHerdrJson(fleetTabArgs(title));
+        return r.ok ? (r.value?.result?.tab?.tab_id ?? r.value?.result?.tab_id ?? null) : null;
+      },
+      spawn: (argv) => runHerdr(argv),
+      notify: (title, body, sound) => runHerdr(notifyArgs(title, body, sound)),
+    });
+    st.prev = curr;
+    fleetState.set(repoRoot, st);
+  } catch {
+    // best-effort observer — never crash the daemon on a fleet-bridge error
+  }
+}
 let refreshTimer = null;
 let refreshing = false;
 let pendingFull = false;
@@ -128,6 +162,10 @@ async function refreshPass(full) {
     for (const workspaceId of droppedKeys(prevWorkspace, nextWorkspace)) {
       await runHerdr(buildWorkspaceClearArgs(workspaceId));
     }
+    // Fleet observer: reflect each repo's fleet run into herdr (tab, tail panes,
+    // transition notifications). Sequential + after token publishing — it has
+    // side effects and shared per-repo state, unlike the read-only token pass.
+    for (const repoRoot of activeRepos) await bridgeFleet(repoRoot);
     prevPane = nextPane;
     prevWorkspace = nextWorkspace;
   }

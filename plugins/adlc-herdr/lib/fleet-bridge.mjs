@@ -7,6 +7,12 @@
 // unknown schema degrades to polling, and hostile ids never reach a path/argv.
 import { sanitizeToken } from './sanitize.mjs';
 
+// The fleet-status.json schemaVersion this plugin was built to understand. It is
+// deliberately a plugin-local copy (the installed plugin is zero-dep and cannot
+// import @adlc/fleet): when fleet bumps its version past this, the observer sees
+// a mismatch and degrades to polling rather than misreading a newer shape.
+export const KNOWN_FLEET_SCHEMA_VERSION = 1;
+
 const IN_FLIGHT = new Set(['building', 'gating', 'prosecuting', 'fixing', 'merging']);
 const TERMINAL = new Set(['merged', 'failed', 'blocked']);
 // A safe run/ticket id is a plain token: no '/', no '..', no leading '-' — so it

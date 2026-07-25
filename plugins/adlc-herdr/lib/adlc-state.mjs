@@ -203,6 +203,22 @@ export function ticketIdsFromStore(repoRoot) {
   return [...ids];
 }
 
+/** Read `.adlc/fleet-status.json` (the versioned fleet observation surface,
+ *  t-herdr-8), bounded + non-blocking + fail-soft. Returns the parsed status
+ *  object, or null when absent / unreadable / malformed. The planner
+ *  (fleet-bridge) validates schemaVersion and the ids before acting on it. */
+export function readFleetStatus(repoRoot) {
+  if (typeof repoRoot !== 'string' || !isAbsolute(repoRoot)) return null;
+  const text = readRegularFileBounded(join(repoRoot, '.adlc', 'fleet-status.json'), 8 * 1024 * 1024);
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Read the active-ticket pointer through the repo's generated reader — the
  *  pointer file is parsed in exactly ONE canonical place, and the
  *  ticket-store boundary guard enforces that nobody (including this plugin)
