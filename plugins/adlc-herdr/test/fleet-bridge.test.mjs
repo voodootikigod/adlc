@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -216,6 +216,55 @@ test('the board renders a fleet section for terminal rows, and omits it with no 
   assert.match(withFleet, /fleet/);
   assert.match(withFleet, /t-b · failed/);
   assert.doesNotMatch(renderBoard({ ...base, fleetRows: [] }), /fleet/);
+});
+
+test('runFleetBridgeBeat happy path: effects run, prev advances to curr, run marked seen, no error logged', async () => {
+  const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
+  const curr = status({ runId: 'r7', tickets: { 't-a': { state: 'building' } } });
+  const logged = [];
+  const notify = [];
+  await runFleetBridgeBeat({
+    st, curr, repoRoot: '/repo',
+    effects: {
+      openTab: async () => 'w4:t9',
+      spawn: async () => 'w4:p5',
+      closePane: async () => {},
+      notify: async (...n) => { notify.push(n); },
+    },
+    log: (m, e) => logged.push([m, e]),
+  });
+  assert.equal(st.prev, curr, 'prev advances to the observed status');
+  assert.equal(st.seen.has('r7'), true, 'the run is marked seen once its tab opened');
+  assert.equal(st.runState.tabId, 'w4:t9', 'the tab id is retained in the run state');
+  assert.equal(logged.length, 0, 'a clean beat logs nothing');
+});
+
+test('runFleetBridgeBeat surfaces an effect failure via log but never throws, and still advances prev', async () => {
+  const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
+  const curr = status({ runId: 'r8', tickets: { 't-a': { state: 'building' } } });
+  const logged = [];
+  await assert.doesNotReject(runFleetBridgeBeat({
+    st, curr, repoRoot: '/repo',
+    effects: {
+      openTab: async () => { throw new Error('herdr socket refused'); }, // IPC failure mid-beat
+      spawn: async () => 'w4:p5',
+      closePane: async () => {},
+      notify: async () => {},
+    },
+    log: (m, e) => logged.push([m, e]),
+  }));
+  assert.equal(logged.length, 1, 'the swallowed error is surfaced to the log sink (observability)');
+  assert.match(logged[0][0], /fleet bridge/, 'the log message identifies the fleet bridge');
+  assert.equal(logged[0][1].message, 'herdr socket refused', 'the actual error is passed through');
+  assert.equal(st.prev, curr, 'prev still advances so a transient error does not re-fire the beat forever');
+});
+
+test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async () => {
+  const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
+  await assert.doesNotReject(runFleetBridgeBeat({
+    st, curr: status({ tickets: { 't-a': { state: 'building' } } }), repoRoot: '/repo',
+    effects: { openTab: async () => { throw new Error('boom'); }, spawn: async () => {}, closePane: async () => {}, notify: async () => {} },
+  }));
 });
 
 test('AC8 fixed-argv builders: a shell-free tail -f argv, tab create, pane close', () => {

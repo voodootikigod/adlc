@@ -16,7 +16,7 @@ import {
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
-import { planFleetBridge, runFleetPlan, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse } from '../lib/fleet-bridge.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
@@ -51,31 +51,21 @@ const fleetState = new Map();
 async function bridgeFleet(repoRoot) {
   const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
   fleetState.set(repoRoot, st);
-  const curr = readFleetStatus(repoRoot);
-  let plan = null;
-  try {
-    plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
-    // On a new run, runFleetPlan closes the prior run's panes and resets the
-    // (persistent) run state in place — so DON'T reassign it here, or those panes
-    // would be abandoned.
-    await runFleetPlan({
-      plan,
-      repoRoot,
-      state: st.runState,
+  // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
+  // in lib/fleet-bridge.mjs. Here we only supply the real herdr effects, the
+  // freshly-read status, and a stderr logger so a stuck bridge is diagnosable.
+  await runFleetBridgeBeat({
+    st,
+    curr: readFleetStatus(repoRoot),
+    repoRoot,
+    effects: {
       openTab: async (title) => tabIdFromResponse(await runHerdrJson(fleetTabArgs(title))),
       spawn: async (argv) => paneIdFromResponse(await runHerdrJson(argv)),
       closePane: (paneId) => runHerdr(fleetPaneCloseArgs(paneId)),
       notify: (title, body, sound) => runHerdr(notifyArgs(title, body, sound)),
-    });
-  } catch {
-    // best-effort observer — never crash the daemon on a fleet-bridge error
-  } finally {
-    // Commit progress even on a partial failure: mark the run seen the moment its
-    // tab exists (so a later IPC error can't re-create the tab every beat), and
-    // always advance prev (so a transient error doesn't re-fire the same beat).
-    if (shouldMarkRunSeen(plan, st.runState)) st.seen.add(plan.openTab.runId);
-    st.prev = curr;
-  }
+    },
+    log: (message, err) => console.error(`${message}:`, err),
+  });
 }
 let refreshTimer = null;
 let refreshing = false;

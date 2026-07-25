@@ -143,3 +143,36 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   }
   for (const n of plan.notifications) await notify(n.title, n.body, n.sound);
 }
+
+/**
+ * One observer beat for a single repo: plan the transition from the mutable
+ * per-repo `st` (`{ prev, seen:Set, runState }`) against the freshly-read `curr`
+ * status, execute it through the injected herdr `effects`, and commit progress
+ * even on partial failure. Extracted from the daemon glue (bin/watcher.mjs) so
+ * the whole beat is a pinned invariant, not untested wiring:
+ *   - a fleet-bridge error is LOGGED via `log` (a long-running daemon must
+ *     surface IPC/herdr failures — never swallow them silently) but NEVER
+ *     rethrown, so one hiccup can't crash the plugin host; and
+ *   - `prev` always advances to `curr` (and a run is marked seen the moment its
+ *     tab exists), so a transient error can't re-fire the same beat forever.
+ * @param {object} a
+ * @param {{prev:any, seen:Set, runState:{tabId:string|null, tailed:Map}}} a.st
+ * @param {any} a.curr  the freshly-read fleet-status object (or null)
+ * @param {string} a.repoRoot
+ * @param {{openTab:Function, spawn:Function, closePane:Function, notify:Function}} a.effects
+ * @param {(message:string, err:unknown)=>void} [a.log]  observability sink
+ */
+export async function runFleetBridgeBeat({ st, curr, repoRoot, effects, log }) {
+  let plan = null;
+  try {
+    plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
+    // On a new run, runFleetPlan closes the prior run's panes and resets the
+    // (persistent) run state in place — so it is passed by reference, not reassigned.
+    await runFleetPlan({ plan, repoRoot, state: st.runState, ...effects });
+  } catch (err) {
+    log?.('adlc-herdr fleet bridge error', err);
+  } finally {
+    if (shouldMarkRunSeen(plan, st.runState)) st.seen.add(plan.openTab.runId);
+    st.prev = curr;
+  }
+}
