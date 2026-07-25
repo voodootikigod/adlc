@@ -12,32 +12,46 @@ const RESET = '\x1b[0m';
 const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? width : 80, 400));
 
 /** Shortest elided root worth rendering: the ellipsis plus a few leaf chars.
- *  Below this the pane is too narrow for a root to say anything, so the header
- *  falls back to a plain truncation of the whole line. */
+ *  Narrower than this, a root says nothing and is dropped entirely rather than
+ *  being allowed to push the ticket off the line. */
 const MIN_ROOT = 6;
 
+/** Sanitize to the value's OWN length, never to the pane width: capping at the
+ *  width clips the front, which would leave the elision below keeping the middle
+ *  of a path instead of its leaf. Escapes must be stripped before anything is
+ *  MEASURED, or a value that only looked long (or short) distorts the fit. */
+function clean(value) {
+  const raw = String(value ?? '');
+  return sanitizeToken(raw, Math.max(raw.length, 1));
+}
+
 /**
- * Fit the header's three parts into `width`, sacrificing the repo root first.
+ * Fit the header into `width` by degrading the repo root, never the ticket.
  *
- * The root is static context; the ticket id and phase are the fields that
- * change, so truncating the composed line left-to-right drops exactly the wrong
- * ones. The root is elided from the FRONT because a path's tail (the repo's own
- * directory) identifies it and `/var/folders/...` does not.
+ * The root is static context; the ticket id and phase are the only fields on
+ * this line that ever change, so composing left-to-right and truncating drops
+ * exactly the wrong ones — at 40 columns under a deep root it rendered nothing
+ * but a path. The tiers below always sacrifice the root first, and the root is
+ * elided from the FRONT because a path's tail names the repo and
+ * `/var/folders/...` does not.
  */
 function headerText(repoRoot, ticketLabel, phase, width) {
-  const prefix = 'ADLC board · repo ';
-  const suffix = ` · ticket ${ticketLabel}${phase ? ` · ${phase}` : ''}`;
-  // Sanitize before measuring: escape stripping changes length, and a root that
-  // measured short only because its escapes had not been removed yet would let
-  // the composed line overflow back past the width. The cap bounds the root's
-  // OWN length — capping at `width` would clip the front here and leave the
-  // elision below keeping the middle of the path instead of the leaf.
-  const raw = String(repoRoot ?? '');
-  const root = sanitizeToken(raw, Math.max(raw.length, 1));
-  const budget = width - prefix.length - suffix.length;
-  if (budget >= root.length) return `${prefix}${root}${suffix}`;
-  if (budget < MIN_ROOT) return `${prefix}${root}${suffix}`; // too narrow to help; cut() clamps it
-  return `${prefix}…${root.slice(root.length - (budget - 1))}${suffix}`;
+  const root = clean(repoRoot);
+  const label = clean(ticketLabel);
+  const phaseText = phase ? clean(phase) : '';
+  const suffix = `ticket ${label}${phaseText ? ` · ${phaseText}` : ''}`;
+  const withRoot = (rootText) => `ADLC board · repo ${rootText} · ${suffix}`;
+
+  const full = withRoot(root);
+  if (full.length <= width) return full;
+
+  const budget = width - withRoot('').length; // room the root itself may take
+  if (budget >= MIN_ROOT) return withRoot(`…${root.slice(root.length - (budget - 1))}`);
+
+  // No root fits. Drop it, then the banner — whatever remains is ticket-first,
+  // so the outer cut() eats the phase before it ever reaches the id.
+  const banner = `ADLC board · ${suffix}`;
+  return banner.length <= width ? banner : suffix;
 }
 
 /** The board's footer hint line (with its own SGR). Pure so the refresh-seconds

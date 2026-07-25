@@ -361,16 +361,59 @@ test('a short repo root is left exactly as-is (no gratuitous elision)', () => {
   assert.equal(headerOf(baseState()), 'ADLC board · repo /repo · ticket t-b · P4');
 });
 
-test('the header still cannot overflow a pane too narrow to elide into', () => {
-  // Below the point where any root fits, the whole line falls back to a plain
-  // truncation — it must never exceed the width floor.
-  for (const width of [5, 20, 24, 30]) {
+test('the ticket and phase survive every pane width, not just wide ones', () => {
+  // The first version of this test asserted only that the line fit the width —
+  // which a header showing nothing but the repo path also satisfies. It passed
+  // while widths 20-40 rendered "ADLC board · repo /var/folders/s1/51j2xg" with
+  // no ticket at all. Assert the FIELDS survive, because that is the invariant.
+  for (const width of [20, 24, 30, 40, 60, 100]) {
+    const state = baseState();
+    state.width = width;
+    state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+    const header = headerOf(state);
+    assert.ok(header.includes('t-b'), `width ${width}: ticket lost — ${header}`);
+    assert.ok(header.includes('P4'), `width ${width}: phase lost — ${header}`);
+    assert.ok(header.length <= Math.max(20, width), `width ${width}: header is ${header.length}`);
+  }
+});
+
+test('the header cannot overflow however extreme the inputs', () => {
+  for (const width of [5, 20, 21, 37, 80]) {
     const state = baseState();
     state.width = width;
     state.repoRoot = '/'.padEnd(300, 'x');
+    state.active = { state: 'active', id: 'T-'.padEnd(120, 'z') };
+    state.phase = 'P'.repeat(90);
     const header = headerOf(state);
     assert.ok(header.length <= Math.max(20, width), `width ${width}: header is ${header.length}`);
   }
+});
+
+test('a long ticket id never demotes the header back to showing only the path', () => {
+  // A long id inflates the suffix, which is what pushes the fit past the root
+  // budget — the degradation must drop the static root, never the ticket.
+  const state = baseState();
+  state.width = 60;
+  state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+  state.active = { state: 'active', id: 't-01kxpd8kj9h6m6dfa83y82a1z1' };
+  const header = headerOf(state);
+  assert.ok(header.startsWith('ADLC board'), `header keeps its identity: ${header}`);
+  assert.ok(header.includes('t-01kxpd8kj9h6m6dfa83y82a1z1'), `the full id must survive: ${header}`);
+  assert.ok(!header.includes('/var/folders'), 'the root yields before the ticket does');
+});
+
+test('escapes in the ticket id or phase are stripped and do not distort the fit', () => {
+  const state = baseState();
+  state.width = 60;
+  state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+  state.active = { state: 'active', id: '\x1b]0;pwn\x07t-evil' };
+  state.phase = '\x1b[31mP9';
+  const raw = renderBoard(state).split('\n')[0];
+  assert.ok(!raw.includes('\x1b]'), 'no OSC survives');
+  assert.ok(!raw.includes('\x1b[31m'), 'no data-borne CSI survives');
+  const header = headerOf(state);
+  assert.ok(header.includes('t-evil'), `the ticket still renders: ${header}`);
+  assert.ok(header.includes('P9'), `the phase still renders: ${header}`);
 });
 
 test('a hostile repo root cannot smuggle escapes through the elision', () => {
