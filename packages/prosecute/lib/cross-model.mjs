@@ -14,6 +14,7 @@
 
 import { readEntries } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
@@ -132,8 +133,21 @@ function crossModelSatisfied(entries, match) {
   return false;
 }
 
+// FAIL CLOSED on a manifest whose hash chain does not verify (#326 Codex F2). Before
+// trusting ANY approve, walk the chain: readEntries() silently shunts a malformed or
+// truncated line into `skipped`, so an attacker could garble a later `needs-attention`
+// line — WITHOUT re-chaining, the cheap attack — and the dropped revocation would let
+// the earlier `approve` resurface. verify() returns valid:false at the first break, so
+// a corrupt/truncated manifest can no longer clear the gate. (Re-authoring the tail so
+// it re-chains cleanly is the documented honest-limit — defeated only by
+// ADLC_MANIFEST_KEY; this closes the cheap corrupt-and-skip path, not that one.)
+function manifestChainTrustworthy(dir) {
+  return verify(dir).valid === true;
+}
+
 export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } = {}) {
   if (!ticket || !revision || !authorProvider) return false;
+  if (!manifestChainTrustworthy(dir)) return false;
   const { entries } = readEntries('manifest', dir);
   return crossModelSatisfied(entries, { ticket, revision, runAuthor: normalizeProvider(authorProvider) });
 }
@@ -146,6 +160,7 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider } =
  */
 export function hasCrossModelApproveForRevision({ dir, revision, authorProvider } = {}) {
   if (!revision || !authorProvider) return false;
+  if (!manifestChainTrustworthy(dir)) return false;
   const { entries } = readEntries('manifest', dir);
   return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider) });
 }

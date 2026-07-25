@@ -152,6 +152,14 @@ jobs:
           # recorded the attestation against — undoing any install-time lockfile
           # churn. node_modules (gitignored) is untouched, so the gate still runs.
           git checkout --quiet --force "$HEAD_SHA"
+          # #326 Codex F1 defense-in-depth: the job's top-level `npm install` ran the
+          # candidate's install scripts, which could have poisoned the node_modules the
+          # gate imports (@adlc/core, @adlc/gate-manifest). Rebuild the toolchain from
+          # the checked-out sources with NO scripts before trusting it. `npm ci` (not
+          # install) so the lockfile — hence the computed revision — is not rewritten;
+          # the root install manifests are also a tier surface, so a lockfile/scripts
+          # change cannot merge unreviewed in the first place.
+          npm ci --ignore-scripts
           node packages/prosecute/bin/adlc-prosecute.mjs tier-check --base "origin/$BASE_REF" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
 
   # T31 drift canary: the SAME two OpenCode live proofs against opencode-ai@latest.

@@ -34,6 +34,18 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     }
   });
 
+  it('TRUE for the ROOT install manifests (package.json / package-lock.json) — #326 Codex F1', () => {
+    // A change to the root package.json (its `scripts`/deps) or the lockfile is a
+    // pre-gate control surface: CI runs candidate `npm install` before the gate, so
+    // a postinstall script or a repointed dependency executes in the gate's own job.
+    // Tiering them means such a change cannot merge without a cross-model attestation.
+    for (const f of ['package.json', 'package-lock.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
+      assert.ok(r.reasons.some((x) => x.includes(f)));
+    }
+  });
+
   it('TRUE for an enforcement-package prefix (packages/prosecute/…)', () => {
     const r = classifyTrustRootTier({ changedFiles: ['packages/prosecute/lib/run.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, true);
@@ -105,6 +117,16 @@ describe('classifyTrustRootTier — negative / ordinary diffs', () => {
     const r = classifyTrustRootTier({ changedFiles: ['packages/spec-lint/lib/y.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, false);
     assert.deepEqual(r.reasons, []);
+  });
+
+  it('FALSE for a NESTED package.json outside an enforcement package (root-manifest rule is exact, #326 F1)', () => {
+    // The root-install-surface rule is an EXACT match on the repo-root manifests; a
+    // nested non-enforcement manifest must not tier on it (an enforcement package's
+    // own package.json still tiers via its prefix — covered elsewhere).
+    for (const f of ['apps/docs/package.json', 'packages/spec-lint/package.json', 'apps/docs/package-lock.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, false, `${f} must NOT tier on the root-manifest rule`);
+    }
   });
 
   it('FALSE for a source change outside any rails deny-path', () => {

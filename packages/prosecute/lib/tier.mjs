@@ -27,6 +27,16 @@ const TRUST_ROOT_FILES = [
   'scripts/rails-guard-ci.mjs',
   'docs/ci/rails-guard.yml',
   'scripts/test/rails-guard-workflow-hashes.json',
+  // The ROOT install manifests (#326 Codex F1). CI runs candidate `npm install`
+  // BEFORE the gate, so a `scripts.postinstall` in the root package.json — or a
+  // dependency repointed by the lockfile — executes inside the gate's own job and
+  // could poison the toolchain the gate imports. Neither file is a tier surface by
+  // package-prefix and (verified) neither is in CODEOWNERS, so a PR touching only
+  // them would otherwise merge with no cross-model review. EXACT-match only: a
+  // NESTED package.json tiers solely via its package prefix, not this rule. The gate
+  // step additionally reinstalls with --ignore-scripts as defense-in-depth.
+  'package.json',
+  'package-lock.json',
 ];
 
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
