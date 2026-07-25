@@ -24,9 +24,13 @@ matters — fix the tests, not the threshold.
 
 ## 2. Is the behavior change visible?
 
+`capture` requires `--config <behavior.json>` — the file describing which
+endpoints to snapshot. Without it the command exits on an operational error
+before capturing anything:
+
 ```sh
-adlc behavior-diff capture --out before.json    # on the base revision
-adlc behavior-diff capture --out after.json     # on the change
+adlc behavior-diff capture --config behavior.json --out before.json   # base revision
+adlc behavior-diff capture --config behavior.json --out after.json    # the change
 adlc behavior-diff compare before.json after.json
 ```
 

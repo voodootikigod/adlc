@@ -36,7 +36,8 @@ export default function IntegrationsPage() {
           installs plugins through its in-app marketplace, and{' '}
           <strong style={{ color: '#cbcdd2' }}>GitHub Copilot</strong>&apos;s plugin
           package isn&apos;t on npm yet — both are detected and reported as a manual
-          step rather than guessed at.{' '}
+          step rather than guessed at. <strong style={{ color: '#cbcdd2' }}>OpenCode</strong>{' '}
+          likewise scaffolds the current directory, so it belongs inside your repo.{' '}
           <strong style={{ color: '#cbcdd2' }}>Windows isn&apos;t supported yet</strong>{' '}
           — a <code style={{ color: '#4fb4d8' }}>windows-latest</code> run of the core
           gate suites passes 6 of 28, so use WSL for now. Prefer to install by hand?

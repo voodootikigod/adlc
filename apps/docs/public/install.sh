@@ -20,17 +20,20 @@
 
 set -eu
 
-# EVERYTHING below — constants, helpers, and the run sequence — lives inside this
-# single function, which is invoked on the last line of the file.
+# EVERYTHING below — constants, helpers, AND the run sequence — is inside this
+# one brace group, which closes on the final line of the file.
 #
 # This is the `curl … | sh` truncation defense. sh reads a pipe incrementally and
 # executes as it goes, so a dropped connection runs whatever prefix arrived.
-# Wrapping only the run sequence is NOT enough: a cut landing between two
-# complete top-level function definitions still parses, so sh exits 0 having
-# silently done nothing — a truncated install that reports success. With the
-# whole body inside one function, ANY truncation leaves this brace unclosed, so
-# sh fails with a syntax error and executes nothing.
-adlc_installer_main() {
+#
+# Two weaker shapes were tried and rejected. Wrapping only the run sequence lets
+# a cut between two complete function definitions parse fine, so sh exits 0
+# having silently done nothing. Wrapping the body in a FUNCTION and calling it on
+# the last line still leaves a window: a transfer ending after the function's
+# closing brace but before the call is a complete, valid, no-op script that also
+# exits 0. A brace group has no such gap — the invocation is INSIDE it, so any
+# truncation leaves this brace unclosed and sh refuses the whole file.
+{
 
 CLI_PACKAGE="@adlc/cli"
 CLI_TAG="${ADLC_CLI_TAG:-latest}"
@@ -335,10 +338,8 @@ summary
 # `curl … | sh` surfaces this exit status to whatever automation invoked it, and
 # a partial install that exits 0 is a silent lie to that caller.
 if [ -n "$FAILED" ]; then
-    return 1
+    exit 1
 fi
-return 0
+exit 0
 
-} # end adlc_installer_main — a truncated download never reaches this brace
-
-adlc_installer_main "$@"
+} # end truncation guard — a truncated download never reaches this brace

@@ -147,6 +147,21 @@ test('the neutral router does not drift from the Claude Code phase router', () =
 });
 
 /**
+ * The parts of a skill that present runnable commands: inline `code` spans and
+ * ```sh fenced blocks. Bare ``` fences (the ASCII phase-routing table) are
+ * excluded — they route, they do not instruct.
+ */
+function commandContexts(text) {
+  const parts = [];
+  for (const [, lang, code] of text.matchAll(/```(\w*)\n([\s\S]*?)```/g)) {
+    if (lang === 'sh' || lang === 'bash') parts.push(code);
+  }
+  const withoutFences = text.replace(/```[\s\S]*?```/g, '');
+  for (const [, span] of withoutFences.matchAll(/`([^`\n]+)`/g)) parts.push(span);
+  return parts.join('\n');
+}
+
+/**
  * Required arguments for a tool, DERIVED from its own `--help` rather than
  * hard-coded here. Hard-coding is what let `adlc build-gate` (needs a positional
  * ticket id) and `adlc prosecute` (needs --input) ship in published skills: a
@@ -155,12 +170,28 @@ test('the neutral router does not drift from the Claude Code phase router', () =
  * Usage-line convention: `<foo>` is required, `[bar]` is optional.
  */
 function helpTextFor(tool) {
-  const help = spawnSync(process.execPath, [ADLC_BIN, tool, '--help'], {
-    encoding: 'utf8',
-    cwd: repoRoot,
-    timeout: 20_000,
-  });
-  return `${help.stdout ?? ''}${help.stderr ?? ''}`;
+  // Some tools reject `--help` and print usage on stderr with exit 1 instead
+  // (behavior-diff is one), so BOTH streams are read and a non-zero exit is not
+  // treated as "no help". Falling back to a bare invocation catches the rest.
+  // Tools print usage in several shapes: bare at line start, "usage: <tool> …",
+  // and — when a bare invocation is itself the error — "error: usage: <tool> …".
+  // Anchoring too strictly silently demotes a tool to "undeterminable".
+  const looksLikeUsage = (text) =>
+    new RegExp(`^\\s*((error|usage):\\s*)*(adlc-)?${tool}\\s`, 'im').test(text);
+
+  const attempts = [[ADLC_BIN, tool, '--help'], [ADLC_BIN, tool]];
+  let fallback = '';
+  for (const argv of attempts) {
+    const run = spawnSync(process.execPath, argv, { encoding: 'utf8', cwd: repoRoot, timeout: 20_000 });
+    const text = `${run.stdout ?? ''}${run.stderr ?? ''}`;
+    if (looksLikeUsage(text)) return text;
+    // Keep the most INFORMATIVE non-usage output, not the longest: a tool that
+    // rejects --help emits a Node stack trace (long, useless) while its bare
+    // invocation emits "--test-cmd is required" (short, exactly what we need).
+    const informative = /is required|requires\s+--/i.test(text);
+    if (informative || fallback === '') fallback = informative ? text : fallback || text;
+  }
+  return fallback;
 }
 
 function requiredArgsFor(tool) {
@@ -168,7 +199,24 @@ function requiredArgsFor(tool) {
   const usage = text
     .split(/\r?\n/)
     .find((line) => new RegExp(`(^|\\s)(adlc-)?${tool}\\s`).test(line));
-  if (!usage) return { positionals: [], flags: [] };
+  if (!usage) {
+    // Not every tool exposes a usage line — `consensus-fix` rejects --help
+    // outright. But each one still FAILS CLOSED with its own message naming what
+    // it needs ("--test-cmd is required", "capture requires --config <…>"), so
+    // derive from that instead. Using the tool's own error text keeps this
+    // honest as the CLI changes, where a hard-coded table would rot.
+    const demanded = [
+      ...text.matchAll(/(--[a-z][\w-]*)\s+is required/gi),
+      ...text.matchAll(/requires\s+(--[a-z][\w-]*)/gi),
+    ].map((m) => m[1]);
+
+    // null means UNDETERMINABLE, which is different from "no requirements".
+    // Conflating them is what let `behavior-diff capture` (needs --config) ship
+    // unrunnable in a published skill. The caller records these instead of
+    // quietly passing them — see the known-gap assertion below.
+    if (demanded.length === 0) return null;
+    return { positionals: [], flags: [...new Set(demanded)] };
+  }
 
   // Strip optional groups, then read what survives.
   const after = usage.slice(usage.indexOf(tool) + tool.length);
@@ -194,9 +242,15 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
   // the router's routing table.
   const DISPATCHER_VERBS = new Set(['run', 'accept', 'init', 'ticket', '--version', '--help']);
   const problems = [];
+  const undeterminable = new Set();
 
   for (const skill of catalogSkills()) {
-    const text = body(skill.text);
+    // Only look where the docs TEACH a command: inline `code` spans and ```sh
+    // blocks. The phase-routing table lives in a bare ``` fence and is
+    // navigation — "P4  adlc consensus-fix" points at a gate, it does not claim
+    // to be a runnable line, and flagging it would train the next author to
+    // silence this test rather than fix a command.
+    const text = commandContexts(body(skill.text));
     for (const [, tool, rest] of text.matchAll(/adlc ([a-z][\w-]*)([^\n`]*)/g)) {
       if (DISPATCHER_VERBS.has(tool)) continue;
       if (!CANONICAL_TOOLS.includes(tool)) {
@@ -204,7 +258,12 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
         continue;
       }
 
-      const { positionals, flags } = requiredArgsFor(tool);
+      const derived = requiredArgsFor(tool);
+      if (derived === null) {
+        undeterminable.add(tool);
+        continue;
+      }
+      const { positionals, flags } = derived;
       // A bare mention inside prose ("the adlc prosecute runner") is not an
       // invocation; only treat it as one when it is followed by args or ends a
       // command-looking span.
@@ -235,6 +294,19 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
   }
 
   assert.deepEqual(problems, [], `published skills teach invalid commands:\n  ${problems.join('\n  ')}`);
+
+  // No silent coverage gaps. These tools expose neither a parseable usage line
+  // nor a "X is required" message, so their invocations cannot be argument-
+  // checked here. Each was verified by hand to take NO required arguments
+  // (`adlc <tool> --json` produces no required-arg error), so the gap is
+  // currently harmless — but it is asserted EXACTLY, so a tool that newly stops
+  // exposing its contract fails here and forces a decision rather than quietly
+  // dropping out of coverage.
+  assert.deepEqual(
+    [...undeterminable].sort(),
+    ['lesson-foundry', 'model-router', 'preflight', 'rejection-mining'],
+    'the set of argument-unchecked tools changed — verify the new tool by hand, then update this list',
+  );
 });
 
 test('every catalog skill teaches commands that actually exist', () => {

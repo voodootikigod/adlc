@@ -192,9 +192,15 @@ Walk the human through this sequence.
 
    \`\`\`sh
    mkdir -p .github/workflows
-   curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \\
-     -o .github/workflows/adlc-rails-guard.yml
+   test -e .github/workflows/adlc-rails-guard.yml \\
+     && echo "REFUSING: a workflow already exists — diff before replacing it" \\
+     || curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \\
+          -o .github/workflows/adlc-rails-guard.yml
    \`\`\`
+
+   Check before writing: \`curl -o\` truncates without asking and this
+   destination is a protected trust root, so a repo with a customized or newer
+   workflow would lose it silently. If it exists, diff and let the human decide.
 
    **Then STOP and read the header of the file you just downloaded, and do what
    it says.** Do not mark the check required yet. That workflow documents a

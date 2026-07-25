@@ -39,8 +39,14 @@ Then `cd` into a repo and run `adlc init`.
 
 Requires **macOS or Linux** and **Node.js 18+** — the installer checks Node and
 stops if it is missing rather than installing a runtime for you. Harnesses you
-do not have are left alone. Cursor and GitHub Copilot need one manual step,
-which the installer prints.
+do not have are left alone.
+
+Automated: Claude Code, Codex, GitHub Copilot, pi, Google Antigravity, herdr.
+Two need a step the installer cannot take for you, and it prints them:
+**Cursor** installs plugins through its in-app marketplace, and **OpenCode**
+scaffolds the current directory, so it must be run inside your repo rather than
+from wherever you invoked the installer. pi is also skipped below Node 22.19,
+which is its own floor.
 
 **Windows is not supported yet.** A `windows-latest` run of the core gate suites
 passed 6 of 28: the shared bin-resolution path builds `D:\D:\…` from an

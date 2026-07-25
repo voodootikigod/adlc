@@ -140,24 +140,48 @@ test('install.sh survives truncation: a partial download executes nothing', () =
   // therefore lives inside one function, so any truncation leaves its brace
   // unclosed and sh refuses the file outright.
   const full = read(INSTALL_SH);
-  assert.match(full, /^adlc_installer_main "\$@"$/m, 'the body must be invoked on the last line');
-  assert.match(full, /^adlc_installer_main\(\) \{$/m, 'the whole body must be wrapped in one function');
 
   const box = sandbox({ bins: ['node', 'npm', 'codex'] });
   try {
-    // Cut at several points; every prefix must refuse to run and touch nothing.
-    for (const fraction of [0.25, 0.5, 0.75, 0.95]) {
-      const truncated = path.join(box.root, `truncated-${fraction}.sh`);
-      writeFileSync(truncated, full.slice(0, Math.floor(full.length * fraction)));
+    // EVERY line boundary, not a handful of sampled fractions. Sampling 25/50/
+    // 75/95% is what missed the previous guard's real hole: with the body in a
+    // function invoked on the last line, a cut in the narrow window between the
+    // closing brace and that invocation produced a complete, valid, no-op
+    // script that exited 0. A bug reachable only in a few hundred bytes of a
+    // 12KB file is exactly what sampling cannot find.
+    const offsets = [];
+    for (let i = 0; i < full.length; i += 1) {
+      // Strictly SHORTER than the file: the complete script is not a truncation.
+      if (full[i] === '\n' && i + 1 < full.length) offsets.push(i + 1);
+    }
+    assert.ok(offsets.length > 50, 'sanity: the script should have many line boundaries');
+
+    // A prefix consisting only of the shebang and leading comments is a valid
+    // empty script and exits 0 — unavoidable for any `curl | sh`, and harmless:
+    // nothing ran and the user sees no output at all, which reads as failure
+    // rather than as a completed install. The opening brace is deliberately as
+    // early as possible so that window stays a couple of lines.
+    const guardOpens = full.indexOf('\n{\n') + 2;
+    assert.ok(guardOpens > 0, 'the truncation guard brace must exist');
+
+    for (const offset of offsets) {
+      const truncated = path.join(box.root, 'truncated.sh');
+      writeFileSync(truncated, full.slice(0, offset));
       writeFileSync(box.log, '');
 
       const result = spawnSync('sh', [truncated], { encoding: 'utf8', env: box.env, timeout: 30_000 });
-      assert.notEqual(result.status, 0, `a ${fraction * 100}% download must not report success`);
+      const pct = ((offset / full.length) * 100).toFixed(1);
+
+      // The property that matters at EVERY offset: nothing is ever installed.
       assert.equal(
         box.commands(),
         '',
-        `a ${fraction * 100}% download installed something:\n${box.commands()}`,
+        `a ${pct}% download (byte ${offset}) installed something:\n${box.commands()}`,
       );
+      // Past the opening brace, a truncated file must also be REFUSED outright.
+      if (offset > guardOpens) {
+        assert.notEqual(result.status, 0, `a ${pct}% download (byte ${offset}) reported success`);
+      }
     }
   } finally {
     box.cleanup();

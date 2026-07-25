@@ -11,13 +11,24 @@ actually unbypassable wired into CI.
 
 ## 1. Check what is already there
 
+There are **four** controls, installed by different steps. Probe each one
+independently and report which are present:
+
 ```sh
-adlc --version          # toolkit on PATH?
-ls .adlc                # runtime already bootstrapped?
+adlc --version                                  # 1. gate toolkit on PATH?
+ls .adlc                                        # 2. repo runtime bootstrapped?
+ls .github/workflows/adlc-rails-guard.yml       # 4. CI backstop wired?
 ```
 
-If `adlc --version` prints a version and `.adlc/` exists, this repo is already
-initialized — stop and report that rather than re-running anything.
+Control 3 is the harness integration — check whether your own agent has the
+ADLC plugin loaded (skills alone are not the plugin).
+
+**Do not treat "toolkit + `.adlc/` exist" as "already set up" and stop.** That
+is the common *partial* state — a CLI-only install, a skills.sh adopter, or a
+repo initialized before CI was wired — and stopping there reports success while
+the native plugin and the only unbypassable control are both missing. Skip only
+what is genuinely present, do the rest, and call it complete when all four check
+out.
 
 ## 2. Install the toolkit
 
@@ -81,9 +92,16 @@ any other name leaves it editable by the PRs it is meant to gate:
 
 ```sh
 mkdir -p .github/workflows
-curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \
-  -o .github/workflows/adlc-rails-guard.yml
+test -e .github/workflows/adlc-rails-guard.yml \
+  && echo "REFUSING: a workflow already exists — diff before replacing it" \
+  || curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \
+       -o .github/workflows/adlc-rails-guard.yml
 ```
+
+The existence check is not ceremony. `curl -o` truncates without asking, and
+this destination is a **protected trust root** — a repo with a customized or
+newer workflow would have it silently replaced by whatever `main` serves today.
+If it already exists, diff the two and let the human decide.
 
 **Then read that file's header and follow it before marking the check
 required.** It documents a multi-stage bootstrap: the bootstrap commit merges
