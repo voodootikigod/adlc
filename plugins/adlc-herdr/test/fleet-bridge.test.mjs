@@ -95,6 +95,17 @@ test('planFleetBridge CAPS tail panes at MAX_TAIL_PANES — an untrusted status 
   assert.equal(p.tailPanes.length, MAX_TAIL_PANES, 'tail panes are bounded regardless of the ticket count in the file');
 });
 
+test('planFleetBridge PRIORITIZES active builds over retained failed panes in the shared tail quota (round 23)', () => {
+  const tickets = {};
+  // Many FAILED tickets appear FIRST in insertion order, then one active build.
+  for (let i = 0; i < MAX_TAIL_PANES + 5; i += 1) tickets[`f-${i}`] = { state: 'failed' };
+  tickets['t-build'] = { state: 'building' };
+  const p = plan({ curr: status({ tickets }) });
+  const ids = p.tailPanes.map((x) => x.ticketId);
+  assert.equal(p.tailPanes.length, MAX_TAIL_PANES, 'the quota is still capped');
+  assert.ok(ids.includes('t-build'), 'the active building ticket is tailed — never starved by earlier failed panes');
+});
+
 test('AC5 a hostile ticket id is skipped entirely (no tail pane, no board row, no path)', () => {
   const p = plan({ curr: status({ tickets: { 'a/b': { state: 'building' }, '../evil': { state: 'building' }, '-x': { state: 'merged' } } }) });
   assert.deepEqual(p.tailPanes, []);

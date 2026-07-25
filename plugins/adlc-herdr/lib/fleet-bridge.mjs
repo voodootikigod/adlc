@@ -63,6 +63,11 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
   out.observed = true; // a valid status: absence of a tracked ticket now means it left in-flight
   out.openTab = seen.has(runId) ? null : { runId, title: `fleet: run-${sanitizeToken(runId)}` };
 
+  // Retained FAILED/BLOCKED panes are collected separately and appended AFTER the
+  // in-flight ones, so the shared MAX_TAIL_PANES quota is filled by ACTIVE builds
+  // first — a heavily-failing run must never let zombie failed panes starve a
+  // still-building ticket of its live log (and then have the executor close it).
+  const retained = [];
   for (const [id, rec] of Object.entries(tickets)) {
     if (!safeId(id)) continue; // hostile id → never reaches a log path, argv, or the board
     const state = rec && typeof rec.state === 'string' ? rec.state : null;
@@ -74,10 +79,8 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
       // RETAIN the tail pane for a FAILED/BLOCKED ticket so its final output (the
       // error / stack trace) stays visible — closing it the instant a build fails
       // hides exactly what the developer needs to read. A merged ticket has nothing
-      // more to show, so its pane is released. Retained panes persist until a new
-      // run resets the tab (keeping one in `tailPanes` keeps the executor from
-      // retiring it, and re-tags it with the terminal state).
-      if (state !== 'merged' && out.tailPanes.length < MAX_TAIL_PANES) out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
+      // more to show, so its pane is released. (Filled into the quota below.)
+      if (state !== 'merged') retained.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
       if (sameRun && prevState !== state) {
         if (state === 'merged') {
@@ -92,6 +95,11 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
         }
       }
     }
+  }
+  // Second pass: retained panes fill only the quota LEFT after active in-flight ones.
+  for (const pane of retained) {
+    if (out.tailPanes.length >= MAX_TAIL_PANES) break;
+    out.tailPanes.push(pane);
   }
   return out;
 }
