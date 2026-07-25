@@ -233,9 +233,13 @@ ADR-0009 Decision 4 imposes.
 
 - **AC4.1** `https://www.agenticlifecycle.ai/agent-guide.md` serves a plain-text
   guide addressed to an agent.
-  **VERIFY:** `node --test apps/docs/test/agent-guide.test.mjs` — the route case
-  imports the route handler, calls `GET()`, and asserts a 200 response whose
-  body is non-empty `text/markdown`.
+  **VERIFY:** `node --test apps/docs/test/agent-guide.test.mjs` — the generator
+  case calls `buildAgentGuide()` and asserts a substantial body opening with the
+  agent-addressed heading; the route case asserts `app/agent-guide.md/route.ts`
+  exports `GET`, serves that generator, and sets `text/markdown`. The route is
+  checked by source rather than imported because it is `.ts` and resolves
+  through Next's `@/` alias, which Node cannot load outside a Next build; all
+  the behavior lives in the `.mjs` generator, which IS executed.
 - **AC4.2** The guide's install instructions are generated from
   `integration-facts.mjs`, never hand-typed.
   **VERIFY:** `node --test apps/docs/test/agent-guide.test.mjs` — the
@@ -264,8 +268,7 @@ ADR-0009 Decision 4 imposes.
   `apps/docs/app/` or `apps/docs/components/` other than its defining module.
 - **AC4.8** The guide is discoverable from the existing LLM surface.
   **VERIFY:** `node --test apps/docs/test/agent-guide.test.mjs` — the discovery
-  case calls the `llms.txt` route handler and asserts the response body links
-  `agent-guide.md`.
+  case asserts `app/llms.txt/route.ts` emits a link to `agent-guide.md`.
 
 ## Out of scope
 

@@ -5,6 +5,8 @@ import {
   UNIVERSAL_INSTALL,
   UNIVERSAL_INSTALL_WINDOWS,
   SKILLS_INSTALL,
+  AGENT_PROMPT,
+  AGENT_GUIDE_URL,
 } from '@/lib/install-commands.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { InstallCommand } from '@/components/marketing/install-command';
@@ -35,6 +37,23 @@ export default function IntegrationsPage() {
           <code style={{ color: '#4fb4d8' }}>adlc fleet</code> is POSIX-only and
           unavailable; every other gate runs. Prefer to install by hand? Every
           harness&apos;s native path is below.
+        </p>
+      </MarketingSection>
+
+      <MarketingSection kicker="Hands-free" title="Or let your agent introduce you">
+        <p className="mb-8 max-w-2xl leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
+          Already running a coding agent? Let it do the onboarding. Paste this prompt
+          — it reads a guide written for agents, works out which harness it is, and
+          walks you through the install without running anything until you say so.
+        </p>
+        <div className="lg:max-w-3xl">
+          <InstallCommand command={AGENT_PROMPT} label="Paste into your agent" />
+        </div>
+        <p className="mt-6 text-sm" style={{ color: 'var(--mk-muted)' }}>
+          Read the guide yourself:{' '}
+          <a href={AGENT_GUIDE_URL} style={{ color: '#4fb4d8' }}>
+            agent-guide.md ↗
+          </a>
         </p>
       </MarketingSection>
 
