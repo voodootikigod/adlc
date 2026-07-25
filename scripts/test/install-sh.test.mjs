@@ -222,6 +222,28 @@ test('install.sh detects Cursor by config directory and asks for the manual step
   }
 });
 
+test('install.sh survives an environment with no HOME', () => {
+  // `set -u` plus a bare ${HOME} kills the install with "unbound variable" —
+  // an error naming nothing the user can act on. Containers and some CI shells
+  // have no HOME, and `curl | sh` is exactly what runs in a container.
+  const box = sandbox({ bins: ['node', 'npm', 'codex'] });
+  try {
+    const result = spawnSync('sh', [INSTALL_SH], {
+      encoding: 'utf8',
+      env: { PATH: box.env.PATH }, // deliberately no HOME
+      timeout: 60_000,
+    });
+    assert.equal(result.status, 0, `installer failed without HOME: ${result.stderr}`);
+    assert.ok(
+      !/unbound variable/.test(result.stderr),
+      `installer tripped set -u on an unset variable:\n${result.stderr}`,
+    );
+    assert.match(box.commands(), /npm install -g @adlc\/cli/, 'the toolkit must still install');
+  } finally {
+    box.cleanup();
+  }
+});
+
 test('install.sh is idempotent: a second run issues the same commands', () => {
   const box = sandbox({ bins: ['node', 'npm', 'codex', 'herdr'] });
   try {

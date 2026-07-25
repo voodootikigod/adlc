@@ -160,8 +160,12 @@ install_herdr() {
 
 # Cursor installs plugins through its in-app marketplace UI; there is no
 # supported shell command, so we tell the user rather than guessing.
+#
+# ${HOME:-} is deliberate: `set -u` turns an unset HOME into "unbound variable"
+# and kills the whole install with an error that names nothing the user can act
+# on. Containers and some CI shells run without HOME.
 install_cursor() {
-    if ! have cursor && [ ! -d "${HOME}/.cursor" ]; then
+    if ! have cursor && [ ! -d "${HOME:-}/.cursor" ]; then
         return 0
     fi
     log "Cursor detected"
