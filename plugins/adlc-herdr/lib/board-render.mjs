@@ -16,6 +16,9 @@ const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? wid
  *  being allowed to push the ticket off the line. */
 const MIN_ROOT = 6;
 
+/** Shortest elided ticket id worth rendering, same reasoning as MIN_ROOT. */
+const MIN_ID = 6;
+
 /** Sanitize to the value's OWN length, never to the pane width: capping at the
  *  width clips the front, which would leave the elision below keeping the middle
  *  of a path instead of its leaf. Escapes must be stripped before anything is
@@ -48,10 +51,19 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   const budget = width - withRoot('').length; // room the root itself may take
   if (budget >= MIN_ROOT) return withRoot(`…${root.slice(root.length - (budget - 1))}`);
 
-  // No root fits. Drop it, then the banner — whatever remains is ticket-first,
-  // so the outer cut() eats the phase before it ever reaches the id.
+  // No root fits. Drop it, then the banner.
   const banner = `ADLC board · ${suffix}`;
-  return banner.length <= width ? banner : suffix;
+  if (banner.length <= width) return banner;
+  if (suffix.length <= width) return suffix;
+
+  // Even the bare suffix overflows — a canonical 28-char generated id does this
+  // below 40 columns. Elide the ID rather than let cut() take the phase off the
+  // end: a ULID's entropy is in its tail, and the phase is two characters that
+  // say where the ticket stands. Both matter more than the id's leading bytes.
+  const tail = phaseText ? ` · ${phaseText}` : '';
+  const room = width - 'ticket '.length - tail.length;
+  if (room < MIN_ID) return suffix; // nothing legible fits; cut() clamps it
+  return `ticket …${label.slice(label.length - (room - 1))}${tail}`;
 }
 
 /** The board's footer hint line (with its own SGR). Pure so the refresh-seconds

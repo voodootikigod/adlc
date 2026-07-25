@@ -389,6 +389,26 @@ test('the header cannot overflow however extreme the inputs', () => {
   }
 });
 
+test('a canonical generated id keeps the phase and its own distinguishing tail', () => {
+  // The width sweep above uses the 3-char fixture id 't-b', so it could not see
+  // that a real generated id (28 chars) overflows the bare suffix and takes the
+  // phase down with it. A 20-column pane cannot hold 28 chars + phase, so the id
+  // elides from the FRONT: a ULID's entropy is in its tail, and the phase — two
+  // characters that say where the ticket is — must never be what gets dropped.
+  const id = 'T-01JXT21Q000W3GE1R70W3GE1R7'; // shape of generateTicketId()
+  assert.equal(id.length, 28, 'fixture must match the real generated id length');
+  for (const width of [20, 24, 28, 35, 39, 40, 60]) {
+    const state = baseState();
+    state.width = width;
+    state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+    state.active = { state: 'active', id };
+    const header = headerOf(state);
+    assert.ok(header.includes('P4'), `width ${width}: phase lost — ${header}`);
+    assert.ok(header.includes(id.slice(-6)), `width ${width}: id tail lost — ${header}`);
+    assert.ok(header.length <= Math.max(20, width), `width ${width}: header is ${header.length}`);
+  }
+});
+
 test('a long ticket id never demotes the header back to showing only the path', () => {
   // A long id inflates the suffix, which is what pushes the fit past the root
   // budget — the degradation must drop the static root, never the ticket.
