@@ -46,7 +46,11 @@ export const TICKET_FIELDS = [
     name: 'category',
     type: 'string',
     required: false,
-    summary: 'Routing hint, not a free-form label: model-router sends contract, spec, and architecture to a frontier model and routes everything else from empirical priors.',
+    // The store accepts any string, so the schema must too — but ticket-sync's
+    // rich validator pins an enum, and a category outside it round-trips to a
+    // remote provider and then fails closed on the next sync. Name the set here
+    // so the choice is made once, at authoring time.
+    summary: 'Routing hint, not a free-form label. model-router sends contract, spec, and architecture to a frontier model and routes the rest from empirical priors. Keep to the set ticket-sync accepts or a synced ticket cannot converge: feature, bug, bugfix, refactor, docs, chore, test, spec, contract, architecture.',
     schema: { type: 'string' },
   },
   {
@@ -60,8 +64,12 @@ export const TICKET_FIELDS = [
     name: 'budget',
     type: 'number > 0',
     required: false,
-    summary: 'Optional token ceiling honoured by model-router and flail-detector. Omit it to take the tier default.',
-    schema: { type: 'number', exclusiveMinimum: 0 },
+    // NOT constrained in the schema: the store does not police budget, and
+    // model-router ignores a non-positive or non-numeric one rather than
+    // rejecting it. Pinning it here would narrow v1 under an unchanged $id and
+    // make the published schema reject stores that load fine.
+    summary: 'Optional token ceiling. model-router and flail-detector honour a positive number and ignore anything else; the store does not validate it. Omit it to take the tier default.',
+    schema: {},
   },
   {
     name: 'scope',
@@ -97,7 +105,7 @@ export const TICKET_FIELDS = [
 const CREATE_EXAMPLE = {
   title: 'Reject unsigned webhook deliveries',
   body: 'Verify the HMAC signature on every inbound webhook before dispatch.\n\nAcceptance criteria:\n1. An unsigned delivery is rejected with 401. Verify: node --test test/webhook.test.mjs\n2. A delivery signed with a stale secret is rejected. Verify: node --test test/webhook.test.mjs',
-  category: 'security',
+  category: 'feature',
   duration: 2,
   scope: ['src/webhook/**', 'test/webhook.test.mjs'],
   rails: [],
@@ -155,12 +163,16 @@ const COMMAND_HELP = {
     createExampleJson(),
   ],
   update: () => [
-    'adlc ticket update <id> --input <path|-> --expect <ticketHash> [--write] [--json]',
+    'adlc ticket update <id> --input <path|-> [--expect <ticketHash>] [--write] [--json]',
     '',
-    'Replace a ticket in place. --expect takes the current ticketHash from',
-    '`adlc ticket show <id>` or `adlc ticket list --json`; the write is a',
-    'compare-and-swap and fails STALE_TICKET if the ticket moved underneath you.',
-    'The input must carry the same id — use reassign for an identity change.',
+    'Replace a ticket in place. The input must carry the same id — use reassign',
+    'for an identity change.',
+    '',
+    '--expect is optional but strongly recommended. Give it the current',
+    'ticketHash from `adlc ticket show <id>` or `adlc ticket list --json` and the',
+    'write becomes a compare-and-swap that fails STALE_TICKET if the ticket moved',
+    'underneath you. OMITTED, the update is last-writer-wins: it will overwrite',
+    'another author\'s newer ticket without complaint.',
     '',
     ...INPUT_DOCUMENT,
   ],
@@ -181,8 +193,12 @@ const COMMAND_HELP = {
   complete: () => [
     'adlc ticket complete <id> [--write --authorize] [--json]',
     '',
-    'Mark a ticket complete. --authorize records that a human approved the',
-    'state change; without it the write is refused.',
+    'Mark a ticket complete. The plan is recorded as a lifecycle change and',
+    'carries evidence either way.',
+    '',
+    '--authorize records that a human approved the change. It is ENFORCED only',
+    'for a protected id, and this CLI configures no protected ids — so by',
+    'default `complete <id> --write` applies without it.',
   ],
   archive: () => [
     'adlc ticket archive <id> [--write --authorize] [--json]',
@@ -243,7 +259,7 @@ export function renderUsage() {
     'Commands:',
     '  list | show <id>',
     '  create --input <path|-> [--write]',
-    '  update <id> --input <path|-> --expect <ticket-hash> [--write]',
+    '  update <id> --input <path|-> [--expect <ticket-hash>] [--write]',
     '  edit <id> [--write]',
     '  discard <id> [--write]',
     '  complete <id> [--write --authorize]',

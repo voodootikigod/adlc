@@ -25,7 +25,7 @@
     },
     "category": {
       "type": "string",
-      "description": "Routing hint, not a free-form label: model-router sends contract, spec, and architecture to a frontier model and routes everything else from empirical priors."
+      "description": "Routing hint, not a free-form label. model-router sends contract, spec, and architecture to a frontier model and routes the rest from empirical priors. Keep to the set ticket-sync accepts or a synced ticket cannot converge: feature, bug, bugfix, refactor, docs, chore, test, spec, contract, architecture."
     },
     "duration": {
       "type": "number",
@@ -33,9 +33,7 @@
       "description": "Relative build-time estimate used to order the ticket DAG. Defaults to 1."
     },
     "budget": {
-      "type": "number",
-      "exclusiveMinimum": 0,
-      "description": "Optional token ceiling honoured by model-router and flail-detector. Omit it to take the tier default."
+      "description": "Optional token ceiling. model-router and flail-detector honour a positive number and ignore anything else; the store does not validate it. Omit it to take the tier default."
     },
     "scope": {
       "type": "array",

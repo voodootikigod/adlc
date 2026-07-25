@@ -91,6 +91,24 @@ test('update help states the compare-and-swap requirement', () => {
   assert.match(help, /ticketHash/);
 });
 
+test('update help does not claim a guard the CLI does not enforce', () => {
+  // bin/adlc-tickets.mjs requires only --input, and planUpdate checks the hash
+  // only when it is truthy — so an update WITHOUT --expect is last-writer-wins.
+  // Help that reads as though the guard is unconditional is worse than none:
+  // it invites a scripted caller to omit the flag and assume it is still safe.
+  const help = renderCommandHelp('update');
+  assert.match(help, /optional/i, 'the help must say --expect is optional');
+  assert.match(help, /last-writer-wins/i, 'the help must name what omitting it costs');
+});
+
+test('complete/archive help describe the real authorization policy', () => {
+  // The CLI constructs TicketService with no protectedIds, so --authorize gates
+  // nothing by default; planComplete only enforces it for a protected id.
+  const help = renderCommandHelp('complete');
+  assert.match(help, /protected/i, 'the help must scope --authorize to protected ids');
+  assert.doesNotMatch(help, /without it the write is refused/i, 'that claim is false by default');
+});
+
 test('every command the CLI dispatches has dedicated help', () => {
   const commands = [
     'list', 'show', 'create', 'update', 'edit', 'discard', 'complete',
@@ -128,6 +146,53 @@ test('the committed schema file matches the generated one', () => {
   // drift, the file becomes another thing an author has to double-check.
   const committed = readFileSync(join(PACKAGE, 'schemas/ticket.schema.json'), 'utf8');
   assert.equal(committed, serializeTicketJsonSchema());
+});
+
+/** Minimal checker for the only keywords ticketJsonSchema() emits. */
+function satisfies(value, schema) {
+  if (schema.type === 'string' && typeof value !== 'string') return false;
+  if (schema.type === 'number' && typeof value !== 'number') return false;
+  if (schema.type === 'array' && !Array.isArray(value)) return false;
+  if (schema.type === 'object' && (!value || typeof value !== 'object' || Array.isArray(value))) return false;
+  if (schema.minLength !== undefined && String(value).length < schema.minLength) return false;
+  if (schema.exclusiveMinimum !== undefined && !(value > schema.exclusiveMinimum)) return false;
+  if (schema.items) return value.every((item) => satisfies(item, schema.items));
+  if (schema.required) return schema.required.every((key) => key in value);
+  return true;
+}
+
+test('the schema never rejects a ticket the validator accepts', () => {
+  // The published schema carries a fixed $id, so constraining a field the store
+  // does not police silently narrows v1: a store that loads fine stops
+  // validating for any editor or CI consumer that resolves that same $id.
+  // `budget` is the live case — model-router ignores a non-positive or
+  // non-numeric budget rather than rejecting it, and neither does validateTicket.
+  const corpus = [
+    { id: 'T1', title: 'minimal' },
+    { id: 'T1', title: 'loose budget', budget: 'cheap' },
+    { id: 'T1', title: 'negative budget', budget: -5 },
+    { id: 'T1', title: 'free-form category', category: 'anything-at-all' },
+    { id: 'T1', title: 'empty collections', body: '', scope: [], rails: [], edges: [], duration: 1 },
+    { id: 'T1', title: 'edges', edges: [{ to: 'T2', note: 'extra' }] },
+  ];
+  const { properties } = ticketJsonSchema();
+  for (const ticket of corpus) {
+    assert.deepEqual(validateTicket(ticket), [], `corpus entry must be valid: ${ticket.title}`);
+    for (const [field, value] of Object.entries(ticket)) {
+      assert.ok(
+        satisfies(value, properties[field]),
+        `schema rejects ${field}=${JSON.stringify(value)} which validateTicket accepts`,
+      );
+    }
+  }
+});
+
+test('the schema still constrains what the validator DOES police', () => {
+  // The inverse of the test above: permissiveness must not become vacuous.
+  const { properties } = ticketJsonSchema();
+  assert.ok(!satisfies(-5, properties.duration), 'duration is policed, so the schema must pin it');
+  assert.ok(!satisfies('', properties.title), 'title is policed, so the schema must pin it');
+  assert.ok(!satisfies('x', properties.scope), 'scope must be an array');
 });
 
 test('the generated schema keeps its published identity', () => {
