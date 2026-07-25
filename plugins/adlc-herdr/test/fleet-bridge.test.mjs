@@ -5,7 +5,7 @@
 // unknown schema and refusing hostile ticket ids. bin/watcher.mjs only executes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, openWorktreeShellArgs } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, openWorktreeShellArgs, runFleetPlan } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 const V = 1; // knownSchemaVersion under test
@@ -59,6 +59,38 @@ test('AC6 terminal transitions → notifications; a stable terminal state does n
 test('AC7 terminal tickets → board summary rows; in-flight ones do not', () => {
   const p = plan({ curr: status({ tickets: { 't-a': { state: 'building' }, 't-b': { state: 'failed' } } }) });
   assert.deepEqual(p.boardRows, [{ ticketId: 't-b', state: 'failed' }]);
+});
+
+test('runFleetPlan opens the tab, tails each ticket ONCE across beats, and notifies', async () => {
+  const calls = { tab: [], spawn: [], notify: [] };
+  const state = { tabId: null, tailed: new Set() };
+  const deps = {
+    repoRoot: '/repo', state,
+    openTab: async (t) => { calls.tab.push(t); return 'w4:t9'; },
+    spawn: async (a) => { calls.spawn.push(a); },
+    notify: async (...n) => { calls.notify.push(n); },
+  };
+  const plan = {
+    degrade: false, openTab: { runId: 'r1', title: 'fleet: run-r1' },
+    tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }],
+    notifications: [{ title: 'ADLC fleet', body: 't-a merged', sound: 'done' }], boardRows: [],
+  };
+  await runFleetPlan({ plan, ...deps });
+  assert.equal(calls.tab.length, 1);
+  assert.equal(state.tabId, 'w4:t9');
+  assert.deepEqual(calls.spawn[0], fleetTailPaneArgs({ tabId: 'w4:t9', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log' }));
+  assert.equal(calls.notify.length, 1);
+  // next beat, same ticket still in-flight, tab already open → no re-tab, no re-tail
+  await runFleetPlan({ plan: { ...plan, openTab: null }, ...deps });
+  assert.equal(calls.tab.length, 1);
+  assert.equal(calls.spawn.length, 1, 'each ticket is tailed exactly once');
+});
+
+test('runFleetPlan on a degrade performs no effects', async () => {
+  let touched = false;
+  const mark = async () => { touched = true; };
+  await runFleetPlan({ plan: { degrade: true }, repoRoot: '/r', state: { tabId: null, tailed: new Set() }, openTab: mark, spawn: mark, notify: mark });
+  assert.equal(touched, false);
 });
 
 test('the board renders a fleet section for terminal rows, and omits it with no run', () => {

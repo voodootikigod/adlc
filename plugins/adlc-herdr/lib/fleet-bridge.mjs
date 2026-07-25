@@ -67,3 +67,23 @@ export function fleetTailPaneArgs({ tabId, repoRoot, logPath }) {
 export function openWorktreeShellArgs({ worktreePath, shell = 'bash' }) {
   return ['agent', 'start', 'adlc-fleet-shell', '--cwd', worktreePath, '--split', 'right', '--', shell];
 }
+
+/**
+ * Execute a fleet plan through injected effects, keeping per-run mutable `state`
+ * (`{ tabId, tailed:Set }`) so the tab opens once and each ticket gets ONE tail
+ * pane across beats. `openTab(title)->tabId`, `spawn(argv)`, `notify(t,b,s)` are
+ * injected (async) so the orchestration is unit-testable, not watcher glue.
+ */
+export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, notify }) {
+  if (!plan || plan.degrade) return;
+  if (plan.openTab) {
+    const tabId = await openTab(plan.openTab.title);
+    if (typeof tabId === 'string' && tabId) state.tabId = tabId;
+  }
+  for (const pane of plan.tailPanes) {
+    if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
+    await spawn(fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
+    state.tailed.add(pane.ticketId);
+  }
+  for (const n of plan.notifications) await notify(n.title, n.body, n.sound);
+}
