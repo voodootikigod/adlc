@@ -128,11 +128,16 @@ export function shouldMarkRunSeen(plan, runState) {
  * still reflects state); it is surfaced to `log`, not hidden.
  *
  * Pane teardown is a two-step "retire then drain": a pane that should close is
- * moved from `tailed` into `closing` (keyed by pane id, NOT ticket id, so a
- * failed close from an old run can't block spawning a new pane for the same
- * ticket id next run), then `closing` is drained — a successful close clears the
- * pane, a transient failure keeps it for the next beat (never leak a live tail
- * process). What gets retired is the plan's call:
+ * moved from `tailed` into `closing` (a Map paneId→failed-attempts, keyed by pane
+ * id NOT ticket id, so a failed close from an old run can't block spawning a new
+ * pane for the same ticket id next run), then `closing` is drained. A close
+ * SUCCEEDS when it neither throws NOR returns `{ ok: false }` (the herdr shim
+ * signals failure by return, not exception) — success clears the pane. A failure
+ * is retried on the next beat, but only up to BOUNDED_CLOSE_ATTEMPTS: a pane still
+ * unclosable after that is GONE (the user closed it), not merely busy — retrying
+ * a vanished pane forever would spawn a failing `herdr pane close` on every 400ms
+ * beat, so we drop it (its tail process is already dead — nothing leaks). What
+ * gets retired is the plan's call:
  *   - degrade (schema no longer understood) → retire ALL tracked panes and poll;
  *   - observed (a valid status) → retire every pane whose ticket is no longer
  *     in-flight (terminal, vanished, or unknown state);
@@ -140,26 +145,41 @@ export function shouldMarkRunSeen(plan, runState) {
  *     is not evidence a ticket ended, and wiping panes on a one-beat read blip
  *     would churn the UI and destroy scrollback.
  */
+// Retry a failing pane close at most this many beats before assuming the pane is
+// gone (not busy) and dropping it — bounds the retry so a manually-closed pane
+// can't drive a per-beat `herdr pane close` spawn loop. Exported for the test.
+export const BOUNDED_CLOSE_ATTEMPTS = 5;
+
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, log }) {
   if (!plan) return;
-  if (!(state.closing instanceof Set)) state.closing = new Set(); // panes awaiting close, decoupled from active tracking
+  if (!(state.closing instanceof Map)) state.closing = new Map(); // paneId → failed close attempts, decoupled from active tracking
   const safeCall = async (label, fn, ...args) => {
     try { return await fn(...args); } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
   };
-  // Move every ACTIVE pane not in `keep` into the pending-close set.
+  // Move every ACTIVE pane not in `keep` into the pending-close set (0 attempts).
   const retire = (keep) => {
     for (const [ticketId, paneId] of [...state.tailed]) {
       if (keep.has(ticketId)) continue;
       state.tailed.delete(ticketId);
-      if (typeof paneId === 'string' && paneId) state.closing.add(paneId);
+      if (typeof paneId === 'string' && paneId && !state.closing.has(paneId)) state.closing.set(paneId, 0);
     }
   };
-  // Drain pending closes: clear a pane once its close SUCCEEDS; keep it for the
-  // next beat on a transient failure, so a busy socket never leaks a tail process.
+  // Drain pending closes. A close fails if it throws OR returns { ok:false } (the
+  // herdr shim reports failure by return, never by exception). On success, clear
+  // the pane; on failure, retry next beat until BOUNDED_CLOSE_ATTEMPTS, then drop
+  // it (a pane unclosable that long is gone, not busy — its tail process is dead).
   const drainClosing = async () => {
-    for (const paneId of [...state.closing]) {
-      try { await closePane(paneId); state.closing.delete(paneId); }
-      catch (err) { log?.('adlc-herdr fleet pane-close failed', err); /* keep, retry next beat */ }
+    for (const [paneId, attempts] of [...state.closing]) {
+      let failed = false;
+      try { const res = await closePane(paneId); if (res && res.ok === false) failed = true; }
+      catch (err) { failed = true; log?.('adlc-herdr fleet pane-close failed', err); }
+      if (!failed) { state.closing.delete(paneId); continue; }
+      if (attempts + 1 >= BOUNDED_CLOSE_ATTEMPTS) {
+        state.closing.delete(paneId); // give up: assume the pane is gone, so stop the per-beat retry
+        log?.('adlc-herdr fleet pane-close giving up (pane assumed already gone)', paneId);
+      } else {
+        state.closing.set(paneId, attempts + 1);
+      }
     }
   };
   if (plan.degrade) {

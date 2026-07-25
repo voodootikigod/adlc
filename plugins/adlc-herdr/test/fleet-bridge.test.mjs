@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -196,7 +196,7 @@ test('runFleetPlan RETRIES a tail pane whose spawn failed (null is not cached)',
 });
 
 test('runFleetPlan RETAINS a pane on a transient close failure so it retries — but notifications still fire that beat', async () => {
-  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]), closing: new Set() };
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]), closing: new Map() };
   const notified = [];
   let fail = true; // the close fails transiently on the first beat, succeeds on the next
   const plan = { degrade: false, observed: true, openTab: null, tailPanes: [], notifications: [{ title: 'x', body: 'y', sound: 'done' }], boardRows: [] };
@@ -215,11 +215,42 @@ test('runFleetPlan RETAINS a pane on a transient close failure so it retries —
   assert.equal(state.closing.has('w4:p5'), false, 'the retried close succeeds and the pane is forgotten');
 });
 
+test('runFleetPlan treats a { ok:false } close RETURN as a failure (the herdr shim reports failure by return, not throw)', async () => {
+  // The real injected closePane is runHerdr(...), which RESOLVES {ok:false} on a
+  // non-zero exit — it never throws. A prior version only caught throws, so a
+  // failed close was silently treated as success and the pane leaked.
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]), closing: new Map() };
+  let ok = false;
+  const plan = { degrade: false, observed: true, openTab: null, tailPanes: [], notifications: [], boardRows: [] };
+  const deps = { repoRoot: '/r', openTab: async () => {}, spawn: async () => {}, notify: async () => {}, closePane: async () => ({ ok }) };
+  await runFleetPlan({ plan, state, ...deps });
+  assert.equal(state.closing.get('w4:p5'), 1, 'a { ok:false } return is a failure → the pane stays pending with one recorded attempt');
+  ok = true; // herdr recovers
+  await runFleetPlan({ plan, state, ...deps });
+  assert.equal(state.closing.has('w4:p5'), false, 'a { ok:true } return clears the pane');
+});
+
+test('runFleetPlan GIVES UP after BOUNDED_CLOSE_ATTEMPTS on a pane that never closes — no per-beat spawn loop (round 9)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map([['w4:ghost', 0]]) };
+  const logs = [];
+  let attempts = 0;
+  const plan = { degrade: false, observed: false, openTab: null, tailPanes: [], notifications: [], boardRows: [] }; // drain runs every beat
+  const deps = {
+    repoRoot: '/r', openTab: async () => {}, spawn: async () => {}, notify: async () => {},
+    closePane: async () => { attempts += 1; throw new Error('no such pane'); }, // user manually closed it → gone forever
+    log: (m, id) => logs.push([m, id]),
+  };
+  for (let beat = 0; beat < BOUNDED_CLOSE_ATTEMPTS + 3; beat += 1) await runFleetPlan({ plan, state, ...deps });
+  assert.equal(state.closing.has('w4:ghost'), false, 'the vanished pane is dropped, not retried forever');
+  assert.equal(attempts, BOUNDED_CLOSE_ATTEMPTS, 'it is retried exactly the bounded number of times, then no more spawns');
+  assert.ok(logs.some(([m]) => /giving up/.test(m)), 'giving up is surfaced to the log');
+});
+
 test('runFleetPlan RETRIES a NEW-RUN teardown whose close failed — a run restart never force-forgets a leaked pane (round 8)', async () => {
   // The prior run left a tail pane; a new run starts while the herdr socket is
   // briefly busy, so tearing the old pane down fails. It must be retried, and a
   // NEW pane for the SAME ticket id must still spawn (no id collision).
-  const state = { tabId: 'w4:old', tailed: new Map([['t-a', 'w4:pOld']]), closing: new Set() };
+  const state = { tabId: 'w4:old', tailed: new Map([['t-a', 'w4:pOld']]), closing: new Map() };
   let closeFails = true;
   const spawned = [];
   const deps = {
