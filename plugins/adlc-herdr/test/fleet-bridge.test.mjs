@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, planFleetRecovery, applyRecovery, observerStateSnapshot, livePaneIds } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, BOUNDED_SPAWN_ATTEMPTS, planFleetRecovery, applyRecovery, observerStateSnapshot, livePaneIds } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -240,6 +240,32 @@ test('runFleetPlan treats a { ok:false } close RETURN as a failure (the herdr sh
   ok = true; // herdr recovers
   await runFleetPlan({ plan, state, ...deps });
   assert.equal(state.closing.has('w4:p5'), false, 'a { ok:true } return clears the pane');
+});
+
+test('runFleetPlan BOUNDS spawn retries — after BOUNDED_SPAWN_ATTEMPTS all-failed beats it drops the dead tab (round 16)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map() };
+  let calls = 0;
+  const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
+  const deps = { repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {}, spawn: async () => { calls += 1; return null; } }; // spawn always fails (dead tab)
+  for (let i = 0; i < BOUNDED_SPAWN_ATTEMPTS; i += 1) await runFleetPlan({ plan, state, ...deps });
+  assert.equal(state.tabId, null, 'the dead tab is dropped once the bound is reached');
+  assert.equal(calls, BOUNDED_SPAWN_ATTEMPTS, 'spawn was attempted exactly the bounded number of times');
+  await runFleetPlan({ plan, state, ...deps }); // tab gone → spawn loop is skipped
+  assert.equal(calls, BOUNDED_SPAWN_ATTEMPTS, 'no more `agent start` blasts into a dropped tab');
+});
+
+test('runFleetPlan RESETS the spawn-fail counter on any success (a transient spawn failure never trips the bound)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map() };
+  let ok = false;
+  const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
+  const deps = { repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {}, spawn: async () => (ok ? 'w4:pa' : null) };
+  await runFleetPlan({ plan, state, ...deps }); // fail
+  await runFleetPlan({ plan, state, ...deps }); // fail
+  ok = true;
+  await runFleetPlan({ plan, state, ...deps }); // recovers
+  assert.equal(state.tabId, 'w4:t1', 'the tab is retained after a recovery');
+  assert.equal(state.spawnFails, 0, 'the fail counter reset on success');
+  assert.equal(state.tailed.get('t-a'), 'w4:pa');
 });
 
 test('runFleetPlan GIVES UP after BOUNDED_CLOSE_ATTEMPTS on a pane that never closes — no per-beat spawn loop (round 9)', async () => {

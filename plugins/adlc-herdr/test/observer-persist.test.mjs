@@ -3,7 +3,7 @@
 // also kills the mutation-gate survivors an untested bin guard would leave.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadObserverState, saveObserverState, observerStatePath, OBSERVER_STATE_MAX_BYTES } from '../lib/observer-persist.mjs';
@@ -38,6 +38,14 @@ test('saveObserverState writes the snapshot; it round-trips through load', () =>
   const st = { prev: { runId: 'r1' }, runState: { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]) } };
   saveObserverState(repo, st);
   assert.deepEqual(loadObserverState(repo), { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } });
+});
+
+test('saveObserverState writes ATOMICALLY — no stray .tmp is left behind (a crash mid-write cannot truncate the real file)', () => {
+  const repo = mkRepo();
+  const st = { prev: { runId: 'r1' }, runState: { tabId: 'w4:t1', tailed: new Map() } };
+  saveObserverState(repo, st);
+  assert.equal(existsSync(`${observerStatePath(repo)}.tmp`), false, 'the temp file was renamed away, not left dangling');
+  assert.deepEqual(loadObserverState(repo), { runId: 'r1', tabId: 'w4:t1', tailed: {} }, 'the real file holds the complete state');
 });
 
 test('saveObserverState SKIPS the write when the state is unchanged (no per-beat disk churn), and writes again on a change', () => {

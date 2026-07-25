@@ -69,7 +69,10 @@ async function bridgeFleet(repoRoot, full, liveIds) {
     st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
     const rec = planFleetRecovery({ persisted: loadObserverState(repoRoot), curr, livePaneIds: liveIds });
     applyRecovery(st, rec);
-    for (const paneId of rec.closePanes) await runHerdr(fleetPaneCloseArgs(paneId)); // tear down old-run orphans
+    // Tear down old-run orphans through the SAME bounded close queue the beat
+    // drains — a fire-and-forget close here would leak the pane on a transient
+    // { ok:false }, since it would never be retried.
+    for (const paneId of rec.closePanes) st.runState.closing.set(paneId, 0);
     fleetState.set(repoRoot, st);
   }
   // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested

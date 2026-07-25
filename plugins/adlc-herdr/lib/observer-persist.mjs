@@ -4,7 +4,7 @@
 // bounded-read guards and change-detected write are TESTED, not untested wiring.
 // The persisted file is UNTRUSTED (unsandboxed, could be tampered): the read is
 // size-bounded and fail-soft, and planFleetRecovery validates every field it uses.
-import { statSync, readFileSync, writeFileSync } from 'node:fs';
+import { statSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { observerStateSnapshot } from './fleet-bridge.mjs';
 
@@ -35,14 +35,19 @@ export function loadObserverState(repoRoot) {
 /**
  * Persist a repo's observer state, but SKIP the write when the serialized value
  * is unchanged since the last save (recorded on `st.persistSig`) so a steady-state
- * beat causes no disk churn. Fail-soft. Returns the JSON that represents the
- * current state (whether or not it was written this call).
+ * beat causes no disk churn. The write is ATOMIC — a temp file in the same
+ * directory then a rename — so a daemon crash mid-write can never leave the state
+ * file truncated/invalid (which would blank recovery and orphan every pane).
+ * Fail-soft. Returns the JSON that represents the current state (written or not).
  */
 export function saveObserverState(repoRoot, st) {
   const json = JSON.stringify(observerStateSnapshot(st));
   if (st.persistSig === json) return json; // unchanged → no write
   try {
-    writeFileSync(observerStatePath(repoRoot), json);
+    const path = observerStatePath(repoRoot);
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, json);
+    renameSync(tmp, path); // atomic replace on the same filesystem
     st.persistSig = json;
   } catch {
     // best-effort — recovery just won't have the very latest state

@@ -184,6 +184,11 @@ export function shouldMarkRunSeen(plan, runState) {
 // gone (not busy) and dropping it — bounds the retry so a manually-closed pane
 // can't drive a per-beat `herdr pane close` spawn loop. Exported for the test.
 export const BOUNDED_CLOSE_ATTEMPTS = 5;
+// After this many consecutive beats where EVERY attempted tail spawn failed and
+// none succeeded, assume the tab itself is gone (e.g. the user closed the run
+// tab) and drop `state.tabId` — otherwise a dead tab drives a failing `agent
+// start` on every 400ms beat, per in-flight ticket. Exported for the test.
+export const BOUNDED_SPAWN_ATTEMPTS = 5;
 
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, tagPane, log, heartbeat = false }) {
   if (!plan) return;
@@ -245,12 +250,30 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   }
   // The tickets that SHOULD have a tail pane this beat (the in-flight set).
   const desired = new Set(plan.tailPanes.map((p) => p.ticketId));
+  let spawned = 0;
+  let spawnFailed = 0;
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
     const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath, ticketId: pane.ticketId }));
     // Only remember a REAL pane — a failed spawn (null/throw) must retry next
     // beat, not be cached as "already tailed" and deprive the ticket of logs.
-    if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
+    if (typeof paneId === 'string' && paneId) { state.tailed.set(pane.ticketId, paneId); spawned += 1; }
+    else spawnFailed += 1;
+  }
+  // Bound the spawn retry (mirror of the close bound): if EVERY spawn this beat
+  // failed and none succeeded, the tab is likely dead (the user closed it). Count
+  // consecutive all-failed beats and, at BOUNDED_SPAWN_ATTEMPTS, drop `tabId` so
+  // we stop hammering a dead tab with `agent start` every beat. Any success resets
+  // the counter (a transient busy socket recovers well within the bound).
+  if (spawnFailed > 0 && spawned === 0) {
+    state.spawnFails = (state.spawnFails ?? 0) + 1;
+    if (state.spawnFails >= BOUNDED_SPAWN_ATTEMPTS) {
+      log?.('adlc-herdr fleet tail spawns keep failing — dropping the tab (assumed closed)', state.tabId);
+      state.tabId = null;
+      state.spawnFails = 0;
+    }
+  } else if (spawned > 0) {
+    state.spawnFails = 0;
   }
   // Token-tag each tail pane with its ticket + CURRENT state (plan §5.5), rendered
   // natively by herdr so concurrent panes are distinguishable. Re-tag on a state
