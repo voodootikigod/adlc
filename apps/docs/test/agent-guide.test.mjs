@@ -14,7 +14,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { buildAgentGuide } from '../lib/agent-guide.mjs';
+import { buildAgentGuide, agentGuideResponse } from '../lib/agent-guide.mjs';
 import { INTEGRATIONS } from '../lib/integration-facts.mjs';
 import { AGENT_PROMPT, AGENT_GUIDE_URL } from '../lib/install-commands.mjs';
 
@@ -35,15 +35,52 @@ test('the guide generator produces a substantial markdown document', () => {
   assert.match(body, /^# ADLC — a guide for agents/, 'the guide must address agents up front');
 });
 
-test('the route serves the generated guide as markdown', () => {
+test('the served response is a 200 markdown document', async () => {
+  // Exercised for real. hollow-test showed that with this logic in the .ts
+  // route, `return null` survived every test — an unimportable route is an
+  // untestable one, so the response is built in .mjs and asserted here.
+  const response = agentGuideResponse();
+  assert.ok(response instanceof Response, 'agentGuideResponse must return a Response');
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /text\/markdown/);
+
+  const body = await response.text();
+  assert.equal(body, buildAgentGuide(), 'the response body must be the generated guide');
+});
+
+test('the route delegates to the tested response builder', () => {
   const source = readFileSync(GUIDE_ROUTE, 'utf8');
-  assert.match(source, /buildAgentGuide/, 'the route must serve the generated guide');
-  assert.match(
-    source,
-    /text\/markdown/,
-    'the guide must be served as text/markdown so an agent parses it as markdown',
-  );
+  assert.match(source, /agentGuideResponse/, 'the route must serve the generated response');
   assert.match(source, /export function GET/, 'the route must export a GET handler');
+  // Static forever: the guide is generated at build time from repo data, so
+  // revalidation would only add cost and cache churn.
+  assert.match(source, /export const revalidate = false/, 'the guide must be statically generated');
+});
+
+test('every code fence in the guide is closed', () => {
+  // The guide is consumed by an agent as markdown. An unterminated fence turns
+  // the remainder of the document into one code block, so the agent reads the
+  // install commands as prose and the rules as decoration. hollow-test found
+  // this: dropping the closing fence from the generator survived every test.
+  const guide = buildAgentGuide();
+  const fences = guide.split('\n').filter((line) => line.trimEnd() === '```' || line.trimEnd() === '```sh');
+
+  assert.ok(fences.length > 0, 'the guide must contain fenced command blocks');
+  assert.equal(
+    fences.length % 2,
+    0,
+    `unbalanced code fences: ${fences.length} fence lines, so at least one block is never closed`,
+  );
+
+  // Balance alone is not enough — ```sh followed by ```sh is also "even".
+  for (let i = 0; i < fences.length; i += 1) {
+    const expected = i % 2 === 0 ? '```sh' : '```';
+    assert.equal(
+      fences[i].trimEnd(),
+      expected,
+      `fence #${i} should be ${expected}; fences must alternate open/close`,
+    );
+  }
 });
 
 test('every per-harness install line is generated verbatim from integration-facts', () => {

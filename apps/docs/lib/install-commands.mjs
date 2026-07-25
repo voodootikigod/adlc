@@ -33,4 +33,4 @@ export const AGENT_PROMPT = `Help me set up the ADLC (Agentic Development Lifecy
 
 /** What the installer actually does, for surfaces that need to set expectations. */
 export const INSTALL_SUMMARY =
-  'Installs the gate toolkit and the native integration for every agent harness on your machine. Requires Node 19+.';
+  'Installs the gate toolkit and the native integration for every agent harness on your machine. Requires Node 18+.';

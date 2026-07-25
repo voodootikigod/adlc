@@ -45,6 +45,21 @@ function harnessSection(integration) {
   ].join('\n');
 }
 
+/**
+ * The served response. Lives here rather than in the route because the route is
+ * `.ts` behind Next's `@/` alias and cannot be imported by the test runner — so
+ * anything expressed there is untestable. hollow-test proved that concretely:
+ * with the body in the route, replacing it with `return null` survived every
+ * test. Keeping it in `.mjs` means the response is actually exercised.
+ * @returns {Response}
+ */
+export function agentGuideResponse() {
+  return new Response(buildAgentGuide(), {
+    headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+  });
+}
+
+/** @returns {string} */
 export function buildAgentGuide() {
   const slugs = INTEGRATIONS.map((i) => i.slug);
 

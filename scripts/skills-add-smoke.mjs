@@ -23,6 +23,8 @@ import { join, resolve } from 'node:path';
 const repoRoot = resolve(process.argv[2] ?? '.');
 const EXPECTED = ['adlc', 'adlc-init', 'adlc-prosecute'];
 
+console.log(`target: ${repoRoot}`);
+
 if (!existsSync(join(repoRoot, 'skills'))) {
   console.error(`✗ ${repoRoot}/skills does not exist — nothing for the skills CLI to discover`);
   process.exit(1);
