@@ -94,6 +94,16 @@ export const TICKET_FIELDS = [
     schema: { type: 'array', items: { type: 'string' } },
   },
   {
+    name: 'completed',
+    type: 'boolean',
+    required: false,
+    // Written by planComplete, not by an author — but it lives on a stored
+    // ticket, so an update rebuilt from this table without it silently retires
+    // the flag and downstream tooling schedules the work again.
+    summary: 'Lifecycle state, set by `adlc ticket complete` rather than authored by hand. It is part of the stored document, so an update that omits it REMOVES it — build updates from `show <id> --json`, not from scratch.',
+    schema: {},
+  },
+  {
     name: 'edges',
     type: 'array of "to" objects',
     required: false,
@@ -188,8 +198,14 @@ const COMMAND_HELP = {
   update: () => [
     'adlc ticket update <id> --input <path|-> [--expect <ticketHash>] [--authorize] [--write] [--json]',
     '',
-    'Replace a ticket in place. The input must carry the same id — use reassign',
-    'for an identity change.',
+    'Replace a ticket in place. This is a REPLACEMENT, not a merge: any field',
+    'absent from the input is dropped, including `completed`. Start from',
+    '`adlc ticket show <id> --json` rather than from the field table below, or',
+    'an update will quietly retire lifecycle state it never meant to touch.',
+    '',
+    'The input must carry the same id. Changing a ticket\'s identity is a',
+    'library-only operation (TicketService.planReassign) — this CLI exposes no',
+    'reassign verb, so discard-and-recreate is the supported route here.',
     '',
     ...AUTHORIZE_NOTE,
     '',

@@ -11,6 +11,7 @@ import {
   ticketJsonSchema,
 } from '../lib/help.mjs';
 import { validateTicket } from '../lib/schema.mjs';
+import * as runtime from '../index.mjs';
 
 const PACKAGE = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const fieldNames = () => TICKET_FIELDS.map((field) => field.name);
@@ -235,6 +236,42 @@ test('the schema still constrains what the validator DOES police', () => {
   assert.ok(!satisfies(-5, properties.duration), 'duration is policed, so the schema must pin it');
   assert.ok(!satisfies('', properties.title), 'title is policed, so the schema must pin it');
   assert.ok(!satisfies('x', properties.scope), 'scope must be an array');
+});
+
+// Pre-existing declaration debt, recorded so it can only shrink. The package
+// export map sends TypeScript consumers to index.d.ts, so anything here is an
+// import that loads at runtime and fails to type-check. Nothing compared the two
+// files, which is how `planEditSession` shipped undeclared on this branch.
+// Declaring these 26 needs their real signatures — worth its own change; this
+// ratchet stops the list growing in the meantime.
+const UNDECLARED_BASELINE = new Set([
+  'ACTIVE_DIRECTORY', 'ACTIVE_MANIFEST', 'ARCHIVE_DIRECTORY', 'ARCHIVE_MANIFEST',
+  'CANONICAL_ID_KEY', 'CURRENT_TICKET_FILE', 'DEPRECATED_ID_KEYS', 'LEGACY_ARCHIVE_FILE',
+  'LEGACY_FILE', 'LOCK_DIRECTORY', 'STORE_HASH_DOMAIN', 'TICKET_HASH_DOMAIN',
+  'TRANSACTION_DIRECTORY', 'activeDirectoryStore', 'archiveDirectoryStore',
+  'canonicalValue', 'compareTicketIds', 'deepClone', 'deepFreeze',
+  'readActiveTicketPointer', 'readTicketLock', 'resolveActiveTicketAgainst',
+  'resolveActiveTicketId', 'sha256', 'ticketSlug', 'writeActiveTicket',
+]);
+
+test('no NEW runtime export goes undeclared in index.d.ts', () => {
+  const declarations = readFileSync(join(PACKAGE, 'index.d.ts'), 'utf8');
+  const undeclared = Object.keys(runtime).filter((name) => !new RegExp(`\\b${name}\\b`).test(declarations));
+  assert.deepEqual(
+    undeclared.filter((name) => !UNDECLARED_BASELINE.has(name)),
+    [],
+    'index.d.ts must declare every export added since the baseline',
+  );
+});
+
+test('the declaration-debt baseline only shrinks', () => {
+  // A baseline that is never re-checked becomes a place to hide new debt.
+  const declarations = readFileSync(join(PACKAGE, 'index.d.ts'), 'utf8');
+  const stillUndeclared = [...UNDECLARED_BASELINE].filter((name) => !new RegExp(`\\b${name}\\b`).test(declarations));
+  assert.equal(
+    stillUndeclared.length, UNDECLARED_BASELINE.size,
+    `${UNDECLARED_BASELINE.size - stillUndeclared.length} baseline entr(y|ies) now declared — remove them from UNDECLARED_BASELINE`,
+  );
 });
 
 test('the generated schema keeps its published identity', () => {

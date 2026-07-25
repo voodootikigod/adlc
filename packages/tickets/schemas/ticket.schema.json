@@ -47,6 +47,9 @@
       },
       "description": "Path globs frozen for the duration of the build; rails-guard denies edits to them. Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1."
     },
+    "completed": {
+      "description": "Lifecycle state, set by `adlc ticket complete` rather than authored by hand. It is part of the stored document, so an update that omits it REMOVES it — build updates from `show <id> --json`, not from scratch."
+    },
     "edges": {
       "type": "array",
       "items": {
