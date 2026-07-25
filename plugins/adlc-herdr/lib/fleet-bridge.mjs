@@ -35,10 +35,11 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
 
   const tickets = curr.tickets && typeof curr.tickets === 'object' ? curr.tickets : {};
   const prevTickets = prev && typeof prev.tickets === 'object' ? prev.tickets : {};
-  // The FIRST observation of a run (no prior status) is a baseline, not a set of
-  // transitions — otherwise a watcher started mid/after a run storms one
-  // notification per already-terminal ticket. Notify only once we have a prev.
-  const havePrev = Boolean(prev && typeof prev === 'object');
+  // Notify only on a transition observed WITHIN THE SAME run: the first beat of a
+  // run (no prev, or prev belongs to a different runId) is a baseline, not
+  // transitions — else a watcher starting mid-run, or a restarted run, storms one
+  // notification per already-terminal ticket.
+  const sameRun = Boolean(prev && typeof prev === 'object' && prev.runId === runId);
   const seen = seenRunIds instanceof Set ? seenRunIds : new Set();
 
   const out = EMPTY();
@@ -53,7 +54,7 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
     } else if (TERMINAL.has(state)) {
       out.boardRows.push({ ticketId: id, state });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
-      if (havePrev && prevState !== state) {
+      if (sameRun && prevState !== state) {
         if (state === 'merged') {
           out.notifications.push({ ticketId: id, kind: 'merged', title: 'ADLC fleet', body: `${sanitizeToken(id)} merged`, sound: 'done' });
         } else {
@@ -95,6 +96,13 @@ export function paneIdFromResponse(res) {
   if (!res || res.ok !== true) return null;
   const id = res.value?.result?.pane?.pane_id ?? null;
   return typeof id === 'string' && id ? id : null;
+}
+
+/** Mark a run "seen" (tab opened) ONLY when a tab was requested this beat AND it
+ *  now has an id — a transient tab failure must retry next beat, not be recorded
+ *  as handled. Kept here + tested so the watcher glue isn't an untested guard. */
+export function shouldMarkRunSeen(plan, runState) {
+  return Boolean(plan && plan.openTab && runState && runState.tabId);
 }
 
 /**

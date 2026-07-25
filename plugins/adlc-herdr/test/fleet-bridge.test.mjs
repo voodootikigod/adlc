@@ -5,8 +5,12 @@
 // unknown schema and refusing hostile ticket ids. bin/watcher.mjs only executes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, tabIdFromResponse, paneIdFromResponse, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
+import { readFleetStatus } from '../lib/adlc-state.mjs';
 
 const V = 1; // knownSchemaVersion under test
 const status = (over = {}) => ({ schemaVersion: V, runId: 'r1', tickets: {}, ...over });
@@ -77,11 +81,38 @@ test('AC6 terminal transitions → notifications; a stable terminal state does n
   assert.ok(!('t-c' in byId), 't-c was already merged in prev → no re-notification');
 });
 
-test('the FIRST observation (no prev) is a baseline — historical terminals do NOT notify', () => {
-  const curr = status({ tickets: { 't-a': { state: 'merged' }, 't-b': { state: 'failed' } } });
-  const p = planFleetBridge({ prev: null, curr, knownSchemaVersion: V, seenRunIds: new Set(['r1']) });
-  assert.deepEqual(p.notifications, [], 'no notification storm for pre-existing terminals on watcher startup');
-  assert.equal(p.boardRows.length, 2, 'they still appear as board rows');
+test('a baseline beat does NOT notify — first observation AND a NEW run vs the prior run', () => {
+  const terminals = { tickets: { 't-a': { state: 'merged' }, 't-b': { state: 'failed' } } };
+  // first observation (no prev)
+  const first = planFleetBridge({ prev: null, curr: status(terminals), knownSchemaVersion: V, seenRunIds: new Set(['r1']) });
+  assert.deepEqual(first.notifications, [], 'no storm for pre-existing terminals on startup');
+  assert.equal(first.boardRows.length, 2, 'they still appear as board rows');
+  // new run: prev belongs to a DIFFERENT runId → its tickets must not be compared
+  const prevRun = status({ runId: 'r0', tickets: { 't-a': { state: 'building' } } });
+  const newRun = status({ runId: 'r1', ...terminals });
+  const cross = planFleetBridge({ prev: prevRun, curr: newRun, knownSchemaVersion: V, seenRunIds: new Set(['r1']) });
+  assert.deepEqual(cross.notifications, [], 'a new run is a fresh baseline, not cross-run transitions');
+});
+
+test('shouldMarkRunSeen: only when a tab was requested AND actually opened', () => {
+  assert.equal(shouldMarkRunSeen({ openTab: { runId: 'r' } }, { tabId: 'w4:t1' }), true);
+  assert.equal(shouldMarkRunSeen({ openTab: { runId: 'r' } }, { tabId: null }), false); // tab failed → retry
+  assert.equal(shouldMarkRunSeen({ openTab: null }, { tabId: 'w4:t1' }), false); // not a new run
+  assert.equal(shouldMarkRunSeen(null, { tabId: 'w4:t1' }), false);
+});
+
+test('readFleetStatus reads a valid status and fails soft on bad input', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-fleet-read-'));
+  mkdirSync(join(repo, '.adlc'), { recursive: true });
+  const p = join(repo, '.adlc', 'fleet-status.json');
+  writeFileSync(p, JSON.stringify({ schemaVersion: 1, runId: 'r1', tickets: {} }));
+  assert.equal(readFleetStatus(repo).runId, 'r1');
+  assert.equal(readFleetStatus('relative/path'), null); // non-absolute root → null (pins the guard)
+  assert.equal(readFleetStatus(join(repo, 'nope')), null); // missing → null
+  writeFileSync(p, '{ not json');
+  assert.equal(readFleetStatus(repo), null); // malformed → null
+  writeFileSync(p, '[1,2,3]');
+  assert.equal(readFleetStatus(repo), null); // array is not a status object → null
 });
 
 test('runFleetPlan closes the previous run panes when a new run starts (no restart leak)', async () => {
