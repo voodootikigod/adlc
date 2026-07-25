@@ -12,7 +12,7 @@
 // The recorded revision is resolved the SAME way the gate resolves it (no --revision).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -285,60 +285,6 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
       assert.match(res.stderr, /rails deny-path of ticket T1/);
     } finally {
       rmSync(repo.dir, { recursive: true, force: true });
-    }
-  });
-
-  it('residual: renaming a ticket-store shard OUT of the trust root still tiers (rename source is not invisible)', () => {
-    // `git diff --name-only` reports ONLY the destination of a rename, so moving a
-    // shard out of `.adlc/tickets/` removes a ticket contract while the classifier
-    // sees just an unprotected path — a fail-OPEN bypass of the new prefixes. The
-    // rename SOURCE must be part of the changed-file set. Covers the active store
-    // and the archive; both are trust-root surfaces.
-    for (const storeDir of ['.adlc/tickets', '.adlc/ticket-archive']) {
-      // The ACTIVE store must be genuinely migrated (a bare `.adlc/tickets/`
-      // alongside the legacy file is an ambiguous dual store and rightly fails
-      // closed). T9 is the spare whose shard gets moved; T1 remains prosecutable,
-      // which is what makes the bypass reachable rather than merely broken. The
-      // ARCHIVE is not the active store, so it needs no migration.
-      const active = storeDir === '.adlc/tickets';
-      // The shard must exist at the BASE for the move to read as a rename at all;
-      // adding it on the feature branch would diff as a plain addition of the
-      // destination. The active shard arrives via migration, the archive one via
-      // baselineFiles — both land in the baseline commit on main.
-      const repo = scratchRepo('src/app.mjs', {
-        ledgerDir: '.adlc',
-        rails: [],
-        migrateStore: active,
-        extraTickets: active ? ['T9'] : [],
-        baselineFiles: active ? {} : { '.adlc/ticket-archive/t9--abc.json': JSON.stringify({ id: 'T9' }) },
-      });
-      const g = (...args) => execFileSync('git', args, { cwd: repo.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-      try {
-        let shard;
-        if (active) {
-          const found = readdirSync(join(repo.dir, ...storeDir.split('/'))).find((name) => name.startsWith('t9--'));
-          assert.ok(found, 'migration should have produced a T9 shard');
-          shard = `${storeDir}/${found}`;
-        } else {
-          shard = `${storeDir}/t9--abc.json`;
-        }
-        g('checkout', '-q', '-b', `move-${storeDir.replace(/\W/g, '')}`);
-        mkdirSync(join(repo.dir, 'holding'), { recursive: true });
-        g('mv', shard, 'holding/moved.json');
-        g('commit', '-qm', 'move shard out of the trust root');
-
-        // Precondition: plain --name-only really does hide the source, or this
-        // test would pass for a reason unrelated to the bypass it describes.
-        const nameOnly = g('diff', '--name-only', 'main', '--').trim().split('\n');
-        assert.ok(!nameOnly.includes(shard), 'rename source must be invisible to --name-only for this test to be meaningful');
-
-        writePasses({ ...repo, revision: 'fixed-rev' });
-        const res = runBin(['--input', '.adlc/passes.json', '--ticket', 'T1', '--base', 'main', '--dir', '.adlc', '--revision', 'fixed-rev', '--author-provider', 'anthropic', '--json'], repo.dir);
-        assert.equal(res.status, 2, `moving a shard out of ${storeDir} must tier`);
-        assert.match(res.stderr, /trust-root ticket store/);
-      } finally {
-        rmSync(repo.dir, { recursive: true, force: true });
-      }
     }
   });
 

@@ -26,8 +26,20 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     assert.ok(r.reasons.some((x) => x.includes('scripts/rails-guard-ci.mjs')));
   });
 
-  it('TRUE for the CI workflow template and hash pin and tickets.json', () => {
-    for (const f of ['docs/ci/rails-guard.yml', 'scripts/test/rails-guard-workflow-hashes.json', '.adlc/tickets.json']) {
+  it('TRUE for the CI workflow template and hash pin', () => {
+    for (const f of ['docs/ci/rails-guard.yml', 'scripts/test/rails-guard-workflow-hashes.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
+      assert.ok(r.reasons.some((x) => x.includes(f)));
+    }
+  });
+
+  it('TRUE for the ROOT install manifests (package.json / package-lock.json) — #326 Codex F1', () => {
+    // A change to the root package.json (its `scripts`/deps) or the lockfile is a
+    // pre-gate control surface: CI runs candidate `npm install` before the gate, so
+    // a postinstall script or a repointed dependency executes in the gate's own job.
+    // Tiering them means such a change cannot merge without a cross-model attestation.
+    for (const f of ['package.json', 'package-lock.json']) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
       assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
       assert.ok(r.reasons.some((x) => x.includes(f)));
@@ -61,30 +73,30 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     assert.ok(r.reasons.some((x) => x.includes('T7') && x.includes('test/auth/**')));
   });
 
-  // The sharded backend is the SAME trust root as `.adlc/tickets.json`. When a
-  // repo migrates, the exact-file entry stops matching and every shard edit would
-  // declassify unless the store directory itself is a trust-root surface.
-  it('TRUE for a shard in the sharded ticket store', () => {
-    const r = classifyTrustRootTier({
-      changedFiles: ['.adlc/tickets/t64--ec791ef8cffb458098b48e73556d0f644cd8c1845bf94cc167060c1e3aca4a42.json'],
-      tickets: TICKETS,
-    });
-    assert.equal(r.isTrustRootTier, true);
-    assert.ok(r.reasons.some((x) => x.includes('.adlc/tickets/')));
-  });
+});
 
-  it('TRUE for the sharded store manifest and for the archive', () => {
-    for (const f of ['.adlc/tickets/.store.json', '.adlc/ticket-archive/.store.json', '.adlc/ticket-archive/t1--abc.json']) {
+describe('classifyTrustRootTier — the ticket store is NOT a tier surface (#326)', () => {
+  // rails-guard-ci owns the ticket store (add-vs-alter contract); routing it through
+  // the cross-model tier too made every ticketed PR tier for no added protection and
+  // could not be soundly attested (the reviewed revision excludes the store). So a
+  // ticket-store change is trust-root tier ONLY if it also hits a rails deny-path.
+  it('FALSE for the legacy file, active shards, the store index, and the archive', () => {
+    for (const f of [
+      '.adlc/tickets.json',
+      '.adlc/tickets/t64--ec791ef8cffb458098b48e73556d0f644cd8c1845bf94cc167060c1e3aca4a42.json',
+      '.adlc/tickets/.store.json',
+      '.adlc/ticket-archive/.store.json',
+      '.adlc/ticket-archive/t1--abc.json',
+    ]) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
-      assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
+      assert.equal(r.isTrustRootTier, false, `${f} must NOT tier on the ticket-store surface alone`);
     }
   });
 
-  // The test-path exemption applies to package prefixes only. A shard is DATA the
-  // gate reads, so a ticket id that happens to look test-ish must not exempt it.
-  it('TRUE for a shard whose name would trip the test-file heuristic', () => {
-    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets/t-test--abc.test.mjs'], tickets: TICKETS });
+  it('a ticket-store change co-changed with an enforcement package still tiers (via the package)', () => {
+    const r = classifyTrustRootTier({ changedFiles: ['.adlc/tickets.json', 'packages/prosecute/lib/run.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.every((x) => !x.includes('tickets')), 'the ticket file contributes no reason');
   });
 });
 
@@ -105,6 +117,16 @@ describe('classifyTrustRootTier — negative / ordinary diffs', () => {
     const r = classifyTrustRootTier({ changedFiles: ['packages/spec-lint/lib/y.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, false);
     assert.deepEqual(r.reasons, []);
+  });
+
+  it('FALSE for a NESTED package.json outside an enforcement package (root-manifest rule is exact, #326 F1)', () => {
+    // The root-install-surface rule is an EXACT match on the repo-root manifests; a
+    // nested non-enforcement manifest must not tier on it (an enforcement package's
+    // own package.json still tiers via its prefix — covered elsewhere).
+    for (const f of ['apps/docs/package.json', 'packages/spec-lint/package.json', 'apps/docs/package-lock.json']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, false, `${f} must NOT tier on the root-manifest rule`);
+    }
   });
 
   it('FALSE for a source change outside any rails deny-path', () => {

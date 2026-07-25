@@ -5,7 +5,7 @@ import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFil
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
-import { recordCrossModelReview } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -243,6 +243,64 @@ if (positionals[0] === 'record-cross-model') {
     console.log(`recorded cross-model ${entry.data.verdict} for ${values.ticket} @ ${revision} (${entry.data.provider} vs author ${entry.data.authorProvider})`);
   }
   process.exit(0);
+}
+
+// --- tier-check subcommand (#326: the CI trust-root cross-model gate) ---
+// Classify the change; if trust-root tier, REQUIRE a distinct-provider cross-model
+// approve bound to the reviewed revision (fail closed). Always surfaces the tier
+// decision so "no review required" and "review missing" are distinguishable.
+if (positionals[0] === 'tier-check') {
+  let root;
+  let changed;
+  let tickets;
+  try {
+    root = repoRoot();
+    const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
+    const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
+      .split('\0').filter(Boolean);
+    changed = [...new Set([...tracked, ...untracked, ...renamedSources(values.base, root)])];
+    tickets = loadTicketsForTier(values.dir, root, values.base); // rails deny-path source
+  } catch (err) {
+    opError(`tier-check: cannot determine the changed-file set — base ref '${values.base}' unresolvable. Fetch it (git fetch origin ${values.base}) or pass --base <ref>. Underlying: ${err.message}`);
+  }
+  let tier;
+  try {
+    tier = classifyTrustRootTier({ changedFiles: changed, tickets });
+  } catch (err) {
+    opError(`tier-check: cannot classify the change: ${err.message}`);
+  }
+
+  // AC3: the tier decision is ALWAYS visible — tiered or not.
+  if (!tier.isTrustRootTier) {
+    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
+    else console.log('tier-check: NOT trust-root tier — no cross-model review required.');
+    process.exit(0);
+  }
+  console.error('tier-check: TRUST-ROOT tier — a distinct-provider cross-model approve is REQUIRED. Reasons:');
+  for (const reason of tier.reasons) console.error(`  - ${reason}`);
+
+  const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROVIDER;
+  if (!authorProvider) {
+    opError('tier-check: trust-root tier but no --author-provider / ADLC_AUTHOR_PROVIDER — distinctness cannot be proven; failing closed');
+  }
+  const revision = resolveProsecutionRevision({ dir: values.dir, revision: values.revision });
+  if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
+
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider });
+  if (values.json) {
+    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision });
+    process.exit(satisfied ? 0 : 2);
+  }
+  if (satisfied) {
+    console.log(`tier-check: cross-model approve found for revision ${revision} (reviewer distinct from author ${authorProvider}). PASS.`);
+    process.exit(0);
+  }
+  console.error(
+    `tier-check: NO cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +
+    `Record one after a distinct-provider adversarial review:\n` +
+    `  adlc-prosecute record-cross-model --ticket <id> --provider <distinct-provider> --author-provider ${authorProvider} --verdict approve --revision ${revision}`
+  );
+  process.exit(2);
 }
 
 // --- record-finding mode (P5 → P7 bridge) ---

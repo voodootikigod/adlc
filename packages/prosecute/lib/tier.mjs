@@ -10,28 +10,33 @@
 import { globMatch } from '@adlc/core';
 
 // 1. Exact trust-root files: the rails-guard CI backstop, its workflow template,
-//    the workflow hash pin, and the ticket table every downstream gate reads.
+//    and the workflow hash pin — the code/config surfaces whose meaning a
+//    same-model review of the author's own change cannot independently check.
+//
+// The ticket STORE (`.adlc/tickets.json`, the sharded `.adlc/tickets/`, and
+// `.adlc/ticket-archive/`) is deliberately NOT here (#326). rails-guard-ci already
+// owns that surface with an add-vs-alter contract: a PR may ADD a ticket (which
+// grants no privilege over existing rails) but can never ALTER or REMOVE an
+// existing ticket's contract — only the protected-base admin ceremony can. So a
+// ticket-store change is either privilege-neutral (an addition) or already blocked
+// (an alteration); routing it through the cross-model tier as well made every
+// ADLC-ticketed PR trust-root tier for no added protection, and — because the
+// reviewed revision excludes the ticket store — could not even be soundly
+// attested. Producer packages that WRITE the store still tier (below).
 const TRUST_ROOT_FILES = [
   'scripts/rails-guard-ci.mjs',
   'docs/ci/rails-guard.yml',
   'scripts/test/rails-guard-workflow-hashes.json',
-  '.adlc/tickets.json',
-];
-
-// 1b. The SHARDED ticket store — the same trust root as `.adlc/tickets.json`,
-// just spread across per-ticket files. Exact-file matching cannot express it (one
-// entry per ticket, and new shards appear as tickets are authored), so the whole
-// store directory is a trust-root PREFIX. Without this, migrating a repo from the
-// legacy file to the directory backend would silently declassify every edit to
-// the ticket table: the exact-file entry above stops matching and nothing else
-// covers `.adlc/tickets/`. The archive is included because a ticket moved there
-// still describes what was enforced, so mutating it rewrites gate history.
-//
-// Unconditional, like TRUST_ROOT_FILES: these are DATA the gate reads, so the
-// test-path exemption that applies to package prefixes must not apply here.
-const TRUST_ROOT_PREFIXES = [
-  '.adlc/tickets/',
-  '.adlc/ticket-archive/',
+  // The ROOT install manifests (#326 Codex F1). CI runs candidate `npm install`
+  // BEFORE the gate, so a `scripts.postinstall` in the root package.json — or a
+  // dependency repointed by the lockfile — executes inside the gate's own job and
+  // could poison the toolchain the gate imports. Neither file is a tier surface by
+  // package-prefix and (verified) neither is in CODEOWNERS, so a PR touching only
+  // them would otherwise merge with no cross-model review. EXACT-match only: a
+  // NESTED package.json tiers solely via its package prefix, not this rule. The gate
+  // step additionally reinstalls with --ignore-scripts as defense-in-depth.
+  'package.json',
+  'package-lock.json',
 ];
 
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
@@ -86,9 +91,13 @@ function isTestFile(path) {
 /**
  * Classify a change as trust-root tier.
  *
+ * The ticket STORE is intentionally not a tier surface (#326) — rails-guard-ci
+ * owns it with an add-vs-alter contract, so ticket-store changes are either
+ * privilege-neutral additions or already-blocked alterations. See TRUST_ROOT_FILES.
+ *
  * @param {object} args
  * @param {string[]} [args.changedFiles]  repo-relative POSIX paths
- * @param {object[]} [args.tickets]       the array from .adlc/tickets.json
+ * @param {object[]} [args.tickets]       the ticket array (rails deny-path source)
  * @returns {{ isTrustRootTier: boolean, reasons: string[] }}
  */
 export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) {
@@ -99,12 +108,7 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) 
     if (typeof raw !== 'string' || raw.trim() === '') continue;
     const path = toPosix(raw);
 
-    if (TRUST_ROOT_FILES.includes(path)) {
-      push(`touches trust-root file ${path}`);
-    }
-    for (const prefix of TRUST_ROOT_PREFIXES) {
-      if (path.startsWith(prefix)) push(`touches trust-root ticket store ${prefix}`);
-    }
+    if (TRUST_ROOT_FILES.includes(path)) push(`touches trust-root file ${path}`);
     // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
     // touches neither, so it is exempt here (#154/T41). The exact-file check
     // above and the rails-deny-path check below stay unconditional.
