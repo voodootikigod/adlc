@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
+import { displayWidth } from '../lib/display-width.mjs';
 
 let repo;
 beforeEach(() => { repo = mkdtempSync(join(tmpdir(), 'adlc-herdr-board-')); });
@@ -411,6 +412,39 @@ test('an over-long phase cannot erase the phase AND the id tail', () => {
       assert.ok(header.length <= Math.max(20, width), `overflow — ${context}`);
     }
   }
+});
+
+test('no row exceeds the pane in terminal CELLS, not just code units', () => {
+  // A CJK path is two cells per character, so a header measured 80 by .length
+  // occupied ~160 and wrapped. The redraw is cursor-home, not an alternate
+  // screen, so a wrapped line corrupts the frame shape on every refresh.
+  // Each row's content must be long enough in CELLS to force truncation, or the
+  // assertion passes under the old code-unit `cut` too and proves nothing. A
+  // first version used ~14 CJK characters per row: 38 cells in a 40-column
+  // pane, so nothing was ever truncated and reverting the fix did not fail it.
+  const state = baseState();
+  state.width = 40;
+  state.repoRoot = `/Users/開発/${'プロジェクト'.repeat(6)}/リポジトリ`;
+  state.groups.ready = [t('t-cjk', { title: '日本語のチケットのタイトルです'.repeat(3) })];
+  state.paneRows = [{ paneId: 'w1:p1', agent: 'クロード'.repeat(4), agentStatus: '作業中'.repeat(4), ticket: 't-cjk' }];
+  state.ledger = [{ seq: 1, gate: '検証ゲート'.repeat(5), ticket: 't-cjk' }];
+  const lines = renderBoard(state).split('\n').map((line) => line.replace(/\x1b\[[0-9;]*m/g, ''));
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 40, `line occupies ${displayWidth(line)} cells: ${line}`);
+  }
+  // DENOMINATOR: at least one row must actually have been cut, or the loop
+  // above is asserting over content that always fit.
+  assert.ok(lines.some((line) => displayWidth(line) > 30), 'rows must be filling the pane, not trivially short');
+});
+
+test('the header keeps its fields under a wide-character root', () => {
+  const state = baseState();
+  state.width = 60;
+  state.repoRoot = `/Users/開発/${'プロジェクト'.repeat(4)}/repo`;
+  const header = headerOf(state);
+  assert.ok(header.includes('t-b'), `ticket lost: ${header}`);
+  assert.ok(header.includes('P4'), `phase lost: ${header}`);
+  assert.ok(displayWidth(header) <= 60, `header occupies ${displayWidth(header)} cells: ${header}`);
 });
 
 test('elision never splits a surrogate pair', () => {

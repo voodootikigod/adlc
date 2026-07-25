@@ -4,6 +4,7 @@
 // its own SGR styling (never clears or cursor movement — the glue owns the
 // screen).
 import { sanitizeToken } from './sanitize.mjs';
+import { displayWidth, tailToWidth, truncateToWidth } from './display-width.mjs';
 
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
@@ -19,15 +20,14 @@ const MIN_ROOT = 6;
 /** Shortest elided ticket id worth rendering, same reasoning as MIN_ROOT. */
 const MIN_ID = 6;
 
-/** Keep the last `n` characters, splitting on code POINTS. Slicing code units
- *  can cut an astral character in half and render a replacement box exactly
- *  where the identifying tail should be. */
-const tailOf = (text, n) => [...text].slice(-n).join('');
-
-/** Sanitize to the value's OWN length, never to the pane width: capping at the
- *  width clips the front, which would leave the elision below keeping the middle
- *  of a path instead of its leaf. Escapes must be stripped before anything is
- *  MEASURED, or a value that only looked long (or short) distorts the fit. */
+/**
+ * Strip escapes and collapse whitespace WITHOUT truncating.
+ *
+ * sanitizeToken's own cap counts code units and cuts from the FRONT, which is
+ * wrong twice over here: every budget below is in terminal cells, and the
+ * elisions keep tails. Escapes must still be stripped before anything is
+ * MEASURED, or a value that only looked long distorts the fit.
+ */
 function clean(value) {
   const raw = String(value ?? '');
   return sanitizeToken(raw, Math.max(raw.length, 1));
@@ -51,15 +51,16 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   const withRoot = (rootText) => `ADLC board · repo ${rootText} · ${suffix}`;
 
   const full = withRoot(root);
-  if (full.length <= width) return full;
+  if (displayWidth(full) <= width) return full;
 
-  const budget = width - withRoot('').length; // room the root itself may take
-  if (budget >= MIN_ROOT) return withRoot(`…${tailOf(root, budget - 1)}`);
+  // Cells, not code units: a CJK path measured 80 by .length occupied ~160.
+  const budget = width - displayWidth(withRoot('')); // room the root itself may take
+  if (budget >= MIN_ROOT) return withRoot(`…${tailToWidth(root, budget - 1)}`);
 
   // No root fits. Drop it, then the banner.
   const banner = `ADLC board · ${suffix}`;
-  if (banner.length <= width) return banner;
-  if (suffix.length <= width) return suffix;
+  if (displayWidth(banner) <= width) return banner;
+  if (displayWidth(suffix) <= width) return suffix;
 
   // Even the bare suffix overflows — a canonical 28-char generated id does this
   // below 40 columns. Elide the ID rather than let cut() take the phase off the
@@ -71,12 +72,12 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   // drop BOTH fields — the failure this whole ladder exists to prevent. The id
   // keeps its tail, the phase keeps its head.
   const shown = phaseText
-    ? phaseText.slice(0, Math.max(2, width - 'ticket '.length - MIN_ID - 3))
+    ? truncateToWidth(phaseText, Math.max(2, width - 'ticket '.length - MIN_ID - 3))
     : '';
   const tail = shown ? ` · ${shown}` : '';
-  const room = width - 'ticket '.length - tail.length;
+  const room = width - 'ticket '.length - displayWidth(tail);
   if (room < MIN_ID) return suffix; // pane too narrow for anything legible; cut() clamps
-  return `ticket …${tailOf(label, room - 1)}${tail}`;
+  return `ticket …${tailToWidth(label, room - 1)}${tail}`;
 }
 
 /** The board's footer hint line (with its own SGR). Pure so the refresh-seconds
@@ -92,7 +93,9 @@ export function boardFooter(refreshMs) {
  *  "…N more" marker. */
 export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
   const w = clampWidth(width);
-  const cut = (text) => sanitizeToken(String(text), w);
+  // Truncate by terminal CELLS. sanitizeToken's cap is code units, so a row of
+  // CJK text passed its check at `w` characters and then occupied 2w columns.
+  const cut = (text) => truncateToWidth(clean(text), w);
   const lines = [];
   // `selected` is the flat index of the highlighted ticket row across all three
   // sections (t-herdr-7); a non-integer or out-of-range value marks nothing.
