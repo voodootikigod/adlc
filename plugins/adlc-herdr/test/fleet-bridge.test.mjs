@@ -5,7 +5,7 @@
 // unknown schema and refusing hostile ticket ids. bin/watcher.mjs only executes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, tabIdFromResponse, paneIdFromResponse, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 const V = 1; // knownSchemaVersion under test
@@ -73,8 +73,28 @@ test('AC6 terminal transitions → notifications; a stable terminal state does n
   const byId = Object.fromEntries(p.notifications.map((n) => [n.ticketId, n]));
   assert.equal(byId['t-a'].kind, 'merged'); assert.equal(byId['t-a'].sound, 'done');
   assert.equal(byId['t-b'].kind, 'failed'); assert.equal(byId['t-b'].sound, 'request');
-  assert.equal(byId['t-b'].worktreePath, '.worktrees/fleet-r1');
+  assert.equal(byId['t-b'].worktreePath, '.worktrees/fleet-t-b'); // per-TICKET worktree (§6.3), not the run
   assert.ok(!('t-c' in byId), 't-c was already merged in prev → no re-notification');
+});
+
+test('the FIRST observation (no prev) is a baseline — historical terminals do NOT notify', () => {
+  const curr = status({ tickets: { 't-a': { state: 'merged' }, 't-b': { state: 'failed' } } });
+  const p = planFleetBridge({ prev: null, curr, knownSchemaVersion: V, seenRunIds: new Set(['r1']) });
+  assert.deepEqual(p.notifications, [], 'no notification storm for pre-existing terminals on watcher startup');
+  assert.equal(p.boardRows.length, 2, 'they still appear as board rows');
+});
+
+test('runFleetPlan closes the previous run panes when a new run starts (no restart leak)', async () => {
+  const closed = [];
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-old', 'w4:p1']]) };
+  await runFleetPlan({
+    plan: { degrade: false, openTab: { runId: 'r2', title: 'fleet: run-r2' }, tailPanes: [], notifications: [], boardRows: [] },
+    repoRoot: '/r', state,
+    openTab: async () => 'w4:t2', spawn: async () => 'w4:p2', closePane: async (p) => closed.push(p), notify: async () => {},
+  });
+  assert.deepEqual(closed, ['w4:p1'], 'the prior run pane is closed');
+  assert.equal(state.tabId, 'w4:t2', 'the new tab is adopted');
+  assert.equal(state.tailed.has('t-old'), false, 'the old pane is forgotten');
 });
 
 test('AC7 terminal tickets → board summary rows; in-flight ones do not', () => {
@@ -113,6 +133,16 @@ test('runFleetPlan opens the tab, tails each ticket ONCE, then CLOSES the pane o
   assert.equal(state.tailed.has('t-a'), false);
   await runFleetPlan({ plan: merged, ...deps }); // stable terminal → no double-close
   assert.equal(calls.close.length, 1, 'a terminated pane is closed exactly once');
+});
+
+test('tabIdFromResponse / paneIdFromResponse extract the id and fail soft', () => {
+  assert.equal(tabIdFromResponse({ ok: true, value: { result: { tab: { tab_id: 'w4:t2' } } } }), 'w4:t2');
+  assert.equal(tabIdFromResponse({ ok: true, value: { result: { tab_id: 'w4:t3' } } }), 'w4:t3');
+  assert.equal(tabIdFromResponse({ ok: false }), null);
+  assert.equal(tabIdFromResponse(null), null);
+  assert.equal(paneIdFromResponse({ ok: true, value: { result: { pane: { pane_id: 'w4:p5' } } } }), 'w4:p5');
+  assert.equal(paneIdFromResponse({ ok: true, value: { result: {} } }), null);
+  assert.equal(paneIdFromResponse({ ok: false }), null);
 });
 
 test('runFleetPlan on a degrade performs no effects', async () => {

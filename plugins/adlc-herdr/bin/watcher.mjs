@@ -16,7 +16,7 @@ import {
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
-import { planFleetBridge, runFleetPlan, fleetTabArgs, fleetPaneCloseArgs, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, runFleetPlan, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
@@ -53,21 +53,15 @@ async function bridgeFleet(repoRoot) {
     const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
     const curr = readFleetStatus(repoRoot);
     const plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
-    // Fresh run state on a new run, but DON'T mark it seen yet — only after the
-    // tab actually opens, so a transient tab failure retries next beat.
-    if (plan.openTab) st.runState = { tabId: null, tailed: new Map() };
+    // On a new run, runFleetPlan closes the prior run's panes and resets the
+    // (persistent) run state in place — so DON'T reassign it here, or those panes
+    // would be abandoned. The run is marked seen only after its tab opens.
     await runFleetPlan({
       plan,
       repoRoot,
       state: st.runState,
-      openTab: async (title) => {
-        const r = await runHerdrJson(fleetTabArgs(title));
-        return r.ok ? (r.value?.result?.tab?.tab_id ?? r.value?.result?.tab_id ?? null) : null;
-      },
-      spawn: async (argv) => {
-        const r = await runHerdrJson(argv);
-        return r.ok ? (r.value?.result?.pane?.pane_id ?? null) : null;
-      },
+      openTab: async (title) => tabIdFromResponse(await runHerdrJson(fleetTabArgs(title))),
+      spawn: async (argv) => paneIdFromResponse(await runHerdrJson(argv)),
       closePane: (paneId) => runHerdr(fleetPaneCloseArgs(paneId)),
       notify: (title, body, sound) => runHerdr(notifyArgs(title, body, sound)),
     });

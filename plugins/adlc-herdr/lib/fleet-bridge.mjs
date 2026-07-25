@@ -35,6 +35,10 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
 
   const tickets = curr.tickets && typeof curr.tickets === 'object' ? curr.tickets : {};
   const prevTickets = prev && typeof prev.tickets === 'object' ? prev.tickets : {};
+  // The FIRST observation of a run (no prior status) is a baseline, not a set of
+  // transitions — otherwise a watcher started mid/after a run storms one
+  // notification per already-terminal ticket. Notify only once we have a prev.
+  const havePrev = Boolean(prev && typeof prev === 'object');
   const seen = seenRunIds instanceof Set ? seenRunIds : new Set();
 
   const out = EMPTY();
@@ -49,14 +53,15 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
     } else if (TERMINAL.has(state)) {
       out.boardRows.push({ ticketId: id, state });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
-      if (prevState !== state) {
+      if (havePrev && prevState !== state) {
         if (state === 'merged') {
           out.notifications.push({ ticketId: id, kind: 'merged', title: 'ADLC fleet', body: `${sanitizeToken(id)} merged`, sound: 'done' });
         } else {
-          // herdr notifications carry no action buttons, so the worktree to
-          // inspect is surfaced in the BODY (a one-click shell needs a herdr
-          // notification-action API that does not exist yet — phase 4).
-          const worktreePath = `.worktrees/fleet-${runId}`;
+          // Per §6.3 each ticket runs in its OWN worktree `.worktrees/fleet-<id>`
+          // (the id is validated above, so the path is safe). herdr notifications
+          // carry no action buttons, so the worktree to inspect is in the BODY
+          // (a one-click shell needs a herdr notification-action API — phase 4).
+          const worktreePath = `.worktrees/fleet-${id}`;
           out.notifications.push({ ticketId: id, kind: state, title: 'ADLC fleet', body: `${sanitizeToken(id)} ${state} — inspect ${worktreePath}`, sound: 'request', worktreePath });
         }
       }
@@ -78,6 +83,20 @@ export function fleetPaneCloseArgs(paneId) {
   return ['pane', 'close', paneId];
 }
 
+// Pull the created tab/pane id out of a runHerdrJson result, failing soft to
+// null (kept here + tested so the watcher glue stays a one-liner, not untested
+// response-shape parsing).
+export function tabIdFromResponse(res) {
+  if (!res || res.ok !== true) return null;
+  const id = res.value?.result?.tab?.tab_id ?? res.value?.result?.tab_id ?? null;
+  return typeof id === 'string' && id ? id : null;
+}
+export function paneIdFromResponse(res) {
+  if (!res || res.ok !== true) return null;
+  const id = res.value?.result?.pane?.pane_id ?? null;
+  return typeof id === 'string' && id ? id : null;
+}
+
 /**
  * Execute a fleet plan through injected effects, keeping per-run mutable `state`
  * (`{ tabId, tailed:Map<ticketId,paneId> }`) so the tab opens once, each ticket
@@ -88,6 +107,11 @@ export function fleetPaneCloseArgs(paneId) {
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify }) {
   if (!plan || plan.degrade) return;
   if (plan.openTab) {
+    // A new run: close the PREVIOUS run's tail panes (they belong to the old
+    // tab) and reset, so a restarted run never abandons/leaks panes.
+    for (const paneId of state.tailed.values()) if (paneId) await closePane(paneId);
+    state.tailed.clear();
+    state.tabId = null;
     const tabId = await openTab(plan.openTab.title);
     if (typeof tabId === 'string' && tabId) state.tabId = tabId;
   }
