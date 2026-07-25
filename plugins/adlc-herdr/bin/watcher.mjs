@@ -57,7 +57,7 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 // Phase-4 follow-up alongside the notification-action API (see fleet-bridge.mjs).
 const fleetState = new Map();
 
-async function bridgeFleet(repoRoot, full = false) {
+async function bridgeFleet(repoRoot, full) {
   const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
   fleetState.set(repoRoot, st);
   // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
