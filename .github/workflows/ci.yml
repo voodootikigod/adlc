@@ -28,7 +28,19 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install
-        run: npm install
+        # #326 Codex F1 (round 3): install with NO lifecycle scripts, then rebuild ONLY
+        # a trusted allowlist of native deps. This is the job that runs the trust-root
+        # cross-model gate below; a candidate `postinstall` in ANY workspace/dep manifest
+        # would otherwise run here and could shim node/npm onto $GITHUB_PATH (persisted
+        # to later steps), defeating the gate. The repo has NO first-party lifecycle
+        # scripts, and the ONLY deps that declare one are these lockfile-pinned native
+        # packages (verified via package-lock `hasInstallScript`), so this reproduces a
+        # normal install for any legitimate PR while never running candidate-controlled
+        # code. A candidate cannot extend the allowlist without a lockfile change, which
+        # tiers. Keep this list in sync with `hasInstallScript` deps.
+        run: |
+          npm install --ignore-scripts
+          npm rebuild esbuild sharp msgpackr-extract protobufjs @google/genai
 
       - name: Test
         run: npm test
@@ -152,13 +164,12 @@ jobs:
           # recorded the attestation against — undoing any install-time lockfile
           # churn. node_modules (gitignored) is untouched, so the gate still runs.
           git checkout --quiet --force "$HEAD_SHA"
-          # #326 Codex F1 defense-in-depth: the job's top-level `npm install` ran the
-          # candidate's install scripts, which could have poisoned the node_modules the
-          # gate imports (@adlc/core, @adlc/gate-manifest). Rebuild the toolchain from
-          # the checked-out sources with NO scripts before trusting it. `npm ci` (not
-          # install) so the lockfile — hence the computed revision — is not rewritten;
-          # the root install manifests are also a tier surface, so a lockfile/scripts
-          # change cannot merge unreviewed in the first place.
+          # Rebuild node_modules for the HEAD tree with NO scripts. The job's top-level
+          # Install already ran --ignore-scripts (so no candidate lifecycle script has
+          # executed in this runner — see that step), making this defense-in-depth: it
+          # also re-links the @adlc/* workspaces the gate imports to the checked-out HEAD
+          # sources. `npm ci` (not install) so the lockfile — hence the computed
+          # revision — is not rewritten.
           npm ci --ignore-scripts
           node packages/prosecute/bin/adlc-prosecute.mjs tier-check --base "origin/$BASE_REF" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
 
