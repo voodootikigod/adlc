@@ -28,7 +28,19 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install
-        run: npm install
+        # #326 Codex F1 (round 3): install with NO lifecycle scripts, then rebuild ONLY
+        # a trusted allowlist of native deps. This is the job that runs the trust-root
+        # cross-model gate below; a candidate `postinstall` in ANY workspace/dep manifest
+        # would otherwise run here and could shim node/npm onto $GITHUB_PATH (persisted
+        # to later steps), defeating the gate. The repo has NO first-party lifecycle
+        # scripts, and the ONLY deps that declare one are these lockfile-pinned native
+        # packages (verified via package-lock `hasInstallScript`), so this reproduces a
+        # normal install for any legitimate PR while never running candidate-controlled
+        # code. A candidate cannot extend the allowlist without a lockfile change, which
+        # tiers. Keep this list in sync with `hasInstallScript` deps.
+        run: |
+          npm install --ignore-scripts
+          npm rebuild esbuild sharp msgpackr-extract protobufjs @google/genai
 
       - name: Test
         run: npm test
@@ -126,6 +138,40 @@ jobs:
       - name: pi live prosecute proof (T26 AC5)
         if: matrix.node-version == 22
         run: node scripts/pi-live-prosecute.mjs
+
+      # #326: the trust-root cross-model review gate, finally INVOKED — and FOLDED
+      # into this REQUIRED job (a separate job could not be made a required check on
+      # this repo's plan, so it would enforce nothing). A trust-root-tier change (an
+      # enforcement/producer package, a rails deny-path, or a trust-root file)
+      # requires a distinct-provider cross-model `approve` bound to the reviewed
+      # revision; fails closed (exit 2) with no matching attestation. The ticket
+      # STORE is deliberately NOT a tier surface — rails-guard-ci owns it. Runs on
+      # the Node 20 leg only, LAST, and on PRs only (a push has no base diff).
+      - name: Trust-root cross-model gate (#326)
+        if: matrix.node-version == 20 && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # This repo's default PR author provider; distinctness is checked against
+          # it, so a same-provider review never satisfies the gate. Override with an
+          # ADLC_AUTHOR_PROVIDER repository variable if the author model changes.
+          ADLC_AUTHOR_PROVIDER: ${{ vars.ADLC_AUTHOR_PROVIDER || 'anthropic' }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          git fetch --no-tags origin "$HEAD_SHA"
+          # Check out the PR HEAD (this job otherwise runs on the merge commit) with
+          # --force, so the worktree is the exact committed head tree the author
+          # recorded the attestation against — undoing any install-time lockfile
+          # churn. node_modules (gitignored) is untouched, so the gate still runs.
+          git checkout --quiet --force "$HEAD_SHA"
+          # Rebuild node_modules for the HEAD tree with NO scripts. The job's top-level
+          # Install already ran --ignore-scripts (so no candidate lifecycle script has
+          # executed in this runner — see that step), making this defense-in-depth: it
+          # also re-links the @adlc/* workspaces the gate imports to the checked-out HEAD
+          # sources. `npm ci` (not install) so the lockfile — hence the computed
+          # revision — is not rewritten.
+          npm ci --ignore-scripts
+          node packages/prosecute/bin/adlc-prosecute.mjs tier-check --base "origin/$BASE_REF" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
 
   # T31 drift canary: the SAME two OpenCode live proofs against opencode-ai@latest.
   # ADVISORY by design (continue-on-error): upstream releases near-daily, and a
