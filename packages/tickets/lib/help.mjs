@@ -16,6 +16,31 @@
 export const SCHEMA_ID = 'https://adlc.dev/schemas/ticket-v1.json';
 
 /**
+ * The categories @adlc/ticket-sync will round-trip.
+ *
+ * Duplicated rather than imported: CONVENTIONS rule 1 keeps this package free
+ * of cross-package runtime deps. scripts/test/ticket-help-contract.test.mjs
+ * asserts this list equals ticket-sync's enum exactly, so the copy cannot
+ * drift silently.
+ *
+ * The published SCHEMA deliberately does NOT enforce these — constraining a
+ * field validateTicket ignores would narrow v1 under a fixed . The check
+ * belongs at authoring time, which is where the choice is actually made.
+ */
+export const SYNC_CATEGORIES = Object.freeze([
+  'feature', 'bug', 'bugfix', 'refactor', 'docs', 'chore', 'test',
+  'spec', 'contract', 'architecture',
+]);
+
+/** A warning for a category ticket-sync would reject, or null. */
+export function categoryWarning(category) {
+  if (typeof category !== 'string' || category.length === 0) return null;
+  if (SYNC_CATEGORIES.includes(category)) return null;
+  return `warning: category "${category}" is not one ticket-sync accepts, so a synced ticket cannot converge. `
+    + `Use one of: ${SYNC_CATEGORIES.join(", ")}.`;
+}
+
+/**
  * `required` is author-facing: the only field a create input must carry.
  * The JSON Schema below additionally requires `id`, because it describes a
  * *stored* ticket — the service mints the id on the way in.

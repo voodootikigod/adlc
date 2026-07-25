@@ -84,3 +84,32 @@ test('a TypeScript consumer can import every runtime export', { skip: !existsSyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('declarations do not promise behavior the implementation lacks', { skip: !existsSync(TSC) && 'typescript not installed' }, () => {
+  // deepClone was declared `<T>(value: T): T`, so `deepClone(new Date())`
+  // inferred Date and a following `.getTime()` compiled — while the runtime
+  // returns an ISO string and throws. A signature wider than the implementation
+  // moves the failure past the compiler, which is worse than no types at all.
+  const dir = mkdtempSync(join(ROOT, 'node_modules', '.adlc-dts-negative-'));
+  try {
+    const fixture = join(dir, 'negative.ts');
+    writeFileSync(fixture, [
+      "import { deepClone } from '@adlc/tickets';",
+      // JSON-representable input is fine and keeps its type.
+      "export const ok: { a: number } = deepClone({ a: 1 });",
+      // A Date is NOT JSON-representable, so this must be rejected at compile
+      // time rather than compiling and failing at runtime.
+      "export const bad = deepClone(new Date());",
+      '',
+    ].join('\n'));
+    const result = spawnSync(process.execPath, [
+      TSC, '--noEmit', '--strict', '--lib', 'es2022', '--types', 'node',
+      '--module', 'nodenext', '--moduleResolution', 'nodenext', fixture,
+    ], { encoding: 'utf8', cwd: ROOT });
+    assert.notEqual(result.status, 0, 'deepClone(new Date()) must not type-check');
+    assert.match(`${result.stdout}${result.stderr}`, /Date/, 'and the error must point at the Date argument');
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /negative\.ts\(2,/, 'the JSON-shaped call must still be accepted');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

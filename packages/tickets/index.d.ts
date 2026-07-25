@@ -53,6 +53,11 @@ export function validateTickets(tickets: unknown[], options?: { archive?: boolea
 export type TicketField = Readonly<{ name: string; type: string; required: boolean; summary: string; schema: Record<string, unknown> }>;
 export const TICKET_FIELDS: readonly TicketField[];
 export const SCHEMA_ID: string;
+/** Categories @adlc/ticket-sync round-trips; the published schema stays
+ *  permissive, so this is an authoring-time check, not a stored constraint. */
+export const SYNC_CATEGORIES: readonly string[];
+/** A warning for a category ticket-sync would reject, or null when it is fine. */
+export function categoryWarning(category: unknown): string | null;
 export function renderCommandHelp(command: string | undefined): string | null;
 export function renderUsage(): string;
 export function ticketJsonSchema(): Record<string, unknown>;
@@ -77,7 +82,17 @@ export function compareTicketIds(left: string, right: string): number;
 export function canonicalValue(value: unknown): unknown;
 export function sha256(value: string | Uint8Array): string;
 export function ticketSlug(id: string): string;
-export function deepClone<T>(value: T): T;
+/** JSON-representable values — the only domain deepClone round-trips faithfully. */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+/**
+ * Structural clone via JSON. Constrained to JsonValue on purpose: the previous
+ * `<T>(value: T): T` promised to preserve any type, so `deepClone(new Date())`
+ * inferred Date and a following `.getTime()` compiled cleanly and threw at
+ * runtime — the clone is an ISO string. A signature wider than the
+ * implementation is worse than none, because it moves the failure past the
+ * compiler.
+ */
+export function deepClone<T extends JsonValue>(value: T): T;
 export function deepFreeze<T>(value: T): Readonly<T>;
 
 // ---- store constructors ----

@@ -180,3 +180,57 @@ test('#235 — completing a legacy ticket with a manifest rail is unaffected', (
     assert.equal(after.get('A').completed, true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+/** A service over a scratch directory store, with cleanup. */
+function withService(tickets, fn) {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-lifecycle-'));
+  try {
+    const service = new TicketService(new DirectoryTicketStore(writeDirectory(root, tickets)), { root });
+    return fn(service);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+test('update treats a lifecycle change as sensitive, so it carries evidence', () => {
+  // planComplete records `completed` as an evidence-bearing lifecycle change.
+  // Generic update replaces the WHOLE ticket, so setting that field through it
+  // slipped past the lifecycle path entirely: a scheduler then skips unfinished
+  // work with no completion record in the manifest. This reuses the existing
+  // sensitivity mechanism rather than inventing a second one — rail-narrowing
+  // and scope-widening already work exactly this way.
+  withService([ticket('T1')], (service) => {
+    const hash = service.snapshot().ticketHashes.T1;
+    assert.throws(
+      () => service.planUpdate('T1', { ...ticket('T1'), completed: true }, { expect: hash }),
+      (error) => error.code === 'AUTHORIZATION_REQUIRED' && /lifecycle-change/.test(error.message),
+      'setting completed through update must require authorization',
+    );
+    const authorized = service.planUpdate('T1', { ...ticket('T1'), completed: true }, { expect: hash, authorized: true });
+    assert.ok(authorized.sensitive.includes('lifecycle-change'));
+    assert.equal(authorized.evidenceRequired, true, 'and must be evidence-bearing');
+  });
+});
+
+test('clearing or dropping completed is the same lifecycle change', () => {
+  // Reopening finished work, and silently losing the flag by omitting it from a
+  // replacement document, are the same transition in the other direction. The
+  // omission case is the one an author hits by accident.
+  withService([ticket('T1', { completed: true })], (service) => {
+    const hash = service.snapshot().ticketHashes.T1;
+    for (const input of [{ ...ticket('T1'), completed: false }, ticket('T1')]) {
+      assert.throws(
+        () => service.planUpdate('T1', input, { expect: hash }),
+        (error) => error.code === 'AUTHORIZATION_REQUIRED' && /lifecycle-change/.test(error.message),
+      );
+    }
+  });
+});
+
+test('an update that leaves completed alone stays unsensitive', () => {
+  // The guard must not tax ordinary edits: a title change on a completed ticket
+  // carries the flag through untouched and needs no authorization.
+  withService([ticket('T1', { completed: true })], (service) => {
+    const hash = service.snapshot().ticketHashes.T1;
+    const plan = service.planUpdate('T1', { ...ticket('T1'), completed: true, title: 'renamed' }, { expect: hash });
+    assert.deepEqual(plan.sensitive, []);
+  });
+});

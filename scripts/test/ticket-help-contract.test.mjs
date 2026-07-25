@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { renderCommandHelp, renderUsage, TICKET_FIELDS } from '../../packages/tickets/lib/help.mjs';
+import { categoryWarning, renderCommandHelp, renderUsage, SYNC_CATEGORIES, TICKET_FIELDS } from '../../packages/tickets/lib/help.mjs';
 import { validateTicket } from '../../packages/tickets/lib/schema.mjs';
 import { CATEGORIES } from '../../packages/ticket-sync/lib/schema.mjs';
 
@@ -76,4 +76,23 @@ test('the category field documents every value ticket-sync accepts', () => {
   const summary = TICKET_FIELDS.find((field) => field.name === 'category').summary;
   const missing = CATEGORIES.filter((value) => !summary.includes(value));
   assert.deepEqual(missing, [], 'lib/help.mjs must list every ticket-sync category');
+});
+
+test('the duplicated sync-category list matches ticket-sync exactly', () => {
+  // @adlc/tickets cannot import @adlc/ticket-sync (CONVENTIONS rule 1), so the
+  // list is copied. This is the gate that keeps the copy honest — in both
+  // directions, so a category added to ticket-sync and not here fails too.
+  assert.deepEqual([...SYNC_CATEGORIES].sort(), [...CATEGORIES].sort());
+});
+
+test('create warns about a sync-unsafe category without failing', () => {
+  // The published schema stays permissive by design (constraining a field
+  // validateTicket ignores would narrow v1 under a fixed $id), so the signal
+  // has to arrive at authoring time instead.
+  assert.equal(categoryWarning('feature'), null);
+  assert.equal(categoryWarning(''), null, 'an absent category is not an error');
+  assert.equal(categoryWarning(undefined), null);
+  const warning = categoryWarning('security');
+  assert.match(warning, /security/, 'the warning names the offending value');
+  assert.match(warning, /feature/, 'and lists what is accepted');
 });

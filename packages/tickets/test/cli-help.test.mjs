@@ -267,3 +267,30 @@ test('the printed recipe captures show output once, not twice', () => {
   assert.match(help, /capture ONCE/i, 'the recipe must say so explicitly');
   assert.match(help, /T1\.envelope\.json/, 'and derive both values from that capture');
 });
+
+test('create warns on a sync-unsafe category but still plans', () => {
+  // Advisory, not fatal — the store accepts any category and so must the
+  // published schema. The signal has to land at authoring time or the author
+  // discovers it when a later `ticket sync` fails closed on the remote block.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1')]);
+    const result = spawnSync(process.execPath, [BIN, 'create', '--input', '-', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify({ title: 'x', category: 'security' }),
+    });
+    assert.equal(result.status, 0, 'the warning must not fail the command');
+    assert.match(result.stderr, /security/);
+    assert.match(result.stderr, /ticket-sync/);
+    assert.equal(JSON.parse(result.stdout).dryRun, true);
+  });
+});
+
+test('a sync-safe category produces no warning', () => {
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1')]);
+    const result = spawnSync(process.execPath, [BIN, 'create', '--input', '-', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify({ title: 'x', category: 'feature' }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+  });
+});

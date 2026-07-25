@@ -119,6 +119,13 @@ export class TicketService {
       const sensitive = [];
       if ((before.rails ?? []).some((rail) => !(input.rails ?? []).includes(rail))) sensitive.push('rail-narrowing');
       if ((input.scope ?? []).some((scope) => !(before.scope ?? []).includes(scope))) sensitive.push('scope-widening');
+      // `completed` is lifecycle state that planComplete records with evidence.
+      // update REPLACES the whole ticket, so setting, clearing, or simply
+      // OMITTING the flag moved a ticket across that boundary with no
+      // completion record — schedulers then reschedule finished work or skip
+      // unfinished work. Same mechanism as the two above: authorization plus
+      // evidence, not a special case.
+      if (Boolean(before.completed) !== Boolean(input.completed)) sensitive.push('lifecycle-change');
       if (sensitive.length && !authorized) throw policy('AUTHORIZATION_REQUIRED', `update requires authorization: ${sensitive.join(', ')}`);
       tickets[index] = deepClone(input);
       return {

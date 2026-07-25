@@ -8,6 +8,7 @@ import {
   TicketService,
   TicketStoreError,
   archiveTicket,
+  categoryWarning,
   detectTicketStore,
   doctorTicketStore,
   exitCodeFor,
@@ -125,7 +126,13 @@ async function main() {
   let plan;
   if (command === 'create') {
     if (!flags.input) throw new TicketStoreError('invalid', 'INPUT_REQUIRED', 'create requires --input');
-    plan = service.planCreate(await readInput(flags.input));
+    const input = await readInput(flags.input);
+    // Advisory, never fatal: the store accepts any category and the published
+    // schema must stay permissive, but an author who picks a plausible-looking
+    // one only finds out when a later sync fails closed on the remote block.
+    const warning = categoryWarning(input?.category);
+    if (warning) console.error(warning);
+    plan = service.planCreate(input);
   } else if (command === 'update') {
     if (!flags.input) throw new TicketStoreError('invalid', 'INPUT_REQUIRED', 'update requires --input');
     // update REPLACES the ticket, so a document exported before someone else's
