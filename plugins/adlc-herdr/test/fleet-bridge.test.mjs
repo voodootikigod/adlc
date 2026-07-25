@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, openWorktreeShellArgs } from '../lib/fleet-bridge.mjs';
+import { renderBoard } from '../lib/board-render.mjs';
 
 const V = 1; // knownSchemaVersion under test
 const status = (over = {}) => ({ schemaVersion: V, runId: 'r1', tickets: {}, ...over });
@@ -58,6 +59,14 @@ test('AC6 terminal transitions → notifications; a stable terminal state does n
 test('AC7 terminal tickets → board summary rows; in-flight ones do not', () => {
   const p = plan({ curr: status({ tickets: { 't-a': { state: 'building' }, 't-b': { state: 'failed' } } }) });
   assert.deepEqual(p.boardRows, [{ ticketId: 't-b', state: 'failed' }]);
+});
+
+test('the board renders a fleet section for terminal rows, and omits it with no run', () => {
+  const base = { width: 80, repoRoot: '/r', groups: {}, paneRows: [], ledger: [] };
+  const withFleet = renderBoard({ ...base, fleetRows: [{ ticketId: 't-b', state: 'failed' }] });
+  assert.match(withFleet, /fleet/);
+  assert.match(withFleet, /t-b · failed/);
+  assert.doesNotMatch(renderBoard({ ...base, fleetRows: [] }), /fleet/);
 });
 
 test('AC8 fixed-argv builders: a shell-free tail -f argv, tab create, worktree shell', () => {
