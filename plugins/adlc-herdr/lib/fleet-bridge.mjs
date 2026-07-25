@@ -104,6 +104,16 @@ export function fleetTailPaneArgs({ tabId, repoRoot, logPath, ticketId }) {
 export function fleetPaneCloseArgs(paneId) {
   return ['pane', 'close', paneId];
 }
+// Open an interactive shell in a failed/blocked ticket's worktree so the user can
+// investigate (ticket §2). `worktreePath` is `.worktrees/fleet-<id>` built from a
+// validated ticket id upstream; it is `--cwd`'s value (never a bare positional),
+// and the shell is a fixed argv of a trusted binary (no shell string). NOTE: this
+// is not yet BOUND to a notification action — herdr notifications carry no action
+// buttons (Phase 4). The builder exists per the ticket so the target is ready when
+// that API lands; today the worktree path is surfaced in the notification body.
+export function fleetWorktreeShellArgs({ worktreePath }) {
+  return ['agent', 'start', 'adlc-fleet-shell', '--cwd', worktreePath, '--split', 'right', '--', 'bash'];
+}
 
 // Pull the created tab/pane id out of a runHerdrJson result, failing soft to
 // null (kept here + tested so the watcher glue stays a one-liner, not untested
@@ -165,12 +175,21 @@ export function shouldMarkRunSeen(plan, runState) {
 // can't drive a per-beat `herdr pane close` spawn loop. Exported for the test.
 export const BOUNDED_CLOSE_ATTEMPTS = 5;
 
-export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, tagPane, log }) {
+export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, tagPane, log, heartbeat = false }) {
   if (!plan) return;
   if (!(state.closing instanceof Map)) state.closing = new Map(); // paneId → failed close attempts, decoupled from active tracking
   if (!(state.tagged instanceof Map)) state.tagged = new Map(); // ticketId → last state token published to its pane
+  // A herdr effect fails by THROWING (unexpected) or by RESOLVING { ok:false }
+  // (the shim's normal failure signal — it never rejects for a runtime error).
+  // Either way, LOG it (the daemon must surface every failure, not hide it) and
+  // return null so the caller sees a uniform "no result". Effects whose injected
+  // form already extracts an id (openTab/spawn → string|null) never yield { ok }.
   const safeCall = async (label, fn, ...args) => {
-    try { return await fn(...args); } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
+    try {
+      const res = await fn(...args);
+      if (res && res.ok === false) { log?.(`adlc-herdr fleet ${label} failed`, res.error ?? res.stderr ?? res.code); return null; }
+      return res;
+    } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
   };
   // Move every ACTIVE pane not in `keep` into the pending-close set (0 attempts).
   const retire = (keep) => {
@@ -188,7 +207,7 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   const drainClosing = async () => {
     for (const [paneId, attempts] of [...state.closing]) {
       let failed = false;
-      try { const res = await closePane(paneId); if (res && res.ok === false) failed = true; }
+      try { const res = await closePane(paneId); if (res && res.ok === false) { failed = true; log?.('adlc-herdr fleet pane-close failed', res.error ?? res.stderr ?? res.code); } }
       catch (err) { failed = true; log?.('adlc-herdr fleet pane-close failed', err); }
       if (!failed) { state.closing.delete(paneId); continue; }
       if (attempts + 1 >= BOUNDED_CLOSE_ATTEMPTS) {
@@ -224,15 +243,19 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
     if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
   }
   // Token-tag each tail pane with its ticket + CURRENT state (plan §5.5), rendered
-  // natively by herdr so concurrent panes are distinguishable. Re-tag only when the
-  // state actually changed (no per-beat token spam); best-effort, and skipped when
-  // no tagger is injected (unit tests that don't exercise tagging).
+  // natively by herdr so concurrent panes are distinguishable. Re-tag on a state
+  // CHANGE or on a HEARTBEAT beat — the token carries a TTL and would otherwise
+  // expire mid-state (e.g. a long build), silently un-labelling the pane; the
+  // heartbeat refresh keeps it alive, mirroring the main token loop. Best-effort,
+  // and the tag is recorded ONLY on success, so a transient failure retries next
+  // beat rather than being cached as done. Skipped when no tagger is injected.
   if (typeof tagPane === 'function') {
     for (const pane of plan.tailPanes) {
       const paneId = state.tailed.get(pane.ticketId);
-      if (!paneId || state.tagged.get(pane.ticketId) === pane.state) continue;
-      await safeCall('tag', tagPane, paneId, pane.ticketId, pane.state);
-      state.tagged.set(pane.ticketId, pane.state);
+      if (!paneId) continue;
+      if (state.tagged.get(pane.ticketId) === pane.state && !heartbeat) continue;
+      const res = await safeCall('tag', tagPane, paneId, pane.ticketId, pane.state);
+      if (res !== null) state.tagged.set(pane.ticketId, pane.state); // cache only a SUCCESS
     }
   }
   // Only a valid observation authorizes retiring active panes (see the doc comment).
@@ -258,16 +281,17 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
  * @param {{prev:any, seen:Set, runState:{tabId:string|null, tailed:Map}}} a.st
  * @param {any} a.curr  the freshly-read fleet-status object (or null)
  * @param {string} a.repoRoot
- * @param {{openTab:Function, spawn:Function, closePane:Function, notify:Function}} a.effects
+ * @param {{openTab:Function, spawn:Function, closePane:Function, notify:Function, tagPane?:Function}} a.effects
  * @param {(message:string, err:unknown)=>void} [a.log]  observability sink
+ * @param {boolean} [a.heartbeat]  a periodic full-refresh beat: re-tag panes to keep token TTLs alive
  */
-export async function runFleetBridgeBeat({ st, curr, repoRoot, effects, log }) {
+export async function runFleetBridgeBeat({ st, curr, repoRoot, effects, log, heartbeat = false }) {
   let plan = null;
   try {
     plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
     // On a new run, runFleetPlan closes the prior run's panes and resets the
     // (persistent) run state in place — so it is passed by reference, not reassigned.
-    await runFleetPlan({ plan, repoRoot, state: st.runState, ...effects, log });
+    await runFleetPlan({ plan, repoRoot, state: st.runState, ...effects, log, heartbeat });
   } catch (err) {
     log?.('adlc-herdr fleet bridge error', err);
   } finally {

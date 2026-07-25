@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -440,6 +440,56 @@ test('AC8 fixed-argv builders: a shell-free tail -F argv (waits for a not-yet-cr
   // Falls back to the generic name when no ticket id is supplied.
   assert.equal(fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '/l' })[2], 'adlc-fleet-tail');
   assert.deepEqual(fleetPaneCloseArgs('w4:p5'), ['pane', 'close', 'w4:p5']);
+});
+
+test('a herdr effect that RESOLVES { ok:false } (not a throw) is still surfaced to the log (round 13)', async () => {
+  // The herdr shim reports runtime failure by resolving { ok:false }, never by
+  // throwing; a prior safeCall only logged on throw, so these went silent.
+  const logs = [];
+  const plan = { degrade: false, observed: true, openTab: null, boardRows: [], tailPanes: [], notifications: [{ title: 'a', body: 'b', sound: 'done' }] };
+  await runFleetPlan({
+    plan, repoRoot: '/r', state: { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map() },
+    openTab: async () => {}, spawn: async () => {}, closePane: async () => {},
+    notify: async () => ({ ok: false, code: 1 }),
+    log: (m, e) => logs.push([m, e]),
+  });
+  assert.equal(logs.length, 1, 'the { ok:false } notify failure is logged, not swallowed');
+  assert.match(logs[0][0], /notify failed/);
+});
+
+test('runFleetPlan does NOT cache a FAILED tag — it retries next beat (round 13)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]), closing: new Map(), tagged: new Map() };
+  const tags = [];
+  let tagOk = false;
+  const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
+  const deps = {
+    repoRoot: '/r', openTab: async () => {}, spawn: async () => 'w4:pa', closePane: async () => {}, notify: async () => {},
+    tagPane: async (_p, _t, s) => { tags.push(s); return { ok: tagOk }; },
+  };
+  await runFleetPlan({ plan, state, ...deps });
+  assert.equal(state.tagged.has('t-a'), false, 'a { ok:false } tag is not cached as done');
+  tagOk = true;
+  await runFleetPlan({ plan, state, ...deps });
+  assert.equal(state.tagged.get('t-a'), 'building', 'the retried tag succeeds and is recorded');
+  assert.deepEqual(tags, ['building', 'building'], 'the tag was actually retried');
+});
+
+test('runFleetPlan RE-TAGS an unchanged-state pane on a HEARTBEAT beat, keeping the token TTL alive (round 13)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]), closing: new Map(), tagged: new Map([['t-a', 'building']]) };
+  const tags = [];
+  const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
+  const deps = { repoRoot: '/r', openTab: async () => {}, spawn: async () => 'w4:pa', closePane: async () => {}, notify: async () => {}, tagPane: async (_p, _t, s) => { tags.push(s); } };
+  await runFleetPlan({ plan, state, ...deps }); // ordinary beat, unchanged state → no re-tag
+  assert.deepEqual(tags, [], 'an unchanged state is not re-tagged on an ordinary beat (no token spam)');
+  await runFleetPlan({ plan, state, ...deps, heartbeat: true }); // heartbeat → refresh the TTL
+  assert.deepEqual(tags, ['building'], 'the heartbeat re-tags even though the state is unchanged');
+});
+
+test('fleetWorktreeShellArgs builds a shell-free open-shell argv in the validated worktree (ticket §2)', () => {
+  assert.deepEqual(
+    fleetWorktreeShellArgs({ worktreePath: '.worktrees/fleet-t-a' }),
+    ['agent', 'start', 'adlc-fleet-shell', '--cwd', '.worktrees/fleet-t-a', '--split', 'right', '--', 'bash'],
+  );
 });
 
 test('runFleetPlan token-tags each tail pane with its ticket + CURRENT state, re-tagging only on a state change', async () => {

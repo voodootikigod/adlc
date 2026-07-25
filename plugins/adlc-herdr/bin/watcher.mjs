@@ -57,16 +57,18 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 // Phase-4 follow-up alongside the notification-action API (see fleet-bridge.mjs).
 const fleetState = new Map();
 
-async function bridgeFleet(repoRoot) {
+async function bridgeFleet(repoRoot, full = false) {
   const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
   fleetState.set(repoRoot, st);
   // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
   // in lib/fleet-bridge.mjs. Here we only supply the real herdr effects, the
   // freshly-read status, and a stderr logger so a stuck bridge is diagnosable.
+  // `full` (the 45s heartbeat) re-tags panes so their token TTLs never lapse.
   await runFleetBridgeBeat({
     st,
     curr: readFleetStatus(repoRoot),
     repoRoot,
+    heartbeat: full,
     effects: {
       openTab: async (title) => tabIdFromResponse(await runHerdrJson(fleetTabArgs(title))),
       spawn: async (argv) => paneIdFromResponse(await runHerdrJson(argv)),
@@ -172,7 +174,7 @@ async function refreshPass(full) {
     // Fleet observer: reflect each repo's fleet run into herdr (tab, tail panes,
     // transition notifications). Sequential + after token publishing — it has
     // side effects and shared per-repo state, unlike the read-only token pass.
-    for (const repoRoot of activeRepos) await bridgeFleet(repoRoot);
+    for (const repoRoot of activeRepos) await bridgeFleet(repoRoot, full);
     prevPane = nextPane;
     prevWorkspace = nextWorkspace;
   }
