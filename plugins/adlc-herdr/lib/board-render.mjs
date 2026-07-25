@@ -19,6 +19,11 @@ const MIN_ROOT = 6;
 /** Shortest elided ticket id worth rendering, same reasoning as MIN_ROOT. */
 const MIN_ID = 6;
 
+/** Keep the last `n` characters, splitting on code POINTS. Slicing code units
+ *  can cut an astral character in half and render a replacement box exactly
+ *  where the identifying tail should be. */
+const tailOf = (text, n) => [...text].slice(-n).join('');
+
 /** Sanitize to the value's OWN length, never to the pane width: capping at the
  *  width clips the front, which would leave the elision below keeping the middle
  *  of a path instead of its leaf. Escapes must be stripped before anything is
@@ -49,7 +54,7 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   if (full.length <= width) return full;
 
   const budget = width - withRoot('').length; // room the root itself may take
-  if (budget >= MIN_ROOT) return withRoot(`…${root.slice(root.length - (budget - 1))}`);
+  if (budget >= MIN_ROOT) return withRoot(`…${tailOf(root, budget - 1)}`);
 
   // No root fits. Drop it, then the banner.
   const banner = `ADLC board · ${suffix}`;
@@ -58,12 +63,20 @@ function headerText(repoRoot, ticketLabel, phase, width) {
 
   // Even the bare suffix overflows — a canonical 28-char generated id does this
   // below 40 columns. Elide the ID rather than let cut() take the phase off the
-  // end: a ULID's entropy is in its tail, and the phase is two characters that
-  // say where the ticket stands. Both matter more than the id's leading bytes.
-  const tail = phaseText ? ` · ${phaseText}` : '';
+  // end: a ULID's entropy is in its tail, so the tail is what distinguishes two
+  // tickets, and the phase says where the work stands.
+  //
+  // `phase` is an unrestricted string from the manifest, so it gets bounded
+  // here too. A long one would otherwise leave less than MIN_ID for the id and
+  // drop BOTH fields — the failure this whole ladder exists to prevent. The id
+  // keeps its tail, the phase keeps its head.
+  const shown = phaseText
+    ? phaseText.slice(0, Math.max(2, width - 'ticket '.length - MIN_ID - 3))
+    : '';
+  const tail = shown ? ` · ${shown}` : '';
   const room = width - 'ticket '.length - tail.length;
-  if (room < MIN_ID) return suffix; // nothing legible fits; cut() clamps it
-  return `ticket …${label.slice(label.length - (room - 1))}${tail}`;
+  if (room < MIN_ID) return suffix; // pane too narrow for anything legible; cut() clamps
+  return `ticket …${tailOf(label, room - 1)}${tail}`;
 }
 
 /** The board's footer hint line (with its own SGR). Pure so the refresh-seconds

@@ -389,6 +389,43 @@ test('the header cannot overflow however extreme the inputs', () => {
   }
 });
 
+test('an over-long phase cannot erase the phase AND the id tail', () => {
+  // `phase` arrives from the manifest as an unrestricted string. A long one
+  // inflated the suffix past the id-elision threshold, so the whole thing fell
+  // through to a plain truncation and BOTH fields vanished — the failure this
+  // degradation exists to prevent. The extreme-input test above could not catch
+  // it: asserting only that the line fits is satisfied by a line showing
+  // nothing useful. Both fields must appear; each may be elided.
+  const id = 'T-01JXT21Q000W3GE1R70W3GE1R7';
+  for (const phase of ['P4', 'P4-review', 'P10-integration-verify']) {
+    for (const width of [20, 24, 30, 40, 60]) {
+      const state = baseState();
+      state.width = width;
+      state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+      state.active = { state: 'active', id };
+      state.phase = phase;
+      const header = headerOf(state);
+      const context = `width ${width}, phase "${phase}": ${header}`;
+      assert.ok(header.includes(id.slice(-4)), `id tail lost — ${context}`);
+      assert.ok(header.includes(phase.slice(0, 2)), `phase lost — ${context}`);
+      assert.ok(header.length <= Math.max(20, width), `overflow — ${context}`);
+    }
+  }
+});
+
+test('elision never splits a surrogate pair', () => {
+  // The elision slices by offset. Slicing code UNITS can cut an astral
+  // character in half and render a replacement box where the identifying tail
+  // should be. Ticket ids and paths are both free-form enough to contain one.
+  const state = baseState();
+  state.width = 44;
+  state.repoRoot = `/tmp/${'🎫'.repeat(30)}/repo`;
+  state.active = { state: 'active', id: `T-${'🎟'.repeat(20)}` };
+  const header = headerOf(state);
+  assert.ok(!/[\uD800-\uDFFF]/.test(header.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')),
+    `no lone surrogate may survive: ${JSON.stringify(header)}`);
+});
+
 test('a canonical generated id keeps the phase and its own distinguishing tail', () => {
   // The width sweep above uses the 3-char fixture id 't-b', so it could not see
   // that a real generated id (28 chars) overflows the bare suffix and takes the
