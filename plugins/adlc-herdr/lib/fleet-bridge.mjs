@@ -114,10 +114,13 @@ export function shouldMarkRunSeen(plan, runState) {
  */
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify }) {
   if (!plan || plan.degrade) return;
+  // Closing a pane can throw if the user already closed it — best-effort, so one
+  // dead pane never aborts the run (which would block every later notification).
+  const safeClose = async (paneId) => { if (paneId) { try { await closePane(paneId); } catch { /* pane may already be gone */ } } };
   if (plan.openTab) {
     // A new run: close the PREVIOUS run's tail panes (they belong to the old
     // tab) and reset, so a restarted run never abandons/leaks panes.
-    for (const paneId of state.tailed.values()) if (paneId) await closePane(paneId);
+    for (const paneId of state.tailed.values()) await safeClose(paneId);
     state.tailed.clear();
     state.tabId = null;
     const tabId = await openTab(plan.openTab.title);
@@ -126,15 +129,17 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
     const paneId = await spawn(fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
-    state.tailed.set(pane.ticketId, typeof paneId === 'string' ? paneId : null);
+    // Only remember a REAL pane — a failed spawn (null) must retry next beat, not
+    // be cached as "already tailed" and silently deprive the ticket of logs.
+    if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
   }
-  // Close the tail pane of any ticket that has reached a terminal state (it only
-  // does so once — the entry is removed, so a stable terminal state is a no-op).
+  // Close the tail pane of any ticket that has reached a terminal state. Forget
+  // the entry FIRST, so a throwing close can't leave it to be retried every beat.
   for (const row of plan.boardRows) {
     if (!state.tailed.has(row.ticketId)) continue;
     const paneId = state.tailed.get(row.ticketId);
-    if (paneId) await closePane(paneId);
     state.tailed.delete(row.ticketId);
+    await safeClose(paneId);
   }
   for (const n of plan.notifications) await notify(n.title, n.body, n.sound);
 }

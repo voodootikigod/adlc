@@ -107,6 +107,7 @@ test('readFleetStatus reads a valid status and fails soft on bad input', () => {
   const p = join(repo, '.adlc', 'fleet-status.json');
   writeFileSync(p, JSON.stringify({ schemaVersion: 1, runId: 'r1', tickets: {} }));
   assert.equal(readFleetStatus(repo).runId, 'r1');
+  assert.equal(readFleetStatus(null), null); // non-string root → null WITHOUT reaching isAbsolute (pins the `||` guard)
   assert.equal(readFleetStatus('relative/path'), null); // non-absolute root → null (pins the guard)
   assert.equal(readFleetStatus(join(repo, 'nope')), null); // missing → null
   writeFileSync(p, '{ not json');
@@ -174,6 +175,32 @@ test('tabIdFromResponse / paneIdFromResponse extract the id and fail soft', () =
   assert.equal(paneIdFromResponse({ ok: true, value: { result: { pane: { pane_id: 'w4:p5' } } } }), 'w4:p5');
   assert.equal(paneIdFromResponse({ ok: true, value: { result: {} } }), null);
   assert.equal(paneIdFromResponse({ ok: false }), null);
+});
+
+test('runFleetPlan RETRIES a tail pane whose spawn failed (null is not cached)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map() };
+  let n = 0;
+  const spawn = async () => (n++ === 0 ? null : 'w4:p9'); // first fails, second succeeds
+  const plan = { degrade: false, openTab: null, tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }], notifications: [], boardRows: [] };
+  const deps = { openTab: async () => 'x', closePane: async () => {}, notify: async () => {} };
+  await runFleetPlan({ plan, repoRoot: '/r', state, spawn, ...deps });
+  assert.equal(state.tailed.has('t-a'), false, 'a failed spawn is not cached');
+  await runFleetPlan({ plan, repoRoot: '/r', state, spawn, ...deps });
+  assert.equal(state.tailed.get('t-a'), 'w4:p9', 'retried and cached on the next success');
+});
+
+test('runFleetPlan TOLERATES a closePane failure — entry forgotten, notifications still fire', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]) };
+  const notified = [];
+  const plan = { degrade: false, openTab: null, tailPanes: [], notifications: [{ title: 'x', body: 'y', sound: 'done' }], boardRows: [{ ticketId: 't-a', state: 'merged' }] };
+  await runFleetPlan({
+    plan, repoRoot: '/r', state,
+    openTab: async () => {}, spawn: async () => {},
+    closePane: async () => { throw new Error('pane already gone'); },
+    notify: async (...a) => { notified.push(a); },
+  });
+  assert.equal(state.tailed.has('t-a'), false, 'entry forgotten despite the close failure');
+  assert.equal(notified.length, 1, 'notifications still fire after a close failure');
 });
 
 test('runFleetPlan on a degrade performs no effects', async () => {
