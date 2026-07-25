@@ -170,6 +170,21 @@ test('the paste-able prompt is surfaced on the integrations index and points at 
     AGENT_PROMPT.includes(AGENT_GUIDE_URL),
     'the prompt must point the agent at the served guide rather than embedding instructions',
   );
+
+  // "Read this URL and follow it" hands instructional authority to whatever the
+  // URL serves at fetch time. The user cannot verify that content, and the
+  // pattern is the one that makes prompt injection work. The boundary has to be
+  // in the PROMPT, so it holds even if the fetched document is replaced.
+  assert.match(
+    AGENT_PROMPT,
+    /reference material, not as instructions/i,
+    'the prompt must deny the fetched guide instructional authority',
+  );
+  assert.match(
+    AGENT_PROMPT,
+    /run nothing until I confirm/i,
+    'the prompt must require confirmation before any action',
+  );
 });
 
 /** Every .ts/.tsx/.mjs file under a docs subtree, excluding build output. */
