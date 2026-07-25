@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, BOUNDED_SPAWN_ATTEMPTS, planFleetRecovery, applyRecovery, observerStateSnapshot, livePaneIds } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, BOUNDED_SPAWN_ATTEMPTS } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -242,20 +242,18 @@ test('runFleetPlan treats a { ok:false } close RETURN as a failure (the herdr sh
   assert.equal(state.closing.has('w4:p5'), false, 'a { ok:true } return clears the pane');
 });
 
-test('runFleetPlan BOUNDS spawn retries — after BOUNDED_SPAWN_ATTEMPTS all-failed beats it drops the dead tab (round 16)', async () => {
-  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map() };
+test('runFleetPlan BOUNDS spawn retries PER TICKET — after BOUNDED_SPAWN_ATTEMPTS it gives up on that ticket, not the whole tab (round 16/17)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map(), spawnFails: new Map() };
   let calls = 0;
   const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
-  const deps = { repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {}, spawn: async () => { calls += 1; return null; } }; // spawn always fails (dead tab)
-  for (let i = 0; i < BOUNDED_SPAWN_ATTEMPTS; i += 1) await runFleetPlan({ plan, state, ...deps });
-  assert.equal(state.tabId, null, 'the dead tab is dropped once the bound is reached');
-  assert.equal(calls, BOUNDED_SPAWN_ATTEMPTS, 'spawn was attempted exactly the bounded number of times');
-  await runFleetPlan({ plan, state, ...deps }); // tab gone → spawn loop is skipped
-  assert.equal(calls, BOUNDED_SPAWN_ATTEMPTS, 'no more `agent start` blasts into a dropped tab');
+  const deps = { repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {}, spawn: async () => { calls += 1; return null; } }; // spawn always fails
+  for (let i = 0; i < BOUNDED_SPAWN_ATTEMPTS + 3; i += 1) await runFleetPlan({ plan, state, ...deps });
+  assert.equal(calls, BOUNDED_SPAWN_ATTEMPTS, 'spawn attempted exactly the bounded number of times, then no more');
+  assert.equal(state.tabId, 'w4:t1', 'the TAB is retained — a spawn failure never blinds the whole run (round 17)');
 });
 
-test('runFleetPlan RESETS the spawn-fail counter on any success (a transient spawn failure never trips the bound)', async () => {
-  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map() };
+test('runFleetPlan RESETS a ticket spawn-fail count on success (a transient spawn failure never trips the bound)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map(), spawnFails: new Map() };
   let ok = false;
   const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
   const deps = { repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {}, spawn: async () => (ok ? 'w4:pa' : null) };
@@ -263,9 +261,16 @@ test('runFleetPlan RESETS the spawn-fail counter on any success (a transient spa
   await runFleetPlan({ plan, state, ...deps }); // fail
   ok = true;
   await runFleetPlan({ plan, state, ...deps }); // recovers
-  assert.equal(state.tabId, 'w4:t1', 'the tab is retained after a recovery');
-  assert.equal(state.spawnFails, 0, 'the fail counter reset on success');
   assert.equal(state.tailed.get('t-a'), 'w4:pa');
+  assert.equal(state.spawnFails.has('t-a'), false, 'the ticket fail count reset on success');
+});
+
+test('runFleetPlan drops a ticket spawn-fail count once the ticket leaves the in-flight set (a returning ticket retries fresh)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map(), spawnFails: new Map([['t-a', 3]]) };
+  const deps = { repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {}, spawn: async () => 'w4:pa' };
+  // t-a is no longer in-flight this beat → its stale fail count is pruned.
+  await runFleetPlan({ plan: { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [] }, state, ...deps });
+  assert.equal(state.spawnFails.has('t-a'), false);
 });
 
 test('runFleetPlan GIVES UP after BOUNDED_CLOSE_ATTEMPTS on a pane that never closes — no per-beat spawn loop (round 9)', async () => {
@@ -454,74 +459,6 @@ test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async 
     st, curr: status({ tickets: { 't-a': { state: 'building' } } }), repoRoot: '/repo',
     effects: { openTab: async () => { throw new Error('boom'); }, spawn: async () => {}, closePane: async () => {}, notify: async () => {} },
   }));
-});
-
-// ── Daemon-restart recovery ──────────────────────────────────────────────────
-
-test('livePaneIds collects the pane ids from an api-snapshot panes array, skipping malformed entries', () => {
-  const s = livePaneIds([{ pane_id: 'w4:pa' }, { pane_id: 'w4:pb' }, {}, { pane_id: 5 }, null]);
-  assert.deepEqual([...s].sort(), ['w4:pa', 'w4:pb']);
-  assert.deepEqual([...livePaneIds('nope')], []);
-});
-
-test('observerStateSnapshot serialises the run id (from prev), tab, and live tail panes', () => {
-  const st = { prev: { runId: 'r1' }, runState: { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]) } };
-  assert.deepEqual(observerStateSnapshot(st), { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } });
-  assert.deepEqual(observerStateSnapshot({}), { runId: null, tabId: null, tailed: {} });
-});
-
-test('planFleetRecovery ADOPTS the tab + surviving panes on a same-run restart (no duplicate tab/panes)', () => {
-  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa', 't-b': 'w4:pb' } };
-  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa', 'w4:pb']) });
-  assert.deepEqual(rec, { seen: ['r1'], tabId: 'w4:t1', tailed: { 't-a': 'w4:pa', 't-b': 'w4:pb' }, closePanes: [] });
-});
-
-test('planFleetRecovery adopts ONLY panes herdr still reports; a pane that died is dropped, not adopted or closed', () => {
-  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa', 't-b': 'w4:pb' } };
-  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) }); // pb gone
-  assert.deepEqual(rec.tailed, { 't-a': 'w4:pa' });
-  assert.deepEqual(rec.closePanes, [], 'a pane herdr no longer reports is already dead — nothing to close');
-});
-
-test('planFleetRecovery on a DIFFERENT run closes the old run\'s surviving orphans and starts fresh', () => {
-  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
-  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r2' }), livePaneIds: new Set(['w4:pa']) });
-  assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: ['w4:pa'] });
-});
-
-test('planFleetRecovery on a COMPLETED run (no live panes, nothing in-flight) PRESERVES seen so no empty tab reopens on every restart (round 15)', () => {
-  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
-  const curr = status({ runId: 'r1', tickets: { 't-a': { state: 'merged' } } }); // all terminal → panes closed naturally
-  const rec = planFleetRecovery({ persisted, curr, livePaneIds: new Set() });
-  assert.deepEqual(rec, { seen: ['r1'], tabId: null, tailed: {}, closePanes: [] }, 'seen kept → planFleetBridge will NOT open a tab for the done run');
-});
-
-test('planFleetRecovery when herdr ALSO restarted MID-RUN (still in-flight, panes gone) starts fresh so the running run gets a new tab (round 15)', () => {
-  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
-  const curr = status({ runId: 'r1', tickets: { 't-a': { state: 'building' } } }); // still in-flight
-  const rec = planFleetRecovery({ persisted, curr, livePaneIds: new Set() });
-  assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: [] }, 'seen dropped → a new tab + tail panes for the still-running run');
-});
-
-test('planFleetRecovery treats the persisted file as UNTRUSTED — hostile ids are rejected', () => {
-  // hostile ticket id (not a safe token) → not adopted even though its pane is live
-  const inFlight = status({ runId: 'r1', tickets: { 'x': { state: 'building' } } });
-  const hostileTicket = planFleetRecovery({ persisted: { runId: 'r1', tabId: 'w4:t1', tailed: { '../evil': 'w4:pa' } }, curr: inFlight, livePaneIds: new Set(['w4:pa']) });
-  assert.deepEqual(hostileTicket, { seen: [], tabId: null, tailed: {}, closePanes: [] }, 'a bad ticket id yields no surviving pane → fresh');
-  // a flag-like tab id is dropped (adoption proceeds on the valid pane, but tabId is nulled)
-  const badTab = planFleetRecovery({ persisted: { runId: 'r1', tabId: '-evil', tailed: { 't-a': 'w4:pa' } }, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) });
-  assert.equal(badTab.tabId, null, 'a flag-like tab id is not adopted');
-  assert.deepEqual(badTab.tailed, { 't-a': 'w4:pa' });
-  // null persisted → empty
-  assert.deepEqual(planFleetRecovery({ persisted: null, curr: status(), livePaneIds: new Set() }), { seen: [], tabId: null, tailed: {}, closePanes: [] });
-});
-
-test('applyRecovery seeds a fresh per-repo state in place (adopt seen + tab + tailed)', () => {
-  const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
-  applyRecovery(st, { seen: ['r1'], tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' }, closePanes: [] });
-  assert.equal(st.seen.has('r1'), true);
-  assert.equal(st.runState.tabId, 'w4:t1');
-  assert.equal(st.runState.tailed.get('t-a'), 'w4:pa');
 });
 
 test('AC8 fixed-argv builders: a shell-free tail -F argv (waits for a not-yet-created log), tab create, pane close', () => {

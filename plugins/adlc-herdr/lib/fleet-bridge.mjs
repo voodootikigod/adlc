@@ -15,20 +15,10 @@ export const KNOWN_FLEET_SCHEMA_VERSION = 1;
 
 const IN_FLIGHT = new Set(['building', 'gating', 'prosecuting', 'fixing', 'merging']);
 const TERMINAL = new Set(['merged', 'failed', 'blocked']);
-// Does a status still have any ticket in-flight (vs. a fully-terminal / done run)?
-const hasInFlight = (curr) => {
-  const tickets = curr && typeof curr === 'object' && curr.tickets && typeof curr.tickets === 'object' ? curr.tickets : {};
-  return Object.values(tickets).some((rec) => rec && typeof rec.state === 'string' && IN_FLIGHT.has(rec.state));
-};
 // A safe run/ticket id is a plain token: no '/', no '..', no leading '-' — so it
 // can never traverse a path or be read as a CLI flag.
 const ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 const safeId = (id) => typeof id === 'string' && ID_RE.test(id) && !id.includes('..');
-// A safe herdr pane/tab id (e.g. "w4:t1"): like a plain token but ALSO allowing
-// the ':' herdr uses, still with no leading '-' (which a CLI would read as a
-// flag). Used to validate ids read back from the untrusted persisted-state file.
-const HERDR_ID_RE = /^[A-Za-z0-9][A-Za-z0-9:._-]*$/;
-const safeHerdrId = (id) => typeof id === 'string' && HERDR_ID_RE.test(id) && !id.includes('..');
 
 // `observed` marks a plan built from a VALID status this beat — the only case in
 // which absence of a ticket is evidence it left the in-flight set. A null status
@@ -184,16 +174,19 @@ export function shouldMarkRunSeen(plan, runState) {
 // gone (not busy) and dropping it — bounds the retry so a manually-closed pane
 // can't drive a per-beat `herdr pane close` spawn loop. Exported for the test.
 export const BOUNDED_CLOSE_ATTEMPTS = 5;
-// After this many consecutive beats where EVERY attempted tail spawn failed and
-// none succeeded, assume the tab itself is gone (e.g. the user closed the run
-// tab) and drop `state.tabId` — otherwise a dead tab drives a failing `agent
-// start` on every 400ms beat, per in-flight ticket. Exported for the test.
+// Retry a failing tail spawn at most this many beats PER TICKET before giving up
+// on that ticket's pane — bounds the retry so a ticket whose tab/pane can't be
+// created (e.g. the user closed the run tab) can't drive a failing `agent start`
+// on every 400ms beat forever. Per-ticket (not whole-tab): a transient failure
+// only costs the tickets it actually hit, never blinds the rest of the run.
+// Exported for the test.
 export const BOUNDED_SPAWN_ATTEMPTS = 5;
 
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, tagPane, log, heartbeat = false }) {
   if (!plan) return;
   if (!(state.closing instanceof Map)) state.closing = new Map(); // paneId → failed close attempts, decoupled from active tracking
   if (!(state.tagged instanceof Map)) state.tagged = new Map(); // ticketId → last state token published to its pane
+  if (!(state.spawnFails instanceof Map)) state.spawnFails = new Map(); // ticketId → consecutive failed tail spawns
   // A herdr effect fails by THROWING (unexpected) or by RESOLVING { ok:false }
   // (the shim's normal failure signal — it never rejects for a runtime error).
   // Either way, LOG it (the daemon must surface every failure, not hide it) and
@@ -250,30 +243,26 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   }
   // The tickets that SHOULD have a tail pane this beat (the in-flight set).
   const desired = new Set(plan.tailPanes.map((p) => p.ticketId));
-  let spawned = 0;
-  let spawnFailed = 0;
+  // Drop spawn-failure counts for tickets no longer in-flight (terminated /
+  // vanished / a new run) so a gave-up entry can't linger, and a ticket that
+  // ever returns in-flight retries fresh.
+  for (const t of [...state.spawnFails.keys()]) if (!desired.has(t)) state.spawnFails.delete(t);
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
+    if ((state.spawnFails.get(pane.ticketId) ?? 0) >= BOUNDED_SPAWN_ATTEMPTS) continue; // gave up — stop hammering
     const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath, ticketId: pane.ticketId }));
-    // Only remember a REAL pane — a failed spawn (null/throw) must retry next
-    // beat, not be cached as "already tailed" and deprive the ticket of logs.
-    if (typeof paneId === 'string' && paneId) { state.tailed.set(pane.ticketId, paneId); spawned += 1; }
-    else spawnFailed += 1;
-  }
-  // Bound the spawn retry (mirror of the close bound): if EVERY spawn this beat
-  // failed and none succeeded, the tab is likely dead (the user closed it). Count
-  // consecutive all-failed beats and, at BOUNDED_SPAWN_ATTEMPTS, drop `tabId` so
-  // we stop hammering a dead tab with `agent start` every beat. Any success resets
-  // the counter (a transient busy socket recovers well within the bound).
-  if (spawnFailed > 0 && spawned === 0) {
-    state.spawnFails = (state.spawnFails ?? 0) + 1;
-    if (state.spawnFails >= BOUNDED_SPAWN_ATTEMPTS) {
-      log?.('adlc-herdr fleet tail spawns keep failing — dropping the tab (assumed closed)', state.tabId);
-      state.tabId = null;
-      state.spawnFails = 0;
+    if (typeof paneId === 'string' && paneId) {
+      // A REAL pane — remember it and reset this ticket's failure count.
+      state.tailed.set(pane.ticketId, paneId);
+      state.spawnFails.delete(pane.ticketId);
+    } else {
+      // A failed spawn (null/throw) retries next beat, but only up to the bound:
+      // a ticket whose pane can't be created (dead tab) must not `agent start`
+      // every 400ms forever. Bounded PER TICKET, so it never blinds the rest.
+      const n = (state.spawnFails.get(pane.ticketId) ?? 0) + 1;
+      state.spawnFails.set(pane.ticketId, n);
+      if (n >= BOUNDED_SPAWN_ATTEMPTS) log?.('adlc-herdr fleet tail spawn giving up for ticket (tab/pane unavailable)', pane.ticketId);
     }
-  } else if (spawned > 0) {
-    state.spawnFails = 0;
   }
   // Token-tag each tail pane with its ticket + CURRENT state (plan §5.5), rendered
   // natively by herdr so concurrent panes are distinguishable. Re-tag on a state
@@ -331,81 +320,4 @@ export async function runFleetBridgeBeat({ st, curr, repoRoot, effects, log, hea
     if (shouldMarkRunSeen(plan, st.runState)) st.seen.add(plan.openTab.runId);
     if (plan && curr) st.prev = curr;
   }
-}
-
-// ── Daemon-restart recovery (t-herdr-9 §6.3 recoverability) ──────────────────
-// The observer's pane state is in-memory, so a daemon restart mid-run would
-// re-init empty and (without recovery) open a SECOND tab + duplicate tail panes,
-// orphaning the originals. On restart we reload the persisted state and reconcile
-// it against the panes herdr still reports live (from `api snapshot`), so panes
-// are adopted when they survived or torn down when they didn't.
-
-/** The JSON-able persist shape of a per-repo observer state: the run its panes
- *  belong to, its tab, and the live tail panes. Pure, so the daemon glue only
- *  does the file I/O. `prev` carries the last observed status → its runId. */
-export function observerStateSnapshot(st) {
-  const runState = st && typeof st === 'object' && st.runState ? st.runState : {};
-  const tailed = runState.tailed instanceof Map ? Object.fromEntries(runState.tailed) : {};
-  const runId = st && st.prev && typeof st.prev === 'object' && typeof st.prev.runId === 'string' ? st.prev.runId : null;
-  return { runId, tabId: typeof runState.tabId === 'string' ? runState.tabId : null, tailed };
-}
-
-/** The set of pane ids herdr currently reports (from an `api snapshot` panes
- *  array) — the ground truth a persisted pane id is validated against. */
-export function livePaneIds(panes) {
-  const out = new Set();
-  if (Array.isArray(panes)) for (const p of panes) if (p && typeof p.pane_id === 'string') out.add(p.pane_id);
-  return out;
-}
-
-/**
- * Decide how to recover after a daemon restart, from the (UNTRUSTED, on-disk)
- * `persisted` state, the current `curr` status, and the `livePaneIds` herdr still
- * reports. Returns `{ seen, tabId, tailed, closePanes }`:
- *   - SAME run AND ≥1 persisted pane still live → ADOPT: seed `seen` (don't
- *     re-open the tab) and the surviving `tailed` (don't re-spawn them);
- *   - different run, or nothing survived (herdr itself also restarted) → don't
- *     adopt; CLOSE any survivors (old-run orphans still in herdr) and start fresh.
- * Every id is validated because the file is untrusted: a pane id must appear in
- * the live snapshot (so it is herdr-sourced, never injectable), the tab id must be
- * a safe herdr token, and ticket ids must be safe tokens.
- */
-export function planFleetRecovery({ persisted, curr, livePaneIds: live }) {
-  const liveSet = live instanceof Set ? live : new Set();
-  const empty = { seen: [], tabId: null, tailed: {}, closePanes: [] };
-  if (!persisted || typeof persisted !== 'object') return empty;
-  const persistedTailed = persisted.tailed && typeof persisted.tailed === 'object' ? persisted.tailed : {};
-  const surviving = {}; // ticketId → paneId: validated AND still live in herdr
-  for (const [ticketId, paneId] of Object.entries(persistedTailed)) {
-    if (safeId(ticketId) && typeof paneId === 'string' && liveSet.has(paneId)) surviving[ticketId] = paneId;
-  }
-  const survivingIds = Object.values(surviving);
-  const sameRun = Boolean(curr && typeof curr === 'object' && safeId(persisted.runId) && curr.runId === persisted.runId);
-  if (sameRun && survivingIds.length > 0) {
-    // Watcher restarted, herdr alive → ADOPT the tab + surviving panes.
-    return { seen: [persisted.runId], tabId: safeHerdrId(persisted.tabId) ? persisted.tabId : null, tailed: surviving, closePanes: [] };
-  }
-  if (sameRun && !hasInFlight(curr)) {
-    // Same run, no surviving panes, and nothing still in-flight → the run
-    // COMPLETED while we were down (its panes closed naturally on terminal
-    // states, and fleet-status.json persists as a done record). Mark it SEEN so
-    // the next beat does NOT open an empty `fleet: run-<id>` tab for it — which
-    // would otherwise recur on every restart while the status file exists.
-    return { seen: [persisted.runId], tabId: null, tailed: {}, closePanes: [] };
-  }
-  // Different run, OR the same run is still in-flight but its panes are gone
-  // (herdr itself also restarted): don't adopt — close any survivors (old-run
-  // orphans still in herdr) and start fresh, so a still-running run gets a new
-  // tab + panes rather than being silently left with none.
-  return { ...empty, closePanes: survivingIds };
-}
-
-/** Seed a fresh per-repo state IN PLACE from a recovery plan (adopt survivors,
- *  don't re-open the tab). The caller closes `rec.closePanes` via its effects. */
-export function applyRecovery(st, rec) {
-  const r = rec && typeof rec === 'object' ? rec : {};
-  st.seen = new Set(Array.isArray(r.seen) ? r.seen : []);
-  st.runState.tabId = typeof r.tabId === 'string' ? r.tabId : null;
-  st.runState.tailed = new Map(r.tailed && typeof r.tailed === 'object' ? Object.entries(r.tailed) : []);
-  return st;
 }

@@ -16,8 +16,7 @@ import {
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
-import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse, planFleetRecovery, applyRecovery, livePaneIds } from '../lib/fleet-bridge.mjs';
-import { loadObserverState, saveObserverState } from '../lib/observer-persist.mjs';
+import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse } from '../lib/fleet-bridge.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
@@ -48,40 +47,30 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 // effects + this per-repo state, and fails soft so a fleet hiccup never crashes
 // the daemon.
 //
-// KNOWN LIMITATION (out of scope for t-herdr-9; deferred): this state is
-// in-memory. If the daemon restarts mid-run it re-initialises empty, re-opens the
-// run tab, and re-tails — orphaning the prior run's panes. A sound fix must adopt
-// or close the pre-existing panes on startup, which needs herdr to expose each
-// pane's agent/command in `api snapshot` (today it carries only pane_id + cwd —
-// see lib/panemap.mjs) so a fleet tail pane can be identified; persisting the ids
-// alone is unsound (they are stale if herdr itself also restarted). Tracked as a
+// KNOWN LIMITATION (out of scope for t-herdr-9; deferred to Phase 4): this state
+// is in-memory. If the daemon restarts mid-run it re-initialises empty, opens a
+// fresh run tab, and re-tails — leaving the prior run's panes as harmless orphans
+// until the run ends or the user closes them. This is a DELIBERATE safe choice:
+// a persisted-pane-id recovery was prototyped and rejected because herdr reuses
+// pane ids after a herdr-daemon restart (its counter resets), so a persisted id
+// can match an UNRELATED pane the user has since opened — adopting then closing
+// it would destroy the user's session. A sound fix needs herdr to expose a pane's
+// agent/command in `api snapshot` (today it carries only pane_id + cwd — see
+// lib/panemap.mjs) so a fleet tail pane can be identified unambiguously. Until
+// then, orphaning is strictly safer than risking an unrelated pane. Tracked as a
 // Phase-4 follow-up alongside the notification-action API (see fleet-bridge.mjs).
 const fleetState = new Map();
 
-async function bridgeFleet(repoRoot, full, liveIds) {
-  const curr = readFleetStatus(repoRoot);
-  let st = fleetState.get(repoRoot);
-  if (!st) {
-    // First beat since (re)start for this repo: recover pane state from disk
-    // (lib/observer-persist.mjs), reconciled against the panes herdr still
-    // reports (liveIds), so a restart neither duplicates the tab/panes nor
-    // orphans the old ones.
-    st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
-    const rec = planFleetRecovery({ persisted: loadObserverState(repoRoot), curr, livePaneIds: liveIds });
-    applyRecovery(st, rec);
-    // Tear down old-run orphans through the SAME bounded close queue the beat
-    // drains — a fire-and-forget close here would leak the pane on a transient
-    // { ok:false }, since it would never be retried.
-    for (const paneId of rec.closePanes) st.runState.closing.set(paneId, 0);
-    fleetState.set(repoRoot, st);
-  }
+async function bridgeFleet(repoRoot, full) {
+  const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map(), spawnFails: new Map() } };
+  fleetState.set(repoRoot, st);
   // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
   // in lib/fleet-bridge.mjs. Here we only supply the real herdr effects, the
   // freshly-read status, and a stderr logger so a stuck bridge is diagnosable.
   // `full` (the 45s heartbeat) re-tags panes so their token TTLs never lapse.
   await runFleetBridgeBeat({
     st,
-    curr,
+    curr: readFleetStatus(repoRoot),
     repoRoot,
     heartbeat: full,
     effects: {
@@ -94,7 +83,6 @@ async function bridgeFleet(repoRoot, full, liveIds) {
     },
     log: (message, err) => console.error(`${message}:`, err),
   });
-  saveObserverState(repoRoot, st); // persist AFTER the beat (st.prev now reflects curr)
 }
 let refreshTimer = null;
 let refreshing = false;
@@ -190,10 +178,7 @@ async function refreshPass(full) {
     // Fleet observer: reflect each repo's fleet run into herdr (tab, tail panes,
     // transition notifications). Sequential + after token publishing — it has
     // side effects and shared per-repo state, unlike the read-only token pass.
-    // `liveIds` (the panes herdr reports now) lets a restarted daemon adopt or
-    // tear down the panes it persisted, instead of duplicating/orphaning them.
-    const liveIds = livePaneIds(panes);
-    for (const repoRoot of activeRepos) await bridgeFleet(repoRoot, full, liveIds);
+    for (const repoRoot of activeRepos) await bridgeFleet(repoRoot, full);
     prevPane = nextPane;
     prevWorkspace = nextWorkspace;
   }
