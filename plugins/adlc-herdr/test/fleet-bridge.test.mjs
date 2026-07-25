@@ -5,7 +5,7 @@
 // unknown schema and refusing hostile ticket ids. bin/watcher.mjs only executes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, openWorktreeShellArgs, runFleetPlan } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, openWorktreeShellArgs, runFleetPlan, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 const V = 1; // knownSchemaVersion under test
@@ -37,6 +37,27 @@ test('AC4 in-flight tickets → tail panes with a safe log path; terminal ones d
   assert.deepEqual(Object.keys(byId).sort(), ['t-a', 't-c']);
   assert.equal(byId['t-a'].logPath, '.adlc/fleet-logs/t-a.log');
   assert.equal(byId['t-a'].state, 'building');
+});
+
+test('EVERY in-flight state yields a tail pane (pins the IN_FLIGHT set + version)', () => {
+  assert.equal(KNOWN_FLEET_SCHEMA_VERSION, 1); // the version this plugin understands
+  for (const s of ['building', 'gating', 'prosecuting', 'fixing', 'merging']) {
+    const p = plan({ curr: status({ tickets: { 't-x': { state: s } } }) });
+    assert.equal(p.tailPanes.length, 1, `${s} → one tail pane`);
+    assert.equal(p.boardRows.length, 0, `${s} is not terminal`);
+  }
+});
+
+test('EVERY terminal state yields a board row + a transition notification (pins the TERMINAL set)', () => {
+  for (const s of ['merged', 'failed', 'blocked']) {
+    const prev = status({ tickets: { 't-x': { state: 'building' } } });
+    const curr = status({ tickets: { 't-x': { state: s } } });
+    const p = planFleetBridge({ prev, curr, knownSchemaVersion: V, seenRunIds: new Set(['r1']) });
+    assert.deepEqual(p.boardRows, [{ ticketId: 't-x', state: s }], `${s} → board row`);
+    assert.equal(p.notifications.length, 1, `${s} → one notification`);
+    assert.equal(p.notifications[0].sound, s === 'merged' ? 'done' : 'request');
+    assert.equal(p.tailPanes.length, 0, `${s} is not in-flight`);
+  }
 });
 
 test('AC5 a hostile ticket id is skipped entirely (no tail pane, no board row, no path)', () => {

@@ -12,6 +12,7 @@ import { newStatus, saveStatus, loadStatus, FLEET_STATUS_SCHEMA_VERSION } from '
 
 test('AC1 newStatus stamps the exported schema version, which is a positive integer', () => {
   assert.ok(Number.isInteger(FLEET_STATUS_SCHEMA_VERSION) && FLEET_STATUS_SCHEMA_VERSION > 0, 'version is a positive integer');
+  assert.equal(FLEET_STATUS_SCHEMA_VERSION, 1, 'the current fleet-status schema version is 1');
   const status = newStatus({ runId: 'r1', integrationBranch: 'adlc/run-r1', baseSha: 'abc' });
   assert.equal(status.schemaVersion, FLEET_STATUS_SCHEMA_VERSION);
 });
