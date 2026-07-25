@@ -11,6 +11,35 @@ const RESET = '\x1b[0m';
 
 const clampWidth = (width) => Math.max(20, Math.min(Number.isFinite(width) ? width : 80, 400));
 
+/** Shortest elided root worth rendering: the ellipsis plus a few leaf chars.
+ *  Below this the pane is too narrow for a root to say anything, so the header
+ *  falls back to a plain truncation of the whole line. */
+const MIN_ROOT = 6;
+
+/**
+ * Fit the header's three parts into `width`, sacrificing the repo root first.
+ *
+ * The root is static context; the ticket id and phase are the fields that
+ * change, so truncating the composed line left-to-right drops exactly the wrong
+ * ones. The root is elided from the FRONT because a path's tail (the repo's own
+ * directory) identifies it and `/var/folders/...` does not.
+ */
+function headerText(repoRoot, ticketLabel, phase, width) {
+  const prefix = 'ADLC board · repo ';
+  const suffix = ` · ticket ${ticketLabel}${phase ? ` · ${phase}` : ''}`;
+  // Sanitize before measuring: escape stripping changes length, and a root that
+  // measured short only because its escapes had not been removed yet would let
+  // the composed line overflow back past the width. The cap bounds the root's
+  // OWN length — capping at `width` would clip the front here and leave the
+  // elision below keeping the middle of the path instead of the leaf.
+  const raw = String(repoRoot ?? '');
+  const root = sanitizeToken(raw, Math.max(raw.length, 1));
+  const budget = width - prefix.length - suffix.length;
+  if (budget >= root.length) return `${prefix}${root}${suffix}`;
+  if (budget < MIN_ROOT) return `${prefix}${root}${suffix}`; // too narrow to help; cut() clamps it
+  return `${prefix}…${root.slice(root.length - (budget - 1))}${suffix}`;
+}
+
 /** The board's footer hint line (with its own SGR). Pure so the refresh-seconds
  *  arithmetic is testable rather than buried in the stdout glue. */
 export function boardFooter(refreshMs) {
@@ -31,7 +60,7 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   let ti = 0;
 
   const ticketLabel = active?.state === 'active' ? active.id : 'none';
-  lines.push(`${BOLD}${cut(`ADLC board · repo ${repoRoot} · ticket ${ticketLabel}${phase ? ` · ${phase}` : ''}`)}${RESET}`);
+  lines.push(`${BOLD}${cut(headerText(repoRoot, ticketLabel, phase, w))}${RESET}`);
   lines.push(`${DIM}${'─'.repeat(Math.min(w, 80))}${RESET}`);
 
   const sections = [

@@ -313,6 +313,75 @@ test('renderBoard does not clamp when the frame fits within `height`', () => {
   assert.ok(out.includes('rails-frozen'), 'the full frame renders');
 });
 
+// ---- header: the repo root must never starve the ticket ----
+//
+// Every renderBoard test above uses repoRoot '/repo', so none of them could see
+// that the header composes `repo <root> · ticket <id>` and then truncates the
+// whole line at the pane width: a deep root ate the ticket and the phase — the
+// only two fields on that line that ever change. It reproduced on macOS, where
+// os.tmpdir() is ~48 chars, as board-e2e's 't-e2e' assertion; on Linux CI /tmp
+// is short enough to hide it.
+
+const headerOf = (state) => renderBoard(state).split('\n')[0].replace(/\x1b\[[0-9;]*m/g, '');
+
+test('renderBoard keeps the ticket and phase visible under a deep repo root', () => {
+  const state = baseState();
+  state.repoRoot = `/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/adlc-herdr-board-e2e-Ab3xY9/repo`;
+  const header = headerOf(state);
+  assert.ok(header.includes('t-b'), `the active ticket must survive: ${header}`);
+  assert.ok(header.includes('P4'), `the phase must survive: ${header}`);
+  assert.ok(header.length <= 80, `the header must still fit the width: ${header.length}`);
+});
+
+test('the elided root keeps its tail — the identifying part of a path', () => {
+  const state = baseState();
+  state.repoRoot = '/very/long/prefix/that/must/be/dropped/from/the/front/myrepo';
+  state.width = 60;
+  const header = headerOf(state);
+  assert.ok(header.includes('myrepo'), `the leaf must survive: ${header}`);
+  assert.ok(header.includes('…'), 'elision must be marked, not silent');
+  assert.ok(!header.includes('/very/long/prefix'), 'the dropped prefix must be gone');
+});
+
+test('the leaf survives a root far longer than the pane is wide', () => {
+  // Guards an order-of-operations trap: sanitizing the root with the WIDTH as
+  // its cap clips the front of the string first, so the "tail" the elision then
+  // keeps is the middle of the path and the leaf is gone. The sanitize cap must
+  // bound the root's own length, not the pane's.
+  const state = baseState();
+  state.repoRoot = `${'/segment'.repeat(40)}/myrepo`;
+  state.width = 80;
+  const header = headerOf(state);
+  assert.ok(header.includes('myrepo'), `the leaf must survive: ${header}`);
+  assert.ok(header.includes('t-b'), 'the ticket must survive too');
+  assert.ok(header.length <= 80);
+});
+
+test('a short repo root is left exactly as-is (no gratuitous elision)', () => {
+  assert.equal(headerOf(baseState()), 'ADLC board · repo /repo · ticket t-b · P4');
+});
+
+test('the header still cannot overflow a pane too narrow to elide into', () => {
+  // Below the point where any root fits, the whole line falls back to a plain
+  // truncation — it must never exceed the width floor.
+  for (const width of [5, 20, 24, 30]) {
+    const state = baseState();
+    state.width = width;
+    state.repoRoot = '/'.padEnd(300, 'x');
+    const header = headerOf(state);
+    assert.ok(header.length <= Math.max(20, width), `width ${width}: header is ${header.length}`);
+  }
+});
+
+test('a hostile repo root cannot smuggle escapes through the elision', () => {
+  const state = baseState();
+  state.repoRoot = `/tmp/\x1b]0;pwn\x07${'a'.repeat(120)}\x1b[31m/repo`;
+  const raw = renderBoard(state).split('\n')[0];
+  assert.ok(!raw.includes('\x1b]'), 'no OSC survives');
+  assert.ok(!raw.includes('\x1b[31m'), 'no data-borne CSI survives');
+  assert.ok(headerOf(state).includes('t-b'), 'the ticket still survives');
+});
+
 test('renderBoard renders calm empty states', () => {
   const out = renderBoard({
     width: 80, repoRoot: '/repo', active: { state: 'absent' }, phase: null,
