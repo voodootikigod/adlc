@@ -165,18 +165,22 @@ function manifestLines(text, label) {
 // content, so a whitespace-target symlink would slip past `.trim()` while downstream readers
 // that follow the link consume forged entries — the old readFileSync check denied this by
 // following the link, so preserve that by rejecting any non-`100644 blob` object.
-function committedManifestText() {
+// Returns { present, text }: `present` is whether the manifest is tracked at HEAD, `text`
+// its committed content ('' when absent OR empty). ALL committed-manifest reads go through
+// here so the symlink/submodule fail-closed applies uniformly (creation, first-bootstrap,
+// AND the append-only branch) — reading the working tree with readFileSync followed a link.
+function committedManifestAtHead() {
   const ls = git(['ls-tree', 'HEAD', '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
   if (ls.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
   const row = ls.stdout.trim();
-  if (!row) return '';
+  if (!row) return { present: false, text: '' };
   const [mode, type] = row.split(/\s+/);
   if (type !== 'blob' || mode !== '100644') {
     deny('.adlc/manifest.jsonl must be a regular tracked file, not a symlink or submodule');
   }
   const show = git(['show', 'HEAD:.adlc/manifest.jsonl'], 'git show HEAD manifest');
   if (show.status !== 0) fail('git show failed for the tracked HEAD manifest (operational error) — failing closed.');
-  return show.stdout;
+  return { present: true, text: show.stdout };
 }
 
 function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
@@ -420,7 +424,7 @@ try {
     // PR that ADDS a tracked non-empty manifest is rejected, but a gitignored untracked
     // manifest in the developer's tree is not (it is in zero commits), so local == CI here
     // too. committedManifestText() also fails closed on a symlink/submodule manifest.
-    if (committedManifestText().trim()) {
+    if (committedManifestAtHead().text.trim()) {
       fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
     }
     console.log(`rails-guard-ci: no ticket store at ${base} — nothing was frozen.`);
@@ -505,16 +509,19 @@ if (manifestLs.status !== 0) {
   fail(`git ls-tree failed for '${base}' manifest (operational error) — failing closed.`);
 }
 if (manifestLs.stdout.trim()) {
-  if (!existsSync('.adlc/manifest.jsonl')) {
+  // Base has a tracked manifest → the PR's HEAD version must be a regular blob (not a
+  // symlink smuggling forged evidence past the prefix check) and append-only over the
+  // base. Read the COMMITTED HEAD content, never the working tree (which follows links).
+  const head = committedManifestAtHead();
+  if (!head.present) {
     deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
   }
   const baseManifest = git(['show', `${trustedBase}:.adlc/manifest.jsonl`], 'git show base manifest');
   if (baseManifest.status !== 0) fail('git show failed for an existing base manifest (operational error) — failing closed.');
-  const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
-  if (!headManifest.startsWith(baseManifest.stdout)) {
+  if (!head.text.startsWith(baseManifest.stdout)) {
     deny('.adlc/manifest.jsonl must be append-only in PRs');
   }
-  if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+  if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, head.text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (verifiedMigration) {
   // Verified migration ceremony (protected-base runner): the migration evidence lives in
   // the gitignored WORKING-TREE manifest by design, so read it here as before. The diff
@@ -522,7 +529,7 @@ if (manifestLs.stdout.trim()) {
   // trusting this local file sound in this branch only.
   const headManifest = existsSync('.adlc/manifest.jsonl') ? readFileSync('.adlc/manifest.jsonl', 'utf8') : '';
   if (headManifest.trim()) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
-} else if (committedManifestText().trim()) {
+} else if (committedManifestAtHead().text.trim()) {
   // Ordinary PR (#314): only a TRACKED manifest ADDED by the diff with non-empty evidence
   // denies. An untracked gitignored manifest reads as '' (not tracked at HEAD) and passes,
   // so the local verdict equals CI's clean checkout.

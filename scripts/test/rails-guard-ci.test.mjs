@@ -347,6 +347,51 @@ test('#314: a manifest committed as a SYMLINK is denied (type-confusion fail-clo
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('#314: deleting a base-tracked manifest at HEAD denies as "absent at HEAD" (present flag)', () => {
+  // Base has a tracked manifest; the PR removes it. The gate must report it is ABSENT at
+  // HEAD (the committed-presence flag), distinct from the append-only-violation reason —
+  // pins that committedManifestAtHead() reports present:false when the manifest is untracked
+  // at HEAD.
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-314del-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    rmSync(join(dir, '.adlc', 'manifest.jsonl'));
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'delete manifest']);
+    let stderr = '';
+    let status = 0;
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { status = e.status ?? 1; stderr = (e.stderr ?? '').toString(); }
+    assert.equal(status, 2);
+    assert.match(stderr, /absent at HEAD/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#314: replacing a base manifest with a SYMLINK at HEAD is denied (append-only type-confusion)', () => {
+  // Base has a real tracked manifest. A PR turns it into a symlink pointing at a decoy that
+  // starts with the base content — so a working-tree readFileSync + startsWith would PASS,
+  // then downstream readers follow the link to forged evidence. The committed-object mode
+  // check denies the non-regular manifest before any content is trusted.
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
+    seedFileContents: { '.adlc/manifest.jsonl': '{"seq":1}\n' },
+    mutate: (d) => {
+      writeFileSync(join(d, '.adlc', 'decoy'), '{"seq":1}\n{"forged":true}\n');
+      rmSync(join(d, '.adlc', 'manifest.jsonl'));
+      symlinkSync('decoy', join(d, '.adlc', 'manifest.jsonl'));
+    },
+  });
+  assert.equal(code, 2);
+});
+
 test('#314: the FIRST-BOOTSTRAP path also agrees local == CI for an untracked gitignored manifest', () => {
   // When the base has no ticket store AND no config, the gate takes an early-exit path that
   // ALSO used existsSync/readFileSync — so the same local↔CI divergence lived there. A
