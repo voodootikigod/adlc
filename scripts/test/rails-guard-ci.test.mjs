@@ -92,7 +92,7 @@ const SIGNED_CONFIG = JSON.stringify({
   signers: { alice: { roles: ['builder'] } },
 });
 
-function runMigrationScenario({ mutateTicket = (ticket) => ticket, extraChange = false, evidence = 'valid', legacyArchive = false, injectArchive = false } = {}) {
+function runMigrationScenario({ mutateTicket = (ticket) => ticket, extraChange = false, evidence = 'valid', legacyArchive = false, injectArchive = false, manifestSymlink = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'rgci-migrate-'));
   try {
     git(dir, ['init', '-q', '-b', 'main']);
@@ -142,6 +142,13 @@ function runMigrationScenario({ mutateTicket = (ticket) => ticket, extraChange =
       writeFileSync(join(dir, '.adlc/manifest.jsonl'), `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
     }
     writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n!.adlc/tickets/\n!.adlc/tickets/**\n!.adlc/ticket-archive/\n!.adlc/ticket-archive/**\n');
+    if (manifestSymlink) {
+      // #314 round 3: point the working-tree manifest at an allow-listed path (.gitignore)
+      // — the migration branch reads it via readFileSync and would follow the link to forged
+      // evidence. The lstat regular-file check must deny it.
+      rmSync(join(dir, '.adlc/manifest.jsonl'), { force: true });
+      symlinkSync('../.gitignore', join(dir, '.adlc/manifest.jsonl'));
+    }
     if (extraChange) { mkdirSync(join(dir, 'src'), { recursive: true }); writeFileSync(join(dir, 'src/extra.mjs'), 'export {};\n'); }
     git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'migrate']);
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
@@ -165,6 +172,13 @@ test('legacy-to-directory migration mixed with unrelated changes is denied', () 
 test('legacy-to-directory migration requires hash-bound evidence', () => {
   assert.equal(runMigrationScenario({ evidence: 'missing' }), 2);
   assert.equal(runMigrationScenario({ evidence: 'invalid' }), 2);
+});
+
+test('#314: a migration whose manifest is a SYMLINK is denied (working-tree type-confusion)', () => {
+  // The migration branch is the one path that reads the working-tree manifest. A symlink to
+  // an allow-listed target (../.gitignore) passes the diff-shape allow-list, so the lstat
+  // regular-file guard is what stops readFileSync from following the link to forged evidence.
+  assert.equal(runMigrationScenario({ manifestSymlink: true }), 2);
 });
 
 test('legacy archive migration is accepted only with identical archived content', () => {

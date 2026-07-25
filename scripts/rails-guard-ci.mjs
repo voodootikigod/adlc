@@ -27,7 +27,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { DirectoryTicketStore, GitTreeTicketStore, detectTicketStore, storeHash, validateTickets } from '@adlc/tickets';
@@ -181,6 +181,19 @@ function committedManifestAtHead() {
   const show = git(['show', 'HEAD:.adlc/manifest.jsonl'], 'git show HEAD manifest');
   if (show.status !== 0) fail('git show failed for the tracked HEAD manifest (operational error) — failing closed.');
   return { present: true, text: show.stdout };
+}
+
+// The verified-migration ceremony is the ONE path that reads the working-tree manifest (its
+// evidence is a gitignored local file). Refuse a symlink there too (#314 round 3): a manifest
+// symlinked to an ALLOW-LISTED migration path (e.g. ../.gitignore holding forged evidence)
+// would otherwise be followed by readFileSync — the diff-shape allow-list does not reject it
+// because the target IS allow-listed. lstat (not stat) so the link itself is inspected.
+function workingManifestText() {
+  if (!existsSync('.adlc/manifest.jsonl')) return '';
+  if (!lstatSync('.adlc/manifest.jsonl').isFile()) {
+    deny('.adlc/manifest.jsonl must be a regular file, not a symlink or special file');
+  }
+  return readFileSync('.adlc/manifest.jsonl', 'utf8');
 }
 
 function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
@@ -527,7 +540,7 @@ if (manifestLs.stdout.trim()) {
   // the gitignored WORKING-TREE manifest by design, so read it here as before. The diff
   // shape and CODEOWNERS attestation were already verified upstream, which is what makes
   // trusting this local file sound in this branch only.
-  const headManifest = existsSync('.adlc/manifest.jsonl') ? readFileSync('.adlc/manifest.jsonl', 'utf8') : '';
+  const headManifest = workingManifestText();
   if (headManifest.trim()) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (committedManifestAtHead().text.trim()) {
   // Ordinary PR (#314): only a TRACKED manifest ADDED by the diff with non-empty evidence
@@ -535,7 +548,7 @@ if (manifestLs.stdout.trim()) {
   // so the local verdict equals CI's clean checkout.
   deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
 }
-if (verifiedMigration && (!existsSync('.adlc/manifest.jsonl') || !readFileSync('.adlc/manifest.jsonl', 'utf8').trim())) {
+if (verifiedMigration && !workingManifestText().trim()) {
   deny('legacy-to-directory migration requires hash-bound migration evidence');
 }
 
