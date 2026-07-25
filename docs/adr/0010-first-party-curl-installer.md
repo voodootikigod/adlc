@@ -138,12 +138,22 @@ worse:
   instruction. That is fine and expected: this ADR is the *reasoning* to weigh
   the finding against, not a reason to dismiss it. If a review makes a case this
   document does not already answer, the decision should be reopened.
-- ADR-0009 carries the same reviewer-directing construct this ADR removed
-  ("Reviewers … should be pointed at this ADR rather than re-litigating it").
-  Left in place here because changing it is out of scope for PR #351, but it has
-  the same defect and should be revised.
+- ADR-0009 carried the same reviewer-directing construct. It was initially left
+  alone as out of scope — wrongly. A later review round pointed out that this
+  ADR both *automates* that dependency and *cites* ADR-0009, so the citation
+  would have suppressed review of a risk this change had just increased. It is
+  amended in the same PR. Scope is not a defence for leaving a review-suppressing
+  instruction on the path you are actively making riskier.
 - The served scripts are now the highest-blast-radius files in the repo. They
   are listed as rails on ticket I2 so a change to them is a deliberate act.
+- **The install is not a coherent release, and that is a known limitation.** The
+  toolkit comes from npm `latest` while the Codex marketplace is fetched from
+  mutable `main` and other harness paths follow their own repository state, so a
+  user can end up with a CLI and a plugin from different commits. This follows
+  directly from ADR-0009 Decision 3's refusal to pin, and the honest fix is a
+  release channel the installer can request as one unit rather than pinning each
+  path independently. Not solved here; recorded so it is not mistaken for
+  something already handled.
 - If the digest test starts failing routinely as noise, that is a signal the
   installer is churning too fast — not a reason to delete the control.
 - Writing the Windows CI job was worth it even though its result killed the

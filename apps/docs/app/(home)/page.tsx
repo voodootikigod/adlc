@@ -80,10 +80,15 @@ export default function HomePage() {
           {/* Install leads. A visitor who is already sold should not have to
               navigate to a second page to find the command. */}
           <div className="flex max-w-2xl flex-col gap-3">
-            <InstallCommand command={UNIVERSAL_INSTALL} label="Install for every agent you have" />
+            <InstallCommand command={UNIVERSAL_INSTALL} label="Install the toolkit and your agent integrations" />
             <p className="text-sm" style={{ color: 'var(--mk-muted)' }}>
               macOS and Linux, Node 18+. Then{' '}
-              <code style={{ color: '#4fb4d8' }}>adlc init</code> in your repo.
+              <code style={{ color: '#4fb4d8' }}>adlc init</code> in your repo. Cursor
+              and OpenCode need one manual step, which the installer prints —{' '}
+              <Link href="/integrations" style={{ color: '#4fb4d8' }}>
+                see what gets installed
+              </Link>
+              .
             </p>
           </div>
           <div className="flex flex-wrap gap-4">

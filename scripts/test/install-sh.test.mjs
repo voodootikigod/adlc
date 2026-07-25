@@ -485,8 +485,15 @@ test('install.sh passes non-interactive flags to every nested installer', () => 
     assert.ok(npxLine, `no npx invocation; log:\n${commands}`);
     assert.match(
       npxLine,
-      /plugins@latest add \S+ --yes/,
+      /plugins@latest add \S+ .*--yes/,
       `the trailing --yes must reach 'plugins', not be eaten by npx: ${npxLine}`,
+    );
+    // `plugins add` defaults to auto-detect, i.e. install into EVERY agent tool
+    // found. Unscoped, the Claude payload lands in Codex/Cursor too.
+    assert.match(
+      npxLine,
+      /--target claude-code/,
+      `the Claude branch must scope its install: ${npxLine}`,
     );
   } finally {
     box.cleanup();

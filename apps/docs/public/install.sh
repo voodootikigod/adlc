@@ -190,7 +190,13 @@ install_claude_code() {
     # `curl … | sh` stdin is not a terminal, so an unanswered prompt hangs or
     # fails the install.
     npx_dir=$(mktemp -d) || { record_failed "Claude Code"; return 0; }
-    if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc --yes); then
+    # --target claude-code is REQUIRED, not tidiness. `plugins add` defaults to
+    # auto-detect, which installs into EVERY agent tool it finds — and discovery
+    # resolves this repo's .claude-plugin/marketplace.json, whose payload is the
+    # Claude Code plugin. Unscoped, this branch would push the Claude plugin into
+    # Codex, Cursor, and anything else present, colliding with the correct native
+    # integrations that this same script installs for them.
+    if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc --target claude-code --yes); then
         ok "Claude Code"
         record_installed "Claude Code"
     else

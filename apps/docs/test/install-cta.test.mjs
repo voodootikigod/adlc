@@ -119,12 +119,23 @@ test('the surface that sells the one-liner also names its exceptions', () => {
   );
 });
 
-test('the homepage hero carries the install command', () => {
+test('the homepage hero carries the install command without over-promising', () => {
   const source = read(HOME);
   const install = indexOf(source, RENDERS_UNIVERSAL, HOME);
   const problem = indexOf(source, 'The problem', HOME);
 
   assert.ok(install < problem, 'install must appear in the hero, before the first content section');
+
+  // The most prominent CTA on the site must not claim coverage the script does
+  // not deliver: Cursor and OpenCode are manual, and pi is skipped below its own
+  // Node floor. "Install for every agent you have" read as a guarantee that
+  // native enforcement was wired up everywhere.
+  assert.ok(
+    !/for every agent you have/i.test(source),
+    'the hero must not claim installation for every agent when two are manual',
+  );
+  assert.match(source, /Cursor/, 'the hero must name the manual exceptions');
+  assert.match(source, /OpenCode/, 'the hero must name the manual exceptions');
 });
 
 /** Every .ts/.tsx/.mjs file under a docs subtree, excluding build output. */
