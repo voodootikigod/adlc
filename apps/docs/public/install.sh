@@ -1,4 +1,7 @@
 #!/bin/sh
+set -eu
+{ # <- truncation guard opens on line 3; see the note at the top of the body.
+
 # ADLC installer — https://www.agenticlifecycle.ai
 #
 #   curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh
@@ -17,23 +20,22 @@
 # Environment:
 #   ADLC_SKIP_HARNESSES=1   install the toolkit only, skip harness detection
 #   ADLC_CLI_TAG=next       install a dist-tag other than latest
-
-set -eu
-
-# EVERYTHING below — constants, helpers, AND the run sequence — is inside this
-# one brace group, which closes on the final line of the file.
 #
-# This is the `curl … | sh` truncation defense. sh reads a pipe incrementally and
-# executes as it goes, so a dropped connection runs whatever prefix arrived.
+# THE BRACE ON LINE 3 is the `curl … | sh` truncation defense, and it opens that
+# early on purpose. sh reads a pipe incrementally and executes as it goes, so a
+# dropped connection runs whatever prefix arrived. EVERYTHING — constants,
+# helpers, and the run sequence — is inside the group, which closes on the final
+# line, so any truncation leaves the brace unclosed and sh refuses the file.
 #
 # Two weaker shapes were tried and rejected. Wrapping only the run sequence lets
 # a cut between two complete function definitions parse fine, so sh exits 0
 # having silently done nothing. Wrapping the body in a FUNCTION and calling it on
-# the last line still leaves a window: a transfer ending after the function's
-# closing brace but before the call is a complete, valid, no-op script that also
-# exits 0. A brace group has no such gap — the invocation is INSIDE it, so any
-# truncation leaves this brace unclosed and sh refuses the whole file.
-{
+# the last line still leaves a window: a transfer ending after the closing brace
+# but before the call is a complete, valid, no-op script that also exits 0.
+#
+# The header used to sit ABOVE the brace, leaving ~1.7KB of comments outside the
+# guard — a drop anywhere in that prefix produced a valid no-op that exited 0.
+# Moving the brace to line 3 shrinks that window to the shebang and `set -eu`.
 
 CLI_PACKAGE="@adlc/cli"
 CLI_TAG="${ADLC_CLI_TAG:-latest}"
@@ -181,8 +183,14 @@ install_claude_code() {
     # it only refuses local shadowing.
     warn "Claude Code has no first-party shell install — delegating to the"
     warn "third-party 'plugins' npm package (see ADR-0010 Decision 8)."
+    # Two --yes flags, and they are NOT redundant. The first belongs to npx
+    # (auto-install the package); the trailing one belongs to `plugins` itself
+    # (skip its confirmation prompt). npx consumes everything before the package
+    # spec, so a single leading --yes never reaches the tool — and under
+    # `curl … | sh` stdin is not a terminal, so an unanswered prompt hangs or
+    # fails the install.
     npx_dir=$(mktemp -d) || { record_failed "Claude Code"; return 0; }
-    if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc); then
+    if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc --yes); then
         ok "Claude Code"
         record_installed "Claude Code"
     else
@@ -251,7 +259,10 @@ install_antigravity() {
 install_herdr() {
     have herdr || return 0
     log "herdr detected"
-    try "herdr" herdr plugin install voodootikigod/adlc/plugins/adlc-herdr
+    # --yes is required, not cosmetic: herdr refuses a remote plugin install
+    # without it when stdin is non-interactive, which is exactly the `curl … | sh`
+    # case this script is written for.
+    try "herdr" herdr plugin install voodootikigod/adlc/plugins/adlc-herdr --yes
 }
 
 # Cursor installs plugins through its in-app marketplace UI; there is no

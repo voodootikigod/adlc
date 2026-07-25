@@ -175,8 +175,17 @@ test('install.sh survives truncation: a partial download executes nothing', () =
     // nothing ran and the user sees no output at all, which reads as failure
     // rather than as a completed install. The opening brace is deliberately as
     // early as possible so that window stays a couple of lines.
-    const guardOpens = full.indexOf('\n{\n') + 2;
-    assert.ok(guardOpens > 0, 'the truncation guard brace must exist');
+    const braceLine = full.search(/^\{/m);
+    assert.notEqual(braceLine, -1, 'the truncation guard brace must exist');
+    const guardOpens = full.indexOf('\n', braceLine) + 1;
+
+    // The unguarded prefix must stay TINY. It was ~1.7KB when the header
+    // comment sat above the brace, which is a lot of surface where a dropped
+    // connection yields a valid no-op script that exits 0.
+    assert.ok(
+      guardOpens < 120,
+      `only the shebang and 'set -eu' may precede the guard; found ${guardOpens} bytes`,
+    );
 
     for (const offset of offsets) {
       const truncated = path.join(box.root, 'truncated.sh');
@@ -448,6 +457,36 @@ test('install.sh cannot be hijacked by a repo-local package named "plugins"', ()
     assert.ok(
       !/(^|\s)plugins(\s|$)/.test(npxLine.replace('plugins@latest', '')),
       'no bare `plugins` specifier may remain',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh passes non-interactive flags to every nested installer', () => {
+  // Under `curl … | sh` stdin is NOT a terminal. herdr refuses a remote plugin
+  // install without --yes in that case, and `plugins` prompts for confirmation.
+  // Either one hangs or fails the install, and no other test can see it: the
+  // shims never prompt, so the failure mode is invisible without asserting the
+  // flags directly.
+  const box = sandbox({ bins: ['node', 'npm', 'npx', 'claude', 'herdr', 'mktemp'] });
+  try {
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+    const commands = box.commands();
+
+    const herdrLine = commands.split('\n').find((line) => line.startsWith('herdr '));
+    assert.ok(herdrLine, `no herdr invocation; log:\n${commands}`);
+    assert.match(herdrLine, /--yes/, 'herdr refuses non-interactive remote installs without --yes');
+
+    // npx consumes every flag BEFORE the package spec, so a leading --yes never
+    // reaches `plugins`. The tool's own --yes has to come after the subcommand.
+    const npxLine = commands.split('\n').find((line) => line.startsWith('npx '));
+    assert.ok(npxLine, `no npx invocation; log:\n${commands}`);
+    assert.match(
+      npxLine,
+      /plugins@latest add \S+ --yes/,
+      `the trailing --yes must reach 'plugins', not be eaten by npx: ${npxLine}`,
     );
   } finally {
     box.cleanup();
