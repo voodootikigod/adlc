@@ -155,6 +155,30 @@ function manifestLines(text, label) {
   return text.split('\n').filter((line) => line.trim()).map((line, index) => parseJson(line, `${label} line ${index + 1}`));
 }
 
+// #314: the committed HEAD content of `.adlc/manifest.jsonl`, or '' when it is NOT tracked
+// at HEAD. Whether a PR "creates the manifest" is a DIFF question, not a filesystem one — a
+// gitignored, untracked manifest (which every dev who has run the toolkit has locally) is in
+// zero commits and must not be read, so the local verdict equals CI's clean checkout.
+//
+// FAIL CLOSED on a non-regular object: a manifest committed as a SYMLINK (or submodule) must
+// not smuggle evidence. `git show` returns a symlink's TARGET STRING, not the target's
+// content, so a whitespace-target symlink would slip past `.trim()` while downstream readers
+// that follow the link consume forged entries — the old readFileSync check denied this by
+// following the link, so preserve that by rejecting any non-`100644 blob` object.
+function committedManifestText() {
+  const ls = git(['ls-tree', 'HEAD', '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
+  if (ls.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
+  const row = ls.stdout.trim();
+  if (!row) return '';
+  const [mode, type] = row.split(/\s+/);
+  if (type !== 'blob' || mode !== '100644') {
+    deny('.adlc/manifest.jsonl must be a regular tracked file, not a symlink or submodule');
+  }
+  const show = git(['show', 'HEAD:.adlc/manifest.jsonl'], 'git show HEAD manifest');
+  if (show.status !== 0) fail('git show failed for the tracked HEAD manifest (operational error) — failing closed.');
+  return show.stdout;
+}
+
 function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
   const baseEntries = manifestLines(baseText, 'base manifest');
   const headEntries = manifestLines(headText, 'HEAD manifest');
@@ -392,7 +416,11 @@ try {
   if (baseHasConfig) {
     console.log(`rails-guard-ci: no ticket store at ${base} — protecting ADLC trust roots only.`);
   } else {
-    if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
+    // #314: same diff-not-filesystem rule as the main manifest block — a first-bootstrap
+    // PR that ADDS a tracked non-empty manifest is rejected, but a gitignored untracked
+    // manifest in the developer's tree is not (it is in zero commits), so local == CI here
+    // too. committedManifestText() also fails closed on a symlink/submodule manifest.
+    if (committedManifestText().trim()) {
       fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
     }
     console.log(`rails-guard-ci: no ticket store at ${base} — nothing was frozen.`);
@@ -494,20 +522,11 @@ if (manifestLs.stdout.trim()) {
   // trusting this local file sound in this branch only.
   const headManifest = existsSync('.adlc/manifest.jsonl') ? readFileSync('.adlc/manifest.jsonl', 'utf8') : '';
   if (headManifest.trim()) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
-} else {
-  // Ordinary PR (#314): whether the CHANGE "creates the manifest with evidence" is a DIFF
-  // question, not a filesystem one. A gitignored, untracked manifest — which every dev who
-  // has run the toolkit has locally — is in zero commits and not in the diff, so it must
-  // not deny (the local verdict must equal CI's clean checkout). Reading the working tree
-  // (existsSync/readFileSync) made them disagree. Only a TRACKED manifest ADDED by the
-  // diff triggers the deny; read the committed HEAD content, never the filesystem.
-  const manifestAtHead = git(['ls-tree', '--name-only', 'HEAD', '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
-  if (manifestAtHead.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
-  if (manifestAtHead.stdout.trim()) {
-    const headManifest = git(['show', 'HEAD:.adlc/manifest.jsonl'], 'git show HEAD manifest');
-    if (headManifest.status !== 0) fail('git show failed for a tracked HEAD manifest (operational error) — failing closed.');
-    if (headManifest.stdout.trim()) deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
-  }
+} else if (committedManifestText().trim()) {
+  // Ordinary PR (#314): only a TRACKED manifest ADDED by the diff with non-empty evidence
+  // denies. An untracked gitignored manifest reads as '' (not tracked at HEAD) and passes,
+  // so the local verdict equals CI's clean checkout.
+  deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
 }
 if (verifiedMigration && (!existsSync('.adlc/manifest.jsonl') || !readFileSync('.adlc/manifest.jsonl', 'utf8').trim())) {
   deny('legacy-to-directory migration requires hash-bound migration evidence');

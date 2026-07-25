@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -315,6 +315,82 @@ test('#314: an untracked, gitignored .adlc/manifest.jsonl does NOT trigger a fal
     // sanity: the manifest really is gitignored and untracked
     assert.throws(() => execFileSync('git', ['ls-files', '--error-unmatch', '.adlc/manifest.jsonl'], { cwd: dir, stdio: 'pipe' }));
     assert.equal(run(), 0, 'local (untracked gitignored manifest present) must agree with CI');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#314: a manifest committed as a SYMLINK is denied (type-confusion fail-closed)', () => {
+  // git show returns a symlink's TARGET STRING, not the target's content — so a manifest
+  // symlinked to a whitespace target would slip past a content-only `.trim()` check while
+  // downstream readers that follow the link consume forged evidence. The committed-object
+  // MODE check denies any non-regular manifest, restoring the deny the old readFileSync
+  // (which followed the link) produced.
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-314sym-'));
+  const run = () => {
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+    catch (e) { return e.status ?? 1; }
+  };
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
+    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    // The manifest is a symlink whose target is whitespace, so `git show` → "  " → .trim()
+    // is empty (a content-only check would NOT deny). The mode is 120000, so we deny.
+    symlinkSync('  ', join(dir, '.adlc', 'manifest.jsonl'));
+    git(dir, ['add', '-f', '.adlc/manifest.jsonl']);
+    git(dir, ['commit', '-qm', 'symlink manifest']);
+    assert.equal(run(), 2, 'a symlink manifest must be denied, not read as empty');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#314: the FIRST-BOOTSTRAP path also agrees local == CI for an untracked gitignored manifest', () => {
+  // When the base has no ticket store AND no config, the gate takes an early-exit path that
+  // ALSO used existsSync/readFileSync — so the same local↔CI divergence lived there. A
+  // tracked non-empty manifest add is still rejected; an untracked gitignored one is not.
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-314boot-'));
+  const run = () => {
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+    catch (e) { return e.status ?? 1; }
+  };
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+    // TRUE first bootstrap: no .adlc tree at base at all.
+    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n');
+    writeFileSync(join(dir, 'README.md'), 'base\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    writeFileSync(join(dir, 'README.md'), 'work\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'work']);
+
+    assert.equal(run(), 0, 'first-bootstrap clean checkout must pass');
+    // The toolkit left a gitignored, untracked, non-empty manifest locally.
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+    assert.equal(run(), 0, 'first-bootstrap with an untracked manifest must agree with CI (was: fail exit 1)');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#314: a TRACKED non-empty manifest on the first-bootstrap path is still rejected → exit 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-314boot2-'));
+  const run = () => {
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+    catch (e) { return e.status ?? 1; }
+  };
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+    writeFileSync(join(dir, 'README.md'), 'base\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'prepopulated manifest']);
+    assert.equal(run(), 1, 'a first-bootstrap PR that commits pre-populated evidence is rejected');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
