@@ -152,7 +152,9 @@ test('a keycap without VS16 is still a wide cluster', () => {
 test('narrow symbols the board itself renders stay one cell', () => {
   // The inverse guard: over-broad emoji classification would make the board's
   // own separators and bullets double-width and shrink every row.
-  for (const symbol of ['·', '…', '─', '>', ' ']) {
+  // NB: the separator is ASCII '-' precisely because U+2500 is ambiguous-width
+  // and would render two cells on an East Asian terminal. See board-render.mjs.
+  for (const symbol of ['·', '…', '-', '>', ' ']) {
     assert.equal(displayWidth(symbol), 1, `${symbol} must stay one cell`);
   }
 });
@@ -271,4 +273,15 @@ test('zero-width-only input stays empty rather than accumulating', () => {
   const marks = '́'.repeat(5_000);
   assert.equal(displayWidth(truncateToWidth(marks, 10)), 0);
   assert.ok(truncateToWidth(marks, 10).length < 2_000);
+});
+
+test('the block-boundary policy is applied to EVERY range, not just some', () => {
+  // Three ranges stayed pinned to assignment endpoints — the exact thing the
+  // policy comment 50 lines above them forbids — and Unicode 17 assigned
+  // U+16FF2-16FF6 and extended Tangut past U+187F7 straight into those gaps.
+  assert.equal(displayWidth('\u{16FF2}'), 2, 'assigned in Unicode 17');
+  assert.equal(displayWidth('\u{16FF6}'), 2);
+  assert.equal(displayWidth('\u{16FFF}'), 2, 'end of the ideographic symbols block');
+  assert.equal(displayWidth('\u{187F8}'), 2, 'Tangut past the old endpoint');
+  assert.equal(displayWidth('\u{187FF}'), 2, 'end of the Tangut block');
 });

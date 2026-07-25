@@ -196,7 +196,13 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
 
   const ticketLabel = active?.state === 'active' ? active.id : 'none';
   lines.push(`${BOLD}${cut(headerText(repoRoot, ticketLabel, phase, emit))}${RESET}`);
-  lines.push(`${DIM}${'─'.repeat(Math.min(emit, 80))}${RESET}`);
+  // ASCII separator, deliberately. U+2500 is East_Asian_Width=AMBIGUOUS, which
+  // a terminal configured for East Asian text renders in TWO cells — one glyph
+  // per column then occupies double the pane and wraps the row. Counting all
+  // ambiguous characters as wide would shrink every row for everyone (see the
+  // Ambiguous test in display-width.test.mjs); the separator is the one
+  // character the renderer CHOOSES, so it can simply be unambiguous.
+  lines.push(`${DIM}${'-'.repeat(Math.min(emit, 80))}${RESET}`);
 
   const sections = [
     ['ready', groups?.ready ?? []],

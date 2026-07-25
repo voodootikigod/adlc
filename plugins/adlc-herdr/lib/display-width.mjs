@@ -108,9 +108,12 @@ const WIDE = [
   [0xfe68, 0xfe6b],
   [0xff01, 0xff60], // fullwidth forms
   [0xffe0, 0xffe6], // fullwidth signs
-  [0x16fe0, 0x16fe4], // Tangut/Nushu iteration marks
-  [0x16ff0, 0x16ff1],
-  [0x17000, 0x187f7], // Tangut
+  // These three were the last ranges still pinned to assignment endpoints —
+  // the exact thing the policy above forbids, 50 lines above them. Unicode 17
+  // assigned U+16FF2-16FF6 and extended Tangut past U+187F7, and both landed in
+  // the gaps that left. Whole blocks now.
+  [0x16fe0, 0x16fff], // ideographic symbols and punctuation
+  [0x17000, 0x187ff], // Tangut
   // Tangut components, Khitan Small Script and Tangut Supplement as one span
   // (block boundaries, per the policy above — U+18CFF sat in the old gap).
   [0x18800, 0x18dff],
