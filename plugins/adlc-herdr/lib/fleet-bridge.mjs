@@ -84,7 +84,12 @@ export function fleetTabArgs(title) {
   return ['tab', 'create', '--label', title, '--no-focus'];
 }
 export function fleetTailPaneArgs({ tabId, repoRoot, logPath }) {
-  return ['agent', 'start', 'adlc-fleet-tail', '--cwd', repoRoot, '--tab', tabId, '--split', 'down', '--', 'tail', '-f', '--', logPath];
+  // `tail -F` (= --follow=name --retry), NOT -f: the fleet orchestrator creates
+  // `.adlc/fleet-logs/<id>.log` a beat AFTER the ticket enters `building`, and
+  // plain `tail -f` on a not-yet-existent file exits 1 immediately (dead pane,
+  // dropped logs). -F waits for the file to appear and re-follows on rotation.
+  // Supported by GNU/BSD/busybox tail (herdr's target platforms).
+  return ['agent', 'start', 'adlc-fleet-tail', '--cwd', repoRoot, '--tab', tabId, '--split', 'down', '--', 'tail', '-F', '--', logPath];
 }
 export function fleetPaneCloseArgs(paneId) {
   return ['pane', 'close', paneId];

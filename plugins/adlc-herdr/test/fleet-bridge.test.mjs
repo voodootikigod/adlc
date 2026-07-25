@@ -418,11 +418,11 @@ test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async 
   }));
 });
 
-test('AC8 fixed-argv builders: a shell-free tail -f argv, tab create, pane close', () => {
+test('AC8 fixed-argv builders: a shell-free tail -F argv (waits for a not-yet-created log), tab create, pane close', () => {
   assert.deepEqual(fleetTabArgs('fleet: run-r1'), ['tab', 'create', '--label', 'fleet: run-r1', '--no-focus']);
   assert.deepEqual(
     fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log' }),
-    ['agent', 'start', 'adlc-fleet-tail', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-f', '--', '.adlc/fleet-logs/t-a.log'],
+    ['agent', 'start', 'adlc-fleet-tail', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-F', '--', '.adlc/fleet-logs/t-a.log'],
   );
   assert.deepEqual(fleetPaneCloseArgs('w4:p5'), ['pane', 'close', 'w4:p5']);
 });
