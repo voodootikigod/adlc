@@ -204,6 +204,31 @@ test('the schema never rejects a ticket the validator accepts', () => {
   assert.ok(checked > 40, `expected the probes to exercise the schema, got ${checked}`);
 });
 
+test('the never-reject rule holds for nested edge fields too', () => {
+  // The probe above only walks TOP-LEVEL fields, so an over-constrained nested
+  // property (edges[].contract) would slip past it. validateTicket checks only
+  // that an edge carries a string `to`; everything else on an edge is free.
+  const edgeSchema = ticketJsonSchema().properties.edges.items;
+  for (const probe of [7, true, null, {}, 'text']) {
+    const edge = { to: 'T2', contract: probe };
+    assert.deepEqual(validateTicket({ id: 'T1', title: 'x', edges: [edge] }), []);
+    assert.ok(
+      satisfies(edge, edgeSchema),
+      `schema rejects edge contract=${JSON.stringify(probe)} which validateTicket accepts`,
+    );
+  }
+  assert.ok(edgeSchema.additionalProperties, 'an edge must keep carrying unknown keys');
+});
+
+test('the edge shape documents contract, the field ticket-sync also recognizes', () => {
+  // An author consulting only `create --help` would otherwise write a bare
+  // `to` edge and never learn that an edge can pin the interface the dependent
+  // ticket consumes — the thing that makes parallel execution safe.
+  const summary = TICKET_FIELDS.find((field) => field.name === 'edges').summary;
+  assert.match(summary, /contract/, 'the edges summary must document the contract field');
+  assert.ok(ticketJsonSchema().properties.edges.items.properties.contract, 'and the schema must describe it');
+});
+
 test('the schema still constrains what the validator DOES police', () => {
   // The inverse of the test above: permissiveness must not become vacuous.
   const { properties } = ticketJsonSchema();

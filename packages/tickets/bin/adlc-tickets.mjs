@@ -131,8 +131,14 @@ async function main() {
     if (!flags.input) throw new TicketStoreError('invalid', 'INPUT_REQUIRED', 'update requires --input');
     plan = service.planUpdate(positionals[1], await readInput(flags.input), { expect: flags.expect, authorized: Boolean(flags.authorize) });
   } else if (command === 'edit') {
-    const ticket = service.snapshot().get(positionals[1]);
+    // Bind the hash of what we OPEN, before the editor runs. Reading it again
+    // afterwards made a write that landed during the editor session the
+    // "expected" version, so the compare-and-swap passed on a document derived
+    // from the older one and silently dropped the concurrent author's change.
+    const opened = service.snapshot();
+    const ticket = opened.get(positionals[1]);
     if (!ticket) throw new TicketStoreError('invalid', 'TICKET_NOT_FOUND', `ticket not found: ${positionals[1]}`);
+    const expected = opened.ticketHashes[ticket.id];
     const directory = mkdtempSync(join(tmpdir(), 'adlc-ticket-edit-'));
     const path = join(directory, `${basename(positionals[1])}.json`);
     try {
@@ -140,7 +146,7 @@ async function main() {
       const editor = process.env.EDITOR || process.env.VISUAL;
       if (!editor) throw new TicketStoreError('operational', 'EDITOR_NOT_SET', 'set $EDITOR or $VISUAL');
       execFileSync(editor, [path], { stdio: 'inherit' });
-      plan = service.planUpdate(ticket.id, JSON.parse(readFileSync(path, 'utf8')), { expect: service.snapshot().ticketHashes[ticket.id], authorized: Boolean(flags.authorize) });
+      plan = service.planUpdate(ticket.id, JSON.parse(readFileSync(path, 'utf8')), { expect: expected, authorized: Boolean(flags.authorize) });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   } else if (command === 'discard') plan = service.planDiscard(positionals[1]);
   else if (command === 'complete') plan = service.planComplete(positionals[1], { authorized: Boolean(flags.authorize) });

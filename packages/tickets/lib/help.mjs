@@ -97,13 +97,18 @@ export const TICKET_FIELDS = [
     name: 'edges',
     type: 'array of "to" objects',
     required: false,
-    summary: 'Ordering constraints, prerequisite to dependent. An edge with "to": "TX" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here.',
+    summary: 'Ordering constraints, prerequisite to dependent. An edge with "to": "TX" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here. An edge may also carry "contract": a path to the interface it guarantees TX can consume, which is what lets the two be built in parallel; ticket-sync recognizes it and nothing else on an edge.',
     schema: {
       type: 'array',
       items: {
         type: 'object',
         required: ['to'],
-        properties: { to: { type: 'string', minLength: 1 } },
+        properties: {
+          to: { type: 'string', minLength: 1, description: 'Id of the dependent ticket, which must not start before this one completes.' },
+          // Unconstrained for the same reason as body/category: validateTicket
+          // checks only that an edge carries a string `to`.
+          contract: { description: 'Path to the interface this edge guarantees the dependent ticket can consume.' },
+        },
         additionalProperties: true,
       },
     },
