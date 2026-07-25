@@ -226,3 +226,44 @@ test('planning an update without --expect still works — only --write is gated'
     assert.equal(JSON.parse(result.stdout).dryRun, true);
   });
 });
+
+test('a hash captured with the document catches a concurrent write', () => {
+  // The single-capture recipe the help prints, driven end to end. The earlier
+  // round-trip test parsed one envelope and used both fields from it — i.e. it
+  // exercised the SAFE pattern while the help printed a two-`show` one. This
+  // asserts the property that makes the recipe safe: a document and hash taken
+  // together cannot be applied over someone else's later write.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { title: 'V1' })]);
+    const show = () => JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], {
+      encoding: 'utf8', cwd: root,
+    }).stdout);
+
+    const captured = show(); // author A captures V1 and its hash, together
+
+    // Author B lands V2 in between.
+    const second = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--expect', captured.ticketHash, '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify({ ...captured.ticket, title: 'V2' }),
+    });
+    assert.equal(second.status, 0, second.stderr);
+
+    // Author A now submits their V1-derived edit with the hash from the SAME
+    // capture. It must be refused rather than reverting V2.
+    const stale = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--expect', captured.ticketHash, '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify({ ...captured.ticket, title: 'V1-edited' }),
+    });
+    assert.equal(stale.status, 2, 'a hash captured with the document must go stale with it');
+    assert.match(stale.stderr, /STALE_TICKET/);
+    assert.equal(show().ticket.title, 'V2', "the concurrent author's write must survive");
+  });
+});
+
+test('the printed recipe captures show output once, not twice', () => {
+  // Two `show` calls fetch the hash AFTER the document, so a write landing
+  // between them pairs a current hash with a stale body and the compare-and-swap
+  // passes. The recipe must derive both from one capture.
+  const help = renderCommandHelp('update');
+  assert.doesNotMatch(help, /--expect "\$\(adlc ticket show/, 'the hash must not come from a second show');
+  assert.match(help, /capture ONCE/i, 'the recipe must say so explicitly');
+  assert.match(help, /T1\.envelope\.json/, 'and derive both values from that capture');
+});
