@@ -16,7 +16,7 @@ import {
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
-import { planFleetBridge, runFleetPlan, fleetTabArgs, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, runFleetPlan, fleetTabArgs, fleetPaneCloseArgs, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
@@ -50,10 +50,12 @@ const fleetState = new Map();
 
 async function bridgeFleet(repoRoot) {
   try {
-    const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Set() } };
+    const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
     const curr = readFleetStatus(repoRoot);
     const plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
-    if (plan.openTab) { st.seen.add(plan.openTab.runId); st.runState = { tabId: null, tailed: new Set() }; }
+    // Fresh run state on a new run, but DON'T mark it seen yet — only after the
+    // tab actually opens, so a transient tab failure retries next beat.
+    if (plan.openTab) st.runState = { tabId: null, tailed: new Map() };
     await runFleetPlan({
       plan,
       repoRoot,
@@ -62,9 +64,14 @@ async function bridgeFleet(repoRoot) {
         const r = await runHerdrJson(fleetTabArgs(title));
         return r.ok ? (r.value?.result?.tab?.tab_id ?? r.value?.result?.tab_id ?? null) : null;
       },
-      spawn: (argv) => runHerdr(argv),
+      spawn: async (argv) => {
+        const r = await runHerdrJson(argv);
+        return r.ok ? (r.value?.result?.pane?.pane_id ?? null) : null;
+      },
+      closePane: (paneId) => runHerdr(fleetPaneCloseArgs(paneId)),
       notify: (title, body, sound) => runHerdr(notifyArgs(title, body, sound)),
     });
+    if (plan.openTab && st.runState.tabId) st.seen.add(plan.openTab.runId);
     st.prev = curr;
     fleetState.set(repoRoot, st);
   } catch {

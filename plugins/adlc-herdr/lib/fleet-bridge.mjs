@@ -53,7 +53,11 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
         if (state === 'merged') {
           out.notifications.push({ ticketId: id, kind: 'merged', title: 'ADLC fleet', body: `${sanitizeToken(id)} merged`, sound: 'done' });
         } else {
-          out.notifications.push({ ticketId: id, kind: state, title: 'ADLC fleet', body: `${sanitizeToken(id)} ${state}`, sound: 'request', worktreePath: `.worktrees/fleet-${runId}` });
+          // herdr notifications carry no action buttons, so the worktree to
+          // inspect is surfaced in the BODY (a one-click shell needs a herdr
+          // notification-action API that does not exist yet — phase 4).
+          const worktreePath = `.worktrees/fleet-${runId}`;
+          out.notifications.push({ ticketId: id, kind: state, title: 'ADLC fleet', body: `${sanitizeToken(id)} ${state} — inspect ${worktreePath}`, sound: 'request', worktreePath });
         }
       }
     }
@@ -70,17 +74,18 @@ export function fleetTabArgs(title) {
 export function fleetTailPaneArgs({ tabId, repoRoot, logPath }) {
   return ['agent', 'start', 'adlc-fleet-tail', '--cwd', repoRoot, '--tab', tabId, '--split', 'down', '--', 'tail', '-f', '--', logPath];
 }
-export function openWorktreeShellArgs({ worktreePath, shell = 'bash' }) {
-  return ['agent', 'start', 'adlc-fleet-shell', '--cwd', worktreePath, '--split', 'right', '--', shell];
+export function fleetPaneCloseArgs(paneId) {
+  return ['pane', 'close', paneId];
 }
 
 /**
  * Execute a fleet plan through injected effects, keeping per-run mutable `state`
- * (`{ tabId, tailed:Set }`) so the tab opens once and each ticket gets ONE tail
- * pane across beats. `openTab(title)->tabId`, `spawn(argv)`, `notify(t,b,s)` are
- * injected (async) so the orchestration is unit-testable, not watcher glue.
+ * (`{ tabId, tailed:Map<ticketId,paneId> }`) so the tab opens once, each ticket
+ * gets ONE tail pane, and that pane is CLOSED when the ticket terminates (else a
+ * long run leaks a pane per finished ticket). Injected (async): openTab(title)->
+ * tabId, spawn(argv)->paneId, closePane(paneId), notify(t,b,s).
  */
-export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, notify }) {
+export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify }) {
   if (!plan || plan.degrade) return;
   if (plan.openTab) {
     const tabId = await openTab(plan.openTab.title);
@@ -88,8 +93,16 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, noti
   }
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
-    await spawn(fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
-    state.tailed.add(pane.ticketId);
+    const paneId = await spawn(fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
+    state.tailed.set(pane.ticketId, typeof paneId === 'string' ? paneId : null);
+  }
+  // Close the tail pane of any ticket that has reached a terminal state (it only
+  // does so once — the entry is removed, so a stable terminal state is a no-op).
+  for (const row of plan.boardRows) {
+    if (!state.tailed.has(row.ticketId)) continue;
+    const paneId = state.tailed.get(row.ticketId);
+    if (paneId) await closePane(paneId);
+    state.tailed.delete(row.ticketId);
   }
   for (const n of plan.notifications) await notify(n.title, n.body, n.sound);
 }

@@ -5,7 +5,7 @@
 // unknown schema and refusing hostile ticket ids. bin/watcher.mjs only executes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, openWorktreeShellArgs, runFleetPlan, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, runFleetPlan, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 
 const V = 1; // knownSchemaVersion under test
@@ -82,35 +82,43 @@ test('AC7 terminal tickets → board summary rows; in-flight ones do not', () =>
   assert.deepEqual(p.boardRows, [{ ticketId: 't-b', state: 'failed' }]);
 });
 
-test('runFleetPlan opens the tab, tails each ticket ONCE across beats, and notifies', async () => {
-  const calls = { tab: [], spawn: [], notify: [] };
-  const state = { tabId: null, tailed: new Set() };
+test('runFleetPlan opens the tab, tails each ticket ONCE, then CLOSES the pane on terminal', async () => {
+  const calls = { tab: [], spawn: [], close: [], notify: [] };
+  const state = { tabId: null, tailed: new Map() };
   const deps = {
     repoRoot: '/repo', state,
     openTab: async (t) => { calls.tab.push(t); return 'w4:t9'; },
-    spawn: async (a) => { calls.spawn.push(a); },
+    spawn: async (a) => { calls.spawn.push(a); return 'w4:p5'; },
+    closePane: async (p) => { calls.close.push(p); },
     notify: async (...n) => { calls.notify.push(n); },
   };
-  const plan = {
+  const building = {
     degrade: false, openTab: { runId: 'r1', title: 'fleet: run-r1' },
     tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }],
-    notifications: [{ title: 'ADLC fleet', body: 't-a merged', sound: 'done' }], boardRows: [],
+    notifications: [], boardRows: [],
   };
-  await runFleetPlan({ plan, ...deps });
-  assert.equal(calls.tab.length, 1);
+  await runFleetPlan({ plan: building, ...deps });
   assert.equal(state.tabId, 'w4:t9');
   assert.deepEqual(calls.spawn[0], fleetTailPaneArgs({ tabId: 'w4:t9', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log' }));
-  assert.equal(calls.notify.length, 1);
-  // next beat, same ticket still in-flight, tab already open → no re-tab, no re-tail
-  await runFleetPlan({ plan: { ...plan, openTab: null }, ...deps });
+  assert.equal(state.tailed.get('t-a'), 'w4:p5');
+  // next beat, still building, tab open → no re-tab, no re-tail, no close
+  await runFleetPlan({ plan: { ...building, openTab: null }, ...deps });
   assert.equal(calls.tab.length, 1);
-  assert.equal(calls.spawn.length, 1, 'each ticket is tailed exactly once');
+  assert.equal(calls.spawn.length, 1, 'tailed exactly once');
+  assert.equal(calls.close.length, 0);
+  // t-a terminates → its tail pane is closed exactly once and forgotten
+  const merged = { degrade: false, openTab: null, tailPanes: [], notifications: [], boardRows: [{ ticketId: 't-a', state: 'merged' }] };
+  await runFleetPlan({ plan: merged, ...deps });
+  assert.deepEqual(calls.close, ['w4:p5']);
+  assert.equal(state.tailed.has('t-a'), false);
+  await runFleetPlan({ plan: merged, ...deps }); // stable terminal → no double-close
+  assert.equal(calls.close.length, 1, 'a terminated pane is closed exactly once');
 });
 
 test('runFleetPlan on a degrade performs no effects', async () => {
   let touched = false;
   const mark = async () => { touched = true; };
-  await runFleetPlan({ plan: { degrade: true }, repoRoot: '/r', state: { tabId: null, tailed: new Set() }, openTab: mark, spawn: mark, notify: mark });
+  await runFleetPlan({ plan: { degrade: true }, repoRoot: '/r', state: { tabId: null, tailed: new Map() }, openTab: mark, spawn: mark, closePane: mark, notify: mark });
   assert.equal(touched, false);
 });
 
@@ -122,14 +130,11 @@ test('the board renders a fleet section for terminal rows, and omits it with no 
   assert.doesNotMatch(renderBoard({ ...base, fleetRows: [] }), /fleet/);
 });
 
-test('AC8 fixed-argv builders: a shell-free tail -f argv, tab create, worktree shell', () => {
+test('AC8 fixed-argv builders: a shell-free tail -f argv, tab create, pane close', () => {
   assert.deepEqual(fleetTabArgs('fleet: run-r1'), ['tab', 'create', '--label', 'fleet: run-r1', '--no-focus']);
   assert.deepEqual(
     fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log' }),
     ['agent', 'start', 'adlc-fleet-tail', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-f', '--', '.adlc/fleet-logs/t-a.log'],
   );
-  assert.deepEqual(
-    openWorktreeShellArgs({ worktreePath: '/repo/.worktrees/fleet-r1', shell: 'bash' }),
-    ['agent', 'start', 'adlc-fleet-shell', '--cwd', '/repo/.worktrees/fleet-r1', '--split', 'right', '--', 'bash'],
-  );
+  assert.deepEqual(fleetPaneCloseArgs('w4:p5'), ['pane', 'close', 'w4:p5']);
 });
