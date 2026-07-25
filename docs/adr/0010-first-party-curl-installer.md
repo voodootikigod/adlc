@@ -80,10 +80,20 @@ worse:
      asserted on the installer's own detection output, because an absent
      harness's failed invocation logs nothing and would make a
      "no command was run" assertion hollow.
-5. **Be honest about coverage.** Cursor's plugin install has no supported shell
-   command and `@adlc/copilot` is unpublished; the installer detects both and
-   prints the manual step rather than fabricating an automated one. ADR-0009
-   Decision 4 (claim accuracy) applies here unchanged.
+5. **Be honest about coverage.** Two harnesses genuinely cannot be automated
+   from a machine-level installer: Cursor's plugin install has no supported
+   shell command, and OpenCode's initializer scaffolds the *current directory*,
+   so running it from where `curl | sh` was invoked would configure `$HOME`
+   instead of the user's repo. Both are detected and reported as a manual step
+   rather than fabricated. ADR-0009 Decision 4 (claim accuracy) applies here
+   unchanged.
+
+   Copilot was briefly listed here on the grounds that `@adlc/copilot` is
+   unpublished. That was wrong — its plugin installs through a **Git
+   marketplace** that does not use npm, so the installer automates it. The
+   lesson is the one Decision 4 is about in the first place: an unexamined
+   assumption about a channel produced an inaccurate coverage claim, in the
+   document that exists to prevent inaccurate coverage claims.
 6. **No Windows installer ships until Windows works.** This was originally
    written as "Windows ships as beta, backed by CI", and the CI is what
    overturned it: a `windows-latest` run of the core gate suites passed **6 of

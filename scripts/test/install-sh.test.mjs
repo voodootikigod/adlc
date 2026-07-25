@@ -58,7 +58,13 @@ const HARNESSES = [
  */
 // Default stub Node clears every floor in play, including @adlc/pi's 22.19 —
 // v22.0.0 silently turned the pi cases into skips.
-function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [] } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.adlcOnPath] Simulate the post-install `adlc` binary
+ *   being reachable. Defaults to true, because a successful `npm install -g` is
+ *   the normal case; set false to model a global install landing outside PATH.
+ */
+function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [], adlcOnPath = true } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'adlc-install-'));
   const binDir = path.join(root, 'bin');
   const home = path.join(root, 'home');
@@ -73,7 +79,15 @@ function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [] } = {}) {
     chmodSync(abs, 0o755);
   };
 
-  for (const name of bins) {
+  // The installer verifies its own work by running `adlc --version`, so a
+  // sandbox modelling a SUCCESSFUL npm install has to provide it.
+  const allBins = adlcOnPath && bins.includes('npm') ? [...bins, 'adlc'] : bins;
+
+  for (const name of allBins) {
+    if (name === 'adlc') {
+      shim('adlc', "if [ \"$1\" = '--version' ]; then printf '1.6.0\\n'; fi\nexit 0");
+      continue;
+    }
     if (name === 'node') {
       // `node -v` has to answer; anything else just logs.
       shim('node', `if [ "$1" = "-v" ]; then printf '${nodeVersion}\\n'; fi\nexit 0`);
@@ -395,6 +409,25 @@ test('install.sh installs the Copilot native plugin from its marketplace', () =>
   }
 });
 
+test('install.sh fails when npm succeeds but adlc is not on PATH', () => {
+  // npm exiting 0 proves the package was written, not that it is runnable — a
+  // custom prefix routinely puts the bin outside PATH. Reporting success and
+  // then telling the user to run `adlc init` sends them to command-not-found.
+  const box = sandbox({ bins: ['node', 'npm', 'codex'], adlcOnPath: false });
+  try {
+    const result = runInstaller(box);
+    assert.notEqual(result.status, 0, 'an unusable toolkit must not report success');
+    assert.match(result.stderr, /not on your PATH/);
+    assert.match(result.stderr, /npm prefix -g/, 'the fix must be actionable');
+    assert.ok(
+      !box.commands().includes('codex plugin'),
+      'no harness should be configured against a toolkit that cannot run',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
 test('install.sh cannot be hijacked by a repo-local package named "plugins"', () => {
   // npx resolves a BARE package name against the current project first, so a
   // malicious repo shipping a workspace/dependency named `plugins` would have
@@ -461,17 +494,50 @@ test('install.sh survives an environment with no HOME', () => {
   }
 });
 
-test('install.sh is idempotent: a second run issues the same commands', () => {
-  const box = sandbox({ bins: ['node', 'npm', 'codex', 'herdr'] });
+test('install.sh is idempotent against harnesses that are ALREADY installed', () => {
+  // Stateless shims cannot prove idempotence: they answer identically forever,
+  // so "same commands twice" says nothing about what happens when a plugin is
+  // already registered. These shims remember, and on a second invocation behave
+  // like the real tools do — "already exists", exit 0 — so the assertion is
+  // about the installer's tolerance of prior state, not about shim determinism.
+  const box = sandbox({ bins: ['node', 'npm'] });
   try {
+    const stateDir = path.join(box.root, 'state');
+    mkdirSync(stateDir, { recursive: true });
+
+    for (const bin of ['codex', 'herdr']) {
+      const abs = path.join(box.root, 'bin', bin);
+      writeFileSync(
+        abs,
+        `#!/bin/sh\n` +
+          `printf '%s\\n' "${bin} $*" >> "${box.log}"\n` +
+          `marker="${stateDir}/${bin}.installed"\n` +
+          `if [ -e "$marker" ]; then\n` +
+          `  echo "${bin}: plugin already installed" >&2\n` +
+          `  exit 0\n` +
+          `fi\n` +
+          `touch "$marker"\n` +
+          `exit 0\n`,
+      );
+      chmodSync(abs, 0o755);
+    }
+
     const first = runInstaller(box);
-    assert.equal(first.status, 0);
-    const firstLog = box.commands();
+    assert.equal(first.status, 0, `first run failed: ${first.stderr}`);
+    assert.match(first.stdout, /installed for: .*Codex/);
 
     writeFileSync(box.log, '');
     const second = runInstaller(box);
-    assert.equal(second.status, 0, 're-running the installer must stay safe');
-    assert.equal(box.commands(), firstLog, 'a second run must issue exactly the same commands');
+    assert.equal(second.status, 0, 'a re-run over an existing install must still succeed');
+    assert.match(
+      second.stdout,
+      /installed for: .*Codex/,
+      'an already-installed harness must not be reported as failed',
+    );
+    assert.ok(
+      !/failed for:/.test(second.stdout),
+      `a re-run reported failures:\n${second.stdout}`,
+    );
   } finally {
     box.cleanup();
   }

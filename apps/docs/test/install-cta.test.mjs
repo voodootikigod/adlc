@@ -99,9 +99,19 @@ test('the surface that sells the one-liner also names its exceptions', () => {
   // `curl | sh` has every reason to distrust the rest of the page.
   const source = read(INDEX);
 
+  // The exceptions are the harnesses that genuinely cannot be automated from a
+  // machine-level installer: Cursor (in-app marketplace only) and OpenCode
+  // (scaffolds the CURRENT directory, so it belongs inside the repo).
   assert.match(source, /Cursor/, 'the index must name the Cursor exception');
-  assert.match(source, /Copilot/, 'the index must name the Copilot exception');
+  assert.match(source, /OpenCode/, 'the index must name the OpenCode exception');
   assert.match(source, /manual\s*\n?\s*step/, 'the exceptions must be described as a manual step');
+  // Copilot installs from a Git marketplace that does not use npm, so the
+  // installer automates it. Listing it as manual was an inaccurate coverage
+  // claim derived from an unexamined assumption about npm publication.
+  assert.ok(
+    !/Copilot/.test(source),
+    'Copilot is installed automatically — it must not be listed as a manual exception',
+  );
   assert.match(
     source,
     /Windows isn&apos;t supported|Windows is not supported/,

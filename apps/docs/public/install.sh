@@ -111,7 +111,19 @@ require_node() {
 install_toolkit() {
     log "installing ${CLI_PACKAGE}@${CLI_TAG}"
     if npm install -g "${CLI_PACKAGE}@${CLI_TAG}"; then
-        ok "gate toolkit installed — 'adlc --version'"
+        # npm exiting 0 proves the package was WRITTEN, not that it is runnable.
+        # A custom prefix routinely puts the bin outside PATH, and reporting
+        # success then telling the user to run `adlc init` sends them to a
+        # command-not-found. Verify by actually running it.
+        if adlc_version=$(adlc --version 2>/dev/null); then
+            ok "gate toolkit installed — adlc ${adlc_version}"
+        else
+            err "${CLI_PACKAGE} installed, but 'adlc' is not on your PATH."
+            err "npm's global bin directory is probably not in PATH. Check:"
+            err "    npm prefix -g        # then add its bin/ to PATH"
+            err "Nothing else was installed; re-run once 'adlc --version' works."
+            exit 1
+        fi
     else
         err "npm install -g ${CLI_PACKAGE}@${CLI_TAG} failed."
         err "If this is a permissions (EACCES) error, point npm at a directory"

@@ -34,10 +34,9 @@ export default function IntegrationsPage() {
           <code style={{ color: '#4fb4d8' }}>adlc init</code>. Two exceptions the
           installer will tell you about: <strong style={{ color: '#cbcdd2' }}>Cursor</strong>{' '}
           installs plugins through its in-app marketplace, and{' '}
-          <strong style={{ color: '#cbcdd2' }}>GitHub Copilot</strong>&apos;s plugin
-          package isn&apos;t on npm yet — both are detected and reported as a manual
-          step rather than guessed at. <strong style={{ color: '#cbcdd2' }}>OpenCode</strong>{' '}
-          likewise scaffolds the current directory, so it belongs inside your repo.{' '}
+          <strong style={{ color: '#cbcdd2' }}>OpenCode</strong> scaffolds the current
+          directory, so it belongs inside your repo. Both are detected and reported
+          as a manual step rather than guessed at.{' '}
           <strong style={{ color: '#cbcdd2' }}>Windows isn&apos;t supported yet</strong>{' '}
           — a <code style={{ color: '#4fb4d8' }}>windows-latest</code> run of the core
           gate suites passes 6 of 28, so use WSL for now. Prefer to install by hand?

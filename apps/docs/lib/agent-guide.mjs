@@ -253,8 +253,10 @@ Walk the human through this sequence.
   regardless.
 - **Cursor** installs plugins through its in-app marketplace UI. There is no
   supported shell command, so the installer reports it as a manual step.
-- **GitHub Copilot's** plugin package is not published to npm yet; use
-  \`adlc init --harness copilot\`.
+- **GitHub Copilot** installs from its Git marketplace, not npm. The
+  \`@adlc/copilot\` NPM package is unpublished, but that is irrelevant — the
+  marketplace path does not use npm. See the Copilot section above.
+  \`adlc init --harness copilot\` scaffolds repo state and is NOT an install.
 - **skills.sh installs skills only** — no hooks, MCP, agents, or rails.
 
 ## Diagnosis
