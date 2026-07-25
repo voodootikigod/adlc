@@ -126,16 +126,25 @@ install_codex() {
     fi
 }
 
+# OpenCode's initializer is PROJECT-scoped: `@adlc/opencode init` defaults its
+# root to the current working directory and writes .adlc/ and .opencode/ there.
+# This script is machine-level and is normally run from $HOME (the documented
+# flow is "install, THEN cd into your repo"), so running it here would scaffold
+# the home directory and leave the actual repository untouched. Report it as a
+# step to run inside the repo instead.
 install_opencode() {
     have opencode || return 0
     log "OpenCode detected"
-    try "OpenCode" npx --yes @adlc/opencode init
+    record_manual "OpenCode"
 }
 
+# `pi install -l` is likewise the PROJECT install. The no-flag form is
+# user-global, which is what a machine-level installer should do; the project
+# form belongs in the repo, and the summary says so.
 install_pi() {
     have pi || return 0
     log "pi detected"
-    try "pi" pi install -l npm:@adlc/pi
+    try "pi" pi install npm:@adlc/pi
 }
 
 install_antigravity() {
@@ -207,8 +216,10 @@ summary() {
     fi
     if [ -n "$MANUAL" ]; then
         warn "manual step needed for: ${MANUAL}"
-        printf '      Cursor:  Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
-        printf '      Copilot: adlc init --harness copilot   (the plugin package is not yet on npm)\n'
+        printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
+        printf '      Copilot:  adlc init --harness copilot   (the plugin package is not yet on npm)\n'
+        printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
+        printf '      pi:       installed user-global; run "pi install -l npm:@adlc/pi" inside a repo to share it with teammates\n'
     fi
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"
@@ -228,3 +239,12 @@ require_node
 install_toolkit
 install_harnesses
 summary
+
+# A harness failure must not ABORT the run — the other harnesses on the machine
+# are still worth installing — but it must not be reported as success either.
+# `curl … | sh` surfaces this script's exit status to whatever automation
+# invoked it, and a partial install that exits 0 is a silent lie to that caller.
+if [ -n "$FAILED" ]; then
+    exit 1
+fi
+exit 0

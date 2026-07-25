@@ -149,11 +149,24 @@ Walk the human through this sequence.
    \`--harness copilot\` where relevant). It is idempotent and confines all
    writes to the repo root. If \`.adlc/config.json\` is already a frozen rail, do
    not overwrite it.
-2. **Wire the CI control.** Copy \`docs/ci/rails-guard.yml\` into
-   \`.github/workflows/\` and tell the human to make it a **required check**.
-   This matters more than it looks: in-session rail enforcement is best-effort
-   and harness-dependent, so the commit-time diff gate is the only unbypassable
-   control. Without it, frozen rails are advisory.
+2. **Wire the CI control.** This matters more than it looks: in-session rail
+   enforcement is best-effort and harness-dependent, so the commit-time diff
+   gate is the only unbypassable control. Without it, frozen rails are advisory.
+
+   \`docs/ci/rails-guard.yml\` lives in the ADLC **source repository**. It is
+   NOT shipped inside \`@adlc/cli\` (that package publishes only \`bin/\`,
+   \`lib/\`, \`README.md\`, and \`LICENSE\`) and \`adlc init\` does not create
+   it, so in a normal downstream repo there is no local copy to copy. Fetch it:
+
+   \`\`\`sh
+   mkdir -p .github/workflows
+   curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \\
+     -o .github/workflows/rails-guard.yml
+   \`\`\`
+
+   Then tell the human to mark it a **required check** in branch protection.
+   That last step is theirs — it is a repository setting, not a file, and the
+   gate enforces nothing until it is required.
 3. **Verify.** Run \`adlc preflight\`, \`adlc ticket list\`, and
    \`adlc gate-manifest show\`. Report all three results, including failures.
 4. **Author the first ticket (P0).** \`adlc ticket create --input <path|-> --write\`.

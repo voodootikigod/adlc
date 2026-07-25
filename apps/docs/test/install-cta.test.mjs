@@ -73,9 +73,15 @@ test('the full install section stays at the bottom with operate commands and res
   );
 });
 
+// Match the RENDERED usage, never the bare identifier: every one of these files
+// imports the constant at the top, so `indexOf(source, 'UNIVERSAL_INSTALL')`
+// resolves to the import line and any "install comes before X" assertion built
+// on it is vacuous — deleting the actual <InstallCommand> would still pass.
+const RENDERS_UNIVERSAL = 'command={UNIVERSAL_INSTALL}';
+
 test('the integrations index leads with the universal install command', () => {
   const source = read(INDEX);
-  const install = indexOf(source, 'UNIVERSAL_INSTALL', INDEX);
+  const install = indexOf(source, RENDERS_UNIVERSAL, INDEX);
   const grid = indexOf(source, 'INTEGRATIONS.map(', INDEX);
 
   assert.ok(install < grid, 'the universal install must render before the harness picker');
@@ -105,7 +111,7 @@ test('the surface that sells the one-liner also names its exceptions', () => {
 
 test('the homepage hero carries the install command', () => {
   const source = read(HOME);
-  const install = indexOf(source, 'UNIVERSAL_INSTALL', HOME);
+  const install = indexOf(source, RENDERS_UNIVERSAL, HOME);
   const problem = indexOf(source, 'The problem', HOME);
 
   assert.ok(install < problem, 'install must appear in the hero, before the first content section');

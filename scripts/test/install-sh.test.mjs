@@ -171,7 +171,16 @@ test('install.sh installs the toolkit and only the harnesses that are present', 
     // Present harnesses get their documented native command.
     assert.match(commands, /codex plugin marketplace add voodootikigod\/adlc --ref main/);
     assert.match(commands, /codex plugin add adlc-codex@adlc/);
-    assert.match(commands, /pi install -l npm:@adlc\/pi/);
+
+    // pi must use the USER-GLOBAL form. `pi install -l` is the project install:
+    // it writes into the current directory, and this script is machine-level and
+    // normally run from $HOME, so -l here would configure the home directory
+    // instead of the repo the user actually meant.
+    assert.match(commands, /pi install npm:@adlc\/pi/);
+    assert.ok(
+      !commands.includes('pi install -l'),
+      'the machine-level installer must not run pi\'s PROJECT install from the caller\'s cwd',
+    );
 
     // Absent harnesses must not be touched. Asserting only "no command was
     // logged" would be hollow: an absent harness has no shim, so an attempt to
@@ -200,14 +209,38 @@ test('install.sh installs the toolkit and only the harnesses that are present', 
   }
 });
 
-test('install.sh reports a failing harness without aborting the others', () => {
-  // codex fails; pi must still be installed and the run must still exit 0.
+test('install.sh continues past a failing harness but exits non-zero', () => {
+  // Two properties, and they pull in opposite directions. A broken harness must
+  // not ABORT the run — the others on the machine are still worth installing.
+  // But the run must not report SUCCESS either: `curl … | sh` hands this exit
+  // status to whatever automation invoked it, and a partial install that exits 0
+  // is a silent lie to that caller.
   const box = sandbox({ bins: ['node', 'npm', 'codex', 'pi'], failing: ['codex'] });
   try {
     const result = runInstaller(box);
-    assert.equal(result.status, 0, 'one broken harness must not fail the whole install');
-    assert.match(box.commands(), /pi install -l npm:@adlc\/pi/, 'later harnesses must still run');
-    assert.match(result.stdout, /failed for: .*Codex/);
+    assert.match(box.commands(), /pi install npm:@adlc\/pi/, 'later harnesses must still run');
+    assert.match(result.stdout, /failed for: .*Codex/, 'the failure must be named');
+    assert.notEqual(result.status, 0, 'a partial install must not report success');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh does not run project-scoped installers from the caller\'s directory', () => {
+  // `@adlc/opencode init` defaults its root to the CWD and scaffolds .adlc/ and
+  // .opencode/ there. This script is machine-level and the documented flow is
+  // "install, THEN cd into your repo", so running it here would configure $HOME
+  // and leave the intended repository untouched.
+  const box = sandbox({ bins: ['node', 'npm', 'opencode'] });
+  try {
+    const result = runInstaller(box);
+    assert.equal(result.status, 0);
+    assert.ok(
+      !box.commands().includes('@adlc/opencode init'),
+      'the machine-level installer must not scaffold the caller\'s cwd',
+    );
+    assert.match(result.stdout, /manual step needed for: .*OpenCode/);
+    assert.match(result.stdout, /INSIDE your repo/, 'the summary must say where to run it instead');
   } finally {
     box.cleanup();
   }
