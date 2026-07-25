@@ -245,6 +245,10 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
     // retried on failure — NOT force-forgotten) and reset the active tab.
     retire(new Set());
     state.tabId = null;
+    // Clear spawn-failure counts too: a ticket id that recurs across runs (or a
+    // retained failed ticket that stays in `desired`) would otherwise keep its
+    // prior run's give-up count and never get a tail pane in the new run.
+    state.spawnFails.clear();
     const tabId = await safeCall('open-tab', openTab, plan.openTab.title);
     if (typeof tabId === 'string' && tabId) state.tabId = tabId;
   }

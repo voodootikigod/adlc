@@ -291,6 +291,17 @@ test('runFleetPlan drops a ticket spawn-fail count once the ticket leaves the in
   assert.equal(state.spawnFails.has('t-a'), false);
 });
 
+test('runFleetPlan CLEARS spawn-fail counts on a NEW run — a ticket that gave up last run gets a fresh pane, even if it stays in tailPanes (round 19)', async () => {
+  // t-a exhausted its spawn attempts in the prior run and is STILL in-flight now.
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map(), spawnFails: new Map([['t-a', BOUNDED_SPAWN_ATTEMPTS]]) };
+  let spawned = null;
+  const newRun = { degrade: false, observed: true, openTab: { runId: 'r2', title: 'fleet: run-r2' }, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
+  await runFleetPlan({ plan: newRun, repoRoot: '/r', state, openTab: async () => 'w4:t2', spawn: async () => { spawned = 't-a'; return 'w4:pa'; }, closePane: async () => {}, notify: async () => {} });
+  assert.equal(state.spawnFails.has('t-a'), false, 'the prior run give-up count is cleared on a new run — no cross-run poisoning');
+  assert.equal(spawned, 't-a', 'so the ticket gets a fresh spawn attempt in the new run');
+  assert.equal(state.tailed.get('t-a'), 'w4:pa');
+});
+
 test('runFleetPlan GIVES UP after BOUNDED_CLOSE_ATTEMPTS on a pane that never closes — no per-beat spawn loop (round 9)', async () => {
   const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map([['w4:ghost', 0]]) };
   const logs = [];
