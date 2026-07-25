@@ -203,6 +203,44 @@ test('runFleetPlan TOLERATES a closePane failure — entry forgotten, notificati
   assert.equal(notified.length, 1, 'notifications still fire after a close failure');
 });
 
+test('runFleetPlan ISOLATES a notify failure — the remaining notifications still fire and it is logged', async () => {
+  const notified = [];
+  const logs = [];
+  let n = 0;
+  await runFleetPlan({
+    plan: {
+      degrade: false, openTab: null, tailPanes: [], boardRows: [],
+      notifications: [{ title: 'a', body: 'b1', sound: 'done' }, { title: 'c', body: 'b2', sound: 'request' }],
+    },
+    repoRoot: '/r', state: { tabId: 'w4:t1', tailed: new Map() },
+    openTab: async () => {}, spawn: async () => {}, closePane: async () => {},
+    notify: async (...a) => { n += 1; if (n === 1) throw new Error('socket busy'); notified.push(a); },
+    log: (m, e) => logs.push([m, e]),
+  });
+  assert.equal(n, 2, 'both notifications are attempted — the first throwing does not abort the rest');
+  assert.deepEqual(notified, [['c', 'b2', 'request']], 'the second notification still fires');
+  assert.equal(logs.length, 1, 'the failed notification is surfaced to the log');
+  assert.match(logs[0][0], /notify failed/);
+});
+
+test('runFleetPlan RECONCILES panes — closes a ticket that left the in-flight set (removed/unknown state), not just terminal', async () => {
+  const closed = [];
+  // t-a still in-flight; t-b is absent from tailPanes AND boardRows (removed from
+  // the status file, or in a state outside IN_FLIGHT/TERMINAL) — its pane must close.
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa'], ['t-b', 'w4:pb']]) };
+  await runFleetPlan({
+    plan: {
+      degrade: false, openTab: null, boardRows: [], notifications: [],
+      tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }],
+    },
+    repoRoot: '/r', state,
+    openTab: async () => {}, spawn: async () => 'w4:pa', closePane: async (p) => closed.push(p), notify: async () => {},
+  });
+  assert.deepEqual(closed, ['w4:pb'], 'the vanished ticket pane is closed with no terminal row');
+  assert.equal(state.tailed.has('t-b'), false, 'and forgotten');
+  assert.equal(state.tailed.has('t-a'), true, 'the still-in-flight ticket keeps its pane');
+});
+
 test('runFleetPlan on a degrade performs no effects', async () => {
   let touched = false;
   const mark = async () => { touched = true; };
@@ -239,7 +277,7 @@ test('runFleetBridgeBeat happy path: effects run, prev advances to curr, run mar
   assert.equal(logged.length, 0, 'a clean beat logs nothing');
 });
 
-test('runFleetBridgeBeat surfaces an effect failure via log but never throws, and still advances prev', async () => {
+test('runFleetBridgeBeat surfaces a per-effect failure via log but never throws, and still advances prev', async () => {
   const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
   const curr = status({ runId: 'r8', tickets: { 't-a': { state: 'building' } } });
   const logged = [];
@@ -253,10 +291,32 @@ test('runFleetBridgeBeat surfaces an effect failure via log but never throws, an
     },
     log: (m, e) => logged.push([m, e]),
   }));
-  assert.equal(logged.length, 1, 'the swallowed error is surfaced to the log sink (observability)');
-  assert.match(logged[0][0], /fleet bridge/, 'the log message identifies the fleet bridge');
+  assert.equal(logged.length, 1, 'the swallowed effect error is surfaced to the log sink (observability)');
+  assert.match(logged[0][0], /open-tab failed/, 'the log message identifies the failing effect');
   assert.equal(logged[0][1].message, 'herdr socket refused', 'the actual error is passed through');
-  assert.equal(st.prev, curr, 'prev still advances so a transient error does not re-fire the beat forever');
+  assert.equal(st.prev, curr, 'an isolated effect failure still advances prev (no re-fire storm)');
+});
+
+test('runFleetBridgeBeat NEVER crashes on an unexpected internal error — the outer guard catches and logs it', async () => {
+  const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: null } }; // corrupt run state → an internal throw outside any per-effect guard
+  const logged = [];
+  await assert.doesNotReject(runFleetBridgeBeat({
+    st, curr: status({ runId: 'rX', tickets: {} }), repoRoot: '/repo',
+    effects: { openTab: async () => 'w4:t9', spawn: async () => {}, closePane: async () => {}, notify: async () => {} },
+    log: (m, e) => logged.push([m, e]),
+  }));
+  assert.equal(logged.length, 1);
+  assert.match(logged[0][0], /fleet bridge error/, 'the last-resort guard reports a bridge-level error, not a per-effect one');
+});
+
+test('runFleetBridgeBeat does NOT wipe the baseline when curr is null (transient read error / no run)', async () => {
+  const prevStatus = status({ runId: 'r1', tickets: { 't-a': { state: 'building' } } });
+  const st = { prev: prevStatus, seen: new Set(['r1']), runState: { tabId: 'w4:t1', tailed: new Map() } };
+  await runFleetBridgeBeat({
+    st, curr: null, repoRoot: '/repo',
+    effects: { openTab: async () => {}, spawn: async () => {}, closePane: async () => {}, notify: async () => {} },
+  });
+  assert.equal(st.prev, prevStatus, 'a null observation keeps the last-known status so a transition still fires when the file returns');
 });
 
 test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async () => {

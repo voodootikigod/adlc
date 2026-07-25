@@ -107,41 +107,52 @@ export function shouldMarkRunSeen(plan, runState) {
 
 /**
  * Execute a fleet plan through injected effects, keeping per-run mutable `state`
- * (`{ tabId, tailed:Map<ticketId,paneId> }`) so the tab opens once, each ticket
- * gets ONE tail pane, and that pane is CLOSED when the ticket terminates (else a
- * long run leaks a pane per finished ticket). Injected (async): openTab(title)->
- * tabId, spawn(argv)->paneId, closePane(paneId), notify(t,b,s).
+ * (`{ tabId, tailed:Map<ticketId,paneId> }`) so the tab opens once and each
+ * ticket gets ONE tail pane. Injected (async): openTab(title)->tabId,
+ * spawn(argv)->paneId, closePane(paneId), notify(t,b,s); optional log(msg,err).
+ *
+ * Every herdr effect is BEST-EFFORT: a transient IPC failure on one call
+ * (open/spawn/close/notify) is logged and swallowed, never rethrown — otherwise
+ * one busy socket aborts the rest of the beat, dropping every remaining
+ * notification, and the caller advances `prev` past them so they never re-fire.
+ * A single isolated failure loses only that one ephemeral effect (the board row
+ * still reflects state); it is surfaced to `log`, not hidden.
  */
-export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify }) {
+export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, log }) {
   if (!plan || plan.degrade) return;
-  // Closing a pane can throw if the user already closed it — best-effort, so one
-  // dead pane never aborts the run (which would block every later notification).
-  const safeClose = async (paneId) => { if (paneId) { try { await closePane(paneId); } catch { /* pane may already be gone */ } } };
+  const safeCall = async (label, fn, ...args) => {
+    try { return await fn(...args); } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
+  };
+  const safeClose = (paneId) => (paneId ? safeCall('pane-close', closePane, paneId) : null);
   if (plan.openTab) {
     // A new run: close the PREVIOUS run's tail panes (they belong to the old
     // tab) and reset, so a restarted run never abandons/leaks panes.
     for (const paneId of state.tailed.values()) await safeClose(paneId);
     state.tailed.clear();
     state.tabId = null;
-    const tabId = await openTab(plan.openTab.title);
+    const tabId = await safeCall('open-tab', openTab, plan.openTab.title);
     if (typeof tabId === 'string' && tabId) state.tabId = tabId;
   }
+  // The tickets that SHOULD have a tail pane this beat (the in-flight set).
+  const desired = new Set(plan.tailPanes.map((p) => p.ticketId));
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
-    const paneId = await spawn(fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
-    // Only remember a REAL pane — a failed spawn (null) must retry next beat, not
-    // be cached as "already tailed" and silently deprive the ticket of logs.
+    const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
+    // Only remember a REAL pane — a failed spawn (null/throw) must retry next
+    // beat, not be cached as "already tailed" and deprive the ticket of logs.
     if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
   }
-  // Close the tail pane of any ticket that has reached a terminal state. Forget
+  // Reconcile: close the tail pane of ANY tracked ticket no longer in the desired
+  // in-flight set — whether it reached a terminal state, vanished from the status
+  // file, or entered an unknown state. Coupling closure to a TERMINAL transition
+  // alone leaks the pane on removal/unknown states. Iterate a snapshot and forget
   // the entry FIRST, so a throwing close can't leave it to be retried every beat.
-  for (const row of plan.boardRows) {
-    if (!state.tailed.has(row.ticketId)) continue;
-    const paneId = state.tailed.get(row.ticketId);
-    state.tailed.delete(row.ticketId);
+  for (const [ticketId, paneId] of [...state.tailed]) {
+    if (desired.has(ticketId)) continue;
+    state.tailed.delete(ticketId);
     await safeClose(paneId);
   }
-  for (const n of plan.notifications) await notify(n.title, n.body, n.sound);
+  for (const n of plan.notifications) await safeCall('notify', notify, n.title, n.body, n.sound);
 }
 
 /**
@@ -150,11 +161,13 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
  * status, execute it through the injected herdr `effects`, and commit progress
  * even on partial failure. Extracted from the daemon glue (bin/watcher.mjs) so
  * the whole beat is a pinned invariant, not untested wiring:
- *   - a fleet-bridge error is LOGGED via `log` (a long-running daemon must
- *     surface IPC/herdr failures — never swallow them silently) but NEVER
- *     rethrown, so one hiccup can't crash the plugin host; and
- *   - `prev` always advances to `curr` (and a run is marked seen the moment its
- *     tab exists), so a transient error can't re-fire the same beat forever.
+ *   - herdr effects are best-effort (see runFleetPlan): a per-call failure is
+ *     logged via `log` — a long-running daemon must surface IPC/herdr failures,
+ *     never swallow them silently — and never crashes the plugin host; the outer
+ *     try/catch is a last-resort guard for an unexpected planning/state error; and
+ *   - `prev` advances ONLY on a clean plan with a real `curr` status: a caught
+ *     error (couldn't plan) or a null `curr` (no run / transient read error) must
+ *     NOT wipe the baseline, or the missed transitions never re-fire next beat.
  * @param {object} a
  * @param {{prev:any, seen:Set, runState:{tabId:string|null, tailed:Map}}} a.st
  * @param {any} a.curr  the freshly-read fleet-status object (or null)
@@ -168,11 +181,11 @@ export async function runFleetBridgeBeat({ st, curr, repoRoot, effects, log }) {
     plan = planFleetBridge({ prev: st.prev, curr, knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: st.seen });
     // On a new run, runFleetPlan closes the prior run's panes and resets the
     // (persistent) run state in place — so it is passed by reference, not reassigned.
-    await runFleetPlan({ plan, repoRoot, state: st.runState, ...effects });
+    await runFleetPlan({ plan, repoRoot, state: st.runState, ...effects, log });
   } catch (err) {
     log?.('adlc-herdr fleet bridge error', err);
   } finally {
     if (shouldMarkRunSeen(plan, st.runState)) st.seen.add(plan.openTab.runId);
-    st.prev = curr;
+    if (plan && curr) st.prev = curr;
   }
 }
