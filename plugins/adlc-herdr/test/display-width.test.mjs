@@ -227,3 +227,28 @@ test('width and truncation agree for every prefix of a mixed string', () => {
     assert.ok(displayWidth(tailToWidth(mixed, budget)) <= budget, `tail budget ${budget}`);
   }
 });
+
+test('a complex-script cluster counts every SPACING code point it contains', () => {
+  // Intl.Segmenter returns a Devanagari conjunct as ONE cluster, and measuring
+  // it from its first code point called four code points one cell. A terminal
+  // allocates cells for the second consonant and the spacing vowel mark, so a
+  // row of them measured 40 and occupied far more.
+  //
+  // Nonspacing (Mn) and enclosing (Me) marks stay free; spacing marks (Mc) do
+  // not: ka + virama + ssa + vowel-sign-i = 1 + 0 + 1 + 1.
+  assert.equal(displayWidth('क्षि'), 3);
+  assert.equal(displayWidth('क'), 1, 'the base consonant alone');
+  assert.equal(displayWidth('क्'), 1, 'a virama is nonspacing');
+  assert.equal(displayWidth('ก'), 1, 'Thai consonant');
+  assert.equal(displayWidth('กิ'), 1, 'Thai vowel sign is nonspacing');
+});
+
+test('summing code points does not double-count emoji clusters', () => {
+  // The per-code-point sum must not reach the emoji paths: a flag is two
+  // regional indicators and a ZWJ family is several wide code points, but each
+  // renders as ONE glyph. Summing them would over-shrink every row with emoji.
+  assert.equal(displayWidth('\u{1F1FA}\u{1F1F8}'), 2, 'two regional indicators, one glyph');
+  assert.equal(displayWidth('\u{1F468}‍\u{1F469}‍\u{1F467}'), 2, 'ZWJ family is one glyph');
+  assert.equal(displayWidth('❤️'), 2, 'base plus VS16');
+  assert.equal(displayWidth('1⃣'), 2, 'keycap');
+});

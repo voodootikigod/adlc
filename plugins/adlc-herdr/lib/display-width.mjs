@@ -159,6 +159,18 @@ const inRanges = (ranges, code) => ranges.some(([low, high]) => code >= low && c
  */
 const EMOJI_PRESENTATION = /^\p{Emoji_Presentation}/u;
 
+/**
+ * Marks and format controls that occupy no cell of their own: nonspacing (Mn),
+ * enclosing (Me) and format (Cf, which includes ZWJ and the bidi controls).
+ *
+ * General_Category, unlike Emoji_Presentation, is stable across ICU versions
+ * for every script a board could plausibly render, so reading it from the
+ * engine does not reintroduce the runtime skew the emoji ranges above avoid.
+ * SPACING marks (Mc) are deliberately absent: a Devanagari vowel sign takes a
+ * cell.
+ */
+const ZERO_CATEGORY = /^[\p{Mn}\p{Me}\p{Cf}]$/u;
+
 /** Cells one grapheme cluster occupies: 0, 1, or 2. */
 export function clusterWidth(cluster) {
   if (!cluster) return 0;
@@ -169,9 +181,19 @@ export function clusterWidth(cluster) {
   // when the base is ASCII and no VS16 is present ('1' + U+20E3).
   if (cluster.includes('⃣')) return 2;
   if (EMOJI_PRESENTATION.test(cluster)) return 2;
-  const code = cluster.codePointAt(0);
-  if (inRanges(ZERO, code)) return 0;
-  return inRanges(WIDE, code) ? 2 : 1;
+
+  // Everything above renders as ONE glyph however many code points it holds —
+  // a flag is two regional indicators, a ZWJ family is several. Below here a
+  // cluster is ordinary text, and its width is the sum of its parts: measuring
+  // from the first code point alone called the four-code-point Devanagari
+  // conjunct क्षि one cell when a terminal gives it three.
+  let total = 0;
+  for (const character of cluster) {
+    const code = character.codePointAt(0);
+    if (ZERO_CATEGORY.test(character) || inRanges(ZERO, code)) continue;
+    total += inRanges(WIDE, code) ? 2 : 1;
+  }
+  return total;
 }
 
 /** Terminal cells the whole string occupies. */

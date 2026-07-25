@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
-import { renderBoard, boardFooter, composeFrame } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter, composeFrame, withCurrentGeometry } from '../lib/board-render.mjs';
 import { displayWidth } from '../lib/display-width.mjs';
 
 let repo;
@@ -639,4 +639,35 @@ test('renderBoard renders calm empty states', () => {
   });
   assert.ok(out.includes('none'));
   assert.ok(out.toLowerCase().includes('no tickets'));
+});
+
+test('a redraw after a resize uses the CURRENT pane, not the cached one', () => {
+  // gather() captures geometry with its data and that fetch is async. A
+  // keypress during a resize redrew an 80-column body into a 20-column pane,
+  // wrapping and scrolling until a later gather succeeded — and gather can
+  // fail, pinning the stale geometry indefinitely.
+  const cached = { ...baseState(), width: 80, height: 40 };
+  cached.groups.ready = Array.from({ length: 30 }, (_, i) => t(`t-${i}`, { title: 'y'.repeat(100) }));
+
+  const stale = renderBoard(cached).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+  assert.ok(stale.some((l) => displayWidth(l) > 20), 'the cached frame really is too wide for the new pane');
+
+  const fresh = withCurrentGeometry(cached, { columns: 20, rows: 10 });
+  assert.equal(fresh.width, 20);
+  assert.equal(fresh.height, 8, 'height re-derived from the current rows, less the chrome');
+  for (const line of renderBoard(fresh).split('\n')) {
+    const visible = line.replace(/\x1b\[[0-9;]*m/g, '');
+    assert.ok(displayWidth(visible) <= 20, `line is ${displayWidth(visible)} cells: ${visible}`);
+  }
+});
+
+test('withCurrentGeometry keeps cached geometry when the terminal reports none', () => {
+  // A non-TTY stdout has no columns/rows; falling back to 0 would blank the board.
+  const cached = { ...baseState(), width: 80, height: 40 };
+  for (const geometry of [{}, { columns: undefined, rows: undefined }, { columns: 0, rows: 0 }, { columns: NaN, rows: NaN }]) {
+    const fresh = withCurrentGeometry(cached, geometry);
+    assert.equal(fresh.width, 80);
+    assert.equal(fresh.height, 40);
+  }
+  assert.equal(withCurrentGeometry(null, { columns: 20 }), null, 'no cached frame yet');
 });

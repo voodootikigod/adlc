@@ -15,7 +15,7 @@ import {
   readTicketsViaExport, storeCacheKey, makeKeyedCache,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
-import { renderBoard, boardFooter, composeFrame } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter, composeFrame, withCurrentGeometry } from '../lib/board-render.mjs';
 import { flattenGroups, nextSelectedId, focusSelected, classifyKey, redrawBoard } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
@@ -114,7 +114,11 @@ async function frame(repoRoot) {
 // redrawBoard suppresses the draw until the first frame has loaded, so an early
 // keypress can't wipe the "loading…" screen.
 function redraw() {
-  redrawBoard({ props: lastProps, selectedId, render: renderBoard, draw });
+  // Geometry from the terminal NOW, not from whenever gather() last ran — a
+  // keypress during a resize would otherwise redraw the old width into the new
+  // pane, and gather() is async and can fail.
+  const props = withCurrentGeometry(lastProps, { columns: process.stdout.columns, rows: process.stdout.rows });
+  redrawBoard({ props, selectedId, render: renderBoard, draw });
 }
 
 function move(direction) {

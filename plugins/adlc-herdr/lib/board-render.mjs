@@ -141,6 +141,25 @@ export function boardFooter(refreshMs, width = 80) {
  *
  * Pure so the invariant is pinned here rather than in the stdout glue.
  */
+/**
+ * Re-stamp cached frame data with the terminal's CURRENT geometry.
+ *
+ * gather() captures width/height alongside the data it fetches, and that fetch
+ * is async (herdr subprocesses plus an `adlc ticket store export`). A keypress
+ * redraw during a resize therefore rendered the cached 80-column body into a
+ * 20-column pane, which wraps and scrolls until a later gather succeeds — and
+ * gather can fail, holding the stale geometry indefinitely. Data may be stale;
+ * geometry never should be, because only geometry decides what fits.
+ */
+export function withCurrentGeometry(props, { columns, rows } = {}) {
+  if (!props) return props;
+  return {
+    ...props,
+    width: Number.isFinite(columns) && columns > 0 ? columns : props.width,
+    height: Number.isFinite(rows) && rows > 0 ? Math.max(1, rows - 2) : props.height,
+  };
+}
+
 export function composeFrame(body, footer, terminalRows) {
   const bodyLines = String(body ?? '').split('\n');
   let lines = [...bodyLines, '', footer];
