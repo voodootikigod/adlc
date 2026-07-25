@@ -127,8 +127,9 @@ out the surface. **All mutations are dry-run without `--write`.**
 ### P6 — Integrate (the human gate)
 This gate is a human decision, not something an agent passes. Surface the
 evidence: `adlc gate-manifest show` and the `behavior-diff compare` output, then
-let the human decide. Record outcomes with `adlc gate-manifest record <gate>`
-and `adlc accept`.
+let the human decide. Record outcomes with `adlc gate-manifest record <gate>`,
+then `adlc accept --ticket <id> --packet .adlc/packet.json` — both flags are
+required, and acceptance also needs complete P5 evidence on the manifest.
 
 ### P7 — Distill (turn findings into defenses)
 - `adlc lesson-foundry --prompt-only` — mine repeated findings into deterministic

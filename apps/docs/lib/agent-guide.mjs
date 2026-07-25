@@ -138,10 +138,14 @@ If the human would rather read it first — or you are scripting this — fetch 
 
 ${fence([
   'tmp=$(mktemp -d)',
-  `curl -fsSL ${SITE_URL}/install.sh -o "$tmp/install.sh"`,
-  'less "$tmp/install.sh"   # read it',
-  'sh "$tmp/install.sh"',
+  `curl -fsSL ${SITE_URL}/install.sh -o "$tmp/install.sh" \\`,
+  '  && [ -s "$tmp/install.sh" ] \\',
+  '  && sh "$tmp/install.sh"',
 ])}
+
+The \`&&\` chain and the \`-s\` (non-empty) check are both load-bearing: without
+them a failed download still runs \`sh\` on a missing or empty file, which is the
+same false success the one-liner has.
 
 Two reasons this form and not \`curl … -o install.sh\`. \`curl -o\` truncates
 an existing file without asking, and you are running inside the human's
@@ -157,6 +161,22 @@ Use these when the human wants only their own harness wired up, or when the
 universal installer reported a harness as needing a manual step.
 
 ${INTEGRATIONS.map(harnessSection).join('\n\n')}
+
+### GitHub Copilot (\`copilot\`)
+
+Copilot is not in the marketing integration set above, but it ships a real
+native plugin — rails hook, build-gate, MCP tools, project agents — through its
+Git marketplace. The universal installer performs this automatically when it
+detects \`copilot\`; run it by hand only if you are not using that installer:
+
+${fence([
+  'copilot plugin marketplace add voodootikigod/adlc',
+  'copilot plugin install adlc-copilot@adlc',
+])}
+
+\`adlc init --harness copilot\` is a *different* step. It scaffolds repository
+state (a \`.github/copilot-instructions.md\` block and a setup-steps snippet);
+it does **not** install the plugin. Do not offer it as a substitute.
 
 ## Install: any other agent
 

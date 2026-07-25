@@ -167,6 +167,8 @@ install_claude_code() {
     # neutral cwd means there is no local project to resolve against. This is
     # not the version-pinning ADR-0009 Decision 3 rejects: @latest pins nothing,
     # it only refuses local shadowing.
+    warn "Claude Code has no first-party shell install — delegating to the"
+    warn "third-party 'plugins' npm package (see ADR-0010 Decision 8)."
     npx_dir=$(mktemp -d) || { record_failed "Claude Code"; return 0; }
     if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc); then
         ok "Claude Code"

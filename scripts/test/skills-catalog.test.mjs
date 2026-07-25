@@ -179,7 +179,16 @@ function helpTextFor(tool) {
   const looksLikeUsage = (text) =>
     new RegExp(`^\\s*((error|usage):\\s*)*(adlc-)?${tool}\\s`, 'im').test(text);
 
-  const attempts = [[ADLC_BIN, tool, '--help'], [ADLC_BIN, tool]];
+  // Probing a tool by running it BARE is only safe when the tool fails fast on
+  // missing required arguments. It is not safe in general: `adlc
+  // rejection-mining` with no args actually runs and queries the GitHub API, so
+  // a blanket bare probe turned this offline unit test into a network client.
+  // Only tools verified to reject-and-exit are probed that way; everything else
+  // is --help only, and lands in the explicit undeterminable list if that fails.
+  const SAFE_BARE_PROBE = new Set(['consensus-fix', 'behavior-diff']);
+  const attempts = SAFE_BARE_PROBE.has(tool)
+    ? [[ADLC_BIN, tool, '--help'], [ADLC_BIN, tool]]
+    : [[ADLC_BIN, tool, '--help']];
   let fallback = '';
   for (const argv of attempts) {
     const run = spawnSync(process.execPath, argv, { encoding: 'utf8', cwd: repoRoot, timeout: 20_000 });
@@ -205,9 +214,12 @@ function requiredArgsFor(tool) {
     // it needs ("--test-cmd is required", "capture requires --config <…>"), so
     // derive from that instead. Using the tool's own error text keeps this
     // honest as the CLI changes, where a hard-coded table would rot.
+    // Both shapes appear: "--test-cmd is required" and the bare-word
+    // "ticket is required for P6 acceptance evidence".
     const demanded = [
       ...text.matchAll(/(--[a-z][\w-]*)\s+is required/gi),
       ...text.matchAll(/requires\s+(--[a-z][\w-]*)/gi),
+      ...text.matchAll(/(?:^|;|\s)([a-z][\w-]*) is required/gi),
     ].map((m) => m[1]);
 
     // null means UNDETERMINABLE, which is different from "no requirements".
@@ -240,7 +252,13 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
   // routing-table rows alike. An earlier version scanned only fenced lines, which
   // is precisely how `adlc build-gate` (invalid without a ticket id) survived in
   // the router's routing table.
-  const DISPATCHER_VERBS = new Set(['run', 'accept', 'init', 'ticket', '--version', '--help']);
+  // Dispatcher verbs are valid invocations without being registry TOOLS, so
+  // they need the two concepts kept apart: `accept` is legitimate, and it still
+  // has required arguments. Blanket-exempting the whole class is what hid a
+  // published bare `adlc accept`, which the dispatcher rejects with
+  // "ticket is required … packet is required".
+  const NO_ARG_VERBS = new Set(['init', 'ticket', '--version', '--help']);
+  const ARG_CHECKED_VERBS = new Set(['run', 'accept']);
   const problems = [];
   const undeterminable = new Set();
 
@@ -252,8 +270,8 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
     // silence this test rather than fix a command.
     const text = commandContexts(body(skill.text));
     for (const [, tool, rest] of text.matchAll(/adlc ([a-z][\w-]*)([^\n`]*)/g)) {
-      if (DISPATCHER_VERBS.has(tool)) continue;
-      if (!CANONICAL_TOOLS.includes(tool)) {
+      if (NO_ARG_VERBS.has(tool)) continue;
+      if (!CANONICAL_TOOLS.includes(tool) && !ARG_CHECKED_VERBS.has(tool)) {
         problems.push(`skills/${skill.dir}: "adlc ${tool}" is not a registered tool`);
         continue;
       }
@@ -304,7 +322,7 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
   // dropping out of coverage.
   assert.deepEqual(
     [...undeterminable].sort(),
-    ['lesson-foundry', 'model-router', 'preflight', 'rejection-mining'],
+    ['lesson-foundry', 'model-router', 'preflight', 'rejection-mining', 'skill-rot'],
     'the set of argument-unchecked tools changed — verify the new tool by hand, then update this list',
   );
 });

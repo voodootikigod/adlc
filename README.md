@@ -61,9 +61,13 @@ and what controls sit behind it.
 
 ```sh
 tmp=$(mktemp -d)
-curl -fsSL https://www.agenticlifecycle.ai/install.sh -o "$tmp/install.sh"
-sh "$tmp/install.sh"
+curl -fsSL https://www.agenticlifecycle.ai/install.sh -o "$tmp/install.sh" \
+  && [ -s "$tmp/install.sh" ] \
+  && sh "$tmp/install.sh"
 ```
+
+The `&&` chain and the non-empty check matter: without them a failed download
+still runs `sh` on a missing or empty file and reports success anyway.
 
 In the piped one-liner the exit status is `sh`'s, not `curl`'s — a failed or
 empty download makes `sh` read nothing and exit 0, reporting success having

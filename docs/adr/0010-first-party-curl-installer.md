@@ -98,6 +98,29 @@ worse:
 7. **Do not remove the native paths.** Every integration page keeps its native
    install instructions, so no adopter is forced through the one-liner and anyone
    who wants to read before running can.
+8. **The Claude Code branch AUTOMATES a third-party package, and that is a step
+   beyond what ADR-0009 accepted.** ADR-0009 accepted `npx plugins add
+   voodootikigod/adlc` as an instruction a user *chooses to type*. Here the
+   installer runs it unattended, at the mutable `latest` tag, as part of a
+   `curl | sh`. A cross-model review of PR #351 flagged the difference and is
+   right that it is a distinct exposure: the user is no longer making the call.
+
+   Accepted anyway, for a specific reason — Claude Code's own plugin install is
+   a **slash command inside the app**, so no first-party shell path exists. The
+   alternatives were to drop Claude Code from the installer (gutting the
+   one-command promise for the flagship harness) or to invent an install path we
+   do not control. Neither is better.
+
+   The `@latest` tag is *not* a retreat from ADR-0009 Decision 3's refusal to
+   version-pin: it pins nothing. It exists because `npx` resolves a bare package
+   name against the current project first, so a repository shipping a workspace
+   named `plugins` could hijack the install — and the agent-led flow runs from
+   inside exactly such a repository. The installer additionally runs it from a
+   scratch directory so there is no local project to resolve against.
+
+   Residual risk, stated plainly: a compromise of the `plugins` package reaches
+   users through our installer, and neither our checksum pin nor our review rail
+   binds its version. Revisit if Claude Code ever exposes a shell install.
 
 ## Consequences
 
