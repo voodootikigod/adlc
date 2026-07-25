@@ -276,19 +276,20 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
     }
   }
   // Token-tag each tail pane with its ticket + CURRENT state (plan §5.5), rendered
-  // natively by herdr so concurrent panes are distinguishable. Re-tag on a state
-  // CHANGE or on a HEARTBEAT beat — the token carries a TTL and would otherwise
-  // expire mid-state (e.g. a long build), silently un-labelling the pane; the
-  // heartbeat refresh keeps it alive, mirroring the main token loop. Best-effort,
-  // and the tag is recorded ONLY on success, so a transient failure retries next
-  // beat rather than being cached as done. Skipped when no tagger is injected.
+  // natively by herdr so concurrent panes are distinguishable. Attempt the tag on a
+  // state CHANGE or on a HEARTBEAT beat, and cache the ATTEMPT unconditionally — so
+  // a tag that fails (e.g. the pane was manually closed) is NOT retried on every
+  // 400ms beat; the periodic heartbeat re-tag (which ignores the cache) is the
+  // retry, so a transient failure still recovers within a heartbeat, and the token
+  // TTL never lapses. This mirrors the main token loop exactly (diff-publish on
+  // change + full-refresh on heartbeat). Skipped when no tagger is injected.
   if (typeof tagPane === 'function') {
     for (const pane of plan.tailPanes) {
       const paneId = state.tailed.get(pane.ticketId);
       if (!paneId) continue;
       if (state.tagged.get(pane.ticketId) === pane.state && !heartbeat) continue;
-      const res = await safeCall('tag', tagPane, paneId, pane.ticketId, pane.state);
-      if (res !== null) state.tagged.set(pane.ticketId, pane.state); // cache only a SUCCESS
+      await safeCall('tag', tagPane, paneId, pane.ticketId, pane.state);
+      state.tagged.set(pane.ticketId, pane.state); // cache the attempt: heartbeat is the retry, not every beat
     }
   }
   // Only a valid observation authorizes retiring active panes (see the doc comment).

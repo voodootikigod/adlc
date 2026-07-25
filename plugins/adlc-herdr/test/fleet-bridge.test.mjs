@@ -517,21 +517,23 @@ test('a herdr effect that RESOLVES { ok:false } (not a throw) is still surfaced 
   assert.match(logs[0][0], /notify failed/);
 });
 
-test('runFleetPlan does NOT cache a FAILED tag — it retries next beat (round 13)', async () => {
-  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]), closing: new Map(), tagged: new Map() };
+test('runFleetPlan caches a tag ATTEMPT so a failure does NOT retry every beat; the HEARTBEAT is the retry (round 13/20)', async () => {
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]), closing: new Map(), tagged: new Map(), spawnFails: new Map() };
   const tags = [];
-  let tagOk = false;
+  let tagOk = false; // the pane is gone → tag keeps failing
   const plan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: 'x' }] };
   const deps = {
     repoRoot: '/r', openTab: async () => {}, spawn: async () => 'w4:pa', closePane: async () => {}, notify: async () => {},
     tagPane: async (_p, _t, s) => { tags.push(s); return { ok: tagOk }; },
   };
-  await runFleetPlan({ plan, state, ...deps });
-  assert.equal(state.tagged.has('t-a'), false, 'a { ok:false } tag is not cached as done');
+  await runFleetPlan({ plan, state, ...deps }); // state change → one attempt (fails)
+  assert.equal(tags.length, 1, 'one attempt on the state change');
+  await runFleetPlan({ plan, state, ...deps }); // ordinary beat, unchanged → NO per-beat retry (round 20)
+  assert.equal(tags.length, 1, 'a failed tag is NOT retried every 400ms beat');
   tagOk = true;
-  await runFleetPlan({ plan, state, ...deps });
-  assert.equal(state.tagged.get('t-a'), 'building', 'the retried tag succeeds and is recorded');
-  assert.deepEqual(tags, ['building', 'building'], 'the tag was actually retried');
+  await runFleetPlan({ plan, state, ...deps, heartbeat: true }); // heartbeat → the retry
+  assert.equal(tags.length, 2, 'the heartbeat re-tags, so a transient failure still recovers');
+  assert.equal(state.tagged.get('t-a'), 'building');
 });
 
 test('runFleetPlan RE-TAGS an unchanged-state pane on a HEARTBEAT beat, keeping the token TTL alive (round 13)', async () => {
