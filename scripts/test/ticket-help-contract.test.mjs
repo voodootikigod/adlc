@@ -12,9 +12,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderCommandHelp, TICKET_FIELDS } from '../../packages/tickets/lib/help.mjs';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { renderCommandHelp, renderUsage, TICKET_FIELDS } from '../../packages/tickets/lib/help.mjs';
 import { validateTicket } from '../../packages/tickets/lib/schema.mjs';
 import { CATEGORIES } from '../../packages/ticket-sync/lib/schema.mjs';
+
+const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
+const ADLC = join(ROOT, 'packages/cli/bin/adlc.mjs');
 
 const example = () => {
   const help = renderCommandHelp('create');
@@ -31,6 +37,37 @@ test('the create example uses a category ticket-sync can round-trip', () => {
     CATEGORIES.includes(category),
     `create --help offers category '${category}', which ticket-sync rejects. Accepted: ${CATEGORIES.join(', ')}`,
   );
+});
+
+test('`adlc ticket <command> --help` works for every command the usage advertises', () => {
+  // The package suites invoke bin/adlc-tickets.mjs directly, so they cannot see
+  // that the PUBLIC dispatcher routes pull/push/sync/doctor to @adlc/ticket-sync
+  // (packages/cli/lib/dispatch.mjs). Its flag parser rejected --help outright,
+  // so the instruction printed by `adlc ticket --help` was a dead end for four
+  // of the commands it names — `adlc ticket doctor --help` exited 1 with
+  // "unknown flag: --help".
+  const advertised = ['list', 'show', 'create', 'update', 'edit', 'discard', 'complete', 'archive', 'restore', 'doctor', 'schema'];
+  for (const command of advertised) {
+    const result = spawnSync(process.execPath, [ADLC, 'ticket', command, '--help'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, `\`adlc ticket ${command} --help\` exited ${result.status}: ${result.stderr}`);
+    assert.ok(result.stdout.trim().length > 0, `\`adlc ticket ${command} --help\` printed nothing`);
+  }
+});
+
+test('the routed-away commands are the ones ticket-sync documents', () => {
+  // doctor/pull/push/sync answer from ticket-sync's usage, not the tickets bin.
+  // Both are legitimate; what matters is that neither errors and each describes
+  // the command the dispatcher actually runs.
+  for (const command of ['doctor', 'pull', 'push', 'sync']) {
+    const result = spawnSync(process.execPath, [ADLC, 'ticket', command, '--help'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`\\b${command}\\b`), `help must describe ${command}`);
+  }
+});
+
+test('the top-level usage only points at per-command help that resolves', () => {
+  assert.match(renderUsage(), /adlc ticket <command> --help/);
+  assert.ok(renderCommandHelp('doctor'), 'doctor help must exist for the direct binary too');
 });
 
 test('the category field documents every value ticket-sync accepts', () => {

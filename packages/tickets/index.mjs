@@ -5,6 +5,7 @@ export * from './lib/ids.mjs';
 export * from './lib/filename.mjs';
 export * from './lib/schema.mjs';
 export * from './lib/help.mjs';
+export * from './lib/edit.mjs';
 export * from './lib/snapshot.mjs';
 export * from './lib/store.mjs';
 export * from './lib/lock.mjs';

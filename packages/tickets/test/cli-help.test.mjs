@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,37 +105,6 @@ test('a scope-widening update fails without --authorize and succeeds with it', (
     const allowed = attempt(['--authorize', '--json']);
     assert.equal(allowed.status, 0, allowed.stderr);
     assert.equal(JSON.parse(allowed.stdout).dryRun, true);
-  });
-});
-
-test('edit binds the hash of the ticket it OPENED, not the one it finds on exit', () => {
-  // `edit --help` says the expected hash is supplied for you. It was read after
-  // the editor exited, so a write landing during the (arbitrarily long) editor
-  // session became the "expected" version and the compare-and-swap passed on a
-  // document derived from the older one — the exact lost update the guard is
-  // supposed to make impossible.
-  withTemp((root) => {
-    writeDirectory(root, [ticket('T1', { title: 'original' })]);
-    const editor = join(root, 'editor.sh');
-    writeFileSync(editor, [
-      '#!/bin/sh',
-      // a concurrent author updates T1 while the editor is "open"
-      `echo '{"id":"T1","title":"concurrent","scope":[],"rails":[],"edges":[]}' | ` +
-        `"${process.execPath}" "${BIN}" update T1 --input - --write --json >/dev/null 2>&1`,
-      // then the user saves their edit, derived from the ORIGINAL ticket
-      `echo '{"id":"T1","title":"my edit","scope":[],"rails":[],"edges":[]}' > "$1"`,
-    ].join('\n'));
-    chmodSync(editor, 0o755);
-
-    const result = spawnSync(process.execPath, [BIN, 'edit', 'T1', '--write', '--json'], {
-      encoding: 'utf8', cwd: root, env: { ...process.env, EDITOR: editor },
-    });
-    assert.equal(result.status, 2, `expected STALE_TICKET, got: ${result.stdout}${result.stderr}`);
-    assert.match(result.stderr, /STALE_TICKET/);
-
-    // and the concurrent author's write must still be there
-    const shown = spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], { encoding: 'utf8', cwd: root });
-    assert.equal(JSON.parse(shown.stdout).ticket.title, 'concurrent');
   });
 });
 

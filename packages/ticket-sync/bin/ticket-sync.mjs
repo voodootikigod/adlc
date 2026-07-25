@@ -21,13 +21,18 @@ const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [-
 Dry-run by default; pass --write to apply. Exit: 0 ok · 1 operational · 2 blocked.`;
 
 export function parseFlags(args) {
-  const flags = { write: false, force: false, 'allow-rail-narrowing': false, json: false };
+  const flags = { write: false, force: false, 'allow-rail-narrowing': false, json: false, help: false };
   for (const a of args) {
     if (a === '--write') flags.write = true;
     else if (a === '--force') flags.force = true;
     else if (a === '--allow-rail-narrowing') flags['allow-rail-narrowing'] = true;
     else if (a === '--json') flags.json = true;
     else if (a === '--archive') {} // retained for store-doctor CLI compatibility
+    // `adlc ticket <pull|push|sync|doctor>` routes here, so this is the parser a
+    // user reaches when they follow `adlc ticket <command> --help`. Rejecting
+    // --help as an unknown flag made that instruction a dead end for four of the
+    // documented commands.
+    else if (a === '--help' || a === '-h') flags.help = true;
     else { process.stderr.write(`unknown flag: ${a}\n`); process.exit(1); }
   }
   return flags;
@@ -73,6 +78,7 @@ async function main() {
   const [sub, ...rest] = process.argv.slice(2);
   if (!sub || sub === '--help' || sub === '-h') { process.stdout.write(`${USAGE}\n`); process.exit(sub ? 0 : 1); }
   const flags = parseFlags(rest);
+  if (flags.help) { process.stdout.write(`${USAGE}\n`); process.exit(0); }
 
   if (sub === 'pull') {
     const result = await pull({
