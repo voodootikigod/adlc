@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS } from '../lib/fleet-bridge.mjs';
+import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, planFleetRecovery, applyRecovery, observerStateSnapshot, livePaneIds } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
 
@@ -428,6 +428,65 @@ test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async 
     st, curr: status({ tickets: { 't-a': { state: 'building' } } }), repoRoot: '/repo',
     effects: { openTab: async () => { throw new Error('boom'); }, spawn: async () => {}, closePane: async () => {}, notify: async () => {} },
   }));
+});
+
+// ── Daemon-restart recovery ──────────────────────────────────────────────────
+
+test('livePaneIds collects the pane ids from an api-snapshot panes array, skipping malformed entries', () => {
+  const s = livePaneIds([{ pane_id: 'w4:pa' }, { pane_id: 'w4:pb' }, {}, { pane_id: 5 }, null]);
+  assert.deepEqual([...s].sort(), ['w4:pa', 'w4:pb']);
+  assert.deepEqual([...livePaneIds('nope')], []);
+});
+
+test('observerStateSnapshot serialises the run id (from prev), tab, and live tail panes', () => {
+  const st = { prev: { runId: 'r1' }, runState: { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]) } };
+  assert.deepEqual(observerStateSnapshot(st), { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } });
+  assert.deepEqual(observerStateSnapshot({}), { runId: null, tabId: null, tailed: {} });
+});
+
+test('planFleetRecovery ADOPTS the tab + surviving panes on a same-run restart (no duplicate tab/panes)', () => {
+  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa', 't-b': 'w4:pb' } };
+  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa', 'w4:pb']) });
+  assert.deepEqual(rec, { seen: ['r1'], tabId: 'w4:t1', tailed: { 't-a': 'w4:pa', 't-b': 'w4:pb' }, closePanes: [] });
+});
+
+test('planFleetRecovery adopts ONLY panes herdr still reports; a pane that died is dropped, not adopted or closed', () => {
+  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa', 't-b': 'w4:pb' } };
+  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) }); // pb gone
+  assert.deepEqual(rec.tailed, { 't-a': 'w4:pa' });
+  assert.deepEqual(rec.closePanes, [], 'a pane herdr no longer reports is already dead — nothing to close');
+});
+
+test('planFleetRecovery on a DIFFERENT run closes the old run\'s surviving orphans and starts fresh', () => {
+  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
+  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r2' }), livePaneIds: new Set(['w4:pa']) });
+  assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: ['w4:pa'] });
+});
+
+test('planFleetRecovery when herdr ALSO restarted (no panes survive) starts fresh with nothing to close', () => {
+  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
+  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r1' }), livePaneIds: new Set() });
+  assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: [] });
+});
+
+test('planFleetRecovery treats the persisted file as UNTRUSTED — hostile ids are rejected', () => {
+  // hostile ticket id (not a safe token) → not adopted even though its pane is live
+  const hostileTicket = planFleetRecovery({ persisted: { runId: 'r1', tabId: 'w4:t1', tailed: { '../evil': 'w4:pa' } }, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) });
+  assert.deepEqual(hostileTicket, { seen: [], tabId: null, tailed: {}, closePanes: [] }, 'a bad ticket id yields no surviving pane → fresh');
+  // a flag-like tab id is dropped (adoption proceeds on the valid pane, but tabId is nulled)
+  const badTab = planFleetRecovery({ persisted: { runId: 'r1', tabId: '-evil', tailed: { 't-a': 'w4:pa' } }, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) });
+  assert.equal(badTab.tabId, null, 'a flag-like tab id is not adopted');
+  assert.deepEqual(badTab.tailed, { 't-a': 'w4:pa' });
+  // null persisted → empty
+  assert.deepEqual(planFleetRecovery({ persisted: null, curr: status(), livePaneIds: new Set() }), { seen: [], tabId: null, tailed: {}, closePanes: [] });
+});
+
+test('applyRecovery seeds a fresh per-repo state in place (adopt seen + tab + tailed)', () => {
+  const st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
+  applyRecovery(st, { seen: ['r1'], tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' }, closePanes: [] });
+  assert.equal(st.seen.has('r1'), true);
+  assert.equal(st.runState.tabId, 'w4:t1');
+  assert.equal(st.runState.tailed.get('t-a'), 'w4:pa');
 });
 
 test('AC8 fixed-argv builders: a shell-free tail -F argv (waits for a not-yet-created log), tab create, pane close', () => {

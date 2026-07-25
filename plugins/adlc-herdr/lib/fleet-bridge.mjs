@@ -19,6 +19,11 @@ const TERMINAL = new Set(['merged', 'failed', 'blocked']);
 // can never traverse a path or be read as a CLI flag.
 const ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 const safeId = (id) => typeof id === 'string' && ID_RE.test(id) && !id.includes('..');
+// A safe herdr pane/tab id (e.g. "w4:t1"): like a plain token but ALSO allowing
+// the ':' herdr uses, still with no leading '-' (which a CLI would read as a
+// flag). Used to validate ids read back from the untrusted persisted-state file.
+const HERDR_ID_RE = /^[A-Za-z0-9][A-Za-z0-9:._-]*$/;
+const safeHerdrId = (id) => typeof id === 'string' && HERDR_ID_RE.test(id) && !id.includes('..');
 
 // `observed` marks a plan built from a VALID status this beat — the only case in
 // which absence of a ticket is evidence it left the in-flight set. A null status
@@ -298,4 +303,68 @@ export async function runFleetBridgeBeat({ st, curr, repoRoot, effects, log, hea
     if (shouldMarkRunSeen(plan, st.runState)) st.seen.add(plan.openTab.runId);
     if (plan && curr) st.prev = curr;
   }
+}
+
+// ── Daemon-restart recovery (t-herdr-9 §6.3 recoverability) ──────────────────
+// The observer's pane state is in-memory, so a daemon restart mid-run would
+// re-init empty and (without recovery) open a SECOND tab + duplicate tail panes,
+// orphaning the originals. On restart we reload the persisted state and reconcile
+// it against the panes herdr still reports live (from `api snapshot`), so panes
+// are adopted when they survived or torn down when they didn't.
+
+/** The JSON-able persist shape of a per-repo observer state: the run its panes
+ *  belong to, its tab, and the live tail panes. Pure, so the daemon glue only
+ *  does the file I/O. `prev` carries the last observed status → its runId. */
+export function observerStateSnapshot(st) {
+  const runState = st && typeof st === 'object' && st.runState ? st.runState : {};
+  const tailed = runState.tailed instanceof Map ? Object.fromEntries(runState.tailed) : {};
+  const runId = st && st.prev && typeof st.prev === 'object' && typeof st.prev.runId === 'string' ? st.prev.runId : null;
+  return { runId, tabId: typeof runState.tabId === 'string' ? runState.tabId : null, tailed };
+}
+
+/** The set of pane ids herdr currently reports (from an `api snapshot` panes
+ *  array) — the ground truth a persisted pane id is validated against. */
+export function livePaneIds(panes) {
+  const out = new Set();
+  if (Array.isArray(panes)) for (const p of panes) if (p && typeof p.pane_id === 'string') out.add(p.pane_id);
+  return out;
+}
+
+/**
+ * Decide how to recover after a daemon restart, from the (UNTRUSTED, on-disk)
+ * `persisted` state, the current `curr` status, and the `livePaneIds` herdr still
+ * reports. Returns `{ seen, tabId, tailed, closePanes }`:
+ *   - SAME run AND ≥1 persisted pane still live → ADOPT: seed `seen` (don't
+ *     re-open the tab) and the surviving `tailed` (don't re-spawn them);
+ *   - different run, or nothing survived (herdr itself also restarted) → don't
+ *     adopt; CLOSE any survivors (old-run orphans still in herdr) and start fresh.
+ * Every id is validated because the file is untrusted: a pane id must appear in
+ * the live snapshot (so it is herdr-sourced, never injectable), the tab id must be
+ * a safe herdr token, and ticket ids must be safe tokens.
+ */
+export function planFleetRecovery({ persisted, curr, livePaneIds: live }) {
+  const liveSet = live instanceof Set ? live : new Set();
+  const empty = { seen: [], tabId: null, tailed: {}, closePanes: [] };
+  if (!persisted || typeof persisted !== 'object') return empty;
+  const persistedTailed = persisted.tailed && typeof persisted.tailed === 'object' ? persisted.tailed : {};
+  const surviving = {}; // ticketId → paneId: validated AND still live in herdr
+  for (const [ticketId, paneId] of Object.entries(persistedTailed)) {
+    if (safeId(ticketId) && typeof paneId === 'string' && liveSet.has(paneId)) surviving[ticketId] = paneId;
+  }
+  const survivingIds = Object.values(surviving);
+  const sameRun = Boolean(curr && typeof curr === 'object' && safeId(persisted.runId) && curr.runId === persisted.runId);
+  if (sameRun && survivingIds.length > 0) {
+    return { seen: [persisted.runId], tabId: safeHerdrId(persisted.tabId) ? persisted.tabId : null, tailed: surviving, closePanes: [] };
+  }
+  return { ...empty, closePanes: survivingIds };
+}
+
+/** Seed a fresh per-repo state IN PLACE from a recovery plan (adopt survivors,
+ *  don't re-open the tab). The caller closes `rec.closePanes` via its effects. */
+export function applyRecovery(st, rec) {
+  const r = rec && typeof rec === 'object' ? rec : {};
+  st.seen = new Set(Array.isArray(r.seen) ? r.seen : []);
+  st.runState.tabId = typeof r.tabId === 'string' ? r.tabId : null;
+  st.runState.tailed = new Map(r.tailed && typeof r.tailed === 'object' ? Object.entries(r.tailed) : []);
+  return st;
 }
