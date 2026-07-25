@@ -83,13 +83,18 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
 export function fleetTabArgs(title) {
   return ['tab', 'create', '--label', title, '--no-focus'];
 }
-export function fleetTailPaneArgs({ tabId, repoRoot, logPath }) {
+export function fleetTailPaneArgs({ tabId, repoRoot, logPath, ticketId }) {
+  // The agent NAME carries the pane's identity — `agent start` has no --label
+  // (0.7.4: only --cwd/--env/--split), so a per-ticket name is what makes N
+  // concurrent tail panes distinguishable in herdr's UI. `ticketId` is a
+  // validated token upstream; fall back to the generic name if it's absent.
+  const agentName = typeof ticketId === 'string' && ticketId ? `adlc-fleet-${ticketId}` : 'adlc-fleet-tail';
   // `tail -F` (= --follow=name --retry), NOT -f: the fleet orchestrator creates
   // `.adlc/fleet-logs/<id>.log` a beat AFTER the ticket enters `building`, and
   // plain `tail -f` on a not-yet-existent file exits 1 immediately (dead pane,
   // dropped logs). -F waits for the file to appear and re-follows on rotation.
   // Supported by GNU/BSD/busybox tail (herdr's target platforms).
-  return ['agent', 'start', 'adlc-fleet-tail', '--cwd', repoRoot, '--tab', tabId, '--split', 'down', '--', 'tail', '-F', '--', logPath];
+  return ['agent', 'start', agentName, '--cwd', repoRoot, '--tab', tabId, '--split', 'down', '--', 'tail', '-F', '--', logPath];
 }
 export function fleetPaneCloseArgs(paneId) {
   return ['pane', 'close', paneId];
@@ -155,9 +160,10 @@ export function shouldMarkRunSeen(plan, runState) {
 // can't drive a per-beat `herdr pane close` spawn loop. Exported for the test.
 export const BOUNDED_CLOSE_ATTEMPTS = 5;
 
-export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, log }) {
+export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, tagPane, log }) {
   if (!plan) return;
   if (!(state.closing instanceof Map)) state.closing = new Map(); // paneId → failed close attempts, decoupled from active tracking
+  if (!(state.tagged instanceof Map)) state.tagged = new Map(); // ticketId → last state token published to its pane
   const safeCall = async (label, fn, ...args) => {
     try { return await fn(...args); } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
   };
@@ -166,6 +172,7 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
     for (const [ticketId, paneId] of [...state.tailed]) {
       if (keep.has(ticketId)) continue;
       state.tailed.delete(ticketId);
+      state.tagged.delete(ticketId); // forget its state token so a re-run re-tags
       if (typeof paneId === 'string' && paneId && !state.closing.has(paneId)) state.closing.set(paneId, 0);
     }
   };
@@ -206,10 +213,22 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
   const desired = new Set(plan.tailPanes.map((p) => p.ticketId));
   for (const pane of plan.tailPanes) {
     if (!state.tabId || state.tailed.has(pane.ticketId)) continue; // one tab, one pane per ticket
-    const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath }));
+    const paneId = await safeCall('tail', spawn, fleetTailPaneArgs({ tabId: state.tabId, repoRoot, logPath: pane.logPath, ticketId: pane.ticketId }));
     // Only remember a REAL pane — a failed spawn (null/throw) must retry next
     // beat, not be cached as "already tailed" and deprive the ticket of logs.
     if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
+  }
+  // Token-tag each tail pane with its ticket + CURRENT state (plan §5.5), rendered
+  // natively by herdr so concurrent panes are distinguishable. Re-tag only when the
+  // state actually changed (no per-beat token spam); best-effort, and skipped when
+  // no tagger is injected (unit tests that don't exercise tagging).
+  if (typeof tagPane === 'function') {
+    for (const pane of plan.tailPanes) {
+      const paneId = state.tailed.get(pane.ticketId);
+      if (!paneId || state.tagged.get(pane.ticketId) === pane.state) continue;
+      await safeCall('tag', tagPane, paneId, pane.ticketId, pane.state);
+      state.tagged.set(pane.ticketId, pane.state);
+    }
   }
   // Only a valid observation authorizes retiring active panes (see the doc comment).
   if (plan.observed) retire(desired);

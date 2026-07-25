@@ -157,7 +157,7 @@ test('runFleetPlan opens the tab, tails each ticket ONCE, then CLOSES the pane o
   };
   await runFleetPlan({ plan: building, ...deps });
   assert.equal(state.tabId, 'w4:t9');
-  assert.deepEqual(calls.spawn[0], fleetTailPaneArgs({ tabId: 'w4:t9', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log' }));
+  assert.deepEqual(calls.spawn[0], fleetTailPaneArgs({ tabId: 'w4:t9', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log', ticketId: 't-a' }));
   assert.equal(state.tailed.get('t-a'), 'w4:p5');
   // next beat, still building, tab open → no re-tab, no re-tail, no close
   await runFleetPlan({ plan: { ...building, openTab: null }, ...deps });
@@ -420,9 +420,32 @@ test('runFleetBridgeBeat tolerates a missing log sink (log is optional)', async 
 
 test('AC8 fixed-argv builders: a shell-free tail -F argv (waits for a not-yet-created log), tab create, pane close', () => {
   assert.deepEqual(fleetTabArgs('fleet: run-r1'), ['tab', 'create', '--label', 'fleet: run-r1', '--no-focus']);
+  // A per-ticket agent NAME makes concurrent panes distinguishable (agent start has no --label).
   assert.deepEqual(
-    fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log' }),
-    ['agent', 'start', 'adlc-fleet-tail', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-F', '--', '.adlc/fleet-logs/t-a.log'],
+    fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '.adlc/fleet-logs/t-a.log', ticketId: 't-a' }),
+    ['agent', 'start', 'adlc-fleet-t-a', '--cwd', '/repo', '--tab', 'w4:t2', '--split', 'down', '--', 'tail', '-F', '--', '.adlc/fleet-logs/t-a.log'],
   );
+  // Falls back to the generic name when no ticket id is supplied.
+  assert.equal(fleetTailPaneArgs({ tabId: 'w4:t2', repoRoot: '/repo', logPath: '/l' })[2], 'adlc-fleet-tail');
   assert.deepEqual(fleetPaneCloseArgs('w4:p5'), ['pane', 'close', 'w4:p5']);
+});
+
+test('runFleetPlan token-tags each tail pane with its ticket + CURRENT state, re-tagging only on a state change', async () => {
+  const tags = [];
+  const state = { tabId: 'w4:t1', tailed: new Map(), closing: new Map(), tagged: new Map() };
+  const deps = {
+    repoRoot: '/r', openTab: async () => {}, closePane: async () => {}, notify: async () => {},
+    spawn: async () => 'w4:pa',
+    tagPane: async (paneId, ticketId, s) => { tags.push([paneId, ticketId, s]); },
+  };
+  const building = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [], tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }] };
+  await runFleetPlan({ plan: building, state, ...deps });
+  assert.deepEqual(tags, [['w4:pa', 't-a', 'building']], 'the pane is tagged with ticket + state on first sight');
+  // same state next beat → no re-tag (no token spam)
+  await runFleetPlan({ plan: building, state, ...deps });
+  assert.equal(tags.length, 1, 'an unchanged state does not re-tag');
+  // state advances → re-tag with the new state
+  const gating = { ...building, tailPanes: [{ ticketId: 't-a', state: 'gating', logPath: '.adlc/fleet-logs/t-a.log' }] };
+  await runFleetPlan({ plan: gating, state, ...deps });
+  assert.deepEqual(tags[1], ['w4:pa', 't-a', 'gating'], 'a state change re-tags the pane');
 });

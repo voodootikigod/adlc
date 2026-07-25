@@ -58,7 +58,7 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 const fleetState = new Map();
 
 async function bridgeFleet(repoRoot) {
-  const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map() } };
+  const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
   fleetState.set(repoRoot, st);
   // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
   // in lib/fleet-bridge.mjs. Here we only supply the real herdr effects, the
@@ -72,6 +72,8 @@ async function bridgeFleet(repoRoot) {
       spawn: async (argv) => paneIdFromResponse(await runHerdrJson(argv)),
       closePane: (paneId) => runHerdr(fleetPaneCloseArgs(paneId)),
       notify: (title, body, sound) => runHerdr(notifyArgs(title, body, sound)),
+      // Token-tag the tail pane with its ticket + state, rendered natively by herdr.
+      tagPane: (paneId, ticketId, state) => runHerdr(buildReportArgs(paneId, { ticket: ticketId, state }, TOKEN_TTL_MS)),
     },
     log: (message, err) => console.error(`${message}:`, err),
   });
