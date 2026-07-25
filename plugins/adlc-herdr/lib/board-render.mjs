@@ -6,6 +6,23 @@
 import { sanitizeToken } from './sanitize.mjs';
 import { bounded, displayWidth, tailToWidth, truncateToWidth } from './display-width.mjs';
 
+/**
+ * ASCII ONLY for renderer-owned text — separators, ellipses, key hints.
+ *
+ * U+2500, U+00B7, U+2026 and the arrow glyphs are all East_Asian_Width
+ * =AMBIGUOUS: a terminal configured for East Asian text renders each in TWO
+ * cells, so chrome measured at the pane width physically overflows it and the
+ * frame wraps. Counting every ambiguous character as wide would shrink every
+ * row for the majority who are not on such a terminal (see the Ambiguous test
+ * in display-width.test.mjs), so the rule is narrower: text the renderer
+ * CHOOSES is unambiguous, and untrusted DATA is measured as narrow.
+ *
+ * Residual, deliberate: a ticket title full of ambiguous characters can still
+ * overflow on an ambiguous-wide terminal. Width there is a terminal
+ * CONFIGURATION, not a property of the text, so no measurement is correct for
+ * both setups — this trade keeps the chrome exact everywhere and the data
+ * exact for the common configuration.
+ */
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
@@ -30,6 +47,14 @@ const emitWidth = (width) => (Number.isFinite(width) && width > 0
  *  Narrower than this, a root says nothing and is dropped entirely rather than
  *  being allowed to push the ticket off the line. */
 const MIN_ROOT = 6;
+
+/** Elision marker. ASCII (see the note above), so it costs THREE cells where
+ *  the ambiguous-width ellipsis cost one, so a three-character marker would
+ *  eat two cells of ticket id at narrow widths. '<' is one cell, unambiguous,
+ *  and reads correctly for an elision that keeps the TAIL. Budgets subtract
+ *  ELLIPSIS_W rather than a hard-coded 1, so changing it stays safe. */
+const ELLIPSIS = '<';
+const ELLIPSIS_W = ELLIPSIS.length;
 
 /** Shortest elided ticket id worth rendering, same reasoning as MIN_ROOT. */
 const MIN_ID = 6;
@@ -70,18 +95,18 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   const root = clean(repoRoot);
   const label = clean(ticketLabel);
   const phaseText = phase ? clean(phase) : '';
-  const suffix = `ticket ${label}${phaseText ? ` · ${phaseText}` : ''}`;
-  const withRoot = (rootText) => `ADLC board · repo ${rootText} · ${suffix}`;
+  const suffix = `ticket ${label}${phaseText ? ` | ${phaseText}` : ''}`;
+  const withRoot = (rootText) => `ADLC board | repo ${rootText} | ${suffix}`;
 
   const full = withRoot(root);
   if (displayWidth(full) <= width) return full;
 
   // Cells, not code units: a CJK path measured 80 by .length occupied ~160.
   const budget = width - displayWidth(withRoot('')); // room the root itself may take
-  if (budget >= MIN_ROOT) return withRoot(`…${tailToWidth(root, budget - 1)}`);
+  if (budget >= MIN_ROOT) return withRoot(`${ELLIPSIS}${tailToWidth(root, budget - ELLIPSIS_W)}`);
 
   // No root fits. Drop it, then the banner.
-  const banner = `ADLC board · ${suffix}`;
+  const banner = `ADLC board | ${suffix}`;
   if (displayWidth(banner) <= width) return banner;
   if (displayWidth(suffix) <= width) return suffix;
 
@@ -97,10 +122,10 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   const shown = phaseText
     ? truncateToWidth(phaseText, Math.max(2, width - 'ticket '.length - MIN_ID - 3))
     : '';
-  const tail = shown ? ` · ${shown}` : '';
+  const tail = shown ? ` | ${shown}` : '';
   const room = width - 'ticket '.length - displayWidth(tail);
   if (room < MIN_ID) return suffix; // pane too narrow for anything legible; cut() clamps
-  return `ticket …${tailToWidth(label, room - 1)}${tail}`;
+  return `ticket ${ELLIPSIS}${tailToWidth(label, room - ELLIPSIS_W)}${tail}`;
 }
 
 /**
@@ -119,9 +144,9 @@ function headerText(repoRoot, ticketLabel, phase, width) {
 export function boardFooter(refreshMs, width = 80) {
   const w = emitWidth(width);
   const tiers = [
-    `↑↓/jk select · ↵ focus pane · q quit · refreshes every ${refreshMs / 1000}s`,
-    '↑↓/jk select · ↵ focus · q quit',
-    '↑↓ select · q quit',
+    `up/down jk select | enter focus pane | q quit | refreshes every ${refreshMs / 1000}s`,
+    'up/down select | enter focus | q quit',
+    'up/down select | q quit',
     'q quit',
   ];
   const hint = tiers.find((tier) => displayWidth(tier) <= w) ?? truncateToWidth('q quit', w);
@@ -183,7 +208,7 @@ export function composeFrame(body, footer, terminalRows) {
  *  `height` is given, the output is clamped to that many lines — the redraw
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane
  *  would scroll and duplicate every refresh. A truncated frame ends with a
- *  "…N more" marker. */
+ *  "...N more" marker. */
 export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
   const emit = emitWidth(width); // never write past the real pane, floor or not
   // Truncate by terminal CELLS. sanitizeToken's cap is code units, so a row of
@@ -217,7 +242,7 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
       lines.push(`${BOLD}${cut(`${name} (${list.length})`)}${RESET}`);
       for (const ticket of list) {
         const isSel = Number.isInteger(selected) && ti === selected;
-        const line = cut(`${isSel ? '> ' : '  '}${ticket.id} · ${ticket.title ?? ''}`);
+        const line = cut(`${isSel ? '> ' : '  '}${ticket.id} | ${ticket.title ?? ''}`);
         lines.push(isSel ? `${BOLD}${line}${RESET}` : line);
         ti += 1;
       }
@@ -229,7 +254,7 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
     lines.push(`${DIM}${cut('  (no mapped panes)')}${RESET}`);
   } else {
     for (const row of paneRows) {
-      lines.push(cut(`  ${row.paneId} · ${row.agent ?? '?'} · ${row.agentStatus ?? '?'} · ${row.ticket ?? '-'}`));
+      lines.push(cut(`  ${row.paneId} | ${row.agent ?? '?'} | ${row.agentStatus ?? '?'} | ${row.ticket ?? '-'}`));
     }
   }
 
@@ -238,17 +263,17 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
     lines.push(`${DIM}${cut('  (no records)')}${RESET}`);
   } else {
     for (const record of ledger) {
-      lines.push(cut(`  #${record.seq ?? '?'} ${record.gate ?? '?'} · ${record.ticket ?? ''}`));
+      lines.push(cut(`  #${record.seq ?? '?'} ${record.gate ?? '?'} | ${record.ticket ?? ''}`));
     }
   }
 
   if (Number.isFinite(height) && height > 0 && lines.length > height) {
     // height 1 has no room for both a kept line and the marker; slicing to
     // max(1, height-1) and then pushing produced TWO rows for a one-row budget.
-    if (height === 1) return `${DIM}${cut(`…${lines.length} rows (resize)`)}${RESET}`;
+    if (height === 1) return `${DIM}${cut(`...${lines.length} rows (resize)`)}${RESET}`;
     const hidden = lines.length - height;
     const kept = lines.slice(0, height - 1);
-    kept.push(`${DIM}${cut(`  …${hidden + 1} more (resize to see all)`)}${RESET}`);
+    kept.push(`${DIM}${cut(`  ...${hidden + 1} more (resize to see all)`)}${RESET}`);
     return kept.join('\n');
   }
   return lines.join('\n');

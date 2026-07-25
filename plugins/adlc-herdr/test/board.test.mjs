@@ -358,7 +358,7 @@ test('the elided root keeps its tail — the identifying part of a path', () => 
   state.width = 60;
   const header = headerOf(state);
   assert.ok(header.includes('myrepo'), `the leaf must survive: ${header}`);
-  assert.ok(header.includes('…'), 'elision must be marked, not silent');
+  assert.ok(header.includes('<'), 'elision must be marked, not silent');
   assert.ok(!header.includes('/very/long/prefix'), 'the dropped prefix must be gone');
 });
 
@@ -377,13 +377,13 @@ test('the leaf survives a root far longer than the pane is wide', () => {
 });
 
 test('a short repo root is left exactly as-is (no gratuitous elision)', () => {
-  assert.equal(headerOf(baseState()), 'ADLC board · repo /repo · ticket t-b · P4');
+  assert.equal(headerOf(baseState()), 'ADLC board | repo /repo | ticket t-b | P4');
 });
 
 test('the ticket and phase survive every pane width, not just wide ones', () => {
   // The first version of this test asserted only that the line fit the width —
   // which a header showing nothing but the repo path also satisfies. It passed
-  // while widths 20-40 rendered "ADLC board · repo /var/folders/s1/51j2xg" with
+  // while widths 20-40 rendered "ADLC board | repo /var/folders/s1/51j2xg" with
   // no ticket at all. Assert the FIELDS survive, because that is the invariant.
   for (const width of [20, 24, 30, 40, 60, 100]) {
     const state = baseState();
@@ -670,4 +670,36 @@ test('withCurrentGeometry keeps cached geometry when the terminal reports none',
     assert.equal(fresh.height, 40);
   }
   assert.equal(withCurrentGeometry(null, { columns: 20 }), null, 'no cached frame yet');
+});
+
+test('renderer-owned text is ASCII, so chrome cannot wrap on any terminal', () => {
+  // U+2500, U+00B7, U+2026 and the arrow hints are all East_Asian_Width
+  // =AMBIGUOUS — two cells on a terminal configured for East Asian text. The
+  // separator was fixed first and these were missed, which left the header,
+  // every row and the footer able to overflow on exactly those terminals.
+  const AMBIGUOUS = /[·…←-⇿─-╿①-⓿]/;
+  const state = baseState();
+  state.width = 60;
+  const chrome = [
+    ...renderBoard(state).split('\n'),
+    boardFooter(3000, 60),
+    boardFooter(3000, 20),
+    boardFooter(3000, 5),
+  ].map((line) => line.replace(/\x1b\[[0-9;]*m/g, ''));
+
+  for (const line of chrome) {
+    // Ticket titles are DATA and stay as authored; the fixtures here are ASCII,
+    // so anything ambiguous in this output is renderer-owned.
+    assert.doesNotMatch(line, AMBIGUOUS, `renderer-owned ambiguous glyph: ${JSON.stringify(line)}`);
+  }
+});
+
+test('the elision marker is ASCII too, and still marks elision', () => {
+  const state = baseState();
+  state.width = 60;
+  state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+  const header = renderBoard(state).split('\n')[0].replace(/\x1b\[[0-9;]*m/g, '');
+  assert.match(header, /</, 'elision must still be visible');
+  assert.doesNotMatch(header, /…/, 'but not via the ambiguous-width ellipsis');
+  assert.ok(header.includes('t-b'), 'and the ticket still survives');
 });

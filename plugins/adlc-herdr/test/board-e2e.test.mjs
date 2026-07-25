@@ -59,7 +59,7 @@ const runBoard = (contextJson) => spawnSync(process.execPath, [script], {
 test('a resolvable repo renders the board header, not the refusal', () => {
   const res = runBoard(JSON.stringify({ focused_pane_id: 'w1:p1', focused_pane_cwd: repo }));
   assert.equal(res.status, 0);
-  assert.ok(res.stdout.includes('ADLC board · repo'), `no header in: ${res.stdout.slice(0, 200)}`);
+  assert.ok(res.stdout.includes('ADLC board | repo'), `no header in: ${res.stdout.slice(0, 200)}`);
   assert.ok(res.stdout.includes('t-e2e'));
   assert.ok(!res.stdout.includes('does not resolve'));
 });
