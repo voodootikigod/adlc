@@ -66,8 +66,26 @@ test('EVERY terminal state yields a board row + a transition notification (pins 
     assert.deepEqual(p.boardRows, [{ ticketId: 't-x', state: s }], `${s} → board row`);
     assert.equal(p.notifications.length, 1, `${s} → one notification`);
     assert.equal(p.notifications[0].sound, s === 'merged' ? 'done' : 'request');
-    assert.equal(p.tailPanes.length, 0, `${s} is not in-flight`);
+    // A merged ticket releases its pane; a failed/blocked ticket RETAINS it so the
+    // failure output stays readable (round 18).
+    assert.equal(p.tailPanes.length, s === 'merged' ? 0 : 1, `${s} pane retention`);
+    if (s !== 'merged') assert.deepEqual(p.tailPanes[0], { ticketId: 't-x', state: s, logPath: '.adlc/fleet-logs/t-x.log' });
   }
+});
+
+test('a failed/blocked pane is RETAINED so the executor keeps it open (round 18); merged closes it', async () => {
+  // building → the pane exists; then the ticket fails. The retained tailPane keeps
+  // it out of teardown, so the developer can still read the failure log.
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:pa']]), closing: new Map(), tagged: new Map(), spawnFails: new Map() };
+  const closed = [];
+  const failedPlan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [{ ticketId: 't-a', state: 'failed' }], tailPanes: [{ ticketId: 't-a', state: 'failed', logPath: '.adlc/fleet-logs/t-a.log' }] };
+  await runFleetPlan({ plan: failedPlan, repoRoot: '/r', state, openTab: async () => {}, spawn: async () => 'w4:pa', closePane: async (p) => closed.push(p), notify: async () => {} });
+  assert.deepEqual(closed, [], 'a failed ticket pane is NOT closed');
+  assert.equal(state.tailed.get('t-a'), 'w4:pa', 'and stays tracked');
+  // merged, by contrast, is absent from tailPanes → retired + closed
+  const mergedPlan = { degrade: false, observed: true, openTab: null, notifications: [], boardRows: [{ ticketId: 't-a', state: 'merged' }], tailPanes: [] };
+  await runFleetPlan({ plan: mergedPlan, repoRoot: '/r', state, openTab: async () => {}, spawn: async () => {}, closePane: async (p) => closed.push(p), notify: async () => {} });
+  assert.deepEqual(closed, ['w4:pa'], 'a merged ticket pane IS closed');
 });
 
 test('AC5 a hostile ticket id is skipped entirely (no tail pane, no board row, no path)', () => {

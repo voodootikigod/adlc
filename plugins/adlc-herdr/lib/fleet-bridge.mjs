@@ -64,6 +64,13 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
       out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log` });
     } else if (TERMINAL.has(state)) {
       out.boardRows.push({ ticketId: id, state });
+      // RETAIN the tail pane for a FAILED/BLOCKED ticket so its final output (the
+      // error / stack trace) stays visible — closing it the instant a build fails
+      // hides exactly what the developer needs to read. A merged ticket has nothing
+      // more to show, so its pane is released. Retained panes persist until a new
+      // run resets the tab (keeping one in `tailPanes` keeps the executor from
+      // retiring it, and re-tags it with the terminal state).
+      if (state !== 'merged') out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log` });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
       if (sameRun && prevState !== state) {
         if (state === 'merged') {
