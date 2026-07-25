@@ -137,14 +137,16 @@ If the human would rather read it first — or you are scripting this — fetch 
 **temporary path**, not into their repository, and run it as a separate step:
 
 ${fence([
-  'tmp=$(mktemp -d)',
-  `curl -fsSL ${SITE_URL}/install.sh -o "$tmp/install.sh" \\`,
+  'tmp=$(mktemp -d) \\',
+  `  && curl -fsSL ${SITE_URL}/install.sh -o "$tmp/install.sh" \\`,
   '  && [ -s "$tmp/install.sh" ] \\',
   '  && sh "$tmp/install.sh"',
 ])}
 
-The \`&&\` chain and the \`-s\` (non-empty) check are both load-bearing: without
-them a failed download still runs \`sh\` on a missing or empty file, which is the
+Every link in that chain is load-bearing, including the first. If \`mktemp\`
+fails, \`$tmp\` is empty and an unchained \`curl -o "$tmp/install.sh"\` resolves
+to \`/install.sh\` — an attempted write to the filesystem root. And without the
+\`-s\` check a failed download still runs \`sh\` on an empty file, which is the
 same false success the one-liner has.
 
 Two reasons this form and not \`curl … -o install.sh\`. \`curl -o\` truncates

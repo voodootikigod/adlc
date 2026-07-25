@@ -369,6 +369,24 @@ test('install.sh honours pi\'s 22.19 floor at the MINOR version, not just the ma
   }
 });
 
+test('every harness recorded as manual has a printed instruction', () => {
+  // The class behind two separate findings: a harness can be added to MANUAL in
+  // one place and forgotten in the summary, so the output names it and then
+  // tells the user nothing. Derived from the script itself, so a harness added
+  // later is covered without anyone remembering to extend this test.
+  const source = read(INSTALL_SH);
+  const recorded = [...source.matchAll(/record_manual "([^"]+)"/g)].map((m) => m[1]);
+  const instructed = [...source.matchAll(/manual_has "([^"]+)"/g)].map((m) => m[1]);
+
+  assert.ok(recorded.length > 0, 'sanity: the installer should record manual steps');
+  const missing = [...new Set(recorded)].filter((name) => !instructed.includes(name));
+  assert.deepEqual(
+    missing,
+    [],
+    `recorded as manual but never given an instruction: ${missing.join(', ')}`,
+  );
+});
+
 test('install.sh prints manual steps only for the harnesses that need them', () => {
   // MANUAL was used as a boolean, so one manual harness printed instructions for
   // all four — handing the user commands for software they do not have.
@@ -491,6 +509,19 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     );
     assert.match(result.stdout, /not found at/, 'the missing path must be reported');
     assert.match(result.stdout, /npm root -g/, 'the user needs an actionable next step');
+    // Recording a manual step is not enough — every harness in MANUAL must also
+    // get a printed instruction, or the summary names a harness and then tells
+    // the user nothing about what to do with it.
+    assert.match(
+      result.stdout,
+      /manual step needed for: .*Antigravity/,
+      'the harness must appear in the manual summary',
+    );
+    assert.match(
+      result.stdout,
+      /Antigravity:.*agy plugin install/s,
+      'a harness in MANUAL must get its own printed instruction',
+    );
   } finally {
     box.cleanup();
   }
