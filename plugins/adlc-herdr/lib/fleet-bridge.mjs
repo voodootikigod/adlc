@@ -39,7 +39,12 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
   const runId = curr.runId;
 
   const tickets = curr.tickets && typeof curr.tickets === 'object' ? curr.tickets : {};
-  const prevTickets = prev && typeof prev.tickets === 'object' ? prev.tickets : {};
+  // `prev.tickets &&` is load-bearing: typeof null === 'object', so without the
+  // truthiness check a `"tickets": null` in a prior (untrusted) status would make
+  // prevTickets null and the later prevTickets[id] throw. planFleetBridge parses
+  // an untrusted file and MUST be total — a throw here poisons prev forever (it
+  // never advances past the beat that threw), paralysing the observer for the repo.
+  const prevTickets = prev && prev.tickets && typeof prev.tickets === 'object' ? prev.tickets : {};
   // Notify only on a transition observed WITHIN THE SAME run: the first beat of a
   // run (no prev, or prev belongs to a different runId) is a baseline, not
   // transitions — else a watcher starting mid-run, or a restarted run, storms one

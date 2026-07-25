@@ -100,6 +100,18 @@ test('a baseline beat does NOT notify — first observation AND a NEW run vs the
   assert.deepEqual(cross.notifications, [], 'a new run is a fresh baseline, not cross-run transitions');
 });
 
+test('planFleetBridge is TOTAL on a poisoned prev with tickets:null — no TypeError (typeof null === object footgun)', () => {
+  // A prior (untrusted) status with `tickets: null`: without the truthiness guard,
+  // prevTickets would be null and prevTickets[id] would throw, poisoning prev
+  // forever (it never advances past the throwing beat) → the observer dies.
+  const prev = { schemaVersion: V, runId: 'r1', tickets: null };
+  const curr = status({ runId: 'r1', tickets: { 't-a': { state: 'merged' } } });
+  let p;
+  assert.doesNotThrow(() => { p = planFleetBridge({ prev, curr, knownSchemaVersion: V, seenRunIds: new Set(['r1']) }); });
+  assert.deepEqual(p.boardRows, [{ ticketId: 't-a', state: 'merged' }], 'prevTickets treated as {} → the ticket still summarizes');
+  assert.equal(p.notifications.length, 1, 'and the merge reads as a fresh transition, not a crash');
+});
+
 test('shouldMarkRunSeen: only when a tab was requested AND actually opened', () => {
   assert.equal(shouldMarkRunSeen({ openTab: { runId: 'r' } }, { tabId: 'w4:t1' }), true);
   assert.equal(shouldMarkRunSeen({ openTab: { runId: 'r' } }, { tabId: null }), false); // tab failed → retry
