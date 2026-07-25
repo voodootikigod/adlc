@@ -15,7 +15,7 @@ import {
   readTicketsViaExport, storeCacheKey, makeKeyedCache,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
-import { renderBoard, boardFooter } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter, composeFrame } from '../lib/board-render.mjs';
 import { flattenGroups, nextSelectedId, focusSelected, classifyKey, redrawBoard } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
@@ -82,8 +82,7 @@ function draw(body) {
   // `pane read` — redraw with cursor-home + per-line erase-to-EOL + erase-
   // below instead of a full clear.
   const footer = boardFooter(REFRESH_MS, process.stdout.columns ?? 80);
-  const frameText = `${body}\n\n${footer}`.split('\n').map((line) => `${line}\x1b[K`).join('\n');
-  process.stdout.write(`\x1b[H${frameText}\n\x1b[0J`);
+  process.stdout.write(composeFrame(body, footer));
 }
 
 // Single-flight latch: gather() runs several herdr subprocess calls plus an

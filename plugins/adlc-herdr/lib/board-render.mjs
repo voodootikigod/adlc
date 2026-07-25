@@ -114,6 +114,24 @@ export function boardFooter(refreshMs, width = 80) {
   return `${DIM}${hint}${RESET}`;
 }
 
+/**
+ * The exact bytes a redraw writes: cursor-home, every row erase-to-EOL, then
+ * erase-below.
+ *
+ * There is deliberately NO trailing newline. gather() reserves exactly two rows
+ * for the blank line and footer, so on a height-clamped frame the footer lands
+ * on the terminal's LAST row — and a line feed from the bottom row scrolls the
+ * viewport before erase-below ever runs. That scroll happened on every refresh
+ * and displaced the frame, which is the corruption the height clamp and the
+ * bounded footer exist to prevent.
+ *
+ * Pure so the invariant is pinned here rather than in the stdout glue.
+ */
+export function composeFrame(body, footer) {
+  const rows = `${body}\n\n${footer}`.split('\n').map((line) => `${line}\x1b[K`).join('\n');
+  return `\x1b[H${rows}\x1b[0J`;
+}
+
 /** Render the full board frame as a string of newline-joined rows. When
  *  `height` is given, the output is clamped to that many lines — the redraw
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane

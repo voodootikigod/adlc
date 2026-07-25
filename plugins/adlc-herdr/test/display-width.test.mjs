@@ -72,6 +72,28 @@ test('East Asian Wide characters outside the emoji property are two cells', () =
   assert.equal(displayWidth('〉'), 2, 'right-pointing angle bracket');
 });
 
+test('the non-emoji wide symbols in the BMP are covered', () => {
+  // These are East_Asian_Width=W but NOT emoji-presentation, so the property
+  // escape does not reach them and only the table can. Each successive review
+  // found another; pinned individually so the set cannot silently shrink.
+  assert.equal(displayWidth('☰'), 2, 'U+2630 trigram');
+  assert.equal(displayWidth('☷'), 2, 'U+2637 trigram, range end');
+  assert.equal(displayWidth('⚊'), 2, 'U+268A monogram');
+  assert.equal(displayWidth('⚏'), 2, 'U+268F digram, range end');
+  assert.equal(displayWidth('〈'), 2, 'U+2329 angle bracket');
+});
+
+test('Ambiguous and Neutral characters stay one cell', () => {
+  // The bias is toward wide, but not indiscriminately: East_Asian_Width=A and
+  // =N must stay narrow or every row shrinks for no reason. A review reported
+  // U+4DC0 as a missed wide character — the UCD classifies the Yijing hexagram
+  // block as Neutral, so one cell is correct and widening it would be the bug.
+  assert.equal(displayWidth('䷀'), 1, 'U+4DC0 hexagram is Neutral');
+  assert.equal(displayWidth('㉈'), 1, 'U+3248 is Ambiguous');
+  assert.equal(displayWidth('①'), 1, 'U+2460 is Ambiguous');
+  assert.equal(displayWidth('°'), 1, 'U+00B0 is Ambiguous');
+});
+
 test('a keycap without VS16 is still a wide cluster', () => {
   // '1' + U+20E3 is one grapheme that terminals render as a keycap glyph. The
   // enclosing mark is zero-width and the base is ASCII, so measuring by base

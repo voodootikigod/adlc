@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
-import { renderBoard, boardFooter } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter, composeFrame } from '../lib/board-render.mjs';
 import { displayWidth } from '../lib/display-width.mjs';
 
 let repo;
@@ -462,6 +462,34 @@ test('the whole frame — body plus footer — fits the pane at every width', ()
       assert.ok(displayWidth(visible) <= width, `width ${width}: line is ${displayWidth(visible)} cells: ${visible}`);
     }
   }
+});
+
+test('composeFrame emits no trailing newline — a bottom-row line feed scrolls', () => {
+  // gather() reserves exactly two rows for the blank line and footer, so on a
+  // height-clamped frame the footer sits on the terminal's LAST row. The old
+  // draw() wrote "\n\x1b[0J" after it: a line feed from the bottom row scrolls
+  // the viewport BEFORE erase-below runs, displacing the frame on every 3s
+  // refresh — with the height clamp and bounded footer both working.
+  const frame = composeFrame('body line', 'q quit');
+  assert.ok(frame.startsWith('\x1b[H'), 'the redraw must home the cursor');
+  assert.ok(frame.endsWith('\x1b[0J'), 'erase-below must be last');
+  assert.ok(!frame.includes('\n\x1b[0J'), 'no line feed may precede erase-below');
+  assert.equal(frame.split('\n').length, 3, 'body + blank + footer, and nothing after');
+  for (const row of frame.split('\n')) {
+    assert.ok(row.includes('\x1b[K'), `every row erases to end of line: ${JSON.stringify(row)}`);
+  }
+});
+
+test('composeFrame writes exactly the rows gather() reserved', () => {
+  // height = rows - 2, plus the blank and the footer, must equal `rows`. One
+  // more physical line than that is what scrolls the pane.
+  const terminalRows = 10;
+  const state = baseState();
+  state.width = 40;
+  state.height = terminalRows - 2;
+  state.groups.ready = Array.from({ length: 40 }, (_, i) => t(`t-${i}`));
+  const frame = composeFrame(renderBoard(state), boardFooter(3000, 40));
+  assert.equal(frame.split('\n').length, terminalRows, 'the frame fills the pane exactly, never past it');
 });
 
 test('truncation holds against a width oracle that is not displayWidth', () => {

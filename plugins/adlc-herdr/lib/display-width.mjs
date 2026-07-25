@@ -65,6 +65,8 @@ export function bounded(text, maxCodeUnits) {
 const WIDE = [
   [0x1100, 0x115f], // Hangul Jamo
   [0x2329, 0x232a], // angle brackets
+  [0x2630, 0x2637], // trigrams
+  [0x268a, 0x268f], // monograms and digrams
   [0x2e80, 0x2e99], // CJK radicals supplement
   [0x2e9b, 0x2ef3],
   [0x2f00, 0x2fd5], // Kangxi radicals
