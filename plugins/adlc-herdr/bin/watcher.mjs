@@ -5,7 +5,7 @@
 // pinned by tests. Change-driven and debounced: no herdr process per event,
 // heartbeat refreshes keep TTLs alive (plan premortem bounds).
 import net from 'node:net';
-import { watch, existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { watch, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runHerdr, runHerdrJson, makeCachedReader } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
@@ -16,7 +16,8 @@ import {
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
-import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse, planFleetRecovery, applyRecovery, observerStateSnapshot, livePaneIds } from '../lib/fleet-bridge.mjs';
+import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse, planFleetRecovery, applyRecovery, livePaneIds } from '../lib/fleet-bridge.mjs';
+import { loadObserverState, saveObserverState } from '../lib/observer-persist.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
@@ -57,34 +58,16 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 // Phase-4 follow-up alongside the notification-action API (see fleet-bridge.mjs).
 const fleetState = new Map();
 
-// Per-repo persisted observer state (restart recovery). The `.adlc/*` gitignore
-// covers this file. Reads are bounded + fail-soft; the tested planFleetRecovery
-// validates every field, so a corrupt/tampered file degrades to "no recovery".
-const observerStatePath = (repoRoot) => join(repoRoot, '.adlc', '.herdr-observer.json');
-function loadPersisted(repoRoot) {
-  try {
-    const path = observerStatePath(repoRoot);
-    const meta = statSync(path);
-    if (!meta.isFile() || meta.size > 1_000_000) return null;
-    const obj = JSON.parse(readFileSync(path, 'utf8'));
-    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null;
-  } catch { return null; }
-}
-function savePersisted(repoRoot, st) {
-  const json = JSON.stringify(observerStateSnapshot(st));
-  if (st.persistSig === json) return; // unchanged → skip the write (no per-beat disk churn)
-  try { writeFileSync(observerStatePath(repoRoot), json); st.persistSig = json; } catch { /* best-effort */ }
-}
-
 async function bridgeFleet(repoRoot, full, liveIds) {
   const curr = readFleetStatus(repoRoot);
   let st = fleetState.get(repoRoot);
   if (!st) {
-    // First beat since (re)start for this repo: recover pane state from disk,
-    // reconciled against the panes herdr still reports (liveIds), so a restart
-    // neither duplicates the tab/panes nor orphans the old ones.
+    // First beat since (re)start for this repo: recover pane state from disk
+    // (lib/observer-persist.mjs), reconciled against the panes herdr still
+    // reports (liveIds), so a restart neither duplicates the tab/panes nor
+    // orphans the old ones.
     st = { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map() } };
-    const rec = planFleetRecovery({ persisted: loadPersisted(repoRoot), curr, livePaneIds: liveIds });
+    const rec = planFleetRecovery({ persisted: loadObserverState(repoRoot), curr, livePaneIds: liveIds });
     applyRecovery(st, rec);
     for (const paneId of rec.closePanes) await runHerdr(fleetPaneCloseArgs(paneId)); // tear down old-run orphans
     fleetState.set(repoRoot, st);
@@ -108,7 +91,7 @@ async function bridgeFleet(repoRoot, full, liveIds) {
     },
     log: (message, err) => console.error(`${message}:`, err),
   });
-  savePersisted(repoRoot, st); // persist AFTER the beat (st.prev now reflects curr)
+  saveObserverState(repoRoot, st); // persist AFTER the beat (st.prev now reflects curr)
 }
 let refreshTimer = null;
 let refreshing = false;

@@ -15,6 +15,11 @@ export const KNOWN_FLEET_SCHEMA_VERSION = 1;
 
 const IN_FLIGHT = new Set(['building', 'gating', 'prosecuting', 'fixing', 'merging']);
 const TERMINAL = new Set(['merged', 'failed', 'blocked']);
+// Does a status still have any ticket in-flight (vs. a fully-terminal / done run)?
+const hasInFlight = (curr) => {
+  const tickets = curr && typeof curr === 'object' && curr.tickets && typeof curr.tickets === 'object' ? curr.tickets : {};
+  return Object.values(tickets).some((rec) => rec && typeof rec.state === 'string' && IN_FLIGHT.has(rec.state));
+};
 // A safe run/ticket id is a plain token: no '/', no '..', no leading '-' — so it
 // can never traverse a path or be read as a CLI flag.
 const ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
@@ -354,8 +359,21 @@ export function planFleetRecovery({ persisted, curr, livePaneIds: live }) {
   const survivingIds = Object.values(surviving);
   const sameRun = Boolean(curr && typeof curr === 'object' && safeId(persisted.runId) && curr.runId === persisted.runId);
   if (sameRun && survivingIds.length > 0) {
+    // Watcher restarted, herdr alive → ADOPT the tab + surviving panes.
     return { seen: [persisted.runId], tabId: safeHerdrId(persisted.tabId) ? persisted.tabId : null, tailed: surviving, closePanes: [] };
   }
+  if (sameRun && !hasInFlight(curr)) {
+    // Same run, no surviving panes, and nothing still in-flight → the run
+    // COMPLETED while we were down (its panes closed naturally on terminal
+    // states, and fleet-status.json persists as a done record). Mark it SEEN so
+    // the next beat does NOT open an empty `fleet: run-<id>` tab for it — which
+    // would otherwise recur on every restart while the status file exists.
+    return { seen: [persisted.runId], tabId: null, tailed: {}, closePanes: [] };
+  }
+  // Different run, OR the same run is still in-flight but its panes are gone
+  // (herdr itself also restarted): don't adopt — close any survivors (old-run
+  // orphans still in herdr) and start fresh, so a still-running run gets a new
+  // tab + panes rather than being silently left with none.
   return { ...empty, closePanes: survivingIds };
 }
 

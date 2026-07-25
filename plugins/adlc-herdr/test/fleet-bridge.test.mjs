@@ -463,15 +463,24 @@ test('planFleetRecovery on a DIFFERENT run closes the old run\'s surviving orpha
   assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: ['w4:pa'] });
 });
 
-test('planFleetRecovery when herdr ALSO restarted (no panes survive) starts fresh with nothing to close', () => {
+test('planFleetRecovery on a COMPLETED run (no live panes, nothing in-flight) PRESERVES seen so no empty tab reopens on every restart (round 15)', () => {
   const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
-  const rec = planFleetRecovery({ persisted, curr: status({ runId: 'r1' }), livePaneIds: new Set() });
-  assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: [] });
+  const curr = status({ runId: 'r1', tickets: { 't-a': { state: 'merged' } } }); // all terminal → panes closed naturally
+  const rec = planFleetRecovery({ persisted, curr, livePaneIds: new Set() });
+  assert.deepEqual(rec, { seen: ['r1'], tabId: null, tailed: {}, closePanes: [] }, 'seen kept → planFleetBridge will NOT open a tab for the done run');
+});
+
+test('planFleetRecovery when herdr ALSO restarted MID-RUN (still in-flight, panes gone) starts fresh so the running run gets a new tab (round 15)', () => {
+  const persisted = { runId: 'r1', tabId: 'w4:t1', tailed: { 't-a': 'w4:pa' } };
+  const curr = status({ runId: 'r1', tickets: { 't-a': { state: 'building' } } }); // still in-flight
+  const rec = planFleetRecovery({ persisted, curr, livePaneIds: new Set() });
+  assert.deepEqual(rec, { seen: [], tabId: null, tailed: {}, closePanes: [] }, 'seen dropped → a new tab + tail panes for the still-running run');
 });
 
 test('planFleetRecovery treats the persisted file as UNTRUSTED — hostile ids are rejected', () => {
   // hostile ticket id (not a safe token) → not adopted even though its pane is live
-  const hostileTicket = planFleetRecovery({ persisted: { runId: 'r1', tabId: 'w4:t1', tailed: { '../evil': 'w4:pa' } }, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) });
+  const inFlight = status({ runId: 'r1', tickets: { 'x': { state: 'building' } } });
+  const hostileTicket = planFleetRecovery({ persisted: { runId: 'r1', tabId: 'w4:t1', tailed: { '../evil': 'w4:pa' } }, curr: inFlight, livePaneIds: new Set(['w4:pa']) });
   assert.deepEqual(hostileTicket, { seen: [], tabId: null, tailed: {}, closePanes: [] }, 'a bad ticket id yields no surviving pane → fresh');
   // a flag-like tab id is dropped (adoption proceeds on the valid pane, but tabId is nulled)
   const badTab = planFleetRecovery({ persisted: { runId: 'r1', tabId: '-evil', tailed: { 't-a': 'w4:pa' } }, curr: status({ runId: 'r1' }), livePaneIds: new Set(['w4:pa']) });
