@@ -4,7 +4,7 @@
 // its own SGR styling (never clears or cursor movement — the glue owns the
 // screen).
 import { sanitizeToken } from './sanitize.mjs';
-import { displayWidth, tailToWidth, truncateToWidth } from './display-width.mjs';
+import { bounded, displayWidth, tailToWidth, truncateToWidth } from './display-width.mjs';
 
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
@@ -20,6 +20,10 @@ const MIN_ROOT = 6;
 /** Shortest elided ticket id worth rendering, same reasoning as MIN_ROOT. */
 const MIN_ID = 6;
 
+/** Ceiling on any single untrusted field before width work. The widest pane
+ *  clampWidth allows is 400 cells, so this is ~20x more than can ever show. */
+const FIELD_CAP = 8192;
+
 /**
  * Strip escapes and collapse whitespace WITHOUT truncating.
  *
@@ -29,7 +33,12 @@ const MIN_ID = 6;
  * MEASURED, or a value that only looked long distorts the fit.
  */
 function clean(value) {
-  const raw = String(value ?? '');
+  // Bound BEFORE sanitizing. Ticket titles, branch names and ledger gate names
+  // are untrusted and unbounded, and this runs on every redraw; a multi-megabyte
+  // field would otherwise be escape-scanned and segmented in full to produce a
+  // line no wider than a pane. FIELD_CAP is far above any real value and far
+  // above what the widest supported pane can show.
+  const raw = bounded(String(value ?? ''), FIELD_CAP);
   return sanitizeToken(raw, Math.max(raw.length, 1));
 }
 

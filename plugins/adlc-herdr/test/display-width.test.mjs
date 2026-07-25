@@ -5,7 +5,7 @@
 // alternate screen. Every row shared that assumption, not just the header.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { displayWidth, graphemes, tailToWidth, truncateToWidth } from '../lib/display-width.mjs';
+import { bounded, displayWidth, graphemes, tailToWidth, truncateToWidth } from '../lib/display-width.mjs';
 
 test('ASCII width is its length', () => {
   assert.equal(displayWidth('ticket t-b · P4'), 15);
@@ -48,6 +48,49 @@ test('a flag is one cluster, so it can never be half-truncated', () => {
   assert.equal(graphemes('🇺🇸').length, 1);
   assert.equal(truncateToWidth('🇺🇸🇯🇵', 2), '🇺🇸');
   assert.equal(truncateToWidth('🇺🇸🇯🇵', 3), '🇺🇸', 'a wide cluster that would overflow is dropped whole');
+});
+
+test('default-presentation emoji below the CJK blocks are two cells', () => {
+  // These live below U+2E80, outside every range a hand-written table starts
+  // at, and they are extremely common. Pinned to literal widths.
+  for (const emoji of ['⚽', '⌚', '⏰', '☔', '⛔', '✅', '➕', '⭐', '⬛']) {
+    assert.equal(displayWidth(emoji), 2, `${emoji} must be two cells`);
+  }
+});
+
+test('narrow symbols the board itself renders stay one cell', () => {
+  // The inverse guard: over-broad emoji classification would make the board's
+  // own separators and bullets double-width and shrink every row.
+  for (const symbol of ['·', '…', '─', '>', ' ']) {
+    assert.equal(displayWidth(symbol), 1, `${symbol} must stay one cell`);
+  }
+});
+
+test('truncation is bounded work, not proportional to a huge untrusted field', () => {
+  // Ticket titles are untrusted and have no length limit, and the board
+  // re-renders every few seconds. Eagerly expanding a multi-megabyte title into
+  // segment objects to keep 40 cells allocated hundreds of MB per redraw.
+  const huge = `${'ab'.repeat(2_000_000)}TAIL`;
+  const started = process.hrtime.bigint();
+  assert.equal(truncateToWidth(huge, 10), 'ababababab');
+  assert.equal(tailToWidth(huge, 4), 'TAIL');
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  // Measured on this input: lazy ~2ms, eager ~930ms (4,000,004 clusters
+  // materialized to keep ten). 200ms sits ~100x above the lazy path and ~5x
+  // below the eager one, so it separates the regimes without being tight.
+  // A 1000ms bound did NOT: reverting to eager still passed at 927ms.
+  assert.ok(ms < 200, `truncating a 4 MB field took ${ms.toFixed(0)}ms — is it still eager?`);
+});
+
+test('bounding a field never strands a surrogate half', () => {
+  const emoji = '🎫'.repeat(50);
+  for (const limit of [1, 2, 3, 7, 20]) {
+    const capped = bounded(emoji, limit);
+    assert.ok(!/[\uD800-\uDFFF]/.test(capped.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')),
+      `limit ${limit}: ${JSON.stringify(capped)}`);
+    assert.ok(capped.length <= limit);
+  }
+  assert.equal(bounded('short', 100), 'short', 'a field under the cap is untouched');
 });
 
 test('graphemes keep clusters whole', () => {
