@@ -67,13 +67,28 @@ banner() {
 # WOULD run there and report success — while installing a toolkit that passes
 # 6 of 28 core gate suites on that platform. WSL reports "Linux" from uname and
 # is a supported path, so it is deliberately not caught here.
+# ALLOWLIST, not a denylist. An earlier version only rejected Windows
+# identifiers, so FreeBSD, OpenBSD, Solaris — and an absent or spoofed `uname`,
+# which fell through as "unknown" — all proceeded to install globally on a
+# platform this project does not claim to support.
 require_supported_platform() {
-    case "$(uname -s 2>/dev/null || echo unknown)" in
+    platform="$(uname -s 2>/dev/null || echo unknown)"
+    case "$platform" in
+        Linux|Darwin)
+            ;;
         MINGW*|MSYS*|CYGWIN*|Windows_NT)
             err "native Windows is not supported yet."
             err "The toolkit passes only 6 of 28 core gate suites on Windows"
             err "(see ${SITE} and github.com/voodootikigod/adlc/issues/352)."
             err "Use WSL: install a Linux distro, then re-run this from inside it."
+            exit 1
+            ;;
+        *)
+            err "unsupported platform: ${platform}"
+            err "This installer supports macOS (Darwin) and Linux. The toolkit is"
+            err "Node and may well work elsewhere — but it is untested there, so"
+            err "this script will not install it for you. Install manually with:"
+            err "    npm install -g ${CLI_PACKAGE}"
             exit 1
             ;;
     esac
@@ -119,6 +134,25 @@ install_toolkit() {
         # command-not-found. Verify by actually running it.
         if adlc_version=$(adlc --version 2>/dev/null); then
             ok "gate toolkit installed — adlc ${adlc_version}"
+            # Running `adlc` proves SOMETHING named adlc runs, not that it is the
+            # binary npm just wrote. With several Node managers, or a stale
+            # user-local copy earlier in PATH, the version reported here can come
+            # from an install this script never touched — and the user would then
+            # be running gates from a different toolkit than the one they think
+            # they installed. Warn rather than fail: a shim on PATH is a
+            # legitimate setup, and only the user can judge which they want.
+            resolved=$(command -v adlc 2>/dev/null || echo "")
+            expected_prefix=$(npm prefix -g 2>/dev/null || echo "")
+            if [ -n "$resolved" ] && [ -n "$expected_prefix" ]; then
+                case "$resolved" in
+                    "${expected_prefix}"/*) ;;
+                    *)
+                        warn "the 'adlc' on your PATH is ${resolved},"
+                        warn "not the one npm installed under ${expected_prefix}."
+                        warn "A different toolkit may shadow it — check with 'command -v adlc'."
+                        ;;
+                esac
+            fi
         else
             err "${CLI_PACKAGE} installed, but 'adlc' is not on your PATH."
             err "npm's global bin directory is probably not in PATH. Check:"

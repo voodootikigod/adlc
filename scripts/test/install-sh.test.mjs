@@ -64,7 +64,7 @@ const HARNESSES = [
  *   being reachable. Defaults to true, because a successful `npm install -g` is
  *   the normal case; set false to model a global install landing outside PATH.
  */
-function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [], adlcOnPath = true } = {}) {
+function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [], adlcOnPath = true, npmPrefix } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'adlc-install-'));
   const binDir = path.join(root, 'bin');
   const home = path.join(root, 'home');
@@ -92,8 +92,16 @@ function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [], adlcOnPath
       // `node -v` has to answer; anything else just logs.
       shim('node', `if [ "$1" = "-v" ]; then printf '${nodeVersion}\\n'; fi\nexit 0`);
     } else if (name === 'npm') {
-      // `npm root -g` is used to locate the Antigravity plugin on disk.
-      shim('npm', `if [ "$1" = "root" ]; then printf '%s\\n' "${root}/npmroot"; fi\nexit ${failing.includes('npm') ? 1 : 0}`);
+      // `npm root -g` locates the Antigravity plugin on disk; `npm prefix -g` is
+      // how the installer checks whether the `adlc` it just ran is the one npm
+      // wrote. npmPrefix defaults to a path the shimmed adlc is NOT under, so
+      // the shadow warning is exercised; pass the bin dir to model a match.
+      shim(
+        'npm',
+        `if [ "$1" = "root" ]; then printf '%s\\n' "${root}/npmroot"; fi\n` +
+          `if [ "$1" = "prefix" ]; then printf '%s\\n' "${npmPrefix ?? `${root}/npmprefix`}"; fi\n` +
+          `exit ${failing.includes('npm') ? 1 : 0}`,
+      );
     } else {
       shim(name, `exit ${failing.includes(name) ? 1 : 0}`);
     }
@@ -375,6 +383,92 @@ test('install.sh prints manual steps only for the harnesses that need them', () 
     assert.ok(
       !/Copilot:/.test(result.stdout),
       'Copilot installs from its marketplace — it must not also appear as a manual fallback',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh allowlists platforms rather than denylisting Windows', () => {
+  // A denylist only stops what it enumerates. FreeBSD, Solaris, and — worse — an
+  // ABSENT or spoofed `uname` (which fell through as "unknown") all proceeded to
+  // install globally on a platform this project does not claim to support.
+  for (const reported of ['FreeBSD', 'OpenBSD', 'SunOS', 'Haiku']) {
+    const box = sandbox({ bins: ['node', 'npm'] });
+    try {
+      const unameShim = path.join(box.root, 'bin', 'uname');
+      writeFileSync(unameShim, `#!/bin/sh\nprintf '${reported}\\n'\n`);
+      chmodSync(unameShim, 0o755);
+
+      const result = runInstaller(box);
+      assert.notEqual(result.status, 0, `${reported} must be refused, not installed onto`);
+      assert.match(result.stderr, /unsupported platform/i);
+      assert.match(result.stderr, /npm install -g @adlc\/cli/, 'the manual path must be offered');
+      assert.equal(box.commands(), '', `${reported}: nothing may be installed`);
+    } finally {
+      box.cleanup();
+    }
+  }
+});
+
+test('install.sh refuses when uname is unavailable rather than assuming support', () => {
+  const box = sandbox({ bins: ['node', 'npm'] });
+  try {
+    // A `uname` that fails is indistinguishable from a hostile one; either way
+    // the platform is unknown and an unknown platform is not a supported one.
+    const unameShim = path.join(box.root, 'bin', 'uname');
+    writeFileSync(unameShim, '#!/bin/sh\nexit 1\n');
+    chmodSync(unameShim, 0o755);
+
+    const result = runInstaller(box);
+    assert.notEqual(result.status, 0, 'an unknown platform must fail closed');
+    assert.equal(box.commands(), '', 'nothing may be installed on an unknown platform');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh warns when a different adlc shadows the one npm installed', () => {
+  // Running `adlc` proves something named adlc runs, not that it is the binary
+  // npm just wrote. With several Node managers or a stale user-local copy, the
+  // user can end up running gates from a toolkit this script never touched.
+  const box = sandbox({ bins: ['node', 'npm', 'codex'] });
+  try {
+    // The stub `npm prefix -g` answers with a path the shimmed adlc is NOT under.
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, 'a shadowing binary is a warning, not a failure');
+    assert.match(
+      result.stdout,
+      /shadow|not the one npm installed/i,
+      `a mismatched adlc location must be reported:\n${result.stdout}`,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh stays quiet when the adlc on PATH IS the one npm installed', () => {
+  // The complement matters: a warning that fires on every healthy install is
+  // noise, and noise is what teaches people to ignore the real one. Reporting a
+  // prefix the shims genuinely sit under models the normal case — no test-only
+  // branch in the installer, which is a served trust root.
+  const box = sandbox({ bins: ['node', 'npm', 'codex'], npmPrefix: undefined });
+  try {
+    // Recreate npm reporting the sandbox root, which the bin dir is under.
+    const npmShim = path.join(box.root, 'bin', 'npm');
+    writeFileSync(
+      npmShim,
+      `#!/bin/sh\nprintf '%s\\n' "npm $*" >> "${box.log}"\n` +
+        `if [ "$1" = "root" ]; then printf '%s\\n' "${box.root}/npmroot"; fi\n` +
+        `if [ "$1" = "prefix" ]; then printf '%s\\n' "${box.root}"; fi\nexit 0\n`,
+    );
+    chmodSync(npmShim, 0o755);
+
+    const result = runInstaller(box);
+    assert.equal(result.status, 0);
+    assert.ok(
+      !/shadow/i.test(result.stdout),
+      `a healthy install must not warn about shadowing:\n${result.stdout}`,
     );
   } finally {
     box.cleanup();
