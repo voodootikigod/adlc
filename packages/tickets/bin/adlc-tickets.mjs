@@ -147,9 +147,16 @@ async function main() {
         + 'Take the hash from `adlc ticket show <id> --json`, or pass --force to replace whatever is there now.',
       );
     }
-    plan = service.planUpdate(positionals[1], await readInput(flags.input), { expect: flags.expect, authorized: Boolean(flags.authorize) });
+    const updateInput = await readInput(flags.input);
+    const updateWarning = categoryWarning(updateInput?.category);
+    if (updateWarning) console.error(updateWarning);
+    plan = service.planUpdate(positionals[1], updateInput, { expect: flags.expect, authorized: Boolean(flags.authorize) });
   } else if (command === 'edit') {
-    plan = planEditSession(service, positionals[1], { authorized: Boolean(flags.authorize), editor: process.env.EDITOR || process.env.VISUAL });
+    plan = planEditSession(service, positionals[1], {
+      authorized: Boolean(flags.authorize),
+      editor: process.env.EDITOR || process.env.VISUAL,
+      onEdited: (edited) => { const w = categoryWarning(edited?.category); if (w) console.error(w); },
+    });
   } else if (command === 'discard') plan = service.planDiscard(positionals[1]);
   else if (command === 'complete') plan = service.planComplete(positionals[1], { authorized: Boolean(flags.authorize) });
   else if (command === 'archive' || command === 'restore') {

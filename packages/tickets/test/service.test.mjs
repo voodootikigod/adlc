@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DirectoryTicketStore, LegacyTicketStore, TicketService, pendingTransactions, ticketFilename } from '../index.mjs';
+import { DirectoryTicketStore, LegacyTicketStore, TicketService, deepClone, pendingTransactions, ticketFilename } from '../index.mjs';
 import { ticket, writeDirectory, writeLegacy } from './helpers.mjs';
 
 test('service plans are dry, hash-bound, intent-specific, and preserve unrelated shard bytes', () => {
@@ -233,4 +233,54 @@ test('an update that leaves completed alone stays unsensitive', () => {
     const plan = service.planUpdate('T1', { ...ticket('T1'), completed: true, title: 'renamed' }, { expect: hash });
     assert.deepEqual(plan.sensitive, []);
   });
+});
+
+test('lifecycle detection matches how consumers actually read the flag', () => {
+  // Every downstream reader uses `completed === true` — coldstart, fleet,
+  // merge-forecast, model-router, ticket-prune. A Boolean() comparison here
+  // therefore missed a real transition: `"completed":"false"` is truthy, so
+  // Boolean() saw no change, while every scheduler saw the ticket become
+  // UNCOMPLETED and queued finished work again, with no lifecycle evidence.
+  const truthyNotTrue = ['false', 'no', 0, 1, {}, [], 'true'];
+  withService([ticket('T1', { completed: true })], (service) => {
+    const hash = service.snapshot().ticketHashes.T1;
+    for (const value of truthyNotTrue) {
+      assert.throws(
+        () => service.planUpdate('T1', { ...ticket('T1'), completed: value }, { expect: hash }),
+        (error) => error.code === 'AUTHORIZATION_REQUIRED' && /lifecycle-change/.test(error.message),
+        `completed: ${JSON.stringify(value)} must count as leaving the completed state`,
+      );
+    }
+  });
+});
+
+test('absent and false are the same non-completed state, not a transition', () => {
+  withService([ticket('T1')], (service) => {
+    const hash = service.snapshot().ticketHashes.T1;
+    const plan = service.planUpdate('T1', { ...ticket('T1'), completed: false }, { expect: hash });
+    assert.deepEqual(plan.sensitive, [], 'absent -> false is not a lifecycle change');
+  });
+});
+
+test('deepClone refuses values JSON cannot round-trip', () => {
+  // The declaration says `<T extends JsonValue>(value: T): T`, so a consumer
+  // cloning numeric data keeps the `number` type. JSON turns NaN and the
+  // infinities into null, so that promise was still false for them and a
+  // following `.toFixed()` compiled and threw. Fail closed at the boundary
+  // instead, which makes the declared contract true for everything that returns.
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    assert.throws(() => deepClone({ value: bad }), /non-finite/i, `deepClone must reject ${bad}`);
+    assert.throws(() => deepClone([bad]), /non-finite/i);
+    assert.throws(() => deepClone(bad), /non-finite/i);
+  }
+});
+
+test('deepClone still clones ordinary JSON data unchanged', () => {
+  // NB: no -0 here. JSON serializes it as 0, but TypeScript has no -0 type, so
+  // that round-trip does not violate the declaration the way NaN -> null does.
+  const source = { a: 1, b: [2, 3.5, 0], c: { d: 'x', e: null, f: true } };
+  const clone = deepClone(source);
+  assert.deepEqual(clone, source);
+  assert.notEqual(clone, source, 'it must be a copy, not the same reference');
+  assert.notEqual(clone.c, source.c, 'and a deep one');
 });

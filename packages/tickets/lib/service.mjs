@@ -125,7 +125,11 @@ export class TicketService {
       // completion record — schedulers then reschedule finished work or skip
       // unfinished work. Same mechanism as the two above: authorization plus
       // evidence, not a special case.
-      if (Boolean(before.completed) !== Boolean(input.completed)) sensitive.push('lifecycle-change');
+      // `=== true`, not Boolean(): every consumer reads the flag that way
+      // (coldstart, fleet, merge-forecast, model-router, ticket-prune), so a
+      // truthy non-boolean like "false" leaves the completed state for them
+      // while a Boolean() comparison here saw no change at all.
+      if ((before.completed === true) !== (input.completed === true)) sensitive.push('lifecycle-change');
       if (sensitive.length && !authorized) throw policy('AUTHORIZATION_REQUIRED', `update requires authorization: ${sensitive.join(', ')}`);
       tickets[index] = deepClone(input);
       return {

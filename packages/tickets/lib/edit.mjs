@@ -20,7 +20,7 @@ export const spawnEditor = (editor, path) => execFileSync(editor, [path], { stdi
  * is arbitrarily long — the "expected" version, so the compare-and-swap passed
  * on a document derived from the older one and dropped the other author's work.
  */
-export function planEditSession(service, id, { authorized = false, editor, runEditor = spawnEditor } = {}) {
+export function planEditSession(service, id, { authorized = false, editor, runEditor = spawnEditor, onEdited } = {}) {
   const opened = service.snapshot();
   const ticket = opened.get(id);
   if (!ticket) throw new TicketStoreError('invalid', 'TICKET_NOT_FOUND', `ticket not found: ${id}`);
@@ -31,6 +31,12 @@ export function planEditSession(service, id, { authorized = false, editor, runEd
     writeFileSync(path, `${JSON.stringify(ticket, null, 2)}\n`);
     if (!editor) throw new TicketStoreError('operational', 'EDITOR_NOT_SET', 'set $EDITOR or $VISUAL');
     runEditor(editor, path);
-    return service.planUpdate(ticket.id, JSON.parse(readFileSync(path, 'utf8')), { expect, authorized });
+    const edited = JSON.parse(readFileSync(path, 'utf8'));
+    // The edited document never leaves this function otherwise, so a caller
+    // that wants to inspect what the human actually wrote (the CLI warns about
+    // a category ticket-sync cannot round-trip) needs a hook rather than
+    // reaching into the plan's private state.
+    onEdited?.(edited);
+    return service.planUpdate(ticket.id, edited, { expect, authorized });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }

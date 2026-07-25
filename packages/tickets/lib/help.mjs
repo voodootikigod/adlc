@@ -34,9 +34,12 @@ export const SYNC_CATEGORIES = Object.freeze([
 
 /** A warning for a category ticket-sync would reject, or null. */
 export function categoryWarning(category) {
-  if (typeof category !== 'string' || category.length === 0) return null;
+  // Any PRESENT value that ticket-sync will not round-trip, including a
+  // non-string: a numeric category is accepted locally and rejected on the next
+  // pull just as surely as an unknown name is.
+  if (category === undefined || category === null || category === '') return null;
   if (SYNC_CATEGORIES.includes(category)) return null;
-  return `warning: category "${category}" is not one ticket-sync accepts, so a synced ticket cannot converge. `
+  return `warning: category ${JSON.stringify(category)} is not one ticket-sync accepts, so a synced ticket cannot converge. `
     + `Use one of: ${SYNC_CATEGORIES.join(", ")}.`;
 }
 
