@@ -14,6 +14,10 @@ import { recordCrossModelReview } from '../lib/cross-model.mjs';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { FIXTURE_REVISION, input, tmpAdlc } from './helpers.mjs';
 
+// #326 hardening: attestations must be HMAC-signed to be trusted; set the key so
+// recordCrossModelReview signs and the gate can verify.
+process.env.ADLC_MANIFEST_KEY = 'test-cross-model-gate-signing-key';
+
 const REV = FIXTURE_REVISION;
 
 // A pass set that converges cleanly (three distinct trailing dry lenses).

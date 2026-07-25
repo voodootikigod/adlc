@@ -6,6 +6,7 @@ import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -286,7 +287,21 @@ if (positionals[0] === 'tier-check') {
   const revision = resolveProsecutionRevision({ dir: values.dir, revision: values.revision });
   if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
 
-  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider });
+  // #326 hardening — the attestation is trusted ONLY via its HMAC signature, verified with
+  // the key. Without the key the gate cannot tell a real cross-model approve from a PR-forged
+  // manifest line (a PR controls the manifest file but not the key), so it fails closed with a
+  // distinct message rather than the misleading "no attestation".
+  const key = getKey();
+  if (!key) {
+    if (values.json) {
+      printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false });
+    } else {
+      console.error(`tier-check: ADLC_MANIFEST_KEY is not available, so cross-model attestations cannot be signature-verified — an unverifiable attestation is forgeable, so NONE is trusted. This required trust-root gate FAILS CLOSED for revision ${revision}. Provide the key as a CI secret (available to same-repo runs) and re-record the attestation with it.`);
+    }
+    process.exit(2);
+  }
+
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key });
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision });
     process.exit(satisfied ? 0 : 2);
@@ -296,9 +311,9 @@ if (positionals[0] === 'tier-check') {
     process.exit(0);
   }
   console.error(
-    `tier-check: NO cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +
-    `Record one after a distinct-provider adversarial review:\n` +
-    `  adlc-prosecute record-cross-model --ticket <id> --provider <distinct-provider> --author-provider ${authorProvider} --verdict approve --revision ${revision}`
+    `tier-check: NO SIGNATURE-VERIFIED cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +
+    `Record one AFTER a distinct-provider adversarial review, with ADLC_MANIFEST_KEY set so the entry is signed (an unsigned/forged entry is rejected):\n` +
+    `  ADLC_MANIFEST_KEY=<key> adlc-prosecute record-cross-model --ticket <id> --provider <distinct-provider> --author-provider ${authorProvider} --verdict approve --revision ${revision}`
   );
   process.exit(2);
 }
