@@ -437,6 +437,23 @@ test('no row exceeds the pane in terminal CELLS, not just code units', () => {
   assert.ok(lines.some((line) => displayWidth(line) > 30), 'rows must be filling the pane, not trivially short');
 });
 
+test('truncation holds against a width oracle that is not displayWidth', () => {
+  // Every other cell assertion asks displayWidth whether displayWidth was
+  // right. Flags are a known quantity — two terminal cells each, one grapheme
+  // cluster each — so counting the surviving clusters bounds the real width
+  // without consulting the helper under test.
+  const state = baseState();
+  state.width = 40;
+  state.repoRoot = '/repo';
+  state.groups.ready = [t('t-flag', { title: '🇺🇸'.repeat(40) })];
+  const row = renderBoard(state).split('\n').find((line) => line.includes('t-flag'))
+    .replace(/\x1b\[[0-9;]*m/g, '');
+  const flags = [...row.matchAll(/\p{Regional_Indicator}\p{Regional_Indicator}/gu)].length;
+  const ascii = [...row].filter((ch) => ch.charCodeAt(0) < 128).length;
+  assert.ok(flags > 0, 'the row must actually contain flags');
+  assert.ok(ascii + flags * 2 <= 40, `row occupies ${ascii + flags * 2} real cells: ${row}`);
+});
+
 test('the header keeps its fields under a wide-character root', () => {
   const state = baseState();
   state.width = 60;

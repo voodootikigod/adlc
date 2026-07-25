@@ -7,10 +7,11 @@
 // frame shape on every refresh, not just once.
 //
 // This is an approximation of Unicode East Asian Width, not a generated UCD
-// table: the wide set below covers CJK, Hangul, fullwidth forms and the common
-// emoji blocks. It is exact for the inputs a board actually renders (paths,
-// ticket ids, branch names) and errs toward calling things narrow, which can
-// under-fill a line but never overflows one.
+// table. It errs toward calling things WIDE, and the direction is the whole
+// point: over-counting under-fills a line, while under-counting hands back a
+// row the renderer believes it truncated and the terminal then wraps. An
+// earlier revision claimed the opposite and omitted regional indicators, so a
+// title of flag emoji measured 30 cells and occupied 70.
 
 const SEGMENTER = typeof Intl?.Segmenter === 'function'
   ? new Intl.Segmenter('en', { granularity: 'grapheme' })
@@ -39,10 +40,13 @@ const WIDE = [
   [0xff00, 0xff60], // fullwidth forms
   [0xffe0, 0xffe6], // fullwidth signs
   [0x17000, 0x18aff], // Tangut
-  [0x1f300, 0x1f64f], // pictographs and emoticons
-  [0x1f680, 0x1f6ff], // transport and map
-  [0x1f900, 0x1f9ff], // supplemental symbols and pictographs
-  [0x1fa70, 0x1faff], // symbols and pictographs extended-A
+  [0x1f000, 0x1f0ff], // mahjong, dominoes, playing cards
+  [0x1f1e6, 0x1f1ff], // regional indicators — a flag is one cluster, two cells
+  // One span rather than the per-block list an earlier revision used: the gaps
+  // between those blocks (geometric shapes extended, symbols extended-A) are
+  // where the undercount lived, and every character in this range that a board
+  // could render is emoji-presentation.
+  [0x1f300, 0x1faff],
   [0x20000, 0x3fffd], // CJK extensions B and beyond
 ];
 

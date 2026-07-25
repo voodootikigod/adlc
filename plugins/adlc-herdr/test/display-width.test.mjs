@@ -30,6 +30,26 @@ test('emoji occupy two cells, including ZWJ sequences and VS16', () => {
   assert.equal(displayWidth('❤️'), 2, 'variation selector-16 forces emoji presentation');
 });
 
+test('emoji blocks a first pass missed are still two cells', () => {
+  // Undercounting is the dangerous direction: it lets a row the renderer
+  // believes it truncated occupy more cells than the pane and wrap. These are
+  // pinned to literal expected widths rather than compared against
+  // displayWidth, so the production helper is not its own oracle.
+  assert.equal(displayWidth('🇺🇸'), 2, 'a regional-indicator flag is one wide cluster');
+  assert.equal(displayWidth('🇺🇸🇯🇵'), 4, 'two flags');
+  assert.equal(displayWidth('🟠'), 2, 'geometric shapes extended');
+  assert.equal(displayWidth('🀄'), 2, 'mahjong');
+  assert.equal(displayWidth('🂡'), 2, 'playing cards');
+  assert.equal(displayWidth('🩰'), 2, 'symbols extended-A');
+  assert.equal(displayWidth('🧿'), 2, 'supplemental symbols');
+});
+
+test('a flag is one cluster, so it can never be half-truncated', () => {
+  assert.equal(graphemes('🇺🇸').length, 1);
+  assert.equal(truncateToWidth('🇺🇸🇯🇵', 2), '🇺🇸');
+  assert.equal(truncateToWidth('🇺🇸🇯🇵', 3), '🇺🇸', 'a wide cluster that would overflow is dropped whole');
+});
+
 test('graphemes keep clusters whole', () => {
   assert.deepEqual(graphemes('a日'), ['a', '日']);
   assert.deepEqual(graphemes('é'), ['é']);
