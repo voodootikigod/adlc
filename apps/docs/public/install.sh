@@ -39,6 +39,16 @@ set -eu
 
 CLI_PACKAGE="@adlc/cli"
 CLI_TAG="${ADLC_CLI_TAG:-latest}"
+
+# PINNED, unlike every documented `npx plugins add` a human types. ADR-0009
+# Decision 3 refuses to version-pin the installer in docs, and that still holds
+# there — a stale pinned instruction in a README is worse than an unpinned one.
+# This call is different in kind: it runs UNATTENDED inside a `curl | sh`, so the
+# user never chooses which version executes. Two independent cross-model reviews
+# (codex, gemini) flagged the unpinned automated call; ADR-0010 Decision 8
+# records why the narrower rule applies only here. Bump deliberately, with a
+# review, when `plugins` releases.
+PLUGINS_VERSION="1.3.4"
 SITE="https://www.agenticlifecycle.ai"
 MIN_NODE_MAJOR=18
 
@@ -230,7 +240,7 @@ install_claude_code() {
     # Claude Code plugin. Unscoped, this branch would push the Claude plugin into
     # Codex, Cursor, and anything else present, colliding with the correct native
     # integrations that this same script installs for them.
-    if (cd "$npx_dir" && npx --yes plugins@latest add voodootikigod/adlc --target claude-code --yes); then
+    if (cd "$npx_dir" && npx --yes "plugins@${PLUGINS_VERSION}" add voodootikigod/adlc --target claude-code --yes); then
         ok "Claude Code"
         record_installed "Claude Code"
     else
@@ -286,12 +296,31 @@ install_antigravity() {
     have agy || return 0
     log "Google Antigravity detected"
     # `agy plugin install` only accepts a filesystem path, so the plugin has to
-    # land on disk first.
-    if npm install -g @adlc/antigravity && agy plugin install "$(npm root -g)/@adlc/antigravity"; then
+    # land on disk first. The path is then VERIFIED rather than assumed: with
+    # version managers and custom prefixes, `npm install -g` can write somewhere
+    # `npm root -g` does not report, and handing agy a non-existent path produces
+    # a confusing downstream error instead of a clear one here.
+    if ! npm install -g @adlc/antigravity; then
+        warn "Google Antigravity: npm install failed — see ${SITE}/integrations/antigravity"
+        record_failed "Google Antigravity"
+        return 0
+    fi
+
+    agy_root=$(npm root -g 2>/dev/null || echo "")
+    agy_plugin="${agy_root}/@adlc/antigravity"
+    if [ -z "$agy_root" ] || [ ! -d "$agy_plugin" ]; then
+        warn "Google Antigravity: @adlc/antigravity installed, but not found at"
+        warn "  ${agy_plugin:-<npm root -g unavailable>}"
+        warn "Locate it with 'npm root -g', then: agy plugin install <path>/@adlc/antigravity"
+        record_manual "Google Antigravity"
+        return 0
+    fi
+
+    if agy plugin install "$agy_plugin"; then
         ok "Google Antigravity"
         record_installed "Google Antigravity"
     else
-        warn "Google Antigravity: install command failed — see ${SITE}/integrations/antigravity"
+        warn "Google Antigravity: agy plugin install failed — see ${SITE}/integrations/antigravity"
         record_failed "Google Antigravity"
     fi
 }

@@ -121,16 +121,37 @@ worse:
    one-command promise for the flagship harness) or to invent an install path we
    do not control. Neither is better.
 
-   The `@latest` tag is *not* a retreat from ADR-0009 Decision 3's refusal to
-   version-pin: it pins nothing. It exists because `npx` resolves a bare package
-   name against the current project first, so a repository shipping a workspace
-   named `plugins` could hijack the install — and the agent-led flow runs from
-   inside exactly such a repository. The installer additionally runs it from a
-   scratch directory so there is no local project to resolve against.
+   **The automated call is version-pinned; documented ones are not.** This is a
+   deliberate narrowing of ADR-0009 Decision 3, not a reversal of it. That
+   decision refuses to pin `npx plugins add` *in docs*, and it is still right
+   there: a stale pinned version in a README is worse than an unpinned one,
+   because nobody notices it rotting. But this call runs **unattended** inside a
+   `curl | sh` — the user never sees it, never types it, and never chooses which
+   version executes. Automation is what changes the calculus, and automation is
+   exactly what ADR-0009 did not contemplate.
 
-   Residual risk, stated plainly: a compromise of the `plugins` package reaches
-   users through our installer, and neither our checksum pin nor our review rail
-   binds its version. Revisit if Claude Code ever exposes a shell install.
+   Two independent cross-model reviews reached this conclusion separately —
+   codex across four rounds, gemini as its top finding on a fresh read. That
+   corroboration is what reopened the decision: a single reviewer repeating
+   itself is not new information, but two providers converging independently is.
+
+   `install.sh` therefore pins `PLUGINS_VERSION` to an exact version, bumped
+   deliberately with a review. The pin also subsumes the earlier `@latest`
+   trick, which existed only because `npx` resolves a bare package name against
+   the current project first — a repository shipping a workspace named `plugins`
+   could hijack the install, and the agent-led flow runs from inside exactly such
+   a repository. Any version spec forces registry resolution; the installer also
+   runs it from a scratch directory so there is no local project to resolve
+   against.
+
+   Residual risk, reduced but not eliminated: a compromised release of the
+   pinned version would still reach users, and our checksum covers `install.sh`
+   only, not its dependency. Revisit if Claude Code ever exposes a shell install.
+
+   **Maintenance obligation:** `PLUGINS_VERSION` now needs bumping when
+   `plugins` releases. That upkeep is the cost ADR-0009 Decision 3 was written to
+   avoid — accepted here because it is paid on exactly one line, in the one place
+   where the user has no say.
 
 ## Consequences
 

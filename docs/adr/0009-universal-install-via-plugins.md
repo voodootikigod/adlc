@@ -62,6 +62,12 @@ README anywhere.
 3. **Do not version-pin the installer in docs** (`plugins@x.y.z`). Pinning trades a
    narrow integrity window for permanent maintenance drag and stale-installer bugs; the
    unpinned form is the deliberate choice.
+
+   > **Scoped by ADR-0010 Decision 8 (2026-07-25).** This applies to instructions a
+   > human *reads and types*, where a stale pin rots unnoticed. It does **not** apply
+   > to the automated call inside `apps/docs/public/install.sh`, which runs unattended
+   > in a `curl | sh` where the user never chooses the version. That one is pinned.
+   > Automation was not contemplated when this decision was written.
 4. **Docs must only claim harness coverage the installer actually has.** Where a
    harness's plugin is not yet published/wired for the installer, the docs say so and
    give the native path instead (see each integration page's Install section).

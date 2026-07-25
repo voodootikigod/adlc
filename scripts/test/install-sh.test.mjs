@@ -475,6 +475,27 @@ test('install.sh stays quiet when the adlc on PATH IS the one npm installed', ()
   }
 });
 
+test('install.sh verifies the Antigravity plugin path instead of assuming it', () => {
+  // `agy plugin install` takes a filesystem path, and with version managers or a
+  // custom prefix `npm install -g` can write somewhere `npm root -g` does not
+  // report. Passing an unverified path hands agy a non-existent directory and
+  // produces a confusing downstream error instead of a clear one here.
+  const box = sandbox({ bins: ['node', 'npm', 'agy'] });
+  try {
+    // The stub npm reports a root that does not contain the package.
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, 'a bad plugin path must not fail the whole install');
+    assert.ok(
+      !box.commands().includes('agy plugin install'),
+      'agy must not be invoked with a path that does not exist',
+    );
+    assert.match(result.stdout, /not found at/, 'the missing path must be reported');
+    assert.match(result.stdout, /npm root -g/, 'the user needs an actionable next step');
+  } finally {
+    box.cleanup();
+  }
+});
+
 test('install.sh refuses to run on native Windows but allows WSL', () => {
   // Git Bash / MSYS / Cygwin give a POSIX shell on a platform where the toolkit
   // passes 6 of 28 suites, so the script would install a broken toolkit and
@@ -579,7 +600,7 @@ test('install.sh passes non-interactive flags to every nested installer', () => 
     assert.ok(npxLine, `no npx invocation; log:\n${commands}`);
     assert.match(
       npxLine,
-      /plugins@latest add \S+ .*--yes/,
+      /plugins@\S+ add \S+ .*--yes/,
       `the trailing --yes must reach 'plugins', not be eaten by npx: ${npxLine}`,
     );
     // `plugins add` defaults to auto-detect, i.e. install into EVERY agent tool
@@ -588,6 +609,20 @@ test('install.sh passes non-interactive flags to every nested installer', () => 
       npxLine,
       /--target claude-code/,
       `the Claude branch must scope its install: ${npxLine}`,
+    );
+
+    // An EXACT version, never a tag. This call runs unattended inside a
+    // `curl | sh`, so the user never chooses which third-party code executes —
+    // the narrowing of ADR-0009 Decision 3 recorded in ADR-0010 Decision 8.
+    // Two independent cross-model reviews flagged the unpinned form.
+    assert.match(
+      npxLine,
+      /plugins@\d+\.\d+\.\d+ /,
+      `the automated plugins call must pin an exact version, not a tag: ${npxLine}`,
+    );
+    assert.ok(
+      !/plugins@(latest|next|beta)/.test(npxLine),
+      `a mutable tag reintroduces the risk the pin exists to close: ${npxLine}`,
     );
   } finally {
     box.cleanup();

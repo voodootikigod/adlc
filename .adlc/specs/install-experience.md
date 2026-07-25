@@ -77,6 +77,19 @@ After I1–I3:
    harness-specific invocation syntax (`/adlc:*`, `$adlc-*`, `/adlc-*`). They
    depend only on `adlc <tool>` being on PATH. The per-harness plugin skills
    under `plugins/*/skills/` remain the canonical experience for their harness.
+
+   **Known divergence, deliberately deferred.** The repo already has a canonical
+   phase-router generator (`scripts/router/router-model.mjs` →
+   `gen-routers.mjs`, gated by the `router-drift` CI job) that renders all six
+   harness routers from one source. `skills/adlc/SKILL.md` is hand-written and
+   bypasses it, so it is guarded by the weaker bespoke check in
+   `scripts/test/skills-catalog.test.mjs` instead of the real mechanism. A
+   cross-model review flagged this and is right. It is not fixed here because
+   adding a seventh target means the shared sections — which currently carry
+   Claude-specific text that four harnesses override locally — need
+   parameterising, and getting that wrong breaks the drift gate for six shipped
+   routers. Tracked separately; recorded here so the divergence is visible
+   rather than discovered.
 3. **Drift between `skills/` and `plugins/*/skills/` is caught at the level the
    test actually checks — and no further.** The committed test verifies two
    things: that every canonical gate the Claude Code router routes to is also
