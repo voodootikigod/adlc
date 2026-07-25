@@ -277,6 +277,60 @@ test('mutable state: PR rewrites existing manifest evidence → exit 2', () => {
   assert.equal(code, 2);
 });
 
+test('#314: an untracked, gitignored .adlc/manifest.jsonl does NOT trigger a false deny (local == CI)', () => {
+  // The manifest-evidence check must read the DIFF, not the filesystem. A gitignored,
+  // untracked manifest — which every dev who has run the toolkit has locally — is not
+  // introduced by the commit, so the local verdict must equal CI's clean-checkout
+  // verdict for the same tree. Regression: this used to deny locally (existsSync) while
+  // passing in CI, training people toward the session-lifetime ADLC_RAILS_BYPASS.
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-314-'));
+  const run = () => {
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+    catch (e) { return e.status ?? 1; }
+  };
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
+    // The manifest is gitignored exactly as in the real repo, so `git add -A` can never
+    // stage it — it stays untracked no matter what the toolkit writes.
+    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n');
+    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    // A benign, non-rail change is the entire committed diff.
+    writeFileSync(join(dir, 'README.md'), 'work\n');
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'work']);
+
+    // CI's view: clean checkout, no untracked manifest present.
+    assert.equal(run(), 0, 'CI (no untracked manifest) must pass');
+
+    // A developer's view of the SAME commit: the toolkit left a gitignored, untracked,
+    // non-empty manifest. It is in zero commits and not in the diff, so the verdict must
+    // be identical to CI's.
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"x"}\n');
+    // sanity: the manifest really is gitignored and untracked
+    assert.throws(() => execFileSync('git', ['ls-files', '--error-unmatch', '.adlc/manifest.jsonl'], { cwd: dir, stdio: 'pipe' }));
+    assert.equal(run(), 0, 'local (untracked gitignored manifest present) must agree with CI');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#314: a PR that adds a TRACKED but EMPTY manifest is allowed (empty bootstrap) → exit 0', () => {
+  // The deny is for CREATING evidence, i.e. a NON-EMPTY manifest. An empty manifest is
+  // the sanctioned bootstrap shape ("create it empty during bootstrap"), so a tracked,
+  // empty add must pass. This also pins that the evidence is read from the specific
+  // committed path (git show HEAD:.adlc/manifest.jsonl), not from `git show` writ large.
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), ''),
+  });
+  assert.equal(code, 0);
+});
+
 test('trust root: PR edits deployed rails guard workflow while base rails exist → exit 2', () => {
   const code = runScenario({
     baseTickets: RAILED,

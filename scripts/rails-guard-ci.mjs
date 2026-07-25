@@ -487,10 +487,27 @@ if (manifestLs.stdout.trim()) {
     deny('.adlc/manifest.jsonl must be append-only in PRs');
   }
   if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
-} else if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
-  const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
-  if (verifiedMigration) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
-  else deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
+} else if (verifiedMigration) {
+  // Verified migration ceremony (protected-base runner): the migration evidence lives in
+  // the gitignored WORKING-TREE manifest by design, so read it here as before. The diff
+  // shape and CODEOWNERS attestation were already verified upstream, which is what makes
+  // trusting this local file sound in this branch only.
+  const headManifest = existsSync('.adlc/manifest.jsonl') ? readFileSync('.adlc/manifest.jsonl', 'utf8') : '';
+  if (headManifest.trim()) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+} else {
+  // Ordinary PR (#314): whether the CHANGE "creates the manifest with evidence" is a DIFF
+  // question, not a filesystem one. A gitignored, untracked manifest — which every dev who
+  // has run the toolkit has locally — is in zero commits and not in the diff, so it must
+  // not deny (the local verdict must equal CI's clean checkout). Reading the working tree
+  // (existsSync/readFileSync) made them disagree. Only a TRACKED manifest ADDED by the
+  // diff triggers the deny; read the committed HEAD content, never the filesystem.
+  const manifestAtHead = git(['ls-tree', '--name-only', 'HEAD', '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
+  if (manifestAtHead.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
+  if (manifestAtHead.stdout.trim()) {
+    const headManifest = git(['show', 'HEAD:.adlc/manifest.jsonl'], 'git show HEAD manifest');
+    if (headManifest.status !== 0) fail('git show failed for a tracked HEAD manifest (operational error) — failing closed.');
+    if (headManifest.stdout.trim()) deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
+  }
 }
 if (verifiedMigration && (!existsSync('.adlc/manifest.jsonl') || !readFileSync('.adlc/manifest.jsonl', 'utf8').trim())) {
   deny('legacy-to-directory migration requires hash-bound migration evidence');
