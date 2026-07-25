@@ -89,10 +89,29 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   return `ticket …${tailToWidth(label, room - 1)}${tail}`;
 }
 
-/** The board's footer hint line (with its own SGR). Pure so the refresh-seconds
- *  arithmetic is testable rather than buried in the stdout glue. */
-export function boardFooter(refreshMs) {
-  return `${DIM}↑↓/jk select · ↵ focus pane · q quit · refreshes every ${refreshMs / 1000}s${RESET}`;
+/**
+ * The board's footer hint line (with its own SGR). Pure so the refresh-seconds
+ * arithmetic is testable rather than buried in the stdout glue.
+ *
+ * Width-aware, because draw() appends this to the clamped body and gather()
+ * reserves exactly two rows for it. A fixed 57-cell line wrapped to three rows
+ * in a 20-column pane, so every cursor-home redraw wrote more physical rows
+ * than were reserved and the pane scrolled — the frame corruption the body
+ * clamping exists to prevent, reintroduced one line below it.
+ *
+ * Hints drop in order of how recoverable their absence is; quitting is last to
+ * go, because a user who cannot read the footer most needs the way out.
+ */
+export function boardFooter(refreshMs, width = 80) {
+  const w = clampWidth(width);
+  const tiers = [
+    `↑↓/jk select · ↵ focus pane · q quit · refreshes every ${refreshMs / 1000}s`,
+    '↑↓/jk select · ↵ focus · q quit',
+    '↑↓ select · q quit',
+    'q quit',
+  ];
+  const hint = tiers.find((tier) => displayWidth(tier) <= w) ?? truncateToWidth('q quit', w);
+  return `${DIM}${hint}${RESET}`;
 }
 
 /** Render the full board frame as a string of newline-joined rows. When

@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
-import { renderBoard } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter } from '../lib/board-render.mjs';
 import { displayWidth } from '../lib/display-width.mjs';
 
 let repo;
@@ -435,6 +435,33 @@ test('no row exceeds the pane in terminal CELLS, not just code units', () => {
   // DENOMINATOR: at least one row must actually have been cut, or the loop
   // above is asserting over content that always fit.
   assert.ok(lines.some((line) => displayWidth(line) > 30), 'rows must be filling the pane, not trivially short');
+});
+
+test('the footer fits the pane, so the reserved frame height holds', () => {
+  // renderBoard clamps the BODY, but draw() appends `\n\n${boardFooter(...)}`
+  // and gather() reserves exactly two rows for it. A fixed 57-cell footer wraps
+  // to three rows in a 20-column pane, so every cursor-home redraw wrote more
+  // physical rows than were reserved and the pane scrolled.
+  for (const width of [20, 24, 40, 80, 120]) {
+    const footer = boardFooter(3000, width).replace(/\x1b\[[0-9;]*m/g, '');
+    assert.ok(displayWidth(footer) <= width, `width ${width}: footer is ${displayWidth(footer)} cells: ${footer}`);
+    assert.ok(!footer.includes('\n'), 'the footer is a single row');
+    assert.ok(footer.includes('q'), `width ${width}: quit must always be discoverable: ${footer}`);
+  }
+});
+
+test('the whole frame — body plus footer — fits the pane at every width', () => {
+  for (const width of [20, 40, 80]) {
+    const state = baseState();
+    state.width = width;
+    state.repoRoot = '/var/folders/s1/51j2xgnn0pn_gft2y7n4f7p80000gn/T/deep/repo';
+    state.groups.ready = [t('t-long', { title: '日本語のタイトル'.repeat(5) })];
+    const frame = `${renderBoard(state)}\n\n${boardFooter(3000, width)}`;
+    for (const line of frame.split('\n')) {
+      const visible = line.replace(/\x1b\[[0-9;]*m/g, '');
+      assert.ok(displayWidth(visible) <= width, `width ${width}: line is ${displayWidth(visible)} cells: ${visible}`);
+    }
+  }
 });
 
 test('truncation holds against a width oracle that is not displayWidth', () => {

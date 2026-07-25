@@ -58,6 +58,28 @@ test('default-presentation emoji below the CJK blocks are two cells', () => {
   }
 });
 
+test('East Asian Wide characters outside the emoji property are two cells', () => {
+  // \p{Emoji_Presentation} covers the emoji class but says nothing about
+  // East_Asian_Width=W, and these fall in the gaps a partial range list leaves:
+  // Tangut components, Kana Supplement, Enclosed Ideographic Supplement.
+  // Literal expected widths — no displayWidth-as-its-own-oracle.
+  assert.equal(displayWidth('\u{16FE0}'), 2, 'Tangut iteration mark');
+  assert.equal(displayWidth('\u{1B000}'), 2, 'Kana Supplement');
+  assert.equal(displayWidth('\u{1F200}'), 2, 'Enclosed Ideographic Supplement');
+  assert.equal(displayWidth('\u{18800}'), 2, 'Tangut components');
+  assert.equal(displayWidth('\u{1AFF0}'), 2, 'Kana Extended-B');
+  assert.equal(displayWidth('　'), 2, 'ideographic space');
+  assert.equal(displayWidth('〉'), 2, 'right-pointing angle bracket');
+});
+
+test('a keycap without VS16 is still a wide cluster', () => {
+  // '1' + U+20E3 is one grapheme that terminals render as a keycap glyph. The
+  // enclosing mark is zero-width and the base is ASCII, so measuring by base
+  // alone called it one cell.
+  assert.equal(displayWidth('1⃣'), 2);
+  assert.equal(displayWidth('1️⃣'), 2, 'and with VS16');
+});
+
 test('narrow symbols the board itself renders stay one cell', () => {
   // The inverse guard: over-broad emoji classification would make the board's
   // own separators and bullets double-width and shrink every row.

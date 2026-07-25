@@ -81,7 +81,7 @@ function draw(body) {
   // Probed 2026-07-23: \x1b[2J leaves a herdr pane blank AND unreadable via
   // `pane read` — redraw with cursor-home + per-line erase-to-EOL + erase-
   // below instead of a full clear.
-  const footer = boardFooter(REFRESH_MS);
+  const footer = boardFooter(REFRESH_MS, process.stdout.columns ?? 80);
   const frameText = `${body}\n\n${footer}`.split('\n').map((line) => `${line}\x1b[K`).join('\n');
   process.stdout.write(`\x1b[H${frameText}\n\x1b[0J`);
 }

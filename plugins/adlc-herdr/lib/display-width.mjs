@@ -52,29 +52,55 @@ export function bounded(text, maxCodeUnits) {
   return value.slice(0, end);
 }
 
+/**
+ * East_Asian_Width W and F, as published in the Unicode character database.
+ *
+ * Transcribed rather than hand-picked: successive revisions of a "common blocks"
+ * list kept leaving gaps (Kana Supplement, Enclosed Ideographic Supplement,
+ * Tangut components, geometric shapes extended), and every gap is an undercount,
+ * which is the direction that overflows a line. The emoji class is NOT listed
+ * here — \p{Emoji_Presentation} above covers it from the engine's own data, so
+ * this table only has to carry the non-emoji wide characters.
+ */
 const WIDE = [
   [0x1100, 0x115f], // Hangul Jamo
-  [0x2e80, 0x303e], // CJK radicals, Kangxi, CJK symbols and punctuation
-  [0x3041, 0x33ff], // Hiragana through CJK compatibility
-  [0x3400, 0x4dbf], // CJK unified ideographs extension A
-  [0x4e00, 0x9fff], // CJK unified ideographs
-  [0xa000, 0xa4cf], // Yi
-  [0xa960, 0xa97f], // Hangul Jamo extended-A
+  [0x2329, 0x232a], // angle brackets
+  [0x2e80, 0x2e99], // CJK radicals supplement
+  [0x2e9b, 0x2ef3],
+  [0x2f00, 0x2fd5], // Kangxi radicals
+  [0x2ff0, 0x2ffb], // ideographic description
+  [0x3000, 0x303e], // CJK symbols and punctuation (incl. ideographic space)
+  [0x3041, 0x3096], // Hiragana
+  [0x3099, 0x30ff], // combining kana marks, Katakana
+  [0x3105, 0x312f], // Bopomofo
+  [0x3131, 0x318e], // Hangul compatibility Jamo
+  [0x3190, 0x31e3], // Kanbun, Bopomofo extended, CJK strokes
+  [0x31f0, 0x321e], // Katakana phonetic extensions, enclosed CJK
+  [0x3220, 0x3247],
+  [0x3250, 0x4dbf], // enclosed CJK, CJK extension A
+  [0x4e00, 0xa48c], // CJK unified ideographs, Yi syllables
+  [0xa490, 0xa4c6], // Yi radicals
+  [0xa960, 0xa97c], // Hangul Jamo extended-A
   [0xac00, 0xd7a3], // Hangul syllables
   [0xf900, 0xfaff], // CJK compatibility ideographs
   [0xfe10, 0xfe19], // vertical forms
-  [0xfe30, 0xfe6f], // CJK compatibility forms
-  [0xff00, 0xff60], // fullwidth forms
+  [0xfe30, 0xfe52], // CJK compatibility forms
+  [0xfe54, 0xfe66],
+  [0xfe68, 0xfe6b],
+  [0xff01, 0xff60], // fullwidth forms
   [0xffe0, 0xffe6], // fullwidth signs
-  [0x17000, 0x18aff], // Tangut
-  [0x1f000, 0x1f0ff], // mahjong, dominoes, playing cards
+  [0x16fe0, 0x16fe4], // Tangut/Nushu iteration marks
+  [0x16ff0, 0x16ff1],
+  [0x17000, 0x187f7], // Tangut
+  [0x18800, 0x18cd5], // Tangut components
+  [0x18d00, 0x18d08], // Tangut supplement
+  [0x1aff0, 0x1affe], // Kana extended-B
+  [0x1b000, 0x1b2fb], // Kana supplement, Kana extended-A, Nushu
+  [0x1f000, 0x1f0ff], // mahjong, dominoes, cards — deliberately over-counted
   [0x1f1e6, 0x1f1ff], // regional indicators — a flag is one cluster, two cells
-  // One span rather than the per-block list an earlier revision used: the gaps
-  // between those blocks (geometric shapes extended, symbols extended-A) are
-  // where the undercount lived, and every character in this range that a board
-  // could render is emoji-presentation.
-  [0x1f300, 0x1faff],
-  [0x20000, 0x3fffd], // CJK extensions B and beyond
+  [0x1f200, 0x1f265], // enclosed ideographic supplement
+  [0x20000, 0x2fffd], // CJK extension B and beyond
+  [0x30000, 0x3fffd],
 ];
 
 const ZERO = [
@@ -111,6 +137,9 @@ export function clusterWidth(cluster) {
   // VS16 forces emoji presentation, which is double-width even when the base
   // character (e.g. U+2764) is not emoji-presentation on its own.
   if (cluster.includes('️')) return 2;
+  // U+20E3 turns its base into a keycap glyph, which terminals render wide even
+  // when the base is ASCII and no VS16 is present ('1' + U+20E3).
+  if (cluster.includes('⃣')) return 2;
   if (EMOJI_PRESENTATION.test(cluster)) return 2;
   const code = cluster.codePointAt(0);
   if (inRanges(ZERO, code)) return 0;
