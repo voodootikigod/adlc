@@ -86,10 +86,14 @@ After I1–I3:
 6. **The installer only runs native paths for harnesses it detects.** No
    harness is installed speculatively, and the installer MUST NOT modify a
    harness's user-global configuration for a harness that is not present.
-7. **Windows ships as beta, backed by CI, and states its limits.** A
-   `windows-latest` job runs the core gate suite. `packages/fleet` is
-   POSIX-only (it hard-codes `/bin/sh` and POSIX sandbox backends) and is
-   documented as excluded from the Windows claim rather than silently broken.
+7. **~~Windows ships as beta, backed by CI~~ → Windows is not claimed at all.**
+   This decision was written as a beta claim and then overturned by its own
+   gate: a `windows-latest` run of the core suites passed 6 of 28. A "beta"
+   label describes rough edges, not a platform where four fifths of the gates
+   fail, so `install.ps1` came out before merge and every surface says Windows
+   is unsupported and points at WSL. (`packages/fleet` is separately POSIX-only
+   by design.) Restoring a Windows installer requires restoring a green
+   `windows-latest` gate in the same change.
 8. **Marketing renders install text verbatim from a single source.** The
    existing `integration-facts.mjs` remains the source of truth for per-harness
    install lines; the universal command gets one exported constant and every
@@ -156,16 +160,22 @@ and does not deliver.
   **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the idempotence case
   runs the script twice against the same stub environment and asserts the
   second run exits 0 with a command log byte-equal to the first.
-- **AC2.5** `install.ps1` exists, is labeled beta, and parses.
-  **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the ps1 case
-  asserts the file exists and contains the string
-  `beta`; a `windows-latest` CI step runs
-  `[ScriptBlock]::Create((Get-Content -Raw install.ps1))` and asserts no parse
-  exception.
-- **AC2.6** Core gates pass on Windows.
-  **VERIFY:** a `windows-latest` job in `.github/workflows/ci.yml` runs the
-  core package test suites (excluding `packages/fleet`) and is green; the job
-  is a required check.
+- **AC2.5** ~~`install.ps1` exists, is labeled beta, and parses.~~
+  **WITHDRAWN — the gate that was meant to back this killed it.** A
+  `windows-latest` run of the core gate suites passed **6 of 28**: the shared
+  bin-resolution path builds `D:\D:\…` from an already-absolute Windows path.
+  No `.ps1` is served.
+  **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the tripwire case
+  asserts no `.ps1` exists under `apps/docs/public/`, so restoring one requires
+  restoring a green `windows-latest` gate in the same change.
+- **AC2.6** ~~Core gates pass on Windows.~~
+  **WITHDRAWN — measured false.** Evidence: PR #351, job `windows-core (22)`,
+  6/28 package suites passing. Tracked as follow-on work; Windows adopters are
+  pointed at WSL. The withdrawal itself is what now needs verifying, so that a
+  Windows claim cannot creep back without its gate.
+  **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the tripwire and
+  platform-limits cases together assert no `.ps1` is served and that every
+  surface offering the installer states Windows is unsupported.
 - **AC2.7** The served installers are content-pinned.
   **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the digest case
   recomputes the SHA-256 of
@@ -176,9 +186,10 @@ and does not deliver.
   **VERIFY:** `docs/adr/0010-first-party-curl-installer.md` exists with
   `**Status:** **Accepted.**` and cross-references ADR-0009.
 - **AC2.9** Windows limits are stated, not implied.
-  **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the Windows-honesty case
-  asserts every doc that offers `install.ps1` also states `adlc fleet` is
-  POSIX-only.
+  **VERIFY:** `node --test scripts/test/install-sh.test.mjs` — the platform-limits
+  case asserts every surface offering the installer states Windows is
+  unsupported, rather than staying silent and letting an adopter discover 22
+  failing suites.
 
 ## I3 — Install CTA placement
 

@@ -16,7 +16,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { UNIVERSAL_INSTALL, UNIVERSAL_INSTALL_WINDOWS, SKILLS_INSTALL } from '../lib/install-commands.mjs';
+import { UNIVERSAL_INSTALL, SKILLS_INSTALL } from '../lib/install-commands.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const docsRoot = path.join(repoRoot, 'apps/docs');
@@ -80,10 +80,9 @@ test('the integrations index leads with the universal install command', () => {
 
   assert.ok(install < grid, 'the universal install must render before the harness picker');
   assert.ok(
-    source.includes('UNIVERSAL_INSTALL_WINDOWS'),
-    'the index must offer the Windows command alongside the POSIX one',
+    !source.includes('UNIVERSAL_INSTALL_WINDOWS'),
+    'no Windows command may be offered while the toolkit fails on Windows (6/28 suites)',
   );
-  assert.match(source, /beta/, 'the Windows command must be labeled beta');
 });
 
 test('the surface that sells the one-liner also names its exceptions', () => {
@@ -99,8 +98,8 @@ test('the surface that sells the one-liner also names its exceptions', () => {
   assert.match(source, /manual\s*\n?\s*step/, 'the exceptions must be described as a manual step');
   assert.match(
     source,
-    /POSIX-only/,
-    'the index offers the Windows command and must state the fleet exclusion',
+    /Windows isn&apos;t supported|Windows is not supported/,
+    'the index must state plainly that Windows is unsupported, not leave it to be discovered',
   );
 });
 
@@ -131,7 +130,6 @@ test('install commands are defined once and imported, never hand-typed into a pa
   const definingModule = path.join(docsRoot, 'lib/install-commands.mjs');
   const COMMANDS = [
     ['UNIVERSAL_INSTALL', UNIVERSAL_INSTALL],
-    ['UNIVERSAL_INSTALL_WINDOWS', UNIVERSAL_INSTALL_WINDOWS],
     ['SKILLS_INSTALL', SKILLS_INSTALL],
   ];
 

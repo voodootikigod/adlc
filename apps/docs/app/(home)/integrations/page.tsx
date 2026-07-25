@@ -3,7 +3,6 @@ import Link from 'next/link';
 import { INTEGRATIONS } from '@/lib/integration-facts.mjs';
 import {
   UNIVERSAL_INSTALL,
-  UNIVERSAL_INSTALL_WINDOWS,
   SKILLS_INSTALL,
   AGENT_PROMPT,
   AGENT_GUIDE_URL,
@@ -29,7 +28,6 @@ export default function IntegrationsPage() {
         </p>
         <div className="flex flex-col gap-4 lg:max-w-2xl">
           <InstallCommand command={UNIVERSAL_INSTALL} label="macOS / Linux" />
-          <InstallCommand command={UNIVERSAL_INSTALL_WINDOWS} label="Windows" beta />
         </div>
         <p className="mt-6 max-w-2xl text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
           Then <code style={{ color: '#4fb4d8' }}>cd</code> into a repo and run{' '}
@@ -38,10 +36,11 @@ export default function IntegrationsPage() {
           installs plugins through its in-app marketplace, and{' '}
           <strong style={{ color: '#cbcdd2' }}>GitHub Copilot</strong>&apos;s plugin
           package isn&apos;t on npm yet — both are detected and reported as a manual
-          step rather than guessed at. On Windows,{' '}
-          <code style={{ color: '#4fb4d8' }}>adlc fleet</code> is POSIX-only and
-          unavailable; every other gate runs. Prefer to install by hand? Every
-          harness&apos;s native path is below.
+          step rather than guessed at.{' '}
+          <strong style={{ color: '#cbcdd2' }}>Windows isn&apos;t supported yet</strong>{' '}
+          — a <code style={{ color: '#4fb4d8' }}>windows-latest</code> run of the core
+          gate suites passes 6 of 28, so use WSL for now. Prefer to install by hand?
+          Every harness&apos;s native path is below.
         </p>
       </MarketingSection>
 

@@ -12,11 +12,7 @@
 // obligation here: we describe only the coverage a channel actually has.
 
 import { INTEGRATIONS } from './integration-facts.mjs';
-import {
-  UNIVERSAL_INSTALL,
-  UNIVERSAL_INSTALL_WINDOWS,
-  SKILLS_INSTALL,
-} from './install-commands.mjs';
+import { UNIVERSAL_INSTALL, SKILLS_INSTALL } from './install-commands.mjs';
 import { SITE_URL } from './routes.mjs';
 
 /** @typedef {(typeof INTEGRATIONS)[number]} Integration */
@@ -115,9 +111,11 @@ present on the machine. Harnesses that are absent are left alone.
 
 ${fence([UNIVERSAL_INSTALL])}
 
-On Windows (beta):
-
-${fence([UNIVERSAL_INSTALL_WINDOWS])}
+**macOS and Linux only.** The toolkit does not currently run on Windows — a
+\`windows-latest\` CI run of the core gate suites passed 6 of 28, because the
+shared bin-resolution path builds \`D:\\D:\\...\` from an already-absolute
+Windows path. If the human is on Windows, tell them plainly and point them at
+WSL. Do not install into a native Windows shell and hope.
 
 **Ask before running this.** It pipes a remote script into a shell. If the human
 would rather read it first, fetch it and show it to them:
@@ -168,9 +166,11 @@ Walk the human through this sequence.
 
 - **Node 18+ is required.** The toolkit is Node and zero-dependency. The
   installer will not install a runtime for you.
-- **\`adlc fleet\` is POSIX-only.** It shells out through \`/bin/sh\` and uses
-  POSIX sandbox backends, so parallel ticket orchestration is unavailable on
-  Windows. Every other gate runs there; Windows support is **beta**.
+- **Windows is not supported.** Not "beta" — measured: a \`windows-latest\` run
+  of the core gate suites passed 6 of 28. Point Windows users at WSL. Separately,
+  \`adlc fleet\` is POSIX-only by design (it shells out through \`/bin/sh\` and
+  uses POSIX sandbox backends), so it is unavailable under WSL-less setups
+  regardless.
 - **Cursor** installs plugins through its in-app marketplace UI. There is no
   supported shell command, so the installer reports it as a manual step.
 - **GitHub Copilot's** plugin package is not published to npm yet; use

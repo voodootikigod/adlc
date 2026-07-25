@@ -14,8 +14,12 @@
 /** The one-line install served at /install.sh. Rendered verbatim; never reworded. */
 export const UNIVERSAL_INSTALL = 'curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh';
 
-/** The Windows equivalent. Beta — every surface offering it must say so. */
-export const UNIVERSAL_INSTALL_WINDOWS = 'irm https://www.agenticlifecycle.ai/install.ps1 | iex';
+// There is deliberately no Windows command here. A `windows-latest` CI run of
+// the core gate suites passed 6 of 28: the shared bin-resolution path builds
+// `D:\D:\...` from an already-absolute Windows path, and most gates die on it.
+// Shipping an installer for a platform the toolkit does not run on would be a
+// claim we cannot back (ADR-0009 Decision 4). Windows adopters are pointed at
+// WSL until that is fixed.
 
 /** The harness-neutral skill catalog, for the ~70 agents with no native plugin. */
 export const SKILLS_INSTALL = 'npx skills add voodootikigod/adlc';

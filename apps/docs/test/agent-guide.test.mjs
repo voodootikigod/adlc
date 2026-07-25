@@ -148,11 +148,12 @@ test('the guide states the same limits every other surface states', () => {
   assert.match(guide, /Node 18\+ is required/i, 'the Node floor must be stated');
   assert.match(
     guide,
-    /`adlc fleet` is POSIX-only/i,
-    'the Windows exclusion must be stated, not discovered',
+    /Windows is not supported/i,
+    'the guide must tell an agent Windows is unsupported rather than let it discover 22 failing suites',
   );
+  assert.match(guide, /WSL/, 'the guide must give Windows users somewhere to go');
+  assert.match(guide, /`adlc fleet` is POSIX-only/i, 'the fleet exclusion must be stated');
   assert.match(guide, /skills only/i, 'the skills.sh channel must be described as skills only');
-  assert.match(guide, /Windows support is \*\*beta\*\*|beta/i, 'Windows must be labeled beta');
   assert.match(
     guide,
     /--prompt-only/,

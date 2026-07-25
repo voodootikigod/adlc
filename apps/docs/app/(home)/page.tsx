@@ -6,7 +6,7 @@ import { SERIES_BASE, theoryLink } from '@/lib/theory-links.mjs';
 import { ALL_PACKAGES } from '@/lib/toolkit-packages.mjs';
 import { SITE_URL } from '@/lib/routes.mjs';
 import { MARKETING_GATES } from '@/lib/marketing-gates.mjs';
-import { UNIVERSAL_INSTALL, UNIVERSAL_INSTALL_WINDOWS } from '@/lib/install-commands.mjs';
+import { UNIVERSAL_INSTALL } from '@/lib/install-commands.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { InstallCommand } from '@/components/marketing/install-command';
 import { TerminalCard } from '@/components/marketing/terminal-card';
@@ -82,9 +82,7 @@ export default function HomePage() {
           <div className="flex max-w-2xl flex-col gap-3">
             <InstallCommand command={UNIVERSAL_INSTALL} label="Install for every agent you have" />
             <p className="text-sm" style={{ color: 'var(--mk-muted)' }}>
-              Node 18+. Windows:{' '}
-              <code style={{ color: '#4fb4d8' }}>{UNIVERSAL_INSTALL_WINDOWS}</code>{' '}
-              <span style={{ color: '#e5cd52' }}>(beta)</span>. Then{' '}
+              macOS and Linux, Node 18+. Then{' '}
               <code style={{ color: '#4fb4d8' }}>adlc init</code> in your repo.
             </p>
           </div>

@@ -77,10 +77,17 @@ worse:
    command and `@adlc/copilot` is unpublished; the installer detects both and
    prints the manual step rather than fabricating an automated one. ADR-0009
    Decision 4 (claim accuracy) applies here unchanged.
-6. **Windows ships as beta, backed by CI.** The `windows-core` job runs the core
-   gate suites on `windows-latest` and parses `install.ps1` on the platform it
-   targets. `packages/fleet` is POSIX-only and is documented as excluded, not
-   silently broken.
+6. **No Windows installer ships until Windows works.** This was originally
+   written as "Windows ships as beta, backed by CI", and the CI is what
+   overturned it: a `windows-latest` run of the core gate suites passed **6 of
+   28**. The shared bin-resolution path builds `D:\D:\…` from an already-absolute
+   Windows path, and most gates die on it. `install.ps1` was therefore removed
+   before merge rather than shipped behind a "beta" label — a beta label
+   describes rough edges, not a platform where four fifths of the gates fail.
+   Windows adopters are pointed at WSL. `scripts/test/install-sh.test.mjs`
+   carries a tripwire asserting no `.ps1` is served, so restoring one requires
+   restoring a green `windows-latest` gate in the same change.
+   (`packages/fleet` is separately POSIX-only by design.)
 7. **Do not remove the native paths.** Every integration page keeps its native
    install instructions, so no adopter is forced through the one-liner and anyone
    who wants to read before running can.
@@ -94,6 +101,8 @@ worse:
   are listed as rails on ticket I2 so a change to them is a deliberate act.
 - If the digest test starts failing routinely as noise, that is a signal the
   installer is churning too fast — not a reason to delete the control.
-- The Windows claim is only as good as the `windows-core` job. If that job is
-  ever made non-required or allowed to fail, the beta claim must come down with
-  it.
+- Writing the Windows CI job was worth it even though its result killed the
+  feature it was meant to support. The alternative was shipping `install.ps1` on
+  the strength of "it's all Node, it should work" — which is exactly what the
+  first draft of this ADR said. Any future Windows claim needs the job back,
+  green, and required, in the same change that makes the claim.

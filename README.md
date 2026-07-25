@@ -35,18 +35,17 @@ every agent harness it finds on your machine:
 curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh
 ```
 
-```powershell
-# Windows (beta)
-irm https://www.agenticlifecycle.ai/install.ps1 | iex
-```
-
 Then `cd` into a repo and run `adlc init`.
 
-Requires **Node.js 18+** — the installer checks and stops if it is missing
-rather than installing a runtime for you. Harnesses you do not have are left
-alone. Cursor and GitHub Copilot need one manual step, which the installer
-prints. On Windows, `adlc fleet` is POSIX-only and unavailable; every other gate
-runs, and the core suites are covered by a `windows-latest` CI job.
+Requires **macOS or Linux** and **Node.js 18+** — the installer checks Node and
+stops if it is missing rather than installing a runtime for you. Harnesses you
+do not have are left alone. Cursor and GitHub Copilot need one manual step,
+which the installer prints.
+
+**Windows is not supported yet.** A `windows-latest` run of the core gate suites
+passed 6 of 28: the shared bin-resolution path builds `D:\D:\…` from an
+already-absolute Windows path, and most gates die on it. Use WSL until that is
+fixed. (`adlc fleet` is POSIX-only by design regardless.)
 
 Piping a remote script to a shell is a real tradeoff — see
 [ADR-0010](./docs/adr/0010-first-party-curl-installer.md) for why we serve one

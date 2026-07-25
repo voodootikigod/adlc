@@ -17,7 +17,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, chmodSync } from 'node:fs';
+import {
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  chmodSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -279,22 +288,26 @@ test('ADLC_SKIP_HARNESSES=1 installs the toolkit and touches no harness', () => 
   }
 });
 
-test('install.ps1 exists, is labeled beta, and declares the same Node floor', () => {
-  assert.ok(existsSync(INSTALL_PS1), 'apps/docs/public/install.ps1 must exist');
-  const source = read(INSTALL_PS1);
-  assert.match(source, /beta/i, 'the Windows installer must be labeled beta');
-  assert.match(source, /18/, 'the Windows installer must state the Node 18 floor');
-  assert.match(source, /@adlc\/cli/, 'the Windows installer must install the gate toolkit');
+test('no Windows installer is served while the toolkit fails on Windows', () => {
+  // A windows-latest run of the core gate suites passed 6 of 28: the shared
+  // bin-resolution path builds `D:\D:\...` from an already-absolute Windows
+  // path. Serving an installer for a platform the toolkit does not run on is a
+  // claim we cannot back (ADR-0009 Decision 4, ADR-0010 Decision 6).
+  //
+  // This test is the tripwire on re-adding one: restore install.ps1 only
+  // together with a green windows-latest job, and update this test in the same
+  // change so the two can never drift apart.
+  assert.ok(
+    !existsSync(INSTALL_PS1),
+    'apps/docs/public/install.ps1 is served again — re-add it only with a green windows-latest gate',
+  );
 });
 
-test('every surface offering the Windows installer states that adlc fleet is POSIX-only', () => {
-  // `adlc fleet` hard-codes /bin/sh and POSIX sandbox backends. Shipping a
-  // Windows installer without saying so would be a claim we cannot back.
+test('every surface that offers the installer states the platform limits', () => {
   const CANDIDATES = [
     'README.md',
-    'apps/docs/public/install.ps1',
-    'apps/docs/content/docs/getting-started.mdx',
-    'docs/integrations/windows.md',
+    'apps/docs/lib/install-commands.mjs',
+    'apps/docs/lib/agent-guide.mjs',
   ];
 
   let checked = 0;
@@ -302,16 +315,20 @@ test('every surface offering the Windows installer states that adlc fleet is POS
     const abs = path.join(repoRoot, relative);
     if (!existsSync(abs)) continue;
     const text = read(abs);
-    if (!text.includes('install.ps1')) continue;
+    if (!text.includes('install.sh') && !text.includes('UNIVERSAL_INSTALL')) continue;
     checked += 1;
     assert.match(
       text,
-      /fleet[^.\n]*POSIX-only|POSIX-only[^.\n]*fleet/i,
-      `${relative} offers install.ps1 without stating that adlc fleet is POSIX-only`,
+      /Windows/i,
+      `${relative} offers the installer without addressing Windows at all`,
+    );
+    assert.ok(
+      /not supported|does not currently run|isn't supported|6 of 28/i.test(text),
+      `${relative} must state that Windows is unsupported rather than implying it works`,
     );
   }
 
-  assert.ok(checked > 0, 'expected at least one surface to offer install.ps1');
+  assert.ok(checked > 0, 'expected at least one surface to offer the installer');
 });
 
 test('the served installers are content-pinned', () => {
@@ -334,7 +351,15 @@ test('the served installers are content-pinned', () => {
     );
   }
 
-  for (const relative of ['apps/docs/public/install.sh', 'apps/docs/public/install.ps1']) {
+  // Anything served out of public/ that a user pipes to a shell must be pinned.
+  // Derived from the directory rather than hard-coded, so adding a second
+  // installer without pinning it fails here instead of shipping unnoticed.
+  const servedScripts = readdirSync(path.join(repoRoot, 'apps/docs/public'))
+    .filter((entry) => /\.(sh|ps1)$/.test(entry))
+    .map((entry) => `apps/docs/public/${entry}`);
+
+  assert.ok(servedScripts.length > 0, 'expected at least one served installer');
+  for (const relative of servedScripts) {
     assert.ok(relative in pinned, `${relative} is served but not pinned`);
   }
 });
