@@ -55,6 +55,13 @@ export function bounded(text, maxCodeUnits) {
 /**
  * East_Asian_Width W and F, as published in the Unicode character database.
  *
+ * POLICY: ranges follow BLOCK boundaries, not the last assigned code point in
+ * each block. A table pinned to assignments goes stale on every Unicode
+ * release — 15.1 added U+2FFC-2FFF and U+31EF inside blocks this table already
+ * covered, and both undercounted because the ranges stopped at the previous
+ * last-assigned character. Unassigned positions inside a wide block therefore
+ * count as wide, which is the direction that under-fills rather than wraps.
+ *
  * Transcribed rather than hand-picked: successive revisions of a "common blocks"
  * list kept leaving gaps (Kana Supplement, Enclosed Ideographic Supplement,
  * Tangut components, geometric shapes extended), and every gap is an undercount,
@@ -70,14 +77,19 @@ const WIDE = [
   [0x2e80, 0x2e99], // CJK radicals supplement
   [0x2e9b, 0x2ef3],
   [0x2f00, 0x2fd5], // Kangxi radicals
-  [0x2ff0, 0x2ffb], // ideographic description
+  // Whole block, not the assigned range: Unicode 15.1 added U+2FFC-2FFF here,
+  // and a table pinned to the previous last-assigned code point silently
+  // undercounted them. See the block-boundary policy above.
+  [0x2ff0, 0x2fff], // ideographic description characters
   [0x3000, 0x303e], // CJK symbols and punctuation (incl. ideographic space)
   [0x3041, 0x3096], // Hiragana
   [0x3099, 0x30ff], // combining kana marks, Katakana
   [0x3105, 0x312f], // Bopomofo
   [0x3131, 0x318e], // Hangul compatibility Jamo
-  [0x3190, 0x31e3], // Kanbun, Bopomofo extended, CJK strokes
-  [0x31f0, 0x321e], // Katakana phonetic extensions, enclosed CJK
+  // Kanbun, Bopomofo Extended, CJK Strokes, Katakana Phonetic Extensions and
+  // Enclosed CJK as one span. The gap this closes held U+31EF, added in 15.1;
+  // the unassigned positions inside it default to wide, which is the safe side.
+  [0x3190, 0x321e],
   [0x3220, 0x3247],
   [0x3250, 0x4dbf], // enclosed CJK, CJK extension A
   [0x4e00, 0xa48c], // CJK unified ideographs, Yi syllables

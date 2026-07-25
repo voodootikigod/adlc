@@ -83,6 +83,17 @@ test('the non-emoji wide symbols in the BMP are covered', () => {
   assert.equal(displayWidth('〈'), 2, 'U+2329 angle bracket');
 });
 
+test('characters added by later Unicode releases inside covered blocks are wide', () => {
+  // Ranges that stop at the last ASSIGNED code point go stale on every Unicode
+  // release. These four were added in 15.1, inside blocks the table already
+  // covered, and every one of them undercounted. The ranges now follow block
+  // boundaries so the next release does not reopen the same hole.
+  assert.equal(displayWidth('⿼'), 2, 'U+2FFC, added in Unicode 15.1');
+  assert.equal(displayWidth('⿿'), 2, 'U+2FFF, end of the block');
+  assert.equal(displayWidth('㇯'), 2, 'U+31EF, added in Unicode 15.1');
+  assert.equal(displayWidth('㇤'), 2, 'unassigned inside a wide block counts wide');
+});
+
 test('Ambiguous and Neutral characters stay one cell', () => {
   // The bias is toward wide, but not indiscriminately: East_Asian_Width=A and
   // =N must stay narrow or every row shrinks for no reason. A review reported
