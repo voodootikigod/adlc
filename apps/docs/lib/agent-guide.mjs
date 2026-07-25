@@ -87,9 +87,23 @@ prompt yourself. Do not ask the human for API keys — they are not needed.
 ## Before you touch anything
 
 1. Confirm you are in the repository the human means. Run \`git rev-parse --show-toplevel\`.
-2. Check whether ADLC is already installed: \`adlc --version\` and \`ls .adlc\`.
-   If both succeed, this repo is already set up. Say so and stop — do not re-run
-   the installer.
+2. Probe each control **independently** and report which are present. There are
+   four, and they are installed by different steps, so a repo can easily have
+   some and not others:
+
+   | Control | Probe |
+   | --- | --- |
+   | Gate toolkit | \`adlc --version\` |
+   | Repo runtime | \`ls .adlc\` |
+   | Harness integration | see "Detect which harness" below |
+   | CI backstop | \`ls .github/workflows/adlc-rails-guard.yml\` |
+
+   **Do not treat "toolkit + \`.adlc/\` exist" as "already set up" and stop.**
+   That is the common partial state — a CLI-only install, a skills.sh adopter,
+   or a repo initialized before CI was wired — and stopping there reports
+   success while the native plugin and the only unbypassable control are both
+   missing. Skip only the components that are genuinely present, do the rest,
+   and call setup complete only when you have verified all four.
 3. Check the Node version: \`node -v\`. **Node 18+ is required.** If it is older
    or missing, tell the human and stop. Do not install or upgrade Node yourself.
 
@@ -156,17 +170,28 @@ Walk the human through this sequence.
    \`docs/ci/rails-guard.yml\` lives in the ADLC **source repository**. It is
    NOT shipped inside \`@adlc/cli\` (that package publishes only \`bin/\`,
    \`lib/\`, \`README.md\`, and \`LICENSE\`) and \`adlc init\` does not create
-   it, so in a normal downstream repo there is no local copy to copy. Fetch it:
+   it, so a normal downstream repo has no local copy. Fetch it **to this exact
+   filename** — the workflow protects itself by name, and any other name leaves
+   it editable by the PRs it is supposed to gate:
 
    \`\`\`sh
    mkdir -p .github/workflows
    curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \\
-     -o .github/workflows/rails-guard.yml
+     -o .github/workflows/adlc-rails-guard.yml
    \`\`\`
 
-   Then tell the human to mark it a **required check** in branch protection.
-   That last step is theirs — it is a repository setting, not a file, and the
-   gate enforces nothing until it is required.
+   **Then STOP and read the header of the file you just downloaded, and do what
+   it says.** Do not mark the check required yet. That workflow documents a
+   multi-stage bootstrap ceremony — the bootstrap commit must merge first, the
+   base branch needs \`trustedCodeownersAttested\` in \`.adlc/config.json\`
+   (which \`adlc init\` deliberately does not set), and \`.adlc/manifest.jsonl\`
+   must be absent or empty until reviewed post-bootstrap. Enabling it as a
+   required check before that ceremony is complete **will fail every subsequent
+   PR in the repository**.
+
+   Tell the human this is the one step you cannot do for them: it involves
+   branch-protection settings and a trusted-owner reviewed commit. Point them at
+   the workflow's own header, which is the authority on the order.
 3. **Verify.** Run \`adlc preflight\`, \`adlc ticket list\`, and
    \`adlc gate-manifest show\`. Report all three results, including failures.
 4. **Author the first ticket (P0).** \`adlc ticket create --input <path|-> --write\`.

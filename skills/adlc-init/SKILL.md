@@ -37,6 +37,10 @@ the machine:
 curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh
 ```
 
+**macOS and Linux only.** Native Windows is not supported — the toolkit passes
+6 of 28 core gate suites there. Use WSL. The installer refuses to run under
+Git Bash / MSYS / Cygwin rather than installing a broken toolkit.
+
 Confirm with the user before piping a remote script to a shell. If they prefer
 to read it first, fetch it and show it to them.
 
@@ -72,14 +76,25 @@ shipped inside `@adlc/cli` (that package publishes only `bin/`, `lib/`,
 `README.md`, and `LICENSE`) and `adlc init` does not create it, so a normal
 downstream repo has no local copy to `cp`. Fetch it:
 
+Fetch it to **this exact filename** — the workflow protects itself by name, and
+any other name leaves it editable by the PRs it is meant to gate:
+
 ```sh
 mkdir -p .github/workflows
 curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \
-  -o .github/workflows/rails-guard.yml
+  -o .github/workflows/adlc-rails-guard.yml
 ```
 
-Then mark it required in the repository's branch-protection settings. Without
-that, frozen rails are advisory.
+**Then read that file's header and follow it before marking the check
+required.** It documents a multi-stage bootstrap: the bootstrap commit merges
+first, the base branch needs `trustedCodeownersAttested` in `.adlc/config.json`
+(which `adlc init` deliberately does not set), and `.adlc/manifest.jsonl` must
+be absent or empty until reviewed. Marking it required early **fails every
+subsequent PR**.
+
+Only once that ceremony is complete does marking it required in branch
+protection make sense. Without it, frozen rails are advisory; with it enabled
+too early, every PR fails.
 
 Optionally add the maintenance cron from `docs/ci/adlc-maintenance.yml`.
 

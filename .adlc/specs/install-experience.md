@@ -77,9 +77,16 @@ After I1–I3:
    harness-specific invocation syntax (`/adlc:*`, `$adlc-*`, `/adlc-*`). They
    depend only on `adlc <tool>` being on PATH. The per-harness plugin skills
    under `plugins/*/skills/` remain the canonical experience for their harness.
-3. **Drift between `skills/` and `plugins/*/skills/` is a test failure, not a
-   convention.** A committed test cross-checks the shared substance; a change
-   to one that is not reflected in the other fails `npm test`.
+3. **Drift between `skills/` and `plugins/*/skills/` is caught at the level the
+   test actually checks — and no further.** The committed test verifies two
+   things: that every canonical gate the Claude Code router routes to is also
+   routed by the neutral router, and that every `adlc <tool>` invocation in the
+   catalog names a real registry tool with its required flags. It does **not**
+   compare semantics — changed ordering, safety caveats, or exit-code prose can
+   drift without failing, and `adlc-init`/`adlc-prosecute` have no native
+   counterpart to diff against. Closing that gap needs shared structured routing
+   data, which is out of scope here; this decision records the limit rather than
+   letting "cannot silently drift" overstate it.
 4. **The served installer is a supply-chain trust root and is treated as one.**
    `apps/docs/public/install.sh` and `install.ps1` are frozen rails. A test
    pins their content by checksum so a change to either is a deliberate,

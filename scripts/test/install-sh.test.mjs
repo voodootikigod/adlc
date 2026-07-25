@@ -56,7 +56,9 @@ const HARNESSES = [
  * PATH is replaced, not prepended — a real `codex` leaking in from the
  * developer's machine would make the detection assertions meaningless.
  */
-function sandbox({ bins = [], nodeVersion = 'v22.0.0', failing = [] } = {}) {
+// Default stub Node clears every floor in play, including @adlc/pi's 22.19 —
+// v22.0.0 silently turned the pi cases into skips.
+function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [] } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'adlc-install-'));
   const binDir = path.join(root, 'bin');
   const home = path.join(root, 'home');
@@ -280,19 +282,73 @@ test('install.sh does not run project-scoped installers from the caller\'s direc
   }
 });
 
-test('install.sh skips pi on a Node below its 22.19 floor', () => {
-  // @adlc/pi needs a HIGHER Node than the toolkit (22.19 vs 18). Installing it
-  // on Node 18 would "succeed" and then fail at runtime, which is worse than
-  // not installing it.
-  const box = sandbox({ bins: ['node', 'npm', 'pi'], nodeVersion: 'v18.20.4' });
+test('install.sh honours pi\'s 22.19 floor at the MINOR version, not just the major', () => {
+  // @adlc/pi needs a higher Node than the toolkit (22.19 vs 18). Comparing only
+  // the major accepts 22.0–22.18, which install a package outside its engine
+  // contract that then fails at load time. The boundary cases are the test:
+  // 22.18.x must be refused and 22.19.0 must be accepted.
+  const CASES = [
+    { version: 'v18.20.4', installs: false },
+    { version: 'v22.0.0', installs: false },
+    { version: 'v22.18.9', installs: false },
+    { version: 'v22.19.0', installs: true },
+    { version: 'v24.1.0', installs: true },
+  ];
+
+  for (const { version, installs } of CASES) {
+    const box = sandbox({ bins: ['node', 'npm', 'pi'], nodeVersion: version });
+    try {
+      const result = runInstaller(box);
+      assert.equal(result.status, 0, `${version}: a pi skip must not fail the whole install`);
+      assert.equal(
+        box.commands().includes('pi install'),
+        installs,
+        `${version}: expected pi install to be ${installs ? 'attempted' : 'skipped'}`,
+      );
+      if (!installs) {
+        assert.match(result.stdout, /requires Node >= 22\.19/, `${version}: the reason must be stated`);
+      }
+    } finally {
+      box.cleanup();
+    }
+  }
+});
+
+test('install.sh prints manual steps only for the harnesses that need them', () => {
+  // MANUAL was used as a boolean, so one manual harness printed instructions for
+  // all four — handing the user commands for software they do not have.
+  const box = sandbox({ bins: ['node', 'npm'] });
   try {
+    mkdirSync(path.join(box.home, '.cursor'), { recursive: true }); // Cursor only
     const result = runInstaller(box);
-    assert.equal(result.status, 0, 'a too-old Node for pi must not fail the whole install');
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Cursor:/, 'the harness that needs a step must be named');
+    assert.ok(!/OpenCode:/.test(result.stdout), 'absent OpenCode must not get instructions');
+    assert.ok(!/^\s+pi:/m.test(result.stdout), 'absent pi must not get instructions');
     assert.ok(
-      !box.commands().includes('pi install'),
-      'pi must not be installed on a Node below its floor',
+      !/Copilot:/.test(result.stdout),
+      'Copilot installs from its marketplace — it must not also appear as a manual fallback',
     );
-    assert.match(result.stdout, /requires Node >= 22\.19/, 'the reason must be stated');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh refuses to run on native Windows but allows WSL', () => {
+  // Git Bash / MSYS / Cygwin give a POSIX shell on a platform where the toolkit
+  // passes 6 of 28 suites, so the script would install a broken toolkit and
+  // report success. WSL reports "Linux" and is a supported path.
+  const box = sandbox({ bins: ['node', 'npm'] });
+  try {
+    const unameShim = path.join(box.root, 'bin', 'uname');
+    writeFileSync(unameShim, '#!/bin/sh\nprintf \'MINGW64_NT-10.0\\n\'\n');
+    chmodSync(unameShim, 0o755);
+
+    const result = runInstaller(box);
+    assert.notEqual(result.status, 0, 'native Windows must fail closed');
+    assert.match(result.stderr, /native Windows is not supported/);
+    assert.match(result.stderr, /WSL/, 'the refusal must point somewhere useful');
+    assert.equal(box.commands(), '', 'nothing may be installed on an unsupported platform');
   } finally {
     box.cleanup();
   }

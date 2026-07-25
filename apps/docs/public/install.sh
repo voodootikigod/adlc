@@ -58,6 +58,22 @@ banner() {
 # We explain and stop rather than fetching and running a Node installer:
 # silently installing a language runtime is not something an install script
 # should decide on a user's behalf.
+# Native Windows (Git Bash / MSYS / Cygwin) has a POSIX shell, so this script
+# WOULD run there and report success — while installing a toolkit that passes
+# 6 of 28 core gate suites on that platform. WSL reports "Linux" from uname and
+# is a supported path, so it is deliberately not caught here.
+require_supported_platform() {
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            err "native Windows is not supported yet."
+            err "The toolkit passes only 6 of 28 core gate suites on Windows"
+            err "(see ${SITE} and github.com/voodootikigod/adlc/issues/352)."
+            err "Use WSL: install a Linux distro, then re-run this from inside it."
+            exit 1
+            ;;
+    esac
+}
+
 require_node() {
     if ! have node; then
         err "Node.js ${MIN_NODE_MAJOR}+ is required and was not found on PATH."
@@ -72,6 +88,9 @@ require_node() {
 
     node_version=$(node -v 2>/dev/null || echo "")
     node_major=$(printf '%s' "$node_version" | sed -n 's/^v\([0-9][0-9]*\).*/\1/p')
+    # Minor matters: @adlc/pi's floor is 22.19, not 22.0.
+    node_minor=$(printf '%s' "$node_version" | sed -n 's/^v[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/p')
+    [ -n "$node_minor" ] || node_minor=0
     if [ -z "$node_major" ]; then
         err "could not determine the Node.js version from '${node_version}'."
         err "Node.js ${MIN_NODE_MAJOR}+ is required."
@@ -92,8 +111,12 @@ install_toolkit() {
         ok "gate toolkit installed — 'adlc --version'"
     else
         err "npm install -g ${CLI_PACKAGE}@${CLI_TAG} failed."
-        err "If this is a permissions error, either fix your npm prefix"
-        err "(npm config set prefix ~/.local) or re-run with sudo."
+        err "If this is a permissions (EACCES) error, point npm at a directory"
+        err "you own — do NOT re-run this with sudo:"
+        err "    npm config set prefix ~/.local"
+        err "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+        err "Re-running a piped remote script as root escalates every byte this"
+        err "site serves to root. A Node version manager (fnm, nvm) works too."
         exit 1
     fi
 }
@@ -104,6 +127,15 @@ install_toolkit() {
 record_installed() { INSTALLED="${INSTALLED}${INSTALLED:+, }$1"; }
 record_manual()    { MANUAL="${MANUAL}${MANUAL:+, }$1"; }
 record_failed()    { FAILED="${FAILED}${FAILED:+, }$1"; }
+
+# Did THIS harness need a manual step? Used so the summary prints instructions
+# only for harnesses actually present.
+manual_has() {
+    case ", ${MANUAL}," in
+        *", $1,"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 try() {
     try_name=$1
@@ -160,7 +192,7 @@ install_opencode() {
 install_pi() {
     have pi || return 0
     log "pi detected"
-    if [ "$node_major" -lt 22 ]; then
+    if [ "$node_major" -lt 22 ] || { [ "$node_major" -eq 22 ] && [ "$node_minor" -lt 19 ]; }; then
         warn "pi: @adlc/pi requires Node >= 22.19 (found ${node_version}) — skipped"
         record_manual "pi"
         return 0
@@ -244,12 +276,15 @@ summary() {
     if [ -n "$FAILED" ]; then
         warn "failed for: ${FAILED} — see ${SITE}/integrations"
     fi
+    # Print ONLY the harnesses that actually need a manual step. Emitting all of
+    # them whenever any one triggers hands the user instructions for software
+    # they do not have, which is the same dishonesty as installing for absent
+    # harnesses — just in prose.
     if [ -n "$MANUAL" ]; then
         warn "manual step needed for: ${MANUAL}"
-        printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
-        printf '      Copilot:  adlc init --harness copilot   (the plugin package is not yet on npm)\n'
-        printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
-        printf '      pi:       needs Node >= 22.19; then "pi install npm:@adlc/pi", or "-l" inside a repo to share with teammates\n'
+        manual_has "Cursor" && printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
+        manual_has "OpenCode" && printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
+        manual_has "pi" && printf '      pi:       needs Node >= 22.19; upgrade Node, then "pi install npm:@adlc/pi"\n'
     fi
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"
@@ -265,6 +300,7 @@ summary() {
 }
 
 banner
+require_supported_platform
 require_node
 install_toolkit
 install_harnesses

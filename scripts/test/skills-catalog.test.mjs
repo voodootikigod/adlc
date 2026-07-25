@@ -143,6 +143,46 @@ test('the neutral router does not drift from the Claude Code phase router', () =
   }
 });
 
+test('every catalog skill teaches commands that actually exist', () => {
+  // The name-level drift check above covers routing coverage, not command
+  // CORRECTNESS: a skill can name every gate and still teach an invocation that
+  // cannot run. That is not hypothetical — a published skill shipped
+  // `adlc prosecute --ticket <id>` while the CLI requires `--input`.
+  //
+  // Every `adlc <tool>` invocation in the catalog is checked against the
+  // dispatcher's real registry, and any tool with required flags is checked for
+  // them. Scoped to what is mechanically verifiable offline; the broader
+  // semantic-drift gap is recorded in the spec rather than claimed as covered.
+  const REQUIRED_FLAGS = new Map([['prosecute', ['--input']]]);
+
+  for (const skill of catalogSkills()) {
+    const text = body(skill.text);
+    // Fenced command lines only — prose mentions a tool without invoking it.
+    const invocations = [...text.matchAll(/^\s*adlc ([a-z][\w-]*)([^\n]*)$/gm)];
+
+    for (const [, tool, rest] of invocations) {
+      // Subcommands of the dispatcher itself (run/accept) and ticket verbs are
+      // not registry tools.
+      if (['run', 'accept', 'init', 'ticket'].includes(tool)) continue;
+      assert.ok(
+        CANONICAL_TOOLS.includes(tool),
+        `skills/${skill.dir}/SKILL.md invokes "adlc ${tool}", which is not a registered tool`,
+      );
+
+      const required = REQUIRED_FLAGS.get(tool);
+      if (!required) continue;
+      // record-cross-model is a subcommand with its own flag contract.
+      if (rest.includes('record-cross-model')) continue;
+      for (const flag of required) {
+        assert.ok(
+          rest.includes(flag),
+          `skills/${skill.dir}/SKILL.md invokes "adlc ${tool}" without required ${flag}`,
+        );
+      }
+    }
+  }
+});
+
 test('the skills smoke resolves its target from argv, and refuses a tree with no catalog', () => {
   // Offline coverage for the smoke script's own argument handling. Without it,
   // an off-by-one in argv silently retargets the smoke at the CWD — it would
