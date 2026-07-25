@@ -196,7 +196,7 @@ test('runFleetPlan RETRIES a tail pane whose spawn failed (null is not cached)',
 });
 
 test('runFleetPlan RETAINS a pane on a transient close failure so it retries — but notifications still fire that beat', async () => {
-  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]) };
+  const state = { tabId: 'w4:t1', tailed: new Map([['t-a', 'w4:p5']]), closing: new Set() };
   const notified = [];
   let fail = true; // the close fails transiently on the first beat, succeeds on the next
   const plan = { degrade: false, observed: true, openTab: null, tailPanes: [], notifications: [{ title: 'x', body: 'y', sound: 'done' }], boardRows: [] };
@@ -207,11 +207,40 @@ test('runFleetPlan RETAINS a pane on a transient close failure so it retries —
     notify: async (...a) => { notified.push(a); },
   };
   await runFleetPlan({ plan, ...deps });
-  assert.equal(state.tailed.get('t-a'), 'w4:p5', 'a transient close failure KEEPS the entry (leaking it would be worse)');
+  assert.equal(state.tailed.has('t-a'), false, 'the pane is retired out of active tracking');
+  assert.equal(state.closing.has('w4:p5'), true, 'a transient close failure KEEPS the pane pending (leaking it would be worse)');
   assert.equal(notified.length, 1, 'the close failure does not abort the beat — notifications still fire');
   fail = false;
   await runFleetPlan({ plan, ...deps }); // next beat retries the close, now succeeds
-  assert.equal(state.tailed.has('t-a'), false, 'the retried close succeeds and the entry is forgotten');
+  assert.equal(state.closing.has('w4:p5'), false, 'the retried close succeeds and the pane is forgotten');
+});
+
+test('runFleetPlan RETRIES a NEW-RUN teardown whose close failed — a run restart never force-forgets a leaked pane (round 8)', async () => {
+  // The prior run left a tail pane; a new run starts while the herdr socket is
+  // briefly busy, so tearing the old pane down fails. It must be retried, and a
+  // NEW pane for the SAME ticket id must still spawn (no id collision).
+  const state = { tabId: 'w4:old', tailed: new Map([['t-a', 'w4:pOld']]), closing: new Set() };
+  let closeFails = true;
+  const spawned = [];
+  const deps = {
+    repoRoot: '/r', state,
+    openTab: async () => 'w4:new',
+    spawn: async (a) => { spawned.push(a); return 'w4:pNew'; },
+    closePane: async (p) => { if (closeFails && p === 'w4:pOld') throw new Error('socket busy'); },
+    notify: async () => {},
+  };
+  const newRun = {
+    degrade: false, observed: true, openTab: { runId: 'r2', title: 'fleet: run-r2' },
+    tailPanes: [{ ticketId: 't-a', state: 'building', logPath: '.adlc/fleet-logs/t-a.log' }], notifications: [], boardRows: [],
+  };
+  await runFleetPlan({ plan: newRun, ...deps });
+  assert.equal(state.closing.has('w4:pOld'), true, 'the old pane whose close failed is NOT force-forgotten — it stays pending');
+  assert.equal(state.tailed.get('t-a'), 'w4:pNew', 'the new run still spawns a fresh pane for the same ticket id (no collision)');
+  assert.equal(spawned.length, 1);
+  // Next beat, still the same run, the socket recovers → the old pane is finally closed.
+  closeFails = false;
+  await runFleetPlan({ plan: { ...newRun, openTab: null }, ...deps });
+  assert.equal(state.closing.has('w4:pOld'), false, 'the retried teardown succeeds and the old pane is forgotten');
 });
 
 test('runFleetPlan ISOLATES a notify failure — the remaining notifications still fire and it is logged', async () => {

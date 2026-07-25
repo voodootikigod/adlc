@@ -112,10 +112,13 @@ export function shouldMarkRunSeen(plan, runState) {
 }
 
 /**
- * Execute a fleet plan through injected effects, keeping per-run mutable `state`
- * (`{ tabId, tailed:Map<ticketId,paneId> }`) so the tab opens once and each
- * ticket gets ONE tail pane. Injected (async): openTab(title)->tabId,
- * spawn(argv)->paneId, closePane(paneId), notify(t,b,s); optional log(msg,err).
+ * Execute a fleet plan through injected effects, keeping per-run mutable `state`:
+ *   - `tabId`  — the current run's tab;
+ *   - `tailed` — Map<ticketId,paneId> of ACTIVE tail panes for the current run;
+ *   - `closing` — Set<paneId> of panes AWAITING close, decoupled from tickets.
+ * The tab opens once and each ticket gets ONE tail pane. Injected (async):
+ * openTab(title)->tabId, spawn(argv)->paneId, closePane(paneId), notify(t,b,s);
+ * optional log(msg,err).
  *
  * Every herdr effect is BEST-EFFORT: a transient IPC failure on one call
  * (open/spawn/close/notify) is logged and swallowed, never rethrown — otherwise
@@ -124,47 +127,52 @@ export function shouldMarkRunSeen(plan, runState) {
  * A single isolated failure loses only that one ephemeral effect (the board row
  * still reflects state); it is surfaced to `log`, not hidden.
  *
- * Pane teardown is driven by the plan's authority over the state:
- *   - degrade (schema no longer understood) → close ALL tracked panes and poll;
- *   - observed (a valid status) → reconcile: close every tracked pane whose
- *     ticket is no longer in-flight (terminal, vanished, or unknown state);
- *   - NOT observed (null / unreadable status) → touch no panes: absence of data
+ * Pane teardown is a two-step "retire then drain": a pane that should close is
+ * moved from `tailed` into `closing` (keyed by pane id, NOT ticket id, so a
+ * failed close from an old run can't block spawning a new pane for the same
+ * ticket id next run), then `closing` is drained — a successful close clears the
+ * pane, a transient failure keeps it for the next beat (never leak a live tail
+ * process). What gets retired is the plan's call:
+ *   - degrade (schema no longer understood) → retire ALL tracked panes and poll;
+ *   - observed (a valid status) → retire every pane whose ticket is no longer
+ *     in-flight (terminal, vanished, or unknown state);
+ *   - NOT observed (null / unreadable status) → retire nothing: absence of data
  *     is not evidence a ticket ended, and wiping panes on a one-beat read blip
  *     would churn the UI and destroy scrollback.
- * A pane is forgotten only after its close SUCCEEDS, so a transient close failure
- * is retried on the next beat rather than leaking the tail process.
  */
 export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, closePane, notify, log }) {
   if (!plan) return;
+  if (!(state.closing instanceof Set)) state.closing = new Set(); // panes awaiting close, decoupled from active tracking
   const safeCall = async (label, fn, ...args) => {
     try { return await fn(...args); } catch (err) { log?.(`adlc-herdr fleet ${label} failed`, err); return null; }
   };
-  // Close best-effort; report success so the caller keeps + retries the entry on
-  // a transient IPC failure (a genuinely-gone pane clears at the next run's reset).
-  const safeClose = async (paneId) => {
-    if (!paneId) return true;
-    try { await closePane(paneId); return true; } catch (err) { log?.('adlc-herdr fleet pane-close failed', err); return false; }
-  };
-  // Reconcile tracked panes down to `keep`: close every tracked ticket NOT in
-  // `keep`, forgetting it only once the close succeeds.
-  const closeExcept = async (keep) => {
+  // Move every ACTIVE pane not in `keep` into the pending-close set.
+  const retire = (keep) => {
     for (const [ticketId, paneId] of [...state.tailed]) {
       if (keep.has(ticketId)) continue;
-      if (await safeClose(paneId)) state.tailed.delete(ticketId);
+      state.tailed.delete(ticketId);
+      if (typeof paneId === 'string' && paneId) state.closing.add(paneId);
+    }
+  };
+  // Drain pending closes: clear a pane once its close SUCCEEDS; keep it for the
+  // next beat on a transient failure, so a busy socket never leaks a tail process.
+  const drainClosing = async () => {
+    for (const paneId of [...state.closing]) {
+      try { await closePane(paneId); state.closing.delete(paneId); }
+      catch (err) { log?.('adlc-herdr fleet pane-close failed', err); /* keep, retry next beat */ }
     }
   };
   if (plan.degrade) {
-    // We can see the run but no longer understand its schema: tear down the panes
-    // we can no longer manage and fall back to polling, so they don't leak for
-    // the rest of the run.
-    await closeExcept(new Set());
+    // We can see the run but no longer understand its schema: retire every pane
+    // and fall back to polling, so none leak for the rest of the run.
+    retire(new Set());
+    await drainClosing();
     return;
   }
   if (plan.openTab) {
-    // A new run: close the PREVIOUS run's tail panes (they belong to the old tab)
-    // and reset, so a restarted run never abandons/leaks panes.
-    await closeExcept(new Set());
-    state.tailed.clear();
+    // A new run: retire the PREVIOUS run's panes (closed via the drain below,
+    // retried on failure — NOT force-forgotten) and reset the active tab.
+    retire(new Set());
     state.tabId = null;
     const tabId = await safeCall('open-tab', openTab, plan.openTab.title);
     if (typeof tabId === 'string' && tabId) state.tabId = tabId;
@@ -178,8 +186,9 @@ export async function runFleetPlan({ plan, repoRoot, state, openTab, spawn, clos
     // beat, not be cached as "already tailed" and deprive the ticket of logs.
     if (typeof paneId === 'string' && paneId) state.tailed.set(pane.ticketId, paneId);
   }
-  // Only a valid observation authorizes tearing panes down (see the doc comment).
-  if (plan.observed) await closeExcept(desired);
+  // Only a valid observation authorizes retiring active panes (see the doc comment).
+  if (plan.observed) retire(desired);
+  await drainClosing();
   for (const n of plan.notifications) await safeCall('notify', notify, n.title, n.body, n.sound);
 }
 

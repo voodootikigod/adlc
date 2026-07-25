@@ -58,7 +58,7 @@ const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
 const fleetState = new Map();
 
 async function bridgeFleet(repoRoot) {
-  const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map() } };
+  const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Set() } };
   fleetState.set(repoRoot, st);
   // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
   // in lib/fleet-bridge.mjs. Here we only supply the real herdr effects, the
