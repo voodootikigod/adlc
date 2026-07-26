@@ -124,3 +124,46 @@ test('acquire rejects options whose lock could not be released, leaving nothing 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a failed owner write leaves no lock behind, and the next writer succeeds', () => {
+  // Acquisition is two filesystem steps and the gap was not atomic: ENOSPC or a
+  // quota on the owner write left `.adlc/tickets.lock` present with NO owner
+  // file, and no lock object was returned for anyone to release — so every later
+  // writer saw EEXIST and timed out. Injected because that gap is only reachable
+  // through a real disk failure.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-partial-'));
+  try {
+    const boom = () => { const error = new Error('no space left on device'); error.code = 'ENOSPC'; throw error; };
+    assert.throws(
+      () => acquireTicketLock(root, { command: 'test', retries: 0, writeOwner: boom }),
+      (error) => error.code === 'LOCK_FAILED' && /no space left/.test(error.message),
+      'the original cause must survive, not be replaced by a cleanup error',
+    );
+    assert.ok(!existsSync(join(root, '.adlc', 'tickets.lock')), 'a half-made lock must be removed');
+
+    // The real proof: the next writer is not blocked by the wreckage.
+    const held = acquireTicketLock(root, { command: 'after' });
+    assert.equal(readTicketLock(root)?.command, 'after');
+    releaseTicketLock(held);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cleanup never removes a lock this attempt did not create', () => {
+  // The `created` flag matters: on EEXIST the directory is somebody else's, and
+  // a blanket cleanup in the catch would delete a live lock out from under them.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-foreign-'));
+  try {
+    const held = acquireTicketLock(root, { command: 'owner' });
+    assert.throws(
+      () => acquireTicketLock(root, { command: 'contender', retries: 0 }),
+      (error) => error.code === 'LOCK_TIMEOUT',
+    );
+    assert.ok(existsSync(held.path), "the incumbent's lock must survive a failed contender");
+    assert.equal(readTicketLock(root)?.command, 'owner', 'and still be owned by the incumbent');
+    releaseTicketLock(held);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

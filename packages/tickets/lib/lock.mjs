@@ -6,7 +6,16 @@ import { conflict, invalid, operational } from './errors.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
-export function acquireTicketLock(root = '.', { retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null } = {}) {
+/**
+ * `writeOwner` is a fault-injection seam, defaulting to writeFileSync. The gap
+ * between mkdir and the owner write is only reachable through a real ENOSPC or
+ * quota, which no portable filesystem trick reproduces — and this package runs
+ * on the Windows leg of the platform matrix, so a chmod-based test would not
+ * work there either. Same pattern as planEditSession's runEditor.
+ */
+export function acquireTicketLock(root = '.', {
+  retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null, writeOwner = writeFileSync,
+} = {}) {
   const path = join(root, LOCK_DIRECTORY);
   // Reject bad options BEFORE creating anything. Release requires a well-formed
   // owner file, so writing one that fails the shared check produced a lock this
@@ -21,12 +30,27 @@ export function acquireTicketLock(root = '.', { retries = 50, delayMs = 20, comm
   }
   mkdirSync(dirname(path), { recursive: true });
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    // Tracks whether THIS attempt created the directory, so cleanup below can
+    // never remove a lock that belongs to somebody else.
+    let created = false;
     try {
-      mkdirSync(path);
+      // Build and serialize the owner BEFORE mkdir: a hostname() or JSON failure
+      // must not leave a directory behind, and there is nothing to undo yet.
       const metadata = { version: 1, pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString(), command, transactionId };
-      writeFileSync(join(path, 'owner.json'), `${JSON.stringify(metadata, null, 2)}\n`, { flag: 'wx' });
+      const serialized = `${JSON.stringify(metadata, null, 2)}\n`;
+      mkdirSync(path);
+      created = true;
+      writeOwner(join(path, 'owner.json'), serialized, { flag: 'wx' });
       return { path, metadata };
     } catch (error) {
+      // Acquisition is two filesystem steps, and the gap between them was not
+      // atomic: ENOSPC or a quota on the owner write left `.adlc/tickets.lock`
+      // present with NO owner file, and no lock object was returned for anyone
+      // to release. Every later writer then saw EEXIST and timed out. Undo only
+      // our own half-made lock, best-effort, without masking the real error.
+      if (created) {
+        try { rmSync(path, { recursive: true, force: true }); } catch { /* best effort — the original error matters more */ }
+      }
       if (error.code !== 'EEXIST') throw operational('LOCK_FAILED', `cannot acquire ticket lock: ${error.message}`);
       if (attempt < retries) sleep(delayMs);
     }
