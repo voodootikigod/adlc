@@ -34,9 +34,17 @@ export function acquireTicketLock(root = '.', { retries = 50, delayMs = 20, comm
  * than its implementation moves the failure past the compiler, so the
  * implementation moves to meet it: an unrecognized shape reads as no lock.
  */
-export function readTicketLock(root = '.') {
+/**
+ * The ONE parser/validator for owner.json, shared by every reader.
+ *
+ * Two independent parses of the same attacker-controlled file is how the
+ * asymmetry arose: the read path was hardened and the release path was not.
+ * Returns null for anything unreadable or unrecognized — never throws, because
+ * one caller runs inside `finally` blocks where a throw masks the real error.
+ */
+function readLockMetadata(path) {
   let parsed;
-  try { parsed = JSON.parse(readFileSync(join(root, LOCK_DIRECTORY, 'owner.json'), 'utf8')); }
+  try { parsed = JSON.parse(readFileSync(path, 'utf8')); }
   catch { return null; }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   if (parsed.version !== 1) return null;
@@ -47,10 +55,29 @@ export function readTicketLock(root = '.') {
   return parsed;
 }
 
+export function readTicketLock(root = '.') {
+  return readLockMetadata(join(root, LOCK_DIRECTORY, 'owner.json'));
+}
+
+/**
+ * Release the lock, but only if we still own it.
+ *
+ * Shares ONE validator with readTicketLock. Hardening the read alone left this
+ * path parsing the same attacker-controlled file and dereferencing the result
+ * unvalidated: `owner.json` becoming the valid JSON `null` after acquisition
+ * made `.pid` throw. Release is called from `finally` blocks all over the
+ * transaction, migration, archive, fleet and sync paths, so that TypeError
+ * would replace the operation's real result or error AND leave the lock
+ * directory behind, timing out every later writer.
+ *
+ * An unreadable or unrecognized owner file therefore means "not demonstrably
+ * ours", and the directory is left alone — the same fail-closed answer
+ * readTicketLock gives.
+ */
 export function releaseTicketLock(lock) {
   if (!lock?.path) return;
-  let owner;
-  try { owner = JSON.parse(readFileSync(join(lock.path, 'owner.json'), 'utf8')); } catch { return; }
-  if (owner.pid !== lock.metadata.pid || owner.startedAt !== lock.metadata.startedAt) return;
+  const owner = readLockMetadata(join(lock.path, 'owner.json'));
+  if (!owner) return;
+  if (owner.pid !== lock.metadata?.pid || owner.startedAt !== lock.metadata?.startedAt) return;
   rmSync(lock.path, { recursive: true, force: true });
 }

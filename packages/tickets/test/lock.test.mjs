@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireTicketLock, readTicketLock, releaseTicketLock } from '../index.mjs';
@@ -57,6 +57,41 @@ test('readTicketLock validates the shape it is declared to return', () => {
     // A real transaction id is a string, and that must still be accepted.
     writeFileSync(ownerPath, JSON.stringify({ ...valid, transactionId: 'tx-1' }));
     assert.equal(readTicketLock(root)?.transactionId, 'tx-1');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('releaseTicketLock survives a malformed owner file and leaves the lock alone', () => {
+  // Hardening readTicketLock alone left THIS path parsing the same
+  // attacker-controlled file and dereferencing it unvalidated: `owner.json`
+  // becoming the valid JSON `null` made `.pid` throw. Release runs from
+  // `finally` blocks across the transaction, migration, archive, fleet and sync
+  // paths, so that TypeError would replace the operation's real result AND
+  // strand the lock directory, timing out every later writer.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-release-'));
+  try {
+    for (const body of ['null', '7', '"stale"', '[]', '{}', '{"pid":"x"}', 'not json at all']) {
+      const held = acquireTicketLock(root, { command: 'test' });
+      writeFileSync(join(held.path, 'owner.json'), body);
+      // Must not throw, and must not remove a lock it can no longer prove is ours.
+      assert.doesNotThrow(() => releaseTicketLock(held), `body ${body} must not throw`);
+      assert.ok(existsSync(held.path), `body ${body}: an unverifiable lock must be left in place`);
+      rmSync(held.path, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('releaseTicketLock still removes a lock it does own', () => {
+  // The guard must not become "never release", or every writer strands its lock.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-release-ok-'));
+  try {
+    const held = acquireTicketLock(root, { command: 'test' });
+    assert.ok(existsSync(held.path));
+    releaseTicketLock(held);
+    assert.ok(!existsSync(held.path), 'a validated, matching owner must be released');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
