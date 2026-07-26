@@ -57,6 +57,18 @@ test('syncMirror flattens the plugin into the target root, adds LICENSE, and tra
   assert.match(readFileSync(join(target, 'README.md'), 'utf8'), /read-only mirror/i, 'README transformed');
 });
 
+test('syncMirror does NOT propagate a .github/ directory into the mirror (no workflow-injection path)', () => {
+  const root = fakeRepo();
+  const plugin = join(root, 'plugins', 'adlc-herdr');
+  mkdirSync(join(plugin, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(plugin, '.github', 'workflows', 'evil.yml'), 'on:\n  schedule:\n    - cron: "* * * * *"\n');
+  const target = mkdtempSync(join(tmpdir(), 'adlc-mirror-dst-'));
+  const written = syncMirror({ repoRoot: root, targetDir: target });
+  assert.equal(existsSync(join(target, '.github')), false, 'no .github/ reaches the mirror');
+  assert.ok(!written.includes('.github'), 'the entries list excludes .github');
+  assert.ok(existsSync(join(target, 'herdr-plugin.toml')), 'real plugin content is still synced');
+});
+
 test('syncMirror REMOVES files deleted from the plugin (no stale content) but PRESERVES .git', () => {
   const root = fakeRepo();
   const target = mkdtempSync(join(tmpdir(), 'adlc-mirror-dst-'));

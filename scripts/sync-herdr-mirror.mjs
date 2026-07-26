@@ -90,6 +90,13 @@ function assertSafeTarget(targetDir, repoRoot) {
  */
 export function syncMirror({ repoRoot, targetDir }) {
   const pluginDir = join(repoRoot, PLUGIN_SUBDIR);
+  // Fail CLOSED if the plugin is gone rather than auto-wiping the mirror. In CI
+  // this point is only reached from a successful monorepo checkout, so a missing
+  // plugin dir means it was deliberately removed from main — but emptying a
+  // PUBLISHED marketplace artifact should be a hands-on decision, never an
+  // automatic side effect of a missing dir (a partial checkout or a wrong
+  // --repo-root would otherwise wipe the live plugin). The thrown error reds the
+  // sync workflow, which is the intended signal to retire the mirror on purpose.
   if (!existsSync(pluginDir)) throw new Error(`plugin dir not found: ${pluginDir}`);
   assertSafeTarget(targetDir, repoRoot);
 
@@ -102,6 +109,12 @@ export function syncMirror({ repoRoot, targetDir }) {
   // Copy the plugin tree to the target root (bin/ and lib/ stay siblings, so the
   // plugin's `../lib/...` imports still resolve).
   cpSync(pluginDir, targetDir, { recursive: true });
+  // Never carry a `.github/` into the mirror. A workflow file that ended up under
+  // the plugin dir would otherwise be copied to the mirror root and — once the
+  // deploy key pushes it — RUN in the mirror's own Actions context (e.g. on a
+  // schedule), a lateral-movement path into the mirror repo. The mirror is a
+  // read-only artifact: it must carry none of its own CI. Strip it unconditionally.
+  rmSync(join(targetDir, '.github'), { recursive: true, force: true });
   // Carry the monorepo LICENSE over (the plugin dir has none of its own).
   const license = join(repoRoot, 'LICENSE');
   if (existsSync(license)) cpSync(license, join(targetDir, 'LICENSE'));
