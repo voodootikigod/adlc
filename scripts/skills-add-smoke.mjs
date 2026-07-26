@@ -20,14 +20,36 @@ import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const repoRoot = resolve(process.argv[2] ?? '.');
+const args = process.argv.slice(2);
+// --layout-only validates the catalog and stops before the network call. It
+// exists so the layout can be checked without downloading the skills CLI (fast
+// local feedback), and because it gives this script a SUCCESS path that is
+// reachable offline — without one, the exit-status handling below can only ever
+// be observed on the failure side.
+const layoutOnly = args.includes('--layout-only');
+const repoRoot = resolve(args.find((a) => !a.startsWith('--')) ?? '.');
 const EXPECTED = ['adlc', 'adlc-init', 'adlc-prosecute'];
 
 console.log(`target: ${repoRoot}`);
 
-if (!existsSync(join(repoRoot, 'skills'))) {
+const catalogDir = join(repoRoot, 'skills');
+if (!existsSync(catalogDir)) {
   console.error(`✗ ${repoRoot}/skills does not exist — nothing for the skills CLI to discover`);
   process.exit(1);
+}
+
+// Every expected skill must be present as skills/<name>/SKILL.md — the layout
+// the CLI actually walks. A `skills/` that exists but is empty or misshapen is
+// what a botched move leaves behind, and the CLI would walk past it silently.
+const missingLocally = EXPECTED.filter((name) => !existsSync(join(catalogDir, name, 'SKILL.md')));
+if (missingLocally.length > 0) {
+  console.error(`✗ missing from the catalog: ${missingLocally.map((n) => `skills/${n}/SKILL.md`).join(', ')}`);
+  process.exit(1);
+}
+
+if (layoutOnly) {
+  console.log(`✓ catalog layout OK — ${EXPECTED.join(', ')} (no network check performed)`);
+  process.exit(0);
 }
 
 // A throwaway HOME so the smoke never writes into the operator's real agent

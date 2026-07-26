@@ -65,9 +65,29 @@ test('the smoke refuses a target whose skills/ directory is empty', () => {
     mkdirSync(path.join(dir, 'skills'), { recursive: true });
     const result = runSmoke(dir);
     assert.notEqual(result.status, 0, 'an empty catalog must not pass the smoke');
+    assert.match(result.stderr, /missing from the catalog/, 'it must name what is absent');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('--layout-only passes on this repo without touching the network', () => {
+  // The SUCCESS path, reachable offline. Without an exit-0 case the failure
+  // handling can only ever be observed on the failure side — mutation-gate
+  // proved that by flipping `let failed = false` to `true` and surviving every
+  // test, because they all exited before reaching it.
+  const result = spawnSync(process.execPath, [SMOKE, repoRoot, '--layout-only'], {
+    encoding: 'utf8',
+    cwd: repoRoot,
+    timeout: 30_000,
+  });
+
+  assert.equal(result.status, 0, `layout check failed on this repo:\n${result.stderr}`);
+  assert.match(result.stdout, /catalog layout OK/);
+  assert.ok(
+    !result.stdout.includes('npx'),
+    'the layout check must not invoke the skills CLI',
+  );
 });
 
 test('the smoke names the skills it expects to be installed', () => {

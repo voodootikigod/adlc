@@ -104,6 +104,24 @@ test('every per-harness install line is generated verbatim from integration-fact
   }
 });
 
+test('every per-harness note reaches the guide', () => {
+  // The notes carry the caveats that make an install actually work — Codex's
+  // minimum CLI version and "start a new thread", Cursor's marketplace-over-
+  // scaffold preference, pi's Node floor. Dropping them leaves commands that
+  // look complete and fail in ways the agent cannot diagnose. Asserting only the
+  // install LINES let the whole note block be deleted silently: mutation-gate
+  // caught exactly that (`integration.note ? ['', …] : []` shrunk to `['']`).
+  const guide = buildAgentGuide();
+
+  for (const integration of INTEGRATIONS) {
+    if (!integration.note) continue;
+    assert.ok(
+      guide.includes(integration.note),
+      `${integration.slug}: note missing from the agent guide.\n  ${integration.note}`,
+    );
+  }
+});
+
 test('the guide tells the agent to detect its harness and names every one', () => {
   const guide = buildAgentGuide();
 
