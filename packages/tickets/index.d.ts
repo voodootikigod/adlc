@@ -186,7 +186,15 @@ export function loadTicketSnapshot(options?: Record<string, unknown>): TicketSna
 export function pendingTransactions(root?: string): string[];
 export function resolveStoreOverride(options?: Record<string, unknown>): string | null;
 export function acquireTicketLock(root?: string, options?: Record<string, unknown>): { path: string; metadata: Record<string, unknown> };
-export function releaseTicketLock(lock: unknown): void;
+/** The outcome of a release. NEVER throws: release runs from `finally` blocks,
+ *  where a throw would replace the real result of an operation that may already
+ *  have committed. `released: false` with code LOCK_STRANDED means the lock
+ *  directory is still on disk and a human has to remove it. */
+export type LockReleaseOutcome =
+  | { released: true }
+  | { released: false; reason: 'no-lock' | 'not-ours' }
+  | { released: false; reason: 'unverifiable' | 'remove-failed'; code: 'LOCK_STRANDED'; path: string; cause?: unknown };
+export function releaseTicketLock(lock: unknown, options?: { removeLock?: (path: string, options?: unknown) => void }): LockReleaseOutcome;
 export function applyDirectoryTransaction(store: DirectoryTicketStore, tickets: Ticket[], options?: Record<string, unknown>): TicketSnapshot;
 export function applyLegacyTransaction(store: LegacyTicketStore, tickets: Ticket[], options?: Record<string, unknown>): TicketSnapshot;
 export function recoverDirectoryTransaction(store: LegacyTicketStore | DirectoryTicketStore, transactionId: string, options: { root?: string; direction: 'complete' | 'rollback' }): TicketSnapshot;

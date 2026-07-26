@@ -208,3 +208,46 @@ test('a cleanup that succeeds still reports the original failure, not a stranded
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('release never throws, so it cannot mask a committed transaction', () => {
+  // Release runs from `finally` blocks. An EBUSY on Windows (antivirus, a
+  // transient handle) used to escape raw and replace the operation's outcome —
+  // after a COMMITTED transaction that reports failure for work which durably
+  // applied, and a retry cannot tell whether it landed. The failure is returned
+  // instead: primary result intact, stranded lock still observable.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-release-io-'));
+  try {
+    const held = acquireTicketLock(root, { command: 'test' });
+    const removeBoom = () => { const e = new Error('resource busy'); e.code = 'EBUSY'; throw e; };
+
+    let outcome;
+    assert.doesNotThrow(() => { outcome = releaseTicketLock(held, { removeLock: removeBoom }); });
+    assert.equal(outcome.released, false);
+    assert.equal(outcome.code, 'LOCK_STRANDED');
+    assert.equal(outcome.path, held.path);
+    assert.equal(outcome.cause.code, 'EBUSY', 'the real cause must be carried, not discarded');
+    assert.ok(existsSync(held.path), 'and the lock really is still there');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('release reports which non-release it performed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-outcomes-'));
+  try {
+    assert.deepEqual(releaseTicketLock(null), { released: false, reason: 'no-lock' });
+
+    const held = acquireTicketLock(root, { command: 'test' });
+    assert.deepEqual(releaseTicketLock(held), { released: true }, 'the ordinary path still releases');
+
+    // An owner file we cannot verify is stranded, not silently ignored.
+    const again = acquireTicketLock(root, { command: 'test' });
+    writeFileSync(join(again.path, 'owner.json'), 'null');
+    const outcome = releaseTicketLock(again);
+    assert.equal(outcome.released, false);
+    assert.equal(outcome.code, 'LOCK_STRANDED');
+    rmSync(again.path, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

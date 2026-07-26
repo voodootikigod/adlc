@@ -133,10 +133,25 @@ export function readTicketLock(root = '.') {
  * ours", and the directory is left alone — the same fail-closed answer
  * readTicketLock gives.
  */
-export function releaseTicketLock(lock) {
-  if (!lock?.path) return;
+export function releaseTicketLock(lock, { removeLock = rmSync } = {}) {
+  if (!lock?.path) return { released: false, reason: 'no-lock' };
   const owner = readLockMetadata(join(lock.path, 'owner.json'));
-  if (!owner) return;
-  if (owner.pid !== lock.metadata?.pid || owner.startedAt !== lock.metadata?.startedAt) return;
-  rmSync(lock.path, { recursive: true, force: true });
+  if (!owner) return { released: false, reason: 'unverifiable', code: 'LOCK_STRANDED', path: lock.path };
+  if (owner.pid !== lock.metadata?.pid || owner.startedAt !== lock.metadata?.startedAt) {
+    return { released: false, reason: 'not-ours', path: lock.path };
+  }
+  try {
+    removeLock(lock.path, { recursive: true, force: true });
+  } catch (cause) {
+    // NEVER throw from here. Release runs in `finally` blocks across the
+    // transaction, migration, archive, fleet and sync paths, so throwing
+    // replaces the operation's real outcome — and after a COMMITTED transaction
+    // that is the worst possible answer: the caller reports failure for work
+    // that durably applied, and a retry cannot tell whether it landed.
+    //
+    // Returning the failure keeps the primary result intact while still making
+    // the stranded lock observable, which silence did not.
+    return { released: false, reason: 'remove-failed', code: 'LOCK_STRANDED', path: lock.path, cause };
+  }
+  return { released: true };
 }
