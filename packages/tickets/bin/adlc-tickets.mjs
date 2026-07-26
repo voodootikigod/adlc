@@ -182,7 +182,20 @@ async function main() {
   }
   emit({ ...serializePlan(plan), dryRun: !flags.write }, flags.json);
   if (flags.write) {
-    const applied = service.apply(plan);
+    let applied;
+    try {
+      applied = service.apply(plan);
+    } catch (error) {
+      // Everything after planEditSession returns is outside its protection, and
+      // apply is where a concurrent writer or a held lock actually bites —
+      // STALE_SNAPSHOT, LOCK_TIMEOUT, a transaction failure. The draft survives
+      // in a randomly named temp directory, so an error that does not name it
+      // loses the author's work just as thoroughly as deleting it would.
+      if (editDraftPath && error && typeof error.message === 'string') {
+        error.message = `${error.message} (your edit is preserved at ${editDraftPath})`;
+      }
+      throw error;
+    }
     emit({ applied: true, storeHash: applied.hash, ticketHash: plan.ticketId ? applied.ticketHashes[plan.ticketId] : null }, flags.json);
     // Applied: the edit is in the store, so the draft has served its purpose.
     if (editDraftPath) rmSync(dirname(editDraftPath), { recursive: true, force: true });

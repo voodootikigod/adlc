@@ -97,14 +97,20 @@ export function ticketSlug(id: string): string;
 /** JSON-representable values — the only domain deepClone round-trips faithfully. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 /**
- * Structural clone via JSON. Constrained to JsonValue on purpose: the previous
- * `<T>(value: T): T` promised to preserve any type, so `deepClone(new Date())`
- * inferred Date and a following `.getTime()` compiled cleanly and threw at
- * runtime — the clone is an ISO string. A signature wider than the
- * implementation is worse than none, because it moves the failure past the
- * compiler.
+ * Structural clone via JSON.
+ *
+ * Returns `JsonValue`, NOT the input type. Four consecutive review rounds found
+ * a different way `<T>(value: T): T` was false — Date became an ISO string, NaN
+ * and the infinities became null, sparse arrays and undefined elements became
+ * null, and non-canonical index keys like "01" or 4294967295 were dropped
+ * silently. Each round added a guard; each round JSON found another gap,
+ * because the promise itself is the defect: JSON round-tripping does not
+ * preserve types, and no amount of input validation makes it.
+ *
+ * Callers that know their shape can assert it. That is one visible cast at the
+ * call site instead of a compiler-blessed lie at every one.
  */
-export function deepClone<T extends JsonValue>(value: T): T;
+export function deepClone(value: JsonValue): JsonValue;
 export function deepFreeze<T>(value: T): Readonly<T>;
 
 // ---- store constructors ----

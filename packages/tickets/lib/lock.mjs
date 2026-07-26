@@ -23,8 +23,28 @@ export function acquireTicketLock(root = '.', { retries = 50, delayMs = 20, comm
   throw conflict('LOCK_TIMEOUT', `could not acquire ${LOCK_DIRECTORY}; another ticket writer is running`, readTicketLock(root));
 }
 
+/**
+ * The lock owner's metadata, or null when unlocked, unreadable, or malformed.
+ *
+ * VALIDATED, because index.d.ts publishes the shape: it declares numeric
+ * pid/version and the rest of TicketLockMetadata, while this only JSON-parsed
+ * whatever was on disk. `owner.json` containing the valid JSON string "stale"
+ * therefore satisfied the compiler and crashed the caller on `.pid` — and the
+ * file is attacker-controlled in an untrusted workspace. A declaration wider
+ * than its implementation moves the failure past the compiler, so the
+ * implementation moves to meet it: an unrecognized shape reads as no lock.
+ */
 export function readTicketLock(root = '.') {
-  try { return JSON.parse(readFileSync(join(root, LOCK_DIRECTORY, 'owner.json'), 'utf8')); } catch { return null; }
+  let parsed;
+  try { parsed = JSON.parse(readFileSync(join(root, LOCK_DIRECTORY, 'owner.json'), 'utf8')); }
+  catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.version !== 1) return null;
+  if (!Number.isInteger(parsed.pid)) return null;
+  if (typeof parsed.hostname !== 'string' || typeof parsed.startedAt !== 'string') return null;
+  if (typeof parsed.command !== 'string') return null;
+  if (parsed.transactionId !== null && typeof parsed.transactionId !== 'string') return null;
+  return parsed;
 }
 
 export function releaseTicketLock(lock) {

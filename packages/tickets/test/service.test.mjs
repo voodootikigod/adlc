@@ -307,3 +307,17 @@ test('deepClone refuses arrays carrying non-index properties', () => {
   assert.deepEqual(deepClone([1, 2]), [1, 2], 'a plain array is unaffected');
   assert.deepEqual(deepClone({ list: [1, 2] }), { list: [1, 2] }, 'and so is a nested one');
 });
+
+test('deepClone rejects numeric-looking keys JSON does not treat as indices', () => {
+  // "01" and "4294967295" pass a naive /^\d+$/ index test but are NOT canonical
+  // array indices, so JSON.stringify drops them. Symbol keys are dropped too and
+  // Object.keys cannot even see them.
+  for (const key of ['01', '4294967295', '1e2', ' 1']) {
+    const tagged = Object.assign([1, 2], { [key]: 'metadata' });
+    assert.throws(() => deepClone(tagged), /non-index array key/, `key ${JSON.stringify(key)} must be rejected`);
+  }
+  const symbolTagged = Object.assign([1, 2], { [Symbol('meta')]: 'x' });
+  assert.throws(() => deepClone(symbolTagged), /non-index array key/, 'a symbol key must be rejected');
+  // Canonical indices are of course fine.
+  assert.deepEqual(deepClone(Object.assign([], { 0: 'a', 1: 'b' })), ['a', 'b']);
+});

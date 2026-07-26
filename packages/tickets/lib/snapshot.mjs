@@ -27,9 +27,19 @@ export function deepClone(value) {
     // Object.assign([1, 2], { meta: 'x' }) silently loses `meta` while keeping
     // its declared type — the clone type-checks and the property is gone.
     if (Array.isArray(item)) {
-      const extra = Object.keys(item).filter((name) => !/^\d+$/.test(name));
+      // Reflect.ownKeys, not Object.keys: the latter omits symbol keys, which
+      // JSON also drops. And a CANONICAL index is an unsigned integer string
+      // with no leading zeros below 2^32-1 — "01" and "4294967295" look numeric,
+      // pass a /^\d+$/ test, and are silently dropped by JSON.stringify.
+      // ENUMERABLE own keys only: `length` is an own property of every array and
+      // is non-enumerable, so JSON never serializes it and flagging it would
+      // reject every array in existence.
+      const extra = Reflect.ownKeys(item)
+        .filter((key) => Object.getOwnPropertyDescriptor(item, key)?.enumerable)
+        .filter((key) => typeof key === 'symbol'
+          || !(/^(0|[1-9][0-9]*)$/.test(key) && Number(key) < 4294967295));
       if (extra.length) {
-        throw new TypeError(`deepClone cannot round-trip non-index array propert(y|ies): ${extra.join(', ')}`);
+        throw new TypeError(`deepClone cannot round-trip non-index array key(s): ${extra.map(String).join(', ')}`);
       }
     }
     return item;

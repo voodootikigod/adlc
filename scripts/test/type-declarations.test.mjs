@@ -96,7 +96,10 @@ test('declarations do not promise behavior the implementation lacks', { skip: !e
     writeFileSync(fixture, [
       "import { deepClone } from '@adlc/tickets';",
       // JSON-representable input is fine and keeps its type.
-      "export const ok: { a: number } = deepClone({ a: 1 });",
+      // deepClone returns JsonValue, NOT the input type — four rounds proved the
+      // T -> T promise false in a new way each time, so a caller that knows its
+      // shape asserts it once at the call site rather than everywhere.
+      "export const ok = deepClone({ a: 1 }) as { a: number };",
       // A Date is NOT JSON-representable, so this must be rejected at compile
       // time rather than compiling and failing at runtime.
       "export const bad = deepClone(new Date());",

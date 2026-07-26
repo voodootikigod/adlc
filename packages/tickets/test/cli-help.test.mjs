@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeDirectory, ticket } from './helpers.mjs';
 import { categoryWarning, renderCommandHelp } from '../lib/help.mjs';
@@ -332,4 +332,37 @@ test('update help lists all three sensitive changes, including lifecycle', () =>
   const help = renderCommandHelp('update');
   assert.match(help, /exactly three/, 'the count must track the implementation');
   assert.match(help, /completed/, 'and name the lifecycle transition');
+});
+
+test('an apply failure names the preserved draft, and keeps it', () => {
+  // planEditSession protects editing and planning; apply runs AFTER it returns,
+  // and apply is where a held lock or a concurrent writer actually bites. The
+  // draft survived in a randomly named temp directory, but an error that never
+  // names it loses the author's work as thoroughly as deleting it would.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { title: 'original' })]);
+    // Hold the store lock so apply fails with LOCK_TIMEOUT. mkdir is the same
+    // atomic primitive acquireTicketLock uses, so this is the real contention
+    // path rather than a stubbed throw.
+    mkdirSync(join(root, '.adlc', 'tickets.lock'), { recursive: true });
+
+    const editor = join(root, 'editor.mjs');
+    writeFileSync(editor, '', 'utf8');
+    const result = spawnSync(process.execPath, [BIN, 'edit', 'T1', '--write', '--json'], {
+      encoding: 'utf8',
+      cwd: root,
+      env: { ...process.env, EDITOR: process.execPath, VISUAL: process.execPath },
+    });
+
+    assert.notEqual(result.status, 0, 'apply must fail while the lock is held');
+    // Pin the CODE: $EDITOR here is node run against a .json file, which Node
+    // loads as a JSON module and exits 0 — so planning succeeds and this really
+    // is the APPLY path. Without this assertion an editor that started failing
+    // would satisfy the test through planEditSession's own catch instead.
+    assert.match(result.stderr, /LOCK_TIMEOUT/, `expected an apply failure, got: ${result.stderr}`);
+    const preserved = result.stderr.match(/preserved at (\S+?)\)/)?.[1];
+    assert.ok(preserved, `the error must name the draft: ${result.stderr}`);
+    assert.ok(readFileSync(preserved, 'utf8').length > 0, 'and the draft must still be there');
+    rmSync(dirname(preserved), { recursive: true, force: true });
+  });
 });
