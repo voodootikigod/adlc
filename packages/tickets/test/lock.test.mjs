@@ -96,3 +96,31 @@ test('releaseTicketLock still removes a lock it does own', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('acquire rejects options whose lock could not be released, leaving nothing behind', () => {
+  // Making release strict without validating acquisition produced a lock this
+  // module could create and then refuse to remove: acquireTicketLock(root,
+  // { command: null }) returned a lock whose owner file failed its own release
+  // check, so the directory was stranded and every later writer timed out.
+  // One shared definition of a well-formed owner, asserted before any mkdir.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-opts-'));
+  try {
+    for (const options of [{ command: null }, { command: 7 }, { transactionId: 7 }, { transactionId: {} }]) {
+      assert.throws(
+        () => acquireTicketLock(root, options),
+        (error) => error.code === 'INVALID_LOCK_OPTIONS',
+        `${JSON.stringify(options)} must be refused`,
+      );
+      assert.ok(!existsSync(join(root, '.adlc', 'tickets.lock')), `${JSON.stringify(options)} must leave no lock behind`);
+    }
+
+    // And the valid shapes still acquire and release cleanly.
+    for (const options of [{ command: 'ok' }, { command: 'ok', transactionId: null }, { command: 'ok', transactionId: 'tx-1' }]) {
+      const held = acquireTicketLock(root, options);
+      releaseTicketLock(held);
+      assert.ok(!existsSync(held.path), `${JSON.stringify(options)} must round-trip acquire -> release`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
