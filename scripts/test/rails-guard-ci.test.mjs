@@ -458,6 +458,43 @@ test('#314: a TRACKED non-empty manifest on the first-bootstrap path is still re
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('#314: an ancestor .adlc committed as a SYMLINK is denied (ancestor type-confusion)', () => {
+  // git ls-tree does NOT descend a symlinked `.adlc`, so the leaf lookup would report the
+  // manifest absent while filesystem consumers follow `.adlc` → `state/manifest.jsonl` and
+  // read forged evidence. The `.adlc`-is-a-tree ancestor guard denies it.
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-314anc-'));
+  const run = () => {
+    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+    catch (e) { return e.status ?? 1; }
+  };
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+    writeFileSync(join(dir, 'README.md'), 'base\n'); // no .adlc at base → first bootstrap
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    mkdirSync(join(dir, 'state'), { recursive: true });
+    writeFileSync(join(dir, 'state', 'manifest.jsonl'), '{"forged":"evidence"}\n');
+    symlinkSync('state', join(dir, '.adlc')); // .adlc itself is a symlink
+    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'symlink .adlc']);
+    assert.equal(run(), 2, 'a symlinked .adlc must be denied, not read as absent');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#314: a legitimate append-only manifest update larger than 1 MiB is accepted (maxBuffer)', () => {
+  // Switching the HEAD read to `git cat-file` via spawnSync inherited Node's 1 MiB default
+  // maxBuffer; the append-only ledger grows past that, so a valid large manifest must not
+  // ENOBUFS-fail the gate. readFileSync had no such limit.
+  const big = 'x'.repeat(1_100_000); // > 1 MiB
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
+    seedFileContents: { '.adlc/manifest.jsonl': `${big}\n` },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), `${big}\nappended\n`),
+  });
+  assert.equal(code, 0);
+});
+
 test('#314: a PR that adds a TRACKED but EMPTY manifest is allowed (empty bootstrap) → exit 0', () => {
   // The deny is for CREATING evidence, i.e. a NON-EMPTY manifest. An empty manifest is
   // the sanctioned bootstrap shape ("create it empty during bootstrap"), so a tracked,
