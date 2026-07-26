@@ -174,8 +174,28 @@ const EMOJI_PRESENTATION = /^\p{Emoji_Presentation}/u;
  */
 const ZERO_CATEGORY = /^[\p{Mn}\p{Me}\p{Cf}]$/u;
 
-/** Cells one grapheme cluster occupies: 0, 1, or 2. */
-export function clusterWidth(cluster) {
+/**
+ * Whether this terminal renders East_Asian_Width=AMBIGUOUS characters as two
+ * cells. There is no way to detect it — it is a terminal/font configuration,
+ * not a property of the text — so it is declared, not guessed.
+ *
+ * ADLC_HERDR_AMBIGUOUS_WIDTH=wide turns it on. Default narrow, because that is
+ * correct for the large majority and counting ambiguous characters as wide
+ * would shrink every row on every board for everyone else.
+ */
+export const ambiguousWideFromEnv = (env = {}) => env.ADLC_HERDR_AMBIGUOUS_WIDTH === 'wide';
+
+/**
+ * Cells one grapheme cluster occupies: 0, 1, or 2.
+ *
+ * In ambiguous-wide mode anything non-ASCII that is not already classified
+ * counts as two. That is deliberately conservative rather than table-driven:
+ * enabling the mode is a statement that wrapping is worse than under-filling,
+ * and a full East_Asian_Width=A table is the same hand-maintained data that
+ * kept going stale. Over-counting costs a few columns; under-counting corrupts
+ * the frame on every refresh.
+ */
+export function clusterWidth(cluster, { ambiguousWide = false } = {}) {
   if (!cluster) return 0;
   // VS16 forces emoji presentation, which is double-width even when the base
   // character (e.g. U+2764) is not emoji-presentation on its own.
@@ -194,15 +214,16 @@ export function clusterWidth(cluster) {
   for (const character of cluster) {
     const code = character.codePointAt(0);
     if (ZERO_CATEGORY.test(character) || inRanges(ZERO, code)) continue;
-    total += inRanges(WIDE, code) ? 2 : 1;
+    if (inRanges(WIDE, code)) { total += 2; continue; }
+    total += ambiguousWide && code > 0x7f ? 2 : 1;
   }
   return total;
 }
 
 /** Terminal cells the whole string occupies. */
-export function displayWidth(text) {
+export function displayWidth(text, options) {
   let total = 0;
-  for (const cluster of clusters(text)) total += clusterWidth(cluster);
+  for (const cluster of clusters(text)) total += clusterWidth(cluster, options);
   return total;
 }
 
@@ -218,13 +239,13 @@ const codeUnitCeiling = (max) => max * 16 + 64;
 
 /** Longest prefix fitting `max` cells, cut on cluster boundaries. Stops at the
  *  budget, so the work is proportional to `max` rather than to the input. */
-export function truncateToWidth(text, max) {
+export function truncateToWidth(text, max, options) {
   if (!(max > 0)) return '';
   const ceiling = codeUnitCeiling(max);
   let out = '';
   let used = 0;
   for (const cluster of clusters(text)) {
-    const width = clusterWidth(cluster);
+    const width = clusterWidth(cluster, options);
     if (used + width > max) break;
     if (out.length + cluster.length > ceiling) break;
     out += cluster;
@@ -240,7 +261,7 @@ export function truncateToWidth(text, max) {
  * FIRST. `max` cells need at most `max` clusters; the slack covers even absurd
  * ZWJ sequences, and the cut lands arbitrarily far from the tail that survives.
  */
-export function tailToWidth(text, max) {
+export function tailToWidth(text, max, options) {
   if (!(max > 0)) return '';
   const value = String(text ?? '');
   const window = value.length <= max * 32 + 64
@@ -251,7 +272,7 @@ export function tailToWidth(text, max) {
   let out = '';
   let used = 0;
   for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const width = clusterWidth(parts[index]);
+    const width = clusterWidth(parts[index], options);
     if (used + width > max) break;
     if (out.length + parts[index].length > ceiling) break;
     out = parts[index] + out;

@@ -4,7 +4,25 @@
 // its own SGR styling (never clears or cursor movement — the glue owns the
 // screen).
 import { sanitizeToken } from './sanitize.mjs';
-import { bounded, displayWidth, tailToWidth, truncateToWidth } from './display-width.mjs';
+import {
+  ambiguousWideFromEnv,
+  bounded,
+  displayWidth as rawDisplayWidth,
+  tailToWidth as rawTailToWidth,
+  truncateToWidth as rawTruncateToWidth,
+} from './display-width.mjs';
+
+/**
+ * Read once: whether ambiguous-width characters occupy two cells is a terminal
+ * configuration, fixed for the life of the process. Every measurement in this
+ * module goes through these wrappers so the mode cannot be applied to some
+ * budgets and forgotten on others — which is precisely how the separator got
+ * fixed while the header, rows and footer kept overflowing.
+ */
+const WIDTH_OPTS = { ambiguousWide: ambiguousWideFromEnv(process.env) };
+const displayWidth = (text) => rawDisplayWidth(text, WIDTH_OPTS);
+const truncateToWidth = (text, max) => rawTruncateToWidth(text, max, WIDTH_OPTS);
+const tailToWidth = (text, max) => rawTailToWidth(text, max, WIDTH_OPTS);
 
 /**
  * ASCII ONLY for renderer-owned text — separators, ellipses, key hints.
@@ -21,8 +39,10 @@ import { bounded, displayWidth, tailToWidth, truncateToWidth } from './display-w
  * overflow on an ambiguous-wide terminal. Width there is a terminal
  * CONFIGURATION, not a property of the text, so no measurement is correct for
  * both setups — this trade keeps the chrome exact everywhere and the data
- * exact for the common configuration.
+ * exact for the common configuration — and exact for BOTH once
+ * ADLC_HERDR_AMBIGUOUS_WIDTH=wide is declared, which is the only way to know.
  */
+
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';

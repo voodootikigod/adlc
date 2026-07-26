@@ -5,7 +5,7 @@
 // alternate screen. Every row shared that assumption, not just the header.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bounded, displayWidth, graphemes, tailToWidth, truncateToWidth } from '../lib/display-width.mjs';
+import { ambiguousWideFromEnv, bounded, displayWidth, graphemes, tailToWidth, truncateToWidth } from '../lib/display-width.mjs';
 import { boardFooter } from '../lib/board-render.mjs';
 
 test('ASCII width is its length', () => {
@@ -284,4 +284,38 @@ test('the block-boundary policy is applied to EVERY range, not just some', () =>
   assert.equal(displayWidth('\u{16FFF}'), 2, 'end of the ideographic symbols block');
   assert.equal(displayWidth('\u{187F8}'), 2, 'Tangut past the old endpoint');
   assert.equal(displayWidth('\u{187FF}'), 2, 'end of the Tangut block');
+});
+
+test('ambiguous-width mode is declared, never guessed', () => {
+  // Whether U+2460 occupies one cell or two is a terminal/font CONFIGURATION,
+  // not a property of the text, so there is nothing to detect. Default narrow,
+  // because that is right for the large majority and widening every ambiguous
+  // character would shrink every row on every board for everyone else.
+  assert.equal(ambiguousWideFromEnv({}), false);
+  assert.equal(ambiguousWideFromEnv({ ADLC_HERDR_AMBIGUOUS_WIDTH: 'narrow' }), false);
+  assert.equal(ambiguousWideFromEnv({ ADLC_HERDR_AMBIGUOUS_WIDTH: 'wide' }), true);
+  assert.equal(ambiguousWideFromEnv(), false, 'a missing env is not an error');
+});
+
+test('in ambiguous-wide mode, ambiguous data counts two cells', () => {
+  const WIDE_MODE = { ambiguousWide: true };
+  assert.equal(displayWidth('①'), 1, 'default stays narrow');
+  assert.equal(displayWidth('①', WIDE_MODE), 2);
+  assert.equal(displayWidth('°', WIDE_MODE), 2);
+  // ASCII is never ambiguous, so rows of plain text keep their full length.
+  assert.equal(displayWidth('ticket t-b | P4', WIDE_MODE), 15);
+  // Already-classified characters keep their classification.
+  assert.equal(displayWidth('日', WIDE_MODE), 2, 'wide stays wide');
+  assert.equal(displayWidth('é', WIDE_MODE), 2, 'base is ambiguous, mark still free');
+});
+
+test('ambiguous-wide truncation halves what fits, and cannot overflow', () => {
+  // The failure this closes: forty circled digits measured 40 cells and
+  // occupied 80 on an ambiguous-wide terminal, wrapping the row.
+  const WIDE_MODE = { ambiguousWide: true };
+  const data = '①'.repeat(40);
+  const kept = truncateToWidth(data, 40, WIDE_MODE);
+  assert.equal(displayWidth(kept, WIDE_MODE), 40, 'exactly fills the pane in cells');
+  assert.equal([...kept].length, 20, 'which is twenty glyphs, not forty');
+  assert.equal(displayWidth(tailToWidth(data, 40, WIDE_MODE), WIDE_MODE), 40);
 });
