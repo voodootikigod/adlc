@@ -144,8 +144,17 @@ function headerText(repoRoot, ticketLabel, phase, width) {
     : '';
   const tail = shown ? ` | ${shown}` : '';
   const room = width - 'ticket '.length - displayWidth(tail);
-  if (room < MIN_ID) return suffix; // pane too narrow for anything legible; cut() clamps
-  return `ticket ${ELLIPSIS}${tailToWidth(label, room - ELLIPSIS_W)}${tail}`;
+  if (room >= MIN_ID) return `ticket ${ELLIPSIS}${tailToWidth(label, room - ELLIPSIS_W)}${tail}`;
+
+  // Drop the LABEL before dropping a field. Below about thirteen cells the word
+  // "ticket " costs seven of them — more than the id it introduces — and
+  // returning the labelled suffix here handed cut() a string it rendered as
+  // "ticket " alone: the whole pane spent on a noun, with the id and phase it
+  // was meant to introduce both gone.
+  const bare = phaseText ? `${label} | ${phaseText}` : label;
+  if (displayWidth(bare) <= width) return bare;
+  if (displayWidth(label) <= width) return label;
+  return `${ELLIPSIS}${tailToWidth(label, width - ELLIPSIS_W)}`;
 }
 
 /**

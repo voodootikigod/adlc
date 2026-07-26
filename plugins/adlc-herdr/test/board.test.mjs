@@ -707,3 +707,35 @@ test('the elision marker is ASCII too, and still marks elision', () => {
   assert.doesNotMatch(header, /…/, 'but not via the ambiguous-width ellipsis');
   assert.ok(header.includes('t-b'), 'and the ticket still survives');
 });
+
+test('below the layout floor, the ticket beats the label at every width', () => {
+  // The sub-20 test asserted only that rows fit and fill the pane — both true
+  // of a header reading "ticket " with no ticket in it. Widths 7-12 did exactly
+  // that: the static label ate the pane while the id and phase it introduces
+  // were dropped. Field survival is the property; fitting is the constraint.
+  const id = 't-b';
+  for (let width = 4; width <= 19; width += 1) {
+    const state = baseState();
+    state.width = width;
+    state.active = { state: 'active', id };
+    state.phase = 'P4';
+    const header = headerOf(state);
+    const context = `width ${width}: ${JSON.stringify(header)}`;
+    assert.ok(displayWidth(header) <= width, `overflow — ${context}`);
+    assert.ok(header.includes(id) || header.includes('<'), `the id must survive or be marked elided — ${context}`);
+    assert.doesNotMatch(header, /^ticket ?$/, `the label alone is not a header — ${context}`);
+  }
+});
+
+test('the phase joins the id as soon as both fit, label or no label', () => {
+  const state = baseState();
+  state.active = { state: 'active', id: 't-b' };
+  state.phase = 'P4';
+  // 't-b | P4' is eight cells, so from eight columns up both fields show.
+  for (let width = 8; width <= 19; width += 1) {
+    state.width = width;
+    const header = headerOf(state);
+    assert.match(header, /t-b/, `width ${width}: ${header}`);
+    assert.match(header, /P4/, `width ${width}: ${header}`);
+  }
+});
