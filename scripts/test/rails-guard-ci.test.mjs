@@ -481,6 +481,21 @@ test('#314: an ancestor .adlc committed as a SYMLINK is denied (ancestor type-co
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('#314: append-only is byte-exact — a base-region rewrite that COLLIDES under utf8 is denied', () => {
+  // Base manifest carries an invalid UTF-8 byte (0x80); HEAD flips it to 0x81. Both decode to
+  // U+FFFD, so a decoded-string prefix check would see identical strings and pass. The
+  // byte-for-byte comparison denies the base-region rewrite.
+  const baseBytes = Buffer.concat([Buffer.from('{"seq":1,"pad":"'), Buffer.from([0x80]), Buffer.from('"}\n')]);
+  const headBytes = Buffer.concat([Buffer.from('{"seq":1,"pad":"'), Buffer.from([0x81]), Buffer.from('"}\n')]);
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
+    seedFileContents: { '.adlc/manifest.jsonl': baseBytes },
+    mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), headBytes),
+  });
+  assert.equal(code, 2);
+});
+
 test('#314: a legitimate append-only manifest update larger than 1 MiB is accepted (maxBuffer)', () => {
   // Switching the HEAD read to `git cat-file` via spawnSync inherited Node's 1 MiB default
   // maxBuffer; the append-only ledger grows past that, so a valid large manifest must not

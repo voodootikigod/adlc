@@ -46,11 +46,14 @@ function deny(msg) {
   process.exit(2);
 }
 
-function git(args, label) {
+function git(args, label, { raw = false } = {}) {
   // maxBuffer well above Node's 1 MiB default: the append-only manifest is an ever-growing
   // ledger and `git cat-file`/`git show`/`git diff` output can exceed 1 MiB legitimately.
   // The default would ENOBUFS a large-but-valid manifest and fail the gate (#314 round 6).
-  const result = spawnSync('git', args, { encoding: 'utf8', timeout: 60000, maxBuffer: 512 * 1024 * 1024 });
+  // raw:true omits encoding so stdout is a Buffer — the manifest evidence is compared
+  // BYTE-for-byte (utf8 decode is non-injective: distinct invalid byte sequences both become
+  // U+FFFD, so a decoded-string prefix check could miss a raw-byte rewrite — #314 round 7).
+  const result = spawnSync('git', args, { encoding: raw ? 'buffer' : 'utf8', timeout: 60000, maxBuffer: 512 * 1024 * 1024 });
   if (result.error) fail(`${label} failed: ${result.error.message}`);
   if (result.signal) fail(`${label} timed out or was killed by ${result.signal}`);
   return result;
@@ -182,28 +185,41 @@ function manifestLines(text, label) {
 // HEAD and could bind content to a different tree than the mode check saw (a TOCTOU). The blob
 // hash is immutable, so metadata and content provably describe the same object (#314 round 5).
 function committedManifestAtHead() {
-  // Ancestor guard (#314 round 6): `git ls-tree HEAD -- .adlc/manifest.jsonl` does NOT descend
+  // Pin HEAD to ONE immutable commit sha and resolve every lookup against it (#314 round 7).
+  // Otherwise the ancestor and leaf checks each re-resolve the mutable `HEAD`; a concurrent
+  // ref change between them (tree A with a normal `.adlc`, tree B with a symlinked `.adlc`)
+  // would pass the ancestor guard on A while the leaf reads absent on B.
+  const rev = git(['rev-parse', 'HEAD'], 'git rev-parse HEAD');
+  if (rev.status !== 0) fail('git rev-parse HEAD failed (operational error) — failing closed.');
+  const head = rev.stdout.trim();
+  // Ancestor guard (#314 round 6): `git ls-tree <head> -- .adlc/manifest.jsonl` does NOT descend
   // a symlinked/submodule `.adlc`, so an ANCESTOR symlink (`.adlc` → some `state/` dir holding
   // a forged manifest) would make the leaf lookup return "absent" while filesystem consumers
   // follow the link and read the pre-populated evidence. Require `.adlc` itself to be a real
   // tree at HEAD before trusting the leaf. Absent `.adlc` (dir not created yet) is fine.
-  const adlcDir = git(['ls-tree', 'HEAD', '--', '.adlc'], 'git ls-tree HEAD .adlc');
+  const adlcDir = git(['ls-tree', head, '--', '.adlc'], 'git ls-tree HEAD .adlc');
   if (adlcDir.status !== 0) fail('git ls-tree failed for the HEAD .adlc directory (operational error) — failing closed.');
   const adlcRow = adlcDir.stdout.trim();
   if (adlcRow && adlcRow.split(/\s+/)[0] !== '040000') {
     deny('.adlc must be a directory, not a symlink or submodule');
   }
-  const ls = git(['ls-tree', 'HEAD', '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
+  const ls = git(['ls-tree', head, '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
   if (ls.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
   const row = ls.stdout.trim();
+  // No `bytes` on the absent return: the only bytes consumer (the append-only branch) checks
+  // `present` first, so an absent manifest's bytes are never read — carrying a Buffer here
+  // would just be an unkillable equivalent mutant.
   if (!row) return { present: false, text: '' };
   const [mode, type, hash] = row.split(/\s+/);
   if (type !== 'blob' || mode !== '100644') {
     deny('.adlc/manifest.jsonl must be a regular tracked file, not a symlink or submodule');
   }
-  const blob = git(['cat-file', 'blob', hash], 'git cat-file HEAD manifest blob');
+  // Read the exact object by its immutable hash, as raw BYTES — the append-only comparison is
+  // byte-for-byte (see git() `raw`). `text` is the utf8 view for the semantic checks (trim,
+  // JSON parse) that don't need byte fidelity.
+  const blob = git(['cat-file', 'blob', hash], 'git cat-file HEAD manifest blob', { raw: true });
   if (blob.status !== 0) fail('git cat-file failed for the HEAD manifest blob (operational error) — failing closed.');
-  return { present: true, text: blob.stdout };
+  return { present: true, text: blob.stdout.toString('utf8'), bytes: blob.stdout };
 }
 
 function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
@@ -539,12 +555,15 @@ if (manifestLs.stdout.trim()) {
   if (!head.present) {
     deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
   }
-  const baseManifest = git(['show', `${trustedBase}:.adlc/manifest.jsonl`], 'git show base manifest');
+  const baseManifest = git(['show', `${trustedBase}:.adlc/manifest.jsonl`], 'git show base manifest', { raw: true });
   if (baseManifest.status !== 0) fail('git show failed for an existing base manifest (operational error) — failing closed.');
-  if (!head.text.startsWith(baseManifest.stdout)) {
+  const baseBytes = baseManifest.stdout; // Buffer
+  // Append-only is a BYTE-for-byte prefix check (#314 round 7): a utf8-decoded comparison
+  // could miss a raw-byte rewrite of the base region (invalid sequences collapse to U+FFFD).
+  if (head.bytes.length < baseBytes.length || !head.bytes.subarray(0, baseBytes.length).equals(baseBytes)) {
     deny('.adlc/manifest.jsonl must be append-only in PRs');
   }
-  if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, head.text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+  if (verifiedMigration) validateMigrationEvidence(baseBytes.toString('utf8'), head.text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (verifiedMigration) {
   // Verified migration ceremony (protected-base runner): the migration evidence lives in
   // the gitignored WORKING-TREE manifest by design. Read it EXACTLY ONCE and make both the
