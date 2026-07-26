@@ -7,6 +7,7 @@ import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
+import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -209,6 +210,13 @@ Exit codes:
 
 // --- record-cross-model subcommand (register a cross-model attestation) ---
 if (positionals[0] === 'record-cross-model') {
+  // Signing convenience ONLY: pick up ADLC_MANIFEST_KEY from ./.env.local so a maintainer can
+  // author an attestation without exporting the key first. This is deliberately NOT done for
+  // tier-check: tier-check VERIFIES, and sourcing a verification key from the very tree being
+  // verified would let a contributor force-add a .env.local + a matching forged approve and pass
+  // a local gate (Codex #354 loader F2). A wrong key HERE only produces an attestation that fails
+  // in CI under the real secret — inert, not a bypass. No-op in CI / when the key is already set.
+  loadManifestKeyFromEnvLocal();
   if (!values.ticket) opError('record-cross-model requires --ticket');
   let input;
   if (values.input) {
