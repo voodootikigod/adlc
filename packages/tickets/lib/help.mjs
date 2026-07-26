@@ -24,7 +24,7 @@ export const SCHEMA_ID = 'https://adlc.dev/schemas/ticket-v1.json';
  * drift silently.
  *
  * The published SCHEMA deliberately does NOT enforce these — constraining a
- * field validateTicket ignores would narrow v1 under a fixed . The check
+ * field validateTicket ignores would narrow v1 under a fixed $id. The check
  * belongs at authoring time, which is where the choice is actually made.
  */
 export const SYNC_CATEGORIES = Object.freeze([
@@ -34,10 +34,11 @@ export const SYNC_CATEGORIES = Object.freeze([
 
 /** A warning for a category ticket-sync would reject, or null. */
 export function categoryWarning(category) {
-  // Any PRESENT value that ticket-sync will not round-trip, including a
-  // non-string: a numeric category is accepted locally and rejected on the next
-  // pull just as surely as an unknown name is.
-  if (category === undefined || category === null || category === '') return null;
+  // Only UNDEFINED counts as absent. ticket-sync treats the property as present
+  // whenever it is not undefined and validates it as an enum string, so null,
+  // the empty string and a number are all serialized into the remote block and
+  // rejected by the next pull exactly like an unknown name.
+  if (category === undefined) return null;
   if (SYNC_CATEGORIES.includes(category)) return null;
   return `warning: category ${JSON.stringify(category)} is not one ticket-sync accepts, so a synced ticket cannot converge. `
     + `Use one of: ${SYNC_CATEGORIES.join(", ")}.`;
@@ -203,10 +204,12 @@ const INPUT_DOCUMENT = [
  *  edit into a policy error, with no hint in the error about which flag. */
 const AUTHORIZE_NOTE = [
   '--authorize is REQUIRED for a change the service treats as sensitive, and',
-  'there are exactly two: narrowing rails (dropping a path the ticket froze)',
-  'and widening scope (adding a path it may touch). Either one without the flag',
-  'fails AUTHORIZATION_REQUIRED and writes nothing. Everything else — title,',
-  'body, category, duration, budget, edges — needs no authorization.',
+  'there are exactly three: narrowing rails (dropping a path the ticket froze),',
+  'widening scope (adding a path it may touch), and changing `completed` — which',
+  'belongs to `adlc ticket complete`, where it carries lifecycle evidence. Any of',
+  'them without the flag fails AUTHORIZATION_REQUIRED and writes nothing.',
+  'Everything else — title, body, category, duration, budget, edges — needs no',
+  'authorization.',
 ];
 
 const COMMAND_HELP = {

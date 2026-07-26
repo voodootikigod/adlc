@@ -284,3 +284,16 @@ test('deepClone still clones ordinary JSON data unchanged', () => {
   assert.notEqual(clone, source, 'it must be a copy, not the same reference');
   assert.notEqual(clone.c, source.c, 'and a deep one');
 });
+
+test('deepClone refuses array positions JSON turns into null', () => {
+  // A sparse or undefined-bearing array survives JSON as [null], so a consumer
+  // holding a `number[]` got null and threw on the first numeric method — the
+  // declared type was still number[]. Object properties are deliberately NOT
+  // covered: JSON drops an undefined property, and dropping an OPTIONAL
+  // property is type-compatible.
+  assert.throws(() => deepClone(new Array(1)), /array index/, 'a hole must be rejected');
+  assert.throws(() => deepClone([1, undefined, 3]), /array index/);
+  assert.throws(() => deepClone([() => {}]), /array index/);
+  assert.throws(() => deepClone([Symbol('x')]), /array index/);
+  assert.deepEqual(deepClone({ optional: undefined, kept: 1 }), { kept: 1 }, 'a dropped optional property is fine');
+});

@@ -11,9 +11,17 @@ import { compareTicketIds, storeHash, ticketHash } from './canonical.mjs';
  * three call frames later. Everything that returns now matches the declaration.
  */
 export function deepClone(value) {
-  return JSON.parse(JSON.stringify(value, (_key, item) => {
+  return JSON.parse(JSON.stringify(value, function reject(key, item) {
     if (typeof item === 'number' && !Number.isFinite(item)) {
       throw new TypeError(`deepClone cannot round-trip the non-finite number ${item}`);
+    }
+    // Inside an ARRAY, JSON turns a hole, undefined, a function or a symbol into
+    // null — so `number[]` came back holding null while still typed number[],
+    // and the first numeric method on it threw. Object properties are different:
+    // JSON drops an undefined property, and dropping an OPTIONAL property is
+    // type-compatible, so those stay legal.
+    if (Array.isArray(this) && (item === undefined || typeof item === 'function' || typeof item === 'symbol')) {
+      throw new TypeError(`deepClone cannot round-trip ${String(item)} at array index ${key}`);
     }
     return item;
   }));

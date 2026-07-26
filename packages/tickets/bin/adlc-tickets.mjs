@@ -150,7 +150,13 @@ async function main() {
     const updateInput = await readInput(flags.input);
     const updateWarning = categoryWarning(updateInput?.category);
     if (updateWarning) console.error(updateWarning);
-    plan = service.planUpdate(positionals[1], updateInput, { expect: flags.expect, authorized: Boolean(flags.authorize) });
+    // --force means "replace whatever is there now", so it must also DROP a
+    // hash the caller supplied. Passing it through left the documented override
+    // doing nothing: the rerun failed STALE_TICKET on the same stale hash.
+    plan = service.planUpdate(positionals[1], updateInput, {
+      expect: flags.force ? undefined : flags.expect,
+      authorized: Boolean(flags.authorize),
+    });
   } else if (command === 'edit') {
     plan = planEditSession(service, positionals[1], {
       authorized: Boolean(flags.authorize),

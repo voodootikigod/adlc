@@ -67,14 +67,19 @@ test('the editor sees the ticket as it stands, and the temp file is always remov
   });
 });
 
-test('the temp file is removed even when the editor throws', () => {
+test('an editor that dies leaves the draft behind, not a deleted one', () => {
+  // This test previously asserted the opposite — that the temp file is removed
+  // on failure. That was the data-loss behavior: whatever the author had
+  // written when their editor crashed was deleted for them. Cleanup on the
+  // SUCCESS path only; a failure keeps the file and names it.
   withStore((service) => {
     let seenPath;
     assert.throws(() => planEditSession(service, 'T1', {
       editor: 'noop',
       runEditor: (_editor, path) => { seenPath = path; throw new Error('editor died'); },
     }), /editor died/);
-    assert.throws(() => readFileSync(seenPath, 'utf8'));
+    assert.ok(readFileSync(seenPath, 'utf8').length > 0, 'the draft must survive an editor crash');
+    rmSync(seenPath, { force: true });
   });
 });
 
@@ -82,5 +87,42 @@ test('an unset editor fails closed, and an unknown ticket fails before any temp 
   withStore((service) => {
     assert.throws(() => planEditSession(service, 'T1', { editor: undefined }), (error) => error.code === 'EDITOR_NOT_SET');
     assert.throws(() => planEditSession(service, 'nope', { editor: 'noop' }), (error) => error.code === 'TICKET_NOT_FOUND');
+  });
+});
+
+test('a failed plan preserves the edit and says where it is', () => {
+  // Planning fails for reasons the author cannot predict and did not cause —
+  // most often STALE_TICKET, which the compare-and-swap makes MORE likely, not
+  // less. Deleting the editor session's work in a `finally` turned a
+  // recoverable conflict into lost effort.
+  withStore((service) => {
+    const runEditor = (_editor, path) => {
+      service.apply(service.planUpdate('T1', { ...ticket('T1', { title: 'concurrent' }) }, {
+        expect: service.snapshot().ticketHashes.T1,
+      }));
+      writeFileSync(path, JSON.stringify(ticket('T1', { title: 'my careful edit' }), null, 2));
+    };
+    let message = '';
+    assert.throws(() => planEditSession(service, 'T1', { editor: 'noop', runEditor }), (error) => {
+      message = error.message;
+      return error.code === 'STALE_TICKET';
+    });
+    const preserved = message.match(/preserved at (\S+?)\)/)?.[1];
+    assert.ok(preserved, `the error must name the draft path: ${message}`);
+    assert.equal(JSON.parse(readFileSync(preserved, 'utf8')).title, 'my careful edit');
+    rmSync(preserved, { force: true });
+  });
+});
+
+test('a successful plan still cleans the draft up', () => {
+  // The draft is kept on FAILURE, not always — a temp file per successful edit
+  // would accumulate forever.
+  withStore((service) => {
+    let seen;
+    planEditSession(service, 'T1', {
+      editor: 'noop',
+      runEditor: (_e, path) => { seen = path; writeFileSync(path, JSON.stringify(ticket('T1', { title: 'ok' }))); },
+    });
+    assert.throws(() => readFileSync(seen, 'utf8'), 'a successful session leaves nothing behind');
   });
 });

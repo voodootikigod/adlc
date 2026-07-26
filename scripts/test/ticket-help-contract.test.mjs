@@ -90,8 +90,12 @@ test('create warns about a sync-unsafe category without failing', () => {
   // validateTicket ignores would narrow v1 under a fixed $id), so the signal
   // has to arrive at authoring time instead.
   assert.equal(categoryWarning('feature'), null);
-  assert.equal(categoryWarning(''), null, 'an absent category is not an error');
-  assert.equal(categoryWarning(undefined), null);
+  // Only UNDEFINED is absent: ticket-sync treats the property as present
+  // whenever it is not undefined, so '' and null reach the remote block and
+  // fail its enum exactly like an unknown name.
+  assert.equal(categoryWarning(undefined), null, 'only an omitted category is absent');
+  assert.ok(categoryWarning(''), 'an empty string is present and unacceptable');
+  assert.ok(categoryWarning(null), 'so is null');
   const warning = categoryWarning('security');
   assert.match(warning, /security/, 'the warning names the offending value');
   assert.match(warning, /feature/, 'and lists what is accepted');

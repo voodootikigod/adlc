@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeDirectory, ticket } from './helpers.mjs';
-import { renderCommandHelp } from '../lib/help.mjs';
+import { categoryWarning, renderCommandHelp } from '../lib/help.mjs';
 
 const BIN = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'bin', 'adlc-tickets.mjs');
 
@@ -293,4 +293,43 @@ test('a sync-safe category produces no warning', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, '');
   });
+});
+
+test('--force overrides a stale --expect, which is what the help promises', () => {
+  // --force means "replace whatever is there now". Passing the caller's stale
+  // hash through to planUpdate anyway left the documented override doing
+  // nothing: the rerun failed STALE_TICKET on the very hash it was meant to
+  // bypass.
+  withTemp((root) => {
+    writeDirectory(root, [ticket('T1', { title: 'V1' })]);
+    const stale = JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], {
+      encoding: 'utf8', cwd: root,
+    }).stdout).ticketHash;
+
+    spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--expect', stale, '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(ticket('T1', { title: 'V2' })),
+    });
+
+    const forced = spawnSync(process.execPath, [BIN, 'update', 'T1', '--input', '-', '--expect', stale, '--force', '--write', '--json'], {
+      encoding: 'utf8', cwd: root, input: JSON.stringify(ticket('T1', { title: 'V3' })),
+    });
+    assert.equal(forced.status, 0, `--force must bypass the stale hash: ${forced.stderr}`);
+    assert.equal(
+      JSON.parse(spawnSync(process.execPath, [BIN, 'show', 'T1', '--json'], { encoding: 'utf8', cwd: root }).stdout).ticket.title,
+      'V3',
+    );
+  });
+});
+
+test('null and empty-string categories warn — ticket-sync sees them as present', () => {
+  for (const category of [null, '', 7, 'security']) {
+    assert.ok(categoryWarning(category), `${JSON.stringify(category)} must warn`);
+  }
+  assert.equal(categoryWarning(undefined), null, 'only undefined is absent');
+});
+
+test('update help lists all three sensitive changes, including lifecycle', () => {
+  const help = renderCommandHelp('update');
+  assert.match(help, /exactly three/, 'the count must track the implementation');
+  assert.match(help, /completed/, 'and name the lifecycle transition');
 });

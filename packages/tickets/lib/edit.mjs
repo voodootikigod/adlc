@@ -37,6 +37,18 @@ export function planEditSession(service, id, { authorized = false, editor, runEd
     // a category ticket-sync cannot round-trip) needs a hook rather than
     // reaching into the plan's private state.
     onEdited?.(edited);
-    return service.planUpdate(ticket.id, edited, { expect, authorized });
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+    const plan = service.planUpdate(ticket.id, edited, { expect, authorized });
+    rmSync(directory, { recursive: true, force: true });
+    return plan;
+  } catch (error) {
+    // KEEP the draft. Planning fails for reasons the author cannot predict and
+    // did not cause — most often STALE_TICKET, which the compare-and-swap makes
+    // MORE likely, not less — and deleting their editor session's work in a
+    // `finally` turned a recoverable conflict into lost effort. The path goes in
+    // the message because an error naming no path is the same as no draft.
+    if (error && typeof error.message === 'string') {
+      error.message = `${error.message} (your edit is preserved at ${path})`;
+    }
+    throw error;
+  }
 }
