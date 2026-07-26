@@ -150,7 +150,12 @@ function runMigrationScenario({ mutateTicket = (ticket) => ticket, extraChange =
       symlinkSync('../.gitignore', join(dir, '.adlc/manifest.jsonl'));
     }
     if (extraChange) { mkdirSync(join(dir, 'src'), { recursive: true }); writeFileSync(join(dir, 'src/extra.mjs'), 'export {};\n'); }
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'migrate']);
+    git(dir, ['add', '-A']);
+    // The migration commits its evidence manifest (the diff-shape allow-list expects
+    // `.adlc/manifest.jsonl` in the diff); force past the fixture's `.adlc/*` gitignore so it
+    // is tracked, matching the real ceremony and the committed-content reader.
+    try { git(dir, ['add', '-f', '.adlc/manifest.jsonl']); } catch { /* evidence:'missing' — nothing to add */ }
+    git(dir, ['commit', '-qm', 'migrate']);
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
     catch (error) { return error.status ?? 1; }
   } finally { rmSync(dir, { recursive: true, force: true }); }

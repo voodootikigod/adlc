@@ -27,7 +27,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { DirectoryTicketStore, GitTreeTicketStore, detectTicketStore, storeHash, validateTickets } from '@adlc/tickets';
@@ -166,34 +166,30 @@ function manifestLines(text, label) {
 // that follow the link consume forged entries — the old readFileSync check denied this by
 // following the link, so preserve that by rejecting any non-`100644 blob` object.
 // Returns { present, text }: `present` is whether the manifest is tracked at HEAD, `text`
-// its committed content ('' when absent OR empty). ALL committed-manifest reads go through
-// here so the symlink/submodule fail-closed applies uniformly (creation, first-bootstrap,
-// AND the append-only branch) — reading the working tree with readFileSync followed a link.
+// its committed content ('' when absent OR empty). This is the SOLE manifest reader — every
+// path (creation, first-bootstrap, append-only, AND the migration ceremony) reads through it,
+// so there is no working-tree read left to diverge from CI's clean checkout or to follow a
+// symlink. The migration ceremony's evidence is a TRACKED file (the migration diff-shape
+// allow-list expects `.adlc/manifest.jsonl` in the diff), so committed content is the correct,
+// CI-consistent source; reading the working tree there was the legacy artifact (#314 round 5).
+//
+// FAIL CLOSED on a non-regular object (symlink 120000 / submodule 160000): such a manifest
+// must not smuggle evidence. And read the content by the BLOB HASH from the same ls-tree row
+// (`git cat-file blob <hash>`), NOT `git show HEAD:path` — `git show` re-resolves the mutable
+// HEAD and could bind content to a different tree than the mode check saw (a TOCTOU). The blob
+// hash is immutable, so metadata and content provably describe the same object (#314 round 5).
 function committedManifestAtHead() {
   const ls = git(['ls-tree', 'HEAD', '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
   if (ls.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
   const row = ls.stdout.trim();
   if (!row) return { present: false, text: '' };
-  const [mode, type] = row.split(/\s+/);
+  const [mode, type, hash] = row.split(/\s+/);
   if (type !== 'blob' || mode !== '100644') {
     deny('.adlc/manifest.jsonl must be a regular tracked file, not a symlink or submodule');
   }
-  const show = git(['show', 'HEAD:.adlc/manifest.jsonl'], 'git show HEAD manifest');
-  if (show.status !== 0) fail('git show failed for the tracked HEAD manifest (operational error) — failing closed.');
-  return { present: true, text: show.stdout };
-}
-
-// The verified-migration ceremony is the ONE path that reads the working-tree manifest (its
-// evidence is a gitignored local file). Refuse a symlink there too (#314 round 3): a manifest
-// symlinked to an ALLOW-LISTED migration path (e.g. ../.gitignore holding forged evidence)
-// would otherwise be followed by readFileSync — the diff-shape allow-list does not reject it
-// because the target IS allow-listed. lstat (not stat) so the link itself is inspected.
-function workingManifestText() {
-  if (!existsSync('.adlc/manifest.jsonl')) return '';
-  if (!lstatSync('.adlc/manifest.jsonl').isFile()) {
-    deny('.adlc/manifest.jsonl must be a regular file, not a symlink or special file');
-  }
-  return readFileSync('.adlc/manifest.jsonl', 'utf8');
+  const blob = git(['cat-file', 'blob', hash], 'git cat-file HEAD manifest blob');
+  if (blob.status !== 0) fail('git cat-file failed for the HEAD manifest blob (operational error) — failing closed.');
+  return { present: true, text: blob.stdout };
 }
 
 function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
@@ -543,11 +539,12 @@ if (manifestLs.stdout.trim()) {
   // validation, then a swapped non-empty file satisfies presence with evidence never checked
   // (#314 round 4). The diff shape and CODEOWNERS attestation were verified upstream, which
   // is what makes trusting this local file sound in this branch only.
-  const headManifest = workingManifestText();
-  // validateMigrationEvidence itself denies empty/whitespace evidence (appended.length 0),
-  // so ONE read + one unconditional validation covers both presence and content — no second
-  // read to race against.
-  validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+  // Read the migration evidence from the COMMITTED manifest (it is a tracked file — the
+  // migration diff-shape allow-list expects it in the diff), the same object-bound reader as
+  // every other path. validateMigrationEvidence denies empty/whitespace evidence, so ONE read
+  // + one unconditional validation covers both presence and content — no working-tree read to
+  // diverge from CI and no second snapshot to race against.
+  validateMigrationEvidence('', committedManifestAtHead().text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
 } else if (committedManifestAtHead().text.trim()) {
   // Ordinary PR (#314): only a TRACKED manifest ADDED by the diff with non-empty evidence
   // denies. An untracked gitignored manifest reads as '' (not tracked at HEAD) and passes,
