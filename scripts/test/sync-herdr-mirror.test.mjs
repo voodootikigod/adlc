@@ -15,6 +15,14 @@ test('mirrorBanner names the mirror, the monorepo source, and the install comman
   assert.match(b, new RegExp(`herdr plugin install ${MIRROR}`));
 });
 
+test('mirrorBanner is a well-formed markdown blockquote — every content line starts with "> " so it renders as a callout', () => {
+  const contentLines = mirrorBanner().split('\n').filter((l) => l.trim() !== '');
+  assert.ok(contentLines.length >= 5, 'banner has its content lines');
+  for (const line of contentLines) {
+    assert.ok(line.startsWith('> '), `every banner line is a blockquote line, got: ${JSON.stringify(line)}`);
+  }
+});
+
 test('transformReadme prepends the banner and rewrites monorepo-relative links to absolute; leaves others alone', () => {
   const out = transformReadme('# adlc-herdr\n\nSee [plan](../../docs/herdr-integration-plan.md) and [lib](../lib/x.mjs).\nExternal: [herdr](https://herdr.dev). Local: [readme](./README.md).\n');
   assert.match(out, /read-only mirror/i, 'banner prepended');
