@@ -7,14 +7,16 @@ import { conflict, invalid, operational } from './errors.mjs';
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
 /**
- * `writeOwner` is a fault-injection seam, defaulting to writeFileSync. The gap
- * between mkdir and the owner write is only reachable through a real ENOSPC or
- * quota, which no portable filesystem trick reproduces — and this package runs
- * on the Windows leg of the platform matrix, so a chmod-based test would not
- * work there either. Same pattern as planEditSession's runEditor.
+ * `writeOwner` and `removeLock` are fault-injection seams defaulting to
+ * writeFileSync and rmSync. Both failure paths they reach — a broken owner write,
+ * and a cleanup that fails too — are only reachable through a real disk fault,
+ * which no portable filesystem trick reproduces; and this package runs on the
+ * Windows leg of the platform matrix, so a chmod-based test would not work there
+ * either. Same pattern as planEditSession's runEditor.
  */
 export function acquireTicketLock(root = '.', {
-  retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null, writeOwner = writeFileSync,
+  retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null,
+  writeOwner = writeFileSync, removeLock = rmSync,
 } = {}) {
   const path = join(root, LOCK_DIRECTORY);
   // Reject bad options BEFORE creating anything. Release requires a well-formed
@@ -49,7 +51,21 @@ export function acquireTicketLock(root = '.', {
       // to release. Every later writer then saw EEXIST and timed out. Undo only
       // our own half-made lock, best-effort, without masking the real error.
       if (created) {
-        try { rmSync(path, { recursive: true, force: true }); } catch { /* best effort — the original error matters more */ }
+        try {
+          removeLock(path, { recursive: true, force: true });
+        } catch (cleanupError) {
+          // Cleanup runs under exactly the conditions that broke the owner write
+          // — I/O errors, quota, a transient Windows file lock — so it can fail
+          // too. Swallowing that told the caller only that acquisition failed,
+          // while a directory nobody holds a releasable handle to blocked every
+          // later writer until someone found it by hand. Report BOTH causes and
+          // the path, because this is the one failure a human must act on.
+          throw operational(
+            'LOCK_STRANDED',
+            `could not acquire the ticket lock (${error.message}), and could not remove the partial lock at ${path} `
+            + `(${cleanupError.message}). Remove that directory to unblock later ticket writers.`,
+          );
+        }
       }
       if (error.code !== 'EEXIST') throw operational('LOCK_FAILED', `cannot acquire ticket lock: ${error.message}`);
       if (attempt < retries) sleep(delayMs);

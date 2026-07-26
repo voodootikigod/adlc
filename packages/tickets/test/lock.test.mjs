@@ -167,3 +167,44 @@ test('cleanup never removes a lock this attempt did not create', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a cleanup that also fails is reported, with the path and both causes', () => {
+  // Cleanup runs under exactly the conditions that broke the owner write, so it
+  // can fail too. Swallowing that told the caller only "acquisition failed",
+  // while a directory nobody holds a releasable handle to blocked every later
+  // writer until a human found it. This is the one failure someone must act on,
+  // so it names the path and both causes.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-stranded-'));
+  try {
+    const writeBoom = () => { const e = new Error('disk went away'); e.code = 'EIO'; throw e; };
+    const removeBoom = () => { const e = new Error('directory busy'); e.code = 'EBUSY'; throw e; };
+
+    let raised;
+    assert.throws(() => acquireTicketLock(root, {
+      command: 'test', retries: 0, writeOwner: writeBoom, removeLock: removeBoom,
+    }), (error) => { raised = error; return error.code === 'LOCK_STRANDED'; });
+
+    assert.match(raised.message, /disk went away/, 'the owner-write cause must survive');
+    assert.match(raised.message, /directory busy/, 'and the cleanup cause too');
+    assert.match(raised.message, /tickets\.lock/, 'and the path a human has to remove');
+    assert.match(raised.message, /unblock later ticket writers/i, 'with what to do about it');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a cleanup that succeeds still reports the original failure, not a stranded lock', () => {
+  // The distinction is the point: LOCK_FAILED means "nothing to clean up",
+  // LOCK_STRANDED means "a directory is still there and it is yours to remove".
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-clean-'));
+  try {
+    const writeBoom = () => { const e = new Error('quota exceeded'); e.code = 'EDQUOT'; throw e; };
+    assert.throws(
+      () => acquireTicketLock(root, { command: 'test', retries: 0, writeOwner: writeBoom }),
+      (error) => error.code === 'LOCK_FAILED' && /quota exceeded/.test(error.message),
+    );
+    assert.ok(!existsSync(join(root, '.adlc', 'tickets.lock')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
