@@ -136,6 +136,16 @@ test('syncMirror FAILS CLOSED if the plugin tree contains a symlink (no write-th
   assert.equal(readFileSync(secret, 'utf8'), 'top secret', 'the symlink target file was NOT written through');
 });
 
+test('syncMirror FAILS CLOSED if the monorepo LICENSE is a symlink (the license copy is covered by the guard, not shipped)', () => {
+  const root = fakeRepo();
+  const outside = join(mkdtempSync(join(tmpdir(), 'adlc-mirror-sec-')), 'secret.pem');
+  writeFileSync(outside, 'PRIVATE KEY');
+  rmSync(join(root, 'LICENSE'));
+  symlinkSync(outside, join(root, 'LICENSE')); // monorepo LICENSE replaced by a symlink to a secret
+  const target = mkdtempSync(join(tmpdir(), 'adlc-mirror-dst-'));
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: target }), /symlink \(tampering signal\)/);
+});
+
 test('syncMirror REFUSES a target that CONTAINS the source repo (overlap either direction)', () => {
   const base = mkdtempSync(join(tmpdir(), 'adlc-mirror-nest-'));
   const root = join(base, 'mono');

@@ -146,11 +146,14 @@ export function syncMirror({ repoRoot, targetDir }) {
   // schedule), a lateral-movement path into the mirror repo. The mirror is a
   // read-only artifact: it must carry none of its own CI. Strip it unconditionally.
   rmSync(join(targetDir, '.github'), { recursive: true, force: true });
-  // Reject any symlink in the copied tree before we read/write through one below.
-  assertNoSymlinks(targetDir);
   // Carry the monorepo LICENSE over (the plugin dir has none of its own).
   const license = join(repoRoot, 'LICENSE');
   if (existsSync(license)) cpSync(license, join(targetDir, 'LICENSE'));
+  // Reject any symlink in the FULLY-populated tree — plugin content AND the LICENSE
+  // just copied — before we read/write through one below. This must run AFTER every
+  // copy, so a symlinked monorepo LICENSE is caught too (not just plugin files);
+  // nothing symlinked is ever shipped to the mirror or followed.
+  assertNoSymlinks(targetDir);
   // Rewrite the README for the mirror.
   const readme = join(targetDir, 'README.md');
   if (existsSync(readme)) writeFileSync(readme, transformReadme(readFileSync(readme, 'utf8')));
