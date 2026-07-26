@@ -103,12 +103,18 @@ this destination is a **protected trust root** — a repo with a customized or
 newer workflow would have it silently replaced by whatever `main` serves today.
 If it already exists, diff the two and let the human decide.
 
-**Then read that file's header and follow it before marking the check
-required.** It documents a multi-stage bootstrap: the bootstrap commit merges
-first, the base branch needs `trustedCodeownersAttested` in `.adlc/config.json`
-(which `adlc init` deliberately does not set), and `.adlc/manifest.jsonl` must
-be absent or empty until reviewed. Marking it required early **fails every
-subsequent PR**.
+**This file is fetched from a mutable branch and will become a required CI check
+with repo-wide authority. Review the whole thing before committing it** — not
+just the header. It is workflow code that will run on every pull request; `main`
+is not a fixed revision, and nothing here verifies its integrity. If the human
+wants a stronger guarantee, have them pin the URL to a tag or commit SHA rather
+than `main`.
+
+**Then follow its header before marking the check required.** It documents a
+multi-stage bootstrap: the bootstrap commit merges first, the base branch needs
+`trustedCodeownersAttested` in `.adlc/config.json` (which `adlc init`
+deliberately does not set), and `.adlc/manifest.jsonl` must be absent or empty
+until reviewed. Marking it required early **fails every subsequent PR**.
 
 Only once that ceremony is complete does marking it required in branch
 protection make sense. Without it, frozen rails are advisory; with it enabled

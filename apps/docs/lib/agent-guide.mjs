@@ -224,6 +224,13 @@ Walk the human through this sequence.
    destination is a protected trust root, so a repo with a customized or newer
    workflow would lose it silently. If it exists, diff and let the human decide.
 
+   **That file is fetched from a mutable branch and becomes a required CI check
+   with repo-wide authority. Show the human the whole file before it is
+   committed** — it is workflow code that runs on every pull request, \`main\` is
+   not a fixed revision, and nothing in this flow verifies its integrity. If they
+   want a stronger guarantee, pin the URL to a tag or commit SHA instead of
+   \`main\`.
+
    **Then STOP and read the header of the file you just downloaded, and do what
    it says.** Do not mark the check required yet. That workflow documents a
    multi-stage bootstrap ceremony — the bootstrap commit must merge first, the

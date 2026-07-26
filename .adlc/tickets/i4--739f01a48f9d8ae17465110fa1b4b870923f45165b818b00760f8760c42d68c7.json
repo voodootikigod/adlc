@@ -3,14 +3,7 @@
   "budget": "direct",
   "category": "feat",
   "duration": 1,
-  "edges": [
-    {
-      "to": "I1"
-    },
-    {
-      "to": "I2"
-    }
-  ],
+  "edges": [],
   "id": "I4",
   "rails": [],
   "scope": [
