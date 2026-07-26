@@ -4,7 +4,7 @@
 // untested compare-and-swap is how the lost update below survived in the first
 // place.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { TicketStoreError } from './errors.mjs';
@@ -13,7 +13,9 @@ import { TicketStoreError } from './errors.mjs';
 export const spawnEditor = (editor, path) => execFileSync(editor, [path], { stdio: 'inherit' });
 
 /**
- * Plan an editor session as an update.
+ * Plan an editor session as an update. Returns { plan, draftPath }: the draft
+ * outlives this call so the CALLER can delete it once the plan is applied — a
+ * dry run must not destroy the work it is previewing.
  *
  * The expected hash is bound to the ticket we OPEN, before the editor runs.
  * Reading it afterwards made any write that landed during the session — which
@@ -38,8 +40,13 @@ export function planEditSession(service, id, { authorized = false, editor, runEd
     // reaching into the plan's private state.
     onEdited?.(edited);
     const plan = service.planUpdate(ticket.id, edited, { expect, authorized });
-    rmSync(directory, { recursive: true, force: true });
-    return plan;
+    // Deliberately NOT deleted here. Planning succeeding is not the same as the
+    // edit being SAVED: `adlc ticket edit T1` is dry-run by default, so the
+    // common path plans fine, prints the plan, applies nothing — and deleting
+    // the draft at this point threw away the author's work on the invocation
+    // they are most likely to run. The caller owns the draft now, and only a
+    // successful apply should remove it.
+    return { plan, draftPath: path };
   } catch (error) {
     // KEEP the draft. Planning fails for reasons the author cannot predict and
     // did not cause — most often STALE_TICKET, which the compare-and-swap makes

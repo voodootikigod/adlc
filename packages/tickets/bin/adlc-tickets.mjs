@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { readFileSync, rmSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import {
   DirectoryTicketStore,
   LegacyTicketStore,
@@ -124,6 +124,9 @@ async function main() {
   store = await offerLegacyMigration(store, root, flags, { emit: (value) => emit(value, false) });
   const service = new TicketService(store, { root });
   let plan;
+  // Set only by the edit command. The draft survives a dry run and is removed
+  // after a successful write; anything else prints where it is.
+  let editDraftPath = null;
   if (command === 'create') {
     if (!flags.input) throw new TicketStoreError('invalid', 'INPUT_REQUIRED', 'create requires --input');
     const input = await readInput(flags.input);
@@ -158,11 +161,13 @@ async function main() {
       authorized: Boolean(flags.authorize),
     });
   } else if (command === 'edit') {
-    plan = planEditSession(service, positionals[1], {
+    const session = planEditSession(service, positionals[1], {
       authorized: Boolean(flags.authorize),
       editor: process.env.EDITOR || process.env.VISUAL,
       onEdited: (edited) => { const w = categoryWarning(edited?.category); if (w) console.error(w); },
     });
+    plan = session.plan;
+    editDraftPath = session.draftPath;
   } else if (command === 'discard') plan = service.planDiscard(positionals[1]);
   else if (command === 'complete') plan = service.planComplete(positionals[1], { authorized: Boolean(flags.authorize) });
   else if (command === 'archive' || command === 'restore') {
@@ -179,6 +184,13 @@ async function main() {
   if (flags.write) {
     const applied = service.apply(plan);
     emit({ applied: true, storeHash: applied.hash, ticketHash: plan.ticketId ? applied.ticketHashes[plan.ticketId] : null }, flags.json);
+    // Applied: the edit is in the store, so the draft has served its purpose.
+    if (editDraftPath) rmSync(dirname(editDraftPath), { recursive: true, force: true });
+  } else if (editDraftPath) {
+    // Dry run — `edit` without --write is the DEFAULT invocation. The plan was
+    // only previewed, so the edited document is the author's sole copy; saying
+    // where it is turns "my work vanished" into "re-run with --input".
+    console.error(`edit not applied (dry run); your edited ticket is at ${editDraftPath}`);
   }
 }
 

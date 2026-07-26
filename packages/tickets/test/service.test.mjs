@@ -297,3 +297,13 @@ test('deepClone refuses array positions JSON turns into null', () => {
   assert.throws(() => deepClone([Symbol('x')]), /array index/);
   assert.deepEqual(deepClone({ optional: undefined, kept: 1 }), { kept: 1 }, 'a dropped optional property is fine');
 });
+
+test('deepClone refuses arrays carrying non-index properties', () => {
+  // JSON serializes only an array's INDEX properties, so this value loses
+  // `meta` while keeping its declared type — the clone type-checks and the
+  // property is simply gone at runtime.
+  const tagged = Object.assign([1, 2], { meta: 'kept' });
+  assert.throws(() => deepClone(tagged), /non-index array/);
+  assert.deepEqual(deepClone([1, 2]), [1, 2], 'a plain array is unaffected');
+  assert.deepEqual(deepClone({ list: [1, 2] }), { list: [1, 2] }, 'and so is a nested one');
+});

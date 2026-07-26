@@ -24,9 +24,13 @@ const edited = (title) => (_editor, path) => {
 
 test('a quiet editor session plans an ordinary update', () => {
   withStore((service) => {
-    const plan = planEditSession(service, 'T1', { editor: 'noop', runEditor: edited('my edit') });
+    const { plan, draftPath } = planEditSession(service, 'T1', { editor: 'noop', runEditor: edited('my edit') });
     assert.equal(plan.ticketId, 'T1');
     assert.deepEqual(plan.changedFields, ['title']);
+    // The draft OUTLIVES planning: `edit` is dry-run by default, so deleting it
+    // here destroyed the author's only copy on the commonest invocation.
+    assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'my edit');
+    rmSync(draftPath, { force: true });
   });
 });
 
@@ -50,7 +54,7 @@ test('a write during the editor session is caught as STALE_TICKET', () => {
   });
 });
 
-test('the editor sees the ticket as it stands, and the temp file is always removed', () => {
+test('the editor sees the ticket as it stands, and the draft survives planning', () => {
   withStore((service) => {
     let seen;
     let seenPath;
@@ -63,7 +67,8 @@ test('the editor sees the ticket as it stands, and the temp file is always remov
       },
     });
     assert.equal(seen.title, 'original');
-    assert.throws(() => readFileSync(seenPath, 'utf8'), 'the temp file must not outlive the session');
+    assert.ok(readFileSync(seenPath, 'utf8').length > 0, 'the draft outlives the session — only an APPLY may remove it');
+    rmSync(seenPath, { force: true });
   });
 });
 
@@ -114,15 +119,18 @@ test('a failed plan preserves the edit and says where it is', () => {
   });
 });
 
-test('a successful plan still cleans the draft up', () => {
-  // The draft is kept on FAILURE, not always — a temp file per successful edit
-  // would accumulate forever.
+test('planning never deletes the draft — that is the caller decision', () => {
+  // Cleanup moved to the CLI, which removes the draft only after a successful
+  // apply. A library that deletes on successful PLANNING cannot tell a dry run
+  // from a write, and `edit` without --write is the default.
   withStore((service) => {
     let seen;
-    planEditSession(service, 'T1', {
+    const { draftPath } = planEditSession(service, 'T1', {
       editor: 'noop',
       runEditor: (_e, path) => { seen = path; writeFileSync(path, JSON.stringify(ticket('T1', { title: 'ok' }))); },
     });
-    assert.throws(() => readFileSync(seen, 'utf8'), 'a successful session leaves nothing behind');
+    assert.equal(draftPath, seen);
+    assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'ok');
+    rmSync(draftPath, { force: true });
   });
 });

@@ -1,7 +1,12 @@
-/// <reference types="node" />
-// Node types are a real dependency of these declarations, not an accident:
-// generateTicketId runtime-checks Buffer.isBuffer, so widening its entropy
-// parameter to Uint8Array would declare a call that throws.
+// No `/// <reference types="node" />`. An earlier revision had one, which made
+// @types/node a hard requirement of merely importing this package: a project
+// with only typescript and @adlc/tickets installed failed to resolve the
+// reference before it type-checked a single line of its own code. A published
+// .d.ts must stand on its own.
+//
+// generateTicketId still needs a real Node Buffer at runtime (it calls
+// Buffer.isBuffer), so `NodeBuffer` below describes one structurally instead of
+// naming the global.
 export type Ticket = { id: string; title: string; scope?: string[]; rails?: string[]; edges?: Array<{ to: string; [key: string]: unknown }>; [key: string]: unknown };
 export type TicketErrorKind = 'operational' | 'invalid' | 'conflict' | 'policy';
 export class TicketStoreError extends Error {
@@ -46,7 +51,14 @@ export function prettyCanonicalJson(value: unknown): string;
 export function ticketHash(ticket: Ticket): string;
 export function storeHash(tickets: Ticket[]): string;
 export function ticketFilename(id: string): string;
-export function generateTicketId(now?: number, entropy?: Buffer): string;
+/**
+ * A Node Buffer, described structurally so these declarations need no
+ * @types/node. readUInt8 is the discriminator: Buffer has it, a plain
+ * Uint8Array does not — and generateTicketId rejects anything that is not a
+ * real Buffer, so accepting Uint8Array here would declare a call that throws.
+ */
+export type NodeBuffer = Uint8Array & { readUInt8(offset?: number): number };
+export function generateTicketId(now?: number, entropy?: NodeBuffer): string;
 export function isGeneratedTicketId(id: string): boolean;
 export function validateTicket(ticket: unknown, options?: { archive?: boolean }): string[];
 export function validateTickets(tickets: unknown[], options?: { archive?: boolean; validateGraph?: boolean }): unknown[];
@@ -159,7 +171,10 @@ export function writeActiveTicket(root: string, pointer: { id: string; ticketHas
 
 export type EditorRunner = (editor: string, path: string) => void;
 export const spawnEditor: EditorRunner;
-export function planEditSession(service: TicketService, id: string, options?: { authorized?: boolean; editor?: string; runEditor?: EditorRunner }): TicketPlan;
+export type EditSession = { plan: TicketPlan; draftPath: string };
+/** The draft at `draftPath` outlives this call: a dry run must not destroy the
+ *  work it is previewing. Delete it once the plan is applied. */
+export function planEditSession(service: TicketService, id: string, options?: { authorized?: boolean; editor?: string; runEditor?: EditorRunner; onEdited?: (edited: Ticket) => void }): EditSession;
 export function detectTicketStore(options?: Record<string, unknown>): LegacyTicketStore | DirectoryTicketStore;
 export function loadTicketSnapshot(options?: Record<string, unknown>): TicketSnapshot;
 export function pendingTransactions(root?: string): string[];
@@ -183,7 +198,7 @@ export function withManifestLock<T>(path: string, fn: () => T, options?: { retri
 export function fsyncFile(path: string): void;
 export function fsyncDirectory(path: string): boolean;
 export function durableMkdir(path: string): void;
-export function durableWrite(path: string, content: string | Buffer): void;
+export function durableWrite(path: string, content: string | Uint8Array): void;
 export function durableCopy(source: string, target: string): void;
 export function durableRename(source: string, target: string): void;
 export function durableRemove(path: string, options?: Record<string, unknown>): void;

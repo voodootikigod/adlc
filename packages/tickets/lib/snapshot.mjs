@@ -23,6 +23,15 @@ export function deepClone(value) {
     if (Array.isArray(this) && (item === undefined || typeof item === 'function' || typeof item === 'symbol')) {
       throw new TypeError(`deepClone cannot round-trip ${String(item)} at array index ${key}`);
     }
+    // JSON serializes only an array's INDEX properties, so a value like
+    // Object.assign([1, 2], { meta: 'x' }) silently loses `meta` while keeping
+    // its declared type — the clone type-checks and the property is gone.
+    if (Array.isArray(item)) {
+      const extra = Object.keys(item).filter((name) => !/^\d+$/.test(name));
+      if (extra.length) {
+        throw new TypeError(`deepClone cannot round-trip non-index array propert(y|ies): ${extra.join(', ')}`);
+      }
+    }
     return item;
   }));
 }
