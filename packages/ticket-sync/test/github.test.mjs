@@ -832,3 +832,33 @@ test('push updates a synced ticket body when the canonical block changed', async
     assert.match(gh.state.issues[0].body, /"duration": 2/, 'remote block now reflects the local edit');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('orderLocalByDependency: a generated ticket id counts as local', () => {
+  // `adlc ticket create --help` now recommends omitting the id, which mints a
+  // T-<ULID>. Matching only the legacy T<n> form filtered every such ticket out
+  // of the create pass AND out of this ordering: `push --write` exited 0 having
+  // created no issue, and a legacy ticket could publish an edge to an id that
+  // would never be synced.
+  const generated = 'T-01JXT21Q000W3GE1R70W3GE1R7';
+  const order = orderLocalByDependency([
+    { id: 'T7', title: 'legacy', edges: [{ to: generated }] },
+    { id: generated, title: 'generated', edges: [] },
+    { id: 'gh:12', title: 'already published', edges: [] },
+  ]).map((t) => t.id);
+
+  assert.ok(order.includes(generated), 'a generated id must be treated as a local ticket');
+  assert.ok(order.includes('T7'), 'and legacy ids must still be');
+  assert.ok(!order.includes('gh:12'), 'while published ids stay excluded');
+  assert.ok(
+    order.indexOf(generated) < order.indexOf('T7'),
+    'the prerequisite is still ordered first, so T7 never publishes a dangling edge',
+  );
+});
+
+test('orderLocalByDependency: near-miss ids are not mistaken for generated ones', () => {
+  // The generated form is a ULID — 26 Crockford base-32 characters after `T-`,
+  // first character 0-7. A loose pattern would sweep up unrelated external ids.
+  const near = ['T-', 'T-short', 'T-01JXT21Q000W3GE1R70W3GE1R', 'T-91JXT21Q000W3GE1R70W3GE1R7', 'gh:12', 'JIRA-4'];
+  const order = orderLocalByDependency(near.map((id) => ({ id, title: id, edges: [] })));
+  assert.deepEqual(order.map((t) => t.id), [], 'none of these are local tickets');
+});

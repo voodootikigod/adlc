@@ -26,7 +26,24 @@ import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar
 import { loadTicketSnapshot } from '@adlc/tickets';
 
 const SYNCED_RE = /^gh:[^#]+#(\d+)$/;
-const LOCAL_RE = /^T\d+$/;
+/**
+ * A ticket id that has not been published to the tracker yet.
+ *
+ * TWO shapes, not one. `T<n>` is the legacy hand-authored form; `T-<26 ULID
+ * chars>` is what TicketService mints when `create` omits the id — which
+ * `adlc ticket create --help` now recommends as the normal path. Matching only
+ * the legacy form filtered every generated ticket out of the create pass AND
+ * out of orderLocalByDependency, so `push --write` exited 0 having created no
+ * issue, and a legacy ticket could publish an edge to an id that would never
+ * be synced.
+ *
+ * Duplicated from @adlc/tickets' isGeneratedTicketId rather than imported —
+ * CONVENTIONS rule 1 keeps this package free of cross-package runtime deps —
+ * and drift-gated by scripts/test/ticket-help-contract.test.mjs.
+ */
+const LEGACY_LOCAL_RE = /^T\d+$/;
+const GENERATED_LOCAL_RE = /^T-[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+const LOCAL_RE = { test: (id) => LEGACY_LOCAL_RE.test(id) || GENERATED_LOCAL_RE.test(id) };
 const KEY_RE = /<!--\s*adlc:begin\b[^>]*\bkey=(\S+)/;
 
 /** Best-effort sentinel-key extraction for the adoption scan — robust to an

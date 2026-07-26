@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { categoryWarning, renderCommandHelp, renderUsage, SYNC_CATEGORIES, TICKET_FIELDS } from '../../packages/tickets/lib/help.mjs';
 import { validateTicket } from '../../packages/tickets/lib/schema.mjs';
 import { CATEGORIES } from '../../packages/ticket-sync/lib/schema.mjs';
+import { orderLocalByDependency } from '../../packages/ticket-sync/lib/push.mjs';
+import { generateTicketId, isGeneratedTicketId } from '../../packages/tickets/index.mjs';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const ADLC = join(ROOT, 'packages/cli/bin/adlc.mjs');
@@ -99,4 +101,24 @@ test('create warns about a sync-unsafe category without failing', () => {
   const warning = categoryWarning('security');
   assert.match(warning, /security/, 'the warning names the offending value');
   assert.match(warning, /feature/, 'and lists what is accepted');
+});
+
+test('ticket-sync recognizes exactly the ids @adlc/tickets generates', () => {
+  // ticket-sync duplicates the generated-id pattern (CONVENTIONS rule 1 keeps it
+  // free of cross-package runtime deps), so this is the gate that keeps the copy
+  // honest — in both directions. A drift here means `push` silently skips the
+  // tickets the authoring help tells people to create.
+  const samples = [
+    generateTicketId(1_750_000_000_000, Buffer.alloc(10, 7)),
+    generateTicketId(0, Buffer.alloc(10, 0)),
+    generateTicketId(1, Buffer.alloc(10, 255)),
+  ];
+  for (const id of samples) {
+    assert.ok(isGeneratedTicketId(id), `@adlc/tickets must recognize its own id ${id}`);
+    assert.deepEqual(
+      orderLocalByDependency([{ id, title: 'x', edges: [] }]).map((t) => t.id),
+      [id],
+      `ticket-sync must treat ${id} as a local ticket`,
+    );
+  }
 });
