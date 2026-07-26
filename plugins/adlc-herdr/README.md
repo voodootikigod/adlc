@@ -57,6 +57,35 @@ guarantees as the palette.
 Inside the **board** overlay: `↑`/`↓` (or `k`/`j`) select a ticket row, `Enter`
 focuses that ticket's pane when it is mapped, `q` closes it.
 
+## Terminal width
+
+The board never emits a row wider than the pane, because a wrapped line breaks
+the cursor-home redraw and corrupts the frame on every refresh.
+
+One case cannot be measured, only declared. Characters classified
+East_Asian_Width=AMBIGUOUS — circled digits, Greek, Cyrillic, the degree sign —
+occupy **one** cell on most terminals and **two** on a terminal configured for
+East Asian text. That is a terminal and font setting, not a property of the
+text, so there is nothing to detect. The board assumes narrow, which is correct
+for the large majority; assuming wide would shrink every row for everyone else.
+
+If your terminal renders ambiguous characters double-width, say so:
+
+```bash
+herdr plugin pane open --plugin adlc --entrypoint board \
+  --env ADLC_HERDR_AMBIGUOUS_WIDTH=wide
+```
+
+As a keybinding:
+
+| Binding | Command |
+| --- | --- |
+| `<leader> a b` | `plugin pane open --plugin adlc --entrypoint board --env ADLC_HERDR_AMBIGUOUS_WIDTH=wide` |
+
+Without it, a ticket title full of ambiguous characters can still exceed the
+pane on such a terminal. Everything the board itself draws — separators, key
+hints, the elision marker — is ASCII, so the chrome is exact either way.
+
 ## Layout
 
 - `herdr-plugin.toml` — manifest (v0.2.0): identity plus the shipped

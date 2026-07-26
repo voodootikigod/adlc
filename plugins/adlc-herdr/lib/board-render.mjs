@@ -290,7 +290,13 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   if (Number.isFinite(height) && height > 0 && lines.length > height) {
     // height 1 has no room for both a kept line and the marker; slicing to
     // max(1, height-1) and then pushing produced TWO rows for a one-row budget.
-    if (height === 1) return `${DIM}${cut(`...${lines.length} rows (resize)`)}${RESET}`;
+    // One row: keep the HEADER, not a "resize me" marker. gather reserves two
+    // chrome rows, so a 1-3 row pane lands here — and a marker spent the only
+    // row available on telling the operator the board is small, which they can
+    // already see, while discarding the active ticket and phase. composeFrame
+    // sheds chrome afterwards but cannot recover a body line already thrown
+    // away, so the choice has to be made here.
+    if (height === 1) return lines[0];
     const hidden = lines.length - height;
     const kept = lines.slice(0, height - 1);
     kept.push(`${DIM}${cut(`  ...${hidden + 1} more (resize to see all)`)}${RESET}`);

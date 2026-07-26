@@ -511,7 +511,11 @@ test('the frame never exceeds a tiny pane, shedding chrome before content', () =
     const frame = composeFrame(renderBoard(state), boardFooter(3000, 40), rows);
     const lines = frame.split('\n');
     assert.ok(lines.length <= rows, `rows ${rows}: emitted ${lines.length} physical rows`);
-    assert.ok(lines.length > 0, `rows ${rows}: something must render`);
+    // Fitting is not enough — a frame of pure chrome fits every pane. The
+    // active ticket is the single most valuable row, so it must survive even
+    // at one row, where a "resize me" marker used to take its place and tell
+    // the operator something they can already see.
+    assert.match(frame, /t-b/, `rows ${rows}: the active ticket must survive`);
   }
 });
 
