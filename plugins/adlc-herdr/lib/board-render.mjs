@@ -79,6 +79,11 @@ const ELLIPSIS_W = ELLIPSIS.length;
 /** Shortest elided ticket id worth rendering, same reasoning as MIN_ROOT. */
 const MIN_ID = 6;
 
+/** The same floor once the `ticket ` label is gone. Lower on purpose: there is
+ *  no seven-cell noun left to pay for, and two id characters beside a phase are
+ *  worth more than seven id characters with the phase dropped. */
+const MIN_BARE_ID = 3;
+
 /** Ceiling on any single untrusted field before width work. The widest pane
  *  clampWidth allows is 400 cells, so this is ~20x more than can ever show. */
 const FIELD_CAP = 8192;
@@ -153,6 +158,20 @@ function headerText(repoRoot, ticketLabel, phase, width) {
   // was meant to introduce both gone.
   const bare = phaseText ? `${label} | ${phaseText}` : label;
   if (displayWidth(bare) <= width) return bare;
+
+  // Elide the id but KEEP the phase, mirroring the labelled tier above. The
+  // previous version went straight from "both fit whole" to an id-only elision,
+  // throwing away the phase it had already truncated — so a canonical 28-char
+  // ULID lost P4 at every width from 8 to 17, the exact narrow regime this tier
+  // exists to serve. `<R7 | P4` fits in eight cells.
+  if (shown) {
+    const bareTail = ` | ${shown}`;
+    const bareRoom = width - displayWidth(bareTail);
+    // A lower floor than MIN_ID: with the label gone there is no 7-cell noun to
+    // pay for, and two id characters beside a phase beat seven characters of id
+    // with no phase at all.
+    if (bareRoom >= MIN_BARE_ID) return `${ELLIPSIS}${tailToWidth(label, bareRoom - ELLIPSIS_W)}${bareTail}`;
+  }
   if (displayWidth(label) <= width) return label;
   return `${ELLIPSIS}${tailToWidth(label, width - ELLIPSIS_W)}`;
 }
@@ -248,15 +267,33 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   // sections (t-herdr-7); a non-integer or out-of-range value marks nothing.
   let ti = 0;
 
+  /**
+   * Stop FORMATTING once the pane is full, rather than formatting everything and
+   * slicing at the end.
+   *
+   * Every row is sanitized, segmented and measured in cells. Doing that for all
+   * of a store's tickets to display a handful cost about a second per redraw at
+   * ten thousand tickets — and the board redraws every three seconds, so a large
+   * valid store kept the process CPU-bound and input laggy. Ticket count and
+   * title length are both untrusted; the per-field cap bounds each row but says
+   * nothing about their number.
+   */
+  const budget = Number.isFinite(height) && height > 0 ? Math.floor(height) : Infinity;
+  const push = (line) => {
+    if (lines.length >= budget) return false;
+    lines.push(line);
+    return true;
+  };
+
   const ticketLabel = active?.state === 'active' ? active.id : 'none';
-  lines.push(`${BOLD}${cut(headerText(repoRoot, ticketLabel, phase, emit))}${RESET}`);
+  push(`${BOLD}${cut(headerText(repoRoot, ticketLabel, phase, emit))}${RESET}`);
   // ASCII separator, deliberately. U+2500 is East_Asian_Width=AMBIGUOUS, which
   // a terminal configured for East Asian text renders in TWO cells — one glyph
   // per column then occupies double the pane and wraps the row. Counting all
   // ambiguous characters as wide would shrink every row for everyone (see the
   // Ambiguous test in display-width.test.mjs); the separator is the one
   // character the renderer CHOOSES, so it can simply be unambiguous.
-  lines.push(`${DIM}${'-'.repeat(Math.min(emit, 80))}${RESET}`);
+  push(`${DIM}${'-'.repeat(Math.min(emit, 80))}${RESET}`);
 
   const sections = [
     ['ready', groups?.ready ?? []],
@@ -265,38 +302,46 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   ];
   const total = sections.reduce((n, [, list]) => n + list.length, 0);
   if (total === 0) {
-    lines.push(cut('no tickets'));
+    push(cut('no tickets'));
   } else {
     for (const [name, list] of sections) {
-      lines.push(`${BOLD}${cut(`${name} (${list.length})`)}${RESET}`);
+      if (!push(`${BOLD}${cut(`${name} (${list.length})`)}${RESET}`)) break;
       for (const ticket of list) {
         const isSel = Number.isInteger(selected) && ti === selected;
         const line = cut(`${isSel ? '> ' : '  '}${ticket.id} | ${ticket.title ?? ''}`);
-        lines.push(isSel ? `${BOLD}${line}${RESET}` : line);
+        if (!push(isSel ? `${BOLD}${line}${RESET}` : line)) break;
         ti += 1;
       }
     }
   }
 
-  lines.push(`${BOLD}${cut('panes')}${RESET}`);
+  push(`${BOLD}${cut('panes')}${RESET}`);
   if (!Array.isArray(paneRows) || paneRows.length === 0) {
-    lines.push(`${DIM}${cut('  (no mapped panes)')}${RESET}`);
+    push(`${DIM}${cut('  (no mapped panes)')}${RESET}`);
   } else {
     for (const row of paneRows) {
-      lines.push(cut(`  ${row.paneId} | ${row.agent ?? '?'} | ${row.agentStatus ?? '?'} | ${row.ticket ?? '-'}`));
+      if (!push(cut(`  ${row.paneId} | ${row.agent ?? '?'} | ${row.agentStatus ?? '?'} | ${row.ticket ?? '-'}`))) break;
     }
   }
 
-  lines.push(`${BOLD}${cut('gate ledger')}${RESET}`);
+  push(`${BOLD}${cut('gate ledger')}${RESET}`);
   if (!Array.isArray(ledger) || ledger.length === 0) {
-    lines.push(`${DIM}${cut('  (no records)')}${RESET}`);
+    push(`${DIM}${cut('  (no records)')}${RESET}`);
   } else {
     for (const record of ledger) {
-      lines.push(cut(`  #${record.seq ?? '?'} ${record.gate ?? '?'} | ${record.ticket ?? ''}`));
+      if (!push(cut(`  #${record.seq ?? '?'} ${record.gate ?? '?'} | ${record.ticket ?? ''}`))) break;
     }
   }
 
-  if (Number.isFinite(height) && height > 0 && lines.length > height) {
+  // How many rows the frame WOULD have had. Derived from section lengths rather
+  // than measured from `lines`, because construction now stops at the budget and
+  // never builds the hidden rows — which is the whole point.
+  const plannedRows = 2 // header + separator
+    + (total === 0 ? 1 : sections.length + total)
+    + 1 + Math.max(1, Array.isArray(paneRows) ? paneRows.length : 0)
+    + 1 + Math.max(1, Array.isArray(ledger) ? ledger.length : 0);
+
+  if (budget !== Infinity && plannedRows > budget) {
     // height 1 has no room for both a kept line and the marker; slicing to
     // max(1, height-1) and then pushing produced TWO rows for a one-row budget.
     // One row: keep the HEADER, not a "resize me" marker. gather reserves two
@@ -305,11 +350,11 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
     // already see, while discarding the active ticket and phase. composeFrame
     // sheds chrome afterwards but cannot recover a body line already thrown
     // away, so the choice has to be made here.
-    if (height === 1) return lines[0];
-    const hidden = lines.length - height;
-    const kept = lines.slice(0, height - 1);
-    kept.push(`${DIM}${cut(`  ...${hidden + 1} more (resize to see all)`)}${RESET}`);
-    return kept.join('\n');
+    if (budget === 1) return lines[0];
+    // Overwrite the last BUILT row with the marker: `lines` already holds
+    // exactly `budget` rows, so replacing rather than appending keeps the count.
+    const hidden = plannedRows - budget + 1;
+    lines[budget - 1] = `${DIM}${cut(`  ...${hidden} more (resize to see all)`)}${RESET}`;
   }
   return lines.join('\n');
 }

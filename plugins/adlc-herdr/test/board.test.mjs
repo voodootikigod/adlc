@@ -739,3 +739,61 @@ test('the phase joins the id as soon as both fit, label or no label', () => {
     assert.match(header, /P4/, `width ${width}: ${header}`);
   }
 });
+
+test('a canonical generated id keeps its phase down to eight columns', () => {
+  // The narrow-pane sweeps used the 3-char fixture 't-b', which fits whole and
+  // so never reached the elide-with-phase path. A real 28-char ULID does, and
+  // the label-free tier used to jump straight to an id-only elision — dropping
+  // the phase at every width from 8 to 17, the exact regime it exists for.
+  const id = 'T-01JXT21Q000W3GE1R70W3GE1R7';
+  assert.equal(id.length, 28, 'fixture must match the real generated id length');
+  for (let width = 8; width <= 19; width += 1) {
+    const state = baseState();
+    state.width = width;
+    state.active = { state: 'active', id };
+    state.phase = 'P4';
+    const header = headerOf(state);
+    const context = `width ${width}: ${JSON.stringify(header)}`;
+    assert.match(header, /P4/, `phase lost — ${context}`);
+    assert.match(header, /</, `the id must be marked elided — ${context}`);
+    assert.ok(header.includes(id.slice(-2)), `the id tail must survive — ${context}`);
+    assert.ok(displayWidth(header) <= width, `overflow — ${context}`);
+  }
+});
+
+test('rendering formats only the rows that fit, not the whole backlog', () => {
+  // renderBoard used to sanitize, segment and measure EVERY ticket row and then
+  // slice to the height — about a second per redraw at ten thousand tickets,
+  // repeated every three seconds. Ticket count and title length are both
+  // untrusted; the per-field cap bounds one row but not their number.
+  //
+  // Counting title reads rather than timing: a getter makes this exact and
+  // machine-independent, where a millisecond bound would need calibrating and
+  // could pass for the wrong reason.
+  let reads = 0;
+  const spy = (id) => ({ id, get title() { reads += 1; return `title of ${id}`; } });
+  const state = baseState();
+  state.width = 80;
+  state.height = 20;
+  state.groups = { ready: Array.from({ length: 10_000 }, (_, i) => spy(`t-${i}`)), inFlight: [], blocked: [] };
+
+  const rows = renderBoard(state).split('\n');
+  assert.equal(rows.length, 20, 'the frame still fills the pane');
+  assert.ok(reads <= 20, `formatted ${reads} titles for a 20-row pane`);
+  assert.ok(reads > 0, 'and it did render some rows — otherwise this proves nothing');
+});
+
+test('the hidden count still reflects the whole backlog, not what was built', () => {
+  // The marker is derived from section lengths now, since the hidden rows are
+  // never constructed. It must still tell the operator the real total.
+  const state = baseState();
+  state.width = 80;
+  state.height = 10;
+  state.groups = { ready: Array.from({ length: 500 }, (_, i) => t(`t-${i}`)), inFlight: [], blocked: [] };
+  const rows = renderBoard(state).split('\n');
+  assert.equal(rows.length, 10);
+  const marker = rows[rows.length - 1].replace(/\x1b\[[0-9;]*m/g, '');
+  const hidden = Number(marker.match(/\.\.\.(\d+) more/)?.[1]);
+  // 2 chrome + 3 section headers + 500 tickets + 2 pane rows + 2 ledger rows.
+  assert.equal(hidden, (2 + 3 + 500 + 2 + 2) - 10 + 1, `marker said ${hidden}: ${marker}`);
+});
