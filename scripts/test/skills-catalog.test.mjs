@@ -15,9 +15,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -367,33 +366,11 @@ test('every catalog skill teaches commands that actually exist', () => {
   }
 });
 
-test('the skills smoke resolves its target from argv, and refuses a tree with no catalog', () => {
-  // Offline coverage for the smoke script's own argument handling. Without it,
-  // an off-by-one in argv silently retargets the smoke at the CWD — it would
-  // still "pass" against this repo while testing nothing the operator asked
-  // about. The repo's mutation-gate caught exactly that mutant surviving.
-  const emptyDir = mkdtempSync(path.join(tmpdir(), 'adlc-no-catalog-'));
-  try {
-    const result = spawnSync(
-      process.execPath,
-      [path.join(repoRoot, 'scripts/skills-add-smoke.mjs'), emptyDir],
-      { encoding: 'utf8', cwd: repoRoot, timeout: 30_000 },
-    );
-
-    assert.equal(result.status, 1, 'a tree with no skills/ must fail the smoke, not pass it');
-    assert.ok(
-      result.stdout.includes(emptyDir),
-      `the smoke must report the target it resolved from argv; stdout was:\n${result.stdout}`,
-    );
-    assert.match(
-      result.stderr,
-      /does not exist/,
-      'the smoke must say why it refused, naming the missing catalog',
-    );
-  } finally {
-    rmSync(emptyDir, { recursive: true, force: true });
-  }
-});
+// Coverage for scripts/skills-add-smoke.mjs lives in scripts/test/skills-add-smoke.test.mjs.
+// The filename is not cosmetic: mutation-gate maps `scripts/<name>.mjs` to
+// `scripts/test/<name>.test.mjs` and only takes the fast path when that exact
+// file exists. Hosting those assertions here left the smoke script with "no
+// known fast test target", forcing the gate onto the full-suite fallback.
 
 test('every surface that recommends skills.sh states the channel is skills only', () => {
   // ADR-0009 Decision 4: we document only the coverage a channel actually has.
