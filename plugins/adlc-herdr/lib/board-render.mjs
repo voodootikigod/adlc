@@ -257,7 +257,7 @@ export function composeFrame(body, footer, terminalRows) {
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane
  *  would scroll and duplicate every refresh. A truncated frame ends with a
  *  "...N more" marker. */
-export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
+export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected, fleetRows }) {
   const emit = emitWidth(width); // never write past the real pane, floor or not
   // Truncate by terminal CELLS. sanitizeToken's cap is code units, so a row of
   // CJK text passed its check at `w` characters and then occupied 2w columns.
@@ -333,13 +333,37 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
     }
   }
 
+  // Fleet run summary (t-herdr-9): terminal fleet tickets collapse to one row
+  // each, shown only while a run is present. Routed through push()/cut() like
+  // every other section rather than pushed directly — otherwise it would
+  // reintroduce exactly what this branch removed: unbounded formatting past the
+  // height budget, code-unit truncation, and an ambiguous-width separator that
+  // wraps on an East Asian terminal.
+  const fleet = Array.isArray(fleetRows) ? fleetRows : [];
+  if (fleet.length > 0) {
+    push(`${BOLD}${cut('fleet')}${RESET}`);
+    for (const row of fleet) {
+      // `·` here, not the ASCII `|` used everywhere else in this module. The
+      // separator is pinned by test/fleet-bridge.test.mjs, a FROZEN RAIL
+      // (t-herdr-9) asserting /t-b · failed/ — a rail outranks a policy this
+      // branch introduced, and rewriting the contract test to match new code is
+      // exactly what rails exist to prevent. The residual is bounded: U+00B7 is
+      // ambiguous-width, so on an East Asian terminal this one row can run a
+      // cell over unless ADLC_HERDR_AMBIGUOUS_WIDTH=wide is declared, which
+      // measures it correctly. Worth raising with the rail's owner rather than
+      // resolving unilaterally here.
+      if (!push(cut(`  ${row.ticketId} · ${row.state}`))) break;
+    }
+  }
+
   // How many rows the frame WOULD have had. Derived from section lengths rather
   // than measured from `lines`, because construction now stops at the budget and
   // never builds the hidden rows — which is the whole point.
   const plannedRows = 2 // header + separator
     + (total === 0 ? 1 : sections.length + total)
     + 1 + Math.max(1, Array.isArray(paneRows) ? paneRows.length : 0)
-    + 1 + Math.max(1, Array.isArray(ledger) ? ledger.length : 0);
+    + 1 + Math.max(1, Array.isArray(ledger) ? ledger.length : 0)
+    + (fleet.length > 0 ? 1 + fleet.length : 0); // fleet header + its rows
 
   if (budget !== Infinity && plannedRows > budget) {
     // height 1 has no room for both a kept line and the marker; slicing to

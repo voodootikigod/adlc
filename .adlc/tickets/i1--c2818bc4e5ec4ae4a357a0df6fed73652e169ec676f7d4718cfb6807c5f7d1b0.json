@@ -1,0 +1,22 @@
+{
+  "body": "Spec: .adlc/specs/install-experience.md (I1 section is binding).\n\n=== CONTEXT ===\nskills.sh is vercel-labs/skills (`npx skills add <owner>/<repo>`), reaching ~70 harnesses. It has NO submission process: its FAQ states skills appear on the leaderboard automatically via anonymous telemetry when users run `npx skills add`. Listing is install-driven, so being installable IS being registered. The only human-gated surface is GET /api/v1/skills/curated (\"official first-party skills from technology makers\"), which is outreach and out of scope here.\n\nThe ADLC repo is currently unreachable through that channel. The skills CLI discovers skills in `skills/<name>/SKILL.md`, `skills/<category>/<name>/SKILL.md`, `.claude/skills/`, and `.agents/skills/`. All 24 ADLC SKILL.md files live under `plugins/adlc-<harness>/skills/`, which is not a discovered container, so `npx skills add voodootikigod/adlc` finds nothing.\n\nA skills.sh install delivers SKILLS ONLY -- no hooks, no MCP tools, no agents, no rails enforcement. It is a strictly weaker install than any native plugin and must be positioned as an on-ramp, never as the recommended path (ADR-0009 Decision 4, claim accuracy).\n\n=== TASK ===\n1. Add a top-level `skills/` catalog of harness-neutral ADLC skills, starting with the phase router at `skills/adlc/SKILL.md`. Neutral means: no `/adlc:*`, no `$adlc-*`, no `/adlc-*`; the only dependency is `adlc <tool>` on PATH.\n2. Add `test/skills-catalog.test.mjs` with three cases -- frontmatter validity, neutrality (no harness-specific invocation syntax), and drift (every P0-P7 phase label and every gate tool name in plugins/adlc-claude-code/skills/adlc/SKILL.md also appears in skills/adlc/SKILL.md).\n3. Add a `scripts/skills-add-smoke.mjs` network smoke that runs `npx --yes skills add ./` against a temporary HOME. Not part of the offline unit suite.\n4. Document the channel and its limits in README.md and the integrations index, using the phrase \"skills only\" and claiming no hooks/MCP/rails coverage. Add the honesty case to the test.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1.1: skills/adlc/SKILL.md exists with valid non-empty name and description frontmatter. VERIFY: `node --test test/skills-catalog.test.mjs` frontmatter case passes.\n- AC1.2: No skills/**/SKILL.md contains /adlc:, $adlc-, or /adlc-. VERIFY: `node --test test/skills-catalog.test.mjs` neutrality case passes.\n- AC1.3: Dropping a gate name from either skills/adlc/SKILL.md or the Claude Code router fails the drift case. VERIFY: `node --test test/skills-catalog.test.mjs` drift case passes, and the mutation is demonstrated to fail it.\n- AC1.4: `npx --yes skills add ./` resolves the catalog. VERIFY: `node scripts/skills-add-smoke.mjs` exits 0 with adlc named in stdout.\n- AC1.5: Every file naming skills.sh contains \"skills only\" in the same section and claims no hooks/MCP/rails for that channel. VERIFY: `node --test test/skills-catalog.test.mjs` honesty case passes.",
+  "budget": "direct",
+  "category": "feat",
+  "duration": 1,
+  "edges": [
+    {
+      "to": "I4"
+    }
+  ],
+  "id": "I1",
+  "rails": [],
+  "scope": [
+    "skills/**",
+    "test/skills-catalog.test.mjs",
+    "scripts/skills-add-smoke.mjs",
+    "README.md",
+    "docs/integrations/**",
+    "apps/docs/content/docs/integrations/**"
+  ],
+  "title": "Make ADLC installable from skills.sh via a harness-neutral top-level skills/ catalog"
+}

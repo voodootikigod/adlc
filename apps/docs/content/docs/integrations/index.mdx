@@ -23,6 +23,25 @@ harness below.
 - **[Antigravity](/docs/integrations/antigravity)** is a native `agy` plugin with an
   in-session rails-guard hook, backed by the unbypassable CI rail-freeze gate.
 
+## Any other agent
+
+Harnesses without a native ADLC plugin can install the harness-neutral skill
+catalog from [skills.sh](https://skills.sh), which reaches roughly seventy
+agents:
+
+```sh
+npx skills add voodootikigod/adlc
+npm install -g @adlc/cli
+adlc init
+```
+
+That channel installs **skills only** — the phase router, the bootstrap guide,
+and the P5 prosecution workflow, each driven through the `adlc` CLI. It installs
+no hooks, no MCP tools, no agents, and no in-session rail enforcement, so it is
+strictly weaker than any native integration above. Where a native plugin exists,
+prefer it. With the catalog alone, the CI `rails-guard` job is your only rail
+control.
+
 ## Orchestrating harnesses in parallel
 
 These integrations wire the gates *into* each harness. The

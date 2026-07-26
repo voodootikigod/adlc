@@ -1,0 +1,63 @@
+name: Sync herdr plugin mirror
+
+# Keeps the herdr marketplace mirror (voodootikigod/adlc-herdr) in lockstep with
+# the plugin in this monorepo. Fires only on a push to main that touches the
+# plugin (or the sync script): flattens plugins/adlc-herdr/ to the mirror's root
+# and pushes. The mirror push is authenticated by a deploy key scoped to write
+# ONLY that one repo (secret HERDR_MIRROR_DEPLOY_KEY); this workflow's own
+# GITHUB_TOKEN stays read-only.
+#
+# Indexing is by GitHub TOPIC, not git tags: herdr's marketplace lists public
+# repos carrying the `herdr-plugin` topic, re-scans the default branch (~30 min),
+# and `herdr plugin install voodootikigod/adlc-herdr` installs from that branch —
+# no git version tags are involved (the plugin's version lives in the synced
+# herdr-plugin.toml). So syncing `main` is sufficient; there is deliberately no
+# tag trigger or tag push here. (Verified: install works against the untagged
+# mirror.)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/adlc-herdr/**'
+      - 'LICENSE' # the mirror re-publishes the monorepo LICENSE, so a license change must re-sync
+      - 'scripts/sync-herdr-mirror.mjs'
+      - '.github/workflows/sync-herdr-mirror.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-herdr-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: monorepo
+      - name: Checkout mirror (write, via deploy key)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: voodootikigod/adlc-herdr
+          path: mirror
+          ssh-key: ${{ secrets.HERDR_MIRROR_DEPLOY_KEY }}
+      - name: Flatten the plugin into the mirror
+        run: node "$GITHUB_WORKSPACE/monorepo/scripts/sync-herdr-mirror.mjs" "$GITHUB_WORKSPACE/mirror" --repo-root "$GITHUB_WORKSPACE/monorepo"
+      - name: Commit + push if the mirror changed
+        working-directory: mirror
+        env:
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          git config user.name "adlc-herdr-mirror-bot"
+          git config user.email "adlc-herdr-mirror-bot@users.noreply.github.com"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "mirror already in sync — nothing to push"
+            exit 0
+          fi
+          sha="$(git -C "$GITHUB_WORKSPACE/monorepo" rev-parse --short HEAD)"
+          git add -A
+          git commit -m "mirror: sync adlc-herdr from ${SOURCE_REPO}@${sha}"
+          git push

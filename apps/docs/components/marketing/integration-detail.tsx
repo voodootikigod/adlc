@@ -236,12 +236,17 @@ export function IntegrationDetailPage({ integration }: { integration: Integratio
             </div>
             <SurfaceCounts integration={integration} />
           </div>
-          <NativeBundle integration={integration} />
+          {/* Install leads the hero. The bundle tree is orientation, not action,
+              so it moves down beside the surfaces it actually describes. */}
+          <IntegrationCard integration={integration} />
         </div>
       </MarketingSection>
 
       <div style={{ background: '#18191d' }}>
         <MarketingSection kicker={integration.surfacesSection.kicker} title={integration.surfacesSection.title}>
+          <div className="mb-10 lg:max-w-md">
+            <NativeBundle integration={integration} />
+          </div>
           <NativeSurfaces integration={integration} />
         </MarketingSection>
       </div>

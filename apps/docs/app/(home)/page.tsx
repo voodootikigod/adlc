@@ -6,7 +6,9 @@ import { SERIES_BASE, theoryLink } from '@/lib/theory-links.mjs';
 import { ALL_PACKAGES } from '@/lib/toolkit-packages.mjs';
 import { SITE_URL } from '@/lib/routes.mjs';
 import { MARKETING_GATES } from '@/lib/marketing-gates.mjs';
+import { UNIVERSAL_INSTALL } from '@/lib/install-commands.mjs';
 import { MarketingSection } from '@/components/marketing/section';
+import { InstallCommand } from '@/components/marketing/install-command';
 import { TerminalCard } from '@/components/marketing/terminal-card';
 import { Backdrop } from '@/components/marketing/backdrop';
 import { Barbell } from '@/components/marketing/barbell';
@@ -75,13 +77,27 @@ export default function HomePage() {
             models actually fail. Every phase has an explicit exit contract: deterministic
             gates leave machine-checkable evidence, and human gates record attestation.
           </p>
+          {/* Install leads. A visitor who is already sold should not have to
+              navigate to a second page to find the command. */}
+          <div className="flex max-w-2xl flex-col gap-3">
+            <InstallCommand command={UNIVERSAL_INSTALL} label="Install the toolkit and your agent integrations" />
+            <p className="text-sm" style={{ color: 'var(--mk-muted)' }}>
+              macOS and Linux, Node 18+. Then{' '}
+              <code style={{ color: '#4fb4d8' }}>adlc init</code> in your repo. Cursor
+              and OpenCode need one manual step, which the installer prints —{' '}
+              <Link href="/integrations" style={{ color: '#4fb4d8' }}>
+                see what gets installed
+              </Link>
+              .
+            </p>
+          </div>
           <div className="flex flex-wrap gap-4">
             <Link
               href="/integrations"
               className="rounded-md px-5 py-2.5 font-medium"
               style={{ background: '#4fb4d8', color: '#1c1d21' }}
             >
-              Install for your agent
+              Native integrations
             </Link>
             <Link
               href="/vs-sdlc"

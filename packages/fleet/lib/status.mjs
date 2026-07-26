@@ -20,8 +20,15 @@ export const TERMINAL_STATES = ['merged', 'failed', 'blocked'];
  * reconciliation (§6.4, N2); they are NOT `base`, because successful work merges
  * only into the integration branch.
  */
+// Version of the fleet-status.json shape. It is an internal resumable cache AND
+// a read-only observation surface (the herdr plugin reads it); a consumer that
+// sees an unknown/absent version must degrade to polling `fleet status --json`.
+// Bump ONLY on a breaking change to the observed fields.
+export const FLEET_STATUS_SCHEMA_VERSION = 1;
+
 export function newStatus({ runId, base, baseSha, integrationBranch, concurrency, sandboxMode, startedAt }) {
   return {
+    schemaVersion: FLEET_STATUS_SCHEMA_VERSION,
     runId,
     base,
     baseSha,

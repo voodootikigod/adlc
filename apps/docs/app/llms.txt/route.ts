@@ -29,6 +29,10 @@ export function GET() {
     '',
     integrations,
     '',
+    '## For agents',
+    '',
+    `- [Agent onboarding guide](${SITE_URL}/agent-guide.md): step-by-step install and setup instructions written for a coding agent acting on a human's behalf — harness detection, install paths, first-run walkthrough, and the constraints an agent must respect.`,
+    '',
     '## Documentation',
     '',
   ].join('\n');

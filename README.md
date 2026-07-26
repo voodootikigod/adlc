@@ -28,6 +28,55 @@ product.
 
 ## Install
 
+One command installs the gate toolkit **and** the native ADLC integration for
+every agent harness it finds on your machine:
+
+```sh
+curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh
+```
+
+Then `cd` into a repo and run `adlc init`.
+
+Requires **macOS or Linux** and **Node.js 18+** — the installer checks Node and
+stops if it is missing rather than installing a runtime for you. Harnesses you
+do not have are left alone.
+
+Automated: Claude Code, Codex, GitHub Copilot, pi, Google Antigravity, herdr.
+Two need a step the installer cannot take for you, and it prints them:
+**Cursor** installs plugins through its in-app marketplace, and **OpenCode**
+scaffolds the current directory, so it must be run inside your repo rather than
+from wherever you invoked the installer. pi is also skipped below Node 22.19,
+which is its own floor.
+
+**Windows is not supported yet.** A `windows-latest` run of the core gate suites
+passed 6 of 28: the shared bin-resolution path builds `D:\D:\…` from an
+already-absolute Windows path, and most gates die on it. Use WSL until that is
+fixed. (`adlc fleet` is POSIX-only by design regardless.)
+
+Piping a remote script to a shell is a real tradeoff — see
+[ADR-0010](./docs/adr/0010-first-party-curl-installer.md) for why we serve one
+and what controls sit behind it.
+
+**For CI, or to read it first**, fetch and run as separate steps:
+
+```sh
+tmp=$(mktemp -d) \
+  && curl -fsSL https://www.agenticlifecycle.ai/install.sh -o "$tmp/install.sh" \
+  && [ -s "$tmp/install.sh" ] \
+  && sh "$tmp/install.sh"
+```
+
+Every link matters, including the first: if `mktemp` fails, `$tmp` is empty and
+an unchained `curl -o "$tmp/install.sh"` resolves to `/install.sh` — a write to
+the filesystem root. Without the non-empty check, a failed download still runs
+`sh` on an empty file and reports success anyway.
+
+In the piped one-liner the exit status is `sh`'s, not `curl`'s — a failed or
+empty download makes `sh` read nothing and exit 0, reporting success having
+installed nothing. Two steps make a failed download fail.
+
+### Just the toolkit
+
 Each package publishes independently under the `@adlc` npm scope. For normal use,
 install the dispatcher and run tools through the stable `adlc <tool>` surface:
 
@@ -95,6 +144,25 @@ Each agent tool has its own native integration. See the guides:
 - **[Google Antigravity](./docs/integrations/antigravity.md)** — native plugin system.
 - **[OpenCode](./docs/integrations/opencode.md)** — full phase-router coverage.
 - **[Pi](./docs/integrations/pi.md)** — TypeScript Extension integration.
+
+## Use it in any other agent
+
+For the ~70 harnesses that support [skills.sh](https://skills.sh) but have no
+native ADLC plugin, the harness-neutral skill catalog is one command:
+
+```sh
+npx skills add voodootikigod/adlc   # the harness-neutral skill catalog
+npm install -g @adlc/cli            # the gate toolkit the skills shell out to
+adlc init                           # bootstrap .adlc/ in your repo (once)
+```
+
+This channel installs **skills only** — the phase router, the bootstrap guide,
+and the P5 prosecution workflow, all driven through the `adlc` CLI. It does
+**not** install hooks, MCP tools, agents, or in-session rail enforcement. If
+your agent is one of the seven with a native plugin above, install that
+instead: it is a strictly stronger integration. With the skills catalog, the CI
+`rails-guard` job in [docs/ci/rails-guard.yml](./docs/ci/rails-guard.yml) is
+your only rail control — wire it and make it a required check.
 
 ## Project layout
 

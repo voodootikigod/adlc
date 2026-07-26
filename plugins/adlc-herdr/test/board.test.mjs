@@ -797,3 +797,41 @@ test('the hidden count still reflects the whole backlog, not what was built', ()
   // 2 chrome + 3 section headers + 500 tickets + 2 pane rows + 2 ledger rows.
   assert.equal(hidden, (2 + 3 + 500 + 2 + 2) - 10 + 1, `marker said ${hidden}: ${marker}`);
 });
+
+test('fleet rows obey the same width, budget and ASCII rules as every other section', () => {
+  // The fleet section arrived on main while this branch rewrote the renderer.
+  // Merging it in unchanged would have reintroduced exactly what was removed:
+  // code-unit truncation, formatting past the height budget, and an
+  // ambiguous-width middle dot that occupies two cells on an East Asian
+  // terminal. It goes through push()/cut() like everything else.
+  const state = baseState();
+  state.width = 40;
+  state.fleetRows = [
+    { ticketId: 't-fleet-1', state: 'merged' },
+    { ticketId: '日本語のチケット'.repeat(4), state: '完了' },
+  ];
+  const lines = renderBoard(state).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+
+  assert.ok(lines.some((l) => l.includes('fleet')), 'the fleet header must render');
+  assert.ok(lines.some((l) => l.includes('t-fleet-1')), 'and its rows');
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 40, `fleet row exceeds the pane: ${line}`);
+    // NB: the fleet row keeps '·' — pinned by the t-herdr-9 rail. It is the one
+    // renderer-owned ambiguous glyph left, documented in board-render.mjs.
+  }
+});
+
+test('fleet rows are counted in the hidden total and cut off at the budget', () => {
+  // plannedRows is derived, not measured, so a section it forgets is a section
+  // whose rows are silently missing from the "N more" count.
+  const state = baseState();
+  state.width = 60;
+  state.height = 8;
+  state.fleetRows = Array.from({ length: 30 }, (_, i) => ({ ticketId: `t-${i}`, state: 'merged' }));
+  const lines = renderBoard(state).split('\n');
+  assert.equal(lines.length, 8, 'the frame still fits the pane');
+  const marker = lines[lines.length - 1].replace(/\x1b\[[0-9;]*m/g, '');
+  // 2 chrome + 3 section headers + 3 tickets + 2 panes + 2 ledger + 1 fleet header + 30 fleet.
+  const hidden = Number(marker.match(/\.\.\.(\d+) more/)?.[1]);
+  assert.equal(hidden, (2 + 3 + 3 + 2 + 2 + 1 + 30) - 8 + 1, `marker said ${hidden}: ${marker}`);
+});
