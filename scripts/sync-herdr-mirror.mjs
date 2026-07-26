@@ -15,8 +15,8 @@
 //   node scripts/sync-herdr-mirror.mjs <target-dir> [--repo-root <path>]
 //
 // Exit: 0 = synced · 1 = operational error (bad target, missing plugin, …).
-import { existsSync, statSync, readdirSync, rmSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
+import { existsSync, statSync, readdirSync, rmSync, cpSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { join, dirname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const PLUGIN_SUBDIR = 'plugins/adlc-herdr';
@@ -40,15 +40,24 @@ export function mirrorBanner() {
 
 /**
  * Transform the plugin README for the mirror: prepend the banner and rewrite any
- * monorepo-relative link (`](../x)`, `](../../x)`) to an absolute blob URL on the
- * monorepo (relative links up out of the plugin dir would 404 at the mirror root).
- * Already-absolute links and in-repo links are left untouched. Pure.
+ * monorepo-relative link that escapes the plugin dir (`](../x)`, `](../../x)`, and
+ * the reference-style form `[label]: ../x`) to an absolute blob URL on the monorepo
+ * — such links would 404 at the mirror root. Already-absolute links and in-repo
+ * links (`./x`) are left untouched. Pure.
  */
 export function transformReadme(text) {
-  const body = String(text).replace(
-    /\]\((?:\.\.\/)+([^)]+)\)/g,
-    `](https://github.com/${MONOREPO}/blob/main/$1)`,
-  );
+  const body = String(text)
+    // inline links: [text](../path)
+    .replace(
+      /\]\((?:\.\.\/)+([^)]+)\)/g,
+      `](https://github.com/${MONOREPO}/blob/main/$1)`,
+    )
+    // reference-style definitions: [label]: ../path  (preserve the whitespace,
+    // and match only the URL token so an optional "title" after it is left alone)
+    .replace(
+      /\]:(\s*)(?:\.\.\/)+(\S+)/g,
+      `]:$1https://github.com/${MONOREPO}/blob/main/$2`,
+    );
   return mirrorBanner() + body;
 }
 
@@ -72,14 +81,36 @@ function isSameOrInside(inner, outer) {
 function assertSafeTarget(targetDir, repoRoot) {
   if (!targetDir || typeof targetDir !== 'string') throw new Error('a target directory is required');
   if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) throw new Error(`target is not a directory: ${targetDir}`);
-  const absTarget = resolve(targetDir);
-  const absRoot = resolve(repoRoot);
+  // realpathSync (not just resolve) so the overlap check sees the TRUE path:
+  // it canonicalizes case on case-insensitive filesystems (macOS/Windows, where
+  // `/Repo` and `/repo` are one dir) and resolves symlinks (a target symlinked to
+  // the source). A plain string compare would miss both and wipe the source.
+  // Both paths exist here (target checked above, repoRoot holds the plugin), so
+  // realpathSync cannot throw for a missing path.
+  const absTarget = realpathSync(targetDir);
+  const absRoot = realpathSync(repoRoot);
   if (isSameOrInside(absTarget, absRoot) || isSameOrInside(absRoot, absTarget)) {
     throw new Error(`refusing to sync into the source repo or an overlapping path: ${absTarget}`);
   }
   const entries = readdirSync(targetDir);
   if (entries.length > 0 && !entries.includes('.git')) {
     throw new Error(`refusing to sync into a non-empty, non-git directory: ${targetDir}`);
+  }
+}
+
+// Fail CLOSED if the copied tree holds any symlink. Our plugin is only regular
+// files/dirs, so a symlink is a tampering signal — and a dangerous one: the
+// README transform (readFileSync/writeFileSync) FOLLOWS a symlink, so a README
+// committed as a link to a runner file ($GITHUB_ENV, .git/config, …) would be
+// overwritten THROUGH it; and any symlink shipped to the mirror could point
+// anywhere on a cloner's disk. Reject rather than follow. `.git` (the mirror's
+// own) is skipped. Dirent.isSymbolicLink() reports the entry without following it.
+function assertNoSymlinks(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '.git') continue;
+    const p = join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`refusing to sync a symlink (tampering signal): ${p}`);
+    if (entry.isDirectory()) assertNoSymlinks(p);
   }
 }
 
@@ -115,6 +146,8 @@ export function syncMirror({ repoRoot, targetDir }) {
   // schedule), a lateral-movement path into the mirror repo. The mirror is a
   // read-only artifact: it must carry none of its own CI. Strip it unconditionally.
   rmSync(join(targetDir, '.github'), { recursive: true, force: true });
+  // Reject any symlink in the copied tree before we read/write through one below.
+  assertNoSymlinks(targetDir);
   // Carry the monorepo LICENSE over (the plugin dir has none of its own).
   const license = join(repoRoot, 'LICENSE');
   if (existsSync(license)) cpSync(license, join(targetDir, 'LICENSE'));

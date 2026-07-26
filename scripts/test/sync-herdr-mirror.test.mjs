@@ -3,7 +3,7 @@
 // .git preservation, fail-closed target guard).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { transformReadme, mirrorBanner, syncMirror, MIRROR, MONOREPO } from '../sync-herdr-mirror.mjs';
@@ -30,6 +30,13 @@ test('transformReadme prepends the banner and rewrites monorepo-relative links t
   assert.match(out, new RegExp(`\\]\\(https://github.com/${MONOREPO}/blob/main/lib/x.mjs\\)`), '../ link → absolute');
   assert.match(out, /\]\(https:\/\/herdr\.dev\)/, 'already-absolute link untouched');
   assert.match(out, /\]\(\.\/README\.md\)/, 'in-repo relative link untouched');
+});
+
+test('transformReadme rewrites reference-style link definitions too, not just inline links', () => {
+  const out = transformReadme('# x\n\n[plan]: ../../docs/plan.md\n[abs]: https://herdr.dev\n[here]: ./README.md\n');
+  assert.match(out, new RegExp(`\\]: https://github.com/${MONOREPO}/blob/main/docs/plan.md`), 'ref-style ../ definition → absolute');
+  assert.match(out, /\]: https:\/\/herdr\.dev/, 'already-absolute ref-style definition untouched');
+  assert.match(out, /\]: \.\/README\.md/, 'in-repo ref-style definition untouched');
 });
 
 // Build a minimal fake monorepo root with a plugins/adlc-herdr tree + LICENSE.
@@ -106,6 +113,27 @@ test('syncMirror REFUSES to sync into the source repo itself even when it is a g
   mkdirSync(join(root, '.git')); // the monorepo IS a git checkout, so the .git-presence check alone would have passed — and then wiped it
   assert.throws(() => syncMirror({ repoRoot: root, targetDir: root }), /source repo or an overlapping path/);
   assert.ok(existsSync(join(root, 'plugins', 'adlc-herdr', 'herdr-plugin.toml')), 'the source tree is left untouched');
+});
+
+test('syncMirror resolves symlinks before the overlap check (a target symlinked to the source is refused, not wiped)', () => {
+  const root = fakeRepo();
+  mkdirSync(join(root, '.git')); // make the source look like a valid checkout so only the overlap guard can stop it
+  const link = join(mkdtempSync(join(tmpdir(), 'adlc-mirror-lnk-')), 'target-link');
+  symlinkSync(root, link); // target is a symlink pointing AT the source root — a plain string compare would miss it
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: link }), /source repo or an overlapping path/);
+  assert.ok(existsSync(join(root, 'plugins', 'adlc-herdr', 'herdr-plugin.toml')), 'the source tree is left untouched');
+});
+
+test('syncMirror FAILS CLOSED if the plugin tree contains a symlink (no write-through, no shipped symlink)', () => {
+  const root = fakeRepo();
+  const plugin = join(root, 'plugins', 'adlc-herdr');
+  const secret = join(mkdtempSync(join(tmpdir(), 'adlc-mirror-sec-')), 'secret.txt');
+  writeFileSync(secret, 'top secret');
+  rmSync(join(plugin, 'README.md'));
+  symlinkSync(secret, join(plugin, 'README.md')); // README committed as a symlink to an outside file
+  const target = mkdtempSync(join(tmpdir(), 'adlc-mirror-dst-'));
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: target }), /symlink \(tampering signal\)/);
+  assert.equal(readFileSync(secret, 'utf8'), 'top secret', 'the symlink target file was NOT written through');
 });
 
 test('syncMirror REFUSES a target that CONTAINS the source repo (overlap either direction)', () => {
