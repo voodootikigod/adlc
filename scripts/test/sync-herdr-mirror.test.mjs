@@ -68,6 +68,35 @@ test('syncMirror FAILS CLOSED on a non-empty target that is not a git checkout (
   assert.ok(existsSync(join(target, 'important.txt')), 'the non-mirror dir is left untouched');
 });
 
+test('syncMirror rejects a NON-EXISTENT target with a clear message (pins the exists-OR-is-directory guard)', () => {
+  const root = fakeRepo();
+  const missing = join(mkdtempSync(join(tmpdir(), 'adlc-mirror-')), 'does-not-exist');
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: missing }), /target is not a directory/);
+});
+
+test('syncMirror rejects a target that is a FILE, not a directory (pins the is-directory guard)', () => {
+  const root = fakeRepo();
+  const filePath = join(mkdtempSync(join(tmpdir(), 'adlc-mirror-')), 'a-file');
+  writeFileSync(filePath, 'i am a file');
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: filePath }), /target is not a directory/);
+});
+
+test('syncMirror REFUSES to sync into the source repo itself even when it is a git checkout (the `node sync.mjs .` footgun)', () => {
+  const root = fakeRepo();
+  mkdirSync(join(root, '.git')); // the monorepo IS a git checkout, so the .git-presence check alone would have passed — and then wiped it
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: root }), /source repo or an overlapping path/);
+  assert.ok(existsSync(join(root, 'plugins', 'adlc-herdr', 'herdr-plugin.toml')), 'the source tree is left untouched');
+});
+
+test('syncMirror REFUSES a target that CONTAINS the source repo (overlap either direction)', () => {
+  const base = mkdtempSync(join(tmpdir(), 'adlc-mirror-nest-'));
+  const root = join(base, 'mono');
+  mkdirSync(join(root, 'plugins', 'adlc-herdr'), { recursive: true });
+  writeFileSync(join(root, 'plugins', 'adlc-herdr', 'herdr-plugin.toml'), 'id = "adlc"\n');
+  mkdirSync(join(base, '.git')); // make the enclosing dir look like a valid checkout so only the overlap guard can stop it
+  assert.throws(() => syncMirror({ repoRoot: root, targetDir: base }), /source repo or an overlapping path/);
+});
+
 test('syncMirror throws when the plugin dir is missing (operational error, not a silent no-op)', () => {
   const empty = mkdtempSync(join(tmpdir(), 'adlc-mirror-norepo-'));
   const target = mkdtempSync(join(tmpdir(), 'adlc-mirror-dst-'));

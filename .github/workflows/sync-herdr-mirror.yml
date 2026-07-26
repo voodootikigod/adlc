@@ -6,6 +6,14 @@ name: Sync herdr plugin mirror
 # and pushes. The mirror push is authenticated by a deploy key scoped to write
 # ONLY that one repo (secret HERDR_MIRROR_DEPLOY_KEY); this workflow's own
 # GITHUB_TOKEN stays read-only.
+#
+# Indexing is by GitHub TOPIC, not git tags: herdr's marketplace lists public
+# repos carrying the `herdr-plugin` topic, re-scans the default branch (~30 min),
+# and `herdr plugin install voodootikigod/adlc-herdr` installs from that branch —
+# no git version tags are involved (the plugin's version lives in the synced
+# herdr-plugin.toml). So syncing `main` is sufficient; there is deliberately no
+# tag trigger or tag push here. (Verified: install works against the untagged
+# mirror.)
 on:
   push:
     branches: [main]

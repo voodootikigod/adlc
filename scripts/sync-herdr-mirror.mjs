@@ -16,7 +16,7 @@
 //
 // Exit: 0 = synced · 1 = operational error (bad target, missing plugin, …).
 import { existsSync, statSync, readdirSync, rmSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const PLUGIN_SUBDIR = 'plugins/adlc-herdr';
@@ -52,12 +52,31 @@ export function transformReadme(text) {
   return mirrorBanner() + body;
 }
 
+// True when `inner` is the same path as, or nested inside, `outer` (both resolved
+// to absolute). Uses path.relative so it never trips the string-prefix trap
+// (`/a` vs `/ab`): a `..` segment or an absolute result means "not inside".
+function isSameOrInside(inner, outer) {
+  const rel = relative(outer, inner);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 // Fail CLOSED on a target that doesn't look like a mirror checkout, so a wrong
 // path can never be wiped: it must be an existing directory that is either empty
-// or already a git repo (a `.git` entry).
-function assertSafeTarget(targetDir) {
+// or already a git repo (a `.git` entry), AND it must not overlap the source repo.
+// The overlap guard is the important one: the sync CLEARS the target before
+// copying, so a target that IS, contains, or sits inside `repoRoot` would delete
+// the very tree we read from — e.g. `node sync-herdr-mirror.mjs .` run from the
+// monorepo root would pass a naive `.git`-presence check (the monorepo has a
+// `.git`) and then wipe the whole working tree. The CI workflow checks the
+// monorepo and the mirror out into sibling dirs, so this guard never fires there.
+function assertSafeTarget(targetDir, repoRoot) {
   if (!targetDir || typeof targetDir !== 'string') throw new Error('a target directory is required');
   if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) throw new Error(`target is not a directory: ${targetDir}`);
+  const absTarget = resolve(targetDir);
+  const absRoot = resolve(repoRoot);
+  if (isSameOrInside(absTarget, absRoot) || isSameOrInside(absRoot, absTarget)) {
+    throw new Error(`refusing to sync into the source repo or an overlapping path: ${absTarget}`);
+  }
   const entries = readdirSync(targetDir);
   if (entries.length > 0 && !entries.includes('.git')) {
     throw new Error(`refusing to sync into a non-empty, non-git directory: ${targetDir}`);
@@ -72,7 +91,7 @@ function assertSafeTarget(targetDir) {
 export function syncMirror({ repoRoot, targetDir }) {
   const pluginDir = join(repoRoot, PLUGIN_SUBDIR);
   if (!existsSync(pluginDir)) throw new Error(`plugin dir not found: ${pluginDir}`);
-  assertSafeTarget(targetDir);
+  assertSafeTarget(targetDir, repoRoot);
 
   // Clear everything except .git so files DELETED from the plugin are also removed
   // from the mirror (a plain copy would leave stale files behind).
