@@ -25,6 +25,17 @@ const truncateToWidth = (text, max) => rawTruncateToWidth(text, max, WIDTH_OPTS)
 const tailToWidth = (text, max) => rawTailToWidth(text, max, WIDTH_OPTS);
 
 /**
+ * Truncate a row as if ambiguous-width characters were WIDE, whatever the
+ * declared mode.
+ *
+ * For a row the renderer knows contains an ambiguous glyph it cannot replace —
+ * today only the fleet separator, pinned by a frozen rail. Over-counting costs
+ * at most one character of content and can never overflow; under-counting wraps
+ * the row and corrupts every later cursor-home redraw.
+ */
+const cutAmbiguousSafe = (text, max) => rawTruncateToWidth(text, max, { ambiguousWide: true });
+
+/**
  * ASCII ONLY for renderer-owned text — separators, ellipses, key hints.
  *
  * U+2500, U+00B7, U+2026 and the arrow glyphs are all East_Asian_Width
@@ -343,16 +354,20 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   if (fleet.length > 0) {
     push(`${BOLD}${cut('fleet')}${RESET}`);
     for (const row of fleet) {
-      // `·` here, not the ASCII `|` used everywhere else in this module. The
+      // `·` here, not the ASCII `|` used everywhere else in this module: the
       // separator is pinned by test/fleet-bridge.test.mjs, a FROZEN RAIL
-      // (t-herdr-9) asserting /t-b · failed/ — a rail outranks a policy this
-      // branch introduced, and rewriting the contract test to match new code is
-      // exactly what rails exist to prevent. The residual is bounded: U+00B7 is
-      // ambiguous-width, so on an East Asian terminal this one row can run a
-      // cell over unless ADLC_HERDR_AMBIGUOUS_WIDTH=wide is declared, which
-      // measures it correctly. Worth raising with the rail's owner rather than
-      // resolving unilaterally here.
-      if (!push(cut(`  ${row.ticketId} · ${row.state}`))) break;
+      // (t-herdr-9) asserting /t-b · failed/. A rail outranks a policy this
+      // branch introduced, and amending one is a CODEOWNERS-gated ceremony that
+      // belongs to its owner, not to this change.
+      //
+      // So the row is MEASURED conservatively instead: U+00B7 is
+      // ambiguous-width, and budgeting it as one cell let a row that nominally
+      // filled the pane occupy one physical cell more and wrap (37 nominal, 38
+      // real, at 37 columns). Counting ambiguous as wide for this row costs at
+      // most a character of a ticket id and cannot overflow on either terminal
+      // — the safe direction, and narrower than applying it to every row, which
+      // would shrink the whole board for the majority who do not need it.
+      if (!push(cutAmbiguousSafe(clean(`  ${row.ticketId} · ${row.state}`), emit))) break;
     }
   }
 

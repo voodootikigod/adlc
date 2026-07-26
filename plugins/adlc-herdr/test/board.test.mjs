@@ -835,3 +835,25 @@ test('fleet rows are counted in the hidden total and cut off at the budget', () 
   const hidden = Number(marker.match(/\.\.\.(\d+) more/)?.[1]);
   assert.equal(hidden, (2 + 3 + 3 + 2 + 2 + 1 + 30) - 8 + 1, `marker said ${hidden}: ${marker}`);
 });
+
+test('the fleet row fits the pane even measured as ambiguous-WIDE', () => {
+  // The one row whose separator the renderer cannot choose: `·` is pinned by the
+  // t-herdr-9 rail, and it is ambiguous-width. Budgeting it as one cell let a
+  // row that nominally filled a 37-column pane occupy 38 physical cells and
+  // wrap. The oracle here is deliberately the OPPOSITE mode from the one the
+  // renderer is running in — measuring with the same assumption the code used
+  // is what let this through the first time.
+  for (const width of [30, 37, 40, 60, 80]) {
+    const state = baseState();
+    state.width = width;
+    state.fleetRows = [{ ticketId: 'T-01JXT21Q000W3GE1R70W3GE1R7', state: 'failed' }];
+    const row = renderBoard(state).split('\n')
+      .find((l) => l.includes('T-01JX'))
+      ?.replace(/\x1b\[[0-9;]*m/g, '');
+    assert.ok(row, `width ${width}: the fleet row must render`);
+    assert.ok(
+      displayWidth(row, { ambiguousWide: true }) <= width,
+      `width ${width}: ${displayWidth(row, { ambiguousWide: true })} real cells on an ambiguous-wide terminal: ${row}`,
+    );
+  }
+});
