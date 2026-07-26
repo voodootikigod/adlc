@@ -37,6 +37,16 @@ herdr plugin install voodootikigod/adlc/plugins/adlc-herdr
 Requires herdr ≥ 0.7.4 (`min_herdr_version`). The plugin is zero-dependency
 Node and declares no `[[build]]` commands — installation executes nothing.
 
+### About the npm package
+
+`@adlc/herdr` is published to npm alongside the rest of the suite, but **npm is
+not an install path for this plugin** — herdr resolves plugins from a GitHub
+subdirectory or a local directory, and has no `npm:` source scheme. The package
+exists so the integration is discoverable next to its siblings and so its
+version tracks the suite; installing it with `npm i @adlc/herdr` gives you the
+files but does not register anything with herdr. Use one of the two commands
+above.
+
 ## Keybindings
 
 The board and the palette actions are reachable from herdr's action palette out

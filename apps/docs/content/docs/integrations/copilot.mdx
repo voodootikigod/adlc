@@ -1,0 +1,94 @@
+---
+title: GitHub Copilot
+description: "Native ADLC integration for the GitHub Copilot CLI: seven lifecycle hooks, six phase skills, allowlisted MCP gate tools, and six read-only prosecution agents, backed by the unbypassable CI rail gate."
+---
+
+# ADLC × GitHub Copilot CLI
+
+Native ADLC integration for the **GitHub Copilot CLI**, built against Copilot's own
+plugin surfaces rather than as a compatibility shim. It ships as
+`plugins/adlc-copilot` with a `plugin.json` manifest and installs from this repo's
+Git plugin marketplace.
+
+Two enforcement layers, and it matters which one you rely on:
+
+1. **In-session rail hook (best-effort).** A `preToolUse` hook denies edits to a
+   frozen ticket's rails, and `build-gate` checks context fitness before a
+   high-risk build starts. A shell cannot be reliably parsed, so a rail write via
+   Bash can still land in the diff.
+2. **CI diff gate (the guarantee).** `scripts/rails-guard-ci.mjs` rejects any PR
+   whose diff touches a rail frozen on the base branch, in any spelling. This is
+   the control to depend on.
+
+## Install
+
+```sh
+npm install -g @adlc/cli
+copilot plugin marketplace add voodootikigod/adlc
+copilot plugin install adlc-copilot@adlc
+adlc init --no-codex-agents
+```
+
+<Callout type="warn">
+`adlc init --harness copilot` is **not available in `@adlc/cli` 1.6.0**, the
+current published release — it exits with `--harness must be codex or cursor`.
+The flag exists in the repository and ships in the next release; until then use
+`--no-codex-agents`, which creates the same `.adlc/` runtime without the
+Codex agent templates. What you lose in the meantime is only the
+`.github/copilot-instructions.md` block and the `copilot-setup-steps.yml`
+snippet, which can be added by hand.
+</Callout>
+
+The plugin installs from the **Git marketplace, not npm**. The `@adlc/copilot`
+npm package is not the install path — the marketplace command above does not go
+through npm at all.
+
+`adlc init --harness copilot` is a *separate* step that scaffolds repository
+state: a `.github/copilot-instructions.md` block and a `copilot-setup-steps.yml`
+snippet. It does **not** install the plugin, and is not a substitute for the
+marketplace commands.
+
+**Or let the installer do it.** The universal installer detects the `copilot`
+CLI and runs the marketplace install automatically:
+
+```sh
+curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh
+```
+
+## What the plugin wires
+
+| Primitive | Copilot surface | Count |
+| --- | --- | --- |
+| Phase skills | `skills/` | 6 — `adlc`, `adlc-init`, `adlc-ticket`, `adlc-prosecute`, `adlc-distill`, `adlc-maintain` |
+| Lifecycle hooks | `hooks/hooks.json` | 7 — `sessionStart`, `preToolUse`, `postToolUse`, `preCompact`, `subagentStart`, `subagentStop`, `agentStop` |
+| Gate tools | `.mcp.json` → `adlc mcp-server` | 2 — `adlc_gate`, `adlc_prosecute` |
+| Prosecution agents | `agents/` | 6 — five read-only lenses plus an independent verifier |
+
+The skills use progressive disclosure: `adlc` routes to a phase, then a focused
+skill loads just that P0–P7 workflow rather than the entire lifecycle.
+
+## Wire the CI control
+
+The in-session hook is a nudge. The commit-time gate is the control, and it needs
+a deliberate bootstrap:
+
+```sh
+mkdir -p .github/workflows
+test -e .github/workflows/adlc-rails-guard.yml \
+  && echo "REFUSING: a workflow already exists — diff before replacing it" \
+  || curl -fsSL https://raw.githubusercontent.com/voodootikigod/adlc/main/docs/ci/rails-guard.yml \
+       -o .github/workflows/adlc-rails-guard.yml
+```
+
+The filename is not cosmetic — the workflow protects itself by name, and any
+other name leaves it editable by the PRs it is meant to gate. **Read the file's
+header before marking the check required**: it documents a multi-stage bootstrap
+(the bootstrap commit merges first, the base branch needs
+`trustedCodeownersAttested`, and `.adlc/manifest.jsonl` must be absent or empty
+until reviewed). Enabling it early fails every subsequent PR.
+
+## Further reading
+
+- [Ground-truth integration guide](https://github.com/voodootikigod/adlc/blob/main/docs/integrations/copilot.md)
+- [Plugin source](https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-copilot)
+- [ADR 0013 — Copilot integration rationale](https://github.com/voodootikigod/adlc/blob/main/docs/adr/0013-adlc-copilot-integration.md)

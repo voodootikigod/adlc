@@ -1,0 +1,37 @@
+{
+  "name": "@adlc/herdr",
+  "type": "module",
+  "version": "1.6.0",
+  "description": "ADLC surfaced at the terminal-multiplexer layer: a herdr plugin showing per-pane ticket/phase/gate state, a backlog board, and gate actions. Published for discovery — herdr itself installs this plugin from the GitHub subdirectory, not from npm.",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "plugins/adlc-herdr"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-herdr#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "herdr",
+    "tmux",
+    "observability"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {},
+  "files": [
+    "bin/",
+    "lib/",
+    "herdr-plugin.toml",
+    "README.md"
+  ]
+}
