@@ -12,10 +12,11 @@ import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { parseContext, resolveTarget } from '../lib/actions.mjs';
 import {
   readActiveTicket, readLatestPhase, groupBacklog, readLedgerByTicket,
-  readTicketsViaExport, storeCacheKey, makeKeyedCache,
+  readTicketsViaExport, storeCacheKey, makeKeyedCache, readFleetStatus,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
 import { renderBoard, boardFooter } from '../lib/board-render.mjs';
+import { planFleetBridge, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { flattenGroups, nextSelectedId, focusSelected, classifyKey, redrawBoard } from '../lib/board-nav.mjs';
 
 const REFRESH_MS = 3_000;
@@ -74,6 +75,12 @@ async function gather(repoRoot) {
     groups,
     paneRows,
     ledger: readLedgerByTicket(repoRoot),
+    // Passive fleet summary: terminal fleet tickets as board rows (planner
+    // validates schemaVersion + ids; unknown version → empty, i.e. no section).
+    fleetRows: planFleetBridge({
+      prev: null, curr: readFleetStatus(repoRoot),
+      knownSchemaVersion: KNOWN_FLEET_SCHEMA_VERSION, seenRunIds: new Set(),
+    }).boardRows,
   };
 }
 

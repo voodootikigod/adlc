@@ -22,7 +22,7 @@ export function boardFooter(refreshMs) {
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane
  *  would scroll and duplicate every refresh. A truncated frame ends with a
  *  "…N more" marker. */
-export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected }) {
+export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected, fleetRows }) {
   const w = clampWidth(width);
   const cut = (text) => sanitizeToken(String(text), w);
   const lines = [];
@@ -69,6 +69,15 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   } else {
     for (const record of ledger) {
       lines.push(cut(`  #${record.seq ?? '?'} ${record.gate ?? '?'} · ${record.ticket ?? ''}`));
+    }
+  }
+
+  // Fleet run summary (t-herdr-9): terminal fleet tickets collapse to one row
+  // each. Only shown while a run is present (fleetRows non-empty).
+  if (Array.isArray(fleetRows) && fleetRows.length > 0) {
+    lines.push(`${BOLD}${cut('fleet')}${RESET}`);
+    for (const row of fleetRows) {
+      lines.push(cut(`  ${row.ticketId} · ${row.state}`));
     }
   }
 

@@ -10,12 +10,14 @@ import { join } from 'node:path';
 import { runHerdr, runHerdrJson, makeCachedReader } from '../lib/herdr.mjs';
 import { buildPaneMap, repoGroups } from '../lib/panemap.mjs';
 import { resolveRepoRoot } from '../lib/repo-root.mjs';
-import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport } from '../lib/adlc-state.mjs';
+import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport, readFleetStatus } from '../lib/adlc-state.mjs';
 import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
   buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
 } from '../lib/tokens.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
+import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse } from '../lib/fleet-bridge.mjs';
+import { notifyArgs } from '../lib/actions.mjs';
 
 const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
@@ -37,6 +39,51 @@ const readBacklog = makeCachedReader((repoRoot) => readTicketsViaExport(repoRoot
 let prevPane = new Map();
 let prevWorkspace = new Map();
 const watchedDirs = new Map(); // dir -> { watcher, repoRoot }
+
+// Fleet observer state per repo (t-herdr-9, §5.5): the last-seen status (for
+// transition detection), the runIds whose tab we already opened, and the current
+// run's tab id + which tickets already have a tail pane. All the decisions live
+// in the tested fleet-bridge planner/executor; this glue only supplies the herdr
+// effects + this per-repo state, and fails soft so a fleet hiccup never crashes
+// the daemon.
+//
+// Restart behaviour: this state is in-memory. If the daemon restarts mid-run it
+// re-initialises empty, opens a fresh run tab, and re-tails; the prior instance's
+// panes are orphaned — the new daemon has none of their ids, so it cannot close
+// them, and they persist (an idle `tail -F` on the finished log) until the user
+// closes them or herdr restarts.
+//
+// Recovering the panes by persisting their ids is not sound with the current
+// herdr contract: herdr reuses pane ids after a herdr-daemon restart, so a
+// persisted id can match an unrelated pane the user has since opened, and closing
+// it would kill that pane. Reliable adoption/teardown needs herdr to expose a
+// pane's agent/command in `api snapshot` (today it carries only pane_id + cwd —
+// see lib/panemap.mjs) so a fleet tail pane can be identified unambiguously.
+const fleetState = new Map();
+
+async function bridgeFleet(repoRoot, full) {
+  const st = fleetState.get(repoRoot) ?? { prev: null, seen: new Set(), runState: { tabId: null, tailed: new Map(), closing: new Map(), tagged: new Map(), spawnFails: new Map() } };
+  fleetState.set(repoRoot, st);
+  // Thin wire-up: the whole beat (plan → run → commit → log-on-error) is tested
+  // in lib/fleet-bridge.mjs. Here we only supply the real herdr effects, the
+  // freshly-read status, and a stderr logger so a stuck bridge is diagnosable.
+  // `full` (the 45s heartbeat) re-tags panes so their token TTLs never lapse.
+  await runFleetBridgeBeat({
+    st,
+    curr: readFleetStatus(repoRoot),
+    repoRoot,
+    heartbeat: full,
+    effects: {
+      openTab: async (title) => tabIdFromResponse(await runHerdrJson(fleetTabArgs(title))),
+      spawn: async (argv) => paneIdFromResponse(await runHerdrJson(argv)),
+      closePane: (paneId) => runHerdr(fleetPaneCloseArgs(paneId)),
+      notify: (title, body, sound) => runHerdr(notifyArgs(title, body, sound)),
+      // Token-tag the tail pane with its ticket + state, rendered natively by herdr.
+      tagPane: (paneId, ticketId, state) => runHerdr(buildReportArgs(paneId, { ticket: ticketId, state }, TOKEN_TTL_MS)),
+    },
+    log: (message, err) => console.error(`${message}:`, err),
+  });
+}
 let refreshTimer = null;
 let refreshing = false;
 let pendingFull = false;
@@ -128,6 +175,10 @@ async function refreshPass(full) {
     for (const workspaceId of droppedKeys(prevWorkspace, nextWorkspace)) {
       await runHerdr(buildWorkspaceClearArgs(workspaceId));
     }
+    // Fleet observer: reflect each repo's fleet run into herdr (tab, tail panes,
+    // transition notifications). Sequential + after token publishing — it has
+    // side effects and shared per-repo state, unlike the read-only token pass.
+    for (const repoRoot of activeRepos) await bridgeFleet(repoRoot, full);
     prevPane = nextPane;
     prevWorkspace = nextWorkspace;
   }

@@ -299,8 +299,9 @@ notification, nothing spawned) when the context does not resolve to a repo:
 When the watcher sees `.adlc/fleet-status.json` appear or change:
 
 - Open (once per `runId`) a `fleet: run-<id>` tab; inside it, one read-only
-  pane per in-flight ticket running `tail -f .adlc/fleet-logs/<ticketId>.log`,
-  labeled and token-tagged with the ticket's state
+  pane per in-flight ticket running `tail -F .adlc/fleet-logs/<ticketId>.log`
+  (`-F`, not `-f`, so it waits for the log the orchestrator creates a beat later
+  rather than exiting immediately), labeled and token-tagged with the ticket's state
   (`building|gating|prosecuting|fixing|merging`).
 - Transitions → notifications: `merged` (sound `done`), `failed|blocked`
   (sound `request`) with an "open worktree shell" action targeting
