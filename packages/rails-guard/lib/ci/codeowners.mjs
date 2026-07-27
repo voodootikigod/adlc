@@ -73,25 +73,32 @@ export function pathHasCodeowner(git, baseRef, path) {
 }
 
 /**
- * OWNERSHIP. The union of logins (without a leading @) whose pattern matches any of
- * `paths`, across every CODEOWNERS file present at the base ref.
+ * OWNERSHIP. The logins (without a leading @) whose pattern matches any of `paths`.
  *
- * Union rather than GitHub precedence is deliberate here: this set is only ever used to
- * ask "was one of these people a non-author approver", so a wider set can only make the
- * ceremony harder to satisfy from the PR side. The un-forgeable gate is GitHub's own
- * branch-protection review requirement; this is the audit trail beside it.
+ * Uses the SAME first-existing-file precedence as coverage. It used to union all three
+ * locations, on the argument that a wider owner set "can only make the ceremony harder to
+ * satisfy". That argument is backwards: the ceremony needs an approval from ANY owner, so
+ * a wider set makes it EASIER. Unioning let a `docs/CODEOWNERS` that GitHub ignores —
+ * because `.github/CODEOWNERS` exists — grant an approver who could authorize a trust-root
+ * change (cross-model review, #363 round 3).
+ *
+ * NEGATED rows are skipped. GitHub does not support `!` negation in CODEOWNERS, so a
+ * `!path @alice` line does not make Alice an owner; treating it as ownership over-granted
+ * an approver. Coverage still treats a negated row as UN-owning, which is the conservative
+ * reading of the same unsupported syntax in the other direction.
  */
 export function ownersForPaths(git, baseRef, paths) {
   const owners = new Set();
   for (const file of CODEOWNERS_FILES) {
     const shown = git(['show', `${baseRef}:${file}`], `git show base ${file}`);
-    if (shown.status !== 0) continue;
+    if (shown.status !== 0) continue; // absent at base — fall through to the next file
     for (const row of parseCodeowners(shown.stdout)) {
-      if (!row.owners.length) continue;
+      if (row.negated || !row.owners.length) continue;
       if (paths.some((changed) => codeownersMatch(row.pattern, changed))) {
         for (const owner of row.owners) owners.add(owner);
       }
     }
+    return [...owners]; // this file is authoritative; later files are not consulted
   }
   return [...owners];
 }

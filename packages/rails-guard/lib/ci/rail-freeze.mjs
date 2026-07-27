@@ -124,7 +124,7 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
   }
 
   if (immutableTrustRoots.length) {
-    unique = enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, messages });
+    unique = enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, rails, messages });
   }
 
   // ---- render the verdict -----------------------------------------------------------
@@ -326,7 +326,7 @@ function verifyManifest({ git, trustedBase, base, migration }) {
  * below would deny the very change the ceremony just approved. Ticket-declared rails are
  * never lifted; only the specific trust-root paths this PR was authorized to change.
  */
-function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, messages }) {
+function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, rails, messages }) {
   const diff = git(['diff', '--name-status', '-M', `${trustedBase}...HEAD`, '--', ...immutableTrustRoots], 'git diff trust roots');
   if (diff.status !== 0) fail('git diff trust roots failed (operational error) — failing closed.');
   if (!diff.stdout.trim()) return unique;
@@ -370,8 +370,14 @@ function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique,
   // Only entries drawn from immutableTrustRoots are eligible. Filtering `unique` directly
   // by glob match would also lift a TICKET rail that happens to cover an authorized path,
   // and the ceremony authorizes trust-root changes only — never a ticket's rails.
+  // A rail a TICKET declared is never lifted, even when it is the same STRING as a trust
+  // root. `unique` is a Set, so an identical rail and trust root collapse to one entry, and
+  // lifting it would silently unfreeze the ticket's rail too (cross-model review, #363
+  // round 3). The ceremony authorizes trust roots; a path a ticket froze stays frozen.
+  const ticketRails = new Set(rails);
   const lifted = new Set(
-    immutableTrustRoots.filter((root) => changedTrustRoots.some((path) => root === path || globMatch(root, path)))
+    immutableTrustRoots.filter((root) => !ticketRails.has(root)
+      && changedTrustRoots.some((path) => root === path || globMatch(root, path)))
   );
   return unique.filter((rail) => !lifted.has(rail));
 }

@@ -57,3 +57,49 @@ test('blank lines and CRLF endings are handled', () => {
 test('empty input yields no rows rather than throwing', () => {
   assert.deepEqual(parseCodeowners(''), []);
 });
+
+// ---------------------------------------------------------------------------------
+// #363 round 3. Owner RESOLUTION had two over-grants, both of which could hand the #141
+// ceremony an approver GitHub would not recognise. Both directions are now conservative.
+
+import { ownersForPaths, pathHasCodeowner } from '../lib/ci/codeowners.mjs';
+
+// A tiny fake git: returns the named CODEOWNERS blobs, non-zero for anything absent.
+function fakeGit(files) {
+  return (args) => {
+    const spec = args[1] ?? '';
+    const path = spec.slice(spec.indexOf(':') + 1);
+    return Object.prototype.hasOwnProperty.call(files, path)
+      ? { status: 0, stdout: files[path] }
+      : { status: 1, stdout: '' };
+  };
+}
+
+const WORKFLOW = '.github/workflows/adlc-rails-guard.yml';
+
+test('ownersForPaths consults only the FIRST CODEOWNERS file that exists', () => {
+  // GitHub uses one file. Unioning let an IGNORED docs/CODEOWNERS grant an approver who
+  // could authorize a trust-root change while GitHub itself never counted them.
+  const git = fakeGit({
+    '.github/CODEOWNERS': '/some/other/path @bob\n',
+    'docs/CODEOWNERS': `${WORKFLOW} @alice\n`,
+  });
+  assert.deepEqual(ownersForPaths(git, 'base', [WORKFLOW]), [], 'an ignored file must not grant ownership');
+});
+
+test('ownersForPaths reads a lower-priority file only when the higher one is absent', () => {
+  const git = fakeGit({ 'docs/CODEOWNERS': `${WORKFLOW} @alice\n` });
+  assert.deepEqual(ownersForPaths(git, 'base', [WORKFLOW]), ['alice']);
+});
+
+test('ownersForPaths does not treat a NEGATED row as granting ownership', () => {
+  // GitHub does not support `!` in CODEOWNERS, so `!path @alice` does not make Alice an
+  // owner. Stripping the `!` and keeping the owners over-granted an approver.
+  const git = fakeGit({ '.github/CODEOWNERS': `!${WORKFLOW} @alice\n` });
+  assert.deepEqual(ownersForPaths(git, 'base', [WORKFLOW]), []);
+});
+
+test('coverage still treats a negated row as UN-owning (the conservative reading)', () => {
+  const git = fakeGit({ '.github/CODEOWNERS': `* @alice\n!${WORKFLOW}\n` });
+  assert.equal(pathHasCodeowner(git, 'base', WORKFLOW), false);
+});

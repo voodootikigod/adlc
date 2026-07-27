@@ -120,6 +120,18 @@ test('codeownersMatch: ? is a single-character wildcard, not a regex quantifier'
   assert.equal(codeownersMatch('/docs/c?.yml', 'docs/c/.yml'), false, '? must not cross a path separator');
 });
 
+// #363 round 3, blocking. `**` crosses `/` ONLY as a whole slash-delimited segment. Any
+// `**` was translated to `.*`, so `.github**adlc-rails-guard.yml` matched a workflow three
+// directories away — an over-match, and therefore a COVERAGE fail-open.
+test('codeownersMatch: ** crosses a slash only as a whole segment', () => {
+  const W = '.github/workflows/adlc-rails-guard.yml';
+  assert.equal(codeownersMatch('/.github**adlc-rails-guard.yml', W), false, 'a non-slash-delimited ** must degrade to *');
+  assert.equal(codeownersMatch('/.github/**', W), true, 'trailing /** is everything below');
+  assert.equal(codeownersMatch('/.github/**/adlc-rails-guard.yml', W), true, '/**/ spans zero or more directories');
+  assert.equal(codeownersMatch('/.github/**/workflows/adlc-rails-guard.yml', W), true, '/**/ also spans ZERO directories');
+  assert.equal(codeownersMatch('**/adlc-rails-guard.yml', W), true, 'a leading **/ matches at any depth');
+});
+
 test('codeownersMatch: single star does not cross a slash; double star does', () => {
   assert.equal(codeownersMatch('/scripts/*.mjs', 'scripts/x.mjs'), true);
   assert.equal(codeownersMatch('/scripts/*.mjs', 'scripts/sub/x.mjs'), false); // * stops at /

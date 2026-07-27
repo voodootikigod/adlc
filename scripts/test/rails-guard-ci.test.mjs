@@ -1292,6 +1292,20 @@ test('#141: lifting a GLOB trust root does NOT lift a ticket rail that covers th
   assert.equal(status, 2);
 });
 
+test('#141: a ticket rail IDENTICAL to a trust root is never lifted', () => {
+  // #363 round 3, blocking. `unique` is a Set, so a ticket rail and a trust root spelled
+  // the SAME string collapse to one entry. Lifting that entry unfroze the ticket's rail
+  // along with the trust root. The ceremony authorizes trust roots, never rails.
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["packages/rails-guard/lib/ci/**"]}]}',
+    seedFiles: GLOB_TRUST_ROOT_FILES,
+    seedFileContents: GLOB_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => writeFileSync(join(dir, 'packages/rails-guard/lib/ci/args.mjs'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 2);
+});
+
 test('#141: label present but the reviews payload is absent → clean deny, not a crash (exit 2)', () => {
   // GITHUB_EVENT_PATH is set (real PR context, label applied) but ADLC_PR_REVIEWS
   // is UNSET — the reviews fetch yielded nothing. readPrContext must treat that as
