@@ -18,3 +18,25 @@
 # exists. CI clones fresh, so it is unaffected; a Windows contributor with an
 # older checkout runs `git add --renormalize .` once.
 * text=auto eol=lf
+
+# Declared binary rather than left to the NUL-byte heuristic. Every binary in
+# the tree today is a PNG or an ICO and every one of them contains NUL bytes, so
+# `text=auto` already classifies them correctly — verified, `git add
+# --renormalize .` rewrites zero files. This is for the file added LATER: a
+# binary format with no NUL byte in its first 8k would be read as text and
+# rewritten on checkout, and the rule above is what would do it.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.gz binary
+*.zip binary
+
+# A fixture whose CRLF is its SUBJECT must opt out here, next to this note —
+# the rule above would otherwise normalize the very bytes under test. None
+# exists today; this is where it goes.

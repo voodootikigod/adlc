@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { DirectoryTicketStore, TicketService, planEditSession } from '../index.mjs';
 import { writeDirectory, ticket } from './helpers.mjs';
 
@@ -22,6 +22,32 @@ const edited = (title) => (_editor, path) => {
   writeFileSync(path, JSON.stringify({ ...ticket('T1', { title }) }, null, 2));
 };
 
+/**
+ * Remove the whole mkdtemp directory a draft lives in, not just the draft file.
+ *
+ * Cleaning up only the file stranded one directory under $TMPDIR per session —
+ * six per run of this file — against a package that claims its tests leave no
+ * trace. Guarded twice, because a recursive remove deserves both:
+ *
+ *  - an unset path means the session failed BEFORE the runner was reached, and
+ *    rmSync(undefined) raises a TypeError that would replace the real failure
+ *    with a confusing one;
+ *  - the directory must be one planEditSession actually minted. Today every
+ *    draft lives alone inside its own mkdtemp, so dirname() is always safe —
+ *    but that is an invariant of code this file does not own, and if a draft
+ *    ever moved to a shared directory this cleanup would silently become a
+ *    recursive delete of it. Assert the invariant instead of assuming it.
+ */
+function discardDraft(path) {
+  if (!path) return;
+  const directory = dirname(path);
+  assert.ok(
+    basename(directory).startsWith('adlc-ticket-edit-'),
+    `refusing to recursively remove ${directory}: not a draft session directory`,
+  );
+  rmSync(directory, { recursive: true, force: true });
+}
+
 test('a quiet editor session plans an ordinary update', () => {
   withStore((service) => {
     const { plan, draftPath } = planEditSession(service, 'T1', { editor: 'noop', runEditor: edited('my edit') });
@@ -30,7 +56,7 @@ test('a quiet editor session plans an ordinary update', () => {
     // The draft OUTLIVES planning: `edit` is dry-run by default, so deleting it
     // here destroyed the author's only copy on the commonest invocation.
     assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'my edit');
-    rmSync(dirname(draftPath), { recursive: true, force: true });
+    discardDraft(draftPath);
   });
 });
 
@@ -53,7 +79,7 @@ test('a write during the editor session is caught as STALE_TICKET', () => {
       (error) => error.code === 'STALE_TICKET',
     );
     assert.equal(service.snapshot().get('T1').title, 'concurrent', "the other author's write must survive");
-    rmSync(dirname(draftPath), { recursive: true, force: true });
+    discardDraft(draftPath);
   });
 });
 
@@ -71,7 +97,7 @@ test('the editor sees the ticket as it stands, and the draft survives planning',
     });
     assert.equal(seen.title, 'original');
     assert.ok(readFileSync(seenPath, 'utf8').length > 0, 'the draft outlives the session — only an APPLY may remove it');
-    rmSync(dirname(seenPath), { recursive: true, force: true });
+    discardDraft(seenPath);
   });
 });
 
@@ -87,7 +113,7 @@ test('an editor that dies leaves the draft behind, not a deleted one', () => {
       runEditor: (_editor, path) => { seenPath = path; throw new Error('editor died'); },
     }), /editor died/);
     assert.ok(readFileSync(seenPath, 'utf8').length > 0, 'the draft must survive an editor crash');
-    rmSync(dirname(seenPath), { recursive: true, force: true });
+    discardDraft(seenPath);
   });
 });
 
@@ -118,7 +144,7 @@ test('a failed plan preserves the edit and says where it is', () => {
     const preserved = message.match(/preserved at (\S+?)\)/)?.[1];
     assert.ok(preserved, `the error must name the draft path: ${message}`);
     assert.equal(JSON.parse(readFileSync(preserved, 'utf8')).title, 'my careful edit');
-    rmSync(dirname(preserved), { recursive: true, force: true });
+    discardDraft(preserved);
   });
 });
 
@@ -134,7 +160,7 @@ test('planning never deletes the draft — that is the caller decision', () => {
     });
     assert.equal(draftPath, seen);
     assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'ok');
-    rmSync(dirname(draftPath), { recursive: true, force: true });
+    discardDraft(draftPath);
   });
 });
 
@@ -155,15 +181,11 @@ test('an edit across an authorization boundary is refused unless the caller auth
       draft = path;
       writeFileSync(path, JSON.stringify(ticket('T1', { title: 'original', completed: true }), null, 2));
     };
-    // Removes the mkdtemp DIRECTORY, not just the draft inside it, and runs from
-    // `finally` so a failed assertion leaks nothing either. The guard matters:
-    // `draft` is unset if planEditSession throws before reaching the runner, and
-    // rmSync(undefined) raises a TypeError that would replace the real failure
-    // with a confusing one.
-    const discardDraft = () => {
-      if (draft) rmSync(dirname(draft), { recursive: true, force: true });
-      draft = undefined;
-    };
+    // Both halves below run the SAME runner, so the draft is cleared between
+    // them: without that, a second session that failed before writing would let
+    // the first one's stale path be discarded twice. Runs from `finally` so a
+    // failed assertion leaks nothing either.
+    const discardThisDraft = () => { discardDraft(draft); draft = undefined; };
 
     try {
       assert.throws(
@@ -171,7 +193,7 @@ test('an edit across an authorization boundary is refused unless the caller auth
         (error) => error.code === 'AUTHORIZATION_REQUIRED',
         'the default must be closed: an unauthorized edit cannot cross the lifecycle boundary',
       );
-    } finally { discardDraft(); }
+    } finally { discardThisDraft(); }
 
     // …and the same edit goes through once the caller says so, so the refusal
     // above is the authorization check and not the edit being rejected outright.
@@ -182,7 +204,7 @@ test('an edit across an authorization boundary is refused unless the caller auth
         authorized: true,
       });
       assert.deepEqual(plan.sensitive, ['lifecycle-change']);
-    } finally { discardDraft(); }
+    } finally { discardThisDraft(); }
   });
 });
 
