@@ -1,13 +1,25 @@
+// `gate` is the exit gate that ENDS each phase, quoted from the canonical
+// pipeline in ADLC.md (the "human gate / cold-start / RED gate / green gate /
+// zero-findings gate" line under the P0→P7 flow). It lives here rather than in
+// a component so the homepage pipeline and the /lifecycle page cannot disagree
+// about what gate closes a phase — they previously each carried their own idea
+// of which gates were human.
+//
+// `human: true` marks the two phases a person must close. That pair is the
+// whole claim: machines gate the other six.
 export const PHASES = [
-  { id: 'P0', name: 'Triage' },
-  { id: 'P1', name: 'Interrogate' },
-  { id: 'P2', name: 'Decompose' },
-  { id: 'P3', name: 'Rail' },
-  { id: 'P4', name: 'Build' },
-  { id: 'P5', name: 'Prosecute' },
-  { id: 'P6', name: 'Integrate' },
-  { id: 'P7', name: 'Distill' },
+  { id: 'P0', name: 'Triage', gate: 'routed', human: false },
+  { id: 'P1', name: 'Interrogate', gate: 'human gate', human: true },
+  { id: 'P2', name: 'Decompose', gate: 'cold-start', human: false },
+  { id: 'P3', name: 'Rail', gate: 'RED gate', human: false },
+  { id: 'P4', name: 'Build', gate: 'green gate', human: false },
+  { id: 'P5', name: 'Prosecute', gate: 'zero findings', human: false },
+  { id: 'P6', name: 'Integrate', gate: 'human gate', human: true },
+  { id: 'P7', name: 'Distill', gate: 'feeds the next run', human: false },
 ];
+
+/** The two phases whose gate is a person, derived so no surface can drift. */
+export const HUMAN_GATE_IDS = PHASES.filter((p) => p.human).map((p) => p.id);
 
 // Mermaid cannot resolve CSS variables, so these hexes are hardcoded.
 // #e5cd52 mirrors --adlc-wish (human-gate styling); #4fb4d8 mirrors the
