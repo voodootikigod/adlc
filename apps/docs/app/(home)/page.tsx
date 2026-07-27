@@ -105,7 +105,15 @@ export default function HomePage() {
             { label: 'Subject', value: 'Adopt the Agentic Development Lifecycle' },
             { label: 'Class', value: 'Process change · software delivery' },
             { label: 'Scope', value: 'macOS · Linux · Node 18+', mono: true },
-            { label: 'Back-out', value: 'git revert · zero runtime deps', mono: true },
+            {
+              // The installer mutates the machine, not just the repo: `npm install -g`
+              // plus native plugins for each detected harness. Reverting the repo
+              // cannot remove either, so the field says what a revert actually
+              // covers rather than implying a clean one-command rollback.
+              label: 'Back-out',
+              value: 'revert the repo · uninstall the CLI separately',
+              mono: true,
+            },
           ]}
         />
 
