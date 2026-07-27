@@ -352,9 +352,9 @@ export function Exhibit({
           {attachedTo}
         </span>
       </figcaption>
-      <div style={{ background: '#1c1d21', border: '1px solid #34363d' }}>
+      <div className="rec-capture" style={{ background: '#1c1d21', border: '1px solid #34363d' }}>
         <div
-          className="rec-mono flex items-center justify-between gap-3 px-3.5 py-2 text-[10px] tracking-[0.1em]"
+          className="rec-capture-bar rec-mono flex items-center justify-between gap-3 px-3.5 py-2 text-[10px] tracking-[0.1em]"
           style={{ borderBottom: '1px solid #2c2e34', color: '#686b78' }}
         >
           <span className="truncate">{command}</span>
@@ -398,9 +398,9 @@ export function ExhibitOutput({ output }: { output: string }) {
 /** A small terminal block used where a full exhibit caption would be noise. */
 export function Capture({ title, status, fail, children }: { title: string; status: string; fail?: boolean; children: ReactNode }) {
   return (
-    <div style={{ background: '#1c1d21', border: '1px solid #34363d' }}>
+    <div className="rec-capture" style={{ background: '#1c1d21', border: '1px solid #34363d' }}>
       <div
-        className="rec-mono flex items-center justify-between gap-3 px-3.5 py-2 text-[10px] tracking-[0.1em]"
+        className="rec-capture-bar rec-mono flex items-center justify-between gap-3 px-3.5 py-2 text-[10px] tracking-[0.1em]"
         style={{ borderBottom: '1px solid #2c2e34', color: '#686b78' }}
       >
         <span className="truncate">{title}</span>

@@ -182,6 +182,36 @@ html > body[data-scroll-locked] {
     display: none;
   }
 
+  /* Captures set their ground inline, so the variable overrides above cannot
+     reach them. Browsers omit background graphics by default when printing,
+     which left #cbcdd2 evidence text on white paper — the page's core proof,
+     unreadable, exactly when a reviewer prints it to circulate. Invert the
+     captures to ink-on-paper instead of relying on a background nobody prints.
+     !important is required to beat the inline styles. */
+  .record-surface .rec-capture,
+  .record-surface .rec-capture * {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border-color: #444444 !important;
+  }
+
+  .record-surface .rec-capture {
+    border: 1px solid #444444 !important;
+  }
+
+  .record-surface .rec-capture-bar {
+    border-bottom: 1px solid #999999 !important;
+    color: #333333 !important;
+  }
+
+  /* The install command is the page's primary control and shares the terminal
+     ground; print it as a boxed command line rather than a black slab. */
+  .record-surface code,
+  .record-surface pre {
+    background: transparent !important;
+    color: #000000 !important;
+  }
+
   .rec-row-settle,
   .rec-code-stamp {
     animation: none !important;
