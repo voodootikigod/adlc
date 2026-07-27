@@ -13,10 +13,17 @@ const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffe
  * which no portable filesystem trick reproduces; and this package runs on the
  * Windows leg of the platform matrix, so a chmod-based test would not work there
  * either. Same pattern as planEditSession's runEditor.
+ *
+ * `makeLockDirectory` is the third, and it exists to make the RETRY BOUND
+ * observable. `retries` is what makes a concurrent writer wait instead of failing
+ * instantly, so it is behavior, not decoration — but the contended path throws
+ * EEXIST from mkdir and reaches neither of the other two seams, so nothing could
+ * count how many times it actually tried. The count could have drifted in either
+ * direction and every test still passed.
  */
 export function acquireTicketLock(root = '.', {
   retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null,
-  writeOwner = writeFileSync, removeLock = rmSync,
+  writeOwner = writeFileSync, removeLock = rmSync, makeLockDirectory = mkdirSync,
 } = {}) {
   const path = join(root, LOCK_DIRECTORY);
   // Reject bad options BEFORE creating anything. Release requires a well-formed
@@ -40,7 +47,7 @@ export function acquireTicketLock(root = '.', {
       // must not leave a directory behind, and there is nothing to undo yet.
       const metadata = { version: 1, pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString(), command, transactionId };
       const serialized = `${JSON.stringify(metadata, null, 2)}\n`;
-      mkdirSync(path);
+      makeLockDirectory(path);
       created = true;
       writeOwner(join(path, 'owner.json'), serialized, { flag: 'wx' });
       return { path, metadata };

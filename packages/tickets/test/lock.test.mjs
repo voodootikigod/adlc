@@ -252,6 +252,31 @@ test('release reports which non-release it performed', () => {
   }
 });
 
+test('a contended acquisition retries the documented number of times before giving up', () => {
+  // The retry BOUND is the whole reason a second writer waits instead of failing
+  // instantly, and nothing observed it: the contended path throws EEXIST out of
+  // mkdir, so neither of the other two seams is reached and no test could count
+  // attempts. The default could have drifted in either direction — halving the
+  // window a concurrent `adlc ticket` write has to land in, or multiplying how
+  // long a caller blocks on a lock nobody is going to release — and the suite
+  // would have stayed green.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-retries-'));
+  try {
+    const held = acquireTicketLock(root, { command: 'incumbent' });
+    let attempts = 0;
+    assert.throws(() => acquireTicketLock(root, {
+      command: 'contender',
+      delayMs: 0, // the wait is not what is under test; the count is
+      makeLockDirectory: (path) => { attempts += 1; return mkdirSync(path); },
+    }), (error) => error.code === 'LOCK_TIMEOUT');
+    // `retries` counts RETRIES, so the default is one initial attempt plus 50 more.
+    assert.equal(attempts, 51, 'every attempt in the documented budget must actually be made');
+    releaseTicketLock(held);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an already-removed lock is "no-lock", not a stranded one', () => {
   // LOCK_STRANDED means, per index.d.ts, "the directory is still on disk and a
   // human has to remove it". readLockMetadata collapses every read failure to
