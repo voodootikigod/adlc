@@ -135,6 +135,40 @@ test('planning never deletes the draft — that is the caller decision', () => {
   });
 });
 
+test('an edit across an authorization boundary is refused unless the caller authorized it', () => {
+  // planEditSession forwards `authorized` to planUpdate, and its DEFAULT is
+  // closed. Nothing asserted that: every test above edits a title, which is not
+  // sensitive, so opening the default changed no result — and `adlc ticket edit`
+  // without --authorize would have been able to complete a ticket, narrow its
+  // rails or widen its scope with no evidence, simply because the author typed
+  // it into their editor.
+  withStore((service) => {
+    const completes = (_editor, path) => {
+      writeFileSync(path, JSON.stringify(ticket('T1', { title: 'original', completed: true }), null, 2));
+    };
+    let message = '';
+    assert.throws(
+      () => planEditSession(service, 'T1', { editor: 'noop', runEditor: completes }),
+      (error) => {
+        message = error.message;
+        return error.code === 'AUTHORIZATION_REQUIRED';
+      },
+      'the default must be closed: an unauthorized edit cannot cross the lifecycle boundary',
+    );
+    rmSync(message.match(/preserved at (\S+?)\)/)?.[1] ?? '', { force: true });
+
+    // …and the same edit goes through once the caller says so, so the refusal
+    // above is the authorization check and not the edit being rejected outright.
+    const { plan, draftPath } = planEditSession(service, 'T1', {
+      editor: 'noop',
+      runEditor: completes,
+      authorized: true,
+    });
+    assert.deepEqual(plan.sensitive, ['lifecycle-change']);
+    rmSync(draftPath, { force: true });
+  });
+});
+
 test('an unset editor leaves no temp directory and claims no preserved edit', () => {
   // The check ran AFTER mkdtemp, so every attempt without $EDITOR left a
   // directory in /tmp and reported "your edit is preserved at ..." for a session
