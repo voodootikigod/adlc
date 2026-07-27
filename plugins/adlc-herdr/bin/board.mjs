@@ -15,7 +15,7 @@ import {
   readTicketsViaExport, storeCacheKey, makeKeyedCache, readFleetStatus,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
-import { renderBoard, boardFooter, composeFrame, withCurrentGeometry } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter, composeFrame, frameGeometry, withCurrentGeometry } from '../lib/board-render.mjs';
 import { planFleetBridge, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { flattenGroups, nextSelectedId, focusSelected, classifyKey, redrawBoard } from '../lib/board-nav.mjs';
 
@@ -65,13 +65,7 @@ async function gather(repoRoot) {
       ticket: byId.get(e.paneId)?.tokens?.ticket ?? null,
     }));
   return {
-    width: process.stdout.columns ?? 80,
-    // Reserve two lines for the blank + footer draw() adds, so the whole frame
-    // fits the pane and cursor-home redraw never scrolls/duplicates.
-    // Ask for rows-2 (blank + footer) but never less than 1: a pane shorter
-    // than the chrome used to floor at 4 and then emit 6. composeFrame is the
-    // backstop that sheds the chrome when even that does not fit.
-    height: process.stdout.rows ? Math.max(1, process.stdout.rows - 2) : null,
+    ...frameGeometry({ columns: process.stdout.columns, rows: process.stdout.rows }),
     repoRoot,
     active,
     phase,
@@ -91,7 +85,7 @@ function draw(body) {
   // Probed 2026-07-23: \x1b[2J leaves a herdr pane blank AND unreadable via
   // `pane read` — redraw with cursor-home + per-line erase-to-EOL + erase-
   // below instead of a full clear.
-  const footer = boardFooter(REFRESH_MS, process.stdout.columns ?? 80);
+  const footer = boardFooter(REFRESH_MS, frameGeometry({ columns: process.stdout.columns }).width);
   process.stdout.write(composeFrame(body, footer, process.stdout.rows));
 }
 

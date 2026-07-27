@@ -235,12 +235,40 @@ export function boardFooter(refreshMs, width = 80) {
  * gather can fail, holding the stale geometry indefinitely. Data may be stale;
  * geometry never should be, because only geometry decides what fits.
  */
+/** Pane width assumed when the terminal reports none (stdout is not a TTY). */
+const DEFAULT_COLUMNS = 80;
+/** Rows composeFrame appends after the body: one blank separator + the footer. */
+const CHROME_ROWS = 2;
+
+/**
+ * The geometry a frame is built for, derived from the terminal.
+ *
+ * ONE definition. This arithmetic previously existed twice — here and inline in
+ * bin/board.mjs — with subtly different fallbacks (`?? 80` there, `props.width`
+ * here). The bin copy is thin TUI glue with no tests, which is exactly where two
+ * mutants survived the mutation gate: the row floor and the column default could
+ * each be altered and nothing noticed. Duplicated logic in an untested file is
+ * how a guard stays correct and unverified at the same time.
+ */
+export function frameGeometry({ columns, rows } = {}) {
+  return {
+    width: Number.isFinite(columns) && columns > 0 ? columns : DEFAULT_COLUMNS,
+    // Reserve the chrome rows, but never ask for less than one row of body: a
+    // pane shorter than the chrome still shows the header, because composeFrame
+    // sheds the blank and the footer itself rather than losing content.
+    height: Number.isFinite(rows) && rows > 0 ? Math.max(1, rows - CHROME_ROWS) : null,
+  };
+}
+
 export function withCurrentGeometry(props, { columns, rows } = {}) {
   if (!props) return props;
+  const current = frameGeometry({ columns, rows });
   return {
     ...props,
-    width: Number.isFinite(columns) && columns > 0 ? columns : props.width,
-    height: Number.isFinite(rows) && rows > 0 ? Math.max(1, rows - 2) : props.height,
+    // Keep the cached value when the terminal reports nothing, rather than
+    // stamping the default over a geometry gather() already resolved.
+    width: Number.isFinite(columns) && columns > 0 ? current.width : props.width,
+    height: Number.isFinite(rows) && rows > 0 ? current.height : props.height,
   };
 }
 

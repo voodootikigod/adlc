@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
-import { renderBoard, boardFooter, composeFrame, withCurrentGeometry } from '../lib/board-render.mjs';
+import { renderBoard, boardFooter, composeFrame, frameGeometry, withCurrentGeometry } from '../lib/board-render.mjs';
 import { displayWidth } from '../lib/display-width.mjs';
 
 let repo;
@@ -856,4 +856,34 @@ test('the fleet row fits the pane even measured as ambiguous-WIDE', () => {
       `width ${width}: ${displayWidth(row, { ambiguousWide: true })} real cells on an ambiguous-wide terminal: ${row}`,
     );
   }
+});
+
+test('frameGeometry reserves the chrome rows and floors the body at one', () => {
+  // The mutation gate caught this arithmetic living untested in bin/board.mjs:
+  // Math.max(1, rows - 2) -> Math.max(2, ...) survived, because nothing observed
+  // the floor. It matters at 1-3 rows, where the floor is what keeps a body row
+  // for the header while composeFrame sheds the chrome around it.
+  assert.deepEqual(frameGeometry({ columns: 100, rows: 24 }), { width: 100, height: 22 });
+  for (const rows of [1, 2, 3]) {
+    assert.equal(frameGeometry({ rows }).height, 1, `rows ${rows}: the body floor is one, not two`);
+  }
+  assert.equal(frameGeometry({ rows: 4 }).height, 2, 'and above the floor it is rows - 2');
+});
+
+test('frameGeometry falls back to 80 columns when the terminal reports none', () => {
+  // `columns ?? 80` -> `?? 81` also survived. A non-TTY stdout reports no
+  // columns, which is every piped or redirected run.
+  for (const columns of [undefined, null, 0, -5, NaN]) {
+    assert.equal(frameGeometry({ columns }).width, 80, `${JSON.stringify(columns)} must fall back to 80`);
+  }
+  assert.equal(frameGeometry({ columns: 120 }).width, 120, 'a real width is used as-is');
+});
+
+test('frameGeometry reports no height when the terminal reports no rows', () => {
+  // null height means "do not clamp" — a piped run must not be truncated to
+  // some invented number of lines.
+  for (const rows of [undefined, null, 0, -1, NaN]) {
+    assert.equal(frameGeometry({ rows }).height, null, `${JSON.stringify(rows)} must not clamp`);
+  }
+  assert.deepEqual(frameGeometry(), { width: 80, height: null }, 'and no argument at all is safe');
 });
