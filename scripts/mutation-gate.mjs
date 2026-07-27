@@ -306,8 +306,14 @@ export function main() {
     console.error('');
     console.error('mutation-gate: a mutant SURVIVED — some changed code has no test that notices it changing.');
     console.error('This is the hollow-test failure mode: a guard can be correct and still be unverified.');
-    console.error('Either add a test that fails when that line is altered, or, if the line is genuinely');
-    console.error('redundant with a stronger check, say so in a comment AT ITS DEFINITION and re-run.');
+    console.error('Add a test that fails when that line is altered.');
+    console.error('');
+    console.error('There is NO comment or annotation that suppresses this gate — do not go looking for');
+    console.error('one, and do not add a test that merely asserts the source text says what it says');
+    console.error('(that is a hollow test bolted on to placate the hollow-test gate). If the mutant is');
+    console.error('genuinely EQUIVALENT — no test could ever observe the difference, e.g. +1 ms on a');
+    console.error('subprocess timeout — then generating it is a mutation-OPERATOR bug: fix the operator');
+    console.error('so it is never produced, and say why at its definition (see #359 for the pattern).');
   }
   process.exit(typeof result.status === 'number' ? result.status : 1);
 }

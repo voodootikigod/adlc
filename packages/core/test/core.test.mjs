@@ -263,6 +263,52 @@ test('array-literal-shrink: does not touch a single-element array', () => {
   assert.equal(op.apply("const only = ['id'];"), null);
 });
 
+// ── off-by-one: a tuning constant is not a boundary (#359) ──────────────────
+// off-by-one exists to catch BOUNDARY mistakes. A duration in milliseconds or a
+// size in bytes is a tuning knob: +1 there is an EQUIVALENT mutant that no test
+// can observe, so the gate demanded a test that cannot exist and the only way to
+// satisfy it was a source-text pin — a hollow test added to placate the
+// anti-hollow-test gate. Counts stay mutable: +1 on a retry/limit IS observable.
+
+const offByOne = () => OPERATORS.find((o) => o.name === 'off-by-one');
+
+test('off-by-one: does not mutate a duration or size tuning constant (#359)', () => {
+  const line = "  const result = spawnSync('git', args, { encoding: 'utf8', timeout: 60000, maxBuffer: 512 * 1024 * 1024 });";
+  assert.equal(offByOne().apply(line), null,
+    '+1 ms on a 60 s timeout is unobservable by any test — an equivalent mutant, not a coverage gap');
+});
+
+test('off-by-one: masks the WHOLE tuning value expression, not just its first number', () => {
+  // Skipping only `512` would fall through to `1024` and reproduce the same
+  // unkillable mutant one factor to the right.
+  assert.equal(offByOne().apply('  const opts = { maxBuffer: 512 * 1024 * 1024 };'), null);
+});
+
+test('off-by-one: still mutates a real boundary sharing a line with a tuning constant', () => {
+  assert.equal(
+    offByOne().apply('  if (index < items.length - 1) retry({ timeout: 30000 });'),
+    '  if (index < items.length - 2) retry({ timeout: 30000 });'
+  );
+});
+
+test('off-by-one: still mutates counts — a retry or limit count is an observable boundary', () => {
+  assert.equal(offByOne().apply('  const opts = { maxRetries: 3 };'), '  const opts = { maxRetries: 4 };');
+  assert.equal(offByOne().apply('  const opts = { limit: 10 };'), '  const opts = { limit: 11 };');
+});
+
+test('off-by-one: mutates the boundary at its own index, not the first matching digit run', () => {
+  // A masked tuning value whose digits repeat the boundary's digits must not be
+  // corrupted: a `line.replace(digits, ...)` would rewrite `timeout: 3` instead.
+  assert.equal(
+    offByOne().apply('  const o = { timeout: 3, limit: 3 };'),
+    '  const o = { timeout: 3, limit: 4 };'
+  );
+});
+
+test('off-by-one: an ordinary boundary is still mutated', () => {
+  assert.equal(offByOne().apply('  for (let i = 0; i < n; i++) {'), '  for (let i = 1; i < n; i++) {');
+});
+
 test('ternary-swap: swaps the recursive/leaf branches of an array-processing ternary (old operators miss it)', () => {
   const line = '    const result = Array.isArray(item) ? flatten(item) : item;';
   const originalMutants = mutantsFromOriginalOperators(line);

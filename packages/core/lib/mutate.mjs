@@ -9,6 +9,45 @@
 const LOOSE_EQ_NULL_RE = /(?<![=!])==(?!=)\s*null\b/;
 const LOOSE_NEQ_NULL_RE = /(?<!!)!=(?!=)\s*null\b/;
 
+// ── Tuning constants are not boundaries (#359) ──────────────────────────────
+// off-by-one exists to catch BOUNDARY mistakes — an index, a length, a count.
+// A duration in milliseconds or a size in bytes is a tuning knob, and +1 there is
+// an EQUIVALENT MUTANT: no test can observe 60000 -> 60001 ms on a subprocess
+// timeout, or 512 -> 513 MiB of buffer. Generating it made the gate demand a test
+// that cannot exist, and the only way to satisfy that demand was a source-text pin
+// assertion — i.e. adding a hollow test to placate the anti-hollow-test gate.
+// (Found landing #353, where `timeout: 60000` in rails-guard-ci's git() helper
+// survived and there was no honest way to kill it.)
+//
+// Deliberately EXCLUDES counts — maxRetries, attempts, limit, concurrency, max.
+// +1 on a count IS observable: a test can count attempts or returned items. Those
+// are the boundary bugs this operator exists to prosecute, and they stay mutable.
+//
+// KNOWN LIMIT: only the `key: value` / `key = value` form is recognized. A bare
+// call argument (`setTimeout(fn, 1000)`, `sleep(30000)`) is still mutated. Extend
+// this list only for a key whose ±1 is genuinely unobservable — every addition
+// removes real prosecution, so the bar is "no test could ever tell", not
+// "no test currently does".
+const TUNING_KEYS = String.raw`timeout|timeout_?ms|delay|delay_?ms|interval|interval_?ms`
+  + String.raw`|backoff|backoff_?ms|ttl|ttl_?ms|max_?age|keep_?alive(?:_?msecs)?`
+  + String.raw`|max_?buffer|high_?water_?mark|buffer_?size|chunk_?size|max_?bytes`;
+
+// The key, its separator, and its whole NUMERIC VALUE EXPRESSION. The value class
+// spans arithmetic so `512 * 1024 * 1024` is covered end to end — matching only
+// `512` would leave `1024` exposed and reproduce the same unkillable mutant one
+// factor to the right. Letters are excluded from the value class, so a match can
+// never run past this key's value into the next key's name.
+const TUNING_ASSIGNMENT_RE = new RegExp(
+  String.raw`\b(?:${TUNING_KEYS})\s*[:=]\s*\d[\d\s*+\-/_.]*`,
+  'gi'
+);
+
+// Blank out tuning assignments, PRESERVING LENGTH so an index into the masked line
+// addresses the same character in the original.
+function maskTuningAssignments(line) {
+  return line.replace(TUNING_ASSIGNMENT_RE, (match) => ' '.repeat(match.length));
+}
+
 // A simple array literal of 2+ quoted-string / bare-word elements, e.g.
 // `['id', 'title', 'scope']` or `[a, b, c]`. Deliberately excludes nested
 // brackets/braces/parens so it never mis-grabs function calls or object
@@ -145,10 +184,18 @@ export const OPERATORS = [
   {
     name: 'off-by-one',
     apply(line) {
-      const m = line.match(/(?<![\w.])(\d+)(?![\w.])/);
+      // Search the MASKED line so a tuning constant is skipped (see
+      // TUNING_ASSIGNMENT_RE), then splice into the ORIGINAL at the same index.
+      // Masking preserves length, so the index is valid in both. Index-splicing
+      // rather than `line.replace(digits, ...)` matters: replace() rewrites the
+      // first occurrence of that digit RUN anywhere on the line, which for
+      // `{ timeout: 3, limit: 3 }` would mutate the masked timeout instead of
+      // the boundary actually selected.
+      const m = maskTuningAssignments(line).match(/(?<![\w.])(\d+)(?![\w.])/);
       if (!m) return null;
-      const n = parseInt(m[1], 10);
-      return line.replace(m[1], String(n + 1));
+      const digits = m[1];
+      const n = parseInt(digits, 10);
+      return line.slice(0, m.index) + String(n + 1) + line.slice(m.index + digits.length);
     },
   },
   {
