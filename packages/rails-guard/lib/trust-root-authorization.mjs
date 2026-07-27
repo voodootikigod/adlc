@@ -97,9 +97,17 @@ export function codeownersMatch(pattern, path) {
   if (anchored) p = p.slice(1);
   const dir = p.endsWith('/');
   if (dir) p = p.slice(0, -1);
+  // `?` is a gitignore-style WILDCARD (exactly one character, never `/`) — not a regex
+  // quantifier. Leaving it unescaped made the preceding character optional, so
+  // `…adlc-rails-guard.yml?` matched `…adlc-rails-guard.yml` and falsely attested
+  // coverage for a file CODEOWNERS leaves ownerless. It is not in the escape set above
+  // precisely so it survives to be translated here.
   const rx = p
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*|\*/g, (m) => (m === '**' ? '.*' : '[^/]*'));
+    .replace(/\*\*|\*|\?/g, (m) => {
+      if (m === '**') return '.*';
+      return m === '*' ? '[^/]*' : '[^/]';
+    });
   // `/.*` not `(?:/.*)?`: a directory pattern must require something UNDER the directory.
   const re = new RegExp(dir ? `^${rx}/.*$` : `^${rx}$`);
   return re.test(path) || (!anchored && re.test(String(path ?? '').split('/').pop()));

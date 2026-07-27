@@ -1250,6 +1250,48 @@ test('#141: the same authorized trust-root change alone (no ticket-rail edit) is
   assert.equal(status, 0);
 });
 
+// #363 cross-model review round 2. Since #140 a trust root may be a GLOB
+// (`packages/rails-guard/lib/ci/**`), while the ceremony authorizes CONCRETE paths from
+// the diff. The lift used exact equality, so the glob never came out of the rail set and
+// the rails-guard bin denied the very change the ceremony had just authorized — the #141
+// escape hatch could not open for the gate's own source.
+const GLOB_TRUST_ROOT_FILES = [
+  '.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS',
+  'packages/rails-guard/lib/ci/args.mjs', 'src/critical/auth.mjs',
+];
+const GLOB_TRUST_ROOT_CONTENTS = {
+  '.adlc/config.json': VALID_CONFIG,
+  '.adlc/manifest.jsonl': '',
+  CODEOWNERS: '/packages/rails-guard/   @trusty\n',
+  'packages/rails-guard/lib/ci/args.mjs': 'orig\n',
+  'src/critical/auth.mjs': 'orig\n',
+};
+
+test('#141: an authorized change to a GLOB-covered trust root is lifted, not denied', () => {
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
+    seedFiles: GLOB_TRUST_ROOT_FILES,
+    seedFileContents: GLOB_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => writeFileSync(join(dir, 'packages/rails-guard/lib/ci/args.mjs'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 0);
+});
+
+test('#141: lifting a GLOB trust root does NOT lift a ticket rail that covers the same path', () => {
+  // The lift is drawn from the trust-root set only. Matching against `unique` directly
+  // would let an authorized trust-root change also unfreeze a ticket rail whose glob
+  // happens to cover an authorized path — the ceremony authorizes trust roots, never rails.
+  const status = runScenario({
+    baseTickets: '{"tickets":[{"id":"T1","rails":["packages/rails-guard/**"]}]}',
+    seedFiles: GLOB_TRUST_ROOT_FILES,
+    seedFileContents: GLOB_TRUST_ROOT_CONTENTS,
+    mutate: (dir) => writeFileSync(join(dir, 'packages/rails-guard/lib/ci/args.mjs'), 'changed\n'),
+    env: authorizedEnv(),
+  });
+  assert.equal(status, 2);
+});
+
 test('#141: label present but the reviews payload is absent → clean deny, not a crash (exit 2)', () => {
   // GITHUB_EVENT_PATH is set (real PR context, label applied) but ADLC_PR_REVIEWS
   // is UNSET — the reviews fetch yielded nothing. readPrContext must treat that as

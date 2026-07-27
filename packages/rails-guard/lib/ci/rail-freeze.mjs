@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DirectoryTicketStore, GitTreeTicketStore, detectTicketStore, storeHash, validateTickets } from '@adlc/tickets';
+import { globMatch } from '@adlc/core/tickets';
 import { classifyTrustRootAuthorization } from '../trust-root-authorization.mjs';
 import { deny, fail } from './errors.mjs';
 import { createGit, parseJson, resolveTrustedBase, trackedAt } from './git.mjs';
@@ -360,7 +361,19 @@ function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique,
     + `  approver (self-reported; authoritative source is GitHub's review record): ${decision.approver}\n`
     + `  changed: ${changedTrustRoots.join(', ')}`
   );
-  return unique.filter((rail) => !changedTrustRoots.includes(rail));
+  // Lift by MATCH, not by equality. A trust root may be a GLOB
+  // (`packages/rails-guard/lib/ci/**`), while the ceremony authorizes CONCRETE paths from
+  // the diff. Exact equality never removed the glob, so an authorized change to a
+  // glob-covered trust root was still denied by the rails-guard bin below — the #141
+  // escape hatch could not open for the gate's own source.
+  //
+  // Only entries drawn from immutableTrustRoots are eligible. Filtering `unique` directly
+  // by glob match would also lift a TICKET rail that happens to cover an authorized path,
+  // and the ceremony authorizes trust-root changes only — never a ticket's rails.
+  const lifted = new Set(
+    immutableTrustRoots.filter((root) => changedTrustRoots.some((path) => root === path || globMatch(root, path)))
+  );
+  return unique.filter((rail) => !lifted.has(rail));
 }
 
 /**

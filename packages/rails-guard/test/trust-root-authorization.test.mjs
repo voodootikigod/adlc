@@ -106,6 +106,20 @@ test('codeownersMatch: directory subtree (trailing slash)', () => {
   );
 });
 
+// #363 cross-model review round 2, blocking. `?` is a gitignore-style wildcard matching
+// exactly one character — NOT a regex quantifier. Unescaped it made the preceding
+// character optional, so `<workflow>?` matched `<workflow>` and falsely attested coverage
+// for a path CODEOWNERS leaves ownerless.
+test('codeownersMatch: ? is a single-character wildcard, not a regex quantifier', () => {
+  const W = '.github/workflows/adlc-rails-guard.yml';
+  assert.equal(codeownersMatch(`${W}?`, W), false, '? must CONSUME a character, so it cannot own the bare path');
+  assert.equal(codeownersMatch(`${W}\\?`, W), false, 'an escaped ? must not fall back to the quantifier either');
+  assert.equal(codeownersMatch(`${W}?`, `${W}x`), true, '? matches exactly one character');
+  assert.equal(codeownersMatch('/docs/c?.yml', 'docs/cx.yml'), true);
+  assert.equal(codeownersMatch('/docs/c?.yml', 'docs/cxx.yml'), false, '? matches ONE character, not many');
+  assert.equal(codeownersMatch('/docs/c?.yml', 'docs/c/.yml'), false, '? must not cross a path separator');
+});
+
 test('codeownersMatch: single star does not cross a slash; double star does', () => {
   assert.equal(codeownersMatch('/scripts/*.mjs', 'scripts/x.mjs'), true);
   assert.equal(codeownersMatch('/scripts/*.mjs', 'scripts/sub/x.mjs'), false); // * stops at /
