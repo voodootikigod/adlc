@@ -13,7 +13,14 @@ import { fail } from './errors.mjs';
 // append-only ledger, and `git cat-file`/`git show`/`git diff` over it can legitimately
 // exceed 1 MiB. The default ENOBUFS'd a large-but-valid manifest and failed the gate
 // (#314 round 6).
-const MAX_BUFFER_BYTES = 512 * 1024 * 1024;
+//
+// Named to match the `maxBuffer` option it feeds, which is also how #359/#362's off-by-one
+// operator recognises it as a TUNING constant rather than a boundary. +1 byte on a 512 MiB
+// spawn bound is an EQUIVALENT mutant — distinguishing it would need git output sized
+// between 536,870,912 and 537,919,488 bytes — so the operator masks it instead of demanding
+// a test that cannot exist. The earlier `MAX_BUFFER_BYTES` spelling missed that masking
+// (the key must be followed by the separator) and left an unkillable mutant behind.
+const MAX_BUFFER = 512 * 1024 * 1024;
 
 // Long enough that a cold, large repository does not spuriously fail the gate; short
 // enough that a wedged git cannot hang the CI job indefinitely.
@@ -40,7 +47,7 @@ export function createGit(cwd) {
       cwd,
       encoding: raw ? 'buffer' : 'utf8',
       timeout: GIT_TIMEOUT_MS,
-      maxBuffer: MAX_BUFFER_BYTES,
+      maxBuffer: MAX_BUFFER,
     });
     if (result.error) fail(`${label} failed: ${result.error.message}`);
     if (result.signal) fail(`${label} timed out or was killed by ${result.signal}`);
