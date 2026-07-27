@@ -159,8 +159,14 @@ test('the JSON schema is built from the same field table as the help', () => {
 test('the committed schema file matches the generated one', () => {
   // The published schema and the CLI help must never disagree; if they can
   // drift, the file becomes another thing an author has to double-check.
+  //
+  // Line endings are normalized because this package runs on the Windows leg of
+  // the ticket-store platform matrix, where git checks the file out with CRLF
+  // and every line of an otherwise-identical schema differed. The drift this
+  // gate exists to catch is a CONTENT difference between the field table and
+  // the published artifact; the separator git chose on checkout is not that.
   const committed = readFileSync(join(PACKAGE, 'schemas/ticket.schema.json'), 'utf8');
-  assert.equal(committed, serializeTicketJsonSchema());
+  assert.equal(committed.replace(/\r\n/g, '\n'), serializeTicketJsonSchema());
 });
 
 /** Minimal checker for the only keywords ticketJsonSchema() emits. */
