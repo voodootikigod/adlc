@@ -22,7 +22,8 @@
     "gate"
   ],
   "bin": {
-    "rails-guard": "./bin/rails-guard.mjs"
+    "rails-guard": "./bin/rails-guard.mjs",
+    "rails-guard-ci": "./bin/rails-guard-ci.mjs"
   },
   "files": [
     "bin/",
@@ -32,7 +33,8 @@
   ],
   "dependencies": {
     "@adlc/core": "1.6.0",
-    "@adlc/gate-manifest": "1.6.0"
+    "@adlc/gate-manifest": "1.6.0",
+    "@adlc/tickets": "1.6.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

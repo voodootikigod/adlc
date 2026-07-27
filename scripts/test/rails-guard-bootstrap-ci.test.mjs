@@ -1,5 +1,16 @@
-// rails-guard-bootstrap-ci.test.mjs - regression tests for the bootstrap and
-// signed-mode checks embedded in docs/ci/rails-guard.yml.
+// rails-guard-bootstrap-ci.test.mjs — regression tests for the bootstrap and
+// signed-mode checks of the CI rail-freeze gate.
+//
+// These used to run a script EXTRACTED from docs/ci/rails-guard.yml, because the gate
+// was inlined there as a `node -e` block. Since #140 there is one implementation —
+// `adlc rails-guard-ci`, shipped in @adlc/rails-guard — and the template merely calls
+// it. So the scenarios below run the real bin, which is what CI runs, and the template
+// is checked for the one thing it still owns: that it invokes the right commands with
+// the right environment.
+//
+// The old sha256 fixture (scripts/test/rails-guard-workflow-hashes.json) is gone with
+// the copy it pinned. It could only prove the inline script was UNCHANGED, never that
+// it AGREED with the real gate — and they had already drifted (#314).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,37 +18,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import vm from 'node:vm';
+import { ticketFilename } from '@adlc/tickets';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = join(ROOT, 'docs', 'ci', 'rails-guard.yml');
-const HASH_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'rails-guard-workflow-hashes.json');
-
-function extractNodeScript(marker) {
-  const workflow = readFileSync(WORKFLOW, 'utf8');
-  const markerAt = workflow.indexOf(marker);
-  assert.notEqual(markerAt, -1, `${marker} marker exists`);
-  const startToken = "node -e '\n";
-  const start = workflow.indexOf(startToken, markerAt);
-  assert.notEqual(start, -1, `${marker} node -e block exists`);
-  const nodeLineStart = workflow.lastIndexOf('\n', start) + 1;
-  const nodeIndent = workflow.slice(nodeLineStart, start);
-  assert.match(nodeIndent, /^\s+$/, `${marker} node -e line has YAML indentation`);
-  const codeStart = start + startToken.length;
-  const lines = workflow.slice(codeStart).split('\n');
-  const closeAt = lines.findIndex((line) => line === `${nodeIndent}'`);
-  assert.notEqual(closeAt, -1, `${marker} node -e block terminates at matching indentation`);
-  const scriptIndent = `${nodeIndent}  `;
-  const script = lines
-    .slice(0, closeAt)
-    .map((line) => (line.startsWith(scriptIndent) ? line.slice(scriptIndent.length) : line))
-    .join('\n');
-  assert.ok(script.length > 500, `${marker} extraction produced a non-trivial script`);
-  assert.doesNotThrow(() => new vm.Script(script), `${marker} extraction produced valid JavaScript`);
-  return script;
-}
+const GATE_BIN = join(ROOT, 'packages', 'rails-guard', 'bin', 'rails-guard-ci.mjs');
 
 function extractStepYaml(marker) {
   const workflow = readFileSync(WORKFLOW, 'utf8');
@@ -47,34 +34,33 @@ function extractStepYaml(marker) {
   return workflow.slice(markerAt, nextStep === -1 ? undefined : nextStep);
 }
 
-function extractBootstrapScript() {
-  const script = extractNodeScript('- name: Verify ADLC bootstrap acknowledgement');
-  assert.match(script, /assertExistingSignerRolesExact\(trusted\.signers, head\.signers\)/);
-  assert.match(script, /bootstrap mode: base has no \.adlc tree/);
-  assert.match(script, /ADLC_SIGNED_RUNNER_POOL/);
-  return script;
-}
+// The template's whole job is now dispatch. If it stops calling the gate — or calls it
+// without the base ref — every scenario below still passes while CI enforces nothing,
+// so the wiring is asserted explicitly rather than assumed.
+test('workflow template invokes the shipped gate rather than an inline copy', () => {
+  const workflow = readFileSync(WORKFLOW, 'utf8');
+  assert.match(extractStepYaml('- name: Verify ADLC bootstrap acknowledgement'), /run: adlc rails-guard-ci bootstrap\b/);
+  assert.match(extractStepYaml('- name: Rail-freeze gate'), /run: adlc rails-guard-ci\s*$/m);
+  // Scan the executable `run:` lines only — the file's header legitimately mentions the
+  // `node -e` block it replaced, and matching prose would make this assertion a spelling test.
+  const runLines = workflow.split('\n').filter((line) => /^\s*run:/.test(line));
+  assert.ok(runLines.length > 0, 'the workflow has run: steps');
+  for (const line of runLines) {
+    assert.doesNotMatch(line, /node\s+-e/, `the gate must not be inlined into the template again: ${line.trim()}`);
+  }
+});
 
-function extractRailFreezeScript() {
-  const script = extractNodeScript('- name: Rail-freeze gate');
-  assert.match(script, /adlc rails-guard/);
-  assert.match(script, /bootstrap validation was handled by the previous step/);
-  assert.match(script, /const immutableTrustRoots = \["\.adlc\/config\.json", "\.adlc\/admin\.pub", "\.adlc\/tickets\/\.store\.json", "\.github\/workflows\/adlc-rails-guard\.yml", "CODEOWNERS", "\.github\/CODEOWNERS", "docs\/CODEOWNERS", "docs\/ci\/rails-guard\.yml", "scripts\/rails-guard-ci\.mjs", "scripts\/test\/rails-guard-workflow-hashes\.json"\]/);
-  assert.match(script, /new Set\(\[...rails, ...immutableTrustRoots\]\)/);
-  return script;
-}
+test('workflow template pins an exact @adlc/cli version, never a floating tag', () => {
+  const workflow = readFileSync(WORKFLOW, 'utf8');
+  assert.match(workflow, /npm install -g --ignore-scripts @adlc\/cli@\d+\.\d+\.\d+/);
+  assert.doesNotMatch(workflow, /@adlc\/cli@latest/);
+});
 
-const BOOTSTRAP_SCRIPT = extractBootstrapScript();
-const RAIL_FREEZE_SCRIPT = extractRailFreezeScript();
-
-function sha256(text) {
-  return createHash('sha256').update(text).digest('hex');
-}
-
-test('workflow inline script hashes match the checked-in fixture', () => {
-  const fixture = JSON.parse(readFileSync(HASH_FIXTURE, 'utf8'));
-  assert.equal(sha256(BOOTSTRAP_SCRIPT), fixture.bootstrap);
-  assert.equal(sha256(RAIL_FREEZE_SCRIPT), fixture.railFreeze);
+// Both gate steps need BASE_REF: the bin derives origin/$BASE_REF from it. A step that
+// lost it would silently fall back to origin/main and diff against the wrong base.
+test('both gate steps receive BASE_REF', () => {
+  assert.match(extractStepYaml('- name: Verify ADLC bootstrap acknowledgement'), /BASE_REF:\s*\$\{\{\s*github\.base_ref\s*\}\}/);
+  assert.match(extractStepYaml('- name: Rail-freeze gate'), /BASE_REF:\s*\$\{\{\s*github\.base_ref\s*\}\}/);
 });
 
 test('bootstrap workflow env maps signed-mode values from the expected GitHub contexts', () => {
@@ -121,7 +107,7 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
     git(dir, ['commit', '--allow-empty', '-qm', 'change']);
 
     const scenarioEnv = typeof env === 'function' ? env(dir) : env;
-    const result = spawnSync(process.execPath, ['-e', BOOTSTRAP_SCRIPT], {
+    const result = spawnSync(process.execPath, [GATE_BIN, 'bootstrap'], {
       cwd: dir,
       encoding: 'utf8',
       env: {
@@ -170,7 +156,7 @@ function runRailFreezeScenario({ baseConfig = BASE_UNSIGNED, baseTickets, headCo
     git(dir, ['commit', '--allow-empty', '-qm', 'change']);
 
     const scenarioEnv = typeof env === 'function' ? env(dir) : env;
-    const result = spawnSync(process.execPath, ['-e', RAIL_FREEZE_SCRIPT], {
+    const result = spawnSync(process.execPath, [GATE_BIN], {
       cwd: dir,
       encoding: 'utf8',
       env: { ...process.env, BASE_REF: 'main', ...scenarioEnv },
@@ -625,7 +611,7 @@ test('existing signer roles cannot change in a PR', () => {
     },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /signers\.alice\.role cannot change trusted value/);
+  assert.match(result.stderr, /signers\.alice\.role cannot change trusted signer property/);
 });
 
 test('existing signer keys cannot be deleted in a PR', () => {
@@ -667,7 +653,7 @@ test('existing signer role arrays cannot gain approver roles in a PR', () => {
     },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /existing signer alice roles cannot change/);
+  assert.match(result.stderr, /signers\.alice\.roles cannot change trusted signer property/);
 });
 
 test('unchanged existing signer role arrays pass validation', () => {
@@ -776,94 +762,72 @@ test('base config must already acknowledge the new-rail limitation', () => {
   assert.match(result.stderr, /acknowledgedNewRailBypass must already be set on the base branch/);
 });
 
-test('rail-freeze bootstrap mode defers manifest validation to the bootstrap step', () => {
+test('rail-freeze bootstrap mode rejects pre-populated first-bootstrap manifest evidence', () => {
   const result = runRailFreezeScenario({
     baseConfig: null,
     headConfig: BASE_UNSIGNED,
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n'),
   });
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /bootstrap validation was handled by the previous step/);
+  // The template's inline copy exited 0 here and deferred to the bootstrap step. The
+  // shared gate is stricter: it makes the same diff-based judgement the script always
+  // did, so the check no longer depends on step ordering.
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /first bootstrap PR cannot introduce pre-populated \.adlc\/manifest\.jsonl evidence/);
 });
 
-test('rail-freeze gate fails closed when base .adlc exists without config acknowledgement', () => {
-  const result = runRailFreezeScenario({
-    baseConfig: false,
-    baseTickets: { tickets: [] },
+// A base with a .adlc tree but no config.json is half-bootstrapped. That verdict belongs
+// to the BOOTSTRAP step, which the workflow template runs before the rail-freeze step —
+// so a deployed workflow still fails closed on it. The rail-freeze step deliberately does
+// NOT require a config, because this repository runs it that way: the ADLC repo has a
+// committed .adlc/ ticket store and no .adlc/config.json at all.
+test('bootstrap step fails closed when base .adlc exists without config acknowledgement', () => {
+  const result = runBootstrapScenario({
+    baseConfig: null,
     headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => {
+      mkdirSync(join(dir, '.adlc'), { recursive: true });
+      writeJson(join(dir, '.adlc', 'tickets.json'), { tickets: [] });
+    },
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /base \.adlc\/config\.json is absent/);
 });
 
+// A repo whose tickets declare NO rails is still not unprotected: the immutable trust
+// roots freeze as soon as the base is bootstrapped. Before, this was asserted by reading
+// the argv handed to a stubbed `adlc`; now it is asserted by the verdict.
 test('rail-freeze gate protects trust roots when base tickets declare no rails', () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'rg-adlc-bin-'));
-  try {
-    const binDir = join(tmp, 'bin');
-    const capturePath = join(tmp, 'argv.json');
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, 'adlc'),
-      [
-        '#!/usr/bin/env node',
-        "const { writeFileSync } = require('fs');",
-        'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));',
-        'process.exit(0);',
-        '',
-      ].join('\n'),
-      { mode: 0o700 }
-    );
-    const result = runRailFreezeScenario({
-      baseConfig: BASE_UNSIGNED,
-      baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
-      headConfig: BASE_UNSIGNED,
-      env: {
-        PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
-        CAPTURE_PATH: capturePath,
-      },
-    });
-    assert.equal(result.status, 0);
-    const argv = JSON.parse(readFileSync(capturePath, 'utf8'));
-    assert.deepEqual(argv, [
-      'rails-guard',
-      '--base',
-      'origin/main',
-      '--rails',
-      '.adlc/config.json',
-      '--rails',
-      '.adlc/admin.pub',
-      '--rails',
-      '.adlc/tickets/.store.json',
-      '--rails',
-      '.github/workflows/adlc-rails-guard.yml',
-      '--rails',
-      'CODEOWNERS',
-      '--rails',
-      '.github/CODEOWNERS',
-      '--rails',
-      'docs/CODEOWNERS',
-      '--rails',
-      'docs/ci/rails-guard.yml',
-      '--rails',
-      'scripts/rails-guard-ci.mjs',
-      '--rails',
-      'scripts/test/rails-guard-workflow-hashes.json',
-    ]);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+  const denied = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateBase: editAtHead('.github/workflows/adlc-rails-guard.yml', 'name: gate\n'),
+    mutateHead: editAtHead('.github/workflows/adlc-rails-guard.yml', 'name: tampered\n'),
+  });
+  assert.equal(denied.status, 2);
+  assert.match(denied.stderr, /ADLC trust root changed, deleted, or renamed/);
+
+  // Control: with no rails declared, an ordinary file is NOT frozen. Without this the
+  // test above would also pass if the gate denied everything.
+  const allowed = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateHead: editAtHead('src/ordinary.txt'),
+  });
+  assert.equal(allowed.status, 0);
 });
 
 test('rail-freeze gate allows adding a new ticket while preserving existing tickets', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] },
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] },
     headConfig: BASE_UNSIGNED,
     mutateHead: (dir) =>
       writeJson(join(dir, '.adlc', 'tickets.json'), {
         tickets: [
-          { id: 'T1', rails: ['src/critical/**'] },
-          { id: 'T2', rails: [] },
+          { id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] },
+          { id: 'T2', title: 'Fixture T2', rails: [] },
         ],
       }),
   });
@@ -873,9 +837,9 @@ test('rail-freeze gate allows adding a new ticket while preserving existing tick
 test('rail-freeze gate rejects ticket updates that remove base rails', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] },
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] },
     headConfig: BASE_UNSIGNED,
-    mutateHead: (dir) => writeJson(join(dir, '.adlc', 'tickets.json'), { tickets: [{ id: 'T1', rails: [] }] }),
+    mutateHead: (dir) => writeJson(join(dir, '.adlc', 'tickets.json'), { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] }),
   });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /contract cannot change in \.adlc\/tickets\.json/);
@@ -884,11 +848,11 @@ test('rail-freeze gate rejects ticket updates that remove base rails', () => {
 test('rail-freeze gate rejects existing ticket contract changes that preserve rails', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', triageClass: 'Substantial', triageCommit: 'abc123', rails: ['src/critical/**'] }] },
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', triageClass: 'Substantial', triageCommit: 'abc123', rails: ['src/critical/**'] }] },
     headConfig: BASE_UNSIGNED,
     mutateHead: (dir) =>
       writeJson(join(dir, '.adlc', 'tickets.json'), {
-        tickets: [{ id: 'T1', triageClass: 'Trivial', triageCommit: 'abc123', rails: ['src/critical/**'] }],
+        tickets: [{ id: 'T1', title: 'Fixture T1', triageClass: 'Trivial', triageCommit: 'abc123', rails: ['src/critical/**'] }],
       }),
   });
   assert.equal(result.status, 2);
@@ -898,7 +862,7 @@ test('rail-freeze gate rejects existing ticket contract changes that preserve ra
 test('rail-freeze gate rejects initial non-empty manifest evidence creation', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
     headConfig: BASE_UNSIGNED,
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n'),
   });
@@ -909,7 +873,7 @@ test('rail-freeze gate rejects initial non-empty manifest evidence creation', ()
 test('rail-freeze gate allows append-only manifest evidence', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
     headConfig: BASE_UNSIGNED,
     mutateBase: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n'),
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n{"seq":2}\n'),
@@ -920,7 +884,7 @@ test('rail-freeze gate allows append-only manifest evidence', () => {
 test('rail-freeze gate rejects manifest rewrites', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
     headConfig: BASE_UNSIGNED,
     mutateBase: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n'),
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":0}\n{"seq":2}\n'),
@@ -938,7 +902,7 @@ for (const [path, renamedPath] of [
   test(`rail-freeze gate rejects trust-root rename of ${path}`, () => {
     const result = runRailFreezeScenario({
       baseConfig: BASE_UNSIGNED,
-      baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+      baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
       headConfig: BASE_UNSIGNED,
       mutateBase: (dir) => {
         if (path !== '.adlc/tickets.json') {
@@ -949,13 +913,13 @@ for (const [path, renamedPath] of [
       mutateHead: (dir) => renameSync(join(dir, path), join(dir, renamedPath)),
     });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /ADLC trust root changed, deleted, or renamed|exists at base but is absent at HEAD/);
+    assert.match(result.stderr, /ADLC trust root changed, deleted, or renamed|exists at base but is absent at HEAD|base ticket store was removed or renamed at HEAD/);
   });
 
   test(`rail-freeze gate rejects trust-root deletion of ${path}`, () => {
     const result = runRailFreezeScenario({
       baseConfig: BASE_UNSIGNED,
-      baseTickets: { tickets: [{ id: 'T1', rails: [] }] },
+      baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: [] }] },
       headConfig: BASE_UNSIGNED,
       mutateBase: (dir) => {
         if (path !== '.adlc/tickets.json') {
@@ -966,68 +930,30 @@ for (const [path, renamedPath] of [
       mutateHead: (dir) => unlinkSync(join(dir, path)),
     });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /ADLC trust root changed, deleted, or renamed|exists at base but is absent at HEAD/);
+    assert.match(result.stderr, /ADLC trust root changed, deleted, or renamed|exists at base but is absent at HEAD|base ticket store was removed or renamed at HEAD/);
   });
 }
 
-test('rail-freeze gate passes trust-root rail to adlc rails-guard', () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'rg-adlc-bin-'));
-  try {
-    const binDir = join(tmp, 'bin');
-    const capturePath = join(tmp, 'argv.json');
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, 'adlc'),
-      [
-        '#!/usr/bin/env node',
-        "const { writeFileSync } = require('fs');",
-        'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));',
-        'process.exit(0);',
-        '',
-      ].join('\n'),
-      { mode: 0o700 }
-    );
-    const result = runRailFreezeScenario({
-      baseConfig: BASE_UNSIGNED,
-      baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] },
-      headConfig: BASE_UNSIGNED,
-      env: {
-        PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
-        CAPTURE_PATH: capturePath,
-      },
-    });
-    assert.equal(result.status, 0);
-    const argv = JSON.parse(readFileSync(capturePath, 'utf8'));
-    assert.deepEqual(argv, [
-      'rails-guard',
-      '--base',
-      'origin/main',
-      '--rails',
-      'src/critical/**',
-      '--rails',
-      '.adlc/config.json',
-      '--rails',
-      '.adlc/admin.pub',
-      '--rails',
-      '.adlc/tickets/.store.json',
-      '--rails',
-      '.github/workflows/adlc-rails-guard.yml',
-      '--rails',
-      'CODEOWNERS',
-      '--rails',
-      '.github/CODEOWNERS',
-      '--rails',
-      'docs/CODEOWNERS',
-      '--rails',
-      'docs/ci/rails-guard.yml',
-      '--rails',
-      'scripts/rails-guard-ci.mjs',
-      '--rails',
-      'scripts/test/rails-guard-workflow-hashes.json',
-    ]);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+// The trust-root set reaches enforcement even when ticket rails are also in play — the
+// two sets are unioned, not one-or-the-other.
+test('rail-freeze gate enforces trust roots alongside declared ticket rails', () => {
+  const scenario = (mutateHead) => runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateBase: editAtHead('docs/CODEOWNERS', '* @adlc-admins\n'),
+    mutateHead,
+  });
+
+  const trustRoot = scenario(editAtHead('docs/CODEOWNERS', '* @attacker\n'));
+  assert.equal(trustRoot.status, 2);
+  assert.match(trustRoot.stderr, /ADLC trust root changed, deleted, or renamed/);
+
+  const ticketRail = scenario(editAtHead('src/critical/thing.txt'));
+  assert.equal(ticketRail.status, 2);
+
+  const unrelated = scenario(editAtHead('src/ordinary.txt'));
+  assert.equal(unrelated.status, 0);
 });
 
 // ---- #283: the directory (sharded) ticket store backend ----
@@ -1045,76 +971,94 @@ function writeDirStore(dir, tickets) {
   // The real @adlc/tickets manifest shape; the template validates this content.
   writeFileSync(join(ticketsDir, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
   for (const t of tickets) {
-    writeFileSync(join(ticketsDir, `${t.id.toLowerCase()}--0000.json`), JSON.stringify(t));
+    writeFileSync(join(ticketsDir, ticketFilename(t.id)), JSON.stringify(t));
   }
 }
 
-// Run the rail-freeze block against a directory-backend base, capturing the argv
-// handed to a stubbed `adlc` so we can assert exactly which rails were frozen.
-function runDirBackendCapture({ baseTickets, mutateHead }) {
-  const tmp = mkdtempSync(join(tmpdir(), 'rg-dir-store-'));
-  try {
-    const binDir = join(tmp, 'bin');
-    const capturePath = join(tmp, 'argv.json');
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, 'adlc'),
-      ['#!/usr/bin/env node', "const { writeFileSync } = require('fs');", 'writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)));', 'process.exit(0);', ''].join('\n'),
-      { mode: 0o700 }
-    );
-    const result = runRailFreezeScenario({
-      baseConfig: BASE_UNSIGNED,
-      // no baseTickets → no legacy tickets.json; the directory store is seeded via mutateBase
-      headConfig: BASE_UNSIGNED,
-      mutateBase: (dir) => writeDirStore(dir, baseTickets),
-      mutateHead,
-      env: { PATH: `${binDir}${delimiter}${process.env.PATH || ''}`, CAPTURE_PATH: capturePath },
-    });
-    let argv = null;
-    try { argv = JSON.parse(readFileSync(capturePath, 'utf8')); } catch { /* adlc not reached */ }
-    return { status: result.status, stderr: result.stderr, argv };
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+// Run the rail-freeze gate against a directory-backend base and return its VERDICT.
+//
+// These assertions used to stub `adlc` on PATH and inspect the argv the gate passed to
+// it. The shared gate spawns its sibling verdict bin by absolute path instead — version
+// locked with the gate and not shimmable by a PATH entry — so the stub can no longer see
+// it. Asserting the verdict is the better test anyway: "editing this path is denied" is
+// the property that matters, and it holds regardless of how the rail set is plumbed.
+function runDirBackend({ baseTickets, mutateHead }) {
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    // no baseTickets → no legacy tickets.json; the directory store is seeded via mutateBase
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, baseTickets),
+    mutateHead,
+  });
+  return { status: result.status, stderr: result.stderr };
+}
+
+// Edit a file at HEAD, creating parent directories. The gate judges the DIFF, so a
+// scenario only exercises a rail if the PR actually touches a path under it.
+function editAtHead(relPath, contents = 'changed\n') {
+  return (dir) => {
+    const target = join(dir, relPath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+  };
 }
 
 test('#283: directory-backend base enforces shard ticket rails (fail-open fix)', () => {
-  const { status, argv } = runDirBackendCapture({ baseTickets: [{ id: 'T1', rails: ['src/critical/**'] }] });
-  assert.equal(status, 0);
-  // The shard's rail must reach adlc rails-guard — before the fix it was dropped.
-  assert.ok(argv.includes('src/critical/**'), `expected shard rail to be frozen; got ${JSON.stringify(argv)}`);
-  // And the store manifest is itself a frozen trust root.
-  assert.ok(argv.includes('.adlc/tickets/.store.json'));
+  const baseTickets = [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }];
+
+  // Before the fix the gate read only tickets.json, so a directory-store repo silently
+  // degraded to "trust roots only" and STOPPED enforcing ticket rails.
+  const denied = runDirBackend({ baseTickets, mutateHead: editAtHead('src/critical/thing.txt') });
+  assert.equal(denied.status, 2, denied.stderr);
+
+  // The store manifest is itself a frozen trust root.
+  const manifest = runDirBackend({
+    baseTickets,
+    mutateHead: editAtHead('.github/workflows/adlc-rails-guard.yml', 'name: tampered\n'),
+  });
+  assert.equal(manifest.status, 2, manifest.stderr);
+
+  const allowed = runDirBackend({ baseTickets, mutateHead: editAtHead('src/ordinary.txt') });
+  assert.equal(allowed.status, 0, allowed.stderr);
 });
 
 test('#283: directory-backend completed ticket rails auto-expire; active rails stay frozen', () => {
-  const { status, argv } = runDirBackendCapture({
-    baseTickets: [
-      { id: 'T1', rails: ['src/shipped/**'], completed: true },
-      { id: 'T2', rails: ['src/active/**'] },
-    ],
-  });
-  assert.equal(status, 0);
-  assert.ok(argv.includes('src/active/**'), 'active ticket rail must stay frozen');
-  assert.ok(!argv.includes('src/shipped/**'), 'completed ticket rail must expire');
+  const baseTickets = [
+    { id: 'T1', title: 'Fixture T1', rails: ['src/shipped/**'], completed: true },
+    { id: 'T2', title: 'Fixture T2', rails: ['src/active/**'] },
+  ];
+
+  const expired = runDirBackend({ baseTickets, mutateHead: editAtHead('src/shipped/thing.txt') });
+  assert.equal(expired.status, 0, `completed ticket rail must expire: ${expired.stderr}`);
+
+  const stillFrozen = runDirBackend({ baseTickets, mutateHead: editAtHead('src/active/thing.txt') });
+  assert.equal(stillFrozen.status, 2, `active ticket rail must stay frozen: ${stillFrozen.stderr}`);
 });
 
 test('#283: directory-backend allows adding a new shard while preserving existing tickets', () => {
-  const { status, argv } = runDirBackendCapture({
-    baseTickets: [{ id: 'T1', rails: ['src/critical/**'] }],
-    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't2--0000.json'), JSON.stringify({ id: 'T2', rails: [] })),
-  });
-  assert.equal(status, 0);
+  const baseTickets = [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }];
+  const addShard = (dir) => writeFileSync(
+    join(dir, '.adlc', 'tickets', ticketFilename('T2')),
+    JSON.stringify({ id: 'T2', title: 'Fixture T2', rails: [] })
+  );
+
+  const added = runDirBackend({ baseTickets, mutateHead: addShard });
+  assert.equal(added.status, 0, `adding a shard is an ordinary PR change: ${added.stderr}`);
+
   // The existing ticket's rail must STILL be frozen after a sibling shard is added.
-  assert.ok(argv.includes('src/critical/**'), 'base rail must remain frozen when a shard is added');
+  const stillFrozen = runDirBackend({
+    baseTickets,
+    mutateHead: (dir) => { addShard(dir); editAtHead('src/critical/thing.txt')(dir); },
+  });
+  assert.equal(stillFrozen.status, 2, stillFrozen.stderr);
 });
 
 test('#283: directory-backend rejects removing a base rail from a shard', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
-    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't1--0000.json'), JSON.stringify({ id: 'T1', rails: [] })),
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', ticketFilename('T1')), JSON.stringify({ id: 'T1', title: 'Fixture T1', rails: [] })),
   });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /contract cannot change in the \.adlc\/tickets\/ store/);
@@ -1124,52 +1068,71 @@ test('#283: directory-backend rejects removing an existing base shard', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
-    mutateHead: (dir) => unlinkSync(join(dir, '.adlc', 'tickets', 't1--0000.json')),
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => unlinkSync(join(dir, '.adlc', 'tickets', ticketFilename('T1'))),
   });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /cannot be removed from the \.adlc\/tickets\/ store/);
 });
 
-test('#283: a legacy→directory store migration in an ordinary PR is denied (admin ceremony only)', () => {
+// BEHAVIOUR CHANGE (#140). The workflow template used to DENY every legacy→directory
+// migration outright — not as a policy choice, but because its self-contained inline copy
+// could not verify migration evidence, so it failed closed and routed migrations to the
+// protected base. The shared gate CAN verify that evidence, so a migration is now judged
+// on it: a migration carrying no valid, hash-chained manifest evidence still does not pass.
+test('#283: a legacy→directory store migration without valid evidence does not pass', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }, // legacy base
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] }, // legacy base
     headConfig: BASE_UNSIGNED,
     mutateHead: (dir) => {
       unlinkSync(join(dir, '.adlc', 'tickets.json'));
-      writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]);
+      writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]);
     },
   });
-  assert.equal(result.status, 2);
-  // Exact message: .adlc/tickets/.store.json is a trust root, so the generic
-  // trust-root diff would ALSO deny here — asserting only the specific
-  // backend-change guard proves THAT guard fired, not the broader net.
-  assert.match(result.stderr, /ticket store backend cannot change in a PR \(base legacy -> head directory\)/);
+  assert.notEqual(result.status, 0, `a migration with no evidence must not pass: ${result.stdout}`);
+  assert.equal(result.status, 1);
+  // Fails on the migration path specifically (here: no migrated archive to bind evidence
+  // to), not on some unrelated error that would also happen to be non-zero.
+  assert.match(result.stderr, /migrat/i);
 });
 
 test('#283: an ambiguous base (both tickets.json AND a directory store) fails closed', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
-    baseTickets: { tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }, // legacy file at base
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] }, // legacy file at base
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T2', rails: ['src/other/**'] }]), // AND a directory store
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T2', title: 'Fixture T2', rails: ['src/other/**'] }]), // AND a directory store
   });
   assert.equal(result.status, 1); // operational fail-closed, not a silent legacy-precedence
-  assert.match(result.stderr, /ambiguous ticket store/);
+  assert.match(result.stderr, /AMBIGUOUS_STORE: both legacy and directory ticket stores exist/);
 });
 
-test('#283: directory-backend rejects two shards sharing a ticket id (dup-id shadowing)', () => {
-  const result = runRailFreezeScenario({
+// The canonical store binds a shard's FILENAME to its ticket id (<slug>--<sha256(id)>),
+// which makes dup-id shadowing structurally impossible rather than merely detected: a
+// second shard claiming T1 either IS the T1 file (an ordinary contract change, denied
+// below) or carries a filename that does not match its id (rejected outright).
+test('#283: directory-backend rejects a second shard claiming an existing ticket id', () => {
+  const sameFile = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
-    // Add a second shard for the SAME id with empty rails — a Map keyed by id could
-    // otherwise let the empty copy shadow the frozen one.
-    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't1--ffff.json'), JSON.stringify({ id: 'T1', rails: [] })),
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
+    // The canonical filename for T1 — so this is the SAME shard with its rails emptied.
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', ticketFilename('T1')), JSON.stringify({ id: 'T1', title: 'Fixture T1', rails: [] })),
   });
-  assert.equal(result.status, 1); // validateTickets rejects the duplicate id, failing closed
-  assert.match(result.stderr, /duplicate id T1/);
+  assert.equal(sameFile.status, 2);
+  assert.match(sameFile.stderr, /contract cannot change in the \.adlc\/tickets\/ store/);
+
+  const mismatchedName = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
+    // A DIFFERENT filename carrying id T1 — the shadowing shape the old reader had to
+    // detect by hand. The filename↔id binding refuses it before rails are ever computed.
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', ticketFilename('T2')), JSON.stringify({ id: 'T1', title: 'Fixture T1', rails: [] })),
+  });
+  assert.equal(mismatchedName.status, 1);
+  assert.match(mismatchedName.stderr, /FILENAME_MISMATCH/);
 });
 
 test('#283: a malformed base shard fails closed', () => {
@@ -1178,22 +1141,36 @@ test('#283: a malformed base shard fails closed', () => {
     headConfig: BASE_UNSIGNED,
     mutateBase: (dir) => {
       writeDirStore(dir, []);
-      writeFileSync(join(dir, '.adlc', 'tickets', 't1--0000.json'), '{ not valid json');
+      writeFileSync(join(dir, '.adlc', 'tickets', ticketFilename('T1')), '{ not valid json');
     },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /cannot parse base shard/);
+  assert.match(result.stderr, /INVALID_JSON: invalid (shard|JSON in)/);
 });
 
-test('#283: editing .adlc/tickets/.store.json in a PR is denied (trust root)', () => {
-  const result = runRailFreezeScenario({
+test('#283: editing .adlc/tickets/.store.json in a PR does not pass', () => {
+  // An UNRECOGNIZED store manifest is refused by the loader before rails are computed —
+  // fail closed (1), earlier and more specifically than the trust-root diff would.
+  const unsupported = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
     mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1, tampered: true })),
   });
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /ADLC trust root changed/);
+  assert.equal(unsupported.status, 1);
+  assert.notEqual(unsupported.status, 0);
+
+  // And a STRUCTURALLY VALID rewrite — one the loader accepts — is still caught, by the
+  // trust-root freeze. Without this case the assertion above would pass even if
+  // .adlc/tickets/.store.json had quietly stopped being a trust root.
+  const valid = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    headConfig: BASE_UNSIGNED,
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', '.store.json'), `${JSON.stringify({ format: 'adlc-ticket-directory', version: 1 })}\n`),
+  });
+  assert.equal(valid.status, 2);
+  assert.match(valid.stderr, /ADLC trust root changed, deleted, or renamed/);
 });
 
 test('#283: a base directory store with an unsupported manifest version fails closed', () => {
@@ -1204,11 +1181,11 @@ test('#283: a base directory store with an unsupported manifest version fails cl
       const ticketsDir = join(dir, '.adlc', 'tickets');
       mkdirSync(ticketsDir, { recursive: true });
       writeFileSync(join(ticketsDir, '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 2 }));
-      writeFileSync(join(ticketsDir, 't1--0000.json'), JSON.stringify({ id: 'T1', rails: ['src/critical/**'] }));
+      writeFileSync(join(ticketsDir, ticketFilename('T1')), JSON.stringify({ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }));
     },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /not a supported ticket store/);
+  assert.match(result.stderr, /UNSUPPORTED_STORE_FORMAT/);
 });
 
 // #283 P5 verification round: exercise the fail-closed enumeration defenses
@@ -1220,14 +1197,14 @@ test('#283: a base shard that is a symlink (non-100644 blob) fails closed', () =
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
     mutateBase: (dir) => {
-      writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]);
+      writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]);
       // A symlink named like a shard: git records it as mode 120000, which the
       // base loop rejects instead of git-showing the link target.
-      symlinkSync('../../elsewhere.json', join(dir, '.adlc', 'tickets', 't2--0000.json'));
+      symlinkSync('../../elsewhere.json', join(dir, '.adlc', 'tickets', ticketFilename('T2')));
     },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /is not a regular-file blob/);
+  assert.match(result.stderr, /UNSAFE_GIT_MODE|UNRECOGNIZED_STORE_ENTRY|not a regular-file blob/);
 });
 
 test('#283: a stray non-.json entry in the base store dir fails closed', () => {
@@ -1235,40 +1212,40 @@ test('#283: a stray non-.json entry in the base store dir fails closed', () => {
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
     mutateBase: (dir) => {
-      writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]);
+      writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]);
       writeFileSync(join(dir, '.adlc', 'tickets', 'NOTES.txt'), 'not a shard\n');
     },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /unexpected non-shard entry/);
+  assert.match(result.stderr, /UNRECOGNIZED_STORE_ENTRY: invalid ticket tree entry/);
 });
 
 test('#283: a malformed HEAD shard fails closed', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
-    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', 't2--0000.json'), '{ broken'),
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
+    mutateHead: (dir) => writeFileSync(join(dir, '.adlc', 'tickets', ticketFilename('T2')), '{ broken'),
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /cannot parse head shard/);
+  assert.match(result.stderr, /INVALID_JSON: invalid (shard|JSON in)/);
 });
 
-test('#283: a HEAD shard replaced by a symlink is skipped, not followed (base ticket reads as removed)', () => {
+test('#283: a HEAD shard replaced by a symlink is never followed', () => {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', rails: ['src/critical/**'] }]),
+    mutateBase: (dir) => writeDirStore(dir, [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }]),
     mutateHead: (dir) => {
-      const shard = join(dir, '.adlc', 'tickets', 't1--0000.json');
+      const shard = join(dir, '.adlc', 'tickets', ticketFilename('T1'));
       unlinkSync(shard);
-      // If readHeadStore FOLLOWED this symlink it would read the decoy and see T1
-      // with empty rails (a contract-change deny); skipping it (correct) makes T1
-      // look removed. Asserting the removal message proves the link was not read.
-      writeFileSync(join(dir, 'decoy.json'), JSON.stringify({ id: 'T1', rails: [] }));
+      // If the store FOLLOWED this symlink it would read the decoy and see T1 with empty
+      // rails — silently unfreezing src/critical/**. The canonical store refuses the
+      // non-regular entry outright, so the decoy is never read.
+      writeFileSync(join(dir, 'decoy.json'), JSON.stringify({ id: 'T1', title: 'Fixture T1', rails: [] }));
       symlinkSync('../../decoy.json', shard);
     },
   });
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /cannot be removed from the \.adlc\/tickets\/ store/);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /UNSAFE_GIT_MODE|UNRECOGNIZED_STORE_ENTRY|non-executable regular/);
 });

@@ -41,9 +41,9 @@ function withTempSpec(contents, fn) {
 }
 
 test('registry exposes the suite tools and omits internal packages', () => {
-  // 27 as of spend's registration (issue #272) — bump deliberately when a
+  // 28 as of rails-guard-ci's registration (issue #140) — bump deliberately when a
   // tool is intentionally added/removed from the registry.
-  assert.equal(TOOLS.length, 27);
+  assert.equal(TOOLS.length, 28);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
@@ -53,6 +53,7 @@ test('registry exposes the suite tools and omits internal packages', () => {
   assert.equal(isTool('fleet'), true);
   assert.equal(isTool('init'), true);
   assert.equal(isTool('spend'), true);
+  assert.equal(isTool('rails-guard-ci'), true);
   assert.equal(isTool('core'), false);
   assert.equal(isTool('runner'), false);
 });
