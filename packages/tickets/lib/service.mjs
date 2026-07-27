@@ -129,7 +129,15 @@ export class TicketService {
       // (coldstart, fleet, merge-forecast, model-router, ticket-prune), so a
       // truthy non-boolean like "false" leaves the completed state for them
       // while a Boolean() comparison here saw no change at all.
-      if ((before.completed === true) !== (input.completed === true)) sensitive.push('lifecycle-change');
+      // Each side is named rather than compared inline. `(a === true) !== (b === true)`
+      // is the same predicate as `(a !== true) !== (b !== true)`, so a mutation
+      // operator that inverts every comparison on the line produces an EQUIVALENT
+      // mutant — one no test can kill, because it is the same function. Naming the
+      // sides puts each comparison on its own line, where inverting it is a real
+      // behavior change and the tests below catch it.
+      const wasCompleted = before.completed === true;
+      const nowCompleted = input.completed === true;
+      if (wasCompleted !== nowCompleted) sensitive.push('lifecycle-change');
       if (sensitive.length && !authorized) throw policy('AUTHORIZATION_REQUIRED', `update requires authorization: ${sensitive.join(', ')}`);
       tickets[index] = deepClone(input);
       return {
