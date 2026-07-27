@@ -11,7 +11,7 @@
 //   - a tiered change with no --author-provider fails closed (exit 1).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -223,6 +223,136 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
       const r = runBin(['tier-check', '--base', 'main', '--dir', '.adlc'], dir, { ADLC_AUTHOR_PROVIDER: '' });
       assert.equal(r.status, 1);
       assert.match(r.stderr, /no --author-provider/);
+    } finally { cleanup(dir); }
+  });
+});
+
+// ── #364: a BROKEN CHAIN is not a MISSING ATTESTATION ────────────────────────
+// hasCrossModelApproveForRevision checks manifestChainTrustworthy BEFORE it looks at
+// any entry, so one present-but-invalid signature anywhere fails every trust-root PR
+// regardless of its own attestation. The wrong key produces exactly that: verify.mjs
+// rejects a present-but-invalid sig in BOTH modes ("or the wrong key signed it").
+//
+// Emitting the generic "NO SIGNATURE-VERIFIED attestation" there tells the operator to
+// record one — which cannot help, because the chain check fails before the new entry is
+// ever examined. The cost is a full adversarial review spent on a dead end. These pin
+// the two causes as distinguishable, in the same spirit as the existing no-key branch.
+describe('adlc-prosecute tier-check — chain failure vs missing attestation (#364)', () => {
+  const tierChange = (d) => {
+    mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+    writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+  };
+  const KEY_A = 'key-before-rotation';
+  const KEY_B = 'key-after-rotation';
+
+  // Record a valid signed approve with KEY_A, then verify under KEY_B — precisely what a
+  // key rotation does to already-signed history.
+  function repoWithRotatedKey() {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const rev = JSON.parse(runBin(
+      ['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'],
+      dir, { ADLC_MANIFEST_KEY: KEY_A }
+    ).stdout).revision;
+    const rec = runBin(
+      ['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic',
+       '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'],
+      dir, { ADLC_MANIFEST_KEY: KEY_A }
+    );
+    assert.equal(rec.status, 0, 'precondition: the approve records cleanly under the original key');
+    const ok = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+    assert.equal(ok.status, 0, 'precondition: the gate passes before rotation');
+    return { dir, rev };
+  }
+
+  it('names chain-verification failure (not a missing attestation) after a key rotation', () => {
+    const { dir } = repoWithRotatedKey();
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+      assert.equal(r.status, 2, 'a manifest that does not verify must still fail closed');
+      assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
+      assert.match(r.stderr, /rotat/i, 'must name key rotation as a likely cause');
+      assert.match(r.stderr, /will not|cannot|does not clear/i,
+        'must say recording a new attestation will not clear this');
+    } finally { cleanup(dir); }
+  });
+
+  it('does NOT print the record-cross-model hint when the chain itself is broken', () => {
+    const { dir } = repoWithRotatedKey();
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+      assert.doesNotMatch(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/,
+        'the missing-attestation message must not appear when the cause is a broken chain');
+    } finally { cleanup(dir); }
+  });
+
+  it('the genuine missing-attestation case keeps its existing message and hint', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
+      assert.match(r.stderr, /adlc-prosecute record-cross-model --ticket <id>/);
+      assert.doesNotMatch(r.stderr, /rotat/i,
+        'a genuinely absent attestation must not be blamed on key rotation');
+    } finally { cleanup(dir); }
+  });
+
+  // The asymmetry that IS the bug, pinned from both sides. record-cross-model already
+  // refuses to append onto an unverifiable chain and names the true cause exactly. So the
+  // operator is not stuck in a loop — but they only learn this AFTER tier-check has sent
+  // them to spend a full adversarial review. tier-check is the surface that misattributes;
+  // this test pins record's good behavior as the standard tier-check must meet.
+  it('record-cross-model already names the true cause — tier-check is the surface that misattributes', () => {
+    const { dir, rev } = repoWithRotatedKey();
+    try {
+      const rec = runBin(
+        ['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic',
+         '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'],
+        dir, { ADLC_MANIFEST_KEY: KEY_B }
+      );
+      assert.equal(rec.status, 1, 'appending onto an unverifiable chain must fail closed');
+      assert.match(rec.stderr, /chain is invalid|chain broken/i,
+        'record already diagnoses the chain accurately — tier-check must not be less honest');
+    } finally { cleanup(dir); }
+  });
+
+  it('--json distinguishes the chain failure from a missing attestation', () => {
+    const { dir } = repoWithRotatedKey();
+    try {
+      const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+      assert.equal(j.status, 2);
+      const jj = JSON.parse(j.stdout);
+      assert.equal(jj.satisfied, false);
+      assert.equal(jj.chainTrustworthy, false, 'consumers must be able to tell the causes apart');
+    } finally { cleanup(dir); }
+  });
+
+  // AC5 — the constraint has to live where a maintainer doing routine secret hygiene will
+  // meet it. The gate-manifest doc previously declared key rotation "out of scope for this
+  // tool", which is precisely how a repo-breaking constraint went unrecorded; a doc that
+  // silently loses this again should fail the build, not just read differently.
+  it('documents that rotating the signing key is a migration, in both the tool doc and the ADR', () => {
+    const root = new URL('../../../', import.meta.url).pathname;
+    for (const rel of ['docs/tools/gate-manifest.md', 'docs/adr/0007-multimodel-adversarial-review.md']) {
+      const text = readFileSync(join(root, rel), 'utf8');
+      assert.match(text, /rotat/i, `${rel} must discuss key rotation`);
+      assert.match(text, /migration/i, `${rel} must say rotation is a migration, not a secret update`);
+      assert.match(text, /present-but-invalid|present but invalid/i,
+        `${rel} must explain that old entries become present-but-invalid, not merely unsigned`);
+    }
+    // The sentence that caused the gap must not come back.
+    const toolDoc = readFileSync(join(root, 'docs/tools/gate-manifest.md'), 'utf8');
+    assert.doesNotMatch(toolDoc, /rotation[^.]*\bout of scope\b/i,
+      'the tool doc must no longer declare key rotation out of scope');
+  });
+
+  // Non-weakening guard: the strictness must be untouched. If someone "fixes" this by
+  // tolerating an invalid signature so the friendlier message becomes reachable, this fails.
+  it('does not weaken verification: an invalid signature still fails the gate closed', () => {
+    const { dir } = repoWithRotatedKey();
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+      assert.equal(r.status, 2, 'a wrongly-signed entry must never be tolerated');
     } finally { cleanup(dir); }
   });
 });

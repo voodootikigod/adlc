@@ -177,7 +177,14 @@ function crossModelSatisfied(entries, match) {
 // (or a per-PR high-water mark) written by the trusted workflow to a store the author cannot
 // rewrite (a protected branch/ref, a check-run, or an external signed checkpoint). That is a
 // storage-location change, deliberately left as follow-up; see the PR discussion.
-function manifestChainTrustworthy(dir) {
+// EXPORTED (#364) so a caller can tell WHY the gate failed. hasCrossModelApproveForRevision
+// returns a bare boolean and checks this BEFORE examining any entry, so a broken chain and a
+// genuinely absent attestation are indistinguishable to it — and the CLI reported both as
+// "NO SIGNATURE-VERIFIED attestation", sending the operator to record one. That costs a full
+// adversarial review before record-cross-model finally names the real cause. Exposing the
+// predicate lets the CLI attribute the failure correctly; it changes no decision, and the
+// gating call below is unchanged, so nothing here relaxes what is enforced.
+export function manifestChainTrustworthy(dir) {
   return verify(dir, { requireSignatures: false }).valid === true;
 }
 

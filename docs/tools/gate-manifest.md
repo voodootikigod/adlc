@@ -169,7 +169,20 @@ gate-manifest verify --json    # → { ..., "signed": true }
 - **verify** (run with the key) requires every entry to carry a valid sig — comparison is constant-time (`crypto.timingSafeEqual`). A missing sig → `unsigned entry`; a wrong sig → `signature invalid`. Either breaks the chain (exit 2). This defeats the forge-from-scratch attack: without the key, an attacker cannot produce valid signatures.
 - **verify** without a key still checks the hash chain but reports `signed: false`, so callers cannot claim cryptographic provenance.
 
-Zero-dependency: HMAC comes from Node's built-in `node:crypto`. Key management (rotation, distribution) is out of scope for this tool — supply the key via the environment.
+Zero-dependency: HMAC comes from Node's built-in `node:crypto`. Key distribution is out of scope for this tool — supply the key via the environment.
+
+### ⚠️ Rotating `ADLC_MANIFEST_KEY` is a migration, not a secret update
+
+**Once any entry in a ledger is signed, the key that signed it is load-bearing.** HMAC is symmetric, so verification needs the *same* value. Rotate or lose the key and every previously signed entry becomes **present-but-invalid** — not merely unsigned — and `verify` rejects that in *both* modes (`requireSignatures: false` tolerates unsigned history, never a wrong signature).
+
+The consequence is not local to one entry. Consumers that gate on the ledger check the whole chain before examining any individual record, so a single wrongly-signed entry fails them **closed, permanently**:
+
+- `adlc-prosecute tier-check` — every trust-root PR fails, regardless of whether that PR has its own valid attestation.
+- `record-cross-model` — refuses to append onto an unverifiable chain, so you cannot record your way out.
+
+Before rotating, confirm the ledger has no signed entries (`grep -c '"sig"' .adlc/manifest.jsonl`). If it has any, treat rotation as a migration: re-sign the existing history onto the new key with `repair-chain` (which requires the **original** key and verifies every signature before rewriting), or keep the original key.
+
+If a gate is already failing this way, `tier-check` names it explicitly — a message about the chain not verifying, rather than a missing attestation. Do not respond by running a review and recording a new attestation; that cannot clear it.
 
 ## Sibling tools
 

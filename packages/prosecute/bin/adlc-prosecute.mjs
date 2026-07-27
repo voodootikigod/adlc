@@ -5,7 +5,7 @@ import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFil
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
-import { recordCrossModelReview, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy } from '../lib/cross-model.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 
@@ -310,13 +310,29 @@ if (positionals[0] === 'tier-check') {
   }
 
   const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key });
+  // #364 — WHY it failed, not just THAT it failed. hasCrossModelApproveForRevision checks the
+  // chain before examining any entry, so "the chain does not verify" and "no entry matches this
+  // revision" arrive here as the same `false`. Reporting both as a missing attestation sends the
+  // operator to run a distinct-provider adversarial review and record one — work that cannot
+  // clear a broken chain (record-cross-model refuses to append onto it). The review is the
+  // wasted cost. `satisfied` still decides the exit code; this only attributes the cause.
+  const chainTrustworthy = manifestChainTrustworthy(values.dir);
   if (values.json) {
-    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision });
+    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, chainTrustworthy });
     process.exit(satisfied ? 0 : 2);
   }
   if (satisfied) {
     console.log(`tier-check: cross-model approve found for revision ${revision} (reviewer distinct from author ${authorProvider}). PASS.`);
     process.exit(0);
+  }
+  if (!chainTrustworthy) {
+    console.error(
+      `tier-check: the manifest hash chain does NOT verify — one or more entries carry a signature that is present but INVALID. This required check FAILS for revision ${revision}.\n` +
+      `This is NOT a missing attestation. Recording a new one will not clear it: record-cross-model refuses to append onto an unverifiable chain, so a distinct-provider review run now would be wasted.\n` +
+      `The usual cause is that ADLC_MANIFEST_KEY was ROTATED or replaced — every previously signed entry was signed with the OLD key and no longer verifies under the new one. Restore the original key, or migrate the signed history onto the new key.\n` +
+      `Diagnose with: adlc gate-manifest verify`
+    );
+    process.exit(2);
   }
   console.error(
     `tier-check: NO SIGNATURE-VERIFIED cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +

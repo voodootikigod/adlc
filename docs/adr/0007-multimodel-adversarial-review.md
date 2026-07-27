@@ -229,3 +229,34 @@ what the branch-protection **CODEOWNERS / human-review backstop** exists to catc
 backstop the trust-root code itself relies on). Fully closing this needs a truly isolated
 required job, which the repo's plan does not allow; until then it is accepted, documented, and
 deliberately not chased into an infinite regress of runner-escape variants.
+
+## Update (2026-07-27) — the signing key became load-bearing (#364)
+
+`#354` added HMAC signing to cross-model attestations, and `#362` produced the repository's
+first two signature-verified entries. That combination created a consequence nobody wrote
+down: **once any entry is signed, `ADLC_MANIFEST_KEY` cannot be rotated without a migration.**
+
+`verify` rejects a *present-but-invalid* signature in both modes — `requireSignatures: false`
+tolerates unsigned history, never a wrong signature — and a wrong key produces exactly that
+for every previously signed entry. Because `hasCrossModelApproveForRevision` checks chain
+trustworthiness **before** examining any entry, one wrongly-signed record fails every
+trust-root PR closed, whatever its own attestation says.
+
+Two decisions follow:
+
+1. **Rotation is a migration.** Re-sign existing history onto the new key (`repair-chain`,
+   which requires the original key), or keep the original. Documented in
+   `docs/tools/gate-manifest.md`, where a maintainer doing routine secret hygiene will meet
+   it — the previous text there declared key rotation "out of scope for this tool", which is
+   how the constraint went unrecorded.
+
+2. **The gate must attribute the failure honestly.** `tier-check` previously reported a broken
+   chain as `NO SIGNATURE-VERIFIED cross-model attestation` and told the operator to record
+   one. That costs a full distinct-provider adversarial review before `record-cross-model`
+   finally names the real cause (it refuses to append onto an unverifiable chain). The two
+   causes are now distinguished, in prose and in `--json` via `chainTrustworthy`, matching the
+   precedent already set for the missing-key branch.
+
+**Residual limit.** Rotation is still *unsupported*, only *diagnosed*. Making it survivable —
+carrying a key id per entry and verifying against the matching historical key — is deliberately
+out of scope here; this update ensures the failure is legible rather than silent.
