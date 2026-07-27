@@ -1,0 +1,8 @@
+# Generated, PUBLISHED artifacts are byte-compared against their generator, so
+# their line endings are part of the artifact rather than a checkout detail.
+# Without this pin git hands a Windows checkout CRLF, the drift gate in
+# packages/tickets/test/help.test.mjs sees every line differ, and `npm pack` on
+# that checkout would ship a schema whose bytes are not the ones the generator
+# produces. Scoped to the generated files on purpose: this is not a repo-wide
+# `* text=auto`, which would renormalize files nothing compares byte-for-byte.
+packages/tickets/schemas/*.json text eol=lf

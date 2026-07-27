@@ -160,13 +160,14 @@ test('the committed schema file matches the generated one', () => {
   // The published schema and the CLI help must never disagree; if they can
   // drift, the file becomes another thing an author has to double-check.
   //
-  // Line endings are normalized because this package runs on the Windows leg of
-  // the ticket-store platform matrix, where git checks the file out with CRLF
-  // and every line of an otherwise-identical schema differed. The drift this
-  // gate exists to catch is a CONTENT difference between the field table and
-  // the published artifact; the separator git chose on checkout is not that.
+  // BYTE-for-byte, deliberately. This file is a PUBLISHED artifact resolved by
+  // its $id, so its bytes are the product; normalizing line endings here would
+  // let `npm pack` on a Windows checkout ship a CRLF schema this test still
+  // called identical. The separator is pinned at the repository boundary
+  // instead — see .gitattributes — so the file is LF on every platform and this
+  // comparison can stay exact.
   const committed = readFileSync(join(PACKAGE, 'schemas/ticket.schema.json'), 'utf8');
-  assert.equal(committed.replace(/\r\n/g, '\n'), serializeTicketJsonSchema());
+  assert.equal(committed, serializeTicketJsonSchema());
 });
 
 /** Minimal checker for the only keywords ticketJsonSchema() emits. */
