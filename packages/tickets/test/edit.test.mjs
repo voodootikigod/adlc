@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DirectoryTicketStore, TicketService, planEditSession } from '../index.mjs';
 import { writeDirectory, ticket } from './helpers.mjs';
 
@@ -30,7 +30,7 @@ test('a quiet editor session plans an ordinary update', () => {
     // The draft OUTLIVES planning: `edit` is dry-run by default, so deleting it
     // here destroyed the author's only copy on the commonest invocation.
     assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'my edit');
-    rmSync(draftPath, { force: true });
+    rmSync(dirname(draftPath), { recursive: true, force: true });
   });
 });
 
@@ -39,7 +39,9 @@ test('a write during the editor session is caught as STALE_TICKET', () => {
   // concurrent write became the "expected" version and this plan succeeded,
   // silently replacing it with a document derived from the original.
   withStore((service) => {
+    let draftPath;
     const runEditor = (editor, path) => {
+      draftPath = path;
       // another author lands a write while the editor is "open"
       service.apply(service.planUpdate('T1', { ...ticket('T1', { title: 'concurrent' }) }, {
         expect: service.snapshot().ticketHashes.T1,
@@ -51,6 +53,7 @@ test('a write during the editor session is caught as STALE_TICKET', () => {
       (error) => error.code === 'STALE_TICKET',
     );
     assert.equal(service.snapshot().get('T1').title, 'concurrent', "the other author's write must survive");
+    rmSync(dirname(draftPath), { recursive: true, force: true });
   });
 });
 
@@ -68,7 +71,7 @@ test('the editor sees the ticket as it stands, and the draft survives planning',
     });
     assert.equal(seen.title, 'original');
     assert.ok(readFileSync(seenPath, 'utf8').length > 0, 'the draft outlives the session — only an APPLY may remove it');
-    rmSync(seenPath, { force: true });
+    rmSync(dirname(seenPath), { recursive: true, force: true });
   });
 });
 
@@ -84,7 +87,7 @@ test('an editor that dies leaves the draft behind, not a deleted one', () => {
       runEditor: (_editor, path) => { seenPath = path; throw new Error('editor died'); },
     }), /editor died/);
     assert.ok(readFileSync(seenPath, 'utf8').length > 0, 'the draft must survive an editor crash');
-    rmSync(seenPath, { force: true });
+    rmSync(dirname(seenPath), { recursive: true, force: true });
   });
 });
 
@@ -115,7 +118,7 @@ test('a failed plan preserves the edit and says where it is', () => {
     const preserved = message.match(/preserved at (\S+?)\)/)?.[1];
     assert.ok(preserved, `the error must name the draft path: ${message}`);
     assert.equal(JSON.parse(readFileSync(preserved, 'utf8')).title, 'my careful edit');
-    rmSync(preserved, { force: true });
+    rmSync(dirname(preserved), { recursive: true, force: true });
   });
 });
 
@@ -131,7 +134,7 @@ test('planning never deletes the draft — that is the caller decision', () => {
     });
     assert.equal(draftPath, seen);
     assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'ok');
-    rmSync(draftPath, { force: true });
+    rmSync(dirname(draftPath), { recursive: true, force: true });
   });
 });
 
@@ -152,22 +155,34 @@ test('an edit across an authorization boundary is refused unless the caller auth
       draft = path;
       writeFileSync(path, JSON.stringify(ticket('T1', { title: 'original', completed: true }), null, 2));
     };
-    assert.throws(
-      () => planEditSession(service, 'T1', { editor: 'noop', runEditor: completes }),
-      (error) => error.code === 'AUTHORIZATION_REQUIRED',
-      'the default must be closed: an unauthorized edit cannot cross the lifecycle boundary',
-    );
-    rmSync(draft, { force: true });
+    // Removes the mkdtemp DIRECTORY, not just the draft inside it, and runs from
+    // `finally` so a failed assertion leaks nothing either. The guard matters:
+    // `draft` is unset if planEditSession throws before reaching the runner, and
+    // rmSync(undefined) raises a TypeError that would replace the real failure
+    // with a confusing one.
+    const discardDraft = () => {
+      if (draft) rmSync(dirname(draft), { recursive: true, force: true });
+      draft = undefined;
+    };
+
+    try {
+      assert.throws(
+        () => planEditSession(service, 'T1', { editor: 'noop', runEditor: completes }),
+        (error) => error.code === 'AUTHORIZATION_REQUIRED',
+        'the default must be closed: an unauthorized edit cannot cross the lifecycle boundary',
+      );
+    } finally { discardDraft(); }
 
     // …and the same edit goes through once the caller says so, so the refusal
     // above is the authorization check and not the edit being rejected outright.
-    const { plan, draftPath } = planEditSession(service, 'T1', {
-      editor: 'noop',
-      runEditor: completes,
-      authorized: true,
-    });
-    assert.deepEqual(plan.sensitive, ['lifecycle-change']);
-    rmSync(draftPath, { force: true });
+    try {
+      const { plan } = planEditSession(service, 'T1', {
+        editor: 'noop',
+        runEditor: completes,
+        authorized: true,
+      });
+      assert.deepEqual(plan.sensitive, ['lifecycle-change']);
+    } finally { discardDraft(); }
   });
 });
 
