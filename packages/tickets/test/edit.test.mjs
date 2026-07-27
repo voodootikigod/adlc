@@ -4,7 +4,7 @@
 // fixture cannot be executed at all.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DirectoryTicketStore, TicketService, planEditSession } from '../index.mjs';
@@ -132,5 +132,23 @@ test('planning never deletes the draft — that is the caller decision', () => {
     assert.equal(draftPath, seen);
     assert.equal(JSON.parse(readFileSync(draftPath, 'utf8')).title, 'ok');
     rmSync(draftPath, { force: true });
+  });
+});
+
+test('an unset editor leaves no temp directory and claims no preserved edit', () => {
+  // The check ran AFTER mkdtemp, so every attempt without $EDITOR left a
+  // directory in /tmp and reported "your edit is preserved at ..." for a session
+  // in which no editing occurred. Preserving work is only meaningful when work
+  // exists; saying so otherwise trains people to ignore the message.
+  withStore((service) => {
+    const before = readdirSync(tmpdir()).filter((n) => n.startsWith('adlc-ticket-edit-')).length;
+    let raised;
+    assert.throws(() => planEditSession(service, 'T1', { editor: undefined }), (error) => {
+      raised = error;
+      return error.code === 'EDITOR_NOT_SET';
+    });
+    assert.doesNotMatch(raised.message, /preserved at/, 'there was no edit to preserve');
+    const after = readdirSync(tmpdir()).filter((n) => n.startsWith('adlc-ticket-edit-')).length;
+    assert.equal(after, before, 'and no temp directory may be left behind');
   });
 });

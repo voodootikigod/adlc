@@ -251,3 +251,22 @@ test('release reports which non-release it performed', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('an already-removed lock is "no-lock", not a stranded one', () => {
+  // LOCK_STRANDED means, per index.d.ts, "the directory is still on disk and a
+  // human has to remove it". readLockMetadata collapses every read failure to
+  // null — ENOENT included — so releasing a lock another process or a test had
+  // already cleaned up raised that alarm at an operator with nothing to act on.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-lock-gone-'));
+  try {
+    const held = acquireTicketLock(root, { command: 'test' });
+    rmSync(held.path, { recursive: true, force: true }); // someone else cleaned up
+
+    const outcome = releaseTicketLock(held);
+    assert.equal(outcome.released, false);
+    assert.equal(outcome.reason, 'no-lock');
+    assert.equal(outcome.code, undefined, 'nothing on disk is not a stranded lock');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

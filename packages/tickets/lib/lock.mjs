@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { LOCK_DIRECTORY } from './constants.mjs';
@@ -135,6 +135,12 @@ export function readTicketLock(root = '.') {
  */
 export function releaseTicketLock(lock, { removeLock = rmSync } = {}) {
   if (!lock?.path) return { released: false, reason: 'no-lock' };
+  // Nothing on disk is NOT a stranded lock. readLockMetadata collapses every
+  // read failure to null, ENOENT included, so an already-removed directory came
+  // back as LOCK_STRANDED — which index.d.ts defines as "still on disk, a human
+  // has to remove it". That is a false alarm pointed at an operator, and the
+  // ordinary cleanup path (a test, another process, a prior release) hits it.
+  if (!existsSync(lock.path)) return { released: false, reason: 'no-lock' };
   const owner = readLockMetadata(join(lock.path, 'owner.json'));
   if (!owner) return { released: false, reason: 'unverifiable', code: 'LOCK_STRANDED', path: lock.path };
   if (owner.pid !== lock.metadata?.pid || owner.startedAt !== lock.metadata?.startedAt) {

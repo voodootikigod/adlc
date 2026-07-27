@@ -27,11 +27,15 @@ export function planEditSession(service, id, { authorized = false, editor, runEd
   const ticket = opened.get(id);
   if (!ticket) throw new TicketStoreError('invalid', 'TICKET_NOT_FOUND', `ticket not found: ${id}`);
   const expect = opened.ticketHashes[ticket.id];
+  // Check $EDITOR BEFORE creating anything. This ran after mkdtemp, so a user
+  // with no $EDITOR got a temp directory left behind on every attempt AND an
+  // error claiming "your edit is preserved at ..." — for a session in which no
+  // editing happened. Preserving work is only meaningful when work exists.
+  if (!editor) throw new TicketStoreError('operational', 'EDITOR_NOT_SET', 'set $EDITOR or $VISUAL');
   const directory = mkdtempSync(join(tmpdir(), 'adlc-ticket-edit-'));
   const path = join(directory, `${basename(id)}.json`);
   try {
     writeFileSync(path, `${JSON.stringify(ticket, null, 2)}\n`);
-    if (!editor) throw new TicketStoreError('operational', 'EDITOR_NOT_SET', 'set $EDITOR or $VISUAL');
     runEditor(editor, path);
     const edited = JSON.parse(readFileSync(path, 'utf8'));
     // The edited document never leaves this function otherwise, so a caller
