@@ -91,12 +91,14 @@ export function assertAppendOnly(headBytes, baseBytes) {
   }
 }
 
+/** The non-blank RAW lines of a manifest, in order. */
+export function manifestRawLines(text) {
+  return String(text).split('\n').filter((line) => line.trim());
+}
+
 /** Split manifest text into parsed entries, naming the source on a parse failure. */
 export function manifestLines(text, label) {
-  return text
-    .split('\n')
-    .filter((line) => line.trim())
-    .map((line, index) => parseJson(line, `${label} line ${index + 1}`));
+  return manifestRawLines(text).map((line, index) => parseJson(line, `${label} line ${index + 1}`));
 }
 
 /**
@@ -108,9 +110,12 @@ export function manifestLines(text, label) {
  * chain and sequence without a gap.
  */
 export function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
+  const baseRawLines = manifestRawLines(baseText);
+  const headRawLines = manifestRawLines(headText);
   const baseEntries = manifestLines(baseText, 'base manifest');
   const headEntries = manifestLines(headText, 'HEAD manifest');
   const appended = headEntries.slice(baseEntries.length);
+  const appendedRawLines = headRawLines.slice(baseRawLines.length);
   if (![1, 2].includes(appended.length)) deny('migration must append apply evidence and at most one recovery-complete entry');
 
   const entry = appended[0];
@@ -137,13 +142,20 @@ export function validateMigrationEvidence(baseText, headText, expectedStoreHash,
     }
   }
 
-  let previousLine = baseText.split('\n').filter((line) => line.trim()).at(-1) ?? null;
+  // Chain over the ACTUAL RAW LINES. `prev` is defined as sha256 of the previous raw line
+  // (@adlc/gate-manifest record.mjs / verify.mjs), so re-serializing a parsed entry with
+  // JSON.stringify only coincides with the truth when the writer's exact byte form is
+  // reproduced. It is not: leading whitespace, key order, or spacing all diverge, and the
+  // SECOND appended entry was validated against that re-serialization rather than the line
+  // actually in the file — accepting a manifest whose real chain is broken (cross-model
+  // review, #363 round 4; the same bug is on main, faithfully ported here).
+  let previousLine = baseRawLines.at(-1) ?? null;
   let previousSeq = baseEntries.length ? baseEntries.at(-1).seq : 0;
-  for (const appendedEntry of appended) {
+  appended.forEach((appendedEntry, index) => {
     const expectedPrev = previousLine ? createHash('sha256').update(previousLine).digest('hex') : null;
     if (appendedEntry.prev !== expectedPrev) deny('migration evidence does not extend the manifest hash chain');
     if (appendedEntry.seq !== previousSeq + 1) deny('migration evidence sequence does not extend the manifest');
-    previousLine = JSON.stringify(appendedEntry);
+    previousLine = appendedRawLines[index];
     previousSeq = appendedEntry.seq;
-  }
+  });
 }
