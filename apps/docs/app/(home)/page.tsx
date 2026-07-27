@@ -239,11 +239,13 @@ export default function HomePage() {
                 className="max-w-[36ch] text-[clamp(19px,2.1vw,26px)] font-bold tracking-[-0.018em]"
                 style={{ color: '#cbcdd2' }}
               >
-                Attached to this record: what the gates actually printed.
+                Attached to this record: the gate, the question, and the verdict.
               </h2>
               <p className="mt-4 max-w-[72ch] text-[16px] leading-[1.55]" style={{ color: '#9093a0' }}>
                 Two of these are refusals. They are here because a record that only attaches its passes is
-                not evidence, it is marketing — and because a gate that never refuses is not a gate.
+                not evidence, it is marketing — and because a gate that never refuses is not a gate. The
+                commands and the exit codes are real; the verdict line under each is the record's own
+                one-line summary of the result, not a verbatim transcript of what the tool prints.
               </p>
 
               <div className="mt-8 grid gap-5 lg:grid-cols-2">
@@ -402,16 +404,17 @@ export default function HomePage() {
 
       <div className="mx-auto max-w-[1180px] px-6 py-8 text-[12.5px] md:px-8" style={{ color: 'var(--rec-ink-3)' }}>
         ADLC gates this repository in its own CI — rails-guard on frozen paths, cross-model attestation on
-        trust-root changes, and a mutation gate that refuses to report a kill rate when the baseline is red.
-        Every exhibit above is real output.{' '}
+        trust-root changes, and a mutation gate that refuses to report a kill rate when the baseline is red.{' '}
         <RecordLink href={`${SERIES_BASE}/series/adlc`}>The original essay series ↗</RecordLink>
         {/* The record framing is authored: the gate output is real, the record
             number is not a live ticket. Saying so costs one line and protects
             the credibility everything else on the page depends on. */}
         <span className="mt-2 block" style={{ color: 'var(--rec-ink-3)' }}>
-          This page is laid out as a change record. The exhibits, exit codes, gate names, and counts are
-          real; <span className="rec-mono">ADLC-CR-0001</span> and its status are an illustrative framing,
-          not a live ticket.
+          This page is laid out as a change record. The commands, exit codes, gate names, and counts are
+          real. The verdict line in each exhibit is this record's one-line summary of the result rather
+          than a verbatim transcript — <span className="rec-mono">adlc spec-lint</span> really prints a
+          per-criterion table. <span className="rec-mono">ADLC-CR-0001</span> and its status are an
+          illustrative framing, not a live ticket.
         </span>
       </div>
     </main>

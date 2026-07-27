@@ -14,13 +14,22 @@ import { ExitCode } from './record';
 // be stated as fact, and a column that is right six times out of eight is worse
 // than no column. The manifest is named once, in the note beneath.
 
-/** The approver for each phase. Human gates name a person; the rest name the tool. */
-const APPROVER: Record<string, string> = {
+/**
+ * The approver for each phase. Human gates name a person; the rest name the tool.
+ *
+ * Every machine approver here MUST be a real dispatchable tool — this component
+ * tells the visitor these are executable, so a name that does not dispatch is a
+ * broken promise, not a typo. P4 previously read `adlc gate`, which does not
+ * exist: `packages/gate` is not a package and the dispatcher exits 1 on it. The
+ * name was taken from an MCP tool called `adlc_gate`, which is not a CLI.
+ * scripts/test/marketing-approvers.test.mjs now dispatches every one of these.
+ */
+export const APPROVER: Record<string, string> = {
   P0: 'adlc ticket',
   P1: 'A person',
   P2: 'adlc coldstart',
   P3: 'adlc rails-guard',
-  P4: 'adlc gate',
+  P4: 'adlc build-gate',
   P5: 'adlc prosecute',
   P6: 'A person',
   P7: 'adlc lesson-foundry',
