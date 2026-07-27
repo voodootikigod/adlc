@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { PHASES } from '@/lib/phase-graph.mjs';
+import { PHASES, HUMAN_GATE_IDS } from '@/lib/phase-graph.mjs';
 import { theoryLink } from '@/lib/theory-links.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
@@ -23,9 +23,11 @@ const PHASE_DETAIL: Record<string, string> = {
   P7: 'Distill what the review found into permanent, deterministic defenses.',
 };
 
-// The two phases whose gate is a human, per PHASE_DETAIL — tagged so the
-// grid encodes the "two human gates" structure at a glance.
-const HUMAN_GATES = new Set(['P1', 'P6']);
+// Which phases end in a human gate now comes from phase-graph.mjs, the same
+// source the pipeline reads. It used to be a second hand-maintained Set here,
+// so this page and the diagram above it could have disagreed about which two
+// gates are human — the one structural claim the section exists to make.
+const HUMAN_GATES = new Set(HUMAN_GATE_IDS);
 
 export default function LifecyclePage() {
   return (

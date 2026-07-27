@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPhaseMermaid, PHASES } from '../lib/phase-graph.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { buildPhaseMermaid, PHASES, HUMAN_GATE_IDS } from '../lib/phase-graph.mjs';
+
+const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('PHASES lists P0..P7 in order', () => {
   assert.deepEqual(PHASES.map((p) => p.id), ['P0','P1','P2','P3','P4','P5','P6','P7']);
@@ -9,6 +14,48 @@ test('PHASES lists P0..P7 in order', () => {
 test('P6 is named Integrate, not Review', () => {
   const p6 = PHASES.find((p) => p.id === 'P6');
   assert.equal(p6.name, 'Integrate');
+});
+
+test('every phase names the gate that ends it', () => {
+  // The section headline promises "a gate between every one". A phase with no
+  // gate would render a blank row under its name and quietly break that claim.
+  for (const phase of PHASES) {
+    assert.ok(
+      typeof phase.gate === 'string' && phase.gate.trim().length > 0,
+      `${phase.id}: missing an exit gate`,
+    );
+  }
+});
+
+test('exactly two gates are human, and they are P1 and P6', () => {
+  // This ratio is the thesis — machines gate the other six — and it is stated
+  // verbatim in the pipeline legend. If the data changes, the legend becomes a
+  // lie, so pin both the count and the identities.
+  assert.deepEqual(HUMAN_GATE_IDS, ['P1', 'P6']);
+  assert.equal(PHASES.filter((p) => p.human).length, 2);
+});
+
+test('the pipeline legend states the real machine/human split', () => {
+  const source = readFileSync(
+    path.join(docsRoot, 'components/marketing/lifecycle-pipeline.tsx'),
+    'utf8',
+  );
+  const machineCount = PHASES.length - HUMAN_GATE_IDS.length;
+  assert.ok(
+    new RegExp(`${machineCount === 6 ? 'Six' : String(machineCount)} gates a machine can check`).test(source),
+    'the legend must match how many gates are actually machine-checked',
+  );
+});
+
+test('the lifecycle page derives human gates from the shared source', () => {
+  // It used to keep its own `new Set(['P1','P6'])`, so the page and the diagram
+  // above it could disagree about which gates are human.
+  const source = readFileSync(path.join(docsRoot, 'app/(home)/lifecycle/page.tsx'), 'utf8');
+  assert.ok(source.includes('HUMAN_GATE_IDS'), 'the page must import the shared list');
+  assert.ok(
+    !/new Set\(\[\s*'P1'\s*,\s*'P6'\s*\]\)/.test(source),
+    'the page must not re-declare which phases are human-gated',
+  );
 });
 
 test('buildPhaseMermaid highlights the active phase and is a flowchart', () => {
