@@ -8,6 +8,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_IMMUTABLE_TRUST_ROOTS, resolveImmutableTrustRoots } from '../lib/ci/trust-roots.mjs';
 
+// #363 cross-model review, blocking finding 1: these were briefly passed in via
+// --trust-root from scripts/rails-guard-ci.mjs. That let ONE PR drop the arguments AND
+// remove the wrapper from the defaults, unprotecting both enforcement sources at once.
+// They must stay in the defaults, where disarming the gate requires editing a covered file.
+test('the gate\'s own sources are frozen by DEFAULT, not by a caller-supplied list', () => {
+  for (const path of [
+    'packages/rails-guard/lib/ci/**',
+    'packages/rails-guard/bin/rails-guard-ci.mjs',
+    'packages/rails-guard/bin/rails-guard.mjs',
+    'packages/rails-guard/lib/trust-root-authorization.mjs',
+    'scripts/rails-guard-ci.mjs',
+    'docs/ci/rails-guard.yml',
+  ]) {
+    assert.ok(DEFAULT_IMMUTABLE_TRUST_ROOTS.includes(path), `${path} must be frozen without any caller argument`);
+  }
+  // And with NO additional roots at all, they are still frozen.
+  const roots = resolveImmutableTrustRoots({ additional: [] });
+  assert.ok(roots.includes('packages/rails-guard/lib/ci/**'));
+  assert.ok(roots.includes('scripts/rails-guard-ci.mjs'));
+});
+
 test('the default set covers the paths that decide enforcement in any repo', () => {
   for (const path of [
     '.adlc/config.json',

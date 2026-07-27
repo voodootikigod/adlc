@@ -93,6 +93,17 @@ test('codeownersMatch: anchored exact path', () => {
 test('codeownersMatch: directory subtree (trailing slash)', () => {
   assert.equal(codeownersMatch('/docs/', 'docs/ci/rails-guard.yml'), true);
   assert.equal(codeownersMatch('/docs/', 'scripts/x.mjs'), false);
+  // #363 cross-model review, blocking finding 2. A trailing slash denotes a DIRECTORY, so
+  // it must not match the path itself. Since #140 this matcher also answers "is the
+  // deployed workflow owned by anyone", where over-matching is a fail-OPEN: a CODEOWNERS
+  // line of `.github/workflows/adlc-rails-guard.yml/ @owner` would otherwise self-attest
+  // coverage for a file GitHub leaves ownerless.
+  assert.equal(codeownersMatch('/docs/', 'docs'), false);
+  assert.equal(
+    codeownersMatch('.github/workflows/adlc-rails-guard.yml/', '.github/workflows/adlc-rails-guard.yml'),
+    false,
+    'a trailing-slash pattern names a directory and cannot own the like-named FILE'
+  );
 });
 
 test('codeownersMatch: single star does not cross a slash; double star does', () => {

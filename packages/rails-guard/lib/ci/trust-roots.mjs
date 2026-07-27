@@ -13,11 +13,26 @@
  * relies on in ANY repo that installs it. A repo whose enforcement surface is wider
  * declares the rest itself; see `resolveImmutableTrustRoots`.
  *
- * `docs/ci/rails-guard.yml` and `scripts/rails-guard-ci.mjs` are ADLC-repo paths that a
- * downstream repo will not have. They stay in the default set anyway: freezing a path
- * that does not exist costs nothing (it simply never appears in a diff), and dropping
- * them would silently narrow the frozen set for any repo that vendored those files from
- * an earlier template. Narrowing a security boundary is not a refactor.
+ * The ADLC-repo paths at the end (`docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`,
+ * and the gate's own sources) are in the DEFAULTS rather than supplied by a caller, and
+ * that placement is load-bearing. They were briefly passed in via `--trust-root` from
+ * `scripts/rails-guard-ci.mjs`, on the argument that the wrapper is itself a default trust
+ * root so the list could not shrink. Cross-model review refuted it: that split let ONE PR
+ * remove the wrapper's arguments AND drop the wrapper from this list, unprotecting both
+ * enforcement sources in a single change. Keeping every gate source here means disarming
+ * the gate requires editing a file this list already covers.
+ *
+ * The residual is irreducible and pre-existing: a same-repo pull_request runs the PR
+ * BRANCH's gate, so a PR that edits THIS FILE runs its own edited list. Nothing in-repo
+ * closes that — the un-forgeable backstop is branch protection requiring CODEOWNERS
+ * review, which is what the ceremony ultimately rests on. What this placement buys is that
+ * the hole needs one obvious edit to a frozen, reviewed file rather than a two-file
+ * indirection that reads as ordinary plumbing.
+ *
+ * A downstream repo will not have the ADLC-specific paths. Freezing a path that does not
+ * exist costs nothing — it simply never appears in a diff — and dropping them would
+ * silently narrow the frozen set for any repo that vendored those files from an earlier
+ * template. Narrowing a security boundary is not a refactor.
  */
 export const DEFAULT_IMMUTABLE_TRUST_ROOTS = Object.freeze([
   '.adlc/config.json',
@@ -30,6 +45,18 @@ export const DEFAULT_IMMUTABLE_TRUST_ROOTS = Object.freeze([
   'docs/CODEOWNERS',
   'docs/ci/rails-guard.yml',
   'scripts/rails-guard-ci.mjs',
+  // The gate's own sources. `lib/ci/**` is a directory glob, not a file list, so a NEW
+  // file added under it is frozen the moment it exists — a list would have to be
+  // remembered, and not having to remember is the point of #140.
+  'packages/rails-guard/lib/ci/**',
+  'packages/rails-guard/bin/rails-guard-ci.mjs',
+  'packages/rails-guard/lib/trust-root-authorization.mjs',
+  // The enforcement bin the gate spawns to render the final verdict. The in-gate freeze
+  // CANNOT be transitively complete: that bin delegates to packages/rails-guard/lib/**
+  // (check.mjs -> rails.mjs / suppressions.mjs), which uses @adlc/tickets for the
+  // base-vs-head comparisons. That engine rests on branch-protection CODEOWNERS review,
+  // the same merge gate this whole ceremony rests on. (See #326.)
+  'packages/rails-guard/bin/rails-guard.mjs',
 ]);
 
 /**

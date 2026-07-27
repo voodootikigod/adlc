@@ -83,6 +83,14 @@ export function classifyTrustRootAuthorization({
 // semantics). Over-matching only WIDENS the owner set — an added owner must
 // still produce a real approving review — while under-matching removes owners
 // and denies, so both directions fail safe for authorization.
+//
+// That fail-safe argument holds for OWNER RESOLUTION only. Since #140 this matcher also
+// answers COVERAGE ("does anyone own the deployed workflow?"), where over-matching is a
+// fail-OPEN: a path GitHub treats as ownerless would be reported as protected. So the
+// directory form is exact — `docs/` matches paths UNDER docs, never `docs` itself, and
+// never a FILE whose name the pattern spells with a trailing slash. Getting this wrong
+// let `.github/workflows/adlc-rails-guard.yml/ @owner` self-attest coverage for the very
+// file it does not own.
 export function codeownersMatch(pattern, path) {
   let p = String(pattern ?? '');
   const anchored = p.startsWith('/');
@@ -92,6 +100,7 @@ export function codeownersMatch(pattern, path) {
   const rx = p
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*\*|\*/g, (m) => (m === '**' ? '.*' : '[^/]*'));
-  const re = new RegExp(dir ? `^${rx}(?:/.*)?$` : `^${rx}$`);
+  // `/.*` not `(?:/.*)?`: a directory pattern must require something UNDER the directory.
+  const re = new RegExp(dir ? `^${rx}/.*$` : `^${rx}$`);
   return re.test(path) || (!anchored && re.test(String(path ?? '').split('/').pop()));
 }

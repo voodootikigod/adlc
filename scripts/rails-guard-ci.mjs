@@ -26,28 +26,16 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Enforcement sources that live in this repo's tree. The gate's built-in defaults cover
-// the paths every ADLC-using repo has (.adlc/config.json, CODEOWNERS, the deployed
-// workflow, …); these are ours.
-const REPO_TRUST_ROOTS = [
-  // The workflow that runs THIS gate and produces the ADLC_PR_REVIEWS the #141 ceremony
-  // reads. Since the authorization decision depends on this file's integrity, tampering
-  // with it to forge reviews is itself a trust-root change.
-  '.github/workflows/ci.yml',
-  // The gate implementation, as source. Freezing the directory rather than a file list
-  // means a NEW file added under it is frozen the moment it exists — a list would have
-  // to be remembered, and the whole point of #140 is to stop relying on remembering.
-  'packages/rails-guard/lib/ci/**',
-  'packages/rails-guard/bin/rails-guard-ci.mjs',
-  'packages/rails-guard/lib/trust-root-authorization.mjs',
-  // The enforcement bin the gate spawns to render the final verdict. Freezing it is
-  // defense in depth, and the in-gate freeze CANNOT be transitively complete: the bin
-  // delegates to packages/rails-guard/lib/** (check.mjs -> rails.mjs / suppressions.mjs),
-  // which in turn uses @adlc/tickets for the base-vs-head comparisons. That whole engine
-  // rests on branch-protection CODEOWNERS review as its un-forgeable backstop — the same
-  // merge gate this entire ceremony rests on. (See #326 for tightening the tier.)
-  'packages/rails-guard/bin/rails-guard.mjs',
-];
+// This repo's CI workflow, which is not part of the gate's built-in defaults (a
+// downstream repo deploys .github/workflows/adlc-rails-guard.yml instead, which IS a
+// default). It produces the ADLC_PR_REVIEWS the #141 ceremony reads, so tampering with it
+// to forge reviews is itself a trust-root change.
+//
+// The gate's OWN sources are deliberately NOT passed from here. They live in
+// DEFAULT_IMMUTABLE_TRUST_ROOTS: passing them in made it possible for one PR to drop these
+// arguments AND remove this wrapper from the defaults, unprotecting both enforcement
+// sources at once (cross-model review, #363).
+const REPO_TRUST_ROOTS = ['.github/workflows/ci.yml'];
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
 const bin = join(
