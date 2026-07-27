@@ -6,28 +6,26 @@ import { VS_SDLC_ROWS } from '@/lib/vs-sdlc.mjs';
 // is load-bearing — the table scrolls in its own container, never the page.
 export function VsTable() {
   return (
-    <div className="overflow-x-auto rounded-lg border" style={{ borderColor: '#3f4044' }}>
+    <div className="overflow-x-auto" style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
       <table className="w-full min-w-[40rem] border-collapse text-sm">
         <thead>
-          <tr>
+          <tr style={{ background: 'var(--rec-paper-sunk)', borderBottom: '1px solid var(--rec-rule-strong)' }}>
             <th
               scope="col"
-              className="p-4 text-left align-bottom font-mono text-xs font-medium uppercase tracking-wider"
-              style={{ color: 'var(--mk-muted)' }}
+              className="rec-legend p-3 text-left align-bottom"
             >
               Dimension
             </th>
             <th
               scope="col"
-              className="p-4 text-left align-bottom font-mono text-xs font-medium uppercase tracking-wider"
-              style={{ color: 'var(--mk-muted)' }}
+              className="rec-legend p-3 text-left align-bottom"
             >
               SDLC (built for humans)
             </th>
             <th
               scope="col"
-              className="p-4 text-left align-bottom font-mono text-xs font-medium uppercase tracking-wider"
-              style={{ color: '#4fb4d8', background: '#26272c' }}
+              className="p-4 text-left align-bottom rec-mono text-xs font-medium uppercase tracking-wider"
+              style={{ color: 'var(--rec-link)', background: 'var(--rec-paper-raised)' }}
             >
               ADLC (built for models)
             </th>
@@ -35,20 +33,20 @@ export function VsTable() {
         </thead>
         <tbody>
           {VS_SDLC_ROWS.map((r) => (
-            <tr key={r.dimension} className="border-t" style={{ borderColor: '#3f4044' }}>
+            <tr key={r.dimension} className="border-t" style={{ borderColor: 'var(--rec-rule)' }}>
               <th
                 scope="row"
                 className="w-[9.5rem] p-4 text-left align-top font-semibold"
-                style={{ color: '#cbcdd2' }}
+                style={{ color: 'var(--rec-ink)' }}
               >
                 {r.dimension}
               </th>
-              <td className="p-4 align-top leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
+              <td className="p-4 align-top leading-relaxed" style={{ color: 'var(--rec-ink-2)' }}>
                 {r.sdlc}
               </td>
               <td
                 className="p-4 align-top leading-relaxed"
-                style={{ color: '#cbcdd2', background: '#26272c' }}
+                style={{ color: 'var(--rec-ink)', background: 'var(--rec-paper-raised)', fontWeight: 500 }}
               >
                 {r.adlc}
               </td>

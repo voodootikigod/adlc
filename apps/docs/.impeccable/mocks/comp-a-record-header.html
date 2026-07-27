@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Comp A — Record header leads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..700&family=Azeret+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#171920; --ink-2:#464c5c; --ink-3:#767d8d;
+  --paper:#e7eaef; --paper-2:#f2f4f7; --paper-3:#dde1e8;
+  --rule:#c6cbd6; --rule-2:#a7aebd;
+  --ground:#1c1d21; --fg:#cbcdd2; --dim:#686b78;
+  --green:#78bd65; --yellow:#e5cd52; --blue:#4fb4d8; --orange:#ef7c2a; --red:#eb3d54;
+  --pass-ink:#2f6a22; --fail-ink:#a81d31; --gate-ink:#7a6410;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{background:var(--paper);color:var(--ink);font-family:Archivo,system-ui,sans-serif;font-variation-settings:"wdth" 100}
+.mono{font-family:"Azeret Mono",ui-monospace,monospace;font-feature-settings:"tnum" 1}
+.lbl{font-family:"Azeret Mono",monospace;font-size:9.5px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+
+/* masthead */
+.mast{background:var(--ground);color:var(--fg);border-bottom:1px solid #000}
+.mast .wrap{display:flex;align-items:center;justify-content:space-between;height:52px}
+.mark{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.14em;font-size:12.5px;font-family:"Azeret Mono",monospace}
+.mark i{display:block;width:9px;height:9px;background:var(--green);border-radius:1px}
+.nav{display:flex;gap:26px;font-size:12.5px;color:#9599a6;font-weight:500}
+.nav a{color:inherit;text-decoration:none}
+.nav a.on{color:var(--fg);box-shadow:0 9px 0 -8px var(--blue)}
+
+/* record rail */
+.rail{background:var(--paper-3);border-bottom:1px solid var(--rule-2)}
+.rail .wrap{display:flex;align-items:center;gap:0;height:34px;font-size:10px}
+.rail span{padding-right:20px;margin-right:20px;border-right:1px solid var(--rule-2);color:var(--ink-2);font-family:"Azeret Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+.rail span:last-child{border:0}
+.rail b{color:var(--ink);font-weight:600}
+.open{color:var(--gate-ink)}
+.open::before{content:"";display:inline-block;width:6px;height:6px;background:var(--yellow);border-radius:50%;margin-right:7px;vertical-align:1px}
+
+/* header block */
+.record{border-left:1px solid var(--rule);border-right:1px solid var(--rule);max-width:1180px;margin:0 auto}
+.fields{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--rule)}
+.f{padding:18px 24px;border-right:1px solid var(--rule)}
+.f:last-child{border-right:0}
+.f .v{margin-top:7px;font-size:14px;font-weight:500;color:var(--ink);line-height:1.35}
+.f .v.m{font-family:"Azeret Mono",monospace;font-size:13px;letter-spacing:-.01em}
+
+/* statement */
+.stmt{padding:56px 24px 44px;border-bottom:1px solid var(--rule)}
+.clause{display:flex;gap:22px;align-items:baseline}
+.cn{font-family:"Azeret Mono",monospace;font-size:11px;color:var(--ink-3);font-weight:500;padding-top:10px;white-space:nowrap}
+h1{font-size:clamp(30px,4.3vw,54px);line-height:1.02;letter-spacing:-.022em;font-weight:700;max-width:17ch;font-variation-settings:"wdth" 92}
+h1 em{font-style:normal;color:var(--ink-2);display:block;font-weight:600}
+.sub{margin-top:22px;margin-left:calc(11ch + 22px);max-width:62ch;font-size:16.5px;line-height:1.55;color:var(--ink-2)}
+.sub b{color:var(--ink);font-weight:600}
+
+/* implementation */
+.impl{display:grid;grid-template-columns:11ch 1fr 300px;border-bottom:1px solid var(--rule)}
+.impl>div{padding:22px 24px}
+.impl .c1{border-right:1px solid var(--rule);display:flex;align-items:center}
+.impl .c3{border-left:1px solid var(--rule)}
+.cmd{display:flex;align-items:stretch;border:1px solid var(--ink);background:var(--ground)}
+.cmd code{flex:1;font-family:"Azeret Mono",monospace;font-size:13.5px;color:var(--fg);padding:13px 16px;white-space:nowrap;overflow:hidden}
+.cmd code s{color:var(--green);text-decoration:none;padding-right:9px}
+.cmd button{border:0;border-left:1px solid #34363d;background:#26272c;color:var(--fg);font-family:"Azeret Mono",monospace;font-size:10px;letter-spacing:.14em;padding:0 18px;cursor:pointer}
+.note{margin-top:11px;font-size:12.5px;color:var(--ink-3);line-height:1.5}
+.note a{color:#1b6f92;text-decoration:none;border-bottom:1px solid #a9cede}
+.c3 .v{font-size:12.5px;color:var(--ink-2);line-height:1.55;margin-top:8px}
+
+/* approval chain */
+.chain{border-bottom:1px solid var(--rule)}
+.chead{display:flex;align-items:baseline;justify-content:space-between;padding:26px 24px 14px}
+.chead h2{font-size:15px;font-weight:700;letter-spacing:-.01em}
+.chead p{font-size:12.5px;color:var(--ink-3);margin-top:5px}
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;padding:9px 14px;border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule-2);background:var(--paper-3);
+  font-family:"Azeret Mono",monospace;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-2);font-weight:500}
+tbody td{padding:11px 14px;border-bottom:1px solid var(--rule);font-size:13.5px;vertical-align:middle}
+tbody tr:hover{background:var(--paper-2)}
+td.id{font-family:"Azeret Mono",monospace;font-size:12px;color:var(--ink-3);width:44px}
+td.ph{font-weight:600;width:132px}
+td.gt{font-family:"Azeret Mono",monospace;font-size:12.5px;color:var(--ink-2)}
+td.ex{width:92px}
+td.ap{width:190px;font-size:12.5px;color:var(--ink-2)}
+td.ev{width:210px;font-family:"Azeret Mono",monospace;font-size:11.5px;color:#1b6f92}
+.code{font-family:"Azeret Mono",monospace;font-size:11px;font-weight:600;padding:2px 7px;border:1px solid;letter-spacing:.03em}
+.c0{color:var(--pass-ink);border-color:#9dc492;background:#e2efdd}
+.c2{color:var(--fail-ink);border-color:#dda3ad;background:#f7e2e5}
+.human{background:#faf3d8}
+.human:hover{background:#f7eecb}
+.human td.ap{color:var(--gate-ink);font-weight:600}
+.human td.ap::before{content:"";display:inline-block;width:6px;height:6px;background:var(--yellow);border:1px solid #b99f24;margin-right:8px;transform:rotate(45deg)}
+
+/* exhibit */
+.exhibit{padding:30px 24px 44px}
+.exh-h{display:flex;align-items:baseline;gap:14px;margin-bottom:14px}
+.exh-h b{font-family:"Azeret Mono",monospace;font-size:11px;letter-spacing:.1em;color:var(--ink)}
+.exh-h span{font-size:12.5px;color:var(--ink-3)}
+.term{background:var(--ground);border:1px solid #34363d}
+.term .bar{display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid #2c2e34;
+  font-family:"Azeret Mono",monospace;font-size:10px;letter-spacing:.1em;color:var(--dim)}
+.term pre{padding:16px 18px;font-family:"Azeret Mono",monospace;font-size:12.5px;line-height:1.75;color:var(--fg);overflow-x:auto}
+.term pre .p{color:var(--dim)}
+.term pre .ok{color:var(--green)}
+.term pre .no{color:var(--red)}
+.foot{padding:20px 24px 60px;font-size:12px;color:var(--ink-3);border-top:1px solid var(--rule);display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+
+<header class="mast"><div class="wrap">
+  <div class="mark"><i></i>ADLC</div>
+  <nav class="nav"><a class="on" href="#">Record</a><a href="#">Lifecycle</a><a href="#">Failure modes</a><a href="#">Toolkit</a><a href="#">Integrations</a><a href="#">Enterprise</a></nav>
+</div></header>
+
+<div class="rail"><div class="wrap">
+  <span>Record <b>ADLC-CR-0001</b></span>
+  <span class="open">Open — awaiting implementation</span>
+  <span>Control points <b>8</b></span>
+  <span>Gates <b>26</b></span>
+  <span>Human attestations <b>2</b></span>
+</div></div>
+
+<main class="record">
+
+  <section class="fields">
+    <div class="f"><div class="lbl">Subject</div><div class="v">Adopt the Agentic Development Lifecycle</div></div>
+    <div class="f"><div class="lbl">Class</div><div class="v">Process change · software delivery</div></div>
+    <div class="f"><div class="lbl">Scope</div><div class="v m">macOS · Linux · Node 18+</div></div>
+    <div class="f"><div class="lbl">Back-out</div><div class="v m">git revert · no runtime deps</div></div>
+  </section>
+
+  <section class="stmt">
+    <div class="clause">
+      <div class="cn">§1 &nbsp;STATEMENT</div>
+      <h1>The SDLC defends against human failure.<em>Your agents fail differently.</em></h1>
+    </div>
+    <p class="sub">Models fail <b>confidently, quickly, and at scale</b> — a process built for forgetting and fatigue is not adequate for hallucination and reward hacking. ADLC gives every phase an explicit exit contract: deterministic gates leave machine-checkable evidence, and two human gates record attestation.</p>
+  </section>
+
+  <section class="impl">
+    <div class="c1"><div class="lbl">§2 Implement</div></div>
+    <div>
+      <div class="cmd">
+        <code><s>$</s>curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh</code>
+        <button>COPY</button>
+      </div>
+      <p class="note">Installs the toolkit and every native harness integration. Then <span class="mono" style="color:var(--ink)">adlc init</span> in your repository. Cursor and OpenCode need one manual step, which the installer prints — <a href="#">see what gets installed</a>.</p>
+    </div>
+    <div class="c3">
+      <div class="lbl">Enforcement</div>
+      <div class="v">In-session hooks are best-effort and harness-dependent. The commit-time CI gate is the unbypassable control.</div>
+    </div>
+  </section>
+
+  <section class="chain">
+    <div class="chead">
+      <div><h2>§3 &nbsp;Approval chain</h2><p>Eight control points. Each closes on an exit code, and each leaves the artifact named in the evidence column.</p></div>
+      <div class="lbl">Exit 0 pass · 1 error · 2 refused</div>
+    </div>
+    <table>
+      <thead><tr><th></th><th>Phase</th><th>Exit gate</th><th>Code</th><th>Approver</th><th>Evidence</th></tr></thead>
+      <tbody>
+        <tr><td class="id">P0</td><td class="ph">Triage</td><td class="gt">routed</td><td class="ex"><span class="code c0">0</span></td><td class="ap">adlc ticket</td><td class="ev">tickets.json</td></tr>
+        <tr class="human"><td class="id">P1</td><td class="ph">Interrogate</td><td class="gt">human gate</td><td class="ex"><span class="code c0">0</span></td><td class="ap">A person</td><td class="ev">attestation.json</td></tr>
+        <tr><td class="id">P2</td><td class="ph">Decompose</td><td class="gt">cold-start</td><td class="ex"><span class="code c0">0</span></td><td class="ap">adlc coldstart</td><td class="ev">coldstart.log</td></tr>
+        <tr><td class="id">P3</td><td class="ph">Rail</td><td class="gt">RED gate</td><td class="ex"><span class="code c2">2</span></td><td class="ap">adlc rails-guard</td><td class="ev">rails-guard.json</td></tr>
+        <tr><td class="id">P4</td><td class="ph">Build</td><td class="gt">green gate</td><td class="ex"><span class="code c0">0</span></td><td class="ap">adlc gate</td><td class="ev">gate.json</td></tr>
+        <tr><td class="id">P5</td><td class="ph">Prosecute</td><td class="gt">zero findings</td><td class="ex"><span class="code c0">0</span></td><td class="ap">adlc prosecute</td><td class="ev">findings.json</td></tr>
+        <tr class="human"><td class="id">P6</td><td class="ph">Integrate</td><td class="gt">human gate</td><td class="ex"><span class="code c0">0</span></td><td class="ap">A person</td><td class="ev">attestation.json</td></tr>
+        <tr><td class="id">P7</td><td class="ph">Distill</td><td class="gt">feeds the next run</td><td class="ex"><span class="code c0">0</span></td><td class="ap">adlc lesson-foundry</td><td class="ev">lessons.json</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="exhibit">
+    <div class="exh-h"><b>EXHIBIT 3.1</b><span>Attached to §3 · P3 · the refusal above, as it happened</span></div>
+    <div class="term">
+      <div class="bar"><span>adlc rails-guard</span><span>EXIT 2 — REFUSED</span></div>
+<pre><span class="p">$</span> adlc rails-guard --base main --ticket T42 --tickets .adlc/tickets.json
+<span class="no">✗ FAIL: a frozen rail changed</span></pre>
+    </div>
+    <div class="exh-h" style="margin-top:26px"><b>EXHIBIT 3.2</b><span>Attached to §3 · P5 · the check that answers "would review catch it?"</span></div>
+    <div class="term">
+      <div class="bar"><span>adlc review-calibration</span><span>EXIT 0 — PASS</span></div>
+<pre><span class="p">$</span> adlc review-calibration --review-cmd "adlc review --base {base}" --plants 3
+<span class="ok">✓ PASS: planted-defect recall met the configured threshold</span></pre>
+    </div>
+  </section>
+
+  <div class="foot"><span>ADLC gates this repository in its own CI. Every exhibit on this page is real output.</span><span class="mono">MIT · @adlc on npm</span></div>
+</main>
+
+</body>
+</html>

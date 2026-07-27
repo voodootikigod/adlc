@@ -1,11 +1,25 @@
 import { RootProvider } from 'fumadocs-ui/provider/next';
 import './global.css';
-import { Inter } from 'next/font/google';
+import { Archivo, Azeret_Mono } from 'next/font/google';
 import type { Metadata } from 'next';
 import { SITE_URL } from '@/lib/routes.mjs';
 
-const inter = Inter({
+// Archivo is a grotesque out of documentary and industrial printing, and it
+// carries a width axis — which is what lets the record's statement clause be set
+// narrow at panel scale without a second display face. Azeret Mono sets every
+// identifier, exit code, and field legend: mono here is measurement and code,
+// not costume.
+const archivo = Archivo({
   subsets: ['latin'],
+  axes: ['wdth'],
+  variable: '--font-record',
+  display: 'swap',
+});
+
+const azeretMono = Azeret_Mono({
+  subsets: ['latin'],
+  variable: '--font-record-mono',
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
@@ -59,7 +73,11 @@ const STRUCTURED_DATA = {
 export default function Layout({ children }: LayoutProps<'/'>) {
   // dark class on <html> enforces dark mode — theme switching is disabled
   return (
-    <html lang="en" className={`dark ${inter.className}`} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`dark ${archivo.variable} ${azeretMono.variable} ${archivo.className}`}
+      suppressHydrationWarning
+    >
       <body className="flex flex-col min-h-screen">
         <script
           type="application/ld+json"

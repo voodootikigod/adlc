@@ -11,14 +11,14 @@ export const metadata: Metadata = {
 export default function FailureModesPage() {
   return (
     <main>
-      <MarketingSection headingLevel={1} kicker="The problem" title="Every defense traces to a failure mode">
-        <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
+      <MarketingSection n="1" headingLevel={1} kicker="The problem" title="Every defense traces to a failure mode">
+        <p className="mb-10 max-w-[72ch]" style={{ color: 'var(--rec-ink-2)' }}>
           ADLC has one design rule: if a gate can&apos;t name the model failure mode it
           defends against, it gets cut. Here is the full map.
         </p>
         <FailureMap />
-        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
-          <a href={theoryLink('F1')} style={{ color: '#4fb4d8' }}>Read the original essay ↗</a>
+        <p className="mt-8 text-sm" style={{ color: 'var(--rec-ink-2)' }}>
+          <a href={theoryLink('F1')} style={{ color: 'var(--rec-link)' }}>Read the original essay ↗</a>
         </p>
       </MarketingSection>
     </main>

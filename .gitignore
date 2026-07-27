@@ -45,3 +45,10 @@ node_modules/
 # Local env files (may contain secrets, e.g. ATTIO_API_TOKEN)
 .env.local
 .env*.local
+
+# Impeccable working state: decision-server sessions and local live-mode config
+# are per-machine and ephemeral. The design system (DESIGN.md, design.json),
+# the surface brief, and the approved comps are tracked deliberately.
+apps/docs/.impeccable/questions/
+apps/docs/.impeccable/live/
+apps/docs/.impeccable/mocks/mobile.html

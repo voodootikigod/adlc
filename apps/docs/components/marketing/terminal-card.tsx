@@ -5,24 +5,29 @@ interface TerminalCardProps {
   children: ReactNode;
 }
 
+/**
+ * A capture. Evidence keeps the terminal ground and the unmodified An Old Hope
+ * palette wherever it appears, including on the record's paper surface — that
+ * contrast is the argument, so it is not softened to match the page around it.
+ *
+ * The traffic-light dots are gone: they were window chrome imitating a terminal
+ * app, and this is a captured stream, not a window.
+ */
 export function TerminalCard({ title, children }: TerminalCardProps) {
   return (
-    <div
-      className="overflow-hidden rounded-lg border"
-      style={{ borderColor: '#3f4044', background: '#26272c' }}
-    >
+    <div style={{ background: '#1c1d21', border: '1px solid #34363d' }}>
       <div
-        className="flex items-center gap-3 border-b px-4 py-2.5 font-mono text-xs"
-        style={{ borderColor: '#3f4044', color: 'var(--mk-muted)' }}
+        className="rec-mono flex items-center gap-3 px-3.5 py-2 text-[10px] tracking-[0.1em]"
+        style={{ borderBottom: '1px solid #2c2e34', color: '#686b78' }}
       >
-        <span aria-hidden className="flex select-none gap-1.5">
-          <span className="h-2 w-2 rounded-full" style={{ background: '#3f4044' }} />
-          <span className="h-2 w-2 rounded-full" style={{ background: '#3f4044' }} />
-          <span className="h-2 w-2 rounded-full" style={{ background: '#3f4044' }} />
-        </span>
         <span className="truncate">{title}</span>
       </div>
-      <div className="overflow-x-auto p-4 font-mono text-sm leading-relaxed">{children}</div>
+      <div
+        className="rec-mono overflow-x-auto px-4 py-3.5 text-[12.5px] leading-[1.75]"
+        style={{ color: '#cbcdd2' }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

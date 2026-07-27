@@ -13,11 +13,14 @@ interface IntegrationCardProps {
 }
 
 // Install text is contractual — render verbatim; comment lines are only dimmed, never rewritten.
+//
+// These colours are the TERMINAL side of the system, not the record side: this
+// pre renders inside a capture on #1c1d21. Paper inks here are invisible.
 function InstallLines({ lines }: { lines: readonly string[] }) {
   return (
     <pre className="whitespace-pre-wrap">
       {lines.map((line, i) => (
-        <span key={i} style={{ color: line.startsWith('#') ? 'var(--mk-muted)' : '#cbcdd2' }}>
+        <span key={i} style={{ color: line.startsWith('#') ? '#686b78' : '#cbcdd2' }}>
           {i > 0 ? '\n' : ''}
           {line}
         </span>
@@ -32,8 +35,8 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
     <div className="flex flex-col gap-4">
       <div>
         <span
-          className="rounded border px-2 py-0.5 font-mono text-xs"
-          style={{ borderColor: '#3f4044', color: 'var(--mk-muted)' }}
+          className="rec-legend border px-2 py-1"
+          style={{ borderColor: 'var(--rec-rule-strong)', background: 'var(--rec-paper-sunk)' }}
         >
           {STATUS_LABEL[integration.status]}
         </span>
@@ -42,7 +45,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
         <InstallLines lines={integration.install} />
       </TerminalCard>
       {note ? (
-        <p className="text-sm leading-relaxed" style={{ color: '#e5cd52' }}>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--rec-gate-ink)' }}>
           <span aria-hidden>◌ </span>
           {note}
         </p>

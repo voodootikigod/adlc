@@ -12,9 +12,16 @@ interface InstallCommandProps {
 }
 
 /**
- * A copy-able install command. Client component only because of the clipboard —
- * the command itself is rendered server-side, so it is present in the HTML (and
- * therefore selectable, crawlable, and readable) whether or not JS runs.
+ * The record's primary control.
+ *
+ * In this world the install command is not a call-to-action button beside the
+ * copy — it is the value of the IMPLEMENTATION field, so it is rendered as the
+ * form's own executable field: squared, ruled, on the terminal ground, with the
+ * command itself as the field's content.
+ *
+ * Client component only because of the clipboard. The command is rendered
+ * server-side, so it is in the HTML — selectable, crawlable, and readable —
+ * whether or not JS runs.
  */
 export function InstallCommand({ command, label, beta = false }: InstallCommandProps) {
   const [copied, setCopied] = useState(false);
@@ -33,35 +40,46 @@ export function InstallCommand({ command, label, beta = false }: InstallCommandP
   }, [command]);
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2">
       {label ? (
-        <p className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.14em]" style={{ color: 'var(--mk-muted)' }}>
+        <p className="rec-legend flex items-center gap-2">
           <span>{label}</span>
           {beta ? (
-            <span className="rounded border px-1.5 py-0.5 text-[0.65rem]" style={{ borderColor: '#e5cd52', color: '#e5cd52' }}>
-              beta
+            <span
+              className="rec-mono border px-1.5 py-[1px] text-[9px]"
+              style={{ borderColor: 'var(--rec-gate-edge)', color: 'var(--rec-gate-ink)', background: 'var(--rec-gate-field)' }}
+            >
+              BETA
             </span>
           ) : null}
         </p>
       ) : null}
-      <div
-        className="flex items-center gap-3 rounded-lg border px-4 py-3"
-        style={{ borderColor: '#3f4044', background: '#26272c' }}
-      >
-        <span aria-hidden className="select-none font-mono text-sm" style={{ color: '#4fb4d8' }}>
-          $
-        </span>
-        <code className="flex-1 overflow-x-auto whitespace-pre font-mono text-sm" style={{ color: '#cbcdd2' }}>
+      <div className="flex items-stretch" style={{ border: '1px solid var(--rec-ink)', background: '#1c1d21' }}>
+        {/* The command wraps on narrow screens rather than scrolling out of
+            sight. This is the page's primary action: a visitor who cannot see
+            the whole command cannot verify what they are about to pipe to sh,
+            and "scroll this box sideways" is not an answer on a phone. */}
+        <code
+          className="rec-mono flex-1 whitespace-pre-wrap break-all px-4 py-3 text-[13px] md:overflow-x-auto md:whitespace-pre md:break-normal md:text-[13.5px]"
+          style={{ color: '#cbcdd2' }}
+        >
+          <span aria-hidden className="select-none pr-2.5" style={{ color: '#78bd65' }}>
+            $
+          </span>
           {command}
         </code>
         <button
           type="button"
           onClick={copy}
-          className="shrink-0 rounded border px-2.5 py-1 font-mono text-xs transition-colors"
-          style={{ borderColor: '#3f4044', color: copied ? '#78bd65' : 'var(--mk-muted)' }}
+          className="rec-mono shrink-0 px-4 text-[10px] tracking-[0.14em] transition-colors"
+          style={{
+            borderLeft: '1px solid #34363d',
+            background: '#26272c',
+            color: copied ? '#78bd65' : '#cbcdd2',
+          }}
           aria-label={copied ? 'Command copied to clipboard' : `Copy: ${command}`}
         >
-          {copied ? 'copied' : 'copy'}
+          {copied ? 'COPIED' : 'COPY'}
         </button>
       </div>
     </div>

@@ -1,9 +1,13 @@
 // FAIL text uses the AA-contrast token; its border/background keep the base
 // gate token (non-text, 3:1 suffices — the glyph + label carry the state).
 const STATES = {
-  pass: { glyph: '✓', label: 'PASS', color: 'var(--adlc-pass)', accent: 'var(--adlc-pass)' },
-  fail: { glyph: '✗', label: 'FAIL', color: 'var(--mk-fail-text)', accent: 'var(--adlc-fail)' },
-  wish: { glyph: '◌', label: 'WISH', color: 'var(--adlc-wish)', accent: 'var(--adlc-wish)' },
+  pass: { glyph: '✓', label: 'PASS', color: 'var(--rec-pass-ink)', accent: 'var(--rec-pass-ink)' },
+  fail: { glyph: '✗', label: 'FAIL', color: 'var(--rec-fail-ink)', accent: 'var(--rec-fail-ink)' },
+  // Labelled ATTEST, not WISH. "Attestation" is fixed product terminology;
+  // "wish" is the internal name of the colour token and had leaked out as a
+  // verdict word, so the same human gate read as ATTEST in the approval chain
+  // and WISH here — two words for the load-bearing concept.
+  wish: { glyph: '◆', label: 'ATTEST', color: 'var(--rec-gate-ink)', accent: 'var(--rec-gate-ink)' },
 } as const;
 
 export type GateState = keyof typeof STATES;
@@ -18,7 +22,7 @@ export function GateBadge({ state, label }: GateBadgeProps) {
   const s = STATES[state];
   return (
     <span
-      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-sm border px-2 py-0.5 font-mono text-xs font-bold tracking-wider"
+      className="inline-flex items-center gap-1.5 whitespace-nowrap border px-2 py-0.5 rec-mono text-xs font-bold tracking-wider"
       style={{
         color: s.color,
         borderColor: `color-mix(in srgb, ${s.accent} 55%, transparent)`,

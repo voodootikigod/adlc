@@ -18,8 +18,8 @@ const ROLLOUT = [
 export default function EnterprisePage() {
   return (
     <main>
-      <MarketingSection headingLevel={1} kicker="Enterprise" title="Unreviewable agent output is an audit problem">
-        <p className="mk-fade-up max-w-2xl text-lg" style={{ color: 'var(--mk-muted)' }}>
+      <MarketingSection n="1" headingLevel={1} kicker="Enterprise" title="Unreviewable agent output is an audit problem">
+        <p className="max-w-[72ch] text-[16.5px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
           When agents write most of the code, &ldquo;a human approved the PR&rdquo; stops being
           evidence of anything. Regulators, auditors, and your own security team will ask what
           the approval was based on. ADLC gives you an answer: a gate-by-gate evidence trail,
@@ -27,9 +27,9 @@ export default function EnterprisePage() {
         </p>
       </MarketingSection>
 
-      <MarketingSection kicker="The evidence" title="From ticket to merge, every verdict recorded">
+      <MarketingSection n="2" kicker="The evidence" title="From ticket to merge, every verdict recorded">
         <EvidenceTrail />
-        <div className="mt-8 flex flex-wrap items-center gap-3 text-sm" style={{ color: 'var(--mk-muted)' }}>
+        <div className="mt-8 flex flex-wrap items-center gap-3 text-sm" style={{ color: 'var(--rec-ink-2)' }}>
           <span>Every gate emits</span>
           <GateBadge state="pass" />
           <GateBadge state="fail" />
@@ -38,26 +38,31 @@ export default function EnterprisePage() {
         </div>
       </MarketingSection>
 
-      <MarketingSection kicker="Rollout" title="Pilot → rails → org-wide">
-        <div className="grid gap-4 md:grid-cols-3">
+      <MarketingSection n="3" kicker="Rollout" title="Pilot → rails → org-wide">
+        {/* A rollout schedule, not three cards. Same-size cards of number +
+            heading + text are the lazy page scaffold; a staged rollout is a
+            sequence, and the record writes a sequence as ruled stages. */}
+        <ol style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
           {ROLLOUT.map((r, i) => (
-            <div
+            <li
               key={r.phase}
-              className="rounded-lg border p-5"
-              style={{ borderColor: '#3f4044', background: '#26272c' }}
+              className="grid grid-cols-1 gap-x-6 px-1 py-4 md:grid-cols-[52px_170px_minmax(0,1fr)]"
+              style={{ borderBottom: '1px solid var(--rec-rule)', background: 'var(--rec-paper-raised)' }}
             >
-              <p className="font-mono text-[10px] tracking-[0.2em]" style={{ color: 'var(--mk-muted)' }}>
-                {String(i + 1).padStart(2, '0')}
-              </p>
-              <p className="mt-1 font-semibold" style={{ color: '#4fb4d8' }}>{r.phase}</p>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>{r.detail}</p>
-            </div>
+              <span className="rec-legend px-2 pt-1">Stage {i + 1}</span>
+              <span className="px-2 text-[15px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
+                {r.phase}
+              </span>
+              <span className="px-2 text-[14px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
+                {r.detail}
+              </span>
+            </li>
           ))}
-        </div>
+        </ol>
       </MarketingSection>
 
-      <MarketingSection kicker="Talk to us" title="Doing agentic development right?">
-        <p className="max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
+      <MarketingSection n="4" kicker="Talk to us" title="Doing agentic development right?">
+        <p className="max-w-[72ch]" style={{ color: 'var(--rec-ink-2)' }}>
           If you&apos;re rolling agentic development out across an organization and want it
           gated, auditable, and defensible, get in touch. Tell us what you&apos;re rolling out
           and we&apos;ll reply within a couple of business days. Prefer email? Reach us directly
@@ -65,7 +70,7 @@ export default function EnterprisePage() {
           <a
             href="mailto:help@agenticlifecycle.ai?subject=ADLC%20enterprise"
             className="underline"
-            style={{ color: '#4fb4d8' }}
+            style={{ color: 'var(--rec-link)' }}
           >
             help@agenticlifecycle.ai
           </a>

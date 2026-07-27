@@ -32,51 +32,60 @@ const HUMAN_GATES = new Set(HUMAN_GATE_IDS);
 export default function LifecyclePage() {
   return (
     <main>
-      <MarketingSection headingLevel={1} kicker="The lifecycle" title="Eight phases. A gate between every one.">
+      <MarketingSection headingLevel={1} n="1" kicker="The chain" title="Eight phases. A gate between every one.">
         <LifecyclePipeline />
-        <div className="mt-12 grid gap-4 md:grid-cols-2">
+
+        {/* The detail sits as annotations to the chain above, not as a second
+            grid of cards restating it. One row per control point, ruled. */}
+        <dl className="mt-12" style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
           {PHASES.map((p) => (
             <div
               key={p.id}
-              className="rounded-lg border p-5"
-              style={{ borderColor: '#3f4044', background: '#26272c' }}
+              className="grid grid-cols-1 gap-x-6 px-1 py-4 md:grid-cols-[46px_150px_minmax(0,1fr)]"
+              style={{
+                borderBottom: '1px solid var(--rec-rule)',
+                background: HUMAN_GATES.has(p.id) ? 'var(--rec-gate-field)' : undefined,
+              }}
             >
-              <div className="flex items-baseline justify-between gap-3">
-                <p className="font-mono text-xs" style={{ color: '#4fb4d8' }}>{p.id}</p>
+              <dt className="rec-mono px-2 text-[12px]" style={{ color: 'var(--rec-ink-3)' }}>
+                {p.id}
+              </dt>
+              <dt className="px-2 text-[15px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
+                {p.name}
                 {HUMAN_GATES.has(p.id) ? (
-                  <span
-                    className="rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider"
-                    style={{
-                      color: 'var(--adlc-highlight)',
-                      borderColor: 'color-mix(in srgb, var(--adlc-highlight) 55%, transparent)',
-                    }}
-                  >
-                    Human gate
+                  <span className="rec-mono mt-1 block text-[10px] tracking-[0.12em]" style={{ color: 'var(--rec-gate-ink)' }}>
+                    ◆ HUMAN GATE
                   </span>
                 ) : null}
-              </div>
-              <p className="mt-1 font-semibold" style={{ color: '#cbcdd2' }}>{p.name}</p>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
+              </dt>
+              <dd className="px-2 text-[14px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
                 {PHASE_DETAIL[p.id]}
-              </p>
-              <a href={theoryLink(p.id)} className="mt-3 inline-block text-sm" style={{ color: '#4fb4d8' }}>
-                Read the original essay ↗
-              </a>
+                <a
+                  href={theoryLink(p.id)}
+                  className="ml-2 whitespace-nowrap text-[13px]"
+                  style={{ color: 'var(--rec-link)', borderBottom: '1px solid var(--rec-link-edge)' }}
+                >
+                  essay ↗
+                </a>
+              </dd>
             </div>
           ))}
-        </div>
+        </dl>
       </MarketingSection>
 
-      <MarketingSection kicker="Calibration" title="Three dials, set per ticket">
-        <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
+      <MarketingSection n="2" kicker="Calibration" title="Three dials, set per ticket">
+        <p className="mb-10 max-w-[72ch] text-[16px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
           Not every ticket deserves the same autonomy. You set three dials at triage,
           and the gates hold you to whatever you chose.
         </p>
         <ThreeDials />
-        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
-          <a href={theoryLink('three-dials')} style={{ color: '#4fb4d8' }}>Read the original essay ↗</a>
-          {' · '}
-          <Link href="/docs" style={{ color: '#4fb4d8' }}>Full reference in the docs</Link>
+        <p className="mt-8 flex flex-wrap gap-x-4 text-[13px]">
+          <a href={theoryLink('three-dials')} style={{ color: 'var(--rec-link)', borderBottom: '1px solid var(--rec-link-edge)' }}>
+            Read the original essay ↗
+          </a>
+          <Link href="/docs" style={{ color: 'var(--rec-link)', borderBottom: '1px solid var(--rec-link-edge)' }}>
+            Full reference in the docs
+          </Link>
         </p>
       </MarketingSection>
     </main>
