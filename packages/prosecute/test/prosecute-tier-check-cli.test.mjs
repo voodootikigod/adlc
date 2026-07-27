@@ -18,6 +18,11 @@ import { execFileSync } from 'node:child_process';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
+// #326 hardening: the gate verifies attestation signatures, so both record-cross-model (which
+// signs) and tier-check (which verifies) need ADLC_MANIFEST_KEY. Set it for the whole file so
+// runBin subprocesses inherit it; the no-key fail-closed case overrides it to '' per-call.
+process.env.ADLC_MANIFEST_KEY = 'test-tier-check-signing-key';
+
 function runBin(args, cwd, env = {}) {
   try {
     const stdout = execFileSync(process.execPath, [BIN, ...args], {
@@ -79,7 +84,47 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
       const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
       assert.equal(r.status, 2);
       assert.match(r.stderr, /TRUST-ROOT tier/);
-      assert.match(r.stderr, /NO cross-model attestation/);
+      assert.match(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
+      // The failure must show the actionable, signable record command verbatim — a
+      // maintainer copies it. Pin the template so a garbled hint cannot ship silently.
+      assert.match(r.stderr, /adlc-prosecute record-cross-model --ticket <id>/);
+    } finally { cleanup(dir); }
+  });
+
+  it('#326 forge resistance: an UNSIGNED attestation does NOT satisfy the gate', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+      mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+      writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+    } });
+    try {
+      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+      // Attacker records the approve WITHOUT the key (unsigned) — the forge.
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
+      // Gate (with the key) rejects the unsigned entry — still fails closed.
+      const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(after.status, 2, 'an unsigned forged approve must not satisfy the gate');
+    } finally { cleanup(dir); }
+  });
+
+  it('#326: fails closed with a distinct message when ADLC_MANIFEST_KEY is unavailable', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+      mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+      writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+    } });
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /ADLC_MANIFEST_KEY is not available/);
+      // --json contract on the no-key path: still a trust-root tier and STILL failing
+      // closed, but distinguishably because the key is absent (keyAvailable:false), so a
+      // consumer does not misread it as "attestation simply missing".
+      const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(j.status, 2);
+      const jj = JSON.parse(j.stdout);
+      assert.equal(jj.trustRootTier, true);
+      assert.equal(jj.crossModelRequired, true);
+      assert.equal(jj.satisfied, false);
+      assert.equal(jj.keyAvailable, false);
     } finally { cleanup(dir); }
   });
 

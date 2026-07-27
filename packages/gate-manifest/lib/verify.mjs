@@ -35,11 +35,20 @@ import { getKey, verifyEntrySig } from './sign.mjs';
  *    This defeats the forge-from-scratch attack: without the key an attacker
  *    cannot produce valid signatures, so verify (run WITH the key) returns
  *    valid:false.
+ *  - requireSignatures:false → tolerate entries with NO sig (legacy/unsigned
+ *    history), for a caller which sig-checks the specific entries it trusts
+ *    itself. A PRESENT-but-invalid sig is STILL rejected (tampering), so this is
+ *    "unsigned history is OK", not "tampered signatures are OK". signed=false.
  *
  * @param {string} [dir]  ledger directory (default ADLC_DIR)
+ * @param {object} [opts]
+ * @param {boolean} [opts.requireSignatures=true]  when false, do not require that
+ *   every entry be signed (unsigned/legacy entries pass), but still reject any
+ *   entry whose PRESENT signature does not verify. When true, every entry must be
+ *   signed and valid.
  * @returns {VerifyResult}
  */
-export function verify(dir = ADLC_DIR) {
+export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
   const lp = ledgerPath('manifest', dir);
   const key = getKey();
 
@@ -132,11 +141,24 @@ export function verify(dir = ADLC_DIR) {
       };
     }
 
-    // Check HMAC signature when a key is configured. With a key, EVERY entry
-    // must carry a valid sig — otherwise the chain is not cryptographically
-    // attestable and a forged-from-scratch chain would slip through.
+    // Check HMAC signatures when a key is configured. Two independent conditions:
+    //
+    //   MISSING sig — gated by requireSignatures. In the default (true) mode EVERY
+    //     entry must carry a sig, so a forged-from-scratch chain is rejected. In the
+    //     lenient (false) mode a legacy entry with NO sig is TOLERATED: it is for a
+    //     caller whose manifest has legitimately-unsigned history (signing enabled
+    //     partway through its life) and which sig-checks the specific entries it
+    //     trusts itself.
+    //   PRESENT-but-INVALID sig — rejected in BOTH modes. A sig that is present but
+    //     does not verify means the entry's bytes were altered after signing (or the
+    //     wrong key signed it). Skipping that in lenient mode would let an attacker
+    //     TAMPER a signed entry — e.g. rewrite a signed `needs-attention` revocation
+    //     so it no longer matches the gate — recompute the public prev-hashes, and
+    //     pass "chain-only" verification. Lenient means "unsigned history is OK", NOT
+    //     "tampered signatures are OK". (Codex #354 re-review F1.)
     if (key !== null) {
-      if (entry.sig === undefined || entry.sig === null) {
+      const hasSig = entry.sig !== undefined && entry.sig !== null;
+      if (!hasSig && requireSignatures) {
         return {
           valid: false,
           message: `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`,
@@ -145,7 +167,7 @@ export function verify(dir = ADLC_DIR) {
           break: { seq: entry.seq, lineNo, reason: 'unsigned entry' },
         };
       }
-      if (!verifyEntrySig(key, entry)) {
+      if (hasSig && !verifyEntrySig(key, entry)) {
         return {
           valid: false,
           message: `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`,
@@ -160,9 +182,10 @@ export function verify(dir = ADLC_DIR) {
     prevSeq = entry.seq;
   }
 
-  // signed:true only when a key verified every entry. With no key, the chain
-  // is internally consistent but NOT cryptographically attested.
-  const signed = key !== null;
+  // signed:true only when a key verified every entry. With no key — or when the
+  // caller asked for chain-only via requireSignatures:false — the chain is
+  // internally consistent but NOT cryptographically attested.
+  const signed = key !== null && requireSignatures;
   return {
     valid: true,
     message: signed

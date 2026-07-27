@@ -1,6 +1,12 @@
 // @ts-check
 // Single source of truth for the native-integration marketing pages.
 // Grounded in docs/integrations/<slug>.md. The test cross-checks existence.
+//
+// The universal install command is imported rather than repeated: install-commands.mjs
+// owns it, and hand-typing it here would be a second copy that drifts when the served
+// script moves. (install-commands.mjs imports nothing, so there is no cycle.)
+
+import { UNIVERSAL_INSTALL } from './install-commands.mjs';
 
 /** @typedef {{ key: string, count: number, label: string, title: string, detail: string, items: string[] }} IntegrationSurface */
 /** @typedef {{ phase: string, entry: string, evidence: string }} PhaseRoute */
@@ -823,6 +829,143 @@ export const ANTIGRAVITY_INTEGRATION = {
   ],
 };
 
+/** @type {IntegrationFact} */
+export const COPILOT_INTEGRATION = {
+  slug: 'copilot',
+  name: 'GitHub Copilot',
+  status: 'marketplace',
+  tagline: 'A native Copilot CLI plugin: seven lifecycle hooks, six phase skills, allowlisted MCP gate tools, and six read-only prosecution agents.',
+  install: [
+    'npm install -g @adlc/cli',
+    'copilot plugin marketplace add voodootikigod/adlc',
+    'copilot plugin install adlc-copilot@adlc',
+    'adlc init --no-codex-agents',
+  ],
+  note: 'Installs from this repo\'s Git plugin marketplace, not npm — the @adlc/copilot npm package is not the install path. The universal installer performs these steps automatically when it detects the copilot CLI. adlc init --harness copilot is NOT available in the published @adlc/cli 1.6.0 (it exits: --harness must be codex or cursor); use --no-codex-agents until the next release. Either way it only scaffolds repository state and is not a substitute for installing the plugin.',
+  pluginDir: 'plugins/adlc-copilot',
+  hero: {
+    kicker: 'Copilot integration',
+    title: 'ADLC as a GitHub Copilot plugin',
+    identity: 'Built against Copilot\'s own plugin surfaces. The in-session rail hook is best-effort; CI is the guarantee.',
+    badges: [
+      { label: 'Native plugin', accent: true },
+      { label: 'Git marketplace' },
+    ],
+  },
+  bundle: {
+    title: 'adlc-copilot / native bundle',
+    ariaLabel: 'Native Copilot plugin payload',
+    root: 'adlc-copilot/',
+    entries: [
+      { path: '├─ plugin.json', note: 'manifest' },
+      { path: '├─ skills/', surfaceKey: 'skills', note: 'phase-aware workflows' },
+      { path: '├─ hooks/hooks.json', surfaceKey: 'hooks', note: 'lifecycle events' },
+      { path: '├─ .mcp.json', surfaceKey: 'mcp', note: 'allowlisted tools' },
+      { path: '└─ agents/', surfaceKey: 'agents', note: 'prosecution lenses' },
+    ],
+  },
+  surfaces: [
+    {
+      key: 'skills',
+      count: 6,
+      label: 'skills',
+      title: 'Skills load only the phase you need',
+      detail: 'The adlc skill routes to a phase, then a focused skill loads just that P0-P7 workflow instead of the whole lifecycle.',
+      items: ['adlc', 'adlc-init', 'adlc-ticket', 'adlc-prosecute', 'adlc-distill', 'adlc-maintain'],
+    },
+    {
+      key: 'hooks',
+      count: 7,
+      label: 'hook events',
+      title: 'Hooks for context, rails, and compaction',
+      detail: 'Hooks restore ticket context at session start, check frozen-rail writes before a tool runs, survive compaction, and coordinate subagents.',
+      items: [
+        'sessionStart',
+        'preToolUse',
+        'postToolUse',
+        'preCompact',
+        'subagentStart',
+        'subagentStop',
+        'agentStop',
+      ],
+    },
+    {
+      key: 'mcp',
+      count: 2,
+      label: 'MCP tools',
+      title: 'Two MCP tools, tightly scoped',
+      detail: 'A local MCP server exposes allowlisted adlc_gate (no shell) and adlc_prosecute for evidence-producing review.',
+      items: ['adlc_gate', 'adlc_prosecute'],
+    },
+    {
+      key: 'agents',
+      count: 6,
+      label: 'prosecution agents',
+      title: 'Five lenses plus an independent verifier',
+      detail: 'P5 fans out five read-only specialist lenses, then an independent verifier refutes findings before they gate the merge.',
+      items: [
+        'prosecutor-correctness',
+        'prosecutor-security',
+        'prosecutor-contract',
+        'prosecutor-diff',
+        'prosecutor-tests',
+        'prosecutor-verifier',
+      ],
+    },
+  ],
+  surfacesSection: {
+    kicker: 'Native surfaces',
+    title: 'What the Copilot plugin installs',
+  },
+  phaseRoutes: [
+    { phase: 'P0', entry: 'adlc-ticket', evidence: 'ticket in the canonical store' },
+    { phase: 'P1-P2', entry: 'adlc skill', evidence: 'spec-lint · premortem · coldstart' },
+    { phase: 'P3-P4', entry: 'preToolUse + CI', evidence: 'rail deny · rails-guard-ci' },
+    { phase: 'P5-P6', entry: 'adlc-prosecute', evidence: 'hollow-test · behavior diff · manifest' },
+    { phase: 'P7', entry: 'adlc-distill', evidence: 'foundry · rejection mining' },
+  ],
+  phaseSection: {
+    kicker: 'Phase routing',
+    title: 'Skills route, CI enforces',
+    intro: 'The `adlc` skill picks the phase and a focused skill loads that workflow. The preToolUse hook is an in-session nudge; treat CI as the control you rely on.',
+    entryHeader: 'Copilot entry',
+  },
+  enforcement: {
+    session: {
+      kicker: 'In the session',
+      title: 'Best-effort rail deny',
+      body: 'The preToolUse hook denies edits to a frozen ticket\'s rails, then build-gate checks context fitness. Bash is not reliably parseable, so a shell write can still reach the diff — that is what the CI gate exists for.',
+    },
+    ci: {
+      kicker: 'In CI',
+      title: 'The unbypassable control',
+      body: 'scripts/rails-guard-ci.mjs rejects any PR whose diff touches a rail frozen on the base branch, in any spelling. Install docs/ci/rails-guard.yml as .github/workflows/adlc-rails-guard.yml and follow its bootstrap ceremony before making it required.',
+    },
+  },
+  railsSection: {
+    kicker: 'Frozen rails',
+    title: 'Best-effort in session, required in CI',
+  },
+  installSection: {
+    kicker: 'Install',
+    title: 'Install from the Git plugin marketplace',
+  },
+  operate: {
+    title: 'operate: Copilot plugin',
+    lines: [
+      '# Or let the universal installer detect Copilot and do it for you',
+      UNIVERSAL_INSTALL,
+      '',
+      '# Scaffold repository state (NOT a plugin install)',
+      'adlc init --no-codex-agents',
+    ],
+  },
+  resources: [
+    { href: '/docs/integrations/copilot', label: 'Read the complete integration guide →' },
+    { href: 'https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-copilot', label: 'Inspect the plugin source →', external: true },
+  ],
+};
+
 /** @type {IntegrationFact[]} */
 export const INTEGRATIONS = [
   CLAUDE_CODE_INTEGRATION,
@@ -831,6 +974,7 @@ export const INTEGRATIONS = [
   OPENCODE_INTEGRATION,
   PI_INTEGRATION,
   ANTIGRAVITY_INTEGRATION,
+  COPILOT_INTEGRATION,
 ];
 
 /**

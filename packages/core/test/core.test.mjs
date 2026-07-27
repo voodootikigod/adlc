@@ -263,6 +263,93 @@ test('array-literal-shrink: does not touch a single-element array', () => {
   assert.equal(op.apply("const only = ['id'];"), null);
 });
 
+// ── off-by-one: a tuning constant is not a boundary (#359) ──────────────────
+// off-by-one exists to catch BOUNDARY mistakes. A duration in milliseconds or a
+// size in bytes is a tuning knob: +1 there is an EQUIVALENT mutant that no test
+// can observe, so the gate demanded a test that cannot exist and the only way to
+// satisfy it was a source-text pin — a hollow test added to placate the
+// anti-hollow-test gate. Counts stay mutable: +1 on a retry/limit IS observable.
+
+const offByOne = () => OPERATORS.find((o) => o.name === 'off-by-one');
+
+test('off-by-one: does not mutate a duration or size tuning constant (#359)', () => {
+  const line = "  const result = spawnSync('git', args, { encoding: 'utf8', timeout: 60000, maxBuffer: 512 * 1024 * 1024 });";
+  assert.equal(offByOne().apply(line), null,
+    '+1 ms on a 60 s timeout is unobservable by any test — an equivalent mutant, not a coverage gap');
+});
+
+test('off-by-one: masks the WHOLE tuning value expression, not just its first number', () => {
+  // Skipping only `512` would fall through to `1024` and reproduce the same
+  // unkillable mutant one factor to the right.
+  assert.equal(offByOne().apply('  const opts = { maxBuffer: 512 * 1024 * 1024 };'), null);
+});
+
+test('off-by-one: still mutates a real boundary sharing a line with a tuning constant', () => {
+  assert.equal(
+    offByOne().apply('  if (index < items.length - 1) retry({ timeout: 30000 });'),
+    '  if (index < items.length - 2) retry({ timeout: 30000 });'
+  );
+});
+
+test('off-by-one: still mutates counts — a retry or limit count is an observable boundary', () => {
+  assert.equal(offByOne().apply('  const opts = { maxRetries: 3 };'), '  const opts = { maxRetries: 4 };');
+  assert.equal(offByOne().apply('  const opts = { limit: 10 };'), '  const opts = { limit: 11 };');
+});
+
+test('off-by-one: mutates the boundary at its own index, not the first matching digit run', () => {
+  // A masked tuning value whose digits repeat the boundary's digits must not be
+  // corrupted: a `line.replace(digits, ...)` would rewrite `timeout: 3` instead.
+  assert.equal(
+    offByOne().apply('  const o = { timeout: 3, limit: 3 };'),
+    '  const o = { timeout: 3, limit: 4 };'
+  );
+});
+
+test('off-by-one: an ordinary boundary is still mutated', () => {
+  assert.equal(offByOne().apply('  for (let i = 0; i < n; i++) {'), '  for (let i = 1; i < n; i++) {');
+});
+
+// ── zero is a sentinel, not a magnitude (cross-model review finding, HIGH) ───
+// The masking rationale is "±1 is unobservable", which holds at MAGNITUDE and fails
+// at 0: across every key here, 0 means disabled / none / immediate, so 0 -> 1 is a
+// real semantic change a test must catch. Masking it would let a discrete boundary
+// escape prosecution — the exact over-suppression this operator must not do.
+
+test('off-by-one: still mutates a ZERO tuning value — 0 is a discrete sentinel', () => {
+  assert.equal(offByOne().apply('  const sessionOpts = { ttl: 0 };'), '  const sessionOpts = { ttl: 1 };');
+  assert.equal(offByOne().apply('  const headers = { maxAge: 0 };'), '  const headers = { maxAge: 1 };');
+  assert.equal(offByOne().apply('  const task = { delay: 0 };'), '  const task = { delay: 1 };');
+  assert.equal(offByOne().apply('  const t = { timeout: 0 };'), '  const t = { timeout: 1 };');
+});
+
+test('off-by-one: masks a NEGATIVE tuning sentinel — timeout: -1 means disabled', () => {
+  // Without the optional sign the mask misses `-1` entirely, off-by-one produces
+  // `-2`, and that is unkillable for the same reason 60001 was: a negative duration
+  // is a sentinel, so both values take the same disabled branch.
+  assert.equal(offByOne().apply('  const opts = { timeout: -1 };'), null);
+  assert.equal(offByOne().apply('  const opts = { delay: -1 };'), null);
+});
+
+test('off-by-one: a padded integer zero (00) still prosecutes — the carve-out is by VALUE', () => {
+  assert.equal(offByOne().apply('  const s = { ttl: 00 };'), '  const s = { ttl: 1 };');
+});
+
+// A cross-model review round 2 claimed masking let `ttl: 0.0` escape prosecution and
+// so re-opened the zero-sentinel hole. It does not: off-by-one cannot mutate ANY float,
+// masked or not, because its digit-run pattern rejects a run adjacent to `.`. Pinned
+// here with a NON-tuning key beside the tuning one — if the two ever diverge, masking
+// really has started deciding float behavior and this test says so.
+test('off-by-one: floats are unmutatable independent of masking (not a mask carve-out)', () => {
+  assert.equal(offByOne().apply('  const s = { foo: 0.0 };'), null, 'non-tuning key: no mask involved');
+  assert.equal(offByOne().apply('  const s = { foo: 1.5 };'), null, 'non-tuning key: no mask involved');
+  assert.equal(offByOne().apply('  const s = { ttl: 0.0 };'), null, 'tuning key: same outcome, same cause');
+});
+
+test('off-by-one: a magnitude is still masked after the zero/sign carve-outs', () => {
+  assert.equal(offByOne().apply('  const o = { timeout: 60000 };'), null);
+  assert.equal(offByOne().apply('  const o = { maxBuffer: 512 * 1024 * 1024 };'), null);
+});
+
 test('ternary-swap: swaps the recursive/leaf branches of an array-processing ternary (old operators miss it)', () => {
   const line = '    const result = Array.isArray(item) ? flatten(item) : item;';
   const originalMutants = mutantsFromOriginalOperators(line);

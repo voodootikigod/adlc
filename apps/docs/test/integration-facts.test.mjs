@@ -103,6 +103,10 @@ test('every integration carries Codex-depth marketing structure', () => {
     assert.ok(i.hero?.title, `${i.slug}: hero.title`);
     assert.ok(i.hero?.identity, `${i.slug}: hero.identity`);
     assert.ok(Array.isArray(i.hero?.badges) && i.hero.badges.length >= 1, `${i.slug}: hero.badges`);
+    assert.ok(
+      i.hero.badges.some((b) => b.accent === true),
+      `${i.slug}: hero has an accented (primary) badge`,
+    );
     assert.ok(i.bundle?.title && i.bundle?.ariaLabel && i.bundle?.root, `${i.slug}: bundle meta`);
     assert.ok(Array.isArray(i.bundle.entries) && i.bundle.entries.length >= 3, `${i.slug}: bundle entries`);
     assert.ok(i.surfacesSection?.kicker && i.surfacesSection?.title, `${i.slug}: surfacesSection`);

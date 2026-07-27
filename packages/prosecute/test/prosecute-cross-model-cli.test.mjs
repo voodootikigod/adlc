@@ -22,6 +22,9 @@ import { resolveProsecutionRevision } from '../lib/run.mjs';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
+// #326 hardening: record-cross-model signs and the readers verify, both under this key.
+process.env.ADLC_MANIFEST_KEY = 'test-cross-model-cli-signing-key';
+
 function runBin(args, cwd, env = {}) {
   try {
     const stdout = execFileSync(process.execPath, [BIN, ...args], {

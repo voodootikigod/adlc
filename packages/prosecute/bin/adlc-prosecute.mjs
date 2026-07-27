@@ -6,6 +6,8 @@ import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
+import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -208,6 +210,13 @@ Exit codes:
 
 // --- record-cross-model subcommand (register a cross-model attestation) ---
 if (positionals[0] === 'record-cross-model') {
+  // Signing convenience ONLY: pick up ADLC_MANIFEST_KEY from ./.env.local so a maintainer can
+  // author an attestation without exporting the key first. This is deliberately NOT done for
+  // tier-check: tier-check VERIFIES, and sourcing a verification key from the very tree being
+  // verified would let a contributor force-add a .env.local + a matching forged approve and pass
+  // a local gate (Codex #354 loader F2). A wrong key HERE only produces an attestation that fails
+  // in CI under the real secret — inert, not a bypass. No-op in CI / when the key is already set.
+  loadManifestKeyFromEnvLocal();
   if (!values.ticket) opError('record-cross-model requires --ticket');
   let input;
   if (values.input) {
@@ -286,7 +295,21 @@ if (positionals[0] === 'tier-check') {
   const revision = resolveProsecutionRevision({ dir: values.dir, revision: values.revision });
   if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
 
-  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider });
+  // #326 hardening — the attestation is trusted ONLY via its HMAC signature, verified with
+  // the key. Without the key the gate cannot tell a real cross-model approve from a PR-forged
+  // manifest line (a PR controls the manifest file but not the key), so it fails closed with a
+  // distinct message rather than the misleading "no attestation".
+  const key = getKey();
+  if (!key) {
+    if (values.json) {
+      printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false });
+    } else {
+      console.error(`tier-check: ADLC_MANIFEST_KEY is not available, so cross-model attestations cannot be signature-verified — an unverifiable attestation is forgeable, so NONE is trusted. This required trust-root gate FAILS CLOSED for revision ${revision}. Provide the key as a CI secret (available to same-repo runs) and re-record the attestation with it.`);
+    }
+    process.exit(2);
+  }
+
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key });
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision });
     process.exit(satisfied ? 0 : 2);
@@ -296,9 +319,9 @@ if (positionals[0] === 'tier-check') {
     process.exit(0);
   }
   console.error(
-    `tier-check: NO cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +
-    `Record one after a distinct-provider adversarial review:\n` +
-    `  adlc-prosecute record-cross-model --ticket <id> --provider <distinct-provider> --author-provider ${authorProvider} --verdict approve --revision ${revision}`
+    `tier-check: NO SIGNATURE-VERIFIED cross-model attestation for revision ${revision} (author ${authorProvider}). This required check FAILS.\n` +
+    `Record one AFTER a distinct-provider adversarial review, with ADLC_MANIFEST_KEY set so the entry is signed (an unsigned/forged entry is rejected):\n` +
+    `  ADLC_MANIFEST_KEY=<key> adlc-prosecute record-cross-model --ticket <id> --provider <distinct-provider> --author-provider ${authorProvider} --verdict approve --revision ${revision}`
   );
   process.exit(2);
 }

@@ -176,9 +176,11 @@ ${fence([
   'copilot plugin install adlc-copilot@adlc',
 ])}
 
-\`adlc init --harness copilot\` is a *different* step. It scaffolds repository
-state (a \`.github/copilot-instructions.md\` block and a setup-steps snippet);
-it does **not** install the plugin. Do not offer it as a substitute.
+\`adlc init --harness copilot\` is a *different* step, and it is NOT available in
+the published \`@adlc/cli\` 1.6.0 — it exits with \`--harness must be codex or
+cursor\`. Use \`adlc init --no-codex-agents\` until the next release. Either way
+it only scaffolds repository state; it does **not** install the plugin, so never
+offer it as a substitute.
 
 ## Install: any other agent
 
@@ -197,8 +199,8 @@ and say so rather than quietly installing the weaker option.
 
 Walk the human through this sequence.
 
-1. **Create the runtime.** \`adlc init\` (add \`--harness cursor\` or
-   \`--harness copilot\` where relevant). It is idempotent and confines all
+1. **Create the runtime.** \`adlc init\` (add \`--harness cursor\` where relevant;
+   \`--harness copilot\` is unreleased in 1.6.0 — use \`--no-codex-agents\`). It is idempotent and confines all
    writes to the repo root. If \`.adlc/config.json\` is already a frozen rail, do
    not overwrite it.
 2. **Wire the CI control.** This matters more than it looks: in-session rail
@@ -265,7 +267,8 @@ Walk the human through this sequence.
 - **GitHub Copilot** installs from its Git marketplace, not npm. The
   \`@adlc/copilot\` NPM package is unpublished, but that is irrelevant — the
   marketplace path does not use npm. See the Copilot section above.
-  \`adlc init --harness copilot\` scaffolds repo state and is NOT an install.
+  \`adlc init --harness copilot\` scaffolds repo state, is NOT an install, and is
+  unreleased in 1.6.0 — use \`--no-codex-agents\` for now.
 - **skills.sh installs skills only** — no hooks, MCP, agents, or rails.
 
 ## Diagnosis

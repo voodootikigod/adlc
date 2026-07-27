@@ -46,8 +46,14 @@ function deny(msg) {
   process.exit(2);
 }
 
-function git(args, label) {
-  const result = spawnSync('git', args, { encoding: 'utf8', timeout: 60000 });
+function git(args, label, { raw = false } = {}) {
+  // maxBuffer well above Node's 1 MiB default: the append-only manifest is an ever-growing
+  // ledger and `git cat-file`/`git show`/`git diff` output can exceed 1 MiB legitimately.
+  // The default would ENOBUFS a large-but-valid manifest and fail the gate (#314 round 6).
+  // raw:true omits encoding so stdout is a Buffer — the manifest evidence is compared
+  // BYTE-for-byte (utf8 decode is non-injective: distinct invalid byte sequences both become
+  // U+FFFD, so a decoded-string prefix check could miss a raw-byte rewrite — #314 round 7).
+  const result = spawnSync('git', args, { encoding: raw ? 'buffer' : 'utf8', timeout: 60000, maxBuffer: 512 * 1024 * 1024 });
   if (result.error) fail(`${label} failed: ${result.error.message}`);
   if (result.signal) fail(`${label} timed out or was killed by ${result.signal}`);
   return result;
@@ -153,6 +159,67 @@ function authorizeTrustRootChange(changedPaths, baseRef) {
 
 function manifestLines(text, label) {
   return text.split('\n').filter((line) => line.trim()).map((line, index) => parseJson(line, `${label} line ${index + 1}`));
+}
+
+// #314: the committed HEAD content of `.adlc/manifest.jsonl`, or '' when it is NOT tracked
+// at HEAD. Whether a PR "creates the manifest" is a DIFF question, not a filesystem one — a
+// gitignored, untracked manifest (which every dev who has run the toolkit has locally) is in
+// zero commits and must not be read, so the local verdict equals CI's clean checkout.
+//
+// FAIL CLOSED on a non-regular object: a manifest committed as a SYMLINK (or submodule) must
+// not smuggle evidence. `git show` returns a symlink's TARGET STRING, not the target's
+// content, so a whitespace-target symlink would slip past `.trim()` while downstream readers
+// that follow the link consume forged entries — the old readFileSync check denied this by
+// following the link, so preserve that by rejecting any non-`100644 blob` object.
+// Returns { present, text }: `present` is whether the manifest is tracked at HEAD, `text`
+// its committed content ('' when absent OR empty). This is the SOLE manifest reader — every
+// path (creation, first-bootstrap, append-only, AND the migration ceremony) reads through it,
+// so there is no working-tree read left to diverge from CI's clean checkout or to follow a
+// symlink. The migration ceremony's evidence is a TRACKED file (the migration diff-shape
+// allow-list expects `.adlc/manifest.jsonl` in the diff), so committed content is the correct,
+// CI-consistent source; reading the working tree there was the legacy artifact (#314 round 5).
+//
+// FAIL CLOSED on a non-regular object (symlink 120000 / submodule 160000): such a manifest
+// must not smuggle evidence. And read the content by the BLOB HASH from the same ls-tree row
+// (`git cat-file blob <hash>`), NOT `git show HEAD:path` — `git show` re-resolves the mutable
+// HEAD and could bind content to a different tree than the mode check saw (a TOCTOU). The blob
+// hash is immutable, so metadata and content provably describe the same object (#314 round 5).
+function committedManifestAtHead() {
+  // Pin HEAD to ONE immutable commit sha and resolve every lookup against it (#314 round 7).
+  // Otherwise the ancestor and leaf checks each re-resolve the mutable `HEAD`; a concurrent
+  // ref change between them (tree A with a normal `.adlc`, tree B with a symlinked `.adlc`)
+  // would pass the ancestor guard on A while the leaf reads absent on B.
+  const rev = git(['rev-parse', 'HEAD'], 'git rev-parse HEAD');
+  if (rev.status !== 0) fail('git rev-parse HEAD failed (operational error) — failing closed.');
+  const head = rev.stdout.trim();
+  // Ancestor guard (#314 round 6): `git ls-tree <head> -- .adlc/manifest.jsonl` does NOT descend
+  // a symlinked/submodule `.adlc`, so an ANCESTOR symlink (`.adlc` → some `state/` dir holding
+  // a forged manifest) would make the leaf lookup return "absent" while filesystem consumers
+  // follow the link and read the pre-populated evidence. Require `.adlc` itself to be a real
+  // tree at HEAD before trusting the leaf. Absent `.adlc` (dir not created yet) is fine.
+  const adlcDir = git(['ls-tree', head, '--', '.adlc'], 'git ls-tree HEAD .adlc');
+  if (adlcDir.status !== 0) fail('git ls-tree failed for the HEAD .adlc directory (operational error) — failing closed.');
+  const adlcRow = adlcDir.stdout.trim();
+  if (adlcRow && adlcRow.split(/\s+/)[0] !== '040000') {
+    deny('.adlc must be a directory, not a symlink or submodule');
+  }
+  const ls = git(['ls-tree', head, '--', '.adlc/manifest.jsonl'], 'git ls-tree HEAD manifest');
+  if (ls.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
+  const row = ls.stdout.trim();
+  // No `bytes` on the absent return: the only bytes consumer (the append-only branch) checks
+  // `present` first, so an absent manifest's bytes are never read — carrying a Buffer here
+  // would just be an unkillable equivalent mutant.
+  if (!row) return { present: false, text: '' };
+  const [mode, type, hash] = row.split(/\s+/);
+  if (type !== 'blob' || mode !== '100644') {
+    deny('.adlc/manifest.jsonl must be a regular tracked file, not a symlink or submodule');
+  }
+  // Read the exact object by its immutable hash, as raw BYTES — the append-only comparison is
+  // byte-for-byte (see git() `raw`). `text` is the utf8 view for the semantic checks (trim,
+  // JSON parse) that don't need byte fidelity.
+  const blob = git(['cat-file', 'blob', hash], 'git cat-file HEAD manifest blob', { raw: true });
+  if (blob.status !== 0) fail('git cat-file failed for the HEAD manifest blob (operational error) — failing closed.');
+  return { present: true, text: blob.stdout.toString('utf8'), bytes: blob.stdout };
 }
 
 function validateMigrationEvidence(baseText, headText, expectedStoreHash, expectedArchiveHash) {
@@ -392,7 +459,11 @@ try {
   if (baseHasConfig) {
     console.log(`rails-guard-ci: no ticket store at ${base} — protecting ADLC trust roots only.`);
   } else {
-    if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
+    // #314: same diff-not-filesystem rule as the main manifest block — a first-bootstrap
+    // PR that ADDS a tracked non-empty manifest is rejected, but a gitignored untracked
+    // manifest in the developer's tree is not (it is in zero commits), so local == CI here
+    // too. committedManifestText() also fails closed on a symlink/submodule manifest.
+    if (committedManifestAtHead().text.trim()) {
       fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
     }
     console.log(`rails-guard-ci: no ticket store at ${base} — nothing was frozen.`);
@@ -477,23 +548,41 @@ if (manifestLs.status !== 0) {
   fail(`git ls-tree failed for '${base}' manifest (operational error) — failing closed.`);
 }
 if (manifestLs.stdout.trim()) {
-  if (!existsSync('.adlc/manifest.jsonl')) {
+  // Base has a tracked manifest → the PR's HEAD version must be a regular blob (not a
+  // symlink smuggling forged evidence past the prefix check) and append-only over the
+  // base. Read the COMMITTED HEAD content, never the working tree (which follows links).
+  const head = committedManifestAtHead();
+  if (!head.present) {
     deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
   }
-  const baseManifest = git(['show', `${trustedBase}:.adlc/manifest.jsonl`], 'git show base manifest');
+  const baseManifest = git(['show', `${trustedBase}:.adlc/manifest.jsonl`], 'git show base manifest', { raw: true });
   if (baseManifest.status !== 0) fail('git show failed for an existing base manifest (operational error) — failing closed.');
-  const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
-  if (!headManifest.startsWith(baseManifest.stdout)) {
+  const baseBytes = baseManifest.stdout; // Buffer
+  // Append-only is a BYTE-for-byte prefix check (#314 round 7): a utf8-decoded comparison
+  // could miss a raw-byte rewrite of the base region (invalid sequences collapse to U+FFFD).
+  if (head.bytes.length < baseBytes.length || !head.bytes.subarray(0, baseBytes.length).equals(baseBytes)) {
     deny('.adlc/manifest.jsonl must be append-only in PRs');
   }
-  if (verifiedMigration) validateMigrationEvidence(baseManifest.stdout, headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
-} else if (existsSync('.adlc/manifest.jsonl') && readFileSync('.adlc/manifest.jsonl', 'utf8').trim()) {
-  const headManifest = readFileSync('.adlc/manifest.jsonl', 'utf8');
-  if (verifiedMigration) validateMigrationEvidence('', headManifest, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
-  else deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
-}
-if (verifiedMigration && (!existsSync('.adlc/manifest.jsonl') || !readFileSync('.adlc/manifest.jsonl', 'utf8').trim())) {
-  deny('legacy-to-directory migration requires hash-bound migration evidence');
+  if (verifiedMigration) validateMigrationEvidence(baseBytes.toString('utf8'), head.text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+} else if (verifiedMigration) {
+  // Verified migration ceremony (protected-base runner): the migration evidence lives in
+  // the gitignored WORKING-TREE manifest by design. Read it EXACTLY ONCE and make both the
+  // presence and validation decisions on that single snapshot — a two-read pattern (validate
+  // one snapshot, presence-check a second) is a TOCTOU fail-open: an empty file skips
+  // validation, then a swapped non-empty file satisfies presence with evidence never checked
+  // (#314 round 4). The diff shape and CODEOWNERS attestation were verified upstream, which
+  // is what makes trusting this local file sound in this branch only.
+  // Read the migration evidence from the COMMITTED manifest (it is a tracked file — the
+  // migration diff-shape allow-list expects it in the diff), the same object-bound reader as
+  // every other path. validateMigrationEvidence denies empty/whitespace evidence, so ONE read
+  // + one unconditional validation covers both presence and content — no working-tree read to
+  // diverge from CI and no second snapshot to race against.
+  validateMigrationEvidence('', committedManifestAtHead().text, verifiedMigrationStoreHash, verifiedMigrationArchiveHash);
+} else if (committedManifestAtHead().text.trim()) {
+  // Ordinary PR (#314): only a TRACKED manifest ADDED by the diff with non-empty evidence
+  // denies. An untracked gitignored manifest reads as '' (not tracked at HEAD) and passes,
+  // so the local verdict equals CI's clean checkout.
+  deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
 }
 
 const immutableTrustRoots = rails.length || baseHasConfig

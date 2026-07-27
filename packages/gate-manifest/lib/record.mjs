@@ -30,7 +30,13 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
       throw new Error(`manifest contains malformed JSON at line ${state.skipped[0].line}`);
     }
     if (state.rawLines.length > 0) {
-      const integrity = verify(dir);
+      // Chain-INTEGRITY only: we must not append onto a corrupted/unchained tail,
+      // but we must NOT demand that pre-existing history be signed. The shared
+      // manifest legitimately holds unsigned entries from before signing was enabled;
+      // a full sig-requiring verify here would make it impossible to append a NEW
+      // (signed, below) entry to such a manifest. Provenance is enforced by signing
+      // this entry and by readers sig-checking the specific entries they trust.
+      const integrity = verify(dir, { requireSignatures: false });
       if (!integrity.valid) {
         throw new Error(`manifest chain is invalid: ${integrity.message}`);
       }

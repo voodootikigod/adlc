@@ -804,6 +804,43 @@ describe('signing: tamper after signing is caught', () => {
       cleanTmp(dir);
     }
   });
+
+  it('requireSignatures:false tolerates an UNSIGNED entry but still rejects a TAMPERED signature (#354 F1)', () => {
+    const dir = makeTmp();
+    try {
+      // A manifest with a legitimately-unsigned legacy entry, then a signed one.
+      withKey(null, () => record({ gate: 'legacy', dir })); // no key → unsigned
+      withKey(KEY, () => record({ gate: 'signed', rawData: '{"v":1}', dir }));
+      const lp = ledgerPath('manifest', dir);
+
+      // Lenient mode accepts the mixed manifest: the unsigned legacy entry is tolerated
+      // and the signed entry verifies.
+      withKey(KEY, () => {
+        const ok = verify(dir, { requireSignatures: false });
+        assert.equal(ok.valid, true);
+      });
+
+      // Now TAMPER the signed entry's data (invalidating its sig) and repair the hash
+      // chain forward so only the SIGNATURE — not the prev hash — could catch it.
+      const lines = readFileSync(lp, 'utf8').split('\n').filter(l => l.trim());
+      const e2 = JSON.parse(lines[1]);
+      assert.ok(e2.sig, 'the second entry is signed');
+      e2.data = { v: 999 }; // tampered payload, stale sig
+      lines[1] = JSON.stringify(e2);
+      writeFileSync(lp, lines.join('\n') + '\n');
+
+      // Lenient mode must STILL reject: a present-but-invalid sig is tampering, not
+      // "unsigned history". This is what stops a rewritten signed revocation.
+      withKey(KEY, () => {
+        const r = verify(dir, { requireSignatures: false });
+        assert.equal(r.valid, false);
+        assert.equal(r.break.reason, 'signature invalid');
+        assert.equal(r.break.seq, 2);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
 });
 
 describe('signing: no key in env reports signed:false', () => {

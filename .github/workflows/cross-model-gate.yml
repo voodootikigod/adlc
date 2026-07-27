@@ -1,0 +1,86 @@
+name: cross-model-gate
+
+# #326 trust-root cross-model review gate — the TRUSTED-CONTEXT verifier.
+#
+# ────────────────────────────── SECURITY MODEL (read before editing) ──────────────────────────────
+# The gate must verify a cross-model attestation with ADLC_MANIFEST_KEY. The key is the entire trust
+# anchor: anyone who can read it can mint approvals forever. Therefore the key must NEVER be exposed
+# to code or dependencies a pull-request author controls.
+#
+# This workflow uses `pull_request_target`, so it runs from the BASE branch definition with secrets
+# available. It then:
+#   1. checks out BASE (the trusted code we RUN) and installs BASE dependencies (base lockfile), and
+#   2. materializes the PR tree into ./_pr as DATA via `git worktree` — which is NEVER executed.
+# The gate runs the BASE `adlc-prosecute` binary (absolute path under $GITHUB_WORKSPACE) with its cwd
+# set to the PR worktree, so Node resolves the CODE and DEPENDENCIES from the base checkout (import
+# resolution is script-relative, not cwd-relative) while git/data operations see the PR tree. The PR's
+# code and the PR's dependencies never run, so the key stays isolated.
+#
+# HARD RULES for anyone editing this file:
+#   • NEVER `run:` a script, build, test, or `npm ci`/postinstall from ./_pr or from the PR head.
+#   • NEVER run the PR's own packages/prosecute — always the base copy under $GITHUB_WORKSPACE.
+#   • Keep `permissions:` at the minimum (contents: read). pull_request_target defaults to write.
+#   • Do not add steps that echo secrets or pass ${{ secrets.* }} to anything touching ./_pr.
+#
+# ENFORCEMENT (do this to make the gate binding): mark the `gate` job below as a REQUIRED status
+# check via branch protection / a ruleset on `main`. It fails closed (exit 2) on a missing or
+# FORGED (unsigned / wrong-key / rewritten-sig) attestation, so as a required check it BLOCKS the
+# merge on those. Until that protection is configured this repo has none, so the gate is only a
+# trustworthy SIGNAL the maintainer merges on — an intentional fallback, not the end state. It
+# runs as a separate workflow (not folded into the required test job) precisely so it can hold
+# the key safely; that separation is compatible with making it required.
+#
+# SCOPE LIMIT (Codex #354 F1): a required check does NOT close manifest TRUNCATION — it evaluates
+# the PR-controlled tree, so an author who drops a signed `needs-attention` revocation leaves a
+# valid chain ending in the earlier approve and the check passes. Closing that needs the latest
+# attestation state anchored OUTSIDE the PR tree (a protected ref / check-run / external signed
+# checkpoint); see manifestChainTrustworthy() and the PR discussion. This PR closes forgery and
+# rewrite; truncation is tracked follow-up.
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BASE — the trusted code we RUN (default ref for pull_request_target)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # base history so the PR base SHA resolves for the diff
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Install BASE dependencies (base lockfile — trusted; PR lockfile is never installed)
+        run: npm ci
+
+      - name: Materialize the PR tree as DATA (git worktree; never executed)
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "$PR_HEAD"
+          # A detached worktree of the PR head: its FILES are readable as data (manifest, ticket
+          # store) and its git tree is diff-able, but nothing in it is ever run.
+          git worktree add --detach ./_pr "$PR_HEAD"
+
+      - name: Verify cross-model attestation — BASE code, PR data, key isolated from PR code
+        working-directory: ./_pr
+        env:
+          # The key reaches ONLY this step, which runs the base binary. The PR tree in cwd is read
+          # as data; its code/deps never execute, so a contributor cannot read or exfiltrate the key.
+          ADLC_MANIFEST_KEY: ${{ secrets.ADLC_MANIFEST_KEY }}
+          ADLC_AUTHOR_PROVIDER: ${{ vars.ADLC_AUTHOR_PROVIDER || 'anthropic' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # $GITHUB_WORKSPACE = the BASE checkout. Running the base binary with cwd=./_pr makes
+          # tier-check classify the PR's diff (base..PR tree), derive the PR's revision, and read the
+          # PR's .adlc manifest — all as data — while the executed code + node_modules are the base's.
+          node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" tier-check \
+            --base "$BASE_SHA" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
