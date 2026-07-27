@@ -20,6 +20,14 @@ const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffe
  * EEXIST from mkdir and reaches neither of the other two seams, so nothing could
  * count how many times it actually tried. The count could have drifted in either
  * direction and every test still passed.
+ *
+ * SCOPE, for all three: they are fault-injection points on specific operations,
+ * NOT a filesystem abstraction. `makeLockDirectory` covers the lock-directory
+ * creation INSIDE the retry loop and nothing else — the parent directory is
+ * still created by mkdirSync directly, because it happens once, before the loop,
+ * and is not part of the contention this seam exists to observe. Substituting a
+ * virtual filesystem through these options will not intercept every call, and
+ * they are not offered for that.
  */
 export function acquireTicketLock(root = '.', {
   retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null,

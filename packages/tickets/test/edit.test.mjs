@@ -143,19 +143,21 @@ test('an edit across an authorization boundary is refused unless the caller auth
   // rails or widen its scope with no evidence, simply because the author typed
   // it into their editor.
   withStore((service) => {
+    // The draft path comes from the runner, which is handed it directly. Parsing
+    // it back out of the error message would depend on that prose AND on the
+    // path containing no whitespace — and a tmpdir with a space in it would
+    // yield a truncated prefix pointing at somebody's parent directory.
+    let draft;
     const completes = (_editor, path) => {
+      draft = path;
       writeFileSync(path, JSON.stringify(ticket('T1', { title: 'original', completed: true }), null, 2));
     };
-    let message = '';
     assert.throws(
       () => planEditSession(service, 'T1', { editor: 'noop', runEditor: completes }),
-      (error) => {
-        message = error.message;
-        return error.code === 'AUTHORIZATION_REQUIRED';
-      },
+      (error) => error.code === 'AUTHORIZATION_REQUIRED',
       'the default must be closed: an unauthorized edit cannot cross the lifecycle boundary',
     );
-    rmSync(message.match(/preserved at (\S+?)\)/)?.[1] ?? '', { force: true });
+    rmSync(draft, { force: true });
 
     // …and the same edit goes through once the caller says so, so the refusal
     // above is the authorization check and not the edit being rejected outright.
