@@ -1,5 +1,13 @@
 // Executable command surface shared by the homepage terminal treatments.
 // Keep commands aligned with the real CLI; tests invoke every tool's --help.
+//
+// IMPORTANT: `output` is a one-line SUMMARY of each gate's verdict, authored for
+// the page — it is not a captured transcript. The real `spec-lint` prints a
+// per-criterion table ending "spec-lint: all criteria verified."; it never emits
+// the line below. The commands and the exit-code semantics are real, and the
+// homepage says so in exactly those terms. Do not add copy claiming these are
+// verbatim captures without first replacing these strings with real captures
+// (deterministic fixtures + a test asserting the capture still matches).
 export const MARKETING_GATES = [
   {
     name: 'spec-lint',

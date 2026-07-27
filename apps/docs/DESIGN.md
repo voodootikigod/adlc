@@ -15,7 +15,7 @@ colors:
   rec-paper-sunk: "#dde1e8"
   rec-ink: "#171920"
   rec-ink-2: "#464c5c"
-  rec-ink-3: "#6b7283"
+  rec-ink-3: "#5a616f"
   rec-rule: "#c6cbd6"
   rec-rule-strong: "#a7aebd"
   rec-pass-ink: "#2f6a22"
@@ -35,6 +35,13 @@ colors:
   terminal-muted: "#9093a0"
   terminal-link-edge: "#2b5f74"
   terminal-edge: "#000000"
+  print-paper: "#ffffff"
+  print-paper-sunk: "#f4f4f4"
+  print-ink: "#000000"
+  print-ink-2: "#333333"
+  print-ink-3: "#555555"
+  print-rule: "#999999"
+  print-rule-strong: "#444444"
 typography:
   statement:
     fontFamily: "Archivo, system-ui, sans-serif"
