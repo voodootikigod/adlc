@@ -1,8 +1,8 @@
 # Code owners for the ADLC trust roots.
 #
 # WHAT THIS FILE IS FOR. These paths are the trust roots: the gate that enforces
-# rails, the CI definition that runs it, the fixture that pins that definition's
-# integrity, and the ticket store the gate reads its rail set from. A change to
+# rails, the CI definition that runs it, and the ticket store the gate reads its
+# rail set from. A change to
 # any of them can disable rail enforcement for every other change, which is why
 # `rails-guard-ci.mjs` denies its own modification and why landing a legitimate
 # change to one currently requires an admin override of a red required check
@@ -32,11 +32,12 @@
 /scripts/rails-guard-ci.mjs                        @voodootikigod
 /scripts/test/rails-guard-ci.test.mjs              @voodootikigod
 
-# The CI definition that runs the gate, and the fixture pinning its integrity.
-# A PR can rewrite workflow files it ships, so the hash fixture is what makes
-# the definition tamper-evident; the two must be owned together.
+# The CI definition that runs the gate. Since #140 it carries no inline copy of
+# the gate — it invokes `adlc rails-guard-ci`, whose source is the
+# /packages/rails-guard/ subtree owned below. The sha256 fixture that used to
+# pin the inline copy is gone with it: it could prove the copy was UNCHANGED,
+# never that it AGREED with the real gate, and the two had already drifted.
 /docs/ci/rails-guard.yml                           @voodootikigod
-/scripts/test/rails-guard-workflow-hashes.json     @voodootikigod
 
 # The ticket store. The gate reads its rail set from the BASE version of this
 # file, so a change here changes what is enforced everywhere.
