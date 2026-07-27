@@ -330,6 +330,21 @@ test('off-by-one: masks a NEGATIVE tuning sentinel — timeout: -1 means disable
   assert.equal(offByOne().apply('  const opts = { delay: -1 };'), null);
 });
 
+test('off-by-one: a padded integer zero (00) still prosecutes — the carve-out is by VALUE', () => {
+  assert.equal(offByOne().apply('  const s = { ttl: 00 };'), '  const s = { ttl: 1 };');
+});
+
+// A cross-model review round 2 claimed masking let `ttl: 0.0` escape prosecution and
+// so re-opened the zero-sentinel hole. It does not: off-by-one cannot mutate ANY float,
+// masked or not, because its digit-run pattern rejects a run adjacent to `.`. Pinned
+// here with a NON-tuning key beside the tuning one — if the two ever diverge, masking
+// really has started deciding float behavior and this test says so.
+test('off-by-one: floats are unmutatable independent of masking (not a mask carve-out)', () => {
+  assert.equal(offByOne().apply('  const s = { foo: 0.0 };'), null, 'non-tuning key: no mask involved');
+  assert.equal(offByOne().apply('  const s = { foo: 1.5 };'), null, 'non-tuning key: no mask involved');
+  assert.equal(offByOne().apply('  const s = { ttl: 0.0 };'), null, 'tuning key: same outcome, same cause');
+});
+
 test('off-by-one: a magnitude is still masked after the zero/sign carve-outs', () => {
   assert.equal(offByOne().apply('  const o = { timeout: 60000 };'), null);
   assert.equal(offByOne().apply('  const o = { maxBuffer: 512 * 1024 * 1024 };'), null);

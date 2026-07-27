@@ -23,10 +23,22 @@ const LOOSE_NEQ_NULL_RE = /(?<!!)!=(?!=)\s*null\b/;
 // +1 on a count IS observable: a test can count attempts or returned items. Those
 // are the boundary bugs this operator exists to prosecute, and they stay mutable.
 //
-// KNOWN LIMIT: only the `key: value` / `key = value` form is recognized. A bare
-// call argument (`setTimeout(fn, 1000)`, `sleep(30000)`) is still mutated. Extend
-// this list only for a key whose ±1 is genuinely unobservable — every addition
-// removes real prosecution, so the bar is "no test could ever tell", not
+// KNOWN LIMIT — the value must be a BARE NUMERIC LITERAL directly after the separator.
+// Two shapes are therefore still mutated, and both can still produce an unkillable
+// mutant (cross-model review round 2 raised these; they are residual, NOT regressions —
+// each behaved identically before this operator learned to mask at all):
+//   - a bare call argument:  setTimeout(fn, 1000)   sleep(30000)
+//   - a COMPUTED value:      timeout: isDev ? 1000 : 60000    timeout = delay || 60000
+// Widening to "mask every number between the key and the next terminator" would fix
+// those and break something worse: in `timeout: cfg.max > arr.length - 1 ? 100 : 200`
+// it swallows `arr.length - 1`, a REAL boundary, silently deleting prosecution of it.
+// Precision beats breadth here — extend only when a concrete survivor demands it.
+//
+// Floats are a non-issue for a different reason: off-by-one's digit-run pattern rejects
+// a run adjacent to `.`, so `ttl: 0.0` is unmutatable whether masked or not.
+//
+// Extend the key list only for a key whose ±1 is genuinely unobservable — every
+// addition removes real prosecution, so the bar is "no test could ever tell", not
 // "no test currently does".
 const TUNING_KEYS = String.raw`timeout|timeout_?ms|delay|delay_?ms|interval|interval_?ms`
   + String.raw`|backoff|backoff_?ms|ttl|ttl_?ms|max_?age|keep_?alive(?:_?msecs)?`
