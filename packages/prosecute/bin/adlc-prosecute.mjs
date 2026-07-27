@@ -316,7 +316,12 @@ if (positionals[0] === 'tier-check') {
   // operator to run a distinct-provider adversarial review and record one — work that cannot
   // clear a broken chain (record-cross-model refuses to append onto it). The review is the
   // wasted cost. `satisfied` still decides the exit code; this only attributes the cause.
-  const chainTrustworthy = manifestChainTrustworthy(values.dir);
+  //
+  // Short-circuit on `satisfied`: hasCrossModelApproveForRevision returns true ONLY after its
+  // own manifestChainTrustworthy check passed, so satisfied ⇒ the chain verified. Re-deriving
+  // it would re-read and re-verify the whole ledger on the PASS path for an answer already
+  // known (cross-model review finding, MEDIUM). The || keeps the failing path exact.
+  const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir);
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, chainTrustworthy });
     process.exit(satisfied ? 0 : 2);
