@@ -1,8 +1,20 @@
-# Generated, PUBLISHED artifacts are byte-compared against their generator, so
-# their line endings are part of the artifact rather than a checkout detail.
-# Without this pin git hands a Windows checkout CRLF, the drift gate in
-# packages/tickets/test/help.test.mjs sees every line differ, and `npm pack` on
-# that checkout would ship a schema whose bytes are not the ones the generator
-# produces. Scoped to the generated files on purpose: this is not a repo-wide
-# `* text=auto`, which would renormalize files nothing compares byte-for-byte.
-packages/tickets/schemas/*.json text eol=lf
+# LF everywhere, in the index AND in the working tree on every platform.
+#
+# The first version of this file pinned only packages/tickets/schemas/*.json,
+# because that is the artifact whose drift gate went red on the Windows leg of
+# the ticket-store matrix: git hands that leg CRLF, the byte comparison against
+# the generator sees every line differ, and `npm pack` from such a checkout
+# would ship a schema whose bytes are not the generated ones.
+#
+# That scope was too narrow — it fixes one artifact and leaves the NEXT
+# generated file someone byte-compares to rediscover the same bug (cross-model
+# review, MEDIUM). Repo-wide costs nothing HERE, and that was measured rather
+# than assumed: under this file `git add --renormalize .` rewrites zero tracked
+# files, no tracked file contains a CR byte, and the repo has no .bat/.cmd/.ps1
+# that would want CRLF. `text=auto` still auto-detects binary, so images and
+# archives are left alone.
+#
+# KNOWN LIMIT: git does not retroactively renormalize a working tree that already
+# exists. CI clones fresh, so it is unaffected; a Windows contributor with an
+# older checkout runs `git add --renormalize .` once.
+* text=auto eol=lf
