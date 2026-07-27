@@ -259,3 +259,85 @@ test('AC2 (push): ticket-sync push --write creates a local ticket (writeTicketsA
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('pull preserves local-only fields — a converged pull must not un-complete a ticket', async () => {
+  // The data-loss this closes: buildTicket constructed a ticket from scratch out
+  // of id/title/body plus the block keys, and the union step then replaced the
+  // local record wholesale. Anything outside that contract was deleted by an
+  // ORDINARY converged pull — including `completed`, which every consumer reads
+  // as `completed === true` (fleet, model-router, coldstart, ticket-prune). A
+  // ticket finished with `adlc ticket complete` came back queued for work again.
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-preserve-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    const id = 'gh:acme/app#1';
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({
+      tickets: [{
+        id,
+        title: 'issue 1',
+        body: 'desc',
+        scope: ['src/x/**'],
+        duration: 1,
+        completed: true,        // set locally by `adlc ticket complete`
+        ownerNote: 'keep me',   // an extension field the remote never carries
+      }],
+    }, null, 2)}\n`);
+    writeFileSync(
+      join(dir, '.adlc', 'config.json'),
+      JSON.stringify({ ticketSync: { provider: 'github', repo: 'acme/app' } }),
+    );
+
+    const r = await pull({
+      dir,
+      provider: fakeProvider([issue(1, { scope: ['src/x/**'], duration: 1 })]),
+      write: true,
+      force: true, // no sidecar base here, so take remote deterministically
+      now: 'T',
+    });
+    assert.equal(r.exitCode, 0, `pull must succeed: ${JSON.stringify(r.errors)}`);
+
+    const after = JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'));
+    const ticket = after.tickets.find((t) => t.id === id);
+    assert.equal(ticket.completed, true, 'lifecycle state must survive a pull');
+    assert.equal(ticket.ownerNote, 'keep me', 'and so must an extension field');
+    // The synced contract is still owned by the remote.
+    assert.deepEqual(ticket.scope, ['src/x/**']);
+    assert.equal(ticket.duration, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pull still deletes a block field the remote dropped', async () => {
+  // Preservation must not become "never remove anything": absence from the
+  // remote block is how a synced field gets cleared, and that has to keep
+  // working or sync stops converging.
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-drop-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    const id = 'gh:acme/app#1';
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({
+      tickets: [{ id, title: 'issue 1', body: 'desc', scope: ['src/x/**'], category: 'feature', completed: true }],
+    }, null, 2)}\n`);
+    writeFileSync(
+      join(dir, '.adlc', 'config.json'),
+      JSON.stringify({ ticketSync: { provider: 'github', repo: 'acme/app' } }),
+    );
+
+    const r = await pull({
+      dir,
+      provider: fakeProvider([issue(1, { scope: ['src/x/**'] })]), // category dropped remotely
+      write: true,
+      force: true,
+      now: 'T',
+    });
+    assert.equal(r.exitCode, 0, `pull must succeed: ${JSON.stringify(r.errors)}`);
+
+    const ticket = JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'))
+      .tickets.find((t) => t.id === id);
+    assert.equal(ticket.category, undefined, 'a block field absent remotely is still cleared');
+    assert.equal(ticket.completed, true, 'while local-only state is untouched');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

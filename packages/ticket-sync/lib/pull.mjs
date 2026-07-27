@@ -38,8 +38,30 @@ function loadLocalState(dir) {
   }
 }
 
-function buildTicket(id, title, prose, block) {
+/**
+ * Rebuild a ticket from what the remote carries, PRESERVING everything it does
+ * not.
+ *
+ * The remote block is authoritative for the synced contract — title, body and
+ * BLOCK_KEYS — and a key absent from the block is still removed, which is the
+ * point of syncing. But this used to construct the ticket from nothing and then
+ * overwrite the local one wholesale, so every field outside that contract was
+ * silently deleted by an ordinary converged pull. `completed` is the one that
+ * matters: a ticket finished with `adlc ticket complete` came back from the next
+ * pull as unfinished, and every consumer reading `completed === true` (fleet,
+ * model-router, coldstart, ticket-prune) queued the work again. Extension fields
+ * went the same way.
+ *
+ * Local-only fields are therefore carried across. Sync owns the synced fields;
+ * it does not own the whole record.
+ */
+function buildTicket(id, title, prose, block, localTicket) {
   const t = { id, title };
+  for (const [key, value] of Object.entries(localTicket ?? {})) {
+    if (key === 'id' || key === 'title' || key === 'body') continue; // remote is authoritative
+    if (BLOCK_KEYS.includes(key)) continue;                          // ditto, and absence means delete
+    t[key] = value;
+  }
   if (prose) t.body = prose;
   if (block) for (const k of BLOCK_KEYS) if (block[k] !== undefined) t[k] = block[k];
   return t;
@@ -132,7 +154,7 @@ export async function pull({
         continue;
       }
     }
-    proposed.set(id, buildTicket(id, issue.title, prose, remoteBlock));
+    proposed.set(id, buildTicket(id, issue.title, prose, remoteBlock, localTicket));
     sidecarUpdates[id] = {
       provider: 'github', repo, number: issue.number, nodeId: issue.nodeId, url: issue.url,
       syncedHash: remoteBlock ? canonicalHash(remoteBlock, { omit: ['$schema'] }) : null,
