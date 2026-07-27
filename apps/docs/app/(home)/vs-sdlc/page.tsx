@@ -11,16 +11,16 @@ export const metadata: Metadata = {
 export default function VsSdlcPage() {
   return (
     <main>
-      <MarketingSection headingLevel={1} kicker="The argument" title="60 years of process, built for the wrong failure modes">
-        <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
+      <MarketingSection n="1" headingLevel={1} kicker="The argument" title="60 years of process, built for the wrong failure modes">
+        <p className="mb-10 max-w-[72ch]" style={{ color: 'var(--rec-ink-2)' }}>
           Code review, standups, and sprint ceremonies all exist because humans forget,
           tire, and protect their egos. Models do none of that. They fail in their own
           ways, and a lifecycle that doesn&apos;t defend against <em>those</em> failures
           is theater.
         </p>
         <VsTable />
-        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
-          <a href={theoryLink('vs-sdlc')} style={{ color: '#4fb4d8' }}>Read the original essay ↗</a>
+        <p className="mt-8 text-sm" style={{ color: 'var(--rec-ink-2)' }}>
+          <a href={theoryLink('vs-sdlc')} style={{ color: 'var(--rec-link)' }}>Read the original essay ↗</a>
         </p>
       </MarketingSection>
     </main>

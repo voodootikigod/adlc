@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Comp B — Approval chain leads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..700&family=Azeret+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#171920; --ink-2:#464c5c; --ink-3:#767d8d;
+  --paper:#e7eaef; --paper-2:#f2f4f7; --paper-3:#dde1e8;
+  --rule:#c6cbd6; --rule-2:#a7aebd;
+  --ground:#1c1d21; --fg:#cbcdd2; --dim:#686b78;
+  --green:#78bd65; --yellow:#e5cd52; --blue:#4fb4d8; --orange:#ef7c2a; --red:#eb3d54;
+  --pass-ink:#2f6a22; --fail-ink:#a81d31; --gate-ink:#7a6410;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{background:var(--paper);color:var(--ink);font-family:Archivo,system-ui,sans-serif}
+.mono{font-family:"Azeret Mono",ui-monospace,monospace;font-feature-settings:"tnum" 1}
+.lbl{font-family:"Azeret Mono",monospace;font-size:9.5px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+.wrap{max-width:1400px;margin:0 auto;padding:0 40px}
+
+.mast{background:var(--ground);color:var(--fg)}
+.mast .wrap{display:flex;align-items:center;justify-content:space-between;height:52px}
+.mark{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.14em;font-size:12.5px;font-family:"Azeret Mono",monospace}
+.mark i{display:block;width:9px;height:9px;background:var(--green);border-radius:1px}
+.nav{display:flex;gap:26px;font-size:12.5px;color:#9599a6;font-weight:500}
+.nav a{color:inherit;text-decoration:none}
+.nav a.on{color:var(--fg);box-shadow:0 9px 0 -8px var(--blue)}
+
+/* thesis strip — one ruled line, deliberately small */
+.thesis{border-bottom:1px solid var(--rule-2);background:var(--paper-3)}
+.thesis .wrap{display:flex;align-items:center;justify-content:space-between;gap:40px;padding-top:22px;padding-bottom:22px}
+.thesis h1{font-size:clamp(17px,1.9vw,25px);font-weight:600;letter-spacing:-.017em;line-height:1.3;max-width:52ch;font-variation-settings:"wdth" 95}
+.thesis h1 span{color:var(--ink-3)}
+.cmd{display:flex;align-items:stretch;border:1px solid var(--ink);background:var(--ground);flex:0 0 auto}
+.cmd code{font-family:"Azeret Mono",monospace;font-size:12.5px;color:var(--fg);padding:11px 15px;white-space:nowrap}
+.cmd code s{color:var(--green);text-decoration:none;padding-right:8px}
+.cmd button{border:0;border-left:1px solid #34363d;background:#26272c;color:var(--fg);font-family:"Azeret Mono",monospace;font-size:9.5px;letter-spacing:.14em;padding:0 16px;cursor:pointer}
+
+/* ledger */
+.ledger{border-bottom:1px solid var(--rule-2)}
+.lhead{display:grid;grid-template-columns:58px 1fr 200px 210px 74px 200px 1fr;gap:0;
+  border-bottom:1px solid var(--rule-2);background:var(--paper-3)}
+.lhead div{padding:10px 16px;border-right:1px solid var(--rule)}
+.lhead div:last-child{border-right:0}
+.row{display:grid;grid-template-columns:58px 1fr 200px 210px 74px 200px 1fr;border-bottom:1px solid var(--rule);background:var(--paper-2)}
+.row>div{padding:15px 16px;border-right:1px solid var(--rule);display:flex;align-items:center}
+.row>div:last-child{border-right:0}
+.row:hover{background:#fff}
+.row .n{font-family:"Azeret Mono",monospace;font-size:12px;color:var(--ink-3)}
+.row .name{font-size:15.5px;font-weight:600;letter-spacing:-.012em}
+.row .gate{font-family:"Azeret Mono",monospace;font-size:12.5px;color:var(--ink-2)}
+.row .who{font-size:13px;color:var(--ink-2)}
+.row .ev{font-family:"Azeret Mono",monospace;font-size:11.5px;color:#1b6f92}
+.row .kill{font-size:12.5px;color:var(--ink-3);line-height:1.45}
+.code{font-family:"Azeret Mono",monospace;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid;letter-spacing:.03em}
+.c0{color:var(--pass-ink);border-color:#9dc492;background:#e2efdd}
+.c2{color:var(--fail-ink);border-color:#dda3ad;background:#f7e2e5}
+.human{background:#faf3d8}
+.human:hover{background:#f9f0cd}
+.human .who{color:var(--gate-ink);font-weight:600}
+.human .who::before{content:"";display:inline-block;width:7px;height:7px;background:var(--yellow);border:1px solid #b99f24;margin-right:9px;transform:rotate(45deg);flex:0 0 auto}
+
+/* inline exhibit under a row */
+.inline-ex{border-bottom:1px solid var(--rule);background:var(--paper-3);padding:0}
+.inline-ex .in{display:grid;grid-template-columns:58px 1fr;}
+.inline-ex .sp{border-right:1px solid var(--rule)}
+.inline-ex .bd{padding:16px 16px 20px}
+.exh-h{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
+.exh-h b{font-family:"Azeret Mono",monospace;font-size:10.5px;letter-spacing:.1em}
+.exh-h span{font-size:12px;color:var(--ink-3)}
+.term{background:var(--ground);border:1px solid #34363d;max-width:900px}
+.term .bar{display:flex;justify-content:space-between;padding:8px 13px;border-bottom:1px solid #2c2e34;
+  font-family:"Azeret Mono",monospace;font-size:9.5px;letter-spacing:.1em;color:var(--dim)}
+.term pre{padding:14px 16px;font-family:"Azeret Mono",monospace;font-size:12.5px;line-height:1.7;color:var(--fg);overflow-x:auto}
+.term pre .p{color:var(--dim)} .term pre .ok{color:var(--green)} .term pre .no{color:var(--red)}
+
+.strip{background:var(--paper-3);border-bottom:1px solid var(--rule-2)}
+.strip .wrap{display:flex;gap:0;padding:0}
+.strip .s{flex:1;padding:20px 22px;border-right:1px solid var(--rule)}
+.strip .s:last-child{border-right:0}
+.strip .s b{display:block;font-size:22px;font-weight:700;letter-spacing:-.02em;margin-top:6px;font-family:"Azeret Mono",monospace}
+.strip .s p{font-size:12px;color:var(--ink-3);margin-top:5px;line-height:1.45}
+.foot{padding:22px 40px 60px;max-width:1400px;margin:0 auto;font-size:12px;color:var(--ink-3);display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+
+<header class="mast"><div class="wrap">
+  <div class="mark"><i></i>ADLC</div>
+  <nav class="nav"><a class="on" href="#">Record</a><a href="#">Lifecycle</a><a href="#">Failure modes</a><a href="#">Toolkit</a><a href="#">Integrations</a><a href="#">Enterprise</a></nav>
+</div></header>
+
+<section class="thesis"><div class="wrap">
+  <h1>Your agents don't fail like humans. <span>Every phase closes on an exit code, and leaves the evidence behind it.</span></h1>
+  <div class="cmd"><code><s>$</s>curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh</code><button>COPY</button></div>
+</div></section>
+
+<section class="ledger">
+  <div class="lhead">
+    <div class="lbl"></div><div class="lbl">Control point</div><div class="lbl">Exit gate</div><div class="lbl">Approver</div><div class="lbl">Code</div><div class="lbl">Evidence</div><div class="lbl">Failure mode it kills</div>
+  </div>
+
+  <div class="row"><div class="n">P0</div><div class="name">Triage</div><div class="gate">routed</div><div class="who">adlc ticket</div><div><span class="code c0">0</span></div><div class="ev">tickets.json</div><div class="kill">Work that was never shaped</div></div>
+
+  <div class="row human"><div class="n">P1</div><div class="name">Interrogate</div><div class="gate">human gate</div><div class="who">A person</div><div><span class="code c0">0</span></div><div class="ev">attestation.json</div><div class="kill">Premature satisfaction · confident hallucination</div></div>
+
+  <div class="row"><div class="n">P2</div><div class="name">Decompose</div><div class="gate">cold-start</div><div class="who">adlc coldstart</div><div><span class="code c0">0</span></div><div class="ev">coldstart.log</div><div class="kill">Context rot</div></div>
+
+  <div class="row"><div class="n">P3</div><div class="name">Rail</div><div class="gate">RED gate</div><div class="who">adlc rails-guard</div><div><span class="code c2">2</span></div><div class="ev">rails-guard.json</div><div class="kill">Reward hacking</div></div>
+
+  <div class="inline-ex"><div class="in"><div class="sp"></div><div class="bd">
+    <div class="exh-h"><b>EXHIBIT P3.1</b><span>The refusal above, verbatim. Exit 2 means the gate refused — not that it errored.</span></div>
+    <div class="term"><div class="bar"><span>adlc rails-guard</span><span>EXIT 2 — REFUSED</span></div>
+<pre><span class="p">$</span> adlc rails-guard --base main --ticket T42 --tickets .adlc/tickets.json
+<span class="no">✗ FAIL: a frozen rail changed</span></pre></div>
+  </div></div></div>
+
+  <div class="row"><div class="n">P4</div><div class="name">Build</div><div class="gate">green gate</div><div class="who">adlc gate</div><div><span class="code c0">0</span></div><div class="ev">gate.json</div><div class="kill">Coherence loss</div></div>
+
+  <div class="row"><div class="n">P5</div><div class="name">Prosecute</div><div class="gate">zero findings</div><div class="who">adlc prosecute</div><div><span class="code c0">0</span></div><div class="ev">findings.json</div><div class="kill">Sycophancy · finding-count prior</div></div>
+
+  <div class="row human"><div class="n">P6</div><div class="name">Integrate</div><div class="gate">human gate</div><div class="who">A person</div><div><span class="code c0">0</span></div><div class="ev">attestation.json</div><div class="kill">Merging what nobody vouched for</div></div>
+
+  <div class="row"><div class="n">P7</div><div class="name">Distill</div><div class="gate">feeds the next run</div><div class="who">adlc lesson-foundry</div><div><span class="code c0">0</span></div><div class="ev">lessons.json</div><div class="kill">Generative bloat</div></div>
+</section>
+
+<section class="strip"><div class="wrap">
+  <div class="s"><div class="lbl">Gate CLIs</div><b>26</b><p>One dispatcher, zero runtime dependencies, Node 18+.</p></div>
+  <div class="s"><div class="lbl">Native harnesses</div><b>7</b><p>Plus a harness-neutral skills catalog for everything else.</p></div>
+  <div class="s"><div class="lbl">Exit contract</div><b>0 · 1 · 2</b><p>Pass, operational error, refused. The exit code is the contract.</p></div>
+  <div class="s"><div class="lbl">API keys required</div><b>0</b><p>Every LLM-backed gate supports --prompt-only. The agent in the room is the model.</p></div>
+</div></section>
+
+<div class="foot"><span>ADLC gates this repository in its own CI. Every exhibit on this page is real output.</span><span class="mono">MIT · @adlc on npm</span></div>
+
+</body>
+</html>

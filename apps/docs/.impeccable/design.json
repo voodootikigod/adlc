@@ -1,0 +1,247 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-27T00:00:00.000Z",
+  "title": "Design System: ADLC Marketing \u2014 The Change Record",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Terminal Ground",
+        "canonical": "#1c1d21",
+        "tonalRamp": [
+          "#1c1d21",
+          "#26272c",
+          "#2c2e34",
+          "#34363d",
+          "#3f4044"
+        ]
+      },
+      "rec-paper": {
+        "role": "neutral",
+        "displayName": "Cool Record Paper",
+        "canonical": "#e7eaef",
+        "tonalRamp": [
+          "#f2f4f7",
+          "#e7eaef",
+          "#dde1e8",
+          "#c6cbd6",
+          "#a7aebd"
+        ]
+      },
+      "rec-ink": {
+        "role": "neutral",
+        "displayName": "Record Ink",
+        "canonical": "#171920",
+        "tonalRamp": [
+          "#171920",
+          "#464c5c",
+          "#6b7283"
+        ]
+      },
+      "green": {
+        "role": "success",
+        "displayName": "Gate Pass Green",
+        "canonical": "#78bd65",
+        "tonalRamp": [
+          "#e2efdd",
+          "#9dc492",
+          "#78bd65",
+          "#2f6a22"
+        ]
+      },
+      "red": {
+        "role": "danger",
+        "displayName": "Refusal Red",
+        "canonical": "#eb3d54",
+        "tonalRamp": [
+          "#f7e2e5",
+          "#dda3ad",
+          "#eb3d54",
+          "#a81d31"
+        ]
+      },
+      "yellow": {
+        "role": "warning",
+        "displayName": "Human Gate Amber",
+        "canonical": "#e5cd52",
+        "tonalRamp": [
+          "#faf3d8",
+          "#cbb44a",
+          "#e5cd52",
+          "#6f5a0d"
+        ]
+      },
+      "blue": {
+        "role": "info",
+        "displayName": "Reference Blue",
+        "canonical": "#4fb4d8",
+        "tonalRamp": [
+          "#a9cede",
+          "#4fb4d8",
+          "#17627f"
+        ]
+      },
+      "orange": {
+        "role": "accent",
+        "displayName": "Failure-Mode Orange",
+        "canonical": "#ef7c2a",
+        "tonalRamp": [
+          "#ef7c2a",
+          "#b4571a"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "statement": {
+        "displayName": "Statement",
+        "purpose": "The \u00a71 thesis at panel scale, and interior page leads. The only place the Archivo width axis is used (wdth 92)."
+      },
+      "legend": {
+        "displayName": "Field Legend",
+        "purpose": "Field labels, clause numbers, column headers, exit codes. Azeret Mono at 9.5px / 0.13em."
+      },
+      "evidence": {
+        "displayName": "Evidence",
+        "purpose": "Captured gate output inside exhibits. Never used on the paper surface."
+      },
+      "row-title": {
+        "displayName": "Row Title",
+        "purpose": "Names the subject of a row in every register \u2014 approval chain, failure map, rollout schedule, harness list, dial settings. The workhorse step; the only small size carrying semibold."
+      },
+      "metric": {
+        "displayName": "Metric",
+        "purpose": "A bare count standing alone in a cell. Used by the surface counts on every harness integration page."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "rec-settle",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1) 0.44s, stagger 32ms",
+        "purpose": "Approval-chain rows settling in sequence on load. The record resolving."
+      },
+      {
+        "name": "rec-stamp",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1) 0.34s, scale 1.32 to 1, offset +150ms",
+        "purpose": "The verdict landing just after its row settles. Kept short so a chip never reads as missing data."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "record",
+        "value": "1180px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Install Field",
+      "kind": "input",
+      "refersTo": "install-field",
+      "description": "The record's primary control \u2014 the executable value of the IMPLEMENTATION field, not a button.",
+      "html": "<div class=\"ds-install\"><code><s>$</s>curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh</code><button>COPY</button></div>",
+      "css": ".ds-install{display:flex;align-items:stretch;border:1px solid #171920;background:#1c1d21}.ds-install code{flex:1;font-family:'Azeret Mono',monospace;font-size:13.5px;color:#cbcdd2;padding:12px 16px;white-space:pre-wrap;word-break:break-all}.ds-install code s{color:#78bd65;text-decoration:none;padding-right:10px}.ds-install button{border:0;border-left:1px solid #34363d;background:#26272c;color:#cbcdd2;font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:.14em;padding:0 16px}@media(min-width:768px){.ds-install code{white-space:pre;word-break:normal;overflow-x:auto}}"
+    },
+    {
+      "name": "Exit Code Chip",
+      "kind": "chip",
+      "refersTo": "exit-code-pass",
+      "description": "A verdict. Always glyph plus word; machine verdicts also carry the exit code, because the exit code is the contract.",
+      "html": "<span class=\"ds-code ds-pass\">\u2713 PASS <b>0</b></span> <span class=\"ds-code ds-fail\">\u2717 FAIL <b>2</b></span> <span class=\"ds-code ds-attest\">\u25c6 ATTEST</span>",
+      "css": ".ds-code{display:inline-flex;align-items:center;gap:6px;font-family:'Azeret Mono',monospace;font-size:10.5px;font-weight:600;border:1px solid;padding:2px 6px;border-radius:0}.ds-pass{color:#2f6a22;border-color:#9dc492;background:#e2efdd}.ds-fail{color:#a81d31;border-color:#dda3ad;background:#f7e2e5}.ds-attest{color:#6f5a0d;border-color:#cbb44a;background:#faf3d8}"
+    },
+    {
+      "name": "Exhibit",
+      "kind": "card",
+      "refersTo": "exhibit",
+      "description": "A verbatim capture, numbered and attached to a clause. Keeps the terminal ground on every surface.",
+      "html": "<figure class=\"ds-exh\"><figcaption><b>EXHIBIT 5.2</b> <span>Are the frozen tests untouched?</span></figcaption><div class=\"ds-term\"><div class=\"ds-bar\"><span>adlc rails-guard</span><em>EXIT 2 \u2014 REFUSED</em></div><pre><span class=\"p\">$</span> adlc rails-guard --base main\n<span class=\"no\">\u2717 FAIL: a frozen rail changed</span></pre></div></figure>",
+      "css": ".ds-exh figcaption{margin-bottom:10px;font-size:12.5px;color:#6b7283}.ds-exh figcaption b{font-family:'Azeret Mono',monospace;font-size:11px;letter-spacing:.1em;color:#171920;margin-right:12px}.ds-term{background:#1c1d21;border:1px solid #34363d}.ds-bar{display:flex;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #2c2e34;font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:.1em;color:#686b78}.ds-bar em{font-style:normal;color:#eb3d54}.ds-term pre{padding:14px 16px;font-family:'Azeret Mono',monospace;font-size:12.5px;line-height:1.75;color:#cbcdd2}.ds-term .p{color:#686b78}.ds-term .no{color:#eb3d54}"
+    },
+    {
+      "name": "Attestation Block",
+      "kind": "custom",
+      "refersTo": "chain-row-human",
+      "description": "The record's signature panel for the two gates a machine cannot close. Must not be demoted back into a table cell.",
+      "html": "<div class=\"ds-att\"><div class=\"k\">ATTESTATION \u00b7 P1 INTERROGATE</div><p>Is this what I meant?</p><div class=\"sig\"><span class=\"line\"></span><span class=\"by\">SIGNED BY A PERSON</span></div></div>",
+      "css": ".ds-att{background:#faf3d8;border:1px solid #a7aebd;padding:14px 16px}.ds-att .k{font-family:'Azeret Mono',monospace;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:#6f5a0d}.ds-att p{margin:8px 0 0;font-size:13.5px;color:#464c5c}.ds-att .sig{display:flex;align-items:flex-end;gap:12px;margin-top:24px}.ds-att .line{flex:1;height:1px;background:#cbb44a}.ds-att .by{font-family:'Azeret Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6f5a0d}"
+    },
+    {
+      "name": "Clause",
+      "kind": "custom",
+      "refersTo": "chain-row",
+      "description": "The layout unit of every marketing surface: numbered label in a 104px gutter, content in the measure beside it.",
+      "html": "<section class=\"ds-clause\"><div class=\"g\">\u00a73 CHAIN</div><div class=\"b\"><h2>Eight control points. A gate closes every one.</h2><p>Each phase ends on an exit code.</p></div></section>",
+      "css": ".ds-clause{display:flex;gap:24px;padding:48px 32px;border-bottom:1px solid #c6cbd6;border-left:1px solid #c6cbd6;border-right:1px solid #c6cbd6;background:#e7eaef}.ds-clause .g{width:104px;flex:none;font-family:'Azeret Mono',monospace;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:#6b7283}.ds-clause h2{margin:0;font-family:Archivo,sans-serif;font-size:26px;font-weight:700;letter-spacing:-.018em;color:#171920}.ds-clause p{margin:16px 0 0;font-size:16.5px;line-height:1.55;color:#464c5c;max-width:62ch}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Change Record",
+    "overview": "The marketing surfaces are one controlled-change record: what changed, why, who assessed the impact, what the back-out is, who approved it, and what evidence was attached. That record is what makes a change defensible rather than merely done, which is the question ADLC's buyer has about agents. The site is therefore not a page describing the product; it is the record for adopting it.\n\nThe system has two surfaces and the split between them carries the argument. The record is paper \u2014 cool, ruled, squared, fixed fields and numbered clauses \u2014 and is what a person reads and a non-engineer could audit. The evidence is terminal \u2014 real gate output on #1c1d21 in the unmodified An Old Hope palette \u2014 and is what a machine produced. Evidence is never restyled to match the page around it.\n\nThe register is deliberately corporate and unwhimsical. The audience is engineers and the leadership accountable for what agents merge, and for them charm reads as the opposite of defensible.",
+    "keyCharacteristics": [
+      "Two committed surfaces: paper record, terminal evidence. The contrast is the argument.",
+      "Zero radius, zero shadow. Elevation is declared once, as a 1px rule.",
+      "Numbered clauses in a 104px gutter as the universal layout unit.",
+      "Verdicts always pair a glyph with a word, and machine verdicts carry the exit code.",
+      "Archivo with a width axis for the record; Azeret Mono only for identifiers, codes, commands, and captured output.",
+      "One authored motion moment: the record resolving, once, on load."
+    ],
+    "rules": [
+      {
+        "name": "The Exhibit Rule",
+        "body": "No claim about what the toolkit does ships without an attached exhibit or the name of the gate that produces it. Argument may be argument; capability may not.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Surface Rule",
+        "body": "The record is paper and the evidence is terminal. An exhibit keeps the An Old Hope ground wherever it appears, and paper never borrows the terminal-bright verdict hues for text.",
+        "section": "colors"
+      },
+      {
+        "name": "The Doubled Verdict Rule",
+        "body": "Gate state is never carried by colour alone. Glyph plus word always; exit code as well for machine verdicts. Shape doubles it too: the human gate is a diamond, the machine gate an open ring.",
+        "section": "colors"
+      },
+      {
+        "name": "The Flat Record Rule",
+        "body": "Radius is zero and shadows do not exist. Grouping uses a hairline, a gap-px lattice over a rule-coloured container, or a shift between the three paper tones.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Derived Count Rule",
+        "body": "Counts and names come from the data modules, never typed. Where the repository cannot back a per-item fact, the column is dropped rather than guessed \u2014 which is why the approval chain has no evidence column.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do attach an exhibit to every capability claim.",
+      "Do keep evidence on the terminal ground, including on paper.",
+      "Do pair every verdict with a glyph and a word, plus the exit code for machine verdicts.",
+      "Do derive counts from phase-graph.mjs and toolkit-packages.mjs.",
+      "Do label authored framing \u2014 ADLC-CR-0001 and its status are illustrative and say so.",
+      "Do name limits plainly: Windows unsupported, hooks best-effort, CI the unbypassable control."
+    ],
+    "donts": [
+      "Don't round a corner, add a shadow, or reach for glass, glow, or gradient text.",
+      "Don't put terminal-bright green, red, or yellow on paper as text.",
+      "Don't use monospace for prose, or put a tracked uppercase eyebrow over every section.",
+      "Don't restyle an exhibit to match the paper around it.",
+      "Don't add a second entrance animation; the record resolves once.",
+      "Don't claim a per-phase evidence artifact the repository cannot back.",
+      "Don't invent customers, benchmarks, or logos, and don't pluralize the single public testimonial.",
+      "Don't reintroduce the rejected worlds: instrument panels, split-flap boards, near-black-plus-neon-glow, or clean enterprise-SaaS card grids."
+    ]
+  }
+}

@@ -12,15 +12,15 @@ export const metadata: Metadata = {
 export default function ToolkitPage() {
   return (
     <main>
-      <MarketingSection headingLevel={1} kicker="The toolkit" title="Small CLIs, one gate each, zero dependencies">
-        <p className="mb-10 max-w-2xl" style={{ color: 'var(--mk-muted)' }}>
+      <MarketingSection n="1" headingLevel={1} kicker="The toolkit" title="Small CLIs, one gate each, zero dependencies">
+        <p className="mb-10 max-w-[72ch]" style={{ color: 'var(--rec-ink-2)' }}>
           Each package enforces a single machine-checkable gate, and they all share a
           runtime convention, so tools built independently still feel like one product.
           Click any package for its docs.
         </p>
         <Constellation />
-        <p className="mt-8 text-sm" style={{ color: 'var(--mk-muted)' }}>
-          <a href={theoryLink('toolkit')} style={{ color: '#4fb4d8' }}>
+        <p className="mt-8 text-sm" style={{ color: 'var(--rec-ink-2)' }}>
+          <a href={theoryLink('toolkit')} style={{ color: 'var(--rec-link)' }}>
             Read the original essay ↗
           </a>
         </p>

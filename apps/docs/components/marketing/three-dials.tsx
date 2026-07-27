@@ -4,68 +4,70 @@ const DIALS = [
   { name: 'Scope', value: 0.35, note: 'How much surface one ticket may touch' },
 ] as const;
 
-// Scale ticks at 0 / 25 / 50 / 75 / 100%, as needle rotations about the hub.
-const TICK_ANGLES = [-90, -45, 0, 45, 90];
-
-function Dial({ name, value, note }: (typeof DIALS)[number]) {
-  // Semi-circle gauge: needle angle from -90° (0) to +90° (1)
-  const angle = -90 + value * 180;
+// The three dials, as the record writes a setting: a named field, the value it
+// was set to, and a ruled scale showing where in its range that sits.
+//
+// These were semicircle needle gauges. That is instrument-panel vocabulary —
+// the world explicitly rejected for this product as too whimsical for the
+// audience — and it had survived into the record by being re-tinted rather than
+// rebuilt. A setting on a form is a value in a range, not a cockpit.
+//
+// The values are illustrative defaults for a worked example, which is why the
+// header says so rather than implying a measured reading.
+function DialRow({ name, value, note }: (typeof DIALS)[number]) {
   const pct = Math.round(value * 100);
   return (
-    <figure className="flex flex-col items-center gap-3">
-      <svg viewBox="0 0 100 60" className="w-44" role="img" aria-label={`${name} dial set to ${pct}%`}>
-        <path
-          d="M 10 55 A 40 40 0 0 1 90 55"
-          fill="none"
-          stroke="#3f4044"
-          strokeWidth="6"
-          strokeLinecap="round"
-        />
-        <path
-          d="M 10 55 A 40 40 0 0 1 90 55"
-          fill="none"
-          stroke="#4fb4d8"
-          strokeWidth="6"
-          strokeLinecap="round"
-          pathLength={100}
-          strokeDasharray={`${pct} 100`}
-        />
-        {TICK_ANGLES.map((a) => (
-          <line
-            key={a}
-            x1="50" y1="21" x2="50" y2="25"
-            stroke="#3f4044"
-            strokeWidth="1.5"
-            transform={`rotate(${a} 50 55)`}
+    <div
+      className="grid grid-cols-[minmax(0,1fr)_64px] items-baseline gap-x-5 gap-y-2 px-2 py-4 md:grid-cols-[150px_minmax(0,1fr)_64px]"
+      style={{ borderBottom: '1px solid var(--rec-rule)', background: 'var(--rec-paper-raised)' }}
+    >
+      <div className="text-[15px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
+        {name}
+      </div>
+
+      {/* The scale: a ruled track with quarter ticks and a filled span. */}
+      <div className="col-span-2 md:col-span-1">
+        <div className="relative h-[18px]" style={{ borderBottom: '1px solid var(--rec-rule-strong)' }}>
+          <div
+            className="absolute bottom-0 left-0 top-[5px]"
+            style={{ width: `${pct}%`, background: 'var(--rec-ink)' }}
           />
-        ))}
-        <line
-          x1="50" y1="55" x2="50" y2="27"
-          stroke="#cbcdd2" strokeWidth="2.5" strokeLinecap="round"
-          transform={`rotate(${angle} 50 55)`}
-        />
-        <circle cx="50" cy="55" r="4" fill="#26272c" stroke="#cbcdd2" strokeWidth="2" />
-      </svg>
-      <figcaption className="text-center">
-        <span className="block font-semibold" style={{ color: '#cbcdd2' }}>
-          {name}{' '}
-          <span className="ml-1 font-mono text-sm font-normal" style={{ color: '#4fb4d8' }}>
-            {pct}%
-          </span>
-        </span>
-        <span className="mt-1 block max-w-44 text-xs leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
+          {[0, 25, 50, 75, 100].map((t) => (
+            <span
+              key={t}
+              aria-hidden
+              className="absolute bottom-0 h-[6px] w-px"
+              style={{ left: `calc(${t}% - ${t === 100 ? 1 : 0}px)`, background: 'var(--rec-rule-strong)' }}
+            />
+          ))}
+        </div>
+        <p className="mt-1.5 text-[12.5px] leading-[1.45]" style={{ color: 'var(--rec-ink-2)' }}>
           {note}
-        </span>
-      </figcaption>
-    </figure>
+        </p>
+      </div>
+
+      <div
+        className="rec-mono text-right text-[14px] font-semibold tabular-nums"
+        style={{ color: 'var(--rec-ink)' }}
+      >
+        {pct}%
+      </div>
+    </div>
   );
 }
 
 export function ThreeDials() {
   return (
-    <div className="flex flex-wrap justify-center gap-10">
+    <div style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
+      <div
+        className="flex items-baseline justify-between px-2 py-2.5"
+        style={{ background: 'var(--rec-paper-sunk)', borderBottom: '1px solid var(--rec-rule-strong)' }}
+      >
+        <span className="rec-legend">Dial · setting · range</span>
+        <span className="rec-legend">Illustrative settings</span>
+      </div>
       {DIALS.map((d) => (
-        <Dial key={d.name} {...d} />
+        <DialRow key={d.name} {...d} />
       ))}
     </div>
   );

@@ -65,25 +65,29 @@ export function ContactForm() {
   if (status === 'success') {
     return (
       <div
-        className="max-w-xl rounded-lg border p-6"
-        style={{ borderColor: '#3f4044', background: '#26272c' }}
+        className="max-w-xl border p-6"
+        style={{ borderColor: 'var(--rec-rule-strong)', background: 'var(--rec-paper-raised)' }}
       >
-        <p className="font-semibold" style={{ color: '#4fb4d8' }}>
+        <p className="rec-legend" style={{ color: 'var(--rec-pass-ink)' }}>
+          ✓ Received
+        </p>
+        <p className="mt-2 text-[15px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
           Thanks, your message is in.
         </p>
-        <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
+        <p className="mt-2 text-[13.5px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
           We read every enterprise inquiry ourselves and reply within a couple of business days.
         </p>
       </div>
     );
   }
 
+  // Squared, ruled fields on raised paper: a record's form is filled in, not
+  // a dark app input floating on a document.
   const inputStyle = {
-    borderColor: '#3f4044',
-    background: '#1c1d21',
-    color: '#cbcdd2',
+    borderColor: 'var(--rec-rule-strong)',
+    background: 'var(--rec-paper-raised)',
+    color: 'var(--rec-ink)',
   };
-  const labelStyle = { color: 'var(--mk-muted)' };
 
   return (
     <form onSubmit={onSubmit} className="max-w-xl" noValidate>
@@ -101,7 +105,7 @@ export function ContactForm() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <label htmlFor="name" className="block text-sm font-medium" style={labelStyle}>
+          <label htmlFor="name" className="rec-legend block">
             Name
           </label>
           <input
@@ -109,13 +113,13 @@ export function ContactForm() {
             name="name"
             type="text"
             required
-            className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+            className="mt-1 w-full border px-3 py-2 text-[14px]"
             style={inputStyle}
           />
-          {fields.name ? <p className="mt-1 text-xs" style={{ color: '#f2788a' }}>{fields.name}</p> : null}
+          {fields.name ? <p className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>{fields.name}</p> : null}
         </div>
         <div>
-          <label htmlFor="email" className="block text-sm font-medium" style={labelStyle}>
+          <label htmlFor="email" className="rec-legend block">
             Work email
           </label>
           <input
@@ -123,28 +127,28 @@ export function ContactForm() {
             name="email"
             type="email"
             required
-            className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+            className="mt-1 w-full border px-3 py-2 text-[14px]"
             style={inputStyle}
           />
-          {fields.email ? <p className="mt-1 text-xs" style={{ color: '#f2788a' }}>{fields.email}</p> : null}
+          {fields.email ? <p className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>{fields.email}</p> : null}
         </div>
       </div>
 
       <div className="mt-4">
-        <label htmlFor="company" className="block text-sm font-medium" style={labelStyle}>
+        <label htmlFor="company" className="rec-legend block">
           Company <span style={{ opacity: 0.6 }}>(optional)</span>
         </label>
         <input
           id="company"
           name="company"
           type="text"
-          className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+          className="mt-1 w-full border px-3 py-2 text-[14px]"
           style={inputStyle}
         />
       </div>
 
       <div className="mt-4">
-        <label htmlFor="message" className="block text-sm font-medium" style={labelStyle}>
+        <label htmlFor="message" className="rec-legend block">
           What are you rolling out?
         </label>
         <textarea
@@ -152,16 +156,16 @@ export function ContactForm() {
           name="message"
           required
           rows={5}
-          className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+          className="mt-1 w-full border px-3 py-2 text-[14px]"
           style={inputStyle}
         />
-        {fields.message ? <p className="mt-1 text-xs" style={{ color: '#f2788a' }}>{fields.message}</p> : null}
+        {fields.message ? <p className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>{fields.message}</p> : null}
       </div>
 
       {status === 'error' && errorMsg ? (
-        <p className="mt-4 text-sm" style={{ color: '#f2788a' }}>
+        <p className="mt-4 text-sm" style={{ color: 'var(--rec-fail-ink)' }}>
           {errorMsg}{' '}
-          <a href={MAILTO} className="underline" style={{ color: '#4fb4d8' }}>
+          <a href={MAILTO} className="underline" style={{ color: 'var(--rec-link)' }}>
             Email us instead
           </a>
           .
@@ -172,22 +176,22 @@ export function ContactForm() {
         <button
           type="submit"
           disabled={status === 'submitting'}
-          className="rounded-md px-5 py-2.5 font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
-          style={{ background: '#4fb4d8', color: '#1c1d21' }}
+          className="rec-mono px-5 py-2.5 text-[11px] tracking-[0.14em] transition-opacity hover:opacity-90 disabled:opacity-60"
+          style={{ background: '#1c1d21', color: '#cbcdd2', border: '1px solid var(--rec-ink)' }}
         >
-          {status === 'submitting' ? 'Sending…' : 'Send message'}
+          {status === 'submitting' ? 'SENDING…' : 'SEND MESSAGE'}
         </button>
-        <span className="text-sm" style={{ color: 'var(--mk-muted)' }}>
+        <span className="text-sm" style={{ color: 'var(--rec-ink-2)' }}>
           Prefer email?{' '}
-          <a href={MAILTO} className="underline" style={{ color: '#4fb4d8' }}>
+          <a href={MAILTO} className="underline" style={{ color: 'var(--rec-link)' }}>
             help@agenticlifecycle.ai
           </a>
         </span>
       </div>
 
-      <p className="mt-4 text-xs" style={{ color: 'var(--mk-muted)' }}>
+      <p className="mt-4 text-xs" style={{ color: 'var(--rec-ink-2)' }}>
         We use your details only to respond to this inquiry. See our{' '}
-        <a href="/privacy" className="underline" style={{ color: '#4fb4d8' }}>
+        <a href="/privacy" className="underline" style={{ color: 'var(--rec-link)' }}>
           privacy policy
         </a>
         .

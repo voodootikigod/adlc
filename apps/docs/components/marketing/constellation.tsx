@@ -8,23 +8,25 @@ export function Constellation() {
         <div key={g.group}>
           <div className="mb-4 flex items-baseline gap-4">
             <h3
-              className="whitespace-nowrap font-mono text-sm uppercase tracking-widest"
-              style={{ color: 'var(--mk-muted)' }}
+              className="whitespace-nowrap rec-mono text-sm uppercase tracking-widest"
+              style={{ color: 'var(--rec-ink-2)' }}
             >
               {g.group}
             </h3>
-            <span aria-hidden className="h-px min-w-8 flex-1 self-center" style={{ background: '#3f4044' }} />
-            <span className="whitespace-nowrap font-mono text-xs" style={{ color: 'var(--mk-muted)' }}>
+            <span aria-hidden className="h-px min-w-8 flex-1 self-center" style={{ background: 'var(--rec-rule)' }} />
+            <span className="whitespace-nowrap rec-mono text-xs" style={{ color: 'var(--rec-ink-2)' }}>
               {g.packages.length} {g.packages.length === 1 ? 'package' : 'packages'}
             </span>
           </div>
-          <div className="flex flex-wrap gap-2">
+          {/* A parts list, not a tag cloud: squared cells on the raised paper,
+              because a pill is a control and these are line items. */}
+          <div className="flex flex-wrap gap-px" style={{ background: 'var(--rec-rule)', border: '1px solid var(--rec-rule)' }}>
             {g.packages.map((name) => (
               <Link
                 key={name}
                 href={`/docs/toolkit/${name}`}
-                className="rounded-full border px-4 py-1.5 font-mono text-sm transition-colors hover:border-[#4fb4d8] hover:text-[#4fb4d8]"
-                style={{ borderColor: '#3f4044', color: '#cbcdd2' }}
+                className="rec-mono px-3.5 py-2 text-[13px] transition-colors hover:text-[var(--rec-link)]"
+                style={{ background: 'var(--rec-paper-raised)', color: 'var(--rec-ink)' }}
               >
                 {name}
               </Link>

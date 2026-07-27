@@ -14,7 +14,7 @@ const UPDATED = 'July 9, 2026';
 
 export default function PrivacyPage() {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16">
+    <main className="mx-auto max-w-[72ch] px-6 py-16">
       <h1 className="text-3xl font-bold tracking-tight" style={{ color: '#cbcdd2' }}>
         Privacy Policy
       </h1>

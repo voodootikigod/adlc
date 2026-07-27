@@ -1,67 +1,61 @@
 import Link from 'next/link';
 import { FAILURE_MODES } from '@/lib/failure-modes.mjs';
 
-// Same visual language as the pipeline's GateConnector — rail, gate ring in
-// the pass token, rail, arrowhead — stretched for the map's wider gap.
-// Decorative only; the list's aria-label carries the semantics.
-function DefenseConnector() {
-  return (
-    <svg aria-hidden viewBox="0 0 64 12" className="hidden h-3 w-16 shrink-0 md:block">
-      <line x1="1" y1="6" x2="25" y2="6" stroke="#3f4044" strokeWidth="1.5" />
-      <circle cx="32" cy="6" r="3.5" fill="none" stroke="var(--adlc-pass)" strokeWidth="1.5" />
-      <line x1="39" y1="6" x2="58" y2="6" stroke="#3f4044" strokeWidth="1.5" />
-      <path
-        d="M 55.5 2.5 L 60 6 L 55.5 9.5"
-        fill="none"
-        stroke="#3f4044"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-// F1–F8 on the left, the defending gate on the right — the core ADLC claim
-// (every defense traces to a failure mode) made visual. One continuous
-// hairline lattice (gap-px over the border color), not floating cards.
+// F1–F8 and the gate that defends each — the core ADLC claim (every defense
+// traces to a failure mode) made visual.
+//
+// This used to be a lattice of cells joined by a rail-and-ring SVG connector,
+// borrowed from a pipeline diagram that no longer exists. Under the record the
+// relationship is a register: fixed columns, one row per mode, the defending
+// gate in the column reserved for it. The mapping is legible by alignment, so
+// the connector was drawing a line the columns already draw.
 export function FailureMap() {
   return (
-    <ul
-      className="grid gap-px overflow-hidden rounded-lg border"
-      style={{ borderColor: '#3f4044', background: '#3f4044' }}
-      aria-label="Eight model failure modes F1 through F8, each mapped to the machine-checkable gate that defends against it"
-    >
-      {Object.entries(FAILURE_MODES).map(([id, fm], i) => (
-        <li
-          key={id}
-          className="mk-gate-line grid items-center gap-x-6 gap-y-3 p-5 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
-          style={{ background: '#26272c', animationDelay: `${i * 0.06}s` }}
-        >
-          <div>
-            <span className="font-mono text-xs" style={{ color: 'var(--adlc-highlight)' }}>
+    <div style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
+      <div
+        className="hidden grid-cols-[46px_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.9fr)] md:grid"
+        style={{ background: 'var(--rec-paper-sunk)', borderBottom: '1px solid var(--rec-rule-strong)' }}
+      >
+        <div className="rec-legend px-3 py-2.5" />
+        <div className="rec-legend px-3 py-2.5">Failure mode</div>
+        <div className="rec-legend px-3 py-2.5">How it shows up</div>
+        <div className="rec-legend px-3 py-2.5">Defended by</div>
+      </div>
+
+      <ul aria-label="Eight model failure modes F1 through F8, each mapped to the machine-checkable gate that defends against it">
+        {Object.entries(FAILURE_MODES).map(([id, fm]) => (
+          <li
+            key={id}
+            className="grid grid-cols-[46px_minmax(0,1fr)] gap-y-1 md:grid-cols-[46px_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.9fr)] md:gap-y-0"
+            style={{ borderBottom: '1px solid var(--rec-rule)', background: 'var(--rec-paper-raised)' }}
+          >
+            <div className="rec-mono px-3 py-3 text-[12px]" style={{ color: '#b4571a' }}>
               {id}
-            </span>
-            <p className="font-semibold" style={{ color: '#cbcdd2' }}>{fm.name}</p>
-            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--mk-muted)' }}>
-              {fm.tagline}
-            </p>
-          </div>
-          <DefenseConnector />
-          <div className="md:text-right">
-            <Link
-              href={`/docs/toolkit/${fm.defense.tool}`}
-              className="font-mono font-semibold"
-              style={{ color: '#4fb4d8' }}
+            </div>
+            <div className="px-3 py-3 text-[14.5px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
+              {fm.name}
+            </div>
+            <div
+              className="col-start-2 px-3 pb-1 text-[13.5px] leading-[1.5] md:col-start-auto md:py-3 md:pb-3"
+              style={{ color: 'var(--rec-ink-2)' }}
             >
-              {fm.defense.tool}
-            </Link>
-            <p className="mt-1 font-mono text-xs uppercase tracking-wider" style={{ color: 'var(--mk-muted)' }}>
-              gate at {fm.defense.phase}
-            </p>
-          </div>
-        </li>
-      ))}
-    </ul>
+              {fm.tagline}
+            </div>
+            <div className="col-start-2 px-3 pb-3 md:col-start-auto md:py-3">
+              <Link
+                href={`/docs/toolkit/${fm.defense.tool}`}
+                className="rec-mono text-[13px] font-semibold"
+                style={{ color: 'var(--rec-link)', borderBottom: '1px solid var(--rec-link-edge)' }}
+              >
+                {fm.defense.tool}
+              </Link>
+              <span className="rec-mono ml-2 text-[12px]" style={{ color: 'var(--rec-ink-3)' }}>
+                at {fm.defense.phase}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Comp C — Claim / exhibit split</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..700&family=Azeret+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#171920; --ink-2:#464c5c; --ink-3:#767d8d;
+  --paper:#e7eaef; --paper-2:#f2f4f7; --paper-3:#dde1e8;
+  --rule:#c6cbd6; --rule-2:#a7aebd;
+  --ground:#1c1d21; --fg:#cbcdd2; --dim:#686b78;
+  --green:#78bd65; --yellow:#e5cd52; --blue:#4fb4d8; --orange:#ef7c2a; --red:#eb3d54;
+  --pass-ink:#2f6a22; --fail-ink:#a81d31; --gate-ink:#7a6410;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{background:var(--paper);color:var(--ink);font-family:Archivo,system-ui,sans-serif}
+.mono{font-family:"Azeret Mono",ui-monospace,monospace;font-feature-settings:"tnum" 1}
+.lbl{font-family:"Azeret Mono",monospace;font-size:9.5px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+
+.mast{background:var(--ground);color:var(--fg)}
+.mast .in{display:flex;align-items:center;justify-content:space-between;height:52px;padding:0 36px}
+.mark{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.14em;font-size:12.5px;font-family:"Azeret Mono",monospace}
+.mark i{display:block;width:9px;height:9px;background:var(--green);border-radius:1px}
+.nav{display:flex;gap:26px;font-size:12.5px;color:#9599a6;font-weight:500}
+.nav a{color:inherit;text-decoration:none}
+.nav a.on{color:var(--fg);box-shadow:0 9px 0 -8px var(--blue)}
+
+/* split */
+.split{display:grid;grid-template-columns:1fr 540px;min-height:calc(100vh - 52px)}
+.left{border-right:1px solid var(--rule-2);padding:0 0 40px}
+.right{background:var(--ground);position:sticky;top:0;align-self:start;height:calc(100vh - 52px);display:flex;flex-direction:column}
+
+/* left: the record */
+.rail{display:flex;align-items:center;height:34px;border-bottom:1px solid var(--rule);background:var(--paper-3);padding:0 36px;font-size:10px}
+.rail span{padding-right:18px;margin-right:18px;border-right:1px solid var(--rule-2);color:var(--ink-2);font-family:"Azeret Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+.rail span:last-child{border:0}
+.rail b{color:var(--ink);font-weight:600}
+.pad{padding:0 36px}
+h1{margin-top:46px;font-size:clamp(28px,3.6vw,46px);line-height:1.04;letter-spacing:-.024em;font-weight:700;max-width:16ch;font-variation-settings:"wdth" 92}
+h1 em{font-style:normal;color:var(--ink-2);display:block;font-weight:600}
+.sub{margin-top:20px;max-width:56ch;font-size:16px;line-height:1.55;color:var(--ink-2)}
+.cmd{margin-top:26px;display:flex;align-items:stretch;border:1px solid var(--ink);background:var(--ground);max-width:560px}
+.cmd code{flex:1;font-family:"Azeret Mono",monospace;font-size:13px;color:var(--fg);padding:12px 15px;white-space:nowrap;overflow:hidden}
+.cmd code s{color:var(--green);text-decoration:none;padding-right:8px}
+.cmd button{border:0;border-left:1px solid #34363d;background:#26272c;color:var(--fg);font-family:"Azeret Mono",monospace;font-size:9.5px;letter-spacing:.14em;padding:0 16px;cursor:pointer}
+.note{margin-top:10px;font-size:12.5px;color:var(--ink-3);max-width:56ch;line-height:1.5}
+
+/* claims — each carries an exhibit reference */
+.claims{margin-top:44px;border-top:1px solid var(--rule-2)}
+.claim{display:grid;grid-template-columns:96px 1fr;border-bottom:1px solid var(--rule);cursor:pointer}
+.claim:hover{background:var(--paper-2)}
+.claim.on{background:#fff;box-shadow:inset 3px 0 0 var(--blue)}
+.claim .ref{padding:20px 0 20px 36px;font-family:"Azeret Mono",monospace;font-size:10.5px;color:var(--ink-3);letter-spacing:.06em}
+.claim.on .ref{color:#1b6f92;font-weight:600}
+.claim .bd{padding:20px 36px 20px 0}
+.claim h3{font-size:16px;font-weight:600;letter-spacing:-.012em;line-height:1.35}
+.claim p{margin-top:6px;font-size:13.5px;color:var(--ink-2);line-height:1.55;max-width:54ch}
+.claim .tag{margin-top:9px;display:inline-flex;align-items:center;gap:8px;font-family:"Azeret Mono",monospace;font-size:10px;letter-spacing:.08em;color:var(--ink-3)}
+.code{font-family:"Azeret Mono",monospace;font-size:10.5px;font-weight:600;padding:2px 7px;border:1px solid;letter-spacing:.03em}
+.c0{color:var(--pass-ink);border-color:#9dc492;background:#e2efdd}
+.c2{color:var(--fail-ink);border-color:#dda3ad;background:#f7e2e5}
+.cH{color:var(--gate-ink);border-color:#cbb44a;background:#faf3d8}
+
+/* right: exhibit viewer */
+.rhead{display:flex;align-items:center;justify-content:space-between;padding:0 26px;height:34px;border-bottom:1px solid #2c2e34;
+  font-family:"Azeret Mono",monospace;font-size:9.5px;letter-spacing:.13em;color:var(--dim)}
+.rbody{flex:1;padding:26px;display:flex;flex-direction:column;gap:20px;overflow:auto}
+.exh{border:1px solid #34363d}
+.exh .bar{display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid #2c2e34;
+  font-family:"Azeret Mono",monospace;font-size:9.5px;letter-spacing:.1em;color:var(--dim)}
+.exh .bar em{font-style:normal;color:var(--red)}
+.exh .bar em.ok{color:var(--green)}
+.exh pre{padding:15px 16px;font-family:"Azeret Mono",monospace;font-size:12.5px;line-height:1.75;color:var(--fg);white-space:pre-wrap;word-break:break-word}
+.exh pre .p{color:var(--dim)} .exh pre .ok{color:var(--green)} .exh pre .no{color:var(--red)}
+.rfoot{border-top:1px solid #2c2e34;padding:16px 26px;color:var(--dim);font-size:11.5px;line-height:1.6}
+.rfoot b{color:var(--fg);font-weight:500}
+.meta{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#2c2e34;border:1px solid #2c2e34}
+.meta div{background:var(--ground);padding:11px 14px}
+.meta .k{font-family:"Azeret Mono",monospace;font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
+.meta .v{margin-top:5px;font-family:"Azeret Mono",monospace;font-size:12px;color:var(--fg)}
+</style>
+</head>
+<body>
+
+<header class="mast"><div class="in">
+  <div class="mark"><i></i>ADLC</div>
+  <nav class="nav"><a class="on" href="#">Record</a><a href="#">Lifecycle</a><a href="#">Failure modes</a><a href="#">Toolkit</a><a href="#">Integrations</a><a href="#">Enterprise</a></nav>
+</div></header>
+
+<div class="split">
+  <div class="left">
+    <div class="rail">
+      <span>Record <b>ADLC-CR-0001</b></span>
+      <span>Control points <b>8</b></span>
+      <span>Human attestations <b>2</b></span>
+      <span>Exhibits <b>4</b></span>
+    </div>
+    <div class="pad">
+      <h1>Every claim on this page<em>carries an exhibit.</em></h1>
+      <p class="sub">The SDLC defends against human failure modes. Agents fail differently — confidently, quickly, and at scale. ADLC gives every phase an exit contract, and nothing here is asserted without the output that backs it.</p>
+      <div class="cmd"><code><s>$</s>curl -fsSL https://www.agenticlifecycle.ai/install.sh | sh</code><button>COPY</button></div>
+      <p class="note">macOS and Linux, Node 18+. Then <span class="mono" style="color:var(--ink)">adlc init</span> in your repository.</p>
+    </div>
+
+    <div class="claims">
+      <div class="claim"><div class="ref">EXHIBIT 1</div><div class="bd">
+        <h3>A spec that can't be verified doesn't pass.</h3>
+        <p>P1 refuses a ticket whose acceptance criteria name no verification method. The gate is the reason the agent can't declare victory early.</p>
+        <div class="tag"><span class="code c0">EXIT 0</span> adlc spec-lint</div>
+      </div></div>
+
+      <div class="claim on"><div class="ref">EXHIBIT 2</div><div class="bd">
+        <h3>Frozen tests are frozen. The gate refuses.</h3>
+        <p>Exit 2 is not an error — it is a refusal. When an agent edits a rail it was told not to touch, the change does not merge, and the refusal is recorded rather than argued with.</p>
+        <div class="tag"><span class="code c2">EXIT 2</span> adlc rails-guard</div>
+      </div></div>
+
+      <div class="claim"><div class="ref">EXHIBIT 3</div><div class="bd">
+        <h3>Tests that pass without testing are found and failed.</h3>
+        <p>A mutant is planted in changed code. If the suite still passes, the suite is hollow and P3 says so.</p>
+        <div class="tag"><span class="code c2">EXIT 2</span> adlc hollow-test</div>
+      </div></div>
+
+      <div class="claim"><div class="ref">EXHIBIT 4</div><div class="bd">
+        <h3>Two gates are a person, and they sign.</h3>
+        <p>Six gates are machines. P1 and P6 are people, and what they attest to is written down — the audit trail a non-engineer can read.</p>
+        <div class="tag"><span class="code cH">ATTEST</span> attestation.json</div>
+      </div></div>
+    </div>
+  </div>
+
+  <aside class="right">
+    <div class="rhead"><span>EXHIBIT 2 — ATTACHED TO P3 · RAIL</span><span>VERBATIM CAPTURE</span></div>
+    <div class="rbody">
+      <div class="exh">
+        <div class="bar"><span>adlc rails-guard</span><em>EXIT 2 — REFUSED</em></div>
+<pre><span class="p">$</span> adlc rails-guard --base main --ticket T42 --tickets .adlc/tickets.json
+<span class="no">✗ FAIL: a frozen rail changed</span></pre>
+      </div>
+
+      <div class="meta">
+        <div><div class="k">Exit code</div><div class="v">2 — refused</div></div>
+        <div><div class="k">Phase</div><div class="v">P3 · Rail</div></div>
+        <div><div class="k">Approver</div><div class="v">machine</div></div>
+        <div><div class="k">Artifact</div><div class="v">rails-guard.json</div></div>
+      </div>
+
+      <div class="exh">
+        <div class="bar"><span>adlc review-calibration</span><em class="ok">EXIT 0 — PASS</em></div>
+<pre><span class="p">$</span> adlc review-calibration --review-cmd "adlc review --base {base}" --plants 3
+<span class="ok">✓ PASS: planted-defect recall met the configured threshold</span></pre>
+      </div>
+    </div>
+    <div class="rfoot"><b>0</b> passes · <b>1</b> is an operational error · <b>2</b> means the gate refused. The exit code is the contract, which is what makes the lifecycle executable in CI rather than aspirational in a wiki.</div>
+  </aside>
+</div>
+
+</body>
+</html>

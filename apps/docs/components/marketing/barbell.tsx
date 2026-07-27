@@ -18,7 +18,7 @@ export function Barbell() {
               className="rounded-t"
               style={{
                 height: bar.height,
-                background: bar.heavy ? '#4fb4d8' : 'rgba(79,180,216,0.25)',
+                background: bar.heavy ? 'var(--rec-link)' : 'rgba(79,180,216,0.25)',
               }}
             />
           </div>
@@ -27,16 +27,16 @@ export function Barbell() {
       <div className="mt-3 flex gap-6">
         {BARS.map((bar) => (
           <div key={bar.label} className="flex-1 text-center">
-            <p className="text-sm font-medium" style={{ color: '#cbcdd2' }}>
+            <p className="text-sm font-medium" style={{ color: 'var(--rec-ink)' }}>
               {bar.label}
             </p>
-            <p className="font-mono text-xs" style={{ color: 'var(--mk-muted)' }}>
+            <p className="rec-mono text-xs" style={{ color: 'var(--rec-ink-2)' }}>
               {bar.phase}
             </p>
           </div>
         ))}
       </div>
-      <figcaption className="mt-4 text-sm" style={{ color: 'var(--mk-muted)' }}>
+      <figcaption className="mt-4 text-sm" style={{ color: 'var(--rec-ink-2)' }}>
         Relative spend by phase: heavy at the ends, light in the middle.
         Schematic, not to scale.
       </figcaption>
