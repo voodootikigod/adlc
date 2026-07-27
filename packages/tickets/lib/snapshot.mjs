@@ -11,7 +11,13 @@ import { compareTicketIds, storeHash, ticketHash } from './canonical.mjs';
  * three call frames later. Everything that returns now matches the declaration.
  */
 export function deepClone(value) {
-  return JSON.parse(JSON.stringify(value, function reject(key, item) {
+  // Serialized to a named binding rather than nested inside the JSON.parse call:
+  // `return JSON.parse(JSON.stringify(value, function (…) { … }))` spreads one
+  // return statement over thirty lines, which reads badly and is also opaque to
+  // any line-scoped analysis — a mutation operator rewriting that first line to
+  // `return null;` produced a file that did not parse, so nothing was prosecuted
+  // here at all. One statement per line, and both are ordinary again.
+  const serialized = JSON.stringify(value, function reject(key, item) {
     if (typeof item === 'number' && !Number.isFinite(item)) {
       throw new TypeError(`deepClone cannot round-trip the non-finite number ${item}`);
     }
@@ -43,7 +49,8 @@ export function deepClone(value) {
       }
     }
     return item;
-  }));
+  });
+  return JSON.parse(serialized);
 }
 
 export function deepFreeze(value) {
