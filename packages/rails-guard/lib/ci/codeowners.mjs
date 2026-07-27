@@ -73,30 +73,44 @@ export function pathHasCodeowner(git, baseRef, path) {
 }
 
 /**
- * OWNERSHIP. The logins (without a leading @) whose pattern matches any of `paths`.
+ * OWNERSHIP. The logins (without a leading @) who own any of `paths`.
  *
- * Uses the SAME first-existing-file precedence as coverage. It used to union all three
- * locations, on the argument that a wider owner set "can only make the ceremony harder to
- * satisfy". That argument is backwards: the ceremony needs an approval from ANY owner, so
- * a wider set makes it EASIER. Unioning let a `docs/CODEOWNERS` that GitHub ignores —
- * because `.github/CODEOWNERS` exists — grant an approver who could authorize a trust-root
- * change (cross-model review, #363 round 3).
+ * Applies GitHub's resolution rules in both dimensions:
+ *   * only the FIRST CODEOWNERS file that exists is consulted (the others are ignored
+ *     outright, not merged), and
+ *   * within it, the LAST matching row wins for a given path.
  *
- * NEGATED rows are skipped. GitHub does not support `!` negation in CODEOWNERS, so a
- * `!path @alice` line does not make Alice an owner; treating it as ownership over-granted
- * an approver. Coverage still treats a negated row as UN-owning, which is the conservative
- * reading of the same unsupported syntax in the other direction.
+ * Both were unions once, on the argument that a wider owner set "can only make the ceremony
+ * harder to satisfy". That is backwards — the ceremony needs an approval from ANY owner, so
+ * a wider set makes it EASIER. Unioning ROWS meant a catch-all `* @alice` kept granting
+ * Alice ownership of `.adlc/config.json` even after a later, more specific
+ * `/.adlc/config.json @bob` had taken it away, so Alice could authorize a trust-root change
+ * GitHub would never let her approve (cross-model review, #363 rounds 3 and 5).
+ *
+ * A last-matching row that is NEGATED, or that names no owners, leaves the path ownerless —
+ * the same reading coverage uses.
+ *
+ * RESIDUAL: when several trust-root paths change at once, this returns the UNION across
+ * paths, so an owner of ONE changed path satisfies the ceremony for the set. GitHub would
+ * require an owner of EACH. Narrowing this to an intersection would deny a legitimate
+ * trust-root RENAME, where the old and new paths can have different owners, so the union is
+ * deliberate. The un-forgeable backstop is unaffected: GitHub's own branch-protection
+ * CODEOWNERS review still gates the merge.
  */
 export function ownersForPaths(git, baseRef, paths) {
   const owners = new Set();
   for (const file of CODEOWNERS_FILES) {
     const shown = git(['show', `${baseRef}:${file}`], `git show base ${file}`);
     if (shown.status !== 0) continue; // absent at base — fall through to the next file
-    for (const row of parseCodeowners(shown.stdout)) {
-      if (row.negated || !row.owners.length) continue;
-      if (paths.some((changed) => codeownersMatch(row.pattern, changed))) {
-        for (const owner of row.owners) owners.add(owner);
+    const rows = parseCodeowners(shown.stdout);
+    for (const path of paths) {
+      let winner = null;
+      // Do NOT break on the first match: a later row overrides an earlier one.
+      for (const row of rows) {
+        if (codeownersMatch(row.pattern, path)) winner = row;
       }
+      if (!winner || winner.negated) continue;
+      for (const owner of winner.owners) owners.add(owner);
     }
     return [...owners]; // this file is authoritative; later files are not consulted
   }

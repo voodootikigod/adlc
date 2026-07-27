@@ -103,3 +103,37 @@ test('coverage still treats a negated row as UN-owning (the conservative reading
   const git = fakeGit({ '.github/CODEOWNERS': `* @alice\n!${WORKFLOW}\n` });
   assert.equal(pathHasCodeowner(git, 'base', WORKFLOW), false);
 });
+
+// #363 round 5, verified by executing the real lift path. Row precedence, not just file
+// precedence: a catch-all kept granting ownership after a later, more specific row had
+// taken it away — so the catch-all owner could authorize a trust-root change GitHub would
+// never let them approve.
+test('ownersForPaths: the LAST matching row wins, so a later specific row overrides a catch-all', () => {
+  const git = fakeGit({ '.github/CODEOWNERS': '* @alice\n/.adlc/config.json @bob\n' });
+  assert.deepEqual(ownersForPaths(git, 'base', ['.adlc/config.json']), ['bob']);
+});
+
+test('ownersForPaths: a catch-all still owns paths no later row claims', () => {
+  const git = fakeGit({ '.github/CODEOWNERS': '* @alice\n/.adlc/config.json @bob\n' });
+  assert.deepEqual(ownersForPaths(git, 'base', ['docs/ci/rails-guard.yml']), ['alice']);
+});
+
+test('ownersForPaths: a later NEGATED row leaves the path ownerless', () => {
+  const git = fakeGit({ '.github/CODEOWNERS': '* @alice\n!/.adlc/config.json\n' });
+  assert.deepEqual(ownersForPaths(git, 'base', ['.adlc/config.json']), []);
+});
+
+test('ownersForPaths: a later no-owner row leaves the path ownerless', () => {
+  const git = fakeGit({ '.github/CODEOWNERS': '* @alice\n/.adlc/config.json\n' });
+  assert.deepEqual(ownersForPaths(git, 'base', ['.adlc/config.json']), []);
+});
+
+test('ownersForPaths: distinct changed paths each resolve to their own last-match owner', () => {
+  // The union ACROSS paths is deliberate — a trust-root rename has two paths that can have
+  // different owners. Each path still resolves by its own last-matching row.
+  const git = fakeGit({ '.github/CODEOWNERS': '* @alice\n/.adlc/config.json @bob\n' });
+  assert.deepEqual(
+    ownersForPaths(git, 'base', ['.adlc/config.json', 'docs/ci/rails-guard.yml']).sort(),
+    ['alice', 'bob']
+  );
+});
