@@ -37,15 +37,28 @@ const TUNING_KEYS = String.raw`timeout|timeout_?ms|delay|delay_?ms|interval|inte
 // `512` would leave `1024` exposed and reproduce the same unkillable mutant one
 // factor to the right. Letters are excluded from the value class, so a match can
 // never run past this key's value into the next key's name.
+// The leading `-?` matters: a NEGATIVE duration is a sentinel ("disabled", "wait
+// forever"), so -1 -> -2 takes the same branch and is unkillable for exactly the
+// reason 60001 was. Without the sign the mask misses it and the bug recurs.
 const TUNING_ASSIGNMENT_RE = new RegExp(
-  String.raw`\b(?:${TUNING_KEYS})\s*[:=]\s*\d[\d\s*+\-/_.]*`,
+  String.raw`\b(?:${TUNING_KEYS})\s*[:=]\s*(-?\d[\d\s*+\-/_.]*)`,
   'gi'
 );
+
+// A value of exactly ZERO is never masked. The whole rationale for masking is that
+// ±1 is unobservable, and that holds at MAGNITUDE but fails at zero: across every
+// key in TUNING_KEYS, 0 means disabled / none / immediate, so 0 -> 1 flips a real
+// semantic branch that a test can and should catch. `{ ttl: 0 }` is a discrete
+// boundary wearing a tuning key's name — prosecute it. (Cross-model review finding,
+// HIGH: masking it let a security-relevant sentinel escape the gate entirely.)
+const ZERO_VALUE_RE = /^-?0+$/;
 
 // Blank out tuning assignments, PRESERVING LENGTH so an index into the masked line
 // addresses the same character in the original.
 function maskTuningAssignments(line) {
-  return line.replace(TUNING_ASSIGNMENT_RE, (match) => ' '.repeat(match.length));
+  return line.replace(TUNING_ASSIGNMENT_RE, (match, value) => (
+    ZERO_VALUE_RE.test(value.trim()) ? match : ' '.repeat(match.length)
+  ));
 }
 
 // A simple array literal of 2+ quoted-string / bare-word elements, e.g.

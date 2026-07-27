@@ -309,6 +309,32 @@ test('off-by-one: an ordinary boundary is still mutated', () => {
   assert.equal(offByOne().apply('  for (let i = 0; i < n; i++) {'), '  for (let i = 1; i < n; i++) {');
 });
 
+// ── zero is a sentinel, not a magnitude (cross-model review finding, HIGH) ───
+// The masking rationale is "±1 is unobservable", which holds at MAGNITUDE and fails
+// at 0: across every key here, 0 means disabled / none / immediate, so 0 -> 1 is a
+// real semantic change a test must catch. Masking it would let a discrete boundary
+// escape prosecution — the exact over-suppression this operator must not do.
+
+test('off-by-one: still mutates a ZERO tuning value — 0 is a discrete sentinel', () => {
+  assert.equal(offByOne().apply('  const sessionOpts = { ttl: 0 };'), '  const sessionOpts = { ttl: 1 };');
+  assert.equal(offByOne().apply('  const headers = { maxAge: 0 };'), '  const headers = { maxAge: 1 };');
+  assert.equal(offByOne().apply('  const task = { delay: 0 };'), '  const task = { delay: 1 };');
+  assert.equal(offByOne().apply('  const t = { timeout: 0 };'), '  const t = { timeout: 1 };');
+});
+
+test('off-by-one: masks a NEGATIVE tuning sentinel — timeout: -1 means disabled', () => {
+  // Without the optional sign the mask misses `-1` entirely, off-by-one produces
+  // `-2`, and that is unkillable for the same reason 60001 was: a negative duration
+  // is a sentinel, so both values take the same disabled branch.
+  assert.equal(offByOne().apply('  const opts = { timeout: -1 };'), null);
+  assert.equal(offByOne().apply('  const opts = { delay: -1 };'), null);
+});
+
+test('off-by-one: a magnitude is still masked after the zero/sign carve-outs', () => {
+  assert.equal(offByOne().apply('  const o = { timeout: 60000 };'), null);
+  assert.equal(offByOne().apply('  const o = { maxBuffer: 512 * 1024 * 1024 };'), null);
+});
+
 test('ternary-swap: swaps the recursive/leaf branches of an array-processing ternary (old operators miss it)', () => {
   const line = '    const result = Array.isArray(item) ? flatten(item) : item;';
   const originalMutants = mutantsFromOriginalOperators(line);
