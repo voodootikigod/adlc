@@ -17,7 +17,7 @@
 // cross-model-gate.yml, which lets the key verify signatures without ever exposing it
 // to PR-controlled code.)
 
-import { readEntries } from '@adlc/core';
+import { readEntries, isChangeSetRevision, changeSetBase, changeSetDigest } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // Two independent defenses on the read side: verify() proves the append-only chain
 // was not corrupted-and-skipped to drop a revocation (#326 Codex F2); verifyEntrySig()
@@ -79,6 +79,105 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
     gate: CROSS_MODEL_GATE,
     ticket,
     rawData: JSON.stringify({ provider, authorProvider, verdict, revision }),
+    dir,
+  });
+}
+
+// ── Carry-forward (#365 B) ───────────────────────────────────────────────────
+// An attestation binds to `(base_sha, change_set_hash)`, which is sound but means every advance
+// of `main` invalidates a verdict for a change that has not moved. Performed by hand on #362 and
+// #367, each time costing a full confirmatory review round to re-approve an identical diff.
+//
+// The danger, and why this is CAPPED (premortem F1): a diff can be byte-identical and
+// semantically WRONG against a new base — main renames a helper it calls, or tightens a validator
+// it relies on. The bytes do not move; the meaning does. Free carry-forward would let a verdict
+// ride over bases nobody examined, which is WORSE than the treadmill it replaces: the treadmill
+// at least forced a fresh look. So the chain is bounded and its depth is recorded, making an
+// Nth-hand verdict visible in the ledger rather than indistinguishable from a fresh one.
+export const CARRY_FORWARD_MAX_DEPTH = 3;
+
+// The most recent cross-model entry naming `revision`, or null.
+function latestEntryForRevision(entries, revision) {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) continue;
+    if (entry?.data?.revision === revision) return entry;
+  }
+  return null;
+}
+
+/**
+ * Re-attest an EXISTING verdict against a new base, when the reviewed change is unchanged.
+ *
+ * Refuses unless every one of these holds:
+ *   - a prior cross-model entry exists for `fromRevision` and its verdict is `approve`;
+ *   - both identities are change-set form (a legacy whole-worktree identity carries no change-set
+ *     component, so "did the change move?" is not answerable about it);
+ *   - the change-set digests are EQUAL — COMPUTED from the two identities, never asserted by the
+ *     caller (F1/AC10). Both identities are produced by the gate, so equality here means the
+ *     reviewed change genuinely did not move;
+ *   - the resulting chain depth stays within CARRY_FORWARD_MAX_DEPTH.
+ *
+ * The carried entry inherits the ORIGINAL provider and authorProvider: it is the same verdict,
+ * not a new one, and distinctness was already proven when it was first earned.
+ */
+export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir } = {}) {
+  requireNonEmptyString(ticket, 'ticket');
+  requireNonEmptyString(fromRevision, 'fromRevision');
+  requireNonEmptyString(revision, 'revision');
+
+  if (!isChangeSetRevision(fromRevision) || !isChangeSetRevision(revision)) {
+    throw new Error(
+      'carry-forward requires change-set identities on both sides (git-change:<base>:<digest>); ' +
+      'a legacy git-worktree identity has no change-set component, so whether the reviewed change ' +
+      'moved cannot be determined — record a fresh review instead'
+    );
+  }
+  if (changeSetDigest(fromRevision) !== changeSetDigest(revision)) {
+    throw new Error(
+      'carry-forward refused: the reviewed change itself differs between the two identities ' +
+      '(change-set digests do not match). Only a base change may be carried forward — record a ' +
+      'fresh distinct-provider review'
+    );
+  }
+  if (changeSetBase(fromRevision) === changeSetBase(revision)) {
+    throw new Error('carry-forward refused: the base is unchanged, so there is nothing to carry');
+  }
+
+  const { entries } = readEntries('manifest', dir);
+  const prior = latestEntryForRevision(entries, fromRevision);
+  if (!prior) {
+    throw new Error(`carry-forward refused: no prior cross-model verdict recorded for ${fromRevision}`);
+  }
+  if (prior.data?.verdict !== 'approve') {
+    throw new Error(
+      `carry-forward refused: the prior verdict for ${fromRevision} is ` +
+      `"${prior.data?.verdict}", not approve — only an approve can be carried`
+    );
+  }
+
+  // Consecutive carries only: a fresh review resets the chain, because a human (or a distinct
+  // model) looked at the change against that base.
+  const depth = (Number(prior.data?.carryDepth) || 0) + 1;
+  if (depth > CARRY_FORWARD_MAX_DEPTH) {
+    throw new Error(
+      `carry-forward refused: chain depth ${depth} exceeds the cap of ${CARRY_FORWARD_MAX_DEPTH}. ` +
+      'The verdict has ridden forward across too many bases without anyone looking at it against ' +
+      'the current one — record a FRESH distinct-provider review'
+    );
+  }
+
+  return record({
+    gate: CROSS_MODEL_GATE,
+    ticket,
+    rawData: JSON.stringify({
+      provider: prior.data.provider,
+      authorProvider: prior.data.authorProvider,
+      verdict: 'approve',
+      revision,
+      carriedFrom: fromRevision,
+      carryDepth: depth,
+    }),
     dir,
   });
 }

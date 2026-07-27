@@ -1,0 +1,133 @@
+// Concern: carryForwardCrossModelReview (#365 part B) — re-attesting a verdict when the BASE
+// moved but the reviewed change did not.
+//
+// Why it exists: binding an attestation to (base_sha, change_set_hash) is sound but makes every
+// advance of `main` invalidate a verdict for an unchanged diff. Done by hand on #362 and #367
+// that cost a full confirmatory review round each time. B makes it a supported operation.
+//
+// Why it is DANGEROUS and therefore capped: a diff can be byte-identical and semantically WRONG
+// against a new base (main renames a helper it calls, or tightens a validator it relies on). If
+// carry-forward were free, a verdict would ride forward over bases nobody examined — worse than
+// the treadmill, which at least forced a fresh look. Premortem F1; the maintainer capped the
+// chain at 3.
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  recordCrossModelReview, carryForwardCrossModelReview, CARRY_FORWARD_MAX_DEPTH,
+} from '../lib/cross-model.mjs';
+import { readEntries } from '@adlc/core';
+
+process.env.ADLC_MANIFEST_KEY = 'carry-forward-test-key';
+
+function ledger() {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-carry-'));
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  return join(dir, '.adlc');
+}
+const clean = (d) => rmSync(join(d, '..'), { recursive: true, force: true });
+
+// Two identities for the SAME reviewed change against DIFFERENT bases.
+const DIGEST = 'a'.repeat(64);
+const rev = (base) => `git-change:${base}:${DIGEST}`;
+const BASE1 = '1'.repeat(40);
+const BASE2 = '2'.repeat(40);
+const BASE3 = '3'.repeat(40);
+const BASE4 = '4'.repeat(40);
+const BASE5 = '5'.repeat(40);
+
+const seed = (dir, revision) => recordCrossModelReview({
+  ticket: 'T1', revision, provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir,
+});
+const carry = (dir, fromRevision, revision) => carryForwardCrossModelReview({
+  ticket: 'T1', fromRevision, revision, dir,
+});
+const lastEntry = (dir) => readEntries('manifest', dir).entries.at(-1);
+
+describe('carryForwardCrossModelReview (#365 B)', () => {
+  it('carries a verdict forward when only the base moved, and records the link and depth', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1));
+      carry(dir, rev(BASE1), rev(BASE2));
+      const e = lastEntry(dir);
+      assert.equal(e.data.verdict, 'approve');
+      assert.equal(e.data.revision, rev(BASE2));
+      assert.equal(e.data.carriedFrom, rev(BASE1), 'the ledger must show which verdict was carried');
+      assert.equal(e.data.carryDepth, 1, 'depth must be visible so an Nth-hand verdict is auditable');
+      // The verdict is the SAME one — provider distinctness is inherited, not re-asserted.
+      assert.equal(e.data.provider, 'agy');
+      assert.equal(e.data.authorProvider, 'anthropic');
+    } finally { clean(dir); }
+  });
+
+  // F1 / AC10 — computed, not asserted.
+  it('refuses when the reviewed change itself differs, even if the caller claims otherwise', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1));
+      const altered = `git-change:${BASE2}:${'b'.repeat(64)}`;
+      assert.throws(() => carry(dir, rev(BASE1), altered), /change/i,
+        'a different change set must never be carried forward');
+      assert.equal(readEntries('manifest', dir).entries.length, 1, 'nothing may be appended on refusal');
+    } finally { clean(dir); }
+  });
+
+  it('refuses when there is no prior verdict to carry', () => {
+    const dir = ledger();
+    try {
+      assert.throws(() => carry(dir, rev(BASE1), rev(BASE2)), /no .*(prior|approve)/i);
+    } finally { clean(dir); }
+  });
+
+  // F1 — the cap is the whole safeguard.
+  it(`caps the chain at ${CARRY_FORWARD_MAX_DEPTH}: the next carry-forward is refused`, () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1));
+      carry(dir, rev(BASE1), rev(BASE2));
+      carry(dir, rev(BASE2), rev(BASE3));
+      carry(dir, rev(BASE3), rev(BASE4));
+      assert.equal(lastEntry(dir).data.carryDepth, 3);
+      assert.throws(() => carry(dir, rev(BASE4), rev(BASE5)), /depth|fresh|cap/i,
+        'the 4th carry-forward must demand a fresh distinct-provider review');
+      assert.equal(readEntries('manifest', dir).entries.length, 4, 'the refused carry must not append');
+    } finally { clean(dir); }
+  });
+
+  it('a fresh review RESETS the chain, so depth counts consecutive carries only', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1));
+      carry(dir, rev(BASE1), rev(BASE2));
+      carry(dir, rev(BASE2), rev(BASE3));
+      // A genuine new review against BASE4 — not a carry.
+      seed(dir, rev(BASE4));
+      carry(dir, rev(BASE4), rev(BASE5));
+      assert.equal(lastEntry(dir).data.carryDepth, 1, 'a fresh review must reset the chain');
+    } finally { clean(dir); }
+  });
+
+  // A legacy whole-worktree identity has no change-set component, so "the change did not move"
+  // is not a question that can be answered about it.
+  it('refuses to carry a legacy git-worktree identity forward', () => {
+    const dir = ledger();
+    try {
+      seed(dir, 'git-worktree:' + 'f'.repeat(64));
+      assert.throws(() => carry(dir, 'git-worktree:' + 'f'.repeat(64), rev(BASE2)), /change-set|git-change|legacy/i);
+    } finally { clean(dir); }
+  });
+
+  it('refuses to carry a non-approve verdict forward', () => {
+    const dir = ledger();
+    try {
+      recordCrossModelReview({
+        ticket: 'T1', revision: rev(BASE1), provider: 'agy', authorProvider: 'anthropic',
+        verdict: 'needs-attention', dir,
+      });
+      assert.throws(() => carry(dir, rev(BASE1), rev(BASE2)), /approve/i);
+    } finally { clean(dir); }
+  });
+});

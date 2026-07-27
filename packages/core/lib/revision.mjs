@@ -147,6 +147,89 @@ function isIgnoredPath(relativePath, ignoredPaths) {
   return [...ignoredPaths].some((path) => normalized === path || normalized.startsWith(`${path}/`));
 }
 
+// ── Change-set identity (#365) ───────────────────────────────────────────────
+// `resolveRevision` below hashes the WHOLE worktree, so an attestation binds to every file in
+// the tree rather than to the change that was reviewed. Any advance of `main` invalidates a
+// verdict for a change that has not moved: #362 lost one to a docs-only merge, #367 to a
+// terminal-rendering merge. Both times the reviewed diff was byte-for-byte identical.
+//
+// This binds to `(base_sha, change_set_hash)` instead. Two premortem findings shape it:
+//
+// F2 — TREE-derived, never diff TEXT. `git diff --raw` reports the base and head MODE and BLOB
+// SHA per changed path, straight from the tree objects. Hashing `git diff` output instead would
+// make the identity depend on `diff.algorithm`, `core.autocrlf`, and the git version, which is
+// the local-vs-CI divergence #362 and #367 were spent on. `--no-renames` is REQUIRED, not
+// tidiness: `diff.renames` defaults to TRUE, and rename detection is a similarity HEURISTIC
+// whose threshold varies — a rename would hash differently depending on configuration. With it
+// off, a rename is always delete+add.
+//
+// F3 — mode is part of the identity. Both the source and destination mode are hashed, so a
+// mode-only change (`chmod +x` on a hook) moves the identity. Normalizing it away would make
+// that edit invisible after review.
+//
+// Untracked files are deliberately absent (unlike resolveRevision): they are not in the PR, so
+// they cannot affect what merges, and including them is what made a local revision disagree with
+// CI's clean checkout whenever scratch files were present. The caller that attests a WORKING TREE
+// is responsible for refusing a dirty one — see the prosecute local path.
+//
+// F5 — `base` is resolved HERE, by the gate, and embedded in the returned string. The value
+// recorded in an attestation is therefore never consulted as authority; matching the full
+// identity string is what proves the base agrees.
+const CHANGE_SET_PREFIX = 'git-change';
+
+export function resolveChangeSetRevision({ cwd = process.cwd(), base, revision, ignorePaths = [] } = {}) {
+  if (revision !== undefined && revision !== null && String(revision).trim() !== '') {
+    return String(revision);
+  }
+  if (!base || String(base).trim() === '') return null;
+  try {
+    const baseSha = git(['rev-parse', String(base)], cwd).toString('utf8').trim();
+    if (!baseSha) return null;
+    // --raw: ":<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0"
+    // --abbrev=40 so blob shas are full, never abbreviated.
+    const raw = splitNull(
+      git(['diff', '--raw', '--no-renames', '--abbrev=40', '-z', baseSha, 'HEAD'], cwd).toString('utf8')
+    );
+    const ignoredPaths = ignoredPathSet(cwd, ignorePaths);
+    const entries = [];
+    for (let i = 0; i + 1 < raw.length; i += 2) {
+      const meta = raw[i];
+      const path = raw[i + 1];
+      if (!meta || !path) continue;
+      if (isIgnoredPath(path, ignoredPaths)) continue;
+      // meta = ":<srcmode> <dstmode> <srcsha> <dstsha> <status>"
+      const fields = meta.replace(/^:/, '').split(/\s+/);
+      const [srcMode, dstMode, srcSha, dstSha, status] = fields;
+      entries.push([path.replaceAll('\\', '/'), srcMode, dstMode, srcSha, dstSha, status].join(' '));
+    }
+    // Sort so the identity is independent of git's output ordering.
+    entries.sort();
+    const hash = newHash();
+    for (const entry of entries) hash.add(Buffer.from(entry));
+    return `${CHANGE_SET_PREFIX}:${baseSha}:${hash.digest()}`;
+  } catch {
+    return null;
+  }
+}
+
+/** True for an identity produced by resolveChangeSetRevision (vs the legacy whole-worktree form). */
+export function isChangeSetRevision(revision) {
+  return typeof revision === 'string' && revision.startsWith(`${CHANGE_SET_PREFIX}:`);
+}
+
+/** The base sha a change-set identity was reviewed against, or null for any other form. */
+export function changeSetBase(revision) {
+  if (!isChangeSetRevision(revision)) return null;
+  return String(revision).split(':')[1] || null;
+}
+
+/** The change-set component — equal across two identities whose reviewed change is the same. */
+export function changeSetDigest(revision) {
+  if (!isChangeSetRevision(revision)) return null;
+  const parts = String(revision).split(':');
+  return parts[2] || null;
+}
+
 export function resolveRevision({ cwd = process.cwd(), revision, ignorePaths = [] } = {}) {
   if (revision !== undefined && revision !== null && String(revision).trim() !== '') {
     return String(revision);
