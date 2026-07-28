@@ -88,9 +88,10 @@ describe('#365 R4/AC18 — base resolution reaches all three consumers identical
       // attestation — proving runProsecution's internal resolveProsecutionRevision call
       // agrees with the other two rather than deriving a fourth, private notion of `base`.
       const inputPath = join(dir, 'passes.json');
-      const transcriptPath = join(dir, 'review.txt');
-      const promptPath = join(dir, 'review-prompt.txt');
-      const inputsPath = join(dir, 'review-inputs.txt');
+      mkdirSync(join(dir, '.omo/evidence'), { recursive: true });
+      const transcriptPath = join(dir, '.omo/evidence/review.txt');
+      const promptPath = join(dir, '.omo/evidence/review-prompt.txt');
+      const inputsPath = join(dir, '.omo/evidence/review-inputs.txt');
       writeFileSync(transcriptPath, [
         'ticket: T1',
         `reviewed revision: ${revisionFromTierCheck}`,

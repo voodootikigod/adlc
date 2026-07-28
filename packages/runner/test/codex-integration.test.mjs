@@ -105,6 +105,14 @@ describe('codex integration docs flow', () => {
       const runner = join(repoRoot, 'packages/runner/bin/adlc.mjs');
       const common = { cwd: dir, encoding: 'utf8' };
 
+      // #365 — pass --revision explicitly rather than letting adlc-prosecute auto-resolve one.
+      // This test commits the .adlc bundle directly onto `main` (no separate feature branch),
+      // so `main` itself advances mid-test; the NEW default resolution derives its identity from
+      // `base` (main) at call time, which would then differ from the value already embedded in
+      // the transcript/review_packet above. Pinning --revision to the SAME value this test
+      // already computed keeps it self-consistent regardless of what `main` points to, and
+      // matches packages/runner's own assertPhase()/resolveRevision() (unchanged by #365), which
+      // this test's later p5/p6 steps depend on resolving to the identical value.
       const p5Record = execFileSync(process.execPath, [
         prosecute,
         '--input',
@@ -113,6 +121,8 @@ describe('codex integration docs flow', () => {
         'T1',
         '--dir',
         '.adlc',
+        '--revision',
+        revision,
         '--json',
       ], common);
       assert.equal(JSON.parse(p5Record).exitCode, 0);
