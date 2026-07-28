@@ -260,26 +260,34 @@ describe('forest verify() — AC1 adversarial rejections', () => {
     } finally { cleanTmp(dir); }
   });
 
-  it('rejects case-colliding segment filenames (no-op on a case-insensitive filesystem)', () => {
+  it('a name that is a pure-case variant of a valid segment is rejected (as bad grammar, not silently accepted)', () => {
+    // §4.2's grammar fixes casing per component (slug always lowercase,
+    // ULID always uppercase, extension always lowercase), so a
+    // grammar-VALID name's casing is fully determined by its content —
+    // no two distinct grammar-valid names can ever be case-variants of
+    // each other. A same-case-folded duplicate like 'FEAT-...' is
+    // therefore always caught by the grammar check itself (dead code
+    // is unreachable, not untested): this asserts the fail-closed
+    // OUTCOME (rejected either way) rather than the specific one of two
+    // valid reasons ('bad filename grammar' vs 'case-colliding') that
+    // fires, since which one fires depends on the filesystem's own
+    // case sensitivity and iteration order.
     const dir = makeTmp();
     try {
       const adlc = join(dir, '.adlc');
       const segDir = join(adlc, 'manifest.d');
       writeLines(join(segDir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
       writeLines(join(segDir, 'FEAT-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
-      // On a case-insensitive filesystem (default macOS/Windows), the second
-      // write silently overwrote the first — there's only one file on disk,
-      // so the collision this test constructs cannot exist here. §4.2's
-      // check exists for git's case-sensitive tree (checked out on any
-      // filesystem via CI's rails-guard, a later slice); this assertion is a
-      // no-op there rather than asserting something impossible to construct.
       if (readdirSync(segDir).length < 2) {
-        assert.ok(true, 'filesystem is case-insensitive; cannot construct two case-variant files on disk');
+        // Case-insensitive filesystem: the second write overwrote the
+        // first, so there is only one (valid) file — nothing to reject.
+        const result = verify(adlc);
+        assert.equal(result.valid, true, result.message);
         return;
       }
       const result = verify(adlc);
       assert.equal(result.valid, false);
-      assert.match(result.message, /case-colliding/);
+      assert.match(result.message, /bad filename grammar|case-colliding/);
     } finally { cleanTmp(dir); }
   });
 
