@@ -90,7 +90,10 @@ function flailOutput(payload, dataRoot) {
 function verifyOutput(root) {
   if (!existsSync(join(root, '.adlc'))) return null;
   const command = process.env.ADLC_CLI_COMMAND ?? 'adlc';
-  const result = spawnSync(command, ['gate-manifest', 'verify', '--json'], {
+  // --allow-legacy-unsigned tolerates a repo's honest pre-signing history
+  // without weakening detection of real tampering — see
+  // packages/gate-manifest/lib/verify.mjs.
+  const result = spawnSync(command, ['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], {
     cwd: root,
     encoding: 'utf8',
     shell: false,

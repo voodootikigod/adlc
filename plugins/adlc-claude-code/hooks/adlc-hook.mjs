@@ -446,9 +446,13 @@ function flail(input) {
 }
 
 // Stop — audit the gate-evidence chain; warn only if it is broken.
+// --allow-legacy-unsigned tolerates a repo's honest pre-signing history (entries
+// recorded before ADLC_MANIFEST_KEY was ever adopted) without weakening detection
+// of real tampering: a missing sig after the first signed entry, or any invalid
+// sig, still trips this warning. See packages/gate-manifest/lib/verify.mjs.
 function manifest() {
   if (!existsSync(join('.adlc', 'manifest.jsonl'))) return; // nothing recorded yet
-  const r = runAdlc(['gate-manifest', 'verify', '--json']);
+  const r = runAdlc(['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned']);
   if (!r || !r.stdout) return;
   const res = parseJson(r.stdout);
   if (!res || res.valid) return; // intact → silent

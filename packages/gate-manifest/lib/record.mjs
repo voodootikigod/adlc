@@ -36,6 +36,14 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
       // a full sig-requiring verify here would make it impossible to append a NEW
       // (signed, below) entry to such a manifest. Provenance is enforced by signing
       // this entry and by readers sig-checking the specific entries they trust.
+      //
+      // requireSignatures:false is SCOPED (see verify.mjs): it tolerates a missing
+      // sig only on the contiguous prefix before the first signed entry. If a prior
+      // append happened to run without a key AFTER signing was already adopted (env
+      // misconfiguration), THAT entry now breaks this check going forward — this
+      // append (and any other) refuses until the chain is repaired (`repair-chain`).
+      // That is intentional: silently continuing to append unsigned entries onto a
+      // signed ledger would degrade provenance with no signal that anything changed.
       const integrity = verify(dir, { requireSignatures: false });
       if (!integrity.valid) {
         throw new Error(`manifest chain is invalid: ${integrity.message}`);

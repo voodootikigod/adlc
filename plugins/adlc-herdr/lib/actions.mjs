@@ -62,7 +62,10 @@ export function planAction(actionId, target, active, opts = {}) {
   const echo = `repo ${repoRoot} · ticket ${sanitizeToken(String(ticketLabel))}`;
   switch (actionId) {
     case 'gate':
-      return { kind: 'gate', argv: ['adlc', 'gate-manifest', 'verify', '--json'], cwd: repoRoot, echo };
+      // --allow-legacy-unsigned tolerates a repo's honest pre-signing history
+      // without weakening detection of real tampering — see
+      // packages/gate-manifest/lib/verify.mjs.
+      return { kind: 'gate', argv: ['adlc', 'gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], cwd: repoRoot, echo };
     case 'ticket-show': {
       if (!active || active.state !== 'active') return refuse(`no active or readable ticket to show (${echo})`);
       if (!TICKET_ID_RE.test(active.id)) return refuse('active ticket id fails validation');

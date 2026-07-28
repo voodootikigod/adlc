@@ -97,6 +97,23 @@ test('auditGateManifest: verify ok → no warning', () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// #378: pin that the verify spawn actually passes --allow-legacy-unsigned — a
+// revert of that flag would restore the "cry wolf on legacy history" bug
+// without any test here catching it (stub() above matches on a bin+verb prefix
+// alone, so it can't see whether the flag was dropped).
+test('auditGateManifest: verify is called with --allow-legacy-unsigned', () => {
+  const root = initAdlc(mkroot());
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+  const calls = [];
+  const spy = (bin, args) => { calls.push({ bin, args }); return { status: 0, stdout: '{}', stderr: '' }; };
+  try {
+    auditGateManifest(root, { spawnImpl: spy });
+    const verifyCall = calls.find((c) => c.bin === 'adlc' && c.args.includes('verify'));
+    assert.ok(verifyCall, 'a gate-manifest verify call was made');
+    assert.ok(verifyCall.args.includes('--allow-legacy-unsigned'), 'verify is called with --allow-legacy-unsigned');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 // ---- auditAdversarialReview (issue #59: mechanical local trigger) ----
 
 test('auditAdversarialReview: not ADLC-initialized → skipped no-op', () => {

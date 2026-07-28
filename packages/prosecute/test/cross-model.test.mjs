@@ -428,6 +428,28 @@ describe('cross-model works on an unsigned legacy manifest (#326 — not inert, 
       assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+
+  // #378: manifestChainTrustworthy's requireSignatures:false is scoped to the
+  // contiguous prefix BEFORE the first signed entry (see verify.mjs). An unsigned
+  // entry recorded AFTER signing was already adopted (e.g. a later append ran
+  // without ADLC_MANIFEST_KEY) now breaks the chain here too — fail-closed on the
+  // WHOLE gate, even for a genuinely valid, correctly-signed approve recorded
+  // earlier. This is a deliberate strengthening versus the old unscoped tolerance.
+  it('a valid signed approve is fail-closed if a LATER entry is unsigned (signing lapsed after adoption)', () => {
+    const dir = tmp();
+    try {
+      // A genuinely valid, correctly-signed approve — recorded FIRST.
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      // Then an unrelated gate appends WITHOUT a key — signing has already been
+      // adopted by this point in the file, so this is a regression, not honest
+      // legacy history.
+      withoutKey(() => {
+        record({ gate: 'rails', ticket: 'T0', rawData: JSON.stringify({ ok: true }), dir });
+      });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 // #326 — hasCrossModelApprove is the per-TICKET gate; each argument of its input guard is

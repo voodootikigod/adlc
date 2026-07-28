@@ -199,7 +199,7 @@ test('stopAudit SKIPS a repo with no .adlc/tickets.json — exactly { skipped: t
 // with no changed paths the run is not risk-gated, so that is the only warning.
 test('stopAudit surfaces the gate-manifest verify problem as a warning when verify exits non-zero', () => {
   const root = mkAdlcRoot();
-  const { impl } = routedSpawn([
+  const { impl, calls } = routedSpawn([
     [(b, a) => b === 'adlc' && a.includes('verify'), { status: 1, stdout: '', stderr: 'gate chain broken' }],
     // git status/ls-files/rev-parse all fall through to the empty default → no changed paths.
   ]);
@@ -209,6 +209,12 @@ test('stopAudit surfaces the gate-manifest verify problem as a warning when veri
     assert.equal(res.warnings.length, 1, 'exactly the verify warning (no changed paths ⇒ not risk-gated)');
     assert.match(res.warnings[0], /gate-manifest verify reported a problem/);
     assert.match(res.warnings[0], /gate chain broken/);
+    // #378: pin that the verify spawn actually passes --allow-legacy-unsigned — a
+    // revert of that flag would restore the "cry wolf on legacy history" bug
+    // without any test here catching it (the route above matches on 'verify' alone).
+    const verifyCall = calls.find((c) => c.bin === 'adlc' && c.args.includes('verify'));
+    assert.ok(verifyCall, 'a gate-manifest verify call was made');
+    assert.ok(verifyCall.args.includes('--allow-legacy-unsigned'), 'verify is called with --allow-legacy-unsigned');
   } finally { cleanup(root); }
 });
 

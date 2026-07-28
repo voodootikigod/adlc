@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -365,6 +366,87 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
     try {
       const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
       assert.equal(r.status, 2, 'a wrongly-signed entry must never be tolerated');
+    } finally { cleanup(dir); }
+  });
+
+  // #378 — a SECOND, distinct cause of "chain does not verify": an entry appended
+  // WITHOUT the key after this ledger had already adopted signing (not a rotation).
+  // The diagnostic must name THIS cause, not blame rotation for something else.
+  it('names "signing lapsed after adoption" (not rotation) when a later entry is unsigned', () => {
+    const { dir, rev } = (() => {
+      const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+      const revision = JSON.parse(runBin(
+        ['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'],
+        dir, { ADLC_MANIFEST_KEY: KEY_A }
+      ).stdout).revision;
+      const rec = runBin(
+        ['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic',
+         '--verdict', 'approve', '--revision', revision, '--dir', '.adlc'],
+        dir, { ADLC_MANIFEST_KEY: KEY_A }
+      );
+      assert.equal(rec.status, 0, 'precondition: the approve records cleanly, signing already adopted');
+      // A later append with NO key — signing lapsed, not rotated. adlc-prosecute has no
+      // bare `record` verb, so append directly via the library function used by CLI.
+      const prevKey = process.env.ADLC_MANIFEST_KEY;
+      delete process.env.ADLC_MANIFEST_KEY;
+      try {
+        record({ gate: 'unrelated-gate', dir: join(dir, '.adlc') });
+      } finally {
+        process.env.ADLC_MANIFEST_KEY = prevKey;
+      }
+      return { dir, rev: revision };
+    })();
+    try {
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
+      assert.match(r.stderr, /lapsed|WITHOUT ADLC_MANIFEST_KEY/i, 'must name the true cause: signing lapsed after adoption');
+      assert.doesNotMatch(r.stderr, /was ROTATED/i, 'must NOT blame rotation as the cause when it is not');
+      // #378 round-3 finding — pin the corrected repair-chain remedy: it must be a
+      // complete, runnable command AND must warn that it re-signs EVERY unsigned
+      // entry in the whole manifest (repair.mjs has no per-entry scoping), not just
+      // the lapsed one — a garbled or dropped warning here would go uncaught.
+      assert.match(r.stderr, /repair-chain --reason "[^"]*" --write --attest-unsigned/,
+        'must give a complete, runnable repair-chain command');
+      assert.match(r.stderr, /WHOLE manifest/i, 'must warn the repair re-signs the whole manifest, not just this entry');
+      void rev;
+    } finally { cleanup(dir); }
+  });
+
+  // #378 round-2 finding — break.reason has values beyond 'signature invalid' and
+  // 'unsigned entry' (e.g. raw hash-chain corruption). The diagnostic must not
+  // mislabel THOSE as key rotation either; it must fall back to a neutral message
+  // naming the actual reason instead of asserting a specific, wrong root cause.
+  it('falls back to a neutral message (not "ROTATED") for a raw hash-chain corruption', () => {
+    const { dir } = repoWithRotatedKey();
+    try {
+      // A SECOND signed entry, so the corruption below lands on a non-first entry
+      // (the first entry's prev must be null — a different check — so corrupting
+      // it would not exercise the 'prev hash mismatch' branch this test targets).
+      const prevKey = process.env.ADLC_MANIFEST_KEY;
+      process.env.ADLC_MANIFEST_KEY = KEY_A;
+      try {
+        record({ gate: 'second-entry', dir: join(dir, '.adlc') });
+      } finally {
+        process.env.ADLC_MANIFEST_KEY = prevKey;
+      }
+
+      // Corrupt the chain directly: break the prev-hash link without touching any
+      // signature. This is neither a rotation (sigs are untouched) nor an unsigned
+      // entry (every entry still carries a sig) — it is raw ledger corruption.
+      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+      const lines = readFileSync(manifestPath, 'utf8').trimEnd().split('\n');
+      const last = JSON.parse(lines.at(-1));
+      last.prev = 'deadbeef'.repeat(8);
+      lines[lines.length - 1] = JSON.stringify(last);
+      writeFileSync(manifestPath, `${lines.join('\n')}\n`);
+
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
+      assert.doesNotMatch(r.stderr, /was ROTATED/i, 'must NOT blame rotation for raw corruption');
+      assert.doesNotMatch(r.stderr, /lapsed/i, 'must NOT blame a signing lapse for raw corruption');
+      assert.match(r.stderr, /prev hash mismatch/i, 'must name the actual break reason');
     } finally { cleanup(dir); }
   });
 });

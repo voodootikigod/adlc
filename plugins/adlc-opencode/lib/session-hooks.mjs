@@ -60,7 +60,10 @@ export function auditGateManifest(root, { spawnImpl = spawnSync } = {}) {
   if (!existsSync(join(root, '.adlc', 'manifest.jsonl'))) {
     return { ok: true, skipped: true, warning: null }; // nothing recorded yet → no-op
   }
-  const res = run(spawnImpl, 'adlc', ['gate-manifest', 'verify', '--json'], root);
+  // --allow-legacy-unsigned tolerates a repo's honest pre-signing history
+  // without weakening detection of real tampering — see
+  // packages/gate-manifest/lib/verify.mjs.
+  const res = run(spawnImpl, 'adlc', ['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], root);
   if (res.error) {
     return { ok: true, skipped: true, warning: null }; // can't run the verifier → stay silent (advisory)
   }

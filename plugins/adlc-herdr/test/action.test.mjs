@@ -80,7 +80,7 @@ test('an unresolvable repo refuses every action (fail closed)', () => {
 test('gate plans the exact trusted argv and echoes repo + ticket', () => {
   const plan = planAction('gate', target, active);
   assert.equal(plan.kind, 'gate');
-  assert.deepEqual(plan.argv, ['adlc', 'gate-manifest', 'verify', '--json']);
+  assert.deepEqual(plan.argv, ['adlc', 'gate-manifest', 'verify', '--json', '--allow-legacy-unsigned']);
   assert.equal(plan.cwd, '/repo');
   assert.ok(plan.echo.includes('/repo'));
   assert.ok(plan.echo.includes('t-x1'));

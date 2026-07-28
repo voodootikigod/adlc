@@ -275,6 +275,29 @@ describe('record → verify round-trip', () => {
     }
   });
 
+  // #378: appendManifestEntry's pre-append check is scoped the same way verify()
+  // is — a signed entry followed by a later unsigned one (e.g. a prior append ran
+  // without ADLC_MANIFEST_KEY after signing was already adopted) must refuse
+  // further appends, not silently continue degrading provenance.
+  it('rejects appending onto a chain where a signed entry is followed by an unsigned one', () => {
+    try {
+      withKey('test-key', () => {
+        record({ gate: 'signed-1', dir });
+      });
+      withKey(null, () => {
+        record({ gate: 'unsigned-after-adoption', dir });
+      });
+      withKey('test-key', () => {
+        assert.throws(
+          () => appendManifestEntry({ type: 'p5-complete' }, dir),
+          /manifest chain is invalid.*unsigned entry/
+        );
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
   it('empty ledger is valid', () => {
     try {
       const r = verify(dir);
@@ -390,6 +413,44 @@ describe('repairChain', () => {
       assert.equal(plain.status, 0, plain.stderr);
       assert.doesNotMatch(plain.stderr, /ticket complete/, 'a non-acceptance gate prints no reminder');
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // #378: proves --allow-legacy-unsigned is actually wired through parseArgs into
+  // verify()'s requireSignatures option via the REAL binary (not just the library
+  // function in isolation) — a reverted/typoed/negation-flipped flag would fail here.
+  it('CLI: --allow-legacy-unsigned tolerates a legacy-unsigned-prefix manifest; omitting it still fails strict', () => {
+    const dir = makeTmp();
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    const env = { ...process.env, [KEY_ENV]: 'test-key' };
+    try {
+      withKey(null, () => {
+        record({ gate: 'legacy-1', dir });
+        record({ gate: 'legacy-2', dir });
+      });
+      withKey('test-key', () => {
+        record({ gate: 'signed-1', dir });
+      });
+
+      const lenient = spawnSync(
+        process.execPath,
+        [bin, 'verify', '--json', '--allow-legacy-unsigned', '--dir', dir],
+        { encoding: 'utf8', env },
+      );
+      assert.equal(lenient.status, 0, lenient.stdout + lenient.stderr);
+      assert.equal(JSON.parse(lenient.stdout).valid, true);
+
+      const strict = spawnSync(
+        process.execPath,
+        [bin, 'verify', '--json', '--dir', dir],
+        { encoding: 'utf8', env },
+      );
+      assert.equal(strict.status, 2);
+      const strictResult = JSON.parse(strict.stdout);
+      assert.equal(strictResult.valid, false);
+      assert.equal(strictResult.break.reason, 'unsigned entry');
+    } finally {
+      cleanTmp(dir);
+    }
   });
 
   it('requires and audits explicit unsigned attestation through the CLI', () => {
@@ -836,6 +897,113 @@ describe('signing: tamper after signing is caught', () => {
         assert.equal(r.valid, false);
         assert.equal(r.break.reason, 'signature invalid');
         assert.equal(r.break.seq, 2);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+});
+
+// ── T149 / #378: scoped legacy-unsigned-prefix tolerance ─────────────────────
+// requireSignatures:false must tolerate ONLY a contiguous legacy prefix (entries
+// before the first signed entry in the file), not an unsigned entry anywhere.
+// A missing sig after signing was adopted, or ANY invalid sig, must still break
+// the chain — otherwise an attacker could regress a signed ledger back to
+// "unsigned" by appending plain entries after the fact.
+
+describe('signing: scoped legacy-prefix tolerance (#378)', () => {
+  it('unsigned prefix followed by signed entries verifies as valid in lenient mode', () => {
+    const dir = makeTmp();
+    try {
+      withKey(null, () => {
+        record({ gate: 'legacy-1', dir });
+        record({ gate: 'legacy-2', dir });
+      });
+      withKey(KEY, () => {
+        record({ gate: 'signed-1', dir });
+      });
+      withKey(KEY, () => {
+        const r = verify(dir, { requireSignatures: false });
+        assert.equal(r.valid, true);
+        assert.equal(r.count, 3);
+        // signed:true means "every entry verified cryptographically" — lenient
+        // mode does not require that of the legacy prefix, so it must stay false
+        // even on an otherwise-clean pass (ticket's explicit signed:true contract).
+        assert.equal(r.signed, false);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('an unsigned entry AFTER the first signed entry breaks the chain even in lenient mode', () => {
+    const dir = makeTmp();
+    try {
+      withKey(KEY, () => {
+        record({ gate: 'signed-1', dir });
+      });
+      // A later entry recorded with no key — signing was already adopted by this
+      // point, so this is a regression, not honest legacy history.
+      withKey(null, () => {
+        record({ gate: 'plain-after-adoption', dir });
+      });
+      withKey(KEY, () => {
+        const r = verify(dir, { requireSignatures: false });
+        assert.equal(r.valid, false);
+        assert.equal(r.break.reason, 'unsigned entry');
+        assert.equal(r.break.seq, 2);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('a legacy-prefix entry with a PRESENT-but-WRONG signature still fails in lenient mode', () => {
+    const dir = makeTmp();
+    try {
+      // e1 sits at the very front of the file (the legacy-prefix position) but
+      // carries a sig computed under the WRONG key — forged provenance, not
+      // honestly-missing provenance.
+      const e1 = buildEntry({
+        gate: 'legacy', ticket: undefined, data: undefined, filePaths: [],
+        prevRawLine: null, prevSeq: 0, ts: '2024-01-01T00:00:00.000Z', key: 'wrong-key',
+      });
+      const line1 = JSON.stringify(e1);
+      const e2 = buildEntry({
+        gate: 'signed', ticket: undefined, data: undefined, filePaths: [],
+        prevRawLine: line1, prevSeq: e1.seq, ts: '2024-01-02T00:00:00.000Z', key: KEY,
+      });
+      const line2 = JSON.stringify(e2);
+      const lp = ledgerPath('manifest', dir);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(lp, line1 + '\n' + line2 + '\n');
+
+      withKey(KEY, () => {
+        const r = verify(dir, { requireSignatures: false });
+        assert.equal(r.valid, false);
+        assert.equal(r.break.reason, 'signature invalid');
+        assert.equal(r.break.seq, e1.seq);
+      });
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('strict default (requireSignatures:true) is unchanged: still fails at the first unsigned entry', () => {
+    const dir = makeTmp();
+    try {
+      withKey(null, () => {
+        record({ gate: 'legacy-1', dir });
+        record({ gate: 'legacy-2', dir });
+      });
+      withKey(KEY, () => {
+        record({ gate: 'signed-1', dir });
+      });
+      withKey(KEY, () => {
+        const r = verify(dir); // no opts → requireSignatures defaults to true
+        assert.equal(r.valid, false);
+        assert.equal(r.break.reason, 'unsigned entry');
+        assert.equal(r.break.seq, 1);
       });
     } finally {
       cleanTmp(dir);

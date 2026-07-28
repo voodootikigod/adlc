@@ -5,7 +5,7 @@ import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFil
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
-import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy, manifestChainBreakReason } from '../lib/cross-model.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 
@@ -432,10 +432,23 @@ if (positionals[0] === 'tier-check') {
     process.exit(0);
   }
   if (!chainTrustworthy) {
+    // #378 — "does not verify" can have several distinct causes (see verify.mjs's
+    // break.reason: 'signature invalid', 'unsigned entry', 'prev hash mismatch', 'seq
+    // not monotonically increasing', 'malformed JSON', 'entry must be an object',
+    // 'invalid seq', 'first entry prev must be null'). Name the two most common and
+    // actionable ones specifically; fall back to a NEUTRAL message for the rest rather
+    // than asserting a specific (and likely wrong) root cause like key rotation for
+    // what could be raw ledger corruption or tampering unrelated to any key.
+    const reason = manifestChainBreakReason(values.dir);
+    const causeLine = reason === 'unsigned entry'
+      ? `The usual cause is that an entry was appended WITHOUT ADLC_MANIFEST_KEY set after this ledger had already adopted signing — a config gap somewhere the entry was recorded, not a rotation. Ensure the key is set for every future record. To repair: \`adlc gate-manifest repair-chain --reason "<why>" --write --attest-unsigned\` — NOTE this re-signs EVERY currently-unsigned entry in the WHOLE manifest under today's key, including any honest legacy prefix that predates signing, not just the lapsed one; review \`adlc gate-manifest verify\` output first to confirm that is what you want.\n`
+      : reason === 'signature invalid'
+      ? `The usual cause is that ADLC_MANIFEST_KEY was ROTATED or replaced — every previously signed entry was signed with the OLD key and no longer verifies under the new one. Restore the original key, or migrate the signed history onto the new key.\n`
+      : `Cause: ${reason ?? 'unknown'}. This is a ledger integrity problem (corruption, truncation, or out-of-order entries), not necessarily a key issue — investigate the manifest directly before assuming rotation.\n`;
     console.error(
-      `tier-check: the manifest hash chain does NOT verify — one or more entries carry a signature that is present but INVALID. This required check FAILS for revision ${revision}.\n` +
+      `tier-check: the manifest hash chain does NOT verify. This required check FAILS for revision ${revision}.\n` +
       `This is NOT a missing attestation. Recording a new one will not clear it: record-cross-model refuses to append onto an unverifiable chain, so a distinct-provider review run now would be wasted.\n` +
-      `The usual cause is that ADLC_MANIFEST_KEY was ROTATED or replaced — every previously signed entry was signed with the OLD key and no longer verifies under the new one. Restore the original key, or migrate the signed history onto the new key.\n` +
+      causeLine +
       `Diagnose with: adlc gate-manifest verify`
     );
     process.exit(2);

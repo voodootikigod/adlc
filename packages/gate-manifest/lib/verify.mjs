@@ -35,17 +35,34 @@ import { getKey, verifyEntrySig } from './sign.mjs';
  *    This defeats the forge-from-scratch attack: without the key an attacker
  *    cannot produce valid signatures, so verify (run WITH the key) returns
  *    valid:false.
- *  - requireSignatures:false → tolerate entries with NO sig (legacy/unsigned
- *    history), for a caller which sig-checks the specific entries it trusts
- *    itself. A PRESENT-but-invalid sig is STILL rejected (tampering), so this is
- *    "unsigned history is OK", not "tampered signatures are OK". signed=false.
+ *  - requireSignatures:false → tolerate a missing sig only on the LEGACY PREFIX:
+ *    entries before the first entry in the file that carries a sig (recorded
+ *    before signing was ever enabled on this ledger). Once the scan passes that
+ *    first signed entry, every later entry is "signed-era" and a missing sig on
+ *    it breaks the chain exactly like strict mode — an attacker cannot regress a
+ *    signed ledger back to unsigned by appending plain entries after the fact.
+ *    A PRESENT-but-invalid sig is STILL rejected everywhere (tampering), so this
+ *    is "an honest unsigned history is OK", not "tampered signatures are OK" or
+ *    "unsigned entries are OK anywhere". signed=false.
+ *
+ *    HONEST LIMIT: if a manifest contains ZERO signed entries, `seenSignedEntry`
+ *    never flips, so the WHOLE file is treated as legacy prefix and reported
+ *    valid:true. A wholesale-forged, entirely-unsigned chain (sha256 is public
+ *    and keyless — this needs no secret) is therefore indistinguishable from an
+ *    honest ledger that genuinely predates signing end to end. This mode does
+ *    NOT prove "no forgery" in that case, only "no signed entry was tampered
+ *    with, and no unsigned entry follows a signed one" — a caller that needs a
+ *    stronger guarantee must check for at least one verified signed entry itself
+ *    (result.signed alone does not distinguish this: it is false in both the
+ *    zero-signed-entries case and the some-signed-entries lenient-pass case).
  *
  * @param {string} [dir]  ledger directory (default ADLC_DIR)
  * @param {object} [opts]
- * @param {boolean} [opts.requireSignatures=true]  when false, do not require that
- *   every entry be signed (unsigned/legacy entries pass), but still reject any
- *   entry whose PRESENT signature does not verify. When true, every entry must be
- *   signed and valid.
+ * @param {boolean} [opts.requireSignatures=true]  when false, tolerate a missing
+ *   sig on the contiguous legacy prefix (entries before the first signed entry),
+ *   but still reject a missing sig on any entry after that point, and reject any
+ *   entry whose PRESENT signature does not verify, anywhere. When true, every
+ *   entry must be signed and valid.
  * @returns {VerifyResult}
  */
 export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
@@ -70,6 +87,7 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
 
   let prevRawLine = null;
   let prevSeq = null;
+  let seenSignedEntry = false; // flips true once an entry with a verified sig is seen
 
   for (const { line, lineNo } of nonEmpty) {
     let entry;
@@ -143,38 +161,47 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
 
     // Check HMAC signatures when a key is configured. Two independent conditions:
     //
-    //   MISSING sig — gated by requireSignatures. In the default (true) mode EVERY
-    //     entry must carry a sig, so a forged-from-scratch chain is rejected. In the
-    //     lenient (false) mode a legacy entry with NO sig is TOLERATED: it is for a
-    //     caller whose manifest has legitimately-unsigned history (signing enabled
-    //     partway through its life) and which sig-checks the specific entries it
-    //     trusts itself.
-    //   PRESENT-but-INVALID sig — rejected in BOTH modes. A sig that is present but
-    //     does not verify means the entry's bytes were altered after signing (or the
-    //     wrong key signed it). Skipping that in lenient mode would let an attacker
-    //     TAMPER a signed entry — e.g. rewrite a signed `needs-attention` revocation
-    //     so it no longer matches the gate — recompute the public prev-hashes, and
-    //     pass "chain-only" verification. Lenient means "unsigned history is OK", NOT
-    //     "tampered signatures are OK". (Codex #354 re-review F1.)
+    //   MISSING sig — gated by requireSignatures AND position. In the default
+    //     (true) mode EVERY entry must carry a sig, so a forged-from-scratch chain
+    //     is rejected. In the lenient (false) mode a missing sig is tolerated ONLY
+    //     while no earlier entry in the file has carried a sig yet — i.e. it is
+    //     still inside the contiguous legacy prefix from before signing was ever
+    //     enabled on this ledger. As soon as one signed entry has been seen,
+    //     `seenSignedEntry` flips true and a later missing sig breaks the chain
+    //     just like strict mode: an attacker who controls the tail of a signed
+    //     ledger cannot regress it to unsigned by appending plain entries.
+    //   PRESENT-but-INVALID sig — rejected in BOTH modes, at ANY position. A sig
+    //     that is present but does not verify means the entry's bytes were altered
+    //     after signing (or the wrong key signed it). Skipping that in lenient mode
+    //     would let an attacker TAMPER a signed entry — e.g. rewrite a signed
+    //     `needs-attention` revocation so it no longer matches the gate — recompute
+    //     the public prev-hashes, and pass "chain-only" verification. Lenient means
+    //     "an honest unsigned prefix is OK", NOT "tampered signatures are OK" and
+    //     NOT "unsigned entries are OK anywhere". (Codex #354 re-review F1.)
     if (key !== null) {
       const hasSig = entry.sig !== undefined && entry.sig !== null;
-      if (!hasSig && requireSignatures) {
-        return {
-          valid: false,
-          message: `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`,
-          count: lineNo - 1,
-          signed: false,
-          break: { seq: entry.seq, lineNo, reason: 'unsigned entry' },
-        };
-      }
-      if (hasSig && !verifyEntrySig(key, entry)) {
-        return {
-          valid: false,
-          message: `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`,
-          count: lineNo - 1,
-          signed: false,
-          break: { seq: entry.seq, lineNo, reason: 'signature invalid' },
-        };
+      if (!hasSig) {
+        const toleratedLegacyPrefix = !requireSignatures && !seenSignedEntry;
+        if (!toleratedLegacyPrefix) {
+          return {
+            valid: false,
+            message: `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`,
+            count: lineNo - 1,
+            signed: false,
+            break: { seq: entry.seq, lineNo, reason: 'unsigned entry' },
+          };
+        }
+      } else {
+        if (!verifyEntrySig(key, entry)) {
+          return {
+            valid: false,
+            message: `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`,
+            count: lineNo - 1,
+            signed: false,
+            break: { seq: entry.seq, lineNo, reason: 'signature invalid' },
+          };
+        }
+        seenSignedEntry = true;
       }
     }
 

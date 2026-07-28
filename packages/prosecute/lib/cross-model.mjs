@@ -302,15 +302,22 @@ function crossModelSatisfied(entries, match) {
 // the earlier `approve` resurface. A garbled line breaks the hash linkage, so verify()
 // returns valid:false and a corrupt/truncated manifest can no longer clear the gate.
 //
-// requireSignatures:false — tolerate UNSIGNED history, still reject TAMPERED signatures.
-// The shared manifest accumulates entries from other gates, most recorded before signing
-// was enabled, so they are legitimately unsigned. A full sig-requiring verify() with the
-// key present would fail on the FIRST such entry and make this gate permanently inert (no
-// PR could ever pass). So we do not DEMAND every entry be signed — but a present-but-
-// invalid sig is still rejected, so an attacker cannot rewrite a signed `needs-attention`
-// revocation (invalidating its sig) and slip it past as "chain-only". Per-entry FORGE
-// resistance is enforced where it matters: candidateReview verifyEntrySig()s the specific
-// approve it is about to trust, so a fabricated (unsigned / wrong-key) approve is rejected.
+// requireSignatures:false — tolerate an UNSIGNED LEGACY PREFIX, still reject TAMPERED
+// signatures. The shared manifest's early history predates signing, so those entries are
+// legitimately unsigned. A full sig-requiring verify() with the key present would fail on
+// the FIRST such entry and make this gate permanently inert (no PR could ever pass). So we
+// do not DEMAND every entry be signed — but (as of #378) this tolerance is SCOPED to the
+// contiguous prefix before the first signed entry in the file: a missing sig on any entry
+// AFTER that point now breaks the chain here too, same as it does for the CLI's
+// --allow-legacy-unsigned path (see verify.mjs). That is a deliberate STRENGTHENING versus
+// the old unscoped tolerance, not a new risk — it fails this predicate closed on a ledger
+// where signing appears to have lapsed after adoption (e.g. an append ran without the key),
+// consistent with "FAIL CLOSED" above. A present-but-invalid sig is still rejected anywhere,
+// so an attacker cannot rewrite a signed `needs-attention` revocation (invalidating its sig)
+// and slip it past as "chain-only". Per-entry FORGE resistance is enforced where it matters
+// regardless: candidateReview verifyEntrySig()s the specific approve it is about to trust,
+// so a fabricated (unsigned / wrong-key) approve is rejected even if this predicate alone
+// would have let a differently-shaped chain through.
 //
 // HONEST LIMIT (Codex #354 F1, truncation) — NOT closed by this PR. A hash chain has no
 // authenticated head, so an author who controls the PR branch can DROP a signed revocation
@@ -332,6 +339,17 @@ function crossModelSatisfied(entries, match) {
 // gating call below is unchanged, so nothing here relaxes what is enforced.
 export function manifestChainTrustworthy(dir) {
   return verify(dir, { requireSignatures: false }).valid === true;
+}
+
+// #378 — since manifestChainTrustworthy's requireSignatures:false is now scoped
+// (see verify.mjs), "the chain does not verify" has TWO distinct causes: a
+// present-but-invalid signature (classic key rotation) OR an unsigned entry
+// appearing after signing was already adopted (signing lapsed post-adoption —
+// a NEW failure mode this predicate can report, that unscoped tolerance never
+// could). Callers that attribute the failure to the operator (e.g. tier-check's
+// diagnostic) need to tell these apart rather than always blaming rotation.
+export function manifestChainBreakReason(dir) {
+  return verify(dir, { requireSignatures: false }).break?.reason ?? null;
 }
 
 export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, key = getKey() } = {}) {

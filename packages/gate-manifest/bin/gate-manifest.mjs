@@ -13,7 +13,7 @@ import { ADLC_DIR } from '@adlc/core';
 const USAGE =
   'usage: gate-manifest <verb> [options]\n' +
   'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c]\n' +
-  '       verify [--json]\n' +
+  '       verify [--json] [--allow-legacy-unsigned]\n' +
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]';
@@ -29,6 +29,7 @@ const { values: flags, positionals } = parseArgs({
     reason: { type: 'string' },
     write:  { type: 'boolean', default: false },
     'attest-unsigned': { type: 'boolean', default: false },
+    'allow-legacy-unsigned': { type: 'boolean', default: false },
   },
 });
 
@@ -83,7 +84,13 @@ if (verb === 'record') {
 
 // ── verify ───────────────────────────────────────────────────────────────────
 if (verb === 'verify') {
-  const result = verify(flags.dir);
+  // --allow-legacy-unsigned: this ledger's own history predates HMAC signing
+  // (signing was enabled partway through its life), so a strict verify with a
+  // key present would fail forever at the first pre-signing entry. Passing this
+  // flag tolerates a missing sig ONLY on that contiguous legacy prefix; a missing
+  // sig on any entry after signing was adopted, or a present-but-invalid sig
+  // anywhere, still fails the chain. See verify()'s requireSignatures doc.
+  const result = verify(flags.dir, { requireSignatures: !flags['allow-legacy-unsigned'] });
 
   if (flags.json) {
     printJson(result);

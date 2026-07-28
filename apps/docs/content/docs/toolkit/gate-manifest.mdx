@@ -23,7 +23,7 @@ provenance that agentic code was checked before it shipped.
 
 ```sh
 adlc gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c] [--dir path] [--json]
-adlc gate-manifest verify [--json] [--dir path]
+adlc gate-manifest verify [--json] [--dir path] [--allow-legacy-unsigned]
 adlc gate-manifest show   [--ticket id] [--json] [--dir path]
 adlc gate-manifest attest [--ticket id] [--dir path]
 adlc gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
@@ -33,6 +33,7 @@ adlc gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--
 | --- | --- |
 | `record <gate-name>` | Append one entry to the ledger; signs it when `ADLC_MANIFEST_KEY` is set. |
 | `verify` | Walk the raw lines and validate the hash chain (and signatures, when keyed). |
+| `--allow-legacy-unsigned` | Tolerate a missing signature on the contiguous legacy prefix (entries before the first signed entry) only — a missing sig after that point, or any invalid signature anywhere, still fails. |
 | `repair-chain` | Preserve and rechain a ledger produced by an older incompatible writer; dry-run unless `--write` is supplied. |
 | `--attest-unsigned` | Explicitly authorize keyed repair to sign previously unsigned entries; their count and original lines are audited. |
 | `show` | Print entries, optionally filtered by ticket. |

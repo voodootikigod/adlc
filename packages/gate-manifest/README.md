@@ -10,7 +10,7 @@ Serves **C11** (cross-cutting provenance / agentic SLSA). Consumed by **P6 human
 
 ```
 gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c] [--dir path] [--json]
-gate-manifest verify [--json] [--dir path]
+gate-manifest verify [--json] [--dir path] [--allow-legacy-unsigned]
 gate-manifest show   [--ticket id] [--json] [--dir path]
 gate-manifest attest [--ticket id] [--dir path]
 gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
@@ -64,18 +64,24 @@ When `ADLC_MANIFEST_KEY` is set, `record` appends a `sig` (the human output prin
 Walk the raw ledger lines and validate the hash chain. Every entry's `prev` must equal `sha256` of the exact raw bytes of the previous line; sequence numbers must be strictly monotonically increasing.
 
 ```sh
-gate-manifest verify          # human-readable
-gate-manifest verify --json   # machine-readable
+gate-manifest verify                            # human-readable
+gate-manifest verify --json                      # machine-readable
+gate-manifest verify --allow-legacy-unsigned      # tolerate an honest pre-signing prefix
 ```
 
 **Exit 0** when valid (or empty manifest). **Exit 2** when the chain is broken — reports the seq and line number of the first break.
 
-When `ADLC_MANIFEST_KEY` is set, `verify` additionally checks every entry's HMAC signature. A missing sig (`unsigned entry`) or a wrong sig (`signature invalid`) breaks the chain. The JSON result includes `signed: true` only when a key was present and every entry verified cryptographically; otherwise `signed: false`.
+When `ADLC_MANIFEST_KEY` is set, `verify` additionally checks every entry's HMAC signature. By default every entry must carry a valid sig: a missing sig (`unsigned entry`) or a wrong sig (`signature invalid`) breaks the chain. The JSON result includes `signed: true` only when a key was present and every entry verified cryptographically; otherwise `signed: false`.
+
+`--allow-legacy-unsigned` relaxes the missing-sig requirement, but only for a **contiguous legacy prefix**: entries before the first entry in the file that carries a sig (i.e. entries recorded before this ledger ever adopted signing). As soon as the scan passes that first signed entry, every later entry is "signed-era" and a missing sig on it still breaks the chain — an attacker cannot regress a signed ledger back to unsigned by appending plain entries after the fact. A **present-but-invalid** signature is rejected everywhere, at any position, with or without this flag — this only tolerates an honest unsigned history, never a tampered one. Use this flag for routine health checks (e.g. a Stop hook) on a ledger that predates signing; omit it when you specifically want to prove the whole chain is under key control (e.g. a forge-from-scratch check).
+
+Honest limit: if a manifest has **zero** signed entries, this flag reports the whole file as a valid legacy prefix — a wholesale-forged, entirely-unsigned chain is indistinguishable from a ledger that genuinely predates signing end to end (sha256 is public and keyless; forging it needs no secret). `signed` stays `false` in both cases, so it cannot be used to tell them apart. A caller that needs a stronger guarantee (proof that at least one entry is under key control) must check for that itself.
 
 | Flag | Description |
 |------|-------------|
 | `--json` | Emit `{ valid, message, count, signed, break }` |
 | `--dir path` | Override ledger directory |
+| `--allow-legacy-unsigned` | Tolerate a missing sig on the contiguous legacy prefix only |
 
 ### show
 

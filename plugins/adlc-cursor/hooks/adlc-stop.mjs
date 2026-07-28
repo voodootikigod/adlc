@@ -80,9 +80,11 @@ export function stopAudit(root, { spawnImpl = spawnSync, env = process.env, base
   }
   const warnings = [];
 
-  // 1. Gate-evidence chain integrity.
+  // 1. Gate-evidence chain integrity. --allow-legacy-unsigned tolerates a repo's
+  // honest pre-signing history without weakening detection of real tampering —
+  // see packages/gate-manifest/lib/verify.mjs.
   if (existsSync(join(root, '.adlc', 'manifest.jsonl'))) {
-    const verify = run(spawnImpl, 'adlc', ['gate-manifest', 'verify', '--json'], root);
+    const verify = run(spawnImpl, 'adlc', ['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], root);
     if (!verify.error && verify.status !== 0) {
       warnings.push(`gate-manifest verify reported a problem: ${(verify.stderr || verify.stdout || '').trim().slice(0, 300)}`);
     }
