@@ -196,12 +196,23 @@ function parseLenient(rawLines, segmentLabel) {
   const entries = [];
   const skipped = [];
   for (const { line, lineNo } of rawLines) {
+    let entry;
     try {
-      const entry = JSON.parse(line);
-      entries.push({ ...entry, segment: segmentLabel });
+      entry = JSON.parse(line);
     } catch (err) {
       skipped.push({ segment: segmentLabel, line: lineNo, error: String(err.message ?? err) });
+      continue;
     }
+    // Valid JSON but not an entry object (null, a number, a string, a bare
+    // array, ...): spreading a non-object is a silent no-op (`{...null}` is
+    // `{}`) and spreading an array copies its indices, either way producing
+    // a phantom `{segment: ...}` entry with none of its real fields — report
+    // it as skipped instead of handing consumers a fabricated entry.
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      skipped.push({ segment: segmentLabel, line: lineNo, error: 'entry must be an object' });
+      continue;
+    }
+    entries.push({ ...entry, segment: segmentLabel });
   }
   return { entries, skipped };
 }
@@ -280,7 +291,15 @@ export function readManifestForest(dir = ADLC_DIR) {
     const aSeq = aa?.seq ?? 0;
     const bSeq = bb?.seq ?? 0;
     if (aSeq !== bSeq) return aSeq - bSeq;
-    return ulidOf(a) < ulidOf(b) ? -1 : ulidOf(a) > ulidOf(b) ? 1 : 0;
+    const aUlid = ulidOf(a);
+    const bUlid = ulidOf(b);
+    if (aUlid !== bUlid) return aUlid < bUlid ? -1 : 1;
+    // Two different segments (different slugs) sharing a ULID is a
+    // near-impossible collision, not something §4.2 forbids outright — fall
+    // back to the full filename so the comparator is still total (a name
+    // never ties with a DIFFERENT name here, since discoverSegments already
+    // rejects same-name-different-case duplicates).
+    return a < b ? -1 : a > b ? 1 : 0;
   });
 
   const entries = [...root.entries];

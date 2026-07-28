@@ -526,6 +526,36 @@ describe('readManifestForest — ordering', () => {
       assert.deepEqual(gates, ['parent-entry', 'child-entry']);
     } finally { cleanTmp(dir); }
   });
+
+  it('two root-less segments sharing a ULID (different slugs) still sort deterministically', () => {
+    // A same-ULID collision across different slugs isn't forbidden by §4.2
+    // (unlike same-name-different-case, which discoverSegments rejects), so
+    // the sort comparator must stay total even here rather than returning 0
+    // for two genuinely different filenames.
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const sharedUlid = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+      writeLines(join(adlc, 'manifest.d', `b-${sharedUlid}.jsonl`), buildChainLines([{ gate: 'b-entry', anchor: null }]));
+      writeLines(join(adlc, 'manifest.d', `a-${sharedUlid}.jsonl`), buildChainLines([{ gate: 'a-entry', anchor: null }]));
+
+      const { entries } = readManifestForest(adlc);
+      const gates = entries.map((e) => e.gate);
+      assert.deepEqual(gates, ['a-entry', 'b-entry']);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('a valid-JSON non-object line (null, a number, a bare array) is skipped, not fabricated into a phantom entry', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.jsonl'), ['null', '42', '[1,2,3]']);
+      const { entries, skipped } = readManifestForest(adlc);
+      assert.deepEqual(entries, []);
+      assert.equal(skipped.length, 3);
+      assert.ok(skipped.every((s) => s.error === 'entry must be an object'));
+    } finally { cleanTmp(dir); }
+  });
 });
 
 describe('discoverSegments — grammar edge cases', () => {
