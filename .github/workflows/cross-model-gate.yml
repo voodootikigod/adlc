@@ -30,19 +30,40 @@ name: cross-model-gate
 # runs as a separate workflow (not folded into the required test job) precisely so it can hold
 # the key safely; that separation is compatible with making it required.
 #
-# SCOPE LIMIT (Codex #354 F1): a required check does NOT close manifest TRUNCATION — it evaluates
-# the PR-controlled tree, so an author who drops a signed `needs-attention` revocation leaves a
-# valid chain ending in the earlier approve and the check passes. Closing that needs the latest
-# attestation state anchored OUTSIDE the PR tree (a protected ref / check-run / external signed
-# checkpoint); see manifestChainTrustworthy() and the PR discussion. This PR closes forgery and
-# rewrite; truncation is tracked follow-up.
+# TRUNCATION CLOSED (#355, #354 F1 follow-up — opt-in, THIS REPO ONLY, not a required ADLC
+# capability): a required check alone does not close manifest TRUNCATION — it evaluates the
+# PR-controlled tree, so an author who drops a signed `needs-attention` revocation leaves a valid
+# chain ending in the earlier approve and the check would pass. This workflow closes it with a
+# protected-ref mirror: BEFORE the gate step, it fetches the `adlc-attestations` orphan branch
+# (ruleset-protected, see docs/github-rulesets/adlc-attestations-ruleset.json), mirrors every
+# newly-observed signed cross-model entry into it, and pushes. The gate step then passes
+# `--attestation-store` so `assertNoTruncation` (packages/prosecute/lib/attestation-store.mjs)
+# can detect a signed entry the store has seen that is missing from the PR's own manifest. See
+# docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md for the full design,
+# the honest residual limit (a revocation is protected only once a trusted run has observed it),
+# and why this is opt-in rather than a default other ADLC adopters must apply.
+#
+# `contents: write` (was `read`) is needed ONLY for the mirror-push step below, and ONLY to the
+# `adlc-attestations` ref — `main` stays ruleset-protected regardless of this workflow's token
+# scope. The mirror step runs base code against PR data exactly like the gate step (same
+# isolation the SECURITY MODEL above describes); the payload it pushes is signature-verified
+# entries, never PR-controlled bytes taken on faith.
 
 on:
   pull_request_target:
     branches: [main]
 
+# Serializes runs PER PR so a revocation's mirror completes and is pushed before the next
+# push's gate run for the SAME PR is evaluated — the one race that could otherwise let a
+# truncation slip through. MUST be keyed on the PR number, NOT `github.ref`: under
+# pull_request_target, `github.ref` resolves to the BASE ref (identical for every PR), which
+# would silently collapse all PRs into one global queue instead of scoping per PR.
+concurrency:
+  group: cross-model-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   gate:
@@ -70,6 +91,47 @@ jobs:
           # store) and its git tree is diff-able, but nothing in it is ever run.
           git worktree add --detach ./_pr "$PR_HEAD"
 
+      # ── #355 truncation anchor: steps below, base code only ────────────────────────────
+      # ./_attestations is a SIBLING of ./_pr (never nested inside it) — a store nested inside
+      # the PR worktree would itself become an untracked file there, perturbing the very
+      # working-tree revision hash the gate binds to (proven while writing this workflow's
+      # tests: revisionIgnorePaths only excludes .adlc/manifest.jsonl, not an arbitrary path).
+      - name: Fetch or bootstrap the attestation store (adlc-attestations branch → ./_attestations)
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin adlc-attestations >/dev/null; then
+            git fetch origin adlc-attestations:refs/remotes/origin/adlc-attestations
+            git worktree add ./_attestations origin/adlc-attestations
+            git -C ./_attestations checkout -B adlc-attestations origin/adlc-attestations
+          else
+            # Bootstrap: the branch does not exist yet — first trusted run ever.
+            git worktree add --detach ./_attestations
+            git -C ./_attestations checkout --orphan adlc-attestations
+            git -C ./_attestations rm -rf . --quiet 2>/dev/null || true
+          fi
+
+      - name: Mirror newly-observed cross-model attestations — BASE code, PR data as input
+        working-directory: ./_pr
+        env:
+          ADLC_MANIFEST_KEY: ${{ secrets.ADLC_MANIFEST_KEY }}
+        run: |
+          node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" mirror-attestations \
+            --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl" --dir .adlc
+
+      - name: Push the updated attestation store (failure here FAILS the job — never gate on an unlanded update)
+        working-directory: ./_attestations
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add attestations.jsonl
+          if git diff --cached --quiet; then
+            echo "no new attestations to mirror this run"
+          else
+            git commit -q -m "mirror cross-model attestations for PR #${{ github.event.pull_request.number }}"
+            git push origin HEAD:adlc-attestations
+          fi
+
       - name: Verify cross-model attestation — BASE code, PR data, key isolated from PR code
         working-directory: ./_pr
         env:
@@ -82,5 +144,7 @@ jobs:
           # $GITHUB_WORKSPACE = the BASE checkout. Running the base binary with cwd=./_pr makes
           # tier-check classify the PR's diff (base..PR tree), derive the PR's revision, and read the
           # PR's .adlc manifest — all as data — while the executed code + node_modules are the base's.
+          # --attestation-store points OUTSIDE ./_pr (see the sibling-worktree note above).
           node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" tier-check \
-            --base "$BASE_SHA" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc
+            --base "$BASE_SHA" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc \
+            --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl"

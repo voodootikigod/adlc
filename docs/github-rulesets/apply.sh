@@ -227,6 +227,7 @@ echo "Applying protections to $REPO ..."
 provision_environment
 apply_ruleset "$DIR/main-branch-ruleset.json"
 apply_ruleset "$DIR/release-tag-ruleset.json"
+apply_ruleset "$DIR/adlc-attestations-ruleset.json"
 
 echo
 echo "Done. Verify with:"
