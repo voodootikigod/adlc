@@ -35,12 +35,24 @@ export function getKey(env = process.env) {
  * Deterministic: v1 uses the historical fixed key order; v2 recursively sorts
  * and signs every field carried by the entry. The `sig` field is always excluded.
  *
+ * Also excludes `segment`: forest.mjs's readManifestForest annotates every
+ * entry it returns with its source segment ('root' or a segment filename) —
+ * metadata inferred from WHICH FILE a line was read from, never itself
+ * written to disk as part of the entry. v2 signs "every field the entry
+ * carries", so without this exclusion, ANY entry read via readManifestForest
+ * would recompute different canonical bytes than what was actually signed at
+ * write time, and EVERY signature would fail to verify — not a hypothetical:
+ * this is exactly what happened first time a forest-read entry reached
+ * verifyEntrySig (T-MANIFEST-FOREST slice 2, cross-model.mjs). `segment` is
+ * therefore a reserved, read-only annotation field, the same category as
+ * `sig` itself — never part of what gets signed.
+ *
  * @param {object} entry  a manifest entry (with or without `sig`)
  * @returns {string} canonical JSON string
  */
 export function canonicalEntryBytes(entry) {
   if (entry.sigVersion === 2) {
-    const { sig: _sig, ...signed } = entry;
+    const { sig: _sig, segment: _segment, ...signed } = entry;
     return canonicalJson(signed);
   }
   const canonical = {

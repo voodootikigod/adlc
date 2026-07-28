@@ -8,7 +8,11 @@ import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 
-const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion'];
+// `segment` is reserved too: forest.mjs's readManifestForest annotates every
+// entry it returns with its source segment (see sign.mjs's canonicalEntryBytes
+// for why that annotation must never be signed) — a caller-supplied `segment`
+// would be indistinguishable from that read-only annotation.
+const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment'];
 
 /**
  * Atomically append an arbitrary top-level evidence entry to the C11 manifest.

@@ -11,7 +11,7 @@ import { appendManifestEntry, record, buildEntry, parseData, parseFileList, read
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
-import { canonicalEntryBytes, KEY_ENV } from '../lib/sign.mjs';
+import { canonicalEntryBytes, KEY_ENV, signEntry, verifyEntrySig } from '../lib/sign.mjs';
 import { repairChain } from '../lib/repair.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
 
@@ -1062,5 +1062,27 @@ describe('signing: canonicalEntryBytes is deterministic and excludes sig', () =>
     assert.equal(canonicalEntryBytes(base), canonicalEntryBytes(withSig));
     assert.equal(canonicalEntryBytes(base), canonicalEntryBytes(reordered));
     assert.ok(!canonicalEntryBytes(withSig).includes('sig'));
+  });
+
+  it('excludes segment too — a signature must survive readManifestForest\'s annotation (T-MANIFEST-FOREST slice 2)', () => {
+    // forest.mjs's readManifestForest annotates every entry it returns with
+    // `segment` ('root' or a segment filename) — metadata inferred from which
+    // file a line was read from, never itself written to disk. Without this
+    // exclusion, verifying an entry AS RETURNED BY readManifestForest recomputes
+    // different canonical bytes than what was actually signed at write time,
+    // and every signature fails — this was caught for real the first time a
+    // forest-read entry reached verifyEntrySig (cross-model.mjs).
+    const base = {
+      seq: 1, gate: 'g', ts: '2024-01-01T00:00:00.000Z',
+      ticket: 'T-1', data: { a: 1 }, files: {}, prev: null,
+    };
+    const annotated = { ...base, segment: 'root' };
+    assert.equal(canonicalEntryBytes(base), canonicalEntryBytes(annotated));
+    assert.ok(!canonicalEntryBytes(annotated).includes('segment'));
+
+    const signedThenAnnotated = { ...base, sigVersion: 2 };
+    signedThenAnnotated.sig = signEntry(KEY, signedThenAnnotated);
+    const asReadFromForest = { ...signedThenAnnotated, segment: 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl' };
+    assert.equal(verifyEntrySig(KEY, asReadFromForest), true);
   });
 });

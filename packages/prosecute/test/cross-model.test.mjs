@@ -7,15 +7,49 @@
 // a same-provider (non cross-model) record.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision, manifestChainBreakReason } from '../lib/cross-model.mjs';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { signEntry } from '@adlc/gate-manifest/lib/sign.mjs';
 import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest, readEntries } from '@adlc/core';
 import { gitRepo } from './helpers.mjs';
 import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
+
+// Hand-build a segment file directly (the segment WRITER is T-MANIFEST-FOREST slice
+// 3, not yet built — see gate-manifest's forest-format.test.mjs for the same
+// pattern). One cross-model-review entry per segment is all these tests need: the
+// entry IS the segment's first (anchor-carrying) entry.
+function writeCrossModelSegment(dir, name, { ticket, revision, provider, authorProvider, verdict, key, anchor = null }) {
+  const entry = {
+    seq: 1,
+    gate: 'cross-model-review',
+    ts: '2026-01-01T00:00:00.000Z',
+    ...(ticket !== undefined ? { ticket } : {}),
+    data: { provider, authorProvider, verdict, revision },
+    files: {},
+    prev: null,
+    anchor,
+  };
+  if (key) {
+    entry.sigVersion = 2;
+    entry.sig = signEntry(key, entry);
+  }
+  const segDir = join(dir, 'manifest.d');
+  mkdirSync(segDir, { recursive: true });
+  writeFileSync(join(segDir, name), JSON.stringify(entry) + '\n');
+}
+
+// The anchor manifestChainTrustworthy's forest verify() requires a segment's
+// first entry to resolve against: root's actual last committed line, so a
+// segment can validly anchor to "the current head line of the root" (spec §4.4).
+function rootAnchor(dir) {
+  const lines = readFileSync(ledgerPath('manifest', dir), 'utf8').split('\n').filter((l) => l.trim());
+  const last = lines.at(-1);
+  return { segment: 'root', seq: JSON.parse(last).seq, lineHash: sha256(last) };
+}
 
 // #326 hardening: attestations are HMAC-signed and the readers verify the signature
 // (which signs when the key is present) and the readers both need it set. Set it for this
@@ -244,8 +278,8 @@ describe('hasCrossModelApproveForRevision — #326 CI tier gate (ticket-agnostic
   });
 });
 
-describe('cross-model latest-verdict revocation (#326 P5 finding)', () => {
-  it('a later needs-attention from the same provider REVOKES an earlier approve (same revision)', () => {
+describe('cross-model TERMINAL revocation (T-MANIFEST-FOREST slice 2, spec §6)', () => {
+  it('a needs-attention from the same provider REVOKES an approve for the same tuple (same revision)', () => {
     const dir = tmp();
     try {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
@@ -255,12 +289,26 @@ describe('cross-model latest-verdict revocation (#326 P5 finding)', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('a later approve after a needs-attention RESTORES the gate', () => {
+  it('TERMINAL, not "latest wins": a LATER approve after a needs-attention does NOT restore the gate', () => {
+    // This is the behavior change slice 2 makes deliberately (spec §6, D2): once a
+    // provider's (provider, revision, [ticket]) tuple is revoked, it can never
+    // satisfy the gate again — not even with a chronologically later approve from
+    // that same provider. Re-approval requires a NEW revision (a real change to
+    // review), not a repeated approve of the same reviewed bytes. Order across the
+    // whole forest is otherwise unknowable (root vs. segments have no shared total
+    // order — see forest.mjs), so "latest wins" was never going to generalize;
+    // terminal is what makes the rule well-defined regardless of where either entry
+    // physically lives.
     const dir = tmp();
     try {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      // A DIFFERENT revision (a real new change) is unaffected — the tuple, not the
+      // provider, is what's revoked.
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-2', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-2', authorProvider: 'anthropic' }), true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -272,6 +320,109 @@ describe('cross-model latest-verdict revocation (#326 P5 finding)', () => {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
       // gemini's approve still stands.
       assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('cross-model forest walk (T-MANIFEST-FOREST slice 2)', () => {
+  it('a needs-attention recorded in a SEGMENT revokes an approve recorded in ROOT', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      writeCrossModelSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', {
+        ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention',
+        key: KEY, anchor: rootAnchor(dir),
+      });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('an approve recorded in a SEGMENT satisfies the gate, and is revoked by a needs-attention in ROOT', () => {
+    const dir = tmp();
+    try {
+      // A root entry to anchor the segment against (unrelated ticket/revision).
+      recordCrossModelReview({ ticket: 'T0', revision: 'rev-0', provider: 'gemini', authorProvider: 'anthropic', verdict: 'approve', dir });
+      writeCrossModelSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', {
+        ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve',
+        key: KEY, anchor: rootAnchor(dir),
+      });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+
+      // Now root revokes it — order/location in the forest doesn't matter to the
+      // terminal rule.
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('an UNSIGNED needs-attention in a fresh (never-signed) segment still revokes — regardless of signature state (spec §6)', () => {
+    // The segment has exactly one entry and it is unsigned: no earlier signed entry
+    // exists in THIS chain, so it is entirely within its own legacy prefix (per-chain,
+    // per #378/verify.mjs) and manifestChainTrustworthy stays true despite the root
+    // already being signed-era. This is the realistic shape of "a revocation counts
+    // regardless of its signature state": a keyless recorder (no ADLC_MANIFEST_KEY at
+    // record time) still produces a chain-trustworthy revocation.
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      writeCrossModelSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', {
+        ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention',
+        key: null, anchor: rootAnchor(dir),
+      });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a segment revocation for a DIFFERENT ticket does not revoke a specific ticket-scoped approve', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      writeCrossModelSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', {
+        ticket: 'T2', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention',
+        key: KEY, anchor: rootAnchor(dir),
+      });
+      // T1's own ticket-SCOPED approve is untouched: the per-ticket gate only
+      // matches needs-attention entries whose OWN ticket is exactly 'T1'.
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), true);
+      // But the ticket-AGNOSTIC gate doesn't filter revocations by ticket at
+      // all (ticket === undefined short-circuits the ticket check in both
+      // candidateReview and revocationCandidate) — a needs-attention for this
+      // (provider, revision) blocks it regardless of which ticket it names.
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('an UNTICKETED segment revocation blocks the ticket-agnostic gate but not a specific ticket-scoped approve', () => {
+    // Spec §6: "the per-ticket gate supplies [ticket], so a needs-attention scopes
+    // only to matching-ticket entries" — an entry with NO ticket field never matches
+    // a ticket-scoped check (ticket !== undefined && entry.ticket !== ticket), so it
+    // cannot revoke a specific ticket's approval; it only blocks the ticket-agnostic
+    // revision-wide gate. This is what lets §4.6's cutover seals revoke a specific
+    // ticket-scoped approval WITHOUT over-broadly poisoning every other ticket at the
+    // same revision, and conversely an unticketed trust-root-tier revocation stays
+    // revision-wide rather than silently narrowing to whichever ticket happens to ask.
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      writeCrossModelSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', {
+        revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', // no ticket
+        key: KEY, anchor: rootAnchor(dir),
+      });
+      assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), true);
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a malformed/dangling segment fails the whole gate closed via manifestChainTrustworthy (not silently ignored)', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      // Bad filename grammar — an invalid segment the forest verifier must reject.
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      writeFileSync(join(dir, 'manifest.d', 'Not-Valid-Grammar.jsonl'), '{}\n');
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
