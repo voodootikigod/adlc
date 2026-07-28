@@ -5,7 +5,7 @@ import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFil
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
-import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE, scopeObservedEntriesToAuthor } from '../lib/cross-model.mjs';
 import { readObservedAttestations, assertNoTruncation, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
@@ -490,7 +490,11 @@ if (positionals[0] === 'tier-check') {
   let truncationDetected = false;
   if (!satisfied && chainTrustworthy && observedEntries !== undefined) {
     const { entries: prEntries } = readEntries('manifest', values.dir);
-    truncationDetected = !assertNoTruncation({ prEntries, observedEntries, revision, key }).ok;
+    // Same author-scoping hasCrossModelApproveForRevision applies internally (round-4
+    // finding): recomputing this with UNSCOPED observedEntries would misreport a
+    // cross-author revision collision as truncation instead of a missing attestation.
+    const authorScopedObserved = scopeObservedEntriesToAuthor(observedEntries, authorProvider);
+    truncationDetected = !assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok;
   }
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, chainTrustworthy, truncationDetected });

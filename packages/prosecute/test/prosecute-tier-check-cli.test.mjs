@@ -590,4 +590,41 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
       assert.ok(!existsSync(storePath), 'the store must not be created/modified from a broken-chain manifest');
     } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
   });
+
+  it('round-4 codex finding: a cross-author revision collision reports MISSING attestation, not truncation, in --attestation-store attribution', () => {
+    // Two unrelated PRs (author anthropic vs author openai) that happen to produce an
+    // identical tree — same baseTickets + same mutate() applied to a fresh scratch repo
+    // yields the same revision hash, since .adlc/manifest.jsonl is excluded from it.
+    const prA = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const prB = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    const storePath = join(storeDir, 'attestations.jsonl');
+    try {
+      const revA = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], prA.dir).stdout).revision;
+      const revB = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--json'], prB.dir).stdout).revision;
+      assert.equal(revA, revB, 'precondition: the two scratch repos must collide on revision for this test to be meaningful');
+
+      // PR A (author anthropic): approve, then revoke. Mirror both into the store.
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revA, '--dir', '.adlc'], prA.dir);
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'needs-attention', '--revision', revA, '--dir', '.adlc'], prA.dir);
+      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], prA.dir);
+      assert.equal(mirrorResult.status, 0);
+      assert.match(mirrorResult.stdout, /appended 2/);
+
+      // PR B (author openai): no attestation recorded at all yet — a completely
+      // ordinary, not-yet-reviewed trust-root PR from a DIFFERENT author.
+      const prBResult = runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--attestation-store', storePath, '--json'], prB.dir);
+      assert.equal(prBResult.status, 2);
+      const prBJson = JSON.parse(prBResult.stdout);
+      assert.equal(prBJson.truncationDetected, false, 'PR B never truncated anything — author A\'s revocation is not about PR B');
+
+      const prBText = runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--attestation-store', storePath], prB.dir);
+      assert.match(prBText.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
+      assert.doesNotMatch(prBText.stderr, /ROLLBACK\/TRUNCATION DETECTED/);
+    } finally {
+      cleanup(prA.dir);
+      cleanup(prB.dir);
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
 });

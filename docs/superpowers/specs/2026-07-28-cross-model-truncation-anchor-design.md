@@ -186,7 +186,7 @@ small, non-overlapping additive one (`--allow-unsigned` next to `--attestation-s
 
 ## Cross-model review findings (codex, distinct from the anthropic author)
 
-Three review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
+Four review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
 made round 1's diff include unrelated upstream files):
 
 1. **Bootstrap run had no store file to `git add`** — `mirrorObservedAttestations` correctly never
@@ -220,8 +220,19 @@ made round 1's diff include unrelated upstream files):
 6. **`mirror-attestations` wrote to the store before proving the manifest chain trustworthy** —
    each entry's own signature was verified, but a signed entry copied out of context from an
    unrelated, legitimate manifest is individually valid while saying nothing about the CURRENT
-   manifest's integrity. Fixed: `mirror-attestations` now calls `manifestChainTrustworthy()` and
-   checks for skipped/malformed lines, refusing to mirror from an untrustworthy manifest.
+   manifest's integrity. Fixed: `mirror-attestations` now calls `manifestChainTrustworthy()`,
+   refusing to mirror from an untrustworthy manifest. (An initial fix also re-checked
+   `readEntries().skipped`; `mutation-gate` proved that check unreachable — `verify()` already
+   returns invalid on the first unparseable line, so it always fails via `manifestChainTrustworthy`
+   first. Removed rather than papering over with a test for an impossible state.)
+7. **The CLI's diagnostic attribution path re-derived truncation WITHOUT the author scoping** —
+   finding 4 fixed `hasCrossModelApproveForRevision`'s enforcement path, but `tier-check`'s separate
+   `truncationDetected` computation (used only for choosing which error message/`--json` field to
+   show) called `assertNoTruncation` directly with the unscoped `observedEntries`, so the exact
+   cross-author revision collision finding 4 closed for enforcement still misreported as
+   "ROLLBACK/TRUNCATION DETECTED" in the CLI's attribution message. Fixed by extracting the scoping
+   rule into an exported `scopeObservedEntriesToAuthor()` both call sites share, so the two paths
+   cannot drift apart again.
 
 One finding was surfaced but NOT changed: the ruleset's bypass being repo-wide (not scoped to just
 `cross-model-gate.yml`) was already known, documented, and accepted — see the residual-scope note in

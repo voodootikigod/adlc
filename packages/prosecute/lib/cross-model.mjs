@@ -410,10 +410,23 @@ export function hasCrossModelApproveForRevision({ dir, revision, authorProvider,
   // slice 2's terminal-revocation redesign.
   const { entries } = readEntries('manifest', dir);
   if (observedEntries !== undefined) {
-    const runAuthor = normalizeProvider(authorProvider);
-    const authorScopedObserved = observedEntries.filter((entry) => normalizeProvider(entry?.data?.authorProvider) === runAuthor);
+    const authorScopedObserved = scopeObservedEntriesToAuthor(observedEntries, authorProvider);
     const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries: authorScopedObserved, revision, key });
     if (!truncationCheck.ok) return false;
   }
   return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider), key });
+}
+
+/**
+ * Filter `observedEntries` down to those recorded FOR `authorProvider` (normalized
+ * comparison) — the same scoping `hasCrossModelApproveForRevision` enforces. Exported
+ * so a caller computing separate diagnostic attribution (e.g. the CLI's distinct
+ * "rollback/truncation detected" vs "no attestation" messaging) uses the IDENTICAL
+ * rule, rather than re-deriving it and drifting out of sync (round-4 cross-model
+ * review finding: the CLI's attribution path once called `assertNoTruncation` with
+ * unscoped entries, misreporting a cross-author revision collision as truncation).
+ */
+export function scopeObservedEntriesToAuthor(observedEntries, authorProvider) {
+  const runAuthor = normalizeProvider(authorProvider);
+  return observedEntries.filter((entry) => normalizeProvider(entry?.data?.authorProvider) === runAuthor);
 }
