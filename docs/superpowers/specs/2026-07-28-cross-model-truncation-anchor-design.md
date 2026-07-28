@@ -1,15 +1,19 @@
 # Design — Cross-model gate: close manifest TRUNCATION via an opt-in attestation-store anchor
 
-**Status:** Design (brainstorming output, approved by Chris Williams → ticket T149 authored →
-P1 interrogation next).
+**Status:** P1 interrogation complete — `spec-lint` clean (8/8 verified, no vacuous methods),
+`premortem` recorded (gate-manifest seq=101), `parallax` divergence pass recorded (seq=102, 5
+ambiguities found and resolved below + mirrored into ticket T150). Next: P2 decompose
+(`model-router`/`merge-forecast`) or straight to TDD implementation.
 **Date:** 2026-07-28
 **Author:** Chris Williams (@voodootikigodcom), drafted with Claude Code
 **Scope:** `packages/prosecute/` (new library + CLI flag), this repo's own
 `.github/workflows/cross-model-gate.yml`, and documentation. **Opt-in hardening mode for this
 repo's own dogfooding — not a required capability for other ADLC adopters.**
 
-> Related: GitHub issue #355, follow-up to PR #354 (merged, squash `14250e1`). Ticket **T149**
-> in the canonical ticket store carries the same content as the executable contract.
+> Related: GitHub issue #355, follow-up to PR #354 (merged, squash `14250e1`). Ticket **T150**
+> in the canonical ticket store carries the same content as the executable contract. (Originally
+> authored as T149; renumbered during a rebase onto origin/main after an independent, unrelated
+> ticket claimed T149 first — see #383.)
 
 ---
 
@@ -74,24 +78,35 @@ the marginal isolation gain.
 
 ### 2. Library — `packages/prosecute/lib/attestation-store.mjs` (new, pure, DI'd)
 
-- `readObservedAttestations(storePath, { key })` → signature-verified cross-model entries read
-  from the store; a missing file returns an empty list (bootstrap case — must not throw).
-- `assertNoTruncation({ prEntries, observedEntries, revision, key })` → pure function. For the
-  given `revision`, the set of observed entries' signatures must be a subset of the PR's currently
-  valid entries' signatures for that revision; a violation returns/throws the missing signatures
-  for a precise, actionable fail-closed message. Revision is signature-covered, so an attacker
-  cannot relabel a dropped revocation's revision to dodge the check.
+Five ambiguities below were surfaced by a `parallax` divergence pass and are resolved explicitly
+(not left to whoever implements) — see [Resolved ambiguities](#resolved-ambiguities-parallax-pass).
+
+- `readObservedAttestations(storePath, { key })` → `storePath` is the direct path to the
+  `attestations.jsonl` FILE (not its containing directory). Re-verifies every entry's signature
+  against `key` on every read — the store is defense-in-depth storage, not a trust boundary by
+  itself, so a corrupted or tampered store file cannot inject a trusted-looking entry merely by
+  having been written to disk. A missing file returns an empty list (bootstrap case — must not
+  throw).
+- `assertNoTruncation({ prEntries, observedEntries, revision, key })` → pure function; **never
+  throws**. Returns `{ ok: true }` or `{ ok: false, missing: [<sig>, ...] }`. For the given
+  `revision`, the set of observed entries' signatures must be a subset of the PR's currently valid
+  entries' signatures for that revision; a violation reports the missing signatures for a precise,
+  actionable fail-closed message. Revision is signature-covered, so an attacker cannot relabel a
+  dropped revocation's revision to dodge the check. Callers (the CLI, `hasCrossModelApproveForRevision`)
+  are responsible for turning `ok: false` into a fail-closed outcome (rejected verdict / non-zero exit).
 - `mirrorObservedAttestations({ prEntries, storePath, key })` → appends every valid cross-model
-  entry from `prEntries` not already present in the store (dedup by signature); returns the count
-  newly appended. Must be tmpdir-testable — no dependency on a real git checkout.
+  entry from `prEntries` not already present in the store, deduped by the entry's own `sig` field
+  (two entries with the same `sig` are byte-identical by construction — the signature covers the
+  full canonical entry). Returns the count newly appended. Must be tmpdir-testable — no dependency
+  on a real git checkout. `storePath` here is the same direct-file-path convention as above.
 
 ### 3. Gate wiring
 
 `hasCrossModelApproveForRevision` (`packages/prosecute/lib/cross-model.mjs`) gains an **optional**
 `observedEntries` parameter.
 
-- **Present:** run `assertNoTruncation` first; any missing signature fails the gate closed before
-  the existing `crossModelSatisfied` evaluation runs.
+- **Present:** run `assertNoTruncation` first; on `{ ok: false }` the gate itself fails closed
+  (rejected verdict / non-zero exit) before the existing `crossModelSatisfied` evaluation runs.
 - **Absent:** behavior is byte-for-byte identical to today (#354). Every existing caller that
   omits the parameter must see no change at all — this is the backward-compatibility contract the
   opt-in framing depends on.
@@ -120,9 +135,13 @@ Hard requirements:
 - `permissions: contents: write` — justified because it's base code only, the payload is
   signature-verified entries, the push target is the orphan branch, and `main` stays
   ruleset-protected.
-- `concurrency: { group: <per-PR>, cancel-in-progress: false }` — serializes runs so a
-  revocation's mirror step completes and is pushed before the next push's gate run is evaluated.
-  Without this, a fast double-push could race the mirror and let one truncation through.
+- `concurrency: { group: cross-model-gate-${{ github.event.pull_request.number }}, cancel-in-progress: false }`
+  — serializes runs **per PR** so a revocation's mirror step completes and is pushed before the
+  next push's gate run for the *same PR* is evaluated, while different PRs still run concurrently.
+  **Must NOT key on `github.ref`**: under `pull_request_target` that resolves to the *base* ref
+  (e.g. `refs/heads/main`), which is identical across every PR — using it would silently collapse
+  all PRs into one global serialization queue instead of scoping per PR. Without correct per-PR
+  serialization, a fast double-push could race the mirror and let one truncation through.
 - A failed mirror-push step **fails the job** — never evaluate the gate against a store update
   that didn't actually land.
 
@@ -133,6 +152,23 @@ PR and the gate workflow ran at least once before truncation. A recorded-but-nev
 revocation is invisible to everyone, the same exposure as an unsubmitted review. This is strictly
 better than today, not a claim of completeness, and is stated plainly in the docs.
 
+## Resolved ambiguities (parallax pass)
+
+A `parallax` divergence pass (three independent readings of this spec) found five points where
+implementers would plausibly have made different, incompatible choices. Each is resolved above and
+restated here for traceability:
+
+1. **`assertNoTruncation`'s failure contract** — never throws; always returns `{ ok, missing? }`.
+   The caller decides how to fail closed. (§2)
+2. **Store-read trust model** — `readObservedAttestations` re-verifies signatures against `key` on
+   every read; the store is not trusted merely for having been written once. (§2)
+3. **Mirror dedup key** — the entry's own `sig` field, not a full-string comparison. (§2)
+4. **Concurrency group key** — `github.event.pull_request.number`-scoped, explicitly NOT
+   `github.ref` (which aliases to the base ref under `pull_request_target` and would collapse all
+   PRs into one global queue). (§5)
+5. **`storePath` shape** — always a direct file path to `attestations.jsonl`, never a containing
+   directory, across the library and the CLI flag. (§2, §4)
+
 ## Known overlap risk
 
 PR #375 (branch `fix/370-unsigned-attestation`, open as of this writing) also edits
@@ -140,24 +176,47 @@ PR #375 (branch `fix/370-unsigned-attestation`, open as of this writing) also ed
 files. Whichever branch merges second must rebase and manually re-check for conflicts in these
 files — no assumption of a clean auto-merge.
 
-## Testing
+## Acceptance criteria
 
-- **Required:** `approve → revoke → truncate` fail-closed test — build a signed chain with an
-  `approve` then a `needs-attention` revocation for the same revision, mirror both into a fixture
-  store, truncate the manifest (drop the revocation line, keep the shorter chain validly signed),
-  assert the gate now **fails** where #354 alone would have passed.
-- `assertNoTruncation` unit tests: subset passes; missing-sig fails; revision-scoped; relabel
-  attempt fails.
-- Mirror idempotency/dedup; empty/absent-store bootstrap.
-- `tier-check --attestation-store` CLI integration test (clean-pass, bootstrap, truncation-fails).
-- No-regression test: calling `hasCrossModelApproveForRevision`/`tier-check` **without** the new
-  parameter/flag is unchanged from current behavior.
-- Workflow structural check (inspection): mirror-before-gate ordering, `contents: write`,
-  `concurrency` with `cancel-in-progress: false`, mirror failure fails the job.
-- `/adlc:adlc-prosecute` (P5), including the cross-model-review gate itself (this change touches
-  `packages/prosecute/`, trust-root tier). Given the new `contents: write` surface, run
-  `npx adversarial-review --base main` with a provider distinct from whoever records the
-  cross-model approve.
+Each has a concrete verification method (this spec must pass `spec-lint`).
+
+- **AC1 — truncation attack closed** — *Verify:* a new `packages/prosecute/test/attestation-store.test.mjs`
+  test builds a signed chain (`approve` → `needs-attention` revocation, same revision), mirrors both
+  into a fixture store, truncates the manifest (drops the revocation line, keeps the shorter chain
+  validly signed), and asserts `hasCrossModelApproveForRevision(..., { observedEntries })` now fails
+  closed where #354 alone would have passed.
+- **AC2 — no regression to existing callers** — *Verify:* `node --test packages/prosecute/test/` exits 0
+  with every existing test file unmodified, and a new assertion calls `hasCrossModelApproveForRevision`
+  / `tier-check` WITHOUT `observedEntries`/`--attestation-store` and asserts output identical to
+  pre-change behavior.
+- **AC3 — `assertNoTruncation` unit-correct** — *Verify:* `packages/prosecute/test/attestation-store.test.mjs`
+  asserts (a) a true subset returns `{ ok: true }`, (b) a missing signature returns `{ ok: false,
+  missing }` naming it — never throws, (c) per-revision scoping (an unrelated revision's entry
+  doesn't block), (d) a relabeled revision still fails (revision is signature-covered).
+- **AC4 — mirroring idempotent/bootstrap-safe** — *Verify:* `packages/prosecute/test/attestation-store.test.mjs`
+  asserts `mirrorObservedAttestations` run twice appends each signature once, mirroring against a
+  non-existent path bootstraps correctly, and `readObservedAttestations` against a missing file
+  returns `[]` without throwing.
+- **AC5 — CLI integration** — *Verify:* `node --test packages/prosecute/test/prosecute-tier-check-cli.test.mjs`
+  covers `tier-check --attestation-store <path>` for clean-pass, missing-store (bootstrap), and
+  truncation-fails cases; a companion assertion exercises the `mirror-attestations` subcommand
+  end to end.
+- **AC6 — workflow structurally sound** — *Verify:* `grep -nE 'mirror-attestations|contents:\s*write|concurrency:' .github/workflows/cross-model-gate.yml`
+  shows the mirror step precedes the gate step, `permissions: contents: write` is declared, and a
+  `concurrency` block with `cancel-in-progress: false` is present; `grep -n 'continue-on-error' .github/workflows/cross-model-gate.yml`
+  returns nothing for the mirror-push step (its failure is never masked); `grep -n 'concurrency' -A2 .github/workflows/cross-model-gate.yml | grep -n 'github.event.pull_request.number'`
+  confirms the concurrency group is keyed by PR number, and `grep -n 'group:.*github.ref[^.]' .github/workflows/cross-model-gate.yml`
+  returns nothing (the group must not alias to the base ref).
+- **AC7 — docs updated and honest** — *Verify:* `grep -rn '#355' packages/prosecute/lib/cross-model.mjs .github/workflows/cross-model-gate.yml`
+  no longer names #355 as an open follow-up; `grep -nE 'opt-in|not required' packages/prosecute/README.md`
+  (or the new ADR note) confirms the opt-in framing and the "protected only once observed" residual
+  limit are documented.
+- **AC8 — full gate green** — *Verify:* `npm test` (root) and `npm run preflight` both exit 0,
+  `/adlc:adlc-prosecute` passes including a recorded distinct-provider `cross-model-review` approve
+  for this trust-root-tier change, and `npx adversarial-review --base main --providers <two distinct>`
+  exits 0 (SHIP).
+
+Suppressions are denied.
 
 ## Documentation updates
 
