@@ -266,6 +266,8 @@ test('Pi marketing facts emphasize proactive/reactive gates and team install', (
   assert.ok(pi?.install.some((c) => c.includes('pi install -l')));
   assert.ok(pi?.surfaces.some((s) => s.key === 'gates' && s.count === 2));
   assert.match(pi?.note ?? '', /teammates|trusted startup/i);
+  assert.match(pi?.note ?? '', /Requires Node >= 22\.19/);
+  assert.match(pi?.note ?? '', /npx adlc-pi install/);
 });
 
 test('Antigravity marketing facts keep CI as the real backstop', () => {

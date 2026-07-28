@@ -112,6 +112,12 @@ test('AC1: bin/cli.mjs executable displays help output on --help', () => {
   assert.match(res.stdout, /pi install -l npm:@adlc\/pi/);
 });
 
+test('AC1: bin/cli.mjs runs install command and does not trigger help mode', () => {
+  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), 'install'], { encoding: 'utf8', timeout: 10_000 });
+  assert.match(res.stdout, /Installing @adlc\/pi via: pi install/);
+  assert.doesNotMatch(res.stdout, /ADLC Pi Extension Helper/);
+});
+
 // --- AC3: ADLC_PI_BIN override on the deny proof --------------------------
 
 test('AC3: pi-live-deny.mjs consults ADLC_PI_BIN before running pi', () => {
