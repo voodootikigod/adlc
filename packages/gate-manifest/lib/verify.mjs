@@ -250,7 +250,10 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
   chainsBySeq.set('root', seqMap(rootRaw));
   const anchorBySegment = new Map(); // segmentName -> anchor (object or null)
   let totalCount = rootResult.count;
-  let allSigned = rootResult.signed;
+  // An empty chain (root-less repo's empty root, or a degenerate empty segment
+  // file) reports signed:false on its own — it has nothing to sign — but must
+  // not drag down a forest whose non-empty chains are all validly signed.
+  let allSigned = rootResult.count === 0 ? true : rootResult.signed;
 
   for (const name of segmentNames) {
     const raw = readRawLines(segmentPath(dir, name));
@@ -261,7 +264,7 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
     chainsBySeq.set(name, seqMap(raw));
     anchorBySegment.set(name, result.firstAnchor === undefined ? null : result.firstAnchor);
     totalCount += result.count;
-    allSigned = allSigned && result.signed;
+    allSigned = allSigned && (result.count === 0 ? true : result.signed);
   }
 
   // §5.4 — anchor resolution.

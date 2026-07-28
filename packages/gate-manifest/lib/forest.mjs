@@ -52,6 +52,9 @@ export function discoverSegments(dir) {
   if (dirStat.isSymbolicLink()) {
     return { valid: [], invalid: [{ name: '.', reason: 'manifest.d/ is a symlink' }] };
   }
+  if (!dirStat.isDirectory()) {
+    return { valid: [], invalid: [{ name: '.', reason: 'manifest.d/ is not a directory' }] };
+  }
 
   const valid = [];
   const invalid = [];

@@ -158,9 +158,36 @@ describe('forest verify() — a valid forest', () => {
       });
     } finally { cleanTmp(dir); }
   });
+
+  it('root-less repo with all-signed segments reports signed:true (empty root must not drag it down)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const segLines = buildChainLines([{ gate: 'evidence', anchor: null }], { key: KEY });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segLines);
+
+      withKey(KEY, () => {
+        const result = verify(adlc);
+        assert.equal(result.valid, true, result.message);
+        assert.equal(result.signed, true);
+      });
+    } finally { cleanTmp(dir); }
+  });
 });
 
 describe('forest verify() — AC1 adversarial rejections', () => {
+  it('a manifest.d/ that exists as a regular file (not a directory) fails closed, does not crash', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(adlc, { recursive: true });
+      writeFileSync(join(adlc, 'manifest.d'), 'not a directory');
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /manifest\.d\/ is not a directory/);
+    } finally { cleanTmp(dir); }
+  });
+
   it('rejects malformed JSON in a segment', () => {
     const dir = makeTmp();
     try {
