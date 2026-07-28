@@ -33,10 +33,16 @@ same-model SHIP as sufficient on its own.
 2. Once it approves, record the attestation so the gate clears:
 
    ```
-   adlc prosecute record-cross-model --ticket <id> \
+   ADLC_MANIFEST_KEY=<key> adlc prosecute record-cross-model --ticket <id> \
      --provider codex --author-provider claude --verdict approve \
      --input <passes.json>
    ```
+
+   The key is REQUIRED. The gate trusts an attestation only via its signature, so
+   without `ADLC_MANIFEST_KEY` this fails closed (exit 1, nothing written) rather
+   than recording an inert unsigned entry and reporting success — which would waste
+   the review you just ran. The key is often in a gitignored `.env.local` in the
+   MAIN checkout, absent from any git worktree; source it explicitly from there.
 
 The recorded `revision` is resolved the same way the gate resolves it (pass the
 same `--input`/`--revision` you use for the gate run), so the attestation binds

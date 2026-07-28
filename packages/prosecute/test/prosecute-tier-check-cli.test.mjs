@@ -99,7 +99,19 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     try {
       const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
       // Attacker records the approve WITHOUT the key (unsigned) — the forge.
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
+      // --allow-unsigned is required since #370: recording now fails closed with no key.
+      // Writing unsigned is the whole point HERE, so the opt-in is the deliberate act it
+      // was added for — an attacker has it too, which is why the gate must still reject.
+      const forge = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(forge.status, 0, 'the forged entry must actually be written, or this proves nothing');
+      // PRECONDITION, not decoration: without it, a record path that silently wrote
+      // NOTHING would leave the gate failing for want of any attestation at all, and
+      // this test would still pass while no longer exercising forge resistance.
+      const forged = JSON.parse(readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n').at(-1));
+      assert.equal(forged.gate, 'cross-model-review');
+      assert.equal(forged.data.verdict, 'approve');
+      assert.equal(forged.data.revision, rev, 'the forge is bound to the revision the gate checks');
+      assert.equal(forged.sig, undefined, 'and it is unsigned — the property under test');
       // Gate (with the key) rejects the unsigned entry — still fails closed.
       const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
       assert.equal(after.status, 2, 'an unsigned forged approve must not satisfy the gate');

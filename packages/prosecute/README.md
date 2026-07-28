@@ -139,9 +139,24 @@ stays off (run such checks post-commit; uncommitted trust-root edits deliberatel
 Record the attestation (after an actual cross-model review approves) with:
 
 ```
-adlc prosecute record-cross-model --ticket <id> \
+ADLC_MANIFEST_KEY=<key> adlc prosecute record-cross-model --ticket <id> \
   --provider <p> --author-provider <a> --verdict approve [--input <passes.json>] [--revision <r>]
 ```
+
+**Recording requires the signing key (#370).** The gate trusts an attestation only via its
+HMAC signature, so an unsigned entry is inert. Without `ADLC_MANIFEST_KEY` the command
+therefore **fails closed** — exit 1, nothing written, and a message naming the consequence —
+rather than writing an unsigned entry and reporting success. That old behaviour cost the
+operator a full distinct-provider review before CI revealed the attestation was worthless,
+and the entry was permanent: the manifest is append-only and hash-chained. Note the key is
+commonly kept in a gitignored `.env.local` in the **main checkout**, which is absent from
+every git worktree; `record-cross-model` reads it from `./.env.local` (never `tier-check` —
+see `lib/load-env-local.mjs`), so from a worktree source it explicitly.
+
+Writing an unsigned entry on purpose — #326's forge-resistance test does, to prove the gate
+rejects one — needs the explicit `--allow-unsigned`. An unsigned write never prints the
+success line; it prints a warning naming the consequence instead. `--json` reports
+`"signed": true|false` alongside the recorded entry either way.
 
 It resolves the revision the same way the gate does (`resolveProsecutionRevision`), so pass
 the same `--input`/`--revision` you use for the gate run. `--provider` must differ from

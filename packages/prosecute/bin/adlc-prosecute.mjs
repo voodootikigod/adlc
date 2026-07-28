@@ -159,6 +159,9 @@ const { values, positionals } = parseArgs({
     // record-cross-model attestation fields.
     provider: { type: 'string' },
     'author-provider': { type: 'string' },
+    // #370: recording with no signing key is refused by default (the entry would be
+    // inert and permanent). This makes an unsigned write a deliberate, auditable act.
+    'allow-unsigned': { type: 'boolean', default: false },
     // --record-finding mode: land one CONFIRMED prosecution finding in the
     // findings ledger so P7 lesson-foundry can cluster it (closes the P5→P7 loop).
     'record-finding': { type: 'boolean', default: false },
@@ -189,9 +192,14 @@ ADLC P5 review-evidence recorder.
 
   record-cross-model --ticket id --provider <p> --author-provider <a> --verdict approve
                      [--revision rev] [--input <passes.json>] [--base main] [--dir .adlc]
+                     [--allow-unsigned]
       Register a cross-model attestation. Resolves the revision the SAME way the
       gate does (pass the same --input/--revision you use for the gate run) so the
       recorded revision matches. FAILS CLOSED if --provider === --author-provider.
+      Also FAILS CLOSED without ADLC_MANIFEST_KEY, writing nothing: the entry
+      would be unsigned, and the gate rejects unsigned attestations. Pass
+      --allow-unsigned to write one deliberately anyway (forge-resistance tests);
+      the success line is then replaced by a warning. --json reports "signed".
 
   --record-finding --file <path> --desc "<prose>" [--category <lens>] [--severity <s>] [--line <n>] [--verdict <v>] [--dir .adlc]
       Record ONE confirmed prosecution finding to <dir>/findings.jsonl for P7
@@ -218,6 +226,26 @@ if (positionals[0] === 'record-cross-model') {
   // in CI under the real secret — inert, not a bypass. No-op in CI / when the key is already set.
   loadManifestKeyFromEnvLocal();
   if (!values.ticket) opError('record-cross-model requires --ticket');
+  // #370 FAIL CLOSED — recording is a SIGNING operation, so with no key it cannot do its
+  // job. It used to write the unsigned entry anyway, exit 0 and print success; the gate
+  // then rejected the inert entry in CI and pointed the operator back at the step they had
+  // just "completed" — after the distinct-provider adversarial review that produced the
+  // attestation was already spent. That review is the cost, which is why this refuses
+  // BEFORE the append rather than warning after it: `.adlc/manifest.jsonl` is append-only
+  // and hash-chained, so a mistaken entry committed here is permanent noise.
+  //
+  // The unsigned path stays reachable, but only as a DELIBERATE act (#326's
+  // forge-resistance test records unsigned on purpose to prove the gate rejects it), so
+  // "the operator lost their key" and "this write is meant to be unsigned" are now
+  // distinguishable at the call site instead of producing identical output.
+  if (!getKey() && !values['allow-unsigned']) {
+    opError(
+      'record-cross-model: ADLC_MANIFEST_KEY is not set, so the attestation would be written UNSIGNED — and an unsigned entry would NOT satisfy the trust-root gate, which trusts an attestation only via its signature. Refusing to write it: the manifest is append-only, so the inert entry would be permanent.\n' +
+      '  Set the key and re-run. Note it is commonly kept in the MAIN checkout\'s gitignored .env.local, which is ABSENT from a git worktree — from a worktree, source it explicitly:\n' +
+      '    set -a; . /path/to/main-checkout/.env.local; set +a\n' +
+      '  To write an unsigned entry on purpose (forge-resistance tests), pass --allow-unsigned.'
+    );
+  }
   let input;
   if (values.input) {
     try {
@@ -246,10 +274,24 @@ if (positionals[0] === 'record-cross-model') {
   } catch (err) {
     opError(err.message); // fail closed: a same-provider or malformed attestation is exit 1, never recorded
   }
+  // #370 — report what was actually WRITTEN, not what was intended. The success line is
+  // the operator's evidence that the ceremony's last step worked, so it is printed only
+  // for an entry that carries a signature; anything else gets the warning instead. Read
+  // from the recorded entry rather than re-checking the key, so a signing path that
+  // silently stops producing `sig` can never resurface as a false success.
+  const signed = typeof entry.sig === 'string' && entry.sig !== '';
   if (values.json) {
-    printJson(entry);
-  } else {
+    printJson({ ...entry, signed });
+  } else if (signed) {
     console.log(`recorded cross-model ${entry.data.verdict} for ${values.ticket} @ ${revision} (${entry.data.provider} vs author ${entry.data.authorProvider})`);
+  }
+  // Always on stderr, so --json stdout stays machine-parseable.
+  if (!signed) {
+    console.error(
+      `record-cross-model: recorded an UNSIGNED cross-model ${entry.data.verdict} for ${values.ticket} @ ${revision}. ` +
+      'It will NOT satisfy the trust-root gate — the gate trusts an attestation only via its signature. ' +
+      'Set ADLC_MANIFEST_KEY and re-record if this was not deliberate; the unsigned entry stays in the append-only manifest either way.'
+    );
   }
   process.exit(0);
 }

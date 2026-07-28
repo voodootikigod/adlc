@@ -12,10 +12,10 @@
 // The recorded revision is resolved the SAME way the gate resolves it (no --revision).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
 import { migrateLegacyStore } from '@adlc/tickets';
 import { resolveProsecutionRevision } from '../lib/run.mjs';
@@ -25,15 +25,35 @@ const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 // #326 hardening: record-cross-model signs and the readers verify, both under this key.
 process.env.ADLC_MANIFEST_KEY = 'test-cross-model-cli-signing-key';
 
+// spawnSync, not execFileSync: stderr must be captured on the SUCCESS path too. A run
+// that exits 0 can still warn (#370 prints the unsigned-entry warning and suppresses the
+// success line), and execFileSync surfaces stderr only through the thrown error.
 function runBin(args, cwd, env = {}) {
-  try {
-    const stdout = execFileSync(process.execPath, [BIN, ...args], {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env },
-    });
-    return { status: 0, stdout };
-  } catch (err) {
-    return { status: err.status, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
-  }
+  const r = spawnSync(process.execPath, [BIN, ...args], {
+    cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env },
+  });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+// A minimal, revision-PINNED record-cross-model invocation: no --input, so no revision
+// resolution is involved and the case under test is purely the signing contract (#370).
+const REC_UNSIGNABLE = [
+  'record-cross-model', '--ticket', 'T1', '--provider', 'openai',
+  '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', 'r', '--dir', '.adlc',
+];
+
+// Raw ledger lines, so "nothing was appended" is asserted on the file itself rather
+// than on a parsed view that could hide a written-then-unparsed entry.
+function manifestLines(dir) {
+  const path = join(dir, '.adlc', 'manifest.jsonl');
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8').split('\n').filter((line) => line.trim() !== '');
+}
+
+function lastManifestEntry(dir) {
+  const lines = manifestLines(dir);
+  assert.ok(lines.length > 0, 'expected at least one manifest entry');
+  return JSON.parse(lines.at(-1));
 }
 
 // A scratch repo. The ticket table (with `rails`) lives at <ledgerDir>/tickets.json;
@@ -346,6 +366,61 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
       const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'anthropic', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', 'r', '--dir', '.adlc'], repo.dir);
       assert.equal(rec.status, 1);
       assert.match(rec.stderr, /distinct from the author/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  // #370 — record-cross-model is a SIGNING operation. With no key it used to write an
+  // inert unsigned entry, exit 0 and print success, so the operator learned the truth
+  // only from CI — after the distinct-provider review that produced the attestation had
+  // already been spent. These pin the write side as loud as the read side.
+  it('#370: with NO key it fails closed (exit 1), names the consequence, and writes NOTHING', () => {
+    const repo = scratchRepo('packages/prosecute/lib/feature.mjs');
+    try {
+      const before = manifestLines(repo.dir);
+      const rec = runBin(REC_UNSIGNABLE, repo.dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(rec.status, 1, 'a signing command with no key must not exit 0');
+      assert.match(rec.stderr, /ADLC_MANIFEST_KEY/, 'names the missing key');
+      assert.match(rec.stderr, /would NOT satisfy the trust-root gate/, 'names the consequence');
+      assert.match(rec.stderr, /--allow-unsigned/, 'names the deliberate opt-in');
+      assert.doesNotMatch(rec.stdout, /recorded cross-model/, 'never claims success');
+      // The manifest is append-only and hash-chained: a wrongly written entry is
+      // permanent noise, so failing closed must happen BEFORE the append.
+      assert.deepEqual(manifestLines(repo.dir), before, 'no entry may be appended on the no-key path');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('#370: --allow-unsigned still writes the unsigned entry, but WARNS instead of reporting success', () => {
+    const repo = scratchRepo('packages/prosecute/lib/feature.mjs');
+    try {
+      const rec = runBin([...REC_UNSIGNABLE, '--allow-unsigned'], repo.dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(rec.status, 0, 'a deliberate unsigned write is allowed');
+      const entry = lastManifestEntry(repo.dir);
+      assert.equal(entry.gate, 'cross-model-review', 'the entry is written');
+      assert.equal(entry.sig, undefined, 'and it is genuinely unsigned');
+      assert.doesNotMatch(rec.stdout, /recorded cross-model/, 'the success line is never printed for an unsigned entry');
+      assert.match(rec.stderr, /UNSIGNED/);
+      assert.match(rec.stderr, /will NOT satisfy the trust-root gate/, 'the warning names the consequence');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('#370: --json reports whether the entry was signed, in BOTH the keyed and unsigned cases', () => {
+    const repo = scratchRepo('packages/prosecute/lib/feature.mjs');
+    try {
+      const signed = runBin([...REC_UNSIGNABLE, '--json'], repo.dir);
+      assert.equal(signed.status, 0, signed.stderr);
+      const signedJson = JSON.parse(signed.stdout);
+      assert.equal(signedJson.signed, true);
+      assert.equal(signedJson.data.revision, 'r', 'the recorded entry is still the JSON payload');
+
+      const unsigned = runBin([...REC_UNSIGNABLE, '--allow-unsigned', '--json'], repo.dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(unsigned.status, 0, unsigned.stderr);
+      assert.equal(JSON.parse(unsigned.stdout).signed, false);
     } finally {
       rmSync(repo.dir, { recursive: true, force: true });
     }

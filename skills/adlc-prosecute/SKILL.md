@@ -91,9 +91,15 @@ holds a `cross-model-review` approve from a provider **distinct from the
 author**, bound to the reviewed revision:
 
 ```sh
-adlc prosecute record-cross-model --ticket <id> \
+ADLC_MANIFEST_KEY=<key> adlc prosecute record-cross-model --ticket <id> \
   --provider <p> --author-provider <a> --verdict approve
 ```
+
+The key is required: the gate trusts an attestation only via its signature, so without
+`ADLC_MANIFEST_KEY` this fails closed (exit 1, nothing written) instead of recording an
+inert unsigned entry after your review has already been spent. The key often lives in a
+gitignored `.env.local` in the main checkout, which is **absent from a git worktree** —
+source it explicitly there. `--allow-unsigned` writes an unsigned entry deliberately.
 
 Pass the **same** `--input`/`--revision` you use for the gate run: the revision
 is a content hash of the worktree, and an attestation bound to a different one
