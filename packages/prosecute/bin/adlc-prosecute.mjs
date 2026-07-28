@@ -241,8 +241,9 @@ if (positionals[0] === 'record-cross-model') {
   if (!getKey() && !values['allow-unsigned']) {
     opError(
       'record-cross-model: ADLC_MANIFEST_KEY is not set, so the attestation would be written UNSIGNED — and an unsigned entry would NOT satisfy the trust-root gate, which trusts an attestation only via its signature. Refusing to write it: the manifest is append-only, so the inert entry would be permanent.\n' +
-      '  Set the key and re-run. Note it is commonly kept in the MAIN checkout\'s gitignored .env.local, which is ABSENT from a git worktree — from a worktree, source it explicitly:\n' +
+      '  Set the key and re-run. Note it is commonly kept in the MAIN checkout\'s gitignored .env.local, which is ABSENT from a git worktree — from a worktree, source it explicitly. In bash or zsh:\n' +
       '    set -a; . /path/to/main-checkout/.env.local; set +a\n' +
+      '  (that form is POSIX shell syntax and fails in fish, which has no `set -a` toggle — there, export the variable directly.)\n' +
       '  To write an unsigned entry on purpose (forge-resistance tests), pass --allow-unsigned.'
     );
   }
