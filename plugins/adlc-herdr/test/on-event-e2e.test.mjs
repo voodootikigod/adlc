@@ -114,9 +114,14 @@ test('agent going idle with an active ticket nudges to gate it (drives pane→re
 test('a rapid re-idle within the dedupe window does not notify again', () => {
   writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-active', ticketHash: 'x' }));
   const payload = JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p2', agent_status: 'idle' } });
-  runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '60000' }); // first: notify + mark
+  // The window is a wall-clock bucket (floor(now/windowMs)), so a 60s window
+  // flakes whenever the two runs straddle a minute boundary — CI hit exactly
+  // that. MAX_SAFE_INTEGER keeps the entire test inside bucket 0, which makes
+  // "within the window" true by construction instead of by luck.
+  const window = { ADLC_HERDR_NUDGE_WINDOW_MS: String(Number.MAX_SAFE_INTEGER) };
+  runEvent('pane.agent_status_changed', payload, window); // first: notify + mark
   const before = (calls().match(/notification show/g) || []).length;
-  runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '60000' }); // within window: suppressed
+  runEvent('pane.agent_status_changed', payload, window); // within window: suppressed
   const after = (calls().match(/notification show/g) || []).length;
   assert.equal(after, before, 'a flap within the window must not nudge twice');
 });
