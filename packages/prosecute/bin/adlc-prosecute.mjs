@@ -218,19 +218,20 @@ ADLC P5 review-evidence recorder.
       a FRESH distinct-provider review is required. --provider/--author-provider/--verdict
       are not accepted here: the carried entry keeps the ORIGINAL review's identity.
 
-  tier-check ... [--attestation-store <path>]
-      OPTIONAL (#355): pass a direct file path to a protected-ref attestation store
-      to also detect a dropped signed entry (TRUNCATION) that the manifest alone
-      cannot see. Omitting this flag reproduces today's (#354) behavior exactly —
-      this is opt-in hardening, not a required capability. The store path MUST be
+  tier-check ... [--attestation-store PATH]
+      OPTIONAL: pass a direct file path to a protected-ref attestation store to
+      also detect a dropped signed entry (TRUNCATION) that the manifest alone
+      cannot see. Omitting this flag reproduces prior behavior exactly — this is
+      opt-in hardening, not a required capability. The store path MUST be
       OUTSIDE the tree being tiered (like the ./_pr sibling-worktree pattern), or
       its own presence perturbs the working-tree revision hash.
 
-  mirror-attestations --attestation-store <path> [--dir .adlc]
-      Append every valid (signature-verified) cross-model entry from <dir>/manifest.jsonl
-      not already in the store at <path>, deduped by signature. Requires
-      ADLC_MANIFEST_KEY. Intended for the trusted CI workflow, run BEFORE tier-check,
-      against a base-controlled store path — never a PR-controlled one.
+  mirror-attestations --attestation-store PATH [--dir .adlc]
+      Append every valid (signature-verified) cross-model entry from the
+      manifest under --dir not already in the store at PATH, deduped by
+      signature. Requires ADLC_MANIFEST_KEY. Intended for the trusted CI
+      workflow, run BEFORE tier-check, against a base-controlled store path —
+      never a PR-controlled one.
 
   --record-finding --file <path> --desc "<prose>" [--category <lens>] [--severity <s>] [--line <n>] [--verdict <v>] [--dir .adlc]
       Record ONE confirmed prosecution finding to <dir>/findings.jsonl for P7
@@ -381,7 +382,7 @@ if (positionals[0] === 'record-cross-model') {
 // store path (never a PR-controlled one). Only ever mirrors CROSS_MODEL_GATE entries —
 // this store exists solely to anchor that one gate's history outside the PR-controlled tree.
 if (positionals[0] === 'mirror-attestations') {
-  if (!values['attestation-store']) opError('mirror-attestations requires --attestation-store <path>');
+  if (!values['attestation-store']) opError('mirror-attestations requires --attestation-store PATH');
   const key = getKey();
   if (!key) opError('mirror-attestations requires ADLC_MANIFEST_KEY to verify which entries are trustworthy to mirror');
   const { entries } = readEntries('manifest', values.dir);
