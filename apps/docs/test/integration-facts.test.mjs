@@ -273,6 +273,8 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   assert.equal(ag?.status, 'local');
   assert.match(ag?.enforcement.session.body ?? '', /fail-open|Advisory/i);
   assert.match(ag?.enforcement.ci.body ?? '', /unbypassable|rails-guard-ci/i);
+  assert.match(ag?.note ?? '', /ADLC_P4_ENFORCEMENT=1/);
+  assert.match(ag?.note ?? '', /npm install -g @adlc\/antigravity/);
 });
 
 test('Pi marketing publication claim matches a non-private @adlc/pi package', () => {

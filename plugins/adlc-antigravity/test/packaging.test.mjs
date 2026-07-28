@@ -173,5 +173,12 @@ test('AC4: bin/cli.mjs executable displays help output on --help', () => {
   const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), '--help'], { encoding: 'utf8', timeout: 10_000 });
   assert.equal(res.status, 0);
   assert.match(res.stdout, /adlc-agy install/);
+  assert.match(res.stdout, /agy plugin install <path>/);
+});
+
+test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () => {
+  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), 'install'], { encoding: 'utf8', timeout: 10_000 });
+  assert.match(res.stdout, /Installing @adlc\/antigravity plugin from:/);
+  assert.doesNotMatch(res.stdout, /ADLC Google Antigravity Plugin Helper/);
 });
 
