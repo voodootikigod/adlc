@@ -181,6 +181,16 @@ export function isChangeSetRevision(revision: unknown): boolean;
 export function changeSetBase(revision: unknown): string | null;
 export function changeSetDigest(revision: unknown): string | null;
 
+/**
+ * Untracked-and-NOT-ignored paths present in the working tree right now (#365 Decision 2 /
+ * AC15). Gitignored paths (e.g. node_modules) are always excluded. Throws if `cwd` is not a
+ * git repository, matching resolveRevision's fail-closed posture.
+ */
+export function untrackedNonIgnoredPaths(options?: {
+  cwd?: string;
+  ignorePaths?: string[];
+}): string[];
+
 export const RISK_TIER_PATTERNS: Readonly<Record<string, readonly string[]>>;
 export function matchRiskTier(path: string): { tier: string; pattern: string } | null;
 export function classifyRiskTier(paths?: readonly string[]): {

@@ -1,4 +1,4 @@
-import { ADLC_DIR, canonicalJson, readEntries, resolveChangeSetRevision, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, readEntries, resolveChangeSetRevision, untrackedNonIgnoredPaths, sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -29,7 +29,7 @@ function isEvidencePath(cwd, absolute) {
   return rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/');
 }
 
-function revisionIgnorePaths(cwd, dir, input, inputPath) {
+export function revisionIgnorePaths(cwd, dir, input, inputPath) {
   return [
     ...manifestArtifactPaths(cwd, dir),
     inputPath ? resolve(cwd, inputPath) : null,
@@ -201,6 +201,27 @@ export function runProsecution(input, {
     errors.push('trust-root-tier prosecution requires --author-provider (or ADLC_AUTHOR_PROVIDER) to anchor author identity for the cross-model gate');
   }
   const resolvedRevision = resolveProsecutionRevision({ cwd, dir, base, revision, input, inputPath });
+  // #365 Decision 2 / AC15 — refuse to attest while an untracked-and-NOT-ignored file is
+  // present. The change-set identity deliberately excludes untracked files, so without this
+  // runtime check an untracked scratch file could change what a review actually observed
+  // without moving the identity at all. Same ignorePaths as the identity, so the manifest
+  // itself, an --input file, and review evidence never trigger it.
+  //
+  // Skipped when `revision` is EXPLICIT (matching resolveChangeSetRevision's own short-circuit):
+  // an explicit revision is not auto-resolved from the working tree at all, so the rationale for
+  // this refusal — the identity silently disagreeing with what was executed — does not apply. A
+  // caller naming its own revision has already taken responsibility for what it means.
+  const revisionIsExplicit = revision !== undefined && revision !== null && String(revision).trim() !== '';
+  if (!revisionIsExplicit) {
+    try {
+      const untrackedPaths = untrackedNonIgnoredPaths({ cwd, ignorePaths: revisionIgnorePaths(cwd, dir, input, inputPath) });
+      if (untrackedPaths.length > 0) {
+        errors.push(`refusing to attest: untracked, non-ignored file(s) present in the working tree — ${untrackedPaths.join(', ')}`);
+      }
+    } catch (err) {
+      errors.push(`cannot verify the working tree is free of untracked files: ${err.message}`);
+    }
+  }
   const ticketBinding = ticket ? ticketDefinitionHash(cwd, ticket, dir) : null;
   const ticketHash = ticketBinding?.ticketHash ?? null;
   const storeHash = ticketBinding?.storeHash ?? null;

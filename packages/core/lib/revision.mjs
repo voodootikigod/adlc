@@ -147,6 +147,28 @@ function isIgnoredPath(relativePath, ignoredPaths) {
   return [...ignoredPaths].some((path) => normalized === path || normalized.startsWith(`${path}/`));
 }
 
+// ── Untracked-file refusal (#365 Decision 2 / AC15) ──────────────────────────────────────────
+// The change-set identity deliberately excludes untracked files (they are not in the PR, so they
+// cannot affect what merges — see the comment above resolveChangeSetRevision). But P5 prosecution
+// EXECUTES a working tree, so an untracked test helper or scratch file can change what a review
+// actually observed without moving the identity at all. Decision 2 closes that gap the other way:
+// refuse to attest while an untracked-and-NOT-ignored file is present, decided from
+// RUNTIME-VERIFIABLE STATE (is such a file present right now) rather than inferred by comparing
+// digests — a digest mismatch carries no REASON, which is the same defect #364's AC5 criticised.
+//
+// `git ls-files --others --exclude-standard` already excludes gitignored paths, so `node_modules`
+// (always present, always ignored) never triggers this — that exclusion is load-bearing: a check
+// that fired on ignored files would brick prosecution permanently. `ignorePaths` lets a caller
+// additionally exclude paths it EXPECTS to be untracked and legitimate (the manifest itself, an
+// input file, a review transcript) — the same set already passed to resolveChangeSetRevision's
+// ignorePaths for the identity, so "what the identity ignores" and "what this refusal tolerates"
+// stay in sync by construction rather than by two independently-maintained lists.
+export function untrackedNonIgnoredPaths({ cwd = process.cwd(), ignorePaths = [] } = {}) {
+  const ignoredPaths = ignoredPathSet(cwd, ignorePaths);
+  const untracked = splitNull(git(['ls-files', '--others', '--exclude-standard', '-z'], cwd));
+  return untracked.filter((path) => !isIgnoredPath(path, ignoredPaths));
+}
+
 // ── Change-set identity (#365) ───────────────────────────────────────────────
 // `resolveRevision` below hashes the WHOLE worktree, so an attestation binds to every file in
 // the tree rather than to the change that was reviewed. Any advance of `main` invalidates a

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths } from '@adlc/core';
+import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths, untrackedNonIgnoredPaths } from '@adlc/core';
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
-import { runProsecution, resolveProsecutionRevision } from '../lib/run.mjs';
+import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy } from '../lib/cross-model.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
@@ -275,6 +275,26 @@ if (positionals[0] === 'record-cross-model') {
     inputPath: values.input,
   });
   if (!revision) opError('revision could not be resolved; pass --revision or run inside a git worktree');
+
+  // #365 Decision 2 / AC15 — refuse to record an attestation while an untracked-and-NOT-ignored
+  // file is present, for the same reason runProsecution refuses: the change-set identity excludes
+  // untracked files, so without this the tree could hold unaccounted state at the moment this
+  // attestation is minted. Same ignorePaths construction as the identity, so the manifest itself,
+  // --input, and review evidence never trigger it.
+  //
+  // Skipped when --revision is EXPLICIT, matching resolveChangeSetRevision's own short-circuit —
+  // see the identical comment in runProsecution (lib/run.mjs) for why.
+  if (values.revision === undefined || String(values.revision).trim() === '') {
+    let untrackedPaths;
+    try {
+      untrackedPaths = untrackedNonIgnoredPaths({ ignorePaths: revisionIgnorePaths(process.cwd(), values.dir, input, values.input) });
+    } catch (err) {
+      opError(`cannot verify the working tree is free of untracked files: ${err.message}`);
+    }
+    if (untrackedPaths.length > 0) {
+      opError(`refusing to record: untracked, non-ignored file(s) present in the working tree — ${untrackedPaths.join(', ')}`);
+    }
+  }
 
   // revision-binding carry-forward mode: re-attest an EXISTING approve at the newly-resolved revision
   // instead of recording a fresh one. Separate branch (not merged with the fresh-record path
