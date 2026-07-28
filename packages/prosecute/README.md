@@ -204,7 +204,17 @@ this is either an `ADLC_MANIFEST_KEY` rotation (every historical store entry nee
 onto the new key, the same treatment the main manifest chain already requires) or tampering by
 whoever has bypass-level write access to `adlc-attestations`. Rotating the signing key is
 therefore a migration event for this store too: rebootstrap or re-sign it, don't expect
-`tier-check --attestation-store` to keep working across a rotation without that step. See
+`tier-check --attestation-store` to keep working across a rotation without that step.
+
+**Observed entries are scoped by `(revision, authorProvider)`, not by PR/branch identity — deliberately.**
+Two different PRs that coincidentally produce a byte-identical reviewed change (same base, same
+diff — a duplicate branch, for instance) share observed-entry history, so a revocation mirrored
+from one can block the other. This is intentional, not a gap: `revision` (the change-set identity
+from #365) already means "the identity of the reviewed change," and #365's own carry-forward
+feature treats an identical change-set digest as grounds to carry a verdict *forward*. Treating an
+identical digest as grounds to carry a *revocation* forward too is the symmetric, consistent
+consequence — adding a PR-unique discriminator to avoid this would let an attacker dodge a revoked
+review by opening a new PR with byte-identical content. See
 [the design doc](../../docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md)
 for the full threat model, the premortem/parallax findings that shaped the final design, and
 why the store path must live outside the tree being tiered.

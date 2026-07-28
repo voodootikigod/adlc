@@ -186,8 +186,9 @@ small, non-overlapping additive one (`--allow-unsigned` next to `--attestation-s
 
 ## Cross-model review findings (codex, distinct from the anthropic author)
 
-Five review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
-made round 1's diff include unrelated upstream files):
+Six review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
+made round 1's diff include unrelated upstream files; round 6 followed #365/#382 merging to
+`main` mid-build — see [Interaction with #365](#interaction-with-365-revision-binding) below):
 
 1. **Bootstrap run had no store file to `git add`** — `mirrorObservedAttestations` correctly never
    creates `attestations.jsonl` when there is nothing to append (the right library behavior), but
@@ -247,9 +248,36 @@ made round 1's diff include unrelated upstream files):
    before implementing, given it makes ordinary key rotation an operational event requiring an
    explicit store migration/rebootstrap, not something to apply reflexively.
 
-One finding was surfaced but NOT changed: the ruleset's bypass being repo-wide (not scoped to just
-`cross-model-gate.yml`) was already known, documented, and accepted — see the residual-scope note in
-`docs/github-rulesets/README.md`.
+Two findings were surfaced but NOT changed:
+
+- The ruleset's bypass being repo-wide (not scoped to just `cross-model-gate.yml`) was already
+  known, documented, and accepted — see the residual-scope note in
+  `docs/github-rulesets/README.md`.
+- **Round 6**: scoping by `(revision, authorProvider)` means two DIFFERENT PRs that coincidentally
+  produce a byte-identical `(base_sha, diff)` — and this repo's workflow always uses
+  `authorProvider: anthropic` — would share observed-entry history: a revocation mirrored from one
+  PR could block a different PR at the same revision. **Confirmed with the repo owner as
+  intentional, not a bug**: #365 (merged mid-build) established that `revision` under the
+  change-set scheme IS the identity of "the reviewed change," and #365's own carry-forward feature
+  already treats an identical change-set digest as grounds to carry a verdict FORWARD across a
+  moved base. Treating an identical digest as grounds to carry a REVOCATION forward too is the
+  symmetric, consistent consequence of that same design — not a new gap. Adding a PR-unique
+  discriminator to dodge this collision would reopen exactly the evasion this feature exists to
+  close: an attacker could sidestep a revoked review by opening a new PR with byte-identical
+  content under a different branch name. See
+  [the interaction section below](#interaction-with-365-revision-binding) for the full reasoning.
+
+## Interaction with #365 (revision-binding)
+
+PR #382 ("Bind cross-model attestations to the reviewed change, not the whole worktree", #365)
+merged into `main` mid-build, replacing the whole-worktree `git-worktree:<hash>` revision identity
+with a change-set identity `git-change:<base_sha>:<sha256>` and adding a capped carry-forward
+mechanism. It directly touches `packages/prosecute/lib/cross-model.mjs` and
+`bin/adlc-prosecute.mjs` — the same two files this ticket built on all session — but
+`hasCrossModelApproveForRevision` itself was untouched by #365's diff; the interaction surfaced
+only as round-6's scoping question above, not a structural conflict. Rebased cleanly (mostly
+additive; the two genuine content conflicts were resolved by hand, see commit history), and the
+full #365 test suite (223 prosecute tests) passes unmodified alongside this ticket's own.
 
 ## Acceptance criteria
 
