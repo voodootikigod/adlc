@@ -8,8 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
-import { violations } from '../block-secret-exposure.mjs';
+import { violations, SAFE_FORM } from '../block-secret-exposure.mjs';
 
 const HOOK = fileURLToPath(new URL('../block-secret-exposure.mjs', import.meta.url));
 
@@ -40,11 +39,14 @@ test('either defect alone is enough to refuse', () => {
   assert.equal(decisionFor('env $(cat .env.local | xargs) node x.mjs'), 'deny', 'substitution into argv, no tracing');
 });
 
-test('the form AGENTS.md recommends is allowed', () => {
-  // A guard that blocks the documented alternative is worse than no guard: it
-  // trains people to disable it. `set -a` must not read as `set -x`.
-  assert.equal(decisionFor('set -a; . ./.env.local; set +a; node x.mjs'), 'allow');
+test('the guard permits the very form it recommends', () => {
+  // Not a wording check — a consistency invariant between the two halves of this
+  // module. A guard that refuses its own documented alternative is worse than no
+  // guard: the only way to get work done is to disable it. Asserted against the
+  // exported constant, so changing the advice without re-checking it fails here.
+  assert.equal(decisionFor(SAFE_FORM), 'allow', 'the recommended form must not itself be refused');
   assert.equal(decisionFor('set +x; env $(echo A=1) node x.mjs'), 'allow', '+x DISABLES tracing — it is the fix');
+  assert.match(SAFE_FORM, /\.env\.local/, 'and it must actually demonstrate loading the secrets file');
 });
 
 test('tracing and secrets files are only a defect together', () => {

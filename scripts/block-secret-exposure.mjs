@@ -55,7 +55,17 @@ const TRACING = /\bset\s+-[a-wyz]*x|\bset\s+-o\s+xtrace\b|\b(?:ba|z|k)?sh\s+-[a-
 const SUBSTITUTION = /\$\([^)]*\)|`[^`]*`/g;
 const XARGS_PIPE = /\|\s*xargs\b/;
 
-const SAFE_FORM = 'set -a; . ./.env.local; set +a; <command>   # value stays in the environment, never in argv';
+/**
+ * The form this guard recommends — a REAL command, not a `<placeholder>` sketch.
+ *
+ * Two reasons it is executable rather than illustrative. It is checked: the test
+ * asserts this exact string is ALLOWED, so the guard can never recommend
+ * something it would itself refuse — the failure mode that makes people disable
+ * a guard rather than obey it. And a prose placeholder put an angle bracket in
+ * the message, which the mutation gate's invert-comparison operator read as a
+ * comparison and rewrote; a concrete example has no such token to mutate.
+ */
+export const SAFE_FORM = 'set -a; . ./.env.local; set +a; node tool.mjs';
 
 function violations(command) {
   const found = [];
@@ -108,7 +118,8 @@ function main() {
         permissionDecisionReason:
           `Blocked — this command would expose a secret:\n`
           + found.map((reason) => `  - ${reason}`).join('\n')
-          + `\n\nUse instead:\n  ${SAFE_FORM}\n\n`
+          + `\n\nUse instead:\n  ${SAFE_FORM}\n`
+          + `  (the value stays in the environment; it never becomes an argument)\n\n`
           + `Drop the tracing flag; env VAR=value cmd prints nothing on its own. `
           + `See AGENTS.md, "ADLC_MANIFEST_KEY: never let it become an argument".`,
       },
