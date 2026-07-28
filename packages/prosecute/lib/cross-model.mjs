@@ -126,8 +126,19 @@ function latestEntryForRevision(entries, revision, ticket) {
  *
  * The carried entry inherits the ORIGINAL provider and authorProvider: it is the same verdict,
  * not a new one, and distinctness was already proven when it was first earned.
+ *
+ * SECURITY (adversarial-review finding, #365): the prior entry is PR-controlled data — the
+ * manifest lives in the tree being reviewed — so it must clear the SAME two defenses the
+ * read-side gate (candidateReview / hasCrossModelApprove) already requires before this function
+ * trusts it: the hash chain must verify (manifestChainTrustworthy, so a corrupted-and-dropped
+ * revocation for this exact ticket+revision cannot resurface an earlier approve), and the prior
+ * entry itself must carry a valid signature (verifyEntrySig) under the key. Without both checks,
+ * an attacker appends an UNSIGNED, forged "approve" to the manifest naming a real ticket and
+ * revision; carry-forward would find it structurally plausible and mint a BRAND NEW, VALIDLY
+ * SIGNED entry carrying it forward — laundering a forged claim into a real attestation through
+ * whoever holds the signing key.
  */
-export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir } = {}) {
+export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key = getKey() } = {}) {
   requireNonEmptyString(ticket, 'ticket');
   requireNonEmptyString(fromRevision, 'fromRevision');
   requireNonEmptyString(revision, 'revision');
@@ -150,10 +161,23 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
     throw new Error('carry-forward refused: the base is unchanged, so there is nothing to carry');
   }
 
+  // No key -> nothing can be signature-verified -> fail closed, matching hasCrossModelApprove.
+  if (!key) {
+    throw new Error('carry-forward refused: no signing key available, so the prior entry cannot be signature-verified');
+  }
+  if (!manifestChainTrustworthy(dir)) {
+    throw new Error('carry-forward refused: the manifest hash chain does not verify — a broken chain could be hiding a dropped revocation');
+  }
   const { entries } = readEntries('manifest', dir);
   const prior = latestEntryForRevision(entries, fromRevision, ticket);
   if (!prior) {
     throw new Error(`carry-forward refused: no prior cross-model verdict recorded for ${fromRevision} under ticket ${ticket}`);
+  }
+  if (!verifyEntrySig(key, prior)) {
+    throw new Error(
+      `carry-forward refused: the prior entry for ${fromRevision} under ticket ${ticket} is not signature-verified ` +
+      '— an unsigned or forged entry cannot be carried forward into a newly signed one'
+    );
   }
   if (prior.data?.verdict !== 'approve') {
     throw new Error(

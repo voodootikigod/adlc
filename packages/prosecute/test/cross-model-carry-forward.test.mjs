@@ -22,6 +22,12 @@ import { readEntries } from '@adlc/core';
 
 process.env.ADLC_MANIFEST_KEY = 'carry-forward-test-key';
 
+function withoutKey(fn) {
+  const prev = process.env.ADLC_MANIFEST_KEY;
+  delete process.env.ADLC_MANIFEST_KEY;
+  try { return fn(); } finally { if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
+}
+
 function ledger() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-carry-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
@@ -101,6 +107,53 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
       // a blanket break.
       carry(dir, rev(BASE1), rev(BASE2));
       assert.equal(lastEntry(dir).ticket, 'T1');
+    } finally { clean(dir); }
+  });
+
+  // Adversarial-review finding (agy, #365): carryForwardCrossModelReview read the prior entry
+  // straight from readEntries() without verifying its HMAC signature — the SAME defense the
+  // read-side gate (candidateReview / hasCrossModelApprove) already requires before trusting an
+  // entry. The manifest lives in the PR-controlled tree, so an attacker can append an UNSIGNED,
+  // structurally-valid "approve" naming a real ticket and revision; without this check,
+  // carry-forward would find it, treat it as a legitimate prior verdict, and mint a BRAND NEW,
+  // VALIDLY SIGNED entry carrying it forward — laundering a forged claim into a real attestation
+  // through whoever holds the signing key when carry-forward runs (e.g. in CI).
+  it('refuses to carry forward an UNSIGNED (forged) prior entry, even though it is structurally a valid approve', () => {
+    const dir = ledger();
+    try {
+      // The forge: a distinct-provider "approve" for a real ticket/revision, written WITHOUT
+      // the key — no valid signature, exactly what an unprivileged PR author can produce.
+      withoutKey(() => seed(dir, rev(BASE1)));
+      assert.throws(
+        () => carry(dir, rev(BASE1), rev(BASE2)),
+        /not signature-verified/,
+        'an unsigned prior entry must never be laundered into a signed carried-forward one'
+      );
+      assert.equal(readEntries('manifest', dir).entries.length, 1, 'the refused carry must not append anything');
+    } finally { clean(dir); }
+  });
+
+  it('refuses to carry forward a prior entry signed with a DIFFERENT (attacker-controlled) key', () => {
+    const dir = ledger();
+    const prev = process.env.ADLC_MANIFEST_KEY;
+    try {
+      process.env.ADLC_MANIFEST_KEY = 'attacker-controlled-key';
+      seed(dir, rev(BASE1));
+      process.env.ADLC_MANIFEST_KEY = prev; // back to the real key
+      // A present-but-wrong-key signature is TAMPERING (#354 F1), which the chain check itself
+      // already rejects — either refusal reason is correct; what matters is that it refuses.
+      assert.throws(() => carry(dir, rev(BASE1), rev(BASE2)), /not signature-verified|manifest hash chain does not verify/);
+    } finally { process.env.ADLC_MANIFEST_KEY = prev; clean(dir); }
+  });
+
+  it('refuses to carry forward with NO signing key available, even for a genuinely-signed prior entry', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1)); // genuinely signed with the real key
+      assert.throws(
+        () => withoutKey(() => carry(dir, rev(BASE1), rev(BASE2))),
+        /no signing key available/
+      );
     } finally { clean(dir); }
   });
 
