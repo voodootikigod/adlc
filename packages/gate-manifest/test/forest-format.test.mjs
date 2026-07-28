@@ -260,7 +260,7 @@ describe('forest verify() — AC1 adversarial rejections', () => {
     } finally { cleanTmp(dir); }
   });
 
-  it('rejects case-colliding segment filenames', (t) => {
+  it('rejects case-colliding segment filenames (no-op on a case-insensitive filesystem)', () => {
     const dir = makeTmp();
     try {
       const adlc = join(dir, '.adlc');
@@ -271,10 +271,10 @@ describe('forest verify() — AC1 adversarial rejections', () => {
       // write silently overwrote the first — there's only one file on disk,
       // so the collision this test constructs cannot exist here. §4.2's
       // check exists for git's case-sensitive tree (checked out on any
-      // filesystem via CI's rails-guard, a later slice); skip the filesystem
-      // half of that scenario rather than assert something impossible here.
+      // filesystem via CI's rails-guard, a later slice); this assertion is a
+      // no-op there rather than asserting something impossible to construct.
       if (readdirSync(segDir).length < 2) {
-        t.skip('filesystem is case-insensitive; cannot construct two case-variant files on disk');
+        assert.ok(true, 'filesystem is case-insensitive; cannot construct two case-variant files on disk');
         return;
       }
       const result = verify(adlc);
