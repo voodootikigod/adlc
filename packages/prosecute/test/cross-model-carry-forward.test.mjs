@@ -82,6 +82,28 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     } finally { clean(dir); }
   });
 
+  // Adversarial-review finding (agy, #365): latestEntryForRevision() searched only by revision,
+  // not ticket, so an approval genuinely earned for one ticket could be carried forward as if it
+  // were a DIFFERENT ticket's own — smuggling a distinct-provider review that never happened for
+  // the sensitive ticket. Scoped by ticket now; this pins the fix.
+  it('refuses to carry a DIFFERENT ticket\'s approval forward, even at the identical revision string', () => {
+    const dir = ledger();
+    try {
+      // T1 earns a genuine approval at BASE1.
+      seed(dir, rev(BASE1));
+      // T2 has NEVER been reviewed at BASE1 — carrying "forward" for T2 must not find T1's entry.
+      assert.throws(
+        () => carryForwardCrossModelReview({ ticket: 'T2', fromRevision: rev(BASE1), revision: rev(BASE2), dir }),
+        /no prior cross-model verdict recorded/,
+        'T2 must not be able to smuggle T1\'s approval as its own'
+      );
+      // Sanity: T1 itself can still carry forward normally — the refusal is ticket-scoped, not
+      // a blanket break.
+      carry(dir, rev(BASE1), rev(BASE2));
+      assert.equal(lastEntry(dir).ticket, 'T1');
+    } finally { clean(dir); }
+  });
+
   // F1 — the cap is the whole safeguard.
   it(`caps the chain at ${CARRY_FORWARD_MAX_DEPTH}: the next carry-forward is refused`, () => {
     const dir = ledger();

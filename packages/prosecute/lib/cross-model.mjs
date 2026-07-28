@@ -96,11 +96,15 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
 // Nth-hand verdict visible in the ledger rather than indistinguishable from a fresh one.
 export const CARRY_FORWARD_MAX_DEPTH = 3;
 
-// The most recent cross-model entry naming `revision`, or null.
-function latestEntryForRevision(entries, revision) {
+// The most recent cross-model entry naming `revision`, scoped to `ticket`, or null. The ticket
+// scope is load-bearing: without it, a carry-forward for ticket A could find and re-attest a
+// prior approval that was actually earned for a DIFFERENT ticket B which merely happened to
+// name the same `fromRevision` string, smuggling B's distinct-provider review in as A's own.
+function latestEntryForRevision(entries, revision, ticket) {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) continue;
+    if (entry.ticket !== ticket) continue;
     if (entry?.data?.revision === revision) return entry;
   }
   return null;
@@ -110,7 +114,9 @@ function latestEntryForRevision(entries, revision) {
  * Re-attest an EXISTING verdict against a new base, when the reviewed change is unchanged.
  *
  * Refuses unless every one of these holds:
- *   - a prior cross-model entry exists for `fromRevision` and its verdict is `approve`;
+ *   - a prior cross-model entry exists for `fromRevision` UNDER THE SAME `ticket` and its verdict
+ *     is `approve` — scoped by ticket so a different ticket's approval at the same revision
+ *     string can never be carried forward as this ticket's own;
  *   - both identities are change-set form (a legacy whole-worktree identity carries no change-set
  *     component, so "did the change move?" is not answerable about it);
  *   - the change-set digests are EQUAL — COMPUTED from the two identities, never asserted by the
@@ -145,9 +151,9 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   }
 
   const { entries } = readEntries('manifest', dir);
-  const prior = latestEntryForRevision(entries, fromRevision);
+  const prior = latestEntryForRevision(entries, fromRevision, ticket);
   if (!prior) {
-    throw new Error(`carry-forward refused: no prior cross-model verdict recorded for ${fromRevision}`);
+    throw new Error(`carry-forward refused: no prior cross-model verdict recorded for ${fromRevision} under ticket ${ticket}`);
   }
   if (prior.data?.verdict !== 'approve') {
     throw new Error(
