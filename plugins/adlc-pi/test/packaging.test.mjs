@@ -79,7 +79,7 @@ test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev
 
 test('AC1: files allowlist ships the runtime surface and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['index.ts', 'lib/', 'skills/', 'prompts/', 'README.md']) {
+  for (const entry of ['index.ts', 'bin/', 'lib/', 'skills/', 'prompts/', 'README.md']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -98,10 +98,18 @@ test('AC1: npm pack --dry-run ships the runtime surface and NO test files', () =
 
   assert.ok(paths.includes('index.ts'), 'pack must include index.ts');
   assert.ok(paths.includes('README.md'), 'pack must include README.md');
+  assert.ok(paths.some((p) => p.startsWith('bin/')), 'pack must include bin/');
   assert.ok(paths.some((p) => p.startsWith('lib/')), 'pack must include lib/');
   assert.ok(paths.some((p) => p.startsWith('skills/')), 'pack must include skills/');
   assert.ok(paths.some((p) => p.startsWith('prompts/')), 'pack must include prompts/');
   assert.ok(!paths.some((p) => p.startsWith('test/')), `pack must NOT include test/: ${paths.filter((p) => p.startsWith('test/')).join(', ')}`);
+});
+
+test('AC1: bin/cli.mjs executable displays help output on --help', () => {
+  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), '--help'], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /ADLC Pi Extension Helper/);
+  assert.match(res.stdout, /pi install -l npm:@adlc\/pi/);
 });
 
 // --- AC3: ADLC_PI_BIN override on the deny proof --------------------------

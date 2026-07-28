@@ -34,6 +34,7 @@
     "mcpServers": "./mcp.json"
   },
   "bin": {
+    "adlc-cursor": "lib/scaffold-cli.mjs",
     "adlc-cursor-scaffold": "lib/scaffold-cli.mjs"
   },
   "files": [

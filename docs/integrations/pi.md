@@ -118,4 +118,17 @@ This package can be loaded locally using:
 ```bash
 pi --extension plugins/adlc-pi/index.ts
 ```
-Or installed globally/per-project via `package.json` dependencies.
+Or installed globally/per-project via `pi install`:
+
+```sh
+npm install -g @adlc/cli
+
+# Per-project team install (lands in .pi/):
+pi install -l npm:@adlc/pi
+
+# Or helper one-liner via npx:
+npx adlc-pi install
+
+# Or user-global install:
+pi install npm:@adlc/pi
+```

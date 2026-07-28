@@ -88,7 +88,7 @@ whose documented hook contract the enforce-by-default posture is pinned against)
 npm install -g @adlc/cli
 
 # 2. Bootstrap the project — scaffolds .adlc/ + .opencode/, registers the plugin
-npx @adlc/opencode init
+npx adlc-opencode init
 ```
 
 Then **restart OpenCode** so it loads the plugin — the `tool.execute.before`

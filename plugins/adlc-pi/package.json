@@ -32,8 +32,12 @@
       "./prompts"
     ]
   },
+  "bin": {
+    "adlc-pi": "bin/cli.mjs"
+  },
   "files": [
     "index.ts",
+    "bin/",
     "lib/",
     "skills/",
     "prompts/",

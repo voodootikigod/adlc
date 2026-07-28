@@ -318,8 +318,9 @@ export const CURSOR_INTEGRATION = {
     '# Install plugin: adlc-cursor',
     'npm install -g @adlc/cli',
     'adlc init --harness cursor',
+    '# Scaffolder one-liner: npx adlc-cursor .',
   ],
-  note: 'Prefer the marketplace install: it brings hooks, skills, and /adlc-* commands. adlc init only bootstraps the .adlc/ runtime (do not commit a generated .adlc/config.json into a repo that already freezes that path). Legacy fallback: npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control.',
+  note: 'Prefer the marketplace install: it brings hooks, skills, and /adlc-* commands. Scaffolder one-liner: npx adlc-cursor . or npx @adlc/cursor . Wire docs/ci/rails-guard.yml as the unbypassable control.',
   pluginDir: 'plugins/adlc-cursor',
   hero: {
     kicker: 'Cursor integration',
@@ -444,8 +445,8 @@ export const CURSOR_INTEGRATION = {
   operate: {
     title: 'operate: Cursor plugin',
     lines: [
-      '# Legacy / local-dev scaffolder fallback',
-      'npx @adlc/cursor .',
+      '# Scaffolder one-liner',
+      'npx adlc-cursor .',
       '',
       '# Offline contract smoke',
       'node scripts/cursor-install-smoke.mjs .',
@@ -598,8 +599,9 @@ export const PI_INTEGRATION = {
   install: [
     'npm install -g @adlc/cli',
     'pi install -l npm:@adlc/pi',
+    'npx adlc-pi install',
   ],
-  note: 'The -l project install auto-installs for teammates on trusted startup. pi install npm:@adlc/pi (no -l) is user-global instead. Then /adlc-init inside pi finishes the repo scaffold. Requires Node >= 22.19.',
+  note: 'The -l project install auto-installs for teammates on trusted startup. pi install npm:@adlc/pi (no -l) is user-global instead. Helper one-liner: npx adlc-pi install. Then /adlc-init inside pi finishes the repo scaffold. Requires Node >= 22.19.',
   pluginDir: 'plugins/adlc-pi',
   hero: {
     kicker: 'Pi integration',
@@ -695,11 +697,14 @@ export const PI_INTEGRATION = {
   operate: {
     title: 'operate: Pi extension',
     lines: [
-      '# User-global instead of project-local',
-      'pi install npm:@adlc/pi',
+      '# Recommended per-project team install',
+      'pi install -l npm:@adlc/pi',
       '',
-      '# Load from a source checkout',
-      'pi --extension /path/to/adlc/plugins/adlc-pi/index.ts',
+      '# One-liner via npx',
+      'npx adlc-pi install',
+      '',
+      '# User-global install',
+      'pi install npm:@adlc/pi',
     ],
   },
   resources: [

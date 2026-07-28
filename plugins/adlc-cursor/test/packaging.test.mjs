@@ -36,6 +36,11 @@ test('AC1: package.json is publishable (not private, licensed, sourced)', () => 
   assert.ok(Array.isArray(pkg.keywords) && pkg.keywords.includes('cursor'), 'keywords must include "cursor"');
 });
 
+test('AC1: package.json bin maps both adlc-cursor and adlc-cursor-scaffold', () => {
+  assert.equal(pkg.bin?.['adlc-cursor'], 'lib/scaffold-cli.mjs');
+  assert.equal(pkg.bin?.['adlc-cursor-scaffold'], 'lib/scaffold-cli.mjs');
+});
+
 
 test('AC1: Cursor plugin manifest locksteps package version (T47)', () => {
   const manifestPath = join(pkgDir, '.cursor-plugin', 'plugin.json');

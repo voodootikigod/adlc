@@ -84,13 +84,13 @@ Publishing to [cursor.com/marketplace](https://cursor.com/marketplace/publish) i
 a human submit step after the plugin layout is green — follow Cursor's checklist;
 this repo is already structured for it.
 
-### Legacy / local-dev fallback — npm scaffolder
+### Scaffolder one-liner — npm package
 
 `@adlc/cursor` remains published on npm for project-local copies of `.cursor/`:
 
 ```sh
 npm install -g @adlc/cli
-npx @adlc/cursor .
+npx adlc-cursor .
 ```
 
 The scaffolder merges hooks (including `stop` / `beforeSubmitPrompt` by
