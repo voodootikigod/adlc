@@ -9,9 +9,9 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { violations } from '../../.claude/hooks/block-secret-exposure.mjs';
+import { violations } from '../block-secret-exposure.mjs';
 
-const HOOK = join(fileURLToPath(new URL('../..', import.meta.url)), '.claude/hooks/block-secret-exposure.mjs');
+const HOOK = fileURLToPath(new URL('../block-secret-exposure.mjs', import.meta.url));
 
 /** Run the hook exactly as Claude Code does: JSON on stdin, JSON or nothing out. */
 function runHook(command) {

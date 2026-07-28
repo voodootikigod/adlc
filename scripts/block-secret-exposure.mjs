@@ -25,7 +25,7 @@
  * carelessness, not an adversary — anyone who can edit this file can bypass it
  * anyway, so fail-closed buys no security while a parse bug that blocked every
  * Bash call would be a far worse outcome than the leak it guards. Asserted in
- * scripts/test/hook-block-secret-exposure.test.mjs so it cannot drift silently.
+ * scripts/test/block-secret-exposure.test.mjs so it cannot drift silently.
  *
  * It does NOT fail open on ambiguous command TEXT. Quoting the pattern inside a
  * heredoc — a commit message describing the incident, say — is still refused,
