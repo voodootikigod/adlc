@@ -106,6 +106,47 @@ rewritten into one. Before building on another PR, check it is still open
 your own unique commits onto fresh `main`, not a rebase — a rebase replays the
 pre-squash commits and conflicts throughout.
 
+## `ADLC_MANIFEST_KEY`: never let it become an argument
+
+Running `tier-check` or `record-cross-model` locally needs the manifest signing
+key, which lives in `.env.local`. It is the entire trust anchor — anyone who
+reads it can mint cross-model approvals forever — so `cross-model-gate.yml` goes
+to considerable length to keep it away from PR-controlled code. That care is
+wasted if the shell prints it.
+
+**It has already been printed once.** The command redacted the file's contents
+and leaked the key anyway:
+
+```sh
+# DO NOT COPY THIS
+set -x
+cat .env.local | sed 's/=.*/=<redacted>/'                 # display path: redacted
+env $(grep -v '^#' .env.local | xargs) node ... tier-check # trace path: NOT redacted
+```
+
+`set -x` traces every command in its **fully expanded** form. `$(...)` expands to
+a literal `ADLC_MANIFEST_KEY=<value>` argument *before* `env` runs, so xtrace
+printed the real value. The redaction and the leak were on different paths;
+guarding the one you are thinking about does not cover the other.
+
+Two rules, either of which alone would have prevented it:
+
+- **Never expand a secret into an argument list.** argv is visible to xtrace, to
+  `ps`, and to any harness that logs commands. Let the child read the file:
+
+  ```sh
+  set -a; . ./.env.local; set +a; node packages/prosecute/bin/adlc-prosecute.mjs tier-check ...
+  ```
+
+- **Never enable `set -x` in a command that touches `.env.local`.** It is a
+  debugging reflex with nothing to debug here; `env VAR=value cmd` prints nothing
+  on its own.
+
+If it does leak, rotate — the `ADLC_MANIFEST_KEY` repository secret *and* every
+worktree's `.env.local`. Check first whether the gate verifies historical
+manifest entries or only the head attestation: entries signed under the old key
+may need re-signing, and finding that out after rotating is the expensive order.
+
 ## The ADLC gates apply to this repo too
 
 This repo is the toolkit, and it uses it: author a ticket (P0), check
