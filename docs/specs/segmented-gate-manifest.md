@@ -84,9 +84,12 @@ reject payloads that supply it.
 - `segment` — `"root"` or the filename (without directory) of another segment.
 - `seq` — the `seq` of the anchored-to entry in that segment.
 - `lineHash` — SHA-256 hex of that entry's exact raw line bytes.
-- Greenfield form: `"anchor": null` — permitted only when the repository has no
-  committed manifest content (no root, no other committed segment) at the time
-  the segment is created; enforced at CI per §9.3.
+- Root-less form: `"anchor": null` — permitted whenever the repository has no
+  root at the time the segment is created, regardless of how many other
+  committed segments already exist (§5's forest is a forest of trees rooted in
+  the root segment *or* in `anchor: null` segments, plural); enforced at CI
+  per §9.3. Once a root exists, every new segment MUST anchor to it (§7.1) —
+  `anchor: null` is unavailable from that point on.
 
 The anchor is inside the signed byte range (v2 signs all fields), so a signed
 anchor cannot be repointed without invalidating its signature.
@@ -235,7 +238,10 @@ Dry-run by default; `--write` applies; `--json` supported. Steps, in order:
 2. Run full verification (§5). Refuse on any invalidity — `repair-chain` first.
 3. Refuse if unsigned entries exist, unless `--attest-unsigned` (same operator
    ceremony and disclosure as `repair-chain`).
-4. Refuse if already segmented (§4.7 marker present).
+4. Refuse if already segmented — §4.7's marker-OR-cutover-entry test, not marker
+   presence alone: the double marker exists precisely so one being lost doesn't
+   make the ceremony blind to a repo that already cut over, re-running and
+   appending duplicate seal and cutover entries to the frozen root.
 5. Compute standing approves (§3). Plan output lists each sealed tuple, the
    cutover entry, the backup path, and the config change. Dry-run stops here.
 6. With `--write`, under the ledger lock: write the hash-named backup
