@@ -13,7 +13,8 @@ import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
-import { ledgerPath, sha256 } from '@adlc/core';
+import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest } from '@adlc/core';
+import { gitRepo } from './helpers.mjs';
 
 // #326 hardening: attestations are HMAC-signed and the readers verify the signature
 // (which signs when the key is present) and the readers both need it set. Set it for this
@@ -484,5 +485,91 @@ describe('cross-model rewrite-a-signed-revocation is caught (#354 F1)', () => {
       // by verify(), so the neutralized revocation cannot resurrect the earlier approve.
       assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// #365 F4/AC11 — the gate accepts ONLY the identity form matching how IT computed the
+// revision for this run. Accepting either form (old git-worktree:* or new git-change:*) would
+// let a PR author satisfy whichever is cheaper, and main's five signed git-worktree:* entries
+// must keep verifying against an old-form computation without also being made to satisfy a
+// new-form one (which would silently widen what they were ever reviewed against).
+describe('#365 F4/AC11 — identity form mismatch does not satisfy the gate', () => {
+  it('an old-form (git-worktree:*) attestation does NOT satisfy a new-form (git-change:*) computation, and vice versa', () => {
+    const dir = tmp();
+    const repo = gitRepo();
+    try {
+      writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
+      repo.g('add', '-A'); repo.g('commit', '-qm', 'base');
+      repo.g('checkout', '-q', '-b', 'feat');
+      writeFileSync(join(repo.dir, 'src.txt'), 'changed\n');
+      repo.g('add', '-A'); repo.g('commit', '-qm', 'the reviewed change');
+
+      const legacyRevision = resolveRevision({ cwd: repo.dir });
+      const changeSetRevision = resolveChangeSetRevision({ cwd: repo.dir, base: 'main' });
+      // Sanity: the two forms genuinely differ for the identical worktree state — otherwise
+      // this test would pass by accident rather than by the form-mismatch guard.
+      assert.notEqual(legacyRevision, changeSetRevision);
+
+      // An attestation recorded against the OLD form still satisfies the gate when the gate
+      // itself computes the OLD form (compatibility: main's existing signed entries keep
+      // verifying).
+      recordCrossModelReview({ ticket: 'T1', revision: legacyRevision, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: legacyRevision, authorProvider: 'anthropic' }), true);
+      // The SAME attestation does NOT satisfy the gate when it computes the NEW form for the
+      // identical underlying change — form mismatch is a refusal, not an acceptable alternative.
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: changeSetRevision, authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); rmSync(repo.dir, { recursive: true, force: true }); }
+  });
+
+  it('a new-form (git-change:*) attestation does NOT satisfy an old-form (git-worktree:*) computation', () => {
+    const dir = tmp();
+    const repo = gitRepo();
+    try {
+      writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
+      repo.g('add', '-A'); repo.g('commit', '-qm', 'base');
+      repo.g('checkout', '-q', '-b', 'feat');
+      writeFileSync(join(repo.dir, 'src.txt'), 'changed\n');
+      repo.g('add', '-A'); repo.g('commit', '-qm', 'the reviewed change');
+
+      const legacyRevision = resolveRevision({ cwd: repo.dir });
+      const changeSetRevision = resolveChangeSetRevision({ cwd: repo.dir, base: 'main' });
+
+      recordCrossModelReview({ ticket: 'T1', revision: changeSetRevision, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: changeSetRevision, authorProvider: 'anthropic' }), true);
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: legacyRevision, authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); rmSync(repo.dir, { recursive: true, force: true }); }
+  });
+});
+
+// #365 F5/AC12 — `base_sha` recorded in (or embedded in) an attestation is never gate
+// authority. The gate must derive its own revision string and match it EXACTLY; a claimed
+// base baked into an attestation's revision has no independent standing.
+describe('#365 F5/AC12 — a false base named in an attestation is never gate authority', () => {
+  it('an attestation naming a fabricated base does not satisfy the gate for the REAL base, even with a matching change-set digest', () => {
+    const dir = tmp();
+    const repo = gitRepo();
+    try {
+      writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
+      repo.g('add', '-A'); repo.g('commit', '-qm', 'base');
+      repo.g('checkout', '-q', '-b', 'feat');
+      writeFileSync(join(repo.dir, 'src.txt'), 'changed\n');
+      repo.g('add', '-A'); repo.g('commit', '-qm', 'the reviewed change');
+
+      const realRevision = resolveChangeSetRevision({ cwd: repo.dir, base: 'main' });
+      const digest = changeSetDigest(realRevision);
+      // Same change-set digest (the reviewed bytes), a FABRICATED base sha — simulates an
+      // attacker (or a stale record) claiming the change was reviewed against a base it never
+      // actually moved against.
+      const falseRevision = `git-change:${'f'.repeat(40)}:${digest}`;
+      assert.notEqual(falseRevision, realRevision);
+
+      recordCrossModelReview({ ticket: 'T1', revision: falseRevision, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      // The gate derives and checks the REAL revision itself; the false-base attestation does
+      // not clear it, proving the base named in the attestation carries no authority on its own.
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: realRevision, authorProvider: 'anthropic' }), false);
+      // Sanity: an attestation at the REAL, gate-derived revision does clear it.
+      recordCrossModelReview({ ticket: 'T1', revision: realRevision, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: realRevision, authorProvider: 'anthropic' }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); rmSync(repo.dir, { recursive: true, force: true }); }
   });
 });
