@@ -42,12 +42,16 @@ function withKey(key, fn) {
  * Build a signed (or unsigned, key=null) chain from partial entries. Each
  * partial may include `anchor` on its first element. Returns the array of
  * raw JSONL lines (strings), in order.
+ *
+ * @param {number} [signFrom]  0-based index of the first entry to sign;
+ *   entries before it are left unsigned (a legacy prefix), entries from it
+ *   onward are signed. Defaults to 0 (every entry signed) when `key` is set.
  */
-function buildChainLines(partials, { key = null } = {}) {
+function buildChainLines(partials, { key = null, signFrom = 0 } = {}) {
   const lines = [];
   let prevRawLine = null;
   let seq = 1;
-  for (const partial of partials) {
+  partials.forEach((partial, index) => {
     const entry = {
       seq,
       gate: 'evidence',
@@ -56,7 +60,7 @@ function buildChainLines(partials, { key = null } = {}) {
       files: partial.files ?? {},
       prev: prevRawLine === null ? null : sha256(prevRawLine),
     };
-    if (key) {
+    if (key && index >= signFrom) {
       entry.sigVersion = 2;
       entry.sig = signEntry(key, entry);
     }
@@ -64,7 +68,7 @@ function buildChainLines(partials, { key = null } = {}) {
     lines.push(line);
     prevRawLine = line;
     seq += 1;
-  }
+  });
   return lines;
 }
 
@@ -156,6 +160,55 @@ describe('forest verify() — a valid forest', () => {
         const result = verify(adlc);
         assert.equal(result.valid, true, result.message);
         assert.equal(result.signed, true);
+      });
+    } finally { cleanTmp(dir); }
+  });
+
+  it('a legacy-unsigned root prefix is tolerated per-chain, independent of a fully-signed segment', () => {
+    // The root has an honest history predating signing (entries 0-1 unsigned,
+    // entry 2 onward signed) — this repo's own shape. The legacy-prefix
+    // tolerance (#378) is evaluated per chain, so the segment's own signed
+    // history is unaffected by the root's unsigned past, and vice versa.
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines(
+        [{ gate: 'old-unsigned-1' }, { gate: 'old-unsigned-2' }, { gate: 'first-signed' }],
+        { key: KEY, signFrom: 2 }
+      );
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+      const anchor = { segment: 'root', seq: 3, lineHash: lineHashOf(rootLines, 2) };
+      const segLines = buildChainLines([{ gate: 'evidence', anchor }], { key: KEY });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segLines);
+
+      withKey(KEY, () => {
+        const result = verify(adlc, { requireSignatures: false });
+        assert.equal(result.valid, true, result.message);
+        assert.equal(result.count, 4);
+      });
+    } finally { cleanTmp(dir); }
+  });
+
+  it('an unsigned entry AFTER the root has gone signed-era still breaks the chain (no regression via appended plain entries)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines(
+        [{ gate: 'old-unsigned' }, { gate: 'first-signed' }, { gate: 'regressed-unsigned' }],
+        { key: KEY, signFrom: 1 }
+      );
+      // Strip the sig back off the third (already-signed) entry to simulate
+      // an attacker appending a plain entry after the ledger went signed-era.
+      const regressed = JSON.parse(rootLines[2]);
+      delete regressed.sig;
+      delete regressed.sigVersion;
+      rootLines[2] = JSON.stringify(regressed);
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+
+      withKey(KEY, () => {
+        const result = verify(adlc, { requireSignatures: false });
+        assert.equal(result.valid, false);
+        assert.match(result.message, /unsigned entry/);
       });
     } finally { cleanTmp(dir); }
   });
