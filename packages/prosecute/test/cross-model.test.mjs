@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision } from '../lib/cross-model.mjs';
+import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision, manifestChainBreakReason } from '../lib/cross-model.mjs';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest } from '@adlc/core';
 import { gitRepo } from './helpers.mjs';
@@ -448,6 +448,35 @@ describe('cross-model works on an unsigned legacy manifest (#326 — not inert, 
       });
       assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
       assert.equal(hasCrossModelApprove({ dir, ticket: 'T1', revision: 'rev-1', authorProvider: 'anthropic' }), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// #378 — manifestChainBreakReason must use the SAME lenient (requireSignatures:false)
+// check as manifestChainTrustworthy, not the strict default. A manifest holding only
+// legacy-unsigned entries (no signed entry at all) has NO break under lenient scoping
+// but WOULD break ('unsigned entry') under strict — this is the one scenario that
+// actually distinguishes the two, so it is what proves the function reads lenient.
+describe('manifestChainBreakReason (#378)', () => {
+  it('returns null for a legacy-unsigned-only manifest (lenient, not strict)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adlc-cross-model-'));
+    try {
+      withoutKey(() => {
+        record({ gate: 'legacy-1', ticket: 'T0', rawData: JSON.stringify({ ok: true }), dir });
+        record({ gate: 'legacy-2', ticket: 'T0', rawData: JSON.stringify({ ok: true }), dir });
+      });
+      assert.equal(manifestChainBreakReason(dir), null);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('returns "unsigned entry" for a signed-then-unsigned manifest', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adlc-cross-model-'));
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      withoutKey(() => {
+        record({ gate: 'rails', ticket: 'T0', rawData: JSON.stringify({ ok: true }), dir });
+      });
+      assert.equal(manifestChainBreakReason(dir), 'unsigned entry');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

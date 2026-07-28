@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +49,22 @@ test('flail advisory stays silent until the same failure repeats three times', (
     const third = run(root, 'flail', payload);
     assert.equal(third.status, 0);
     assert.match(JSON.parse(third.stdout).systemMessage, /repeated 3 times/);
+  });
+});
+
+// #378 — pin that verifyOutput's spawn actually passes --allow-legacy-unsigned. A
+// shim recording its own argv, since verifyOutput's args array is otherwise opaque
+// to a test (ADLC_CLI_COMMAND only substitutes the binary, not the fixed args).
+test('verify spawns gate-manifest verify with --allow-legacy-unsigned', () => {
+  fixture((root) => {
+    const shim = join(root, 'fake-adlc');
+    const log = join(root, 'argv.log');
+    writeFileSync(shim, `#!/bin/sh\necho "$@" > "${log}"\nexit 0\n`);
+    chmodSync(shim, 0o755);
+    const verify = run(root, 'verify', { hook_event_name: 'Stop' }, { ADLC_CLI_COMMAND: shim });
+    assert.equal(verify.status, 0);
+    const argv = readFileSync(log, 'utf8').trim();
+    assert.equal(argv, 'gate-manifest verify --json --allow-legacy-unsigned');
   });
 });
 

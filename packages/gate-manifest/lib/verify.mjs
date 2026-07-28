@@ -87,7 +87,7 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
 
   let prevRawLine = null;
   let prevSeq = null;
-  let seenSignedEntry = false; // flips true once an entry with a verified sig is seen
+  let seenSignedEntry = false; // set once an entry with a verified sig has been seen
 
   for (const { line, lineNo } of nonEmpty) {
     let entry;
