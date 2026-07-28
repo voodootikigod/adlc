@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runProsecution } from '../lib/run.mjs';
-import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
+import { canonicalJson, resolveRevision, resolveChangeSetRevision, sha256 } from '@adlc/core';
 import { ticketHash as domainTicketHash } from '@adlc/tickets';
 import { FIXTURE_REVISION, finding, gitRepo, input, killedFinding, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
 
@@ -214,7 +214,7 @@ describe('revision binding: default resolution and ticket lookup', () => {
       repo.g('commit', '-qm', 'base');
       mkdirSync(join(repo.dir, '.omo/evidence'), { recursive: true });
       const reviewTranscript = join(repo.dir, '.omo/evidence/p5-review.txt');
-      const revision = resolveRevision({ cwd: repo.dir, ignorePaths: [reviewTranscript] });
+      const revision = resolveChangeSetRevision({ cwd: repo.dir, base: 'main', ignorePaths: [reviewTranscript] });
       writeFileSync(reviewTranscript, [
         'ticket: T1',
         `reviewed revision: ${revision}`,
@@ -241,7 +241,7 @@ describe('revision binding: default resolution and ticket lookup', () => {
           { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
           { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings' },
         ],
-      }, { dir: join(repo.dir, '.adlc'), ticket: 'T1', cwd: repo.dir });
+      }, { dir: join(repo.dir, '.adlc'), ticket: 'T1', cwd: repo.dir, base: 'main' });
 
       assert.equal(result.exitCode, 0);
       assert.equal(result.revision, revision);
@@ -266,7 +266,7 @@ describe('revision binding: default resolution and ticket lookup', () => {
       writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [activeTicket] }));
       mkdirSync(join(repo.dir, '.omo/evidence'), { recursive: true });
       const reviewTranscript = join(repo.dir, '.omo/evidence/p5-review.txt');
-      const revision = resolveRevision({ cwd: repo.dir, ignorePaths: [reviewTranscript, join(dir, 'tickets.json')] });
+      const revision = resolveChangeSetRevision({ cwd: repo.dir, base: 'main', ignorePaths: [reviewTranscript, join(dir, 'tickets.json')] });
       writeFileSync(reviewTranscript, [
         'ticket: T1',
         `reviewed revision: ${revision}`,
@@ -292,7 +292,7 @@ describe('revision binding: default resolution and ticket lookup', () => {
           { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
           { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
         ],
-      }, { dir, ticket: 'T1', cwd: repo.dir });
+      }, { dir, ticket: 'T1', cwd: repo.dir, base: 'main' });
 
       assert.equal(result.exitCode, 0);
       const complete = readFileSync(join(dir, 'manifest.jsonl'), 'utf8')

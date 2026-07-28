@@ -1,4 +1,4 @@
-import { ADLC_DIR, canonicalJson, readEntries, resolveRevision, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, readEntries, resolveChangeSetRevision, sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -42,12 +42,18 @@ function revisionIgnorePaths(cwd, dir, input, inputPath) {
 /**
  * Resolve the reviewed revision exactly as runProsecution does, so a cross-model
  * attestation recorded via the CLI binds to the SAME revision string the gate
- * later checks. Pass the identical { cwd, dir, revision, input, inputPath } to
- * both paths (see bin/adlc-prosecute.mjs record-cross-model).
+ * later checks. Pass the identical { cwd, dir, base, revision, input, inputPath } to
+ * all three paths (see bin/adlc-prosecute.mjs record-cross-model and tier-check) —
+ * #365 R4: base resolution is single-sourced here rather than re-derived per consumer.
+ *
+ * `base` defaults to 'main', matching the CLI's `--base` default, so a caller that
+ * omits it (as most direct runProsecution() callers do) still gets the SAME base a
+ * bare `adlc-prosecute` invocation would use.
  */
-export function resolveProsecutionRevision({ cwd = process.cwd(), dir = ADLC_DIR, revision, input, inputPath } = {}) {
-  return resolveRevision({
+export function resolveProsecutionRevision({ cwd = process.cwd(), dir = ADLC_DIR, base = 'main', revision, input, inputPath } = {}) {
+  return resolveChangeSetRevision({
     cwd,
+    base,
     revision,
     ignorePaths: revisionIgnorePaths(cwd, dir, input, inputPath),
   });
@@ -182,6 +188,7 @@ export function runProsecution(input, {
   ticket,
   dir = ADLC_DIR,
   target = input?.target ?? 'working tree',
+  base = 'main',
   revision,
   inputPath,
   cwd = process.cwd(),
@@ -197,7 +204,7 @@ export function runProsecution(input, {
   if (requireCrossModel && (typeof authorProvider !== 'string' || authorProvider.trim() === '')) {
     errors.push('trust-root-tier prosecution requires --author-provider (or ADLC_AUTHOR_PROVIDER) to anchor author identity for the cross-model gate');
   }
-  const resolvedRevision = resolveProsecutionRevision({ cwd, dir, revision, input, inputPath });
+  const resolvedRevision = resolveProsecutionRevision({ cwd, dir, base, revision, input, inputPath });
   const ticketBinding = ticket ? ticketDefinitionHash(cwd, ticket, dir) : null;
   const ticketHash = ticketBinding?.ticketHash ?? null;
   const storeHash = ticketBinding?.storeHash ?? null;

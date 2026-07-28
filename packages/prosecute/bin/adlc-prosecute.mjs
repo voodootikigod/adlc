@@ -257,6 +257,7 @@ if (positionals[0] === 'record-cross-model') {
   }
   const revision = resolveProsecutionRevision({
     dir: values.dir,
+    base: values.base,
     revision: values.revision,
     input,
     inputPath: values.input,
@@ -335,7 +336,7 @@ if (positionals[0] === 'tier-check') {
   if (!authorProvider) {
     opError('tier-check: trust-root tier but no --author-provider / ADLC_AUTHOR_PROVIDER — distinctness cannot be proven; failing closed');
   }
-  const revision = resolveProsecutionRevision({ dir: values.dir, revision: values.revision });
+  const revision = resolveProsecutionRevision({ dir: values.dir, base: values.base, revision: values.revision });
   if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
 
   // #326 hardening — the attestation is trusted ONLY via its HMAC signature, verified with
@@ -475,6 +476,7 @@ const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROV
 const result = runProsecution(input, {
   ticket: values.ticket,
   target: values.target,
+  base: values.base,
   revision: values.revision,
   inputPath: values.input,
   dir: values.dir,
