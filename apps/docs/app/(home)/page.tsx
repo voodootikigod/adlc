@@ -43,13 +43,13 @@ carries either a numbered exhibit or the name of the gate that produces it.
 
 OWN-WORLD: The controlled-change record in its contemporary register. Cool paper
 (#e7eaef) desaturated from An Old Hope's own foreground, hairline rules, fixed field
-blocks, numbered clauses, an approver column, squared corners, no cards. Evidence stays
+blocks, numbered clauses, an at-this-phase column, squared corners, no cards. Evidence stays
 true terminal on #1c1d21 with the unmodified An Old Hope palette. Archivo (width axis at
 panel scale) sets the record; Azeret Mono sets every identifier, exit code, and legend.
 
 STORY: An engineer sees real commands and real exit codes and installs. A leader sees an
-approval chain with an approver column and two named human attestations, and understands
-there is an audit trail a non-engineer could read. Both act on the same honest account.
+approval chain naming what acts at each phase, and two named human attestations, and
+understands there is an audit trail a non-engineer could read. Both act on the same honest account.
 
 FIRST VIEWPORT: Terminal-dark masthead, then the record rail naming ADLC-CR-0001 and its
 standing. A four-field header block. §1 STATEMENT sets the thesis at panel scale in narrow

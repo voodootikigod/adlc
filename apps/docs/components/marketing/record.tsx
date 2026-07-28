@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
  * The record vocabulary.
  *
  * Every marketing surface is a controlled-change record: a header block of
- * fixed fields, numbered clauses, an approver column, and attached exhibits.
+ * fixed fields, numbered clauses, a column naming what acts, and attached exhibits.
  * These are the atoms. Nothing here is a generic card, panel, or pill — a stock
  * component inside a committed form is the lapse this file exists to prevent.
  *

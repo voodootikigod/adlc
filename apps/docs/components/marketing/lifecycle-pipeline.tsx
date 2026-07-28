@@ -5,25 +5,29 @@ import { ExitCode } from './record';
 //
 // The section claims "a gate between every one", so the gate is the subject
 // here, not the connector. Under the record world the chain is what it is in
-// any change record: a ruled table with one row per control point, an approver
-// column, and a verdict. The two human gates are simply the two rows where the
-// approver is a person — the exception reads structurally, not as a colour.
+// any change record: a ruled table with one row per control point, and a column
+// naming what acts at that phase. The two human gates are simply the two rows
+// where that is a person — the exception reads structurally, not as a colour.
 //
-// Every approver below is a real CLI (or a person). There is deliberately no
-// per-row evidence column: only some phases have an artifact whose filename can
-// be stated as fact, and a column that is right six times out of eight is worse
-// than no column. The manifest is named once, in the note beneath.
+// The column is deliberately headed "At this phase", not "Approver". An earlier
+// version claimed the named CLI *enforced* that phase's exit gate, and for two
+// rows that was not true: rails-guard enforces frozen rails rather than proving
+// the suite is RED, and build-gate denies starting a build in a degraded session
+// rather than validating the P4 build. Naming a tool that runs at a phase is
+// true; naming it as the thing that closes the gate was a claim the toolkit does
+// not back. The machine/person split is unaffected and remains the real thesis.
+//
+// Every name here must still dispatch — the page renders them as commands, and
+// marketing-approvers.test.mjs asserts the dispatcher routes each one. That test
+// checks the names are real, not that they enforce a gate; the weakened column
+// header is what makes that the right assertion.
+//
+// There is deliberately no per-row evidence column: only some phases have an
+// artifact whose filename can be stated as fact, and a column that is right six
+// times out of eight is worse than no column. The manifest is named once, in the
+// note beneath.
 
-/**
- * The approver for each phase. Human gates name a person; the rest name the tool.
- *
- * Every machine approver here MUST be a real dispatchable tool — this component
- * tells the visitor these are executable, so a name that does not dispatch is a
- * broken promise, not a typo. P4 previously read `adlc gate`, which does not
- * exist: `packages/gate` is not a package and the dispatcher exits 1 on it. The
- * name was taken from an MCP tool called `adlc_gate`, which is not a CLI.
- * scripts/test/marketing-approvers.test.mjs now dispatches every one of these.
- */
+/** What acts at each phase. Human gates name a person; the rest name the tool. */
 export const APPROVER: Record<string, string> = {
   P0: 'adlc ticket',
   P1: 'A person',
@@ -47,7 +51,7 @@ export function LifecyclePipeline() {
           <div className="rec-legend px-3 py-2.5" />
           <div className="rec-legend px-3 py-2.5">Control point</div>
           <div className="rec-legend px-3 py-2.5">Exit gate</div>
-          <div className="rec-legend px-3 py-2.5">Approver</div>
+          <div className="rec-legend px-3 py-2.5">At this phase</div>
           <div className="rec-legend px-3 py-2.5">Verdict</div>
         </div>
 

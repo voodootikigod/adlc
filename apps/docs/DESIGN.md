@@ -317,10 +317,17 @@ server-side and always imported from `lib/install-commands.mjs`.
 Header strip carries the command and the exit status; the body is real output.
 Prompts dim to `comment`; verdict lines keep glyph, word, and hue.
 
-**Approval chain.** One row per control point: identifier, name, exit gate,
-approver, verdict. Human gates are the rows whose approver is a person — marked by
-the amber field, the diamond, and the word, so the exception is structural rather
-than chromatic.
+**Approval chain.** One row per control point: identifier, name, exit gate, what
+acts at that phase, verdict. Human gates are the rows where that is a person —
+marked by the amber field, the diamond, and the word, so the exception is
+structural rather than chromatic.
+
+The column is headed "At this phase", never "Approver". Naming a tool that runs
+at a phase is true; naming it as the thing that closes the gate is a claim the
+toolkit does not back for every phase — `rails-guard` enforces frozen rails
+rather than proving a suite is RED, and `build-gate` guards entry to a build
+rather than validating one. Every name shown must still dispatch through `adlc`,
+which `marketing-approvers.test.mjs` enforces.
 
 **Attestation block.** The record ends in signatures. The two human gates render as
 signature panels with a ruled signature line and `SIGNED BY A PERSON`. This is the
