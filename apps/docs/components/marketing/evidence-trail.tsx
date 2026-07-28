@@ -7,29 +7,34 @@ const STEPS = [
 
 // Chain of custody: how a change becomes auditable.
 //
-// Custody is recorded, not drawn. The numbered hand-offs carry the sequence the
-// way a custody form does, so the rail-and-arrow SVG that used to sit between
-// the cells is gone — it was decorating an order the numbering already states,
-// and on paper it read as a hairline nobody could see.
+// Custody is recorded, not drawn — and it is a sequence, so the record writes
+// it the way it writes every sequence: ruled rows with a numbered hand-off,
+// not a grid of same-size cards. (The card lattice this replaced was the exact
+// number-heading-text scaffold the rollout section's own comment rejects.)
 export function EvidenceTrail() {
   return (
     <ol
-      className="grid grid-cols-1 gap-px sm:grid-cols-2 lg:grid-cols-4"
-      style={{ background: 'var(--rec-rule)', border: '1px solid var(--rec-rule)' }}
+      style={{ borderTop: '1px solid var(--rec-rule-strong)' }}
       aria-label="Evidence trail from ticket through gates and gate-manifest to merge"
     >
       {STEPS.map((s, i) => (
-        <li key={s.label} className="flex flex-col p-4" style={{ background: 'var(--rec-paper-raised)' }}>
-          <p className="rec-mono text-[10px] tracking-[0.2em]" style={{ color: 'var(--rec-ink-3)' }}>
+        <li
+          key={s.label}
+          className="grid grid-cols-1 gap-x-6 px-1 py-4 md:grid-cols-[52px_170px_minmax(0,1fr)]"
+          style={{ borderBottom: '1px solid var(--rec-rule)', background: 'var(--rec-paper-raised)' }}
+        >
+          <span className="rec-mono px-2 pt-0.5 text-[11px] tracking-[0.1em]" style={{ color: 'var(--rec-ink-3)' }}>
             {String(i + 1).padStart(2, '0')}
-            {i < STEPS.length - 1 ? <span aria-hidden> → HAND-OFF</span> : <span aria-hidden> · CLOSED</span>}
-          </p>
-          <p className="mt-1.5 rec-mono text-[14px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
+          </span>
+          <span className="rec-mono px-2 text-[14px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
             {s.label}
-          </p>
-          <p className="mt-1.5 text-[12.5px] leading-[1.5]" style={{ color: 'var(--rec-ink-2)' }}>
+          </span>
+          <span className="px-2 text-[14px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
             {s.detail}
-          </p>
+            <span aria-hidden className="rec-mono ml-2 text-[11px]" style={{ color: 'var(--rec-ink-3)' }}>
+              {i < STEPS.length - 1 ? '→ hand-off' : '· closed'}
+            </span>
+          </span>
         </li>
       ))}
     </ol>

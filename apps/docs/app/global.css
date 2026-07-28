@@ -64,8 +64,8 @@ html > body[data-scroll-locked] {
   --rec-paper-sunk: #dde1e8;
   --rec-ink: #171920;
   --rec-ink-2: #464c5c;
-  /* 4.74:1 on the darkest paper tone (#dde1e8) — this ink sets .rec-legend at
-     9.5px (field labels, column headers, form labels), so it is normal text and
+  /* 4.74:1 on the darkest paper tone (#dde1e8) — this ink sets .rec-legend
+     (field labels, column headers, form labels), so it is normal text and
      owes the full 4.5:1, not the 3:1 large-text allowance. The previous #6b7283
      measured 3.67-4.37 and failed on all four paper tones. */
   --rec-ink-3: #5a616f;
@@ -91,10 +91,13 @@ html > body[data-scroll-locked] {
   color: var(--rec-ink);
 }
 
-/* Field legends, identifiers, exit codes, evidence filenames. */
+/* Field legends, identifiers, exit codes, evidence filenames.
+   11px, not 9.5px: the legend does functional duty — table column headers and
+   the contact form's labels — so it holds the readable-text floor, not a
+   decorative one. */
 .rec-legend {
   font-family: var(--font-record-mono), ui-monospace, monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.13em;
   text-transform: uppercase;

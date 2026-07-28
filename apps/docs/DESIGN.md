@@ -29,6 +29,7 @@ colors:
   rec-gate-field: "#faf3d8"
   rec-link: "#17627f"
   rec-link-edge: "#a9cede"
+  rec-failure-id: "#a24e15"
   exhibit-border: "#34363d"
   exhibit-rule: "#2c2e34"
   terminal-nav: "#9599a6"
@@ -93,7 +94,7 @@ typography:
     letterSpacing: "0.03em"
   legend:
     fontFamily: "Azeret Mono, ui-monospace, monospace"
-    fontSize: "9.5px"
+    fontSize: "11px"
     fontWeight: 500
     lineHeight: 1.2
     letterSpacing: "0.13em"
@@ -248,7 +249,7 @@ identifier, an exit code, a filename, a command, a field legend, or captured
 output — measurement and code, never prose.
 
 The ramp is a real hierarchy: statement (30–54px), clause title (19–26px), lede
-(16.5px), row title (15px), body (13.5px). Legends sit at 9.5px with `0.13em`
+(16.5px), row title (15px), body (13.5px). Legends sit at 11px with `0.13em`
 tracking; caption (11px) numbers exhibits and labels controls, and chip (10.5px)
 sets the verdict chips. **Row title is the workhorse** — it names the subject of a row in every
 register (approval chain, failure map, rollout schedule, harness list, dial

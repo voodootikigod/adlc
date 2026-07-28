@@ -27,6 +27,10 @@ export const VS_SDLC_ROWS = [
   {
     dimension: 'Cost over time',
     sdlc: 'Process overhead compounds',
-    adlc: 'Gets cheaper over time, because findings distill into permanent defenses',
+    // Mechanism, not an economic promise: P7 turns review findings into
+    // deterministic lints and skills, so the same defect class is caught by a
+    // machine on the next run. Stated as what the lifecycle does, not what it
+    // will save.
+    adlc: 'Findings distill into deterministic defenses (P7), so the same failure is caught by a lint next time',
   },
 ];

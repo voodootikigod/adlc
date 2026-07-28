@@ -49,12 +49,26 @@ test('the pipeline legend states the real machine/human split', () => {
 
 test('the lifecycle page derives human gates from the shared source', () => {
   // It used to keep its own `new Set(['P1','P6'])`, so the page and the diagram
-  // above it could disagree about which gates are human.
+  // above it could disagree about which gates are human. The page now renders
+  // the chain exactly once through LifecyclePipeline (its second, restating
+  // table was removed), so the invariant is: the page declares no human-gate
+  // list of any kind, and the pipeline reads `phase.human` from phase-graph.
   const source = readFileSync(path.join(docsRoot, 'app/(home)/lifecycle/page.tsx'), 'utf8');
-  assert.ok(source.includes('HUMAN_GATE_IDS'), 'the page must import the shared list');
   assert.ok(
     !/new Set\(\[\s*'P1'\s*,\s*'P6'\s*\]\)/.test(source),
     'the page must not re-declare which phases are human-gated',
+  );
+  assert.ok(
+    !source.includes('HUMAN GATE'),
+    'the page must not hand-render human-gate marks; the pipeline owns them',
+  );
+  const pipeline = readFileSync(
+    path.join(docsRoot, 'components/marketing/lifecycle-pipeline.tsx'),
+    'utf8',
+  );
+  assert.ok(
+    pipeline.includes('phase.human'),
+    'the chain must derive human gates from phase-graph.mjs',
   );
 });
 

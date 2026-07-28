@@ -1,4 +1,5 @@
 import { PHASES } from '@/lib/phase-graph.mjs';
+import { theoryLink } from '@/lib/theory-links.mjs';
 import { ExitCode } from './record';
 
 // The approval chain.
@@ -39,7 +40,14 @@ export const APPROVER: Record<string, string> = {
   P7: 'adlc lesson-foundry',
 };
 
-export function LifecyclePipeline() {
+/**
+ * `details` folds the per-phase annotation into the chain itself. The
+ * /lifecycle page used to render a second eight-row table restating this one —
+ * same identifiers, same names, same amber banding — to carry one sentence per
+ * phase; on mobile that was the same table twice. The sentence belongs to the
+ * row it annotates.
+ */
+export function LifecyclePipeline({ details }: { details?: Record<string, string> } = {}) {
   return (
     <div>
       <div style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
@@ -79,6 +87,10 @@ export function LifecyclePipeline() {
                 className="rec-mono col-start-2 px-3 pb-1 text-[12.5px] md:col-start-auto md:py-3.5 md:pb-3.5"
                 style={{ color: 'var(--rec-ink-2)' }}
               >
+                {/* The header row is display:none below md, so the collapsed
+                    rows restate their legends inline — an unlabeled mono value
+                    like "routed" carries nothing on its own. */}
+                <span className="rec-legend mr-2 md:hidden">Exit gate</span>
                 {phase.gate}
               </div>
               <div
@@ -88,6 +100,9 @@ export function LifecyclePipeline() {
                   fontWeight: phase.human ? 600 : 400,
                 }}
               >
+                <span className="rec-legend mr-2 md:hidden" style={{ color: 'var(--rec-ink-3)' }}>
+                  At this phase
+                </span>
                 {phase.human ? (
                   <span
                     aria-hidden
@@ -103,6 +118,21 @@ export function LifecyclePipeline() {
                     enough to read as missing data. */}
                 <ExitCode verdict={phase.human ? 'attest' : 'pass'} stampDelay={i * 32 + 150} />
               </div>
+              {details?.[phase.id] ? (
+                <div className="col-span-full px-3 pb-3.5 md:pl-[58px]">
+                  <p className="max-w-[72ch] text-[13.5px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
+                    {details[phase.id]}{' '}
+                    <a
+                      href={theoryLink(phase.id)}
+                      aria-label={`${phase.name} essay`}
+                      className="whitespace-nowrap text-[13px]"
+                      style={{ color: 'var(--rec-link)', borderBottom: '1px solid var(--rec-link-edge)' }}
+                    >
+                      essay ↗
+                    </a>
+                  </p>
+                </div>
+              ) : null}
             </li>
           ))}
         </ol>
@@ -124,6 +154,11 @@ export function LifecyclePipeline() {
         </span>
         <span className="rec-mono text-[12px]" style={{ color: 'var(--rec-ink-3)' }}>
           Evidence lands in .adlc/manifest.jsonl
+        </span>
+        {/* Same honesty the dials block already has: these chips are the form's
+            worked example, not the output of a live run. */}
+        <span className="rec-mono text-[12px]" style={{ color: 'var(--rec-ink-3)' }}>
+          Verdicts shown are illustrative
         </span>
       </div>
     </div>

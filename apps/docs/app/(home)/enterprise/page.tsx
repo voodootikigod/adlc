@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { MarketingSection } from '@/components/marketing/section';
 import { GateBadge } from '@/components/marketing/gate-badge';
 import { EvidenceTrail } from '@/components/marketing/evidence-trail';
+import { RouteExhibit } from '@/components/marketing/route-exhibit';
 import { ContactForm } from './contact-form';
 
 export const metadata: Metadata = {
@@ -10,7 +11,10 @@ export const metadata: Metadata = {
 };
 
 const ROLLOUT = [
-  { phase: 'Pilot', detail: 'One team, full gates, conservative dials. Two weeks to the first prosecuted merge.' },
+  // No duration here on purpose: a time-to-value figure is exactly the claim
+  // class PRODUCT.md forbids inventing, and this page's reader is the one most
+  // damaged by discovering an unbacked number.
+  { phase: 'Pilot', detail: 'One team, full gates, conservative dials, through to the first prosecuted merge.' },
   { phase: 'Rails', detail: 'Freeze org-wide conventions as rails: CI gates, protected specs, calibrated review.' },
   { phase: 'Org-wide', detail: 'Native integrations for every agent your teams use. Same gates everywhere.' },
 ] as const;
@@ -29,12 +33,21 @@ export default function EnterprisePage() {
 
       <MarketingSection n="2" kicker="The evidence" title="From ticket to merge, every verdict recorded">
         <EvidenceTrail />
+        {/* Accurate about who emits what: six machine gates return exit codes;
+            the two human gates record attestation. "Every gate emits all three"
+            contradicted the /lifecycle chain, which shows ATTEST on two of eight. */}
         <div className="mt-8 flex flex-wrap items-center gap-3 text-sm" style={{ color: 'var(--rec-ink-2)' }}>
-          <span>Every gate emits</span>
+          <span>Machine gates emit</span>
           <GateBadge state="pass" />
           <GateBadge state="fail" />
+          <span>with exit codes; the two human gates record</span>
           <GateBadge state="wish" />
-          <span>verdicts your auditors can read without an engineer translating.</span>
+          <span>— verdicts your auditors can read without an engineer translating.</span>
+        </div>
+        {/* The page that argues "approval is not evidence" attaches some: a real
+            gate, the question it answers, and its verdict. */}
+        <div className="mt-10">
+          <RouteExhibit id="2.1" gateName="review-calibration" />
         </div>
       </MarketingSection>
 

@@ -38,7 +38,9 @@ export function MarketingSection({ id, kicker, n, title, headingLevel = 2, child
     >
       <div className="flex flex-col gap-x-6 px-6 pb-10 pt-10 md:flex-row md:px-8 md:pb-12 md:pt-12">
         {kicker ? (
-          <div className="mb-3 shrink-0 md:mb-0 md:w-[104px] md:pt-1">
+          // mb-4 over the heading vs mt-3 under it: a heading keeps more space
+          // above than below, including where the gutter stacks at mobile width.
+          <div className="mb-4 shrink-0 md:mb-0 md:w-[104px] md:pt-1">
             {/* No whitespace-nowrap: interior kickers run long ("Claude Code
                 integration") and a non-wrapping legend overflows the 104px
                 gutter straight across the heading beside it. */}
@@ -59,7 +61,7 @@ export function MarketingSection({ id, kicker, n, title, headingLevel = 2, child
           >
             {title}
           </Heading>
-          <div className="mt-7">{children}</div>
+          <div className="mt-3 md:mt-7">{children}</div>
         </div>
       </div>
     </section>

@@ -24,8 +24,10 @@ export function VsTable() {
             </th>
             <th
               scope="col"
-              className="p-4 text-left align-bottom rec-mono text-xs font-medium uppercase tracking-wider"
-              style={{ color: 'var(--rec-link)', background: 'var(--rec-paper-raised)' }}
+              className="p-4 text-left align-bottom rec-mono text-xs font-semibold uppercase tracking-wider"
+              // Blue is links only; the raised surface and heavier weight carry
+              // the column's emphasis without borrowing the link hue.
+              style={{ color: 'var(--rec-ink)', background: 'var(--rec-paper-raised)' }}
             >
               ADLC (built for models)
             </th>

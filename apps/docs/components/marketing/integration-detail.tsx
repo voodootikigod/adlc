@@ -40,7 +40,9 @@ function SurfaceCounts({ integration }: { integration: Integration }) {
     // Per-cell rules rather than a gap-px lattice: the surface count is 5 on
     // some harnesses and 4 on others, and a lattice leaves the container colour
     // showing as an empty block wherever the last row is short.
-    <dl className="grid grid-cols-2 sm:grid-cols-4" style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
+    // Three across, not four: five surfaces in a four-column grid stranded the
+    // fifth tile alone on its own row.
+    <dl className="grid grid-cols-2 sm:grid-cols-3" style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
       {integration.surfaces.map((surface) => (
         <div
           key={surface.key}
@@ -70,7 +72,8 @@ function NativeSurfaces({ integration }: { integration: Integration }) {
           className="grid gap-4 border-b py-7 last:border-b-0 md:grid-cols-[4rem_1fr_1.2fr] md:gap-8"
           style={{ borderColor: 'var(--rec-rule)' }}
         >
-          <p className="rec-mono text-xs" style={{ color: 'var(--rec-link)' }}>
+          {/* Blue is links only; a section ordinal is not one. */}
+          <p className="rec-mono text-xs" style={{ color: 'var(--rec-ink-3)' }}>
             0{index + 1} / {surface.label}
           </p>
           <div>
@@ -112,7 +115,7 @@ function PhaseRouting({ integration }: { integration: Integration }) {
         <tbody>
           {integration.phaseRoutes.map((route) => (
             <tr key={route.phase} className="border-t" style={{ borderColor: 'var(--rec-rule)' }}>
-              <th className="py-4 pr-6 rec-mono text-sm font-medium" style={{ color: 'var(--rec-link)' }}>
+              <th className="py-4 pr-6 rec-mono text-sm font-medium" style={{ color: 'var(--rec-ink)' }}>
                 {route.phase}
               </th>
               <td className="px-6 py-4 rec-mono text-sm" style={{ color: 'var(--rec-ink)' }}>
@@ -134,7 +137,9 @@ function EnforcementBoundary({ integration }: { integration: Integration }) {
   return (
     <div className="grid border-y md:grid-cols-2" style={{ borderColor: 'var(--rec-rule)' }}>
       <div className="py-6 pr-0 md:pr-8">
-        <p className="rec-mono text-xs uppercase tracking-[0.14em]" style={{ color: 'var(--rec-gate-ink)' }}>
+        {/* Neither kicker takes a verdict hue: amber is the human gate and green
+            is a pass, and "in the session" is neither. */}
+        <p className="rec-mono text-xs uppercase tracking-[0.14em]" style={{ color: 'var(--rec-ink-3)' }}>
           {session.kicker}
         </p>
         <h3 className="mt-2 text-lg font-semibold" style={{ color: 'var(--rec-ink)' }}>
@@ -145,7 +150,7 @@ function EnforcementBoundary({ integration }: { integration: Integration }) {
         </p>
       </div>
       <div className="border-t py-6 md:border-l md:border-t-0 md:pl-8" style={{ borderColor: 'var(--rec-rule)' }}>
-        <p className="rec-mono text-xs uppercase tracking-[0.14em]" style={{ color: 'var(--rec-pass-ink)' }}>
+        <p className="rec-mono text-xs uppercase tracking-[0.14em]" style={{ color: 'var(--rec-ink-3)' }}>
           {ci.kicker}
         </p>
         <h3 className="mt-2 text-lg font-semibold" style={{ color: 'var(--rec-ink)' }}>
@@ -221,7 +226,9 @@ function IntroWithCode({ text }: { text: string }) {
 export function IntegrationDetailPage({ integration }: { integration: Integration }) {
   return (
     <main>
-      <MarketingSection headingLevel={1} kicker={integration.hero.kicker} title={integration.hero.title}>
+      {/* Interior pages number their clauses like any record; an unnumbered
+          eyebrow over every section is the exact grammar DESIGN.md forbids. */}
+      <MarketingSection headingLevel={1} n="1" kicker={integration.hero.kicker} title={integration.hero.title}>
         <div className="grid items-start gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14">
           <div>
             <p className="max-w-[72ch] text-lg leading-relaxed" style={{ color: 'var(--rec-ink-2)' }}>
@@ -251,7 +258,7 @@ export function IntegrationDetailPage({ integration }: { integration: Integratio
       </MarketingSection>
 
       <div style={{ background: 'var(--rec-paper-sunk)' }}>
-        <MarketingSection kicker={integration.surfacesSection.kicker} title={integration.surfacesSection.title}>
+        <MarketingSection n="2" kicker={integration.surfacesSection.kicker} title={integration.surfacesSection.title}>
           <div className="mb-10 lg:max-w-md">
             <NativeBundle integration={integration} />
           </div>
@@ -259,20 +266,22 @@ export function IntegrationDetailPage({ integration }: { integration: Integratio
         </MarketingSection>
       </div>
 
-      <MarketingSection kicker={integration.phaseSection.kicker} title={integration.phaseSection.title}>
+      <MarketingSection n="3" kicker={integration.phaseSection.kicker} title={integration.phaseSection.title}>
         <IntroWithCode text={integration.phaseSection.intro} />
         <PhaseRouting integration={integration} />
       </MarketingSection>
 
       <div style={{ background: 'var(--rec-paper-sunk)' }}>
-        <MarketingSection kicker={integration.railsSection.kicker} title={integration.railsSection.title}>
+        <MarketingSection n="4" kicker={integration.railsSection.kicker} title={integration.railsSection.title}>
           <EnforcementBoundary integration={integration} />
         </MarketingSection>
       </div>
 
-      <MarketingSection kicker={integration.installSection.kicker} title={integration.installSection.title}>
-        <div className="grid items-start gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:gap-14">
-          <IntegrationCard integration={integration} />
+      <MarketingSection n="5" kicker={integration.installSection.kicker} title={integration.installSection.title}>
+        {/* The install card renders once, in the hero. This closing clause used
+            to repeat it byte-identically; a reader who scrolled the whole page
+            gets the day-to-day commands and the resource nav instead. */}
+        <div className="lg:max-w-[42rem]">
           <OperatingCommands integration={integration} />
         </div>
         <ResourceNav integration={integration} />

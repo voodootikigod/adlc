@@ -81,16 +81,33 @@ export function Masthead() {
             <GitHubMark />
           </a>
         </nav>
-        {/* Small screens keep the record reachable without a drawer: the nav is
-            seven flat destinations, so it wraps into the rail below instead. */}
-        <nav className="flex items-center gap-4 text-[12px] font-medium md:hidden">
-          <Link href="/lifecycle" style={{ color: '#9599a6' }}>
-            Lifecycle
-          </Link>
-          <Link href="/docs" style={{ color: '#9599a6' }}>
-            Docs
-          </Link>
-        </nav>
+        {/* Small screens get every route, not a two-link sample: a no-JS
+            disclosure on the terminal ground. A mobile visitor who lands on an
+            interior page must still be able to reach the install path. */}
+        <details className="relative md:hidden">
+          <summary
+            className="rec-mono flex cursor-pointer list-none items-center border px-2.5 py-1 text-[11px] tracking-[0.1em] [&::-webkit-details-marker]:hidden"
+            style={{ color: '#9599a6', borderColor: '#34363d' }}
+          >
+            MENU
+          </summary>
+          <nav
+            className="absolute right-0 top-[calc(100%+9px)] z-50 flex w-52 flex-col"
+            style={{ background: '#1c1d21', border: '1px solid #34363d' }}
+            aria-label="All pages"
+          >
+            {NAV.map((n) => (
+              <Link
+                key={n.href}
+                href={n.href}
+                className="px-4 py-2.5 text-[13px] font-medium"
+                style={{ color: '#cbcdd2', borderBottom: '1px solid #2c2e34' }}
+              >
+                {n.label}
+              </Link>
+            ))}
+          </nav>
+        </details>
       </div>
     </header>
   );

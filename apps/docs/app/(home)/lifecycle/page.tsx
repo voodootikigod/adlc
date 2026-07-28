@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { PHASES, HUMAN_GATE_IDS } from '@/lib/phase-graph.mjs';
 import { theoryLink } from '@/lib/theory-links.mjs';
 import { MarketingSection } from '@/components/marketing/section';
 import { LifecyclePipeline } from '@/components/marketing/lifecycle-pipeline';
 import { ThreeDials } from '@/components/marketing/three-dials';
+import { RouteExhibit } from '@/components/marketing/route-exhibit';
+import { ImplementClause } from '@/components/marketing/implement-clause';
 
 export const metadata: Metadata = {
   title: 'The Lifecycle: Phases and Gates',
@@ -23,54 +24,17 @@ const PHASE_DETAIL: Record<string, string> = {
   P7: 'Distill what the review found into permanent, deterministic defenses.',
 };
 
-// Which phases end in a human gate now comes from phase-graph.mjs, the same
-// source the pipeline reads. It used to be a second hand-maintained Set here,
-// so this page and the diagram above it could have disagreed about which two
-// gates are human — the one structural claim the section exists to make.
-const HUMAN_GATES = new Set(HUMAN_GATE_IDS);
-
 export default function LifecyclePage() {
   return (
     <main>
       <MarketingSection headingLevel={1} n="1" kicker="The chain" title="Eight phases. A gate between every one.">
-        <LifecyclePipeline />
-
-        {/* The detail sits as annotations to the chain above, not as a second
-            grid of cards restating it. One row per control point, ruled. */}
-        <dl className="mt-12" style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
-          {PHASES.map((p) => (
-            <div
-              key={p.id}
-              className="grid grid-cols-1 gap-x-6 px-1 py-4 md:grid-cols-[46px_150px_minmax(0,1fr)]"
-              style={{
-                borderBottom: '1px solid var(--rec-rule)',
-                background: HUMAN_GATES.has(p.id) ? 'var(--rec-gate-field)' : undefined,
-              }}
-            >
-              <dt className="rec-mono px-2 text-[12px]" style={{ color: 'var(--rec-ink-3)' }}>
-                {p.id}
-              </dt>
-              <dt className="px-2 text-[15px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
-                {p.name}
-                {HUMAN_GATES.has(p.id) ? (
-                  <span className="rec-mono mt-1 block text-[10px] tracking-[0.12em]" style={{ color: 'var(--rec-gate-ink)' }}>
-                    ◆ HUMAN GATE
-                  </span>
-                ) : null}
-              </dt>
-              <dd className="px-2 text-[14px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
-                {PHASE_DETAIL[p.id]}
-                <a
-                  href={theoryLink(p.id)}
-                  className="ml-2 whitespace-nowrap text-[13px]"
-                  style={{ color: 'var(--rec-link)', borderBottom: '1px solid var(--rec-link-edge)' }}
-                >
-                  essay ↗
-                </a>
-              </dd>
-            </div>
-          ))}
-        </dl>
+        {/* One table, annotated in place. This page used to render the chain and
+            then a second eight-row list restating it to carry one sentence per
+            phase — on mobile, the same table twice. */}
+        <LifecyclePipeline details={PHASE_DETAIL} />
+        <div className="mt-10">
+          <RouteExhibit id="1.1" gateName="rails-guard" />
+        </div>
       </MarketingSection>
 
       <MarketingSection n="2" kicker="Calibration" title="Three dials, set per ticket">
@@ -88,6 +52,8 @@ export default function LifecyclePage() {
           </Link>
         </p>
       </MarketingSection>
+
+      <ImplementClause n="3" />
     </main>
   );
 }

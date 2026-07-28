@@ -55,12 +55,13 @@ export function InstallCommand({ command, label, beta = false }: InstallCommandP
         </p>
       ) : null}
       <div className="flex items-stretch" style={{ border: '1px solid var(--rec-ink)', background: '#1c1d21' }}>
-        {/* The command wraps on narrow screens rather than scrolling out of
-            sight. This is the page's primary action: a visitor who cannot see
-            the whole command cannot verify what they are about to pipe to sh,
-            and "scroll this box sideways" is not an answer on a phone. */}
+        {/* The command wraps at every width rather than scrolling out of sight.
+            This is the page's primary action: a visitor who cannot see the
+            whole command cannot verify what they are about to pipe to sh — and
+            an earlier md:whitespace-pre variant clipped the agent prompt
+            mid-sentence at exactly the width where most visitors copy it. */}
         <code
-          className="rec-mono flex-1 whitespace-pre-wrap break-all px-4 py-3 text-[13px] md:overflow-x-auto md:whitespace-pre md:break-normal md:text-[13.5px]"
+          className="rec-mono flex-1 whitespace-pre-wrap break-all px-4 py-3 text-[13px] md:break-words md:text-[13.5px]"
           style={{ color: '#cbcdd2' }}
         >
           <span aria-hidden className="select-none pr-2.5" style={{ color: '#78bd65' }}>

@@ -2,21 +2,27 @@
 
 import { useState } from 'react';
 import { HONEYPOT_FIELD } from '@/lib/contact/handle.mjs';
+import { parseLead } from '@/lib/contact/schema.mjs';
 
 type Status = 'idle' | 'submitting' | 'success' | 'error';
 
 const MAILTO = 'mailto:help@agenticlifecycle.ai?subject=ADLC%20enterprise';
+
+/** Focus the first field the validator rejected, in the form's own order. */
+const FIELD_ORDER = ['name', 'email', 'company', 'message'] as const;
 
 export function ContactForm() {
   const [status, setStatus] = useState<Status>('idle');
   const [fields, setFields] = useState<Record<string, string>>({});
   const [errorMsg, setErrorMsg] = useState<string>('');
 
+  function focusFirstInvalid(errors: Record<string, string>) {
+    const first = FIELD_ORDER.find((f) => errors[f]);
+    if (first) document.getElementById(first)?.focus();
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setStatus('submitting');
-    setFields({});
-    setErrorMsg('');
 
     const form = e.currentTarget;
     const data = new FormData(form);
@@ -27,6 +33,22 @@ export function ContactForm() {
       message: String(data.get('message') ?? ''),
       [HONEYPOT_FIELD]: String(data.get(HONEYPOT_FIELD) ?? ''),
     };
+
+    // The same validator the API route runs. Catching an empty field here means
+    // the round-trip only ever carries a lead the server would accept, and the
+    // two layers can never disagree about a message.
+    const parsed = parseLead(payload);
+    if (!parsed.ok) {
+      setFields(parsed.errors);
+      setStatus('error');
+      setErrorMsg('Please fix the highlighted fields.');
+      focusFirstInvalid(parsed.errors);
+      return;
+    }
+
+    setStatus('submitting');
+    setFields({});
+    setErrorMsg('');
 
     try {
       const res = await fetch('/api/contact', {
@@ -48,6 +70,7 @@ export function ContactForm() {
         setFields(json.fields);
         setStatus('error');
         setErrorMsg('Please fix the highlighted fields.');
+        focusFirstInvalid(json.fields);
         return;
       }
       setStatus('error');
@@ -65,6 +88,7 @@ export function ContactForm() {
   if (status === 'success') {
     return (
       <div
+        role="status"
         className="max-w-xl border p-6"
         style={{ borderColor: 'var(--rec-rule-strong)', background: 'var(--rec-paper-raised)' }}
       >
@@ -77,18 +101,37 @@ export function ContactForm() {
         <p className="mt-2 text-[13.5px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
           We read every enterprise inquiry ourselves and reply within a couple of business days.
         </p>
+        <button
+          type="button"
+          onClick={() => setStatus('idle')}
+          className="rec-mono mt-4 border px-3 py-1.5 text-[11px] tracking-[0.1em]"
+          style={{ borderColor: 'var(--rec-rule-strong)', color: 'var(--rec-ink-2)' }}
+        >
+          SEND ANOTHER
+        </button>
       </div>
     );
   }
 
   // Squared, ruled fields on raised paper: a record's form is filled in, not
-  // a dark app input floating on a document.
-  const inputStyle = {
-    borderColor: 'var(--rec-rule-strong)',
+  // a dark app input floating on a document. An invalid field takes the fail
+  // edge so "highlighted" in the summary is literally true.
+  const inputStyle = (invalid: boolean) => ({
+    borderColor: invalid ? 'var(--rec-fail-edge)' : 'var(--rec-rule-strong)',
     background: 'var(--rec-paper-raised)',
     color: 'var(--rec-ink)',
-  };
+  });
 
+  const fieldError = (id: string) =>
+    fields[id] ? (
+      <p id={`${id}-error`} className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>
+        <span aria-hidden>✗ </span>
+        {fields[id]}
+      </p>
+    ) : null;
+
+  // noValidate is deliberate: parseLead runs on submit with the server's own
+  // messages, so the browser's generic bubbles would only compete with them.
   return (
     <form onSubmit={onSubmit} className="max-w-xl" noValidate>
       {/* Honeypot: hidden from users, tempting to bots. */}
@@ -113,10 +156,12 @@ export function ContactForm() {
             name="name"
             type="text"
             required
+            aria-invalid={fields.name ? true : undefined}
+            aria-describedby={fields.name ? 'name-error' : undefined}
             className="mt-1 w-full border px-3 py-2 text-[14px]"
-            style={inputStyle}
+            style={inputStyle(Boolean(fields.name))}
           />
-          {fields.name ? <p className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>{fields.name}</p> : null}
+          {fieldError('name')}
         </div>
         <div>
           <label htmlFor="email" className="rec-legend block">
@@ -127,10 +172,12 @@ export function ContactForm() {
             name="email"
             type="email"
             required
+            aria-invalid={fields.email ? true : undefined}
+            aria-describedby={fields.email ? 'email-error' : undefined}
             className="mt-1 w-full border px-3 py-2 text-[14px]"
-            style={inputStyle}
+            style={inputStyle(Boolean(fields.email))}
           />
-          {fields.email ? <p className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>{fields.email}</p> : null}
+          {fieldError('email')}
         </div>
       </div>
 
@@ -142,9 +189,12 @@ export function ContactForm() {
           id="company"
           name="company"
           type="text"
+          aria-invalid={fields.company ? true : undefined}
+          aria-describedby={fields.company ? 'company-error' : undefined}
           className="mt-1 w-full border px-3 py-2 text-[14px]"
-          style={inputStyle}
+          style={inputStyle(Boolean(fields.company))}
         />
+        {fieldError('company')}
       </div>
 
       <div className="mt-4">
@@ -156,14 +206,17 @@ export function ContactForm() {
           name="message"
           required
           rows={5}
+          aria-invalid={fields.message ? true : undefined}
+          aria-describedby={fields.message ? 'message-error' : undefined}
           className="mt-1 w-full border px-3 py-2 text-[14px]"
-          style={inputStyle}
+          style={inputStyle(Boolean(fields.message))}
         />
-        {fields.message ? <p className="mt-1 text-xs" style={{ color: 'var(--rec-fail-ink)' }}>{fields.message}</p> : null}
+        {fieldError('message')}
       </div>
 
       {status === 'error' && errorMsg ? (
-        <p className="mt-4 text-sm" style={{ color: 'var(--rec-fail-ink)' }}>
+        <p role="alert" className="mt-4 text-sm" style={{ color: 'var(--rec-fail-ink)' }}>
+          <span aria-hidden>✗ </span>
           {errorMsg}{' '}
           <a href={MAILTO} className="underline" style={{ color: 'var(--rec-link)' }}>
             Email us instead

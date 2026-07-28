@@ -17,10 +17,10 @@ export function TerminalCard({ title, children }: TerminalCardProps) {
   return (
     <div className="rec-capture" style={{ background: '#1c1d21', border: '1px solid #34363d' }}>
       <div
-        className="rec-capture-bar rec-mono flex items-center gap-3 px-3.5 py-2 text-[10px] tracking-[0.1em]"
-        style={{ borderBottom: '1px solid #2c2e34', color: '#686b78' }}
+        className="rec-capture-bar rec-mono flex items-center gap-3 px-3.5 py-2 text-[11px] tracking-[0.1em]"
+        style={{ borderBottom: '1px solid #2c2e34', color: '#9093a0' }}
       >
-        <span className="truncate">{title}</span>
+        <span className="truncate text-[12px] tracking-normal">{title}</span>
       </div>
       <div
         className="rec-mono overflow-x-auto px-4 py-3.5 text-[12.5px] leading-[1.75]"

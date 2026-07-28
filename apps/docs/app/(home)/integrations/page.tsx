@@ -38,8 +38,8 @@ export default function IntegrationsPage() {
           directory, so it belongs inside your repo. Both are detected and reported
           as a manual step rather than guessed at.{' '}
           <strong style={{ color: 'var(--rec-ink)' }}>Windows isn&apos;t supported yet</strong>{' '}
-          — a <code style={{ color: 'var(--rec-link)' }}>windows-latest</code> run of the core
-          gate suites passes 6 of 28, so use WSL for now. Prefer to install by hand?
+          — a <code style={{ color: 'var(--rec-link)' }}>windows-latest</code>{' '}
+          run of the core gate suites passes 6 of 28, so use WSL for now. Prefer to install by hand?
           Every harness&apos;s native path is below.
         </p>
       </MarketingSection>
