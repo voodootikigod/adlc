@@ -290,7 +290,7 @@ if (positionals[0] === 'record-cross-model') {
         dir: values.dir,
       });
     } catch (err) {
-      opError(err.message); // fail closed: an unmoved/mismatched/uncapped/missing-prior carry is exit 1, never recorded
+      opError(err.message); // fail closed: an unmoved/mismatched/uncapped/missing-prior carry is an operational error, never recorded
     }
     if (values.json) {
       printJson(carried);
