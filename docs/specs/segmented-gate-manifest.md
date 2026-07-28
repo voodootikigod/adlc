@@ -199,23 +199,22 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
    its recorded lineage ULID matches, **and** the current Git branch equals the
    token's branch (detached HEAD never matches). Any mismatch mints a new
    segment: generate ULID, derive slug, and anchor its first entry (per §4.4)
-   by trying, in order: (a) the current head line of the root, if a root
-   exists; (b) the current head line of the segment the token previously
-   named, but only if that segment is committed at the current branch's HEAD;
-   (c) the current head line of any other already-committed segment at the
-   current branch's HEAD, chosen deterministically (lexicographically
-   smallest segment filename); (d) `anchor: null`, only when none of (a)–(c)
-   apply, i.e. the current branch's HEAD forest has no root and no segments —
-   matching the §9.3 CI rule so a writer never mints a locally-valid anchor
-   that CI then rejects. Filesystem presence alone never qualifies a segment
-   for (b): segments are not gitignored (§4.8), so a segment written but not
-   yet committed on another branch can still be sitting on disk after a
-   checkout, and anchoring to it would produce a segment whose anchor is
-   absent from its own branch's HEAD forest, failing §9.3 at CI. Anchor choice
-   is bookkeeping, not a trust boundary — §9.3 already establishes that
-   history pinning comes from committed-byte append-only, not from where
-   anchors point — so (c)'s arbitrary-but-deterministic pick among independent
-   lineages is sufficient. The branch binding is load-bearing: without it, one
+   to the current head line of the root if a root exists, else `anchor: null`.
+   The writer never chases the token's previously-named segment, or any other
+   segment, as a fallback anchor target: two branches forked from the same
+   root-less state legitimately mint independent `anchor: null` segments
+   without coordinating, and whichever merges first must not retroactively
+   invalidate the other's already-signed anchor — re-anchoring after the fact
+   would break its signature (§4.4, anchor is inside the signed byte range).
+   §5's forest is explicitly a forest of trees rooted in the root segment
+   **or** in `anchor: null` segments (plural), so this is the intended shape,
+   not a gap; §9.3 permits `anchor: null` on a new segment whenever the base
+   tree has no root, independent of how many other segments already exist
+   there, so CI accepts every branch's legitimately-null-anchored segment
+   regardless of merge order. Anchor choice is bookkeeping, not a trust
+   boundary: §9.3 establishes that history pinning comes from committed-byte
+   append-only, not from where anchors point. The branch binding on the
+   `.lineage` token is load-bearing for a different reason: without it, one
    checkout switching branches would extend the same segment on both branches
    and recreate the tail conflict this spec exists to remove.
 2. Appends under the per-segment ledger lock (`withLedgerLock` on the segment
@@ -284,8 +283,16 @@ a matching `lineHash`, cycle-checked — within the **HEAD** forest, whose
 anchored-to segment is itself valid under §9.1–9.3. Resolving at HEAD rather
 than base is deliberate: a PR may legitimately mint a second segment anchored to
 one it added itself. History pinning comes from §9.1/§9.2 (committed bytes are
-append-only), not from where anchors point. `anchor: null` is permitted only
-when the base tree contains no root and no segments.
+append-only), not from where anchors point. `anchor: null` is permitted
+whenever the base tree contains no root — regardless of how many other
+segments the base tree already has. This is deliberately **not** "no root and
+no segments": two branches forked from the same root-less state each mint an
+independent `anchor: null` segment (§7.1) without seeing each other, and
+whichever merges second must not be denied merely because the first is now
+part of base — its signed anchor can't be repointed after the fact without
+invalidating the signature (§4.4), and §5's forest model is explicitly a
+forest of trees rooted in the root segment **or** in `anchor: null` segments
+(plural).
 
 ### 9.4 Evidence validation
 
@@ -353,8 +360,10 @@ anchor under the same signature-verifying ceremony rules).
   condition in §8 has a test. **Verify:**
   `node --test packages/gate-manifest/test/migrate-ceremony.test.mjs`.
 - **AC8 — CI gate:** rails-guard tests cover §9.1 (both root states), §9.2
-  (segment byte rewrite → deny), and §9.3 (new segment with dangling anchor or
-  null anchor on a non-empty base → deny). **Verify:**
+  (segment byte rewrite → deny), and §9.3 (new segment with a dangling anchor
+  → deny; null anchor on a root-less base that already has other segments,
+  e.g. two concurrently-forked branches merging in either order → allow; null
+  anchor on a base with a root → deny). **Verify:**
   `node --test scripts/test/rails-guard-ci.test.mjs --test-name-pattern='manifest'`.
 - **AC9 — scaffold:** `adlc init` on a fresh directory produces the segmented
   layout, the §4.8 gitignore lines, and a first record lands in a segment with
