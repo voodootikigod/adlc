@@ -111,6 +111,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Actions pinned to full commit SHAs (not floating tags). Refresh deliberately.
+      # Both run on node24, which requires Actions Runner v2.327.1 or newer. GitHub-
+      # hosted runners self-update; a SELF-HOSTED runner does not. If you move this job
+      # to a self-hosted pool (see the signed-evidence note above), update the runner
+      # first or these steps fail before the gate ever runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history so the diff base resolves
