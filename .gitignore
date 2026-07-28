@@ -2,6 +2,7 @@ resume.md
 handoff.md
 node_modules/
 .worktrees/
+.pi/
 # .omo/ is otherwise-ignored scratch state, EXCEPT the three files below, which
 # are deliberately tracked, load-bearing fixture content, not disposable
 # handoff/resume artifacts: docs/examples/p5-passes.json (the bundled
