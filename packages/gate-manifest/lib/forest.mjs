@@ -41,8 +41,10 @@ export function segmentPath(dir, name) {
  */
 export function discoverSegments(dir) {
   const segDir = segmentDirPath(dir);
-  if (!existsSync(segDir)) return { valid: [], invalid: [] };
-
+  // lstatSync FIRST, never existsSync: existsSync follows symlinks, so a
+  // DANGLING symlink at manifest.d/ (pointing at a target that doesn't
+  // currently exist) makes existsSync return false and skip the symlink
+  // check entirely — the exact case this check exists for.
   let dirStat;
   try {
     dirStat = lstatSync(segDir);

@@ -241,9 +241,13 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
   }
 
   if (segmentNames.length === 0) {
-    // Fast path: byte-identical to the pre-forest verifier (AC2).
+    // Fast path: byte-identical to the pre-forest verifier (AC2) for the
+    // valid/message/count/signed fields; break gets the same `segment: 'root'`
+    // label every other failure path in this function returns, for a
+    // consistent contract (an AC2 golden test never inspects break.segment,
+    // since the pre-forest verifier never had one to match).
     const result = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });
-    return { valid: result.valid, message: result.message, count: result.count, segments: 0, signed: result.signed, break: result.break };
+    return { valid: result.valid, message: result.message, count: result.count, segments: 0, signed: result.signed, break: result.break ? { ...result.break, segment: 'root' } : null };
   }
 
   const rootResult = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });

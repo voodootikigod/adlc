@@ -111,6 +111,17 @@ describe('forest verify() — segment-free fast path (AC2)', () => {
       assert.deepEqual(result, { valid: true, message: 'empty manifest', count: 0, segments: 0, signed: false, break: null });
     } finally { cleanTmp(dir); }
   });
+
+  it('a broken root chain on the fast path still labels break.segment as root (contract consistency)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.jsonl'), ['{"seq":1,"gate":"x","ts":"2026-01-01T00:00:00.000Z","files":{},"prev":"deadbeef"}']);
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.segment, 'root');
+    } finally { cleanTmp(dir); }
+  });
 });
 
 describe('forest verify() — a valid forest', () => {
@@ -297,6 +308,21 @@ describe('forest verify() — AC1 adversarial rejections', () => {
       mkdirSync(realDir, { recursive: true });
       mkdirSync(adlc, { recursive: true });
       symlinkSync(realDir, join(adlc, 'manifest.d'));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /symlink/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a DANGLING symlinked manifest.d/ (target does not exist) — existsSync would miss this', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(adlc, { recursive: true });
+      // Never create the target: existsSync(segDir) follows the link and
+      // returns false for a dangling one, which would skip the symlink
+      // check entirely if discoverSegments checked existsSync first.
+      symlinkSync(join(dir, 'never-created'), join(adlc, 'manifest.d'));
       const result = verify(adlc);
       assert.equal(result.valid, false);
       assert.match(result.message, /symlink/);
