@@ -96,16 +96,23 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
 // Nth-hand verdict visible in the ledger rather than indistinguishable from a fresh one.
 export const CARRY_FORWARD_MAX_DEPTH = 3;
 
-// The most recent cross-model entry naming `revision`, scoped to `ticket`, or null. The ticket
-// scope is load-bearing: without it, a carry-forward for ticket A could find and re-attest a
-// prior approval that was actually earned for a DIFFERENT ticket B which merely happened to
-// name the same `fromRevision` string, smuggling B's distinct-provider review in as A's own.
-function latestEntryForRevision(entries, revision, ticket) {
+// The most recent cross-model entry for `ticket`, regardless of revision, or null.
+//
+// Deliberately NOT filtered by revision — see the caller. Looking up "the entry matching
+// fromRevision" instead (as an earlier version did) lets the CALLER pick which entry counts as
+// prior: a caller can name an OLD entry in the same ticket's history (e.g. the very first,
+// un-carried approval) instead of the chain's actual current head, and since depth is read off
+// whatever `prior` happens to be, that resets the accumulated depth to 1 and defeats
+// CARRY_FORWARD_MAX_DEPTH — a verdict rides forward indefinitely without ever forcing the fresh
+// review the cap exists to require (adversarial-review finding, #365). Finding the ticket's TRUE
+// latest entry and requiring the caller's `fromRevision` to match it closes that: carrying
+// forward from anything but the actual chain head is refused outright.
+function latestEntryForTicket(entries, ticket) {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) continue;
     if (entry.ticket !== ticket) continue;
-    if (entry?.data?.revision === revision) return entry;
+    return entry;
   }
   return null;
 }
@@ -169,9 +176,19 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
     throw new Error('carry-forward refused: the manifest hash chain does not verify — a broken chain could be hiding a dropped revocation');
   }
   const { entries } = readEntries('manifest', dir);
-  const prior = latestEntryForRevision(entries, fromRevision, ticket);
+  const prior = latestEntryForTicket(entries, ticket);
   if (!prior) {
     throw new Error(`carry-forward refused: no prior cross-model verdict recorded for ${fromRevision} under ticket ${ticket}`);
+  }
+  // fromRevision must name the ACTUAL head of the ticket's chain, not merely SOME earlier entry
+  // in its history — otherwise a caller picks an old, low-depth entry to reset the depth cap.
+  if (prior.data?.revision !== fromRevision) {
+    throw new Error(
+      `carry-forward refused: fromRevision (${fromRevision}) is not the latest recorded cross-model ` +
+      `entry for ticket ${ticket} (latest is ${prior.data?.revision}) — carrying forward from a ` +
+      'stale entry could skip an intervening revocation or reset the depth cap; carry forward from ' +
+      'the actual latest entry, or record a fresh distinct-provider review'
+    );
   }
   if (!verifyEntrySig(key, prior)) {
     throw new Error(

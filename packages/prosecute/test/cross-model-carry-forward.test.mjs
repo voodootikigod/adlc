@@ -157,6 +157,30 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     } finally { clean(dir); }
   });
 
+  // Adversarial-review finding (agy, #365): depth was computed from whatever entry `fromRevision`
+  // happened to name, so a caller could bypass CARRY_FORWARD_MAX_DEPTH by naming an EARLIER,
+  // low-depth entry in the same ticket's history instead of the chain's actual current head.
+  it('refuses to carry forward from a STALE (non-latest) entry, even one within the depth cap', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1)); // depth 0 (undefined)
+      carry(dir, rev(BASE1), rev(BASE2)); // depth 1
+      carry(dir, rev(BASE2), rev(BASE3)); // depth 2 — this is now T1's actual chain head
+      // Attempt to carry from the ORIGINAL rev(BASE1) entry instead of the true head rev(BASE3).
+      // If depth were computed from rev(BASE1) (undefined -> 0), this would succeed at depth 1,
+      // silently resetting the cap instead of refusing.
+      assert.throws(
+        () => carry(dir, rev(BASE1), rev(BASE4)),
+        /is not the latest recorded cross-model entry/,
+        'carrying from a stale entry must be refused outright, not silently accepted at a reset depth'
+      );
+      assert.equal(readEntries('manifest', dir).entries.length, 3, 'the refused carry must not append anything');
+      // Sanity: carrying from the TRUE head still works normally.
+      carry(dir, rev(BASE3), rev(BASE4));
+      assert.equal(lastEntry(dir).data.carryDepth, 3);
+    } finally { clean(dir); }
+  });
+
   // F1 — the cap is the whole safeguard.
   it(`caps the chain at ${CARRY_FORWARD_MAX_DEPTH}: the next carry-forward is refused`, () => {
     const dir = ledger();

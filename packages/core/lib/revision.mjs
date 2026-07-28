@@ -252,9 +252,13 @@ export function resolveChangeSetRevision({ cwd = process.cwd(), base, revision, 
     // --raw: ":<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0"
     // --abbrev=40 so blob shas are full, never abbreviated.
     // ONE commit argument: compare `base` to the WORKING TREE (see BASIS above).
-    const raw = splitNull(
-      git(['diff', '--raw', '--no-renames', '--abbrev=40', '-z', baseSha], cwd).toString('utf8')
-    );
+    //
+    // Pass the Buffer straight to splitNull/splitNulPaths — NOT a pre-decoded string. A premature
+    // .toString('utf8') here lossily replaces any invalid byte sequence with U+FFFD before
+    // splitNulPaths ever sees it, defeating its own fail-closed round-trip check (#249) for a
+    // non-UTF-8 path. Every other NUL-delimited git() call in this file passes the raw Buffer for
+    // the same reason (adversarial-review finding).
+    const raw = splitNull(git(['diff', '--raw', '--no-renames', '--abbrev=40', '-z', baseSha], cwd));
     const ignoredPaths = ignoredPathSet(cwd, ignorePaths);
     const changed = [];
     for (let i = 0; i + 1 < raw.length; i += 2) {
