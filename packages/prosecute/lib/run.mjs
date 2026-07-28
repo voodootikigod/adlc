@@ -1,4 +1,5 @@
-import { ADLC_DIR, canonicalJson, readEntries, resolveChangeSetRevision, untrackedNonIgnoredPaths, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, resolveChangeSetRevision, untrackedNonIgnoredPaths, sha256 } from '@adlc/core';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -165,7 +166,7 @@ function findingIdentity(finding) {
 
 function seedOpenFindingsFromManifest(dir, ticket, revision) {
   const openFindings = new Map();
-  const { entries } = readEntries('manifest', dir);
+  const { entries } = readManifestForest(dir);
   for (const entry of entries) {
     if (entry.ticket !== ticket || entry.revision !== revision || !entry.finding) continue;
     const type = entry.type ?? entry.gate;

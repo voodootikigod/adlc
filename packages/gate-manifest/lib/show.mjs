@@ -1,6 +1,7 @@
 // show.mjs — render manifest entries (with optional ticket filter).
 
-import { readEntries, ADLC_DIR } from '@adlc/core';
+import { ADLC_DIR } from '@adlc/core';
+import { readManifestForest } from './forest.mjs';
 
 /**
  * Load entries from the manifest ledger, optionally filtered by ticket id.
@@ -11,7 +12,7 @@ import { readEntries, ADLC_DIR } from '@adlc/core';
  * @returns {{ entries: object[], skipped: object[] }}
  */
 export function loadFiltered({ ticket, dir = ADLC_DIR } = {}) {
-  const { entries, skipped } = readEntries('manifest', dir);
+  const { entries, skipped } = readManifestForest(dir);
   const filtered = ticket
     ? entries.filter(e => e.ticket === ticket)
     : entries;
@@ -26,6 +27,10 @@ export function loadFiltered({ ticket, dir = ADLC_DIR } = {}) {
 export function renderEntry(entry) {
   const lines = [];
   lines.push(`seq=${entry.seq}  gate=${entry.gate}  ts=${entry.ts}`);
+  // §6: each entry labeled with its segment id. Root entries are unlabeled —
+  // a segment-free repo's output must stay byte-identical to the pre-forest
+  // renderer (AC2).
+  if (entry.segment && entry.segment !== 'root') lines.push(`  segment: ${entry.segment}`);
   if (entry.ticket) lines.push(`  ticket: ${entry.ticket}`);
   if (entry.data && Object.keys(entry.data).length > 0) {
     lines.push(`  data: ${JSON.stringify(entry.data)}`);

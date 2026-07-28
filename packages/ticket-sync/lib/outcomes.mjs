@@ -8,6 +8,18 @@
 
 const P5_GATES = new Set(['p5', 'p5-complete', 'prosecution']);
 
+// KNOWN GAP (T-MANIFEST-FOREST slice 1, deliberately not fixed here — see the
+// comment at this function's caller in ticket-sync/lib/push.mjs): `seq` is
+// only monotonic WITHIN one manifest chain. Once the manifest is segmented
+// (docs/specs/segmented-gate-manifest.md), root and each lineage segment
+// restart `seq` at 1, so comparing raw seq VALUES across chains is meaningless
+// — a segment's seq=1 could lose to the root's seq=50 even though it was
+// recorded later. push.mjs's call sites stay root-only until this is fixed to
+// compare by the caller's array POSITION (readManifestForest's deterministic
+// forest order — see gate-manifest/lib/forest.mjs) instead of raw seq/ts
+// values. Note the ts fallback below is intentionally VALUE-based and
+// order-independent (see outcomes.test.mjs's "NOT array order" test) — a
+// naive switch to position-only comparison would need to preserve that too.
 const seqOf = (e) => (typeof e?.seq === 'number' ? e.seq : Date.parse(e?.ts ?? '') || 0);
 
 function deriveStatus(gates) {

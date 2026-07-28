@@ -142,6 +142,12 @@ export async function push({
   let expectedSnapshotHash = localState.hash;
   let expectedStoreAbsent = localState.absent;
   const sidecar = readSidecar(dir, { strict: write });
+  // Deliberately root-only for now (T-MANIFEST-FOREST slice 1): reduceTicketOutcomes
+  // (outcomes.mjs) picks "latest per gate" by comparing raw `seq` values, which are
+  // only meaningful within ONE chain — across segments (each restarting seq at 1)
+  // that comparison is not just stale, it's actively wrong. Swapping this to the
+  // forest reader needs outcomes.mjs's reduction fixed first, not a drop-in call
+  // change; see the comment on seqOf() in outcomes.mjs.
   let outcomes = reduceTicketOutcomes(manifestEntries ?? readEntries('manifest', join(dir, '.adlc')).entries);
 
   // Mutable working state (reassignment rewrites tickets store-wide).
@@ -193,6 +199,7 @@ export async function push({
         }
       }
       if (recoveredEvidence && manifestEntries === undefined) {
+        // Root-only for the same reason as the initial load above.
         outcomes = reduceTicketOutcomes(readEntries('manifest', join(dir, '.adlc')).entries);
       }
     }

@@ -1,0 +1,417 @@
+// forest-format.test.mjs — golden fixtures for the chain-forest read layer
+// (docs/specs/segmented-gate-manifest.md §4-§5, spec AC1 + part of AC2).
+//
+// Segments are hand-built here (JSONL written directly, chained/signed with
+// sign.mjs) rather than via appendManifestEntry: the segment WRITER is a
+// later slice (T-MANIFEST-FOREST slice 3) — this suite only exercises the
+// reader (verify/forest.mjs), which must accept whatever a conforming writer
+// would have produced and reject whatever it wouldn't.
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { verify } from '../lib/verify.mjs';
+import { discoverSegments, resolveAnchor, detectAnchorCycle } from '../lib/forest.mjs';
+import { sha256 } from '../../core/index.mjs';
+import { signEntry, KEY_ENV } from '../lib/sign.mjs';
+
+const KEY = 'test-key-forest-format';
+
+function makeTmp() {
+  return mkdtempSync(join(tmpdir(), 'gate-manifest-forest-test-'));
+}
+function cleanTmp(dir) {
+  rmSync(dir, { recursive: true, force: true });
+}
+
+function withKey(key, fn) {
+  const prev = process.env[KEY_ENV];
+  if (key === null) delete process.env[KEY_ENV];
+  else process.env[KEY_ENV] = key;
+  try { return fn(); } finally {
+    if (prev === undefined) delete process.env[KEY_ENV];
+    else process.env[KEY_ENV] = prev;
+  }
+}
+
+/**
+ * Build a signed (or unsigned, key=null) chain from partial entries. Each
+ * partial may include `anchor` on its first element. Returns the array of
+ * raw JSONL lines (strings), in order.
+ */
+function buildChainLines(partials, { key = null } = {}) {
+  const lines = [];
+  let prevRawLine = null;
+  let seq = 1;
+  for (const partial of partials) {
+    const entry = {
+      seq,
+      gate: 'evidence',
+      ts: '2026-01-01T00:00:00.000Z',
+      ...partial,
+      files: partial.files ?? {},
+      prev: prevRawLine === null ? null : sha256(prevRawLine),
+    };
+    if (key) {
+      entry.sigVersion = 2;
+      entry.sig = signEntry(key, entry);
+    }
+    const line = JSON.stringify(entry);
+    lines.push(line);
+    prevRawLine = line;
+    seq += 1;
+  }
+  return lines;
+}
+
+function writeLines(filePath, lines) {
+  mkdirSync(join(filePath, '..'), { recursive: true });
+  writeFileSync(filePath, lines.length ? lines.join('\n') + '\n' : '');
+}
+
+function lineHashOf(lines, index) {
+  return sha256(lines[index]);
+}
+
+describe('forest verify() — segment-free fast path (AC2)', () => {
+  it('empty manifest, no manifest.d/, verifies exactly as the pre-forest single chain', () => {
+    const dir = makeTmp();
+    try {
+      const result = verify(join(dir, '.adlc'));
+      assert.deepEqual(result, { valid: true, message: 'empty manifest', count: 0, segments: 0, signed: false, break: null });
+    } finally { cleanTmp(dir); }
+  });
+
+  it('a root-only manifest with entries verifies with segments:0', () => {
+    const dir = makeTmp();
+    try {
+      const lines = buildChainLines([{ gate: 'a' }, { gate: 'b' }]);
+      writeLines(join(dir, '.adlc', 'manifest.jsonl'), lines);
+      const result = verify(join(dir, '.adlc'), { requireSignatures: false });
+      assert.equal(result.valid, true);
+      assert.equal(result.count, 2);
+      assert.equal(result.segments, 0);
+      assert.equal(result.message, 'manifest ok (2 entries)');
+    } finally { cleanTmp(dir); }
+  });
+
+  it('an empty manifest.d/ directory (no segments yet) still takes the fast path', () => {
+    const dir = makeTmp();
+    try {
+      mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+      const result = verify(join(dir, '.adlc'));
+      assert.deepEqual(result, { valid: true, message: 'empty manifest', count: 0, segments: 0, signed: false, break: null });
+    } finally { cleanTmp(dir); }
+  });
+});
+
+describe('forest verify() — a valid forest', () => {
+  it('root + one segment anchored to root verifies, segments:1', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines([{ gate: 'cross-model-review' }]);
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+      const anchor = { segment: 'root', seq: 1, lineHash: lineHashOf(rootLines, 0) };
+      const segLines = buildChainLines([{ gate: 'evidence', anchor }, { gate: 'evidence' }]);
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segLines);
+
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, true, result.message);
+      assert.equal(result.segments, 1);
+      assert.equal(result.count, 3); // 1 root + 2 segment
+    } finally { cleanTmp(dir); }
+  });
+
+  it('root-less: two independent anchor:null segments both verify (§4.4/§9.3 concurrent-branch case)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const segA = buildChainLines([{ gate: 'evidence', anchor: null }]);
+      const segB = buildChainLines([{ gate: 'evidence', anchor: null }]);
+      writeLines(join(adlc, 'manifest.d', 'a-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segA);
+      writeLines(join(adlc, 'manifest.d', 'b-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segB);
+
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, true, result.message);
+      assert.equal(result.segments, 2);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('signed:true only when every chain in the forest verifies signed', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines([{ gate: 'cross-model-review' }], { key: KEY });
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+      const anchor = { segment: 'root', seq: 1, lineHash: lineHashOf(rootLines, 0) };
+      const segLines = buildChainLines([{ gate: 'evidence', anchor }], { key: KEY });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segLines);
+
+      withKey(KEY, () => {
+        const result = verify(adlc);
+        assert.equal(result.valid, true, result.message);
+        assert.equal(result.signed, true);
+      });
+    } finally { cleanTmp(dir); }
+  });
+});
+
+describe('forest verify() — AC1 adversarial rejections', () => {
+  it('rejects malformed JSON in a segment', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), ['{not json', '{"seq":2}']);
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /malformed JSON/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects bad filename grammar', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.d', 'Not-Valid-Grammar.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /bad filename grammar/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a lowercase ULID (grammar requires uppercase, no folding)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.d', 'feat-01arz3ndektsv4rrffq69g5fav.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /bad filename grammar/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a symlinked segment file', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const real = join(dir, 'real.jsonl');
+      writeFileSync(real, buildChainLines([{ gate: 'x', anchor: null }]).join('\n') + '\n');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      symlinkSync(real, join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /symlink/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a symlinked manifest.d/ directory itself', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const realDir = join(dir, 'real-manifest.d');
+      mkdirSync(realDir, { recursive: true });
+      mkdirSync(adlc, { recursive: true });
+      symlinkSync(realDir, join(adlc, 'manifest.d'));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /symlink/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a nested directory under manifest.d/', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), { recursive: true });
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /nested directory/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects case-colliding segment filenames', (t) => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const segDir = join(adlc, 'manifest.d');
+      writeLines(join(segDir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      writeLines(join(segDir, 'FEAT-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      // On a case-insensitive filesystem (default macOS/Windows), the second
+      // write silently overwrote the first — there's only one file on disk,
+      // so the collision this test constructs cannot exist here. §4.2's
+      // check exists for git's case-sensitive tree (checked out on any
+      // filesystem via CI's rails-guard, a later slice); skip the filesystem
+      // half of that scenario rather than assert something impossible here.
+      if (readdirSync(segDir).length < 2) {
+        t.skip('filesystem is case-insensitive; cannot construct two case-variant files on disk');
+        return;
+      }
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /case-colliding/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a dangling anchor (points at a segment that does not exist)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const anchor = { segment: 'nonexistent-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', seq: 1, lineHash: 'a'.repeat(64) };
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor }]));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /dangling anchor/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects an anchor whose seq does not exist in the target chain', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines([{ gate: 'x' }]);
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+      const anchor = { segment: 'root', seq: 99, lineHash: 'a'.repeat(64) };
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor }]));
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /dangling anchor/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a lineHash mismatch (anchor to a real seq, wrong hash — repointed history)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines([{ gate: 'x' }]);
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+      const anchor = { segment: 'root', seq: 1, lineHash: 'f'.repeat(64) };
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor }]));
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /lineHash mismatch/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects an anchor cycle (two segments anchored to each other)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      // Build both chains first (without anchors) to know their line hashes,
+      // then rewrite each first line to anchor at the OTHER — a cycle.
+      const aName = 'a-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
+      const bName = 'b-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
+      const aLine0 = JSON.stringify({ seq: 1, gate: 'x', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null, anchor: { segment: bName, seq: 1, lineHash: 'placeholder' } });
+      const bLine0 = JSON.stringify({ seq: 1, gate: 'x', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null, anchor: { segment: aName, seq: 1, lineHash: sha256(aLine0) } });
+      const aLine0Final = JSON.stringify({ seq: 1, gate: 'x', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null, anchor: { segment: bName, seq: 1, lineHash: sha256(bLine0) } });
+      writeLines(join(adlc, 'manifest.d', aName), [aLine0Final]);
+      writeLines(join(adlc, 'manifest.d', bName), [bLine0]);
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      // A cycle means at least one side's anchor cannot resolve consistently
+      // with the other (whichever line hash is recomputed last wins the
+      // "real" content) — either a dangling/mismatch or an explicit cycle
+      // report is an acceptable fail-closed outcome; the forest must never
+      // verify:true over a cyclic anchor graph.
+      assert.match(result.message, /lineHash mismatch|anchor cycle|dangling anchor/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects anchor:null once a root exists', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.jsonl'), buildChainLines([{ gate: 'x' }]));
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /anchor: null is not permitted once a root exists/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a segment first entry missing the required anchor field', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x' }]));
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /missing required anchor field/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects an anchor field on a non-first segment entry', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const lines = buildChainLines([{ gate: 'x', anchor: null }, { gate: 'y' }]);
+      // Splice a bogus anchor onto the second (already-chained) line.
+      const second = JSON.parse(lines[1]);
+      second.anchor = null;
+      lines[1] = JSON.stringify(second);
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), lines);
+      const result = verify(adlc);
+      assert.equal(result.valid, false);
+      assert.match(result.message, /only a segment's first entry may carry an anchor/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects an anchor field on a root entry', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const rootLines = buildChainLines([{ gate: 'x', anchor: null }]);
+      writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: { segment: 'root', seq: 1, lineHash: sha256(rootLines[0]) } }]));
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /root entry must not carry an anchor/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('a payload attempting to supply anchor is a writer-side concern (documented, not re-tested here)', () => {
+    // §4.4: appendManifestEntry MUST reject payloads that supply `anchor` —
+    // covered by the segment-writer slice's own test suite once that lands.
+    assert.ok(true);
+  });
+});
+
+describe('forest primitives — unit coverage', () => {
+  it('discoverSegments reports invalid entries without throwing', () => {
+    const dir = makeTmp();
+    try {
+      mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+      writeFileSync(join(dir, '.adlc', 'manifest.d', 'bad name!!.jsonl'), '');
+      const { valid, invalid } = discoverSegments(join(dir, '.adlc'));
+      assert.deepEqual(valid, []);
+      assert.equal(invalid.length, 1);
+      assert.equal(invalid[0].reason, 'bad filename grammar');
+    } finally { cleanTmp(dir); }
+  });
+
+  it('resolveAnchor accepts null', () => {
+    assert.deepEqual(resolveAnchor(null, new Map()), { ok: true });
+  });
+
+  it('resolveAnchor rejects a malformed anchor shape', () => {
+    assert.equal(resolveAnchor({ segment: 'root' }, new Map()).ok, false);
+    assert.equal(resolveAnchor('root', new Map()).ok, false);
+  });
+
+  it('detectAnchorCycle passes a simple two-node chain (a -> root)', () => {
+    const anchorBySegment = new Map([['a', { segment: 'root', seq: 1, lineHash: 'x' }]]);
+    assert.deepEqual(detectAnchorCycle(anchorBySegment), { ok: true });
+  });
+
+  it('detectAnchorCycle catches a direct two-segment cycle', () => {
+    const anchorBySegment = new Map([
+      ['a', { segment: 'b', seq: 1, lineHash: 'x' }],
+      ['b', { segment: 'a', seq: 1, lineHash: 'y' }],
+    ]);
+    const result = detectAnchorCycle(anchorBySegment);
+    assert.equal(result.ok, false);
+  });
+});

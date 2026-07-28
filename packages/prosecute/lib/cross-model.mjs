@@ -356,6 +356,13 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, ke
   // No key → the reader cannot verify any attestation's signature → nothing is trusted.
   if (!ticket || !revision || !authorProvider || !key) return false;
   if (!manifestChainTrustworthy(dir)) return false;
+  // manifestChainTrustworthy already validates the WHOLE forest (root + any
+  // segments) via the forest-aware verify() — a tampered or malformed segment
+  // fails closed here even though this function only reads root entries below.
+  // Deliberately root-only for now (T-MANIFEST-FOREST slice 1): walking
+  // segment-recorded approvals needs the terminal-revocation redesign this
+  // ticket's slice 2 does (spec §6 — "no entry anywhere in the forest" is a
+  // stricter rule than today's "latest per provider", not a drop-in swap).
   const { entries } = readEntries('manifest', dir);
   return crossModelSatisfied(entries, { ticket, revision, runAuthor: normalizeProvider(authorProvider), key });
 }
@@ -375,6 +382,8 @@ export function hasCrossModelApproveForRevision({ dir, revision, authorProvider,
   // would be redundant and unverifiable — candidateReview is the single enforcement point.
   if (!key) return false;
   if (!manifestChainTrustworthy(dir)) return false;
+  // See hasCrossModelApprove above: root-only is deliberate here too, pending
+  // slice 2's terminal-revocation redesign.
   const { entries } = readEntries('manifest', dir);
   return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider), key });
 }

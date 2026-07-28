@@ -1,5 +1,6 @@
-import { canonicalJson, readEntries, resolveRevision, sha256 } from '@adlc/core';
+import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
@@ -172,7 +173,7 @@ export function recordAcceptancePacket({
     }
   }
 
-  const { entries } = readEntries('manifest', dir);
+  const { entries } = readManifestForest(dir);
   const p5Revision = latestP5Revision(entries, ticket);
   const assertedP5Entry = latestP5Entry(entries, ticket, revision ?? p5Revision);
   if (ticket && !assertedP5Entry) {

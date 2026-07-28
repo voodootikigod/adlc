@@ -1,4 +1,5 @@
-import { readEntries, ADLC_DIR, canonicalJson, hashFiles, resolveRevision, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, hashFiles, resolveRevision, sha256 } from '@adlc/core';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
@@ -371,7 +372,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     return { ok: false, operational: true, phase, errors: [`${phase} requires --ticket`] };
   }
 
-  const { entries, skipped } = readEntries('manifest', dir);
+  const { entries, skipped } = readManifestForest(dir);
   const hasExplicitRevision = revision !== undefined && revision !== null && String(revision).trim() !== '';
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
   const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket) : null;
