@@ -85,7 +85,7 @@ test('AC3: no @adlc/* runtime dependency (agy copies without node_modules)', () 
 
 test('AC2: files allowlist ships the runtime surface, plugin.json, and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['agents/', 'build-gate-inline.mjs', 'commands/', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks/', 'hooks.json', 'rails-checker.mjs', 'skills/', 'plugin.json', 'README.md', 'LICENSE']) {
+  for (const entry of ['agents/', 'bin/', 'build-gate-inline.mjs', 'commands/', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks/', 'hooks.json', 'rails-checker.mjs', 'skills/', 'plugin.json', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -97,10 +97,10 @@ test('AC2: npm pack --dry-run ships the runtime surface, plugin.json, and NO tes
   const manifest = JSON.parse(res.stdout);
   const paths = manifest[0].files.map((f) => f.path.replace(/^\.\//, ''));
 
-  for (const dir of ['agents/', 'commands/', 'hooks/', 'skills/']) {
+  for (const dir of ['agents/', 'bin/', 'commands/', 'hooks/', 'skills/']) {
     assert.ok(paths.some((p) => p.startsWith(dir)), `pack must include ${dir}`);
   }
-  for (const file of ['build-gate-inline.mjs', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks.json', 'rails-checker.mjs', 'plugin.json', 'README.md', 'LICENSE']) {
+  for (const file of ['bin/cli.mjs', 'build-gate-inline.mjs', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks.json', 'rails-checker.mjs', 'plugin.json', 'README.md', 'LICENSE']) {
     assert.ok(paths.includes(file), `pack must include ${file}`);
   }
   assert.ok(!paths.some((p) => p.startsWith('test/')), `pack must NOT include test/: ${paths.filter((p) => p.startsWith('test/')).join(', ')}`);
@@ -168,3 +168,10 @@ test('AC4: packed tarball extracted outside the repo imports rails-checker with 
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+test('AC4: bin/cli.mjs executable displays help output on --help', () => {
+  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), '--help'], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /adlc-agy install/);
+});
+

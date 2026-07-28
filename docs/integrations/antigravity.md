@@ -21,22 +21,30 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 > [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) — **make it a required
 > check** before relying on this integration for enforcement.
 
-**Local Checkout (Recommended/Verified).** Currently, the most reliable way to install the plugin is directly from a local checkout:
+**Global npm Install (Recommended).** Install `@adlc/antigravity` globally via npm, then point `agy` at the global package location:
 
 ```sh
-agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
+npm install -g @adlc/antigravity
+agy plugin install $(npm root -g)/@adlc/antigravity
 ```
 
-Then run `/adlc-init` inside your agent session (or execute the steps manually to bootstrap `.adlc/` in your repository).
+**One-liner via npx.** Alternatively, run the helper CLI directly via `npx` to install and register:
 
-**npm-assisted install.** `agy` has no native `agy install npm:X` command — `agy
-plugin install` always takes a filesystem path — but `@adlc/antigravity` is now
-published on npm, so you can install it as a normal dependency and point `agy` at
-`node_modules`:
+```sh
+npx adlc-agy install
+```
+
+**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules` and register with `agy`:
 
 ```sh
 npm install @adlc/antigravity
 agy plugin install ./node_modules/@adlc/antigravity
+```
+
+**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout:
+
+```sh
+agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 ```
 
 **Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
@@ -45,8 +53,7 @@ agy plugin install ./node_modules/@adlc/antigravity
 npx plugins add voodootikigod/adlc
 ```
 
-
-**Note on native marketplace:** The native `.agents` marketplace registration command (`agy plugin install adlc-antigravity@adlc`) is currently subject to a CLI limitation where the CLI rejects unregistered third-party marketplaces with `unknown marketplace: adlc`. Local installation is the recommended path.
+**Note on native marketplace:** The native `.agents` marketplace registration command (`agy plugin install adlc-antigravity@adlc`) is currently subject to a CLI limitation where the CLI rejects unregistered third-party marketplaces with `unknown marketplace: adlc`. Global npm or local installation is the recommended path.
 
 Then `/adlc-init` (or manual bootstrap). Enforcement: `export ADLC_P4_ENFORCEMENT=1` with an active ticket.
 

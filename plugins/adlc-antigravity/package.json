@@ -27,6 +27,10 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
+  "bin": {
+    "adlc-agy": "bin/cli.mjs",
+    "adlc-antigravity": "bin/cli.mjs"
+  },
   "dependencies": {},
   "agy": {
     "hooks": "./hooks.json",
@@ -35,6 +39,7 @@
   },
   "files": [
     "agents/",
+    "bin/",
     "build-gate-inline.mjs",
     "commands/",
     "constants.mjs",

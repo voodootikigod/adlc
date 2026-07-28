@@ -716,16 +716,18 @@ export const ANTIGRAVITY_INTEGRATION = {
   status: 'local',
   tagline: 'Advisory PreToolUse rails-guard for agy, plus skills and a prosecutor agent. The unbypassable CI rail-freeze gate is the real control.',
   install: [
-    'agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity',
+    'npm install -g @adlc/antigravity',
+    'agy plugin install $(npm root -g)/@adlc/antigravity',
+    'npx adlc-agy install',
   ],
-  note: 'agy plugin install only takes a filesystem path. npm-assisted path: npm install @adlc/antigravity then agy plugin install ./node_modules/@adlc/antigravity. Marketplace and universal-installer support are still planned. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  note: 'Recommended: install globally via npm (npm install -g @adlc/antigravity) and register with agy, or run npx adlc-agy install. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
   pluginDir: 'plugins/adlc-antigravity',
   hero: {
     kicker: 'Antigravity integration',
     title: 'ADLC for Google Antigravity',
     identity: 'In-session rails are advisory. agy fails open on hook failure, so CI is the guarantee, not an optional extra.',
     badges: [
-      { label: 'Local plugin install', accent: true },
+      { label: 'Global npm & npx install', accent: true },
       { label: 'CI is the backstop' },
     ],
   },
@@ -810,14 +812,17 @@ export const ANTIGRAVITY_INTEGRATION = {
   },
   installSection: {
     kicker: 'Install',
-    title: 'Install from a local checkout path',
+    title: 'Install via global npm or npx',
   },
   operate: {
     title: 'operate: Antigravity plugin',
     lines: [
-      '# npm-assisted path (still a filesystem install)',
-      'npm install @adlc/antigravity',
-      'agy plugin install ./node_modules/@adlc/antigravity',
+      '# Recommended global npm install',
+      'npm install -g @adlc/antigravity',
+      'agy plugin install $(npm root -g)/@adlc/antigravity',
+      '',
+      '# Or one-liner via npx',
+      'npx adlc-agy install',
       '',
       '# Arm enforcement for an active ticket',
       'export ADLC_P4_ENFORCEMENT=1',

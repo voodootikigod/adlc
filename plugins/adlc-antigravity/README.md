@@ -4,6 +4,34 @@ Embrace the ADLC inside Google Antigravity (`agy`): a phase-router plus doctrine
 skills and a `PreToolUse` rails-guard that freezes ADLC rails. Requires the
 `@adlc/cli` gate toolkit (`npm i -g @adlc/cli`).
 
+## Install
+
+**Global npm install (recommended):**
+
+```sh
+npm install -g @adlc/antigravity
+agy plugin install $(npm root -g)/@adlc/antigravity
+```
+
+**One-liner via npx:**
+
+```sh
+npx adlc-agy install
+```
+
+**Local project install:**
+
+```sh
+npm install @adlc/antigravity
+agy plugin install ./node_modules/@adlc/antigravity
+```
+
+**From local checkout:**
+
+```sh
+agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
+```
+
 ## Manifest: `version` and `adlcContract`
 
 `plugin.json` is the authoritative manifest. `agy plugin install` copies the whole
