@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { splitNulPaths } from './git.mjs';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
@@ -169,13 +169,55 @@ function isIgnoredPath(relativePath, ignoredPaths) {
 //
 // Untracked files are deliberately absent (unlike resolveRevision): they are not in the PR, so
 // they cannot affect what merges, and including them is what made a local revision disagree with
-// CI's clean checkout whenever scratch files were present. The caller that attests a WORKING TREE
-// is responsible for refusing a dirty one — see the prosecute local path.
+// CI's clean checkout whenever scratch files were present. This matches classification exactly —
+// `changedFiles` reads `git diff`, which also ignores untracked. The caller that attests a WORKING
+// TREE is responsible for refusing an untracked-bearing one — see the prosecute local path.
 //
 // F5 — `base` is resolved HERE, by the gate, and embedded in the returned string. The value
 // recorded in an attestation is therefore never consulted as authority; matching the full
 // identity string is what proves the base agrees.
+//
+// BASIS — `base` → WORKING TREE, tracked paths only. NOT `base..HEAD`.
+// An earlier build compared base to HEAD. It was reverted: prosecution here is
+// working-tree-inclusive on purpose, proven by `FIX A` in
+// packages/prosecute/test/prosecute-cross-model-cli.test.mjs, which asserts that an UNCOMMITTED
+// edit to a trust-root file still tiers. A committed-only identity would describe something the
+// gate does not prosecute — a fail-open. So the diff below takes ONE commit argument (compare to
+// the working tree), never two.
+//
+// The CURRENT side is always COMPUTED, never read from `git diff --raw`. Measured against git
+// 2.x, comparing a commit to the working tree reports `dstsha` as 40 zeros for an unstaged
+// modification, a mode-only change, AND a symlink retarget alike — reading that field would
+// collapse three distinct changes onto one identity. A STAGED modification does report a real
+// sha, but it is the INDEX blob, which is stale the moment the file is edited again after
+// staging. Neither is the working tree, so neither is trusted.
 const CHANGE_SET_PREFIX = 'git-change';
+
+// Current-side sentinel for a path that has no working-tree blob (a deletion). `git diff --raw`
+// still lists a deleted path, but the file is gone from disk, so `hash-object`/`stat` must never
+// be reached for it — that is a crash, and this primitive's try/catch would turn the crash into a
+// silent null rather than a loud error.
+const DELETED_MODE = '000000';
+const NULL_OBJECT = '0'.repeat(40);
+
+const REGULAR_MODES = new Set(['100644', '100755']);
+const SYMLINK_MODE = '120000';
+
+// A symlink's blob is the TARGET PATH STRING, which is what git itself stores — verified against
+// `git ls-files -s` on a real symlink. It must NOT go through `hash-object <path>`, which opens
+// and follows the link: for a symlink to a DIRECTORY that fails outright ("fatal: Unable to hash"),
+// and for a dangling symlink it fails too. This is not hypothetical — this repo tracks
+// `plugins/adlc-cursor/commands`, a symlink to a directory. No filters apply to a symlink blob, so
+// `--stdin` (which applies none) is the faithful match.
+function symlinkBlob(cwd, relativePath) {
+  const target = readlinkSync(join(cwd, relativePath));
+  return execFileSync('git', ['hash-object', '--stdin'], {
+    cwd,
+    input: target,
+    maxBuffer: GIT_MAX_BUFFER,
+    stdio: ['pipe', 'pipe', 'ignore'],
+  }).toString('utf8').trim();
+}
 
 export function resolveChangeSetRevision({ cwd = process.cwd(), base, revision, ignorePaths = [] } = {}) {
   if (revision !== undefined && revision !== null && String(revision).trim() !== '') {
@@ -187,20 +229,51 @@ export function resolveChangeSetRevision({ cwd = process.cwd(), base, revision, 
     if (!baseSha) return null;
     // --raw: ":<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0"
     // --abbrev=40 so blob shas are full, never abbreviated.
+    // ONE commit argument: compare `base` to the WORKING TREE (see BASIS above).
     const raw = splitNull(
-      git(['diff', '--raw', '--no-renames', '--abbrev=40', '-z', baseSha, 'HEAD'], cwd).toString('utf8')
+      git(['diff', '--raw', '--no-renames', '--abbrev=40', '-z', baseSha], cwd).toString('utf8')
     );
     const ignoredPaths = ignoredPathSet(cwd, ignorePaths);
-    const entries = [];
+    const changed = [];
     for (let i = 0; i + 1 < raw.length; i += 2) {
       const meta = raw[i];
       const path = raw[i + 1];
       if (!meta || !path) continue;
       if (isIgnoredPath(path, ignoredPaths)) continue;
       // meta = ":<srcmode> <dstmode> <srcsha> <dstsha> <status>"
-      const fields = meta.replace(/^:/, '').split(/\s+/);
-      const [srcMode, dstMode, srcSha, dstSha, status] = fields;
-      entries.push([path.replaceAll('\\', '/'), srcMode, dstMode, srcSha, dstSha, status].join(' '));
+      const [srcMode, dstMode, srcSha] = meta.replace(/^:/, '').split(/\s+/);
+      changed.push({ path, normalized: path.replaceAll('\\', '/'), srcMode, dstMode, srcSha });
+    }
+
+    // Regular files are hashed in ONE batched pass. Plain `hash-object <path>` (no `--path=`) is
+    // deliberate: for a file already at its real working-tree location git applies that path's
+    // own attributes and eol conversion — measured, `--path=` yields a byte-identical hash and
+    // would force one process per file, since `--path` is singular and would otherwise apply one
+    // path's attributes to every file in the batch. The repo pins `* text=auto eol=lf` in
+    // .gitattributes, and attributes outrank `core.autocrlf`, which is what actually keeps a
+    // Windows checkout agreeing with Linux CI here.
+    const regular = changed.filter((entry) => REGULAR_MODES.has(entry.dstMode));
+    const blobs = batchWorkingTreeBlobs(cwd, regular.map((entry) => entry.path));
+
+    const entries = [];
+    for (const entry of changed) {
+      let currentObject;
+      if (entry.dstMode === DELETED_MODE) {
+        currentObject = NULL_OBJECT;
+      } else if (entry.dstMode === SYMLINK_MODE) {
+        currentObject = symlinkBlob(cwd, entry.path);
+      } else if (REGULAR_MODES.has(entry.dstMode)) {
+        currentObject = blobs.get(entry.path);
+      } else {
+        // A gitlink (160000) or any mode git grows later. Fail CLOSED rather than invent a
+        // representation: no identity means the gate finds no attestation and refuses, which is
+        // the safe direction. Inventing one risks two distinct trees sharing an identity.
+        return null;
+      }
+      if (!currentObject) return null;
+      entries.push(
+        [entry.normalized, entry.srcMode, entry.srcSha, entry.dstMode, currentObject].join(' ')
+      );
     }
     // Sort so the identity is independent of git's output ordering.
     entries.sort();

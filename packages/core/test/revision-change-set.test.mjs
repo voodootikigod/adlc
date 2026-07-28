@@ -13,7 +13,7 @@
 //        after review.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -148,6 +148,153 @@ describe('resolveChangeSetRevision (#365) — identity bound to the reviewed cha
       writeFileSync(join(r.dir, '.scratch-review.out'), 'local noise\n');
       assert.equal(resolveChangeSetRevision({ cwd: r.dir, base: 'main' }), before,
         'an untracked file must not move the identity — that trap cost two PRs');
+    } finally { clean(r.dir); }
+  });
+
+  // ── AC13/AC14: the basis is base → WORKING TREE, not base..HEAD ──────────────────
+  // An earlier build compared base to HEAD and was reverted: prosecution here is
+  // working-tree-inclusive on purpose (FIX A in prosecute-cross-model-cli.test.mjs), so a
+  // committed-only identity would describe something the gate does not prosecute.
+  it('AC13: an UNCOMMITTED edit to a tracked file changes the identity, and reverting restores it', () => {
+    const r = repo();
+    try {
+      withChange(r);
+      const committed = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+
+      // Prove the premise: a committed three-dot diff cannot see this edit.
+      writeFileSync(join(r.dir, 'src', 'app.mjs'), 'export const x = 99; // uncommitted\n');
+      const threeDot = r.g('diff', '--name-only', 'main...HEAD');
+      assert.doesNotMatch(threeDot, /uncommitted/, 'fixture sanity: the edit is not committed');
+
+      const dirty = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      assert.notEqual(dirty, committed,
+        'an uncommitted tracked edit MUST move the identity — otherwise the gate attests code it never saw');
+
+      writeFileSync(join(r.dir, 'src', 'app.mjs'), 'export const x = 1;\n'); // revert
+      assert.equal(resolveChangeSetRevision({ cwd: r.dir, base: 'main' }), committed,
+        'restoring the working tree must restore the identity — the identity is content, not history');
+    } finally { clean(r.dir); }
+  });
+
+  // The collision the CURRENT side exists to avoid. Comparing a commit to the working tree,
+  // `git diff --raw` reports `dstsha` as 40 zeros for an unstaged modification regardless of
+  // CONTENT. An implementation that reads that field collapses every distinct edit onto one
+  // identity — a reviewed change and an arbitrary replacement would attest alike.
+  it('AC13: two different UNCOMMITTED contents yield different identities (dstsha is zeros for both)', () => {
+    const r = repo();
+    try {
+      withChange(r);
+      writeFileSync(join(r.dir, 'src', 'app.mjs'), 'export const x = 111;\n');
+      const first = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      writeFileSync(join(r.dir, 'src', 'app.mjs'), 'export const x = 222;\n');
+      const second = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+
+      // Fixture sanity: git really does report zeros for BOTH, so this is the live hazard.
+      const raw = r.g('diff', '--raw', '--abbrev=40', 'main');
+      assert.match(raw, /0{40}/, 'fixture sanity: dstsha is zeros for an unstaged modification');
+
+      assert.notEqual(first, second,
+        'the current side must be COMPUTED from the working tree, never read from git diff --raw');
+    } finally { clean(r.dir); }
+  });
+
+  // A STAGED modification reports a real dstsha — but it is the INDEX blob, which goes stale the
+  // moment the file is edited again. Trusting it attests the staged content, not the real tree.
+  it('AC13: an edit made AFTER staging moves the identity (the index sha is not the working tree)', () => {
+    const r = repo();
+    try {
+      withChange(r);
+      writeFileSync(join(r.dir, 'src', 'app.mjs'), 'export const x = 7;\n');
+      r.g('add', 'src/app.mjs');
+      const staged = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      writeFileSync(join(r.dir, 'src', 'app.mjs'), 'export const x = 8;\n'); // edit after staging
+      assert.notEqual(resolveChangeSetRevision({ cwd: r.dir, base: 'main' }), staged,
+        'the identity must follow the working tree, not the index');
+    } finally { clean(r.dir); }
+  });
+
+  // AC17 / review finding R2 — a deleted path is still LISTED by --raw but is gone from disk, so
+  // hash-object and stat must never be reached for it. The outer try/catch would otherwise turn
+  // the crash into a silent null: no identity, no attestation, and no explanation.
+  it('AC17: a DELETED tracked path resolves via the sentinel instead of crashing', () => {
+    const r = repo();
+    try {
+      withChange(r);
+      const present = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      rmSync(join(r.dir, 'README.md'));
+      const deleted = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      assert.ok(deleted, 'a deletion must still produce an identity, not null from a swallowed crash');
+      assert.match(deleted, /^git-change:/);
+      assert.notEqual(deleted, present, 'a deletion is part of the reviewed change');
+    } finally { clean(r.dir); }
+  });
+
+  // A symlink's blob is its TARGET STRING. `hash-object <path>` opens and FOLLOWS the link, which
+  // fails outright for a symlink to a directory ("fatal: Unable to hash") — and this repo tracks
+  // exactly that (plugins/adlc-cursor/commands). Not covered by the six review findings.
+  it('handles a retargeted SYMLINK, including one pointing at a directory', () => {
+    const r = repo();
+    try {
+      mkdirSync(join(r.dir, 'realdir'), { recursive: true });
+      mkdirSync(join(r.dir, 'otherdir'), { recursive: true });
+      writeFileSync(join(r.dir, 'realdir', 'a.txt'), 'hi\n');
+      writeFileSync(join(r.dir, 'otherdir', 'b.txt'), 'yo\n');
+      symlinkSync('realdir', join(r.dir, 'linkdir'));
+      r.g('add', '-A'); r.g('commit', '-qm', 'add a symlink to a directory');
+      r.g('checkout', '-q', '-b', 'feat');
+
+      // The DIRECTORY symlink must itself be in the change set — that is the case hash-object
+      // cannot survive. Retarget it in the WORKING TREE, so --raw reports dstsha as zeros too.
+      rmSync(join(r.dir, 'linkdir'));
+      symlinkSync('otherdir', join(r.dir, 'linkdir'));
+
+      // Fixture sanity: this is exactly what would kill a hash-object-based implementation.
+      assert.throws(
+        () => execFileSync('git', ['hash-object', 'linkdir'], { cwd: r.dir, stdio: ['ignore', 'pipe', 'ignore'] }),
+        'fixture sanity: hash-object really does fail on a symlink to a directory');
+
+      const retargeted = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      assert.ok(retargeted, 'a directory symlink in the change set must not crash the resolver');
+      assert.match(retargeted, /^git-change:/);
+
+      // A DANGLING symlink is the second case hash-object cannot open.
+      symlinkSync('nowhere-at-all', join(r.dir, 'dangling'));
+      r.g('add', '-A');
+      const withDangling = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      assert.ok(withDangling, 'a dangling symlink must not crash the resolver either');
+      assert.notEqual(withDangling, retargeted, 'adding a symlink is part of the reviewed change');
+
+      // The identity tracks the TARGET STRING, which is what git stores for a symlink blob.
+      rmSync(join(r.dir, 'linkdir'));
+      symlinkSync('realdir', join(r.dir, 'linkdir')); // back to the original target
+      assert.notEqual(resolveChangeSetRevision({ cwd: r.dir, base: 'main' }), withDangling,
+        'retargeting a symlink changes what was reviewed');
+    } finally { clean(r.dir); }
+  });
+
+  // AC16 / review finding R3. The finding prescribed `git hash-object --path=<path>`; measured,
+  // that is a no-op for a file already at its working-tree path (git applies that path's own
+  // attributes either way) and it would force one process per file, since --path is singular.
+  // What actually decides CRLF-vs-LF is the ATTRIBUTE, which outranks core.autocrlf — so that is
+  // what this pins. Without a text attribute the identity DOES follow core.autocrlf; the repo's
+  // own `* text=auto eol=lf` is the control, and this test goes red if it is ever removed.
+  it('AC16: with a text attribute, CRLF content hashes identically under any core.autocrlf', () => {
+    const r = repo();
+    try {
+      writeFileSync(join(r.dir, '.gitattributes'), '* text=auto eol=lf\n');
+      r.g('add', '-A'); r.g('commit', '-qm', 'pin eol');
+      r.g('checkout', '-q', '-b', 'feat');
+      writeFileSync(join(r.dir, 'crlf.txt'), 'alpha\r\nbeta\r\n'); // real CR bytes
+      r.g('add', '-A'); r.g('commit', '-qm', 'add crlf file');
+
+      let baseline;
+      for (const value of ['false', 'true', 'input']) {
+        r.g('config', 'core.autocrlf', value);
+        const rev = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+        if (baseline === undefined) baseline = rev;
+        assert.equal(rev, baseline,
+          `identity moved under core.autocrlf=${value} — a Windows checkout would disagree with Linux CI`);
+      }
     } finally { clean(r.dir); }
   });
 
