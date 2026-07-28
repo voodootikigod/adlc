@@ -44,7 +44,7 @@ function revisionIgnorePaths(cwd, dir, input, inputPath) {
  * attestation recorded via the CLI binds to the SAME revision string the gate
  * later checks. Pass the identical { cwd, dir, base, revision, input, inputPath } to
  * all three paths (see bin/adlc-prosecute.mjs record-cross-model and tier-check) —
- * #365 R4: base resolution is single-sourced here rather than re-derived per consumer.
+ * Base resolution is single-sourced here rather than re-derived per consumer.
  *
  * `base` defaults to 'main', matching the CLI's `--base` default, so a caller that
  * omits it (as most direct runProsecution() callers do) still gets the SAME base a

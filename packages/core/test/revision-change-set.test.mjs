@@ -17,7 +17,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, symlinkSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { resolveChangeSetRevision } from '../lib/revision.mjs';
+import { createHash } from 'node:crypto';
+import { resolveChangeSetRevision, changeSetDigest } from '../lib/revision.mjs';
 
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-changeset-'));
@@ -226,6 +227,44 @@ describe('resolveChangeSetRevision (#365) — identity bound to the reviewed cha
       assert.ok(deleted, 'a deletion must still produce an identity, not null from a swallowed crash');
       assert.match(deleted, /^git-change:/);
       assert.notEqual(deleted, present, 'a deletion is part of the reviewed change');
+    } finally { clean(r.dir); }
+  });
+
+  // AC17 continued — the sentinel's SPECIFIC bytes are part of the documented contract ("000000
+  // mode / 40 zeros"), not an arbitrary placeholder: `git diff --raw` itself reports a MISSING
+  // side as 40 zeros (e.g. an added file's srcSha), so a deleted path's current-side sentinel is
+  // chosen to match that existing git convention. A test that only checks "some stable value
+  // differing from present" (the block above) would not notice the sentinel silently becoming a
+  // different 40-hex-char constant. This reconstructs the expected digest independently — from
+  // git's own base-tree lookup plus the DOCUMENTED sentinel — and pins the exact value, so a
+  // production change to the sentinel bytes fails this test rather than surviving unnoticed.
+  it('AC17: the deleted-path sentinel is EXACTLY 40 zeros, not merely "some" stable constant', () => {
+    const r = repo();
+    try {
+      // A single, isolated deletion: nothing else in the change set, so the entries array has
+      // exactly one element and the expected digest is reproducible by hand.
+      const lsTree = r.g('ls-tree', 'main', '--', 'README.md').trim();
+      const match = lsTree.match(/^(\d+) blob ([0-9a-f]+)\t/);
+      assert.ok(match, 'fixture setup: README.md must be a tracked blob on main');
+      const [, srcMode, srcSha] = match;
+
+      r.g('checkout', '-q', '-b', 'feat');
+      rmSync(join(r.dir, 'README.md'));
+      r.g('add', '-A'); r.g('commit', '-qm', 'delete README.md');
+
+      const revision = resolveChangeSetRevision({ cwd: r.dir, base: 'main' });
+      const digest = changeSetDigest(revision);
+
+      const DOCUMENTED_NULL_OBJECT = '0'.repeat(40);
+      const DOCUMENTED_DELETED_MODE = '000000';
+      const entry = ['README.md', srcMode, srcSha, DOCUMENTED_DELETED_MODE, DOCUMENTED_NULL_OBJECT].join(' ');
+      const expectedHash = createHash('sha256');
+      expectedHash.update(Buffer.from(entry));
+      expectedHash.update('\0');
+
+      assert.equal(digest, expectedHash.digest('hex'),
+        'the deleted-path identity must match a hash built from the DOCUMENTED all-zero sentinel — ' +
+        'any other 40-hex-char constant would fail this exact comparison');
     } finally { clean(r.dir); }
   });
 

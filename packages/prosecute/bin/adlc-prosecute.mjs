@@ -162,7 +162,7 @@ const { values, positionals } = parseArgs({
     // #370: recording with no signing key is refused by default (the entry would be
     // inert and permanent). This makes an unsigned write a deliberate, auditable act.
     'allow-unsigned': { type: 'boolean', default: false },
-    // #365 B — carry an EXISTING approve forward onto a moved base without a fresh review,
+    // revision-binding carry-forward — carry an EXISTING approve forward onto a moved base without a fresh review,
     // when the reviewed change itself is unchanged (see carryForwardCrossModelReview).
     'carry-forward': { type: 'string' },
     // --record-finding mode: land one CONFIRMED prosecution finding in the
@@ -204,13 +204,13 @@ ADLC P5 review-evidence recorder.
       --allow-unsigned to write one deliberately anyway (forge-resistance tests);
       the success line is then replaced by a warning. --json reports "signed".
 
-  record-cross-model --ticket id --carry-forward <fromRevision> [--base main] [--dir .adlc]
-      Carry an EXISTING approve forward onto a moved base WITHOUT a fresh review,
-      when the reviewed change itself is unchanged (#365 B). Refuses unless a prior
-      approve is recorded for <fromRevision>, both identities are change-set form
-      with an EQUAL change-set digest (COMPUTED, never asserted), the base actually
-      moved, and the resulting chain depth stays within the cap — otherwise a FRESH
-      distinct-provider review is required. --provider/--author-provider/--verdict
+  record-cross-model --ticket id --carry-forward FROM_REVISION [--base main] [--dir .adlc]
+      Carry an EXISTING approve forward onto a moved base WITHOUT a fresh review, when
+      the reviewed change itself is unchanged (the revision-binding carry-forward path).
+      Refuses unless a prior approve is recorded for FROM_REVISION, both identities are
+      change-set form with an EQUAL change-set digest (COMPUTED, never asserted), the
+      base actually moved, and the resulting chain depth stays within the cap — otherwise
+      a FRESH distinct-provider review is required. --provider/--author-provider/--verdict
       are not accepted here: the carried entry keeps the ORIGINAL review's identity.
 
   --record-finding --file <path> --desc "<prose>" [--category <lens>] [--severity <s>] [--line <n>] [--verdict <v>] [--dir .adlc]
@@ -276,7 +276,7 @@ if (positionals[0] === 'record-cross-model') {
   });
   if (!revision) opError('revision could not be resolved; pass --revision or run inside a git worktree');
 
-  // #365 B — carry-forward mode: re-attest an EXISTING approve at the newly-resolved revision
+  // revision-binding carry-forward mode: re-attest an EXISTING approve at the newly-resolved revision
   // instead of recording a fresh one. Separate branch (not merged with the fresh-record path
   // below) because it takes NO --provider/--author-provider/--verdict — the carried entry keeps
   // the ORIGINAL review's identity, since it IS that review, just bound to a moved base.
