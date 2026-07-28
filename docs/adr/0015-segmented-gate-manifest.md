@@ -128,11 +128,19 @@ toolkit upgrade. Fail-closed, with a named cause.
 
 ### 6. No compaction at launch
 
-Segments accumulate roughly one file per branch lineage. No fold-into-root
-ceremony ships in v1 — it would reintroduce a re-signing event for no measured
-benefit. The trigger for revisiting is written down: more than 500 segment files,
-or forest verification exceeding 250 ms in CI, whichever comes first, warrants a
-compaction ADR.
+Segments accumulate roughly one file per branch lineage under interactive use.
+An automated CI recorder (e.g. `docs/ci/adversarial-review.yml`'s
+`gate-manifest record`) accumulates faster than that: its checkout is
+ephemeral and the `.lineage` token is gitignored by design (§4.8 of the
+spec), so it never persists across separate job runs — a branch pushed N
+times yields up to N segments from that recorder alone, not one. This isn't a
+defect to route around; it's the same one-open-lineage-per-writer-context
+model applied to a writer whose "context" happens to be a single CI job, and
+it's exactly the volume the trigger below is calibrated to catch. No
+fold-into-root ceremony ships in v1 — it would reintroduce a re-signing event
+for no measured benefit. The trigger for revisiting is written down: more
+than 500 segment files, or forest verification exceeding 250 ms in CI,
+whichever comes first, warrants a compaction ADR.
 
 ## Consequences
 

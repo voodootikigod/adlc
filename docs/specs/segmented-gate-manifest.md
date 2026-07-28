@@ -57,7 +57,12 @@ validation.
 `<slug>-<ulid>.jsonl` where `slug` is 1–40 chars of `[a-z0-9-]` derived from the
 creating branch name (non-conforming chars dropped, lowercased, collapsed;
 `segment` when derivation yields nothing), and
-`ulid` is a 26-char Crockford-base32 ULID generated at segment creation. The
+`ulid` is a 26-char **uppercase** Crockford-base32 ULID generated at segment
+creation — matching this repo's existing ticket-id convention
+(`T-01KXPD8KJ9H6M6DFA83Y82A1Z1`) and the ULID reference encoding. Grammar
+validation MUST accept exactly `[A-Z0-9]{26}` for the ULID segment and reject
+a lowercase or mixed-case one as a bad-filename-grammar error, not fold it —
+folding would defeat the case-collision check below. The
 store MUST reject (fail verification of) files under `manifest.d/` that do not
 match this grammar, are not regular files, are symlinks, or are nested in
 subdirectories. Two segments whose names differ only by case MUST be rejected
@@ -178,11 +183,19 @@ in the existing test suite).
   (anchored-to segment, anchored-to `seq`, ULID), entries in per-segment order,
   each labeled with its segment id. `ts` is display-only and MUST NOT be used
   for any trust decision.
-- **Cross-model gate (terminal revocation).** An approve for tuple
-  (provider, revision) — matched and per-entry signature-verified exactly as
-  today (`candidateReview`) — satisfies the gate only if **no** entry anywhere
-  in the forest carries a `needs-attention` verdict for the same tuple
-  (providers normalized on both sides as today). A revocation counts
+- **Cross-model gate (terminal revocation).** An approve for (provider,
+  revision), plus `ticket` when the caller supplies one — matched and
+  per-entry signature-verified exactly as today (`candidateReview`) —
+  satisfies the gate only if **no** entry anywhere in the forest carries a
+  `needs-attention` verdict for the same key (providers normalized on both
+  sides as today). `ticket` is optional exactly as it is today: the
+  revision-wide trust-root gate (`hasCrossModelApproveForRevision`) omits it, so a
+  needs-attention anywhere at that revision blocks it regardless of which
+  ticket it names; the per-ticket gate (`hasCrossModelApprove`) supplies it,
+  so a needs-attention scopes only to matching-ticket entries — this is why
+  §4.6 seal entries carry `ticket` when the sealed approve had one, so a
+  cutover seals a ticket-scoped approval without over-broadly revoking every
+  other ticket's approval at the same revision. A revocation counts
   **regardless of its signature state**: revocations only ever block an
   approve, so trusting them unsigned is fail-closed, while requiring a
   signature would let a keyless author's genuine revocation be silently
