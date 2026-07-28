@@ -193,12 +193,17 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
    its recorded lineage ULID matches, **and** the current Git branch equals the
    token's branch (detached HEAD never matches). Any mismatch mints a new
    segment: generate ULID, derive slug, write the first entry with its anchor
-   (per §4.4, anchored to the current head line of the root — or of the segment
-   the token previously named if it exists — else `null` in a repo with no
-   manifest content), and rewrite the token. The branch binding is
-   load-bearing: without it, one checkout switching branches would extend the
-   same segment on both branches and recreate the tail conflict this spec
-   exists to remove.
+   (per §4.4, anchored to the current head line of the root — or of the
+   segment the token previously named, but **only if that segment is
+   committed at the current branch's HEAD** — else `null` in a repo with no
+   manifest content), and rewrite the token. Filesystem presence alone never
+   qualifies a segment as an anchor target: segments are not gitignored
+   (§4.8), so a segment written but not yet committed on another branch can
+   still be sitting on disk after a checkout, and anchoring to it would
+   produce a segment whose anchor is absent from its own branch's HEAD
+   forest, failing §9.3 at CI. The branch binding is load-bearing: without it,
+   one checkout switching branches would extend the same segment on both
+   branches and recreate the tail conflict this spec exists to remove.
 2. Appends under the per-segment ledger lock (`withLedgerLock` on the segment
    path), deriving `seq`/`prev` from the segment's byte-exact locked state, as
    the single-file writer does today. Signing behavior is unchanged.
