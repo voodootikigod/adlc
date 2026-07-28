@@ -84,19 +84,61 @@ git fsck --unreachable | grep commit | awk '{print $3}' \
 git stash store -m "<original message>" <sha>
 ```
 
-## Check whether the checkout is already busy
+## Always work in a worktree — never the primary checkout
 
-Other agent sessions and `mutation-gate` runs mutate tracked files in place, so
-a dirty tree may not be the user's edit and may change under you mid-task:
+**First action of any task: create a worktree.** Not "if the checkout looks
+busy" — always.
+
+```sh
+git worktree add .worktrees/<name> -b <branch> origin/main
+cd .worktrees/<name> && npm ci --ignore-scripts    # worktrees get no node_modules
+```
+
+Never work in `/Users/voodootikigod/Projects/adlc` itself. If you need `main`,
+read it by ref (`git show origin/main:<path>`) rather than checking it out.
+
+This used to be conditional on something running. It is not, because the failure
+does not require a running process. **On 2026-07-27 the primary checkout was
+found on another agent's live branch** (`harden/secret-exposure-guard`, three
+unmerged commits) — switched out from under an in-progress session. Every
+statement that session had made about "the main checkout" silently described a
+different branch. Nothing was running; the tree was clean; `git status` looked
+fine.
+
+A worktree shares **one index and one `HEAD`** with every other user of that
+checkout. A `checkout`, `commit`, `rebase`, or `stash` from either agent lands on
+the other's work.
+
+The stakes here are higher than a merge conflict:
+
+- `mutation-gate` requires a clean tree and mutates tracked files in place.
+- `record-cross-model` derives its attestation identity from the working tree.
+- `.adlc/manifest.jsonl` is append-only and hash-chained.
+
+So a concurrent write during a gate run can mint **signed evidence describing a
+tree that never existed** — and the ledger cannot be corrected afterwards without
+breaking the chain.
+
+Two habits that follow:
+
+- **Verify the branch before any commit or gate run.** Do not assume it is the one
+  you created; it may have been moved.
+
+  ```sh
+  git rev-parse --abbrev-ref HEAD
+  ```
+
+- **Confirm `pwd` before trusting a `git status`.** The Bash tool's working
+  directory persists between calls and can be changed by an earlier `cd`, so a
+  `git status` may describe a checkout you did not mean.
+
+Still worth checking what else is active, since a worktree does not isolate you
+from a `mutation-gate` run in the same checkout:
 
 ```sh
 ps -Ao pid,etime,command | grep -E "hollow-test|mutation-gate" | grep -v grep
+git worktree list    # which branch is each checkout actually on?
 ```
-
-If something is running, work in a worktree (`.worktrees/<name>`, see
-[rules on worktrees](https://github.com/voodootikigod/adlc)) and leave the main
-checkout alone. Note the Bash tool's working directory can reset between calls —
-confirm `pwd` before trusting a `git status`.
 
 ## Stacking a PR
 
