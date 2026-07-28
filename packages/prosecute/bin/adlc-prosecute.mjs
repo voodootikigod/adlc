@@ -441,7 +441,7 @@ if (positionals[0] === 'tier-check') {
     // what could be raw ledger corruption or tampering unrelated to any key.
     const reason = manifestChainBreakReason(values.dir);
     const causeLine = reason === 'unsigned entry'
-      ? `The usual cause is that an entry was appended WITHOUT ADLC_MANIFEST_KEY set after this ledger had already adopted signing — a config gap somewhere the entry was recorded, not a rotation. Ensure the key is set for every future record. To repair: \`adlc gate-manifest repair-chain --reason "<why>" --write --attest-unsigned\` — NOTE this re-signs EVERY currently-unsigned entry in the WHOLE manifest under today's key, including any honest legacy prefix that predates signing, not just the lapsed one; review \`adlc gate-manifest verify\` output first to confirm that is what you want.\n`
+      ? `The usual cause is that an entry was appended WITHOUT ADLC_MANIFEST_KEY set after this ledger had already adopted signing — a config gap somewhere the entry was recorded, not a rotation. Ensure the key is set for every future record. To repair: \`adlc gate-manifest repair-chain --reason "<why>" --write --attest-unsigned\` — NOTE this re-signs EVERY currently-unsigned entry in the WHOLE manifest under today's key, including any honest legacy prefix that predates signing, not just the lapsed one; review \`adlc gate-manifest verify --allow-legacy-unsigned\` output first to confirm that is what you want.\n`
       : reason === 'signature invalid'
       ? `The usual cause is that ADLC_MANIFEST_KEY was ROTATED or replaced — every previously signed entry was signed with the OLD key and no longer verifies under the new one. Restore the original key, or migrate the signed history onto the new key.\n`
       : `Cause: ${reason ?? 'unknown'}. This is a ledger integrity problem (corruption, truncation, or out-of-order entries), not necessarily a key issue — investigate the manifest directly before assuming rotation.\n`;
@@ -449,7 +449,11 @@ if (positionals[0] === 'tier-check') {
       `tier-check: the manifest hash chain does NOT verify. This required check FAILS for revision ${revision}.\n` +
       `This is NOT a missing attestation. Recording a new one will not clear it: record-cross-model refuses to append onto an unverifiable chain, so a distinct-provider review run now would be wasted.\n` +
       causeLine +
-      `Diagnose with: adlc gate-manifest verify`
+      // --allow-legacy-unsigned here mirrors the SAME check that determined
+      // chainTrustworthy (manifestChainTrustworthy also uses requireSignatures:false)
+      // — the plain strict form would instead break at this ledger's own honest
+      // legacy prefix (seq 1), masking the actual break point named above.
+      `Diagnose with: adlc gate-manifest verify --allow-legacy-unsigned`
     );
     process.exit(2);
   }

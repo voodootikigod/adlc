@@ -286,6 +286,11 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
       assert.match(r.stderr, /rotat/i, 'must name key rotation as a likely cause');
       assert.match(r.stderr, /will not|cannot|does not clear/i,
         'must say recording a new attestation will not clear this');
+      // #378 — the "Diagnose with" hint must point at the SAME lenient check that
+      // determined chainTrustworthy, not the plain strict form (which would break
+      // at this ledger's own honest legacy prefix and mask the real break point).
+      assert.match(r.stderr, /Diagnose with: adlc gate-manifest verify --allow-legacy-unsigned/,
+        'the diagnose hint must include --allow-legacy-unsigned');
     } finally { cleanup(dir); }
   });
 
