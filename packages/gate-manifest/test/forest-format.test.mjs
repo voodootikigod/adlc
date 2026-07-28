@@ -370,6 +370,17 @@ describe('forest verify() — AC1 adversarial rejections', () => {
     } finally { cleanTmp(dir); }
   });
 
+  it('rejects a genuinely empty segment file (no first entry, so no anchor at all)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), []);
+      const result = verify(adlc);
+      assert.equal(result.valid, false, result.message);
+      assert.match(result.message, /empty segment file/);
+    } finally { cleanTmp(dir); }
+  });
+
   it('rejects an anchor field on a non-first segment entry', () => {
     const dir = makeTmp();
     try {

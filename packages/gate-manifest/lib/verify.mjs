@@ -88,6 +88,14 @@ import { discoverSegments, readRawLines, segmentPath, resolveAnchor, detectAncho
  */
 export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst }) {
   if (nonEmpty.length === 0) {
+    // A segment (unlike the root) MUST have a first entry carrying the fork
+    // anchor (§4.4) — an empty segment file has no anchor to check, but it
+    // must not pass by vacuous truth: that would let a truncated/crashed
+    // writer's empty file (or an empty file dropped by tampering) verify as
+    // a legitimate null-anchored zero-entry segment.
+    if (anchorOnFirst) {
+      return { valid: false, message: 'empty segment file has no first entry to carry the required anchor', count: 0, signed: false, break: { seq: null, lineNo: null, reason: 'empty segment file' }, lastRawLine: null, firstAnchor: undefined };
+    }
     return { valid: true, message: 'empty manifest', count: 0, signed: false, break: null, lastRawLine: null, firstAnchor: undefined };
   }
 

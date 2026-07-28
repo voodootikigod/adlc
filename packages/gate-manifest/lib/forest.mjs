@@ -60,7 +60,14 @@ export function discoverSegments(dir) {
   const invalid = [];
   const seenLower = new Map(); // lowercased name -> first name seen with that casing
 
-  for (const name of readdirSync(segDir).sort()) {
+  let names;
+  try {
+    names = readdirSync(segDir).sort();
+  } catch (err) {
+    return { valid: [], invalid: [{ name: '.', reason: `cannot read manifest.d/: ${err.message}` }] };
+  }
+
+  for (const name of names) {
     if (RESERVED_NAMES.has(name)) continue;
     const full = join(segDir, name);
     let st;
