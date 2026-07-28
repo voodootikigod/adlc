@@ -11,7 +11,7 @@
 //   - a tiered change with no --author-provider fails closed (exit 1).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -453,5 +453,118 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
       assert.doesNotMatch(r.stderr, /lapsed/i, 'must NOT blame a signing lapse for raw corruption');
       assert.match(r.stderr, /prev hash mismatch/i, 'must name the actual break reason');
     } finally { cleanup(dir); }
+  });
+});
+
+// AC5/AC6 — the truncation anti-rollback anchor (#355, #354 F1 follow-up), end-to-end at
+// the process boundary. `mirror-attestations` appends newly-observed cross-model entries
+// to a protected-ref store; `tier-check --attestation-store <path>` uses that store to
+// detect a dropped signed entry the tree alone cannot see. Both flags are OPTIONAL — a
+// bare `tier-check` (no `--attestation-store`) must behave exactly as it does today.
+describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#355 truncation anchor)', () => {
+  const tierChange = (d) => {
+    mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+    writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+  };
+
+  // The store must live OUTSIDE the repo's own working tree (a sibling directory, mirroring
+  // the existing ./_pr sibling-worktree pattern) — a store nested INSIDE the checkout would
+  // itself become an untracked file, perturbing the working-tree-based revision hash the
+  // gate binds to (revisionIgnorePaths only excludes .adlc/manifest.jsonl, not an arbitrary
+  // store path).
+  function attestationStoreDir() {
+    return mkdtempSync(join(tmpdir(), 'adlc-attestations-'));
+  }
+
+  it('mirror-attestations appends a new cross-model entry and is idempotent', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    const storePath = join(storeDir, 'attestations.jsonl');
+    try {
+      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+      const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+      assert.equal(rec.status, 0);
+
+      const first = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      assert.equal(first.status, 0);
+      assert.match(first.stdout, /appended 1/);
+      assert.ok(existsSync(storePath));
+
+      const second = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      assert.equal(second.status, 0);
+      assert.match(second.stdout, /appended 0/);
+    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+  });
+
+  it('mirror-attestations requires --attestation-store and a signing key', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    try {
+      const noStore = runBin(['mirror-attestations', '--dir', '.adlc'], dir);
+      assert.equal(noStore.status, 1);
+      assert.match(noStore.stderr, /--attestation-store/);
+
+      const noKey = runBin(['mirror-attestations', '--attestation-store', join(storeDir, 'attestations.jsonl'), '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
+      assert.equal(noKey.status, 1);
+      assert.match(noKey.stderr, /ADLC_MANIFEST_KEY/);
+    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+  });
+
+  it('tier-check --attestation-store passes on a missing (bootstrap) store and on a store that matches the tree', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    const storePath = join(storeDir, 'attestations.jsonl');
+    try {
+      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+
+      // Bootstrap: the store does not exist yet — must not spuriously fail.
+      const bootstrap = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+      assert.equal(bootstrap.status, 0);
+
+      // Mirror, then re-check: still passes (the store now matches the tree exactly).
+      runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      const afterMirror = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+      assert.equal(afterMirror.status, 0);
+    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+  });
+
+  it('AC1 end-to-end: --attestation-store catches a truncated revocation that a plain tier-check would miss', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    const storePath = join(storeDir, 'attestations.jsonl');
+    try {
+      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'needs-attention', '--revision', rev, '--dir', '.adlc'], dir);
+
+      // Trusted CI observes both entries and mirrors them BEFORE truncation.
+      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      assert.equal(mirrorResult.status, 0);
+      assert.match(mirrorResult.stdout, /appended 2/);
+
+      // Sanity: the revocation already stands even without the anchor.
+      const sanity = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(sanity.status, 2);
+
+      // Attacker truncates the manifest: drop the needs-attention line, keep the approve.
+      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+      const firstLine = readFileSync(manifestPath, 'utf8').split('\n').find((l) => l.trim());
+      writeFileSync(manifestPath, `${firstLine}\n`);
+
+      // THE GAP (#354 F1): without the anchor, the truncated tree wrongly PASSES.
+      const withoutAnchor = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(withoutAnchor.status, 0);
+
+      // THE FIX: with the anchor, truncation is caught — fails closed with a distinct message.
+      const withAnchor = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+      assert.equal(withAnchor.status, 2);
+      assert.match(withAnchor.stderr, /truncat/i);
+
+      // --json distinguishes truncation from a genuinely missing attestation.
+      const withAnchorJson = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath, '--json'], dir);
+      assert.equal(withAnchorJson.status, 2);
+      assert.equal(JSON.parse(withAnchorJson.stdout).truncationDetected, true);
+    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
   });
 });

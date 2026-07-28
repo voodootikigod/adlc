@@ -13,8 +13,9 @@ import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision, manifestChainBreakReason } from '../lib/cross-model.mjs';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
-import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest } from '@adlc/core';
+import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest, readEntries } from '@adlc/core';
 import { gitRepo } from './helpers.mjs';
+import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 
 // #326 hardening: attestations are HMAC-signed and the readers verify the signature
 // (which signs when the key is present) and the readers both need it set. Set it for this
@@ -622,5 +623,70 @@ describe('#365 F5/AC12 — a false base named in an attestation is never gate au
       recordCrossModelReview({ ticket: 'T1', revision: realRevision, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
       assert.equal(hasCrossModelApproveForRevision({ dir, revision: realRevision, authorProvider: 'anthropic' }), true);
     } finally { rmSync(dir, { recursive: true, force: true }); rmSync(repo.dir, { recursive: true, force: true }); }
+  });
+});
+// #355 (#354 F1 follow-up): TRUNCATION — dropping a signed revocation entirely, rather than
+// rewriting it — was the one gap #354 left open (a hash chain has no authenticated head, so a
+// dropped line is invisible to chain-only verify()). hasCrossModelApproveForRevision gains an
+// OPTIONAL `observedEntries` param sourced from the attestation-store anchor (a store outside the
+// PR-controlled tree, mirrored by trusted CI as attestations land). Omitting it must reproduce
+// today's (#354) behavior byte-for-byte — this is an opt-in hardening mode, not a required change.
+describe('truncation anti-rollback anchor (#355, #354 F1 follow-up)', () => {
+  it('AC1: without observedEntries, truncating a signed revocation wrongly PASSES the gate; with it, the gate correctly FAILS', () => {
+    const dir = tmp();
+    const storeDir = tmp();
+    try {
+      const storePath = join(storeDir, 'attestations.jsonl');
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir });
+
+      // Trusted CI observed both entries as they landed and mirrored them BEFORE truncation.
+      const { entries: observedBeforeTruncation } = readEntries('manifest', dir);
+      mirrorObservedAttestations({ prEntries: observedBeforeTruncation, storePath, key: KEY });
+
+      // Sanity: before truncation the revocation already stands (unrelated to this fix).
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
+
+      // Attacker truncates the manifest: drops the needs-attention line, keeps the approve.
+      const lp = ledgerPath('manifest', dir);
+      const firstLine = readFileSync(lp, 'utf8').split('\n').find((l) => l.trim());
+      writeFileSync(lp, `${firstLine}\n`);
+
+      // THE GAP (#354 F1): the truncated tree has a valid, shorter, validly-signed chain ending
+      // in a genuine approve — without the anchor, the gate wrongly PASSES.
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), true);
+
+      // THE FIX: with observedEntries from the anchor, the dropped revocation is detected —
+      // fails closed even though the truncated manifest alone looks clean.
+      const observedEntries = readObservedAttestations(storePath, { key: KEY });
+      assert.equal(
+        hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic', observedEntries }),
+        false,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('AC2: omitting observedEntries reproduces today\'s (#354) behavior exactly — no regression', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      const omitted = hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' });
+      const explicitlyUndefined = hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic', observedEntries: undefined });
+      assert.equal(omitted, true);
+      assert.equal(explicitlyUndefined, true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('honest residual limit: a revocation never observed by a trusted run is invisible (documented, not a regression)', () => {
+    const dir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
+      // A needs-attention was never recorded/pushed, so nothing was ever mirrored — the anchor
+      // has nothing to compare against, same exposure as an unsubmitted review.
+      assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic', observedEntries: [] }), true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

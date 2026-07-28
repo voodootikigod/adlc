@@ -25,6 +25,7 @@ import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // a fresh, well-chained approve. The chain check alone left that forge open by design.
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { getKey, verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
+import { assertNoTruncation } from './attestation-store.mjs';
 
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
@@ -319,17 +320,22 @@ function crossModelSatisfied(entries, match) {
 // so a fabricated (unsigned / wrong-key) approve is rejected even if this predicate alone
 // would have let a differently-shaped chain through.
 //
-// HONEST LIMIT (Codex #354 F1, truncation) — NOT closed by this PR. A hash chain has no
-// authenticated head, so an author who controls the PR branch can DROP a signed revocation
-// recorded on that branch (truncate the manifest to end at an earlier, still-valid signed
-// approve). Rewriting a revocation is closed (its now-invalid sig is rejected above); DROPPING
-// one is not. Making this gate a required check does NOT close it either: the required check
+// HONEST LIMIT (Codex #354 F1, truncation) — CLOSED, as an OPT-IN hardening mode, by #355. A
+// hash chain has no authenticated head, so an author who controls the PR branch can DROP a
+// signed revocation recorded on that branch (truncate the manifest to end at an earlier,
+// still-valid signed approve). Rewriting a revocation is closed (its now-invalid sig is
+// rejected above); DROPPING one is not — chain-only verify() cannot see a line that was never
+// written. Making this gate a required check does not help either: the required check
 // evaluates the attacker's truncated tree, finds a valid chain ending in the approve, and
-// passes. Because the dropped revocation is a PR-branch entry, base-anchoring cannot see it,
-// so closing this needs the LATEST state anchored OUTSIDE the PR-controlled tree — attestations
-// (or a per-PR high-water mark) written by the trusted workflow to a store the author cannot
-// rewrite (a protected branch/ref, a check-run, or an external signed checkpoint). That is a
-// storage-location change, deliberately left as follow-up; see the PR discussion.
+// passes. Because the dropped revocation is a PR-branch entry, base-anchoring cannot see it
+// either, so closing it needs the latest state anchored OUTSIDE the PR-controlled tree —
+// attestations written by the trusted workflow to a store the author cannot rewrite (an
+// orphan branch protected by a repository ruleset; see attestation-store.mjs and
+// docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md). This repo wires
+// it into `hasCrossModelApproveForRevision`'s optional `observedEntries` param and dogfoods it
+// in its own `.github/workflows/cross-model-gate.yml`; it is NOT a required ADLC capability —
+// the residual limit (a revocation is protected only once a trusted run has observed it) is
+// documented there.
 // EXPORTED (#364) so a caller can tell WHY the gate failed. hasCrossModelApproveForRevision
 // returns a bare boolean and checks this BEFORE examining any entry, so a broken chain and a
 // genuinely absent attestation are indistinguishable to it — and the CLI reported both as
@@ -372,8 +378,18 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, ke
  * `revision`, recorded for author `authorProvider` — REGARDLESS of ticket. The CI
  * trust-root-tier gate (#326) uses this: it verifies the reviewed revision was
  * cross-model approved without requiring the change to name a single ticket.
+ *
+ * OPTIONAL `observedEntries` (#355, #354 F1 follow-up — the truncation anti-rollback
+ * anchor): entries read from a store OUTSIDE the PR-controlled tree (see
+ * attestation-store.mjs), holding every cross-model entry a trusted CI run has ever
+ * observed. When provided, `assertNoTruncation` runs FIRST: if the store holds a
+ * signed entry for this revision that is missing from the manifest, the PR branch
+ * dropped it (truncation) and the gate fails closed — even though the truncated
+ * manifest alone would look like a clean, valid chain. Omitting `observedEntries`
+ * reproduces today's behavior byte-for-byte; this is opt-in hardening, not a
+ * required capability (see docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md).
  */
-export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key = getKey() } = {}) {
+export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key = getKey(), observedEntries } = {}) {
   // No key → cannot verify a signature → fail closed (an unverifiable attestation is a
   // forgeable one; the CI gate must not trust the PR-controlled manifest without the key).
   // Only the key is fast-checked here: a missing/empty `revision` or `authorProvider` is
@@ -385,5 +401,9 @@ export function hasCrossModelApproveForRevision({ dir, revision, authorProvider,
   // See hasCrossModelApprove above: root-only is deliberate here too, pending
   // slice 2's terminal-revocation redesign.
   const { entries } = readEntries('manifest', dir);
+  if (observedEntries !== undefined) {
+    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries, revision, key });
+    if (!truncationCheck.ok) return false;
+  }
   return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider), key });
 }
