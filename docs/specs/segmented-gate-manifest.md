@@ -192,18 +192,26 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
    `{segment, branch}`; it is honored only when the named segment file exists,
    its recorded lineage ULID matches, **and** the current Git branch equals the
    token's branch (detached HEAD never matches). Any mismatch mints a new
-   segment: generate ULID, derive slug, write the first entry with its anchor
-   (per §4.4, anchored to the current head line of the root — or of the
-   segment the token previously named, but **only if that segment is
-   committed at the current branch's HEAD** — else `null` in a repo with no
-   manifest content), and rewrite the token. Filesystem presence alone never
-   qualifies a segment as an anchor target: segments are not gitignored
-   (§4.8), so a segment written but not yet committed on another branch can
-   still be sitting on disk after a checkout, and anchoring to it would
-   produce a segment whose anchor is absent from its own branch's HEAD
-   forest, failing §9.3 at CI. The branch binding is load-bearing: without it,
-   one checkout switching branches would extend the same segment on both
-   branches and recreate the tail conflict this spec exists to remove.
+   segment: generate ULID, derive slug, and anchor its first entry (per §4.4)
+   by trying, in order: (a) the current head line of the root, if a root
+   exists; (b) the current head line of the segment the token previously
+   named, but only if that segment is committed at the current branch's HEAD;
+   (c) the current head line of any other already-committed segment at the
+   current branch's HEAD, chosen deterministically (lexicographically
+   smallest segment filename); (d) `anchor: null`, only when none of (a)–(c)
+   apply, i.e. the current branch's HEAD forest has no root and no segments —
+   matching the §9.3 CI rule so a writer never mints a locally-valid anchor
+   that CI then rejects. Filesystem presence alone never qualifies a segment
+   for (b): segments are not gitignored (§4.8), so a segment written but not
+   yet committed on another branch can still be sitting on disk after a
+   checkout, and anchoring to it would produce a segment whose anchor is
+   absent from its own branch's HEAD forest, failing §9.3 at CI. Anchor choice
+   is bookkeeping, not a trust boundary — §9.3 already establishes that
+   history pinning comes from committed-byte append-only, not from where
+   anchors point — so (c)'s arbitrary-but-deterministic pick among independent
+   lineages is sufficient. The branch binding is load-bearing: without it, one
+   checkout switching branches would extend the same segment on both branches
+   and recreate the tail conflict this spec exists to remove.
 2. Appends under the per-segment ledger lock (`withLedgerLock` on the segment
    path), deriving `seq`/`prev` from the segment's byte-exact locked state, as
    the single-file writer does today. Signing behavior is unchanged.
