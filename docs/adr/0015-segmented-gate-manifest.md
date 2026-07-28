@@ -1,6 +1,6 @@
 # ADR 0015: Segmented gate-manifest — a chain forest instead of one chain
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-07-27
 
