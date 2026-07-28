@@ -71,7 +71,7 @@ export function InstallCommand({ command, label, beta = false }: InstallCommandP
         <button
           type="button"
           onClick={copy}
-          className="rec-mono shrink-0 px-4 text-[10px] tracking-[0.14em] transition-colors"
+          className="rec-mono shrink-0 px-4 text-[11px] tracking-[0.14em] transition-colors"
           style={{
             borderLeft: '1px solid #34363d',
             background: '#26272c',

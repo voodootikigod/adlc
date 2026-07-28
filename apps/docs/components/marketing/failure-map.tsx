@@ -29,7 +29,7 @@ export function FailureMap() {
             className="grid grid-cols-[46px_minmax(0,1fr)] gap-y-1 md:grid-cols-[46px_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.9fr)] md:gap-y-0"
             style={{ borderBottom: '1px solid var(--rec-rule)', background: 'var(--rec-paper-raised)' }}
           >
-            <div className="rec-mono px-3 py-3 text-[12px]" style={{ color: '#b4571a' }}>
+            <div className="rec-mono px-3 py-3 text-[12px]" style={{ color: '#a24e15' }}>
               {id}
             </div>
             <div className="px-3 py-3 text-[14.5px] font-semibold" style={{ color: 'var(--rec-ink)' }}>

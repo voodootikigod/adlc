@@ -16,7 +16,6 @@ import {
   ClauseTitle,
   ExhibitOutput,
   ExitCode,
-  FieldBlock,
   RecordBody,
   RecordLink,
   RecordRail,
@@ -52,9 +51,10 @@ approval chain naming what acts at each phase, and two named human attestations,
 understands there is an audit trail a non-engineer could read. Both act on the same honest account.
 
 FIRST VIEWPORT: Terminal-dark masthead, then the record rail naming ADLC-CR-0001 and its
-standing. A four-field header block. §1 STATEMENT sets the thesis at panel scale in narrow
-Archivo. §2 IMPLEMENT carries the install command as the field's executable value — the
-primary action, rendered as a ruled control on terminal ground, not a button.
+standing. §1 STATEMENT sets the thesis at panel scale in narrow Archivo. §2 IMPLEMENT
+carries the install command as the field's executable value — the primary action, rendered
+as a ruled control on terminal ground, not a button. (The comp's four-field header block
+was a direction test, not a spec; it delayed the thesis and was dropped in refinement.)
 
 FORM: Composition A of three rendered comps, chosen by the user over a chain-led and a
 pinned claim/exhibit split. Staging: the record's own header-block-then-clauses sequence.
@@ -89,7 +89,7 @@ export default function HomePage() {
       <RecordRail
         items={[
           { k: 'Record', v: 'ADLC-CR-0001' },
-          { k: '', v: 'Open — awaiting implementation', open: true },
+          { k: 'Status', v: 'Open', open: true },
           { k: 'Control points', v: PHASES.length },
           // ALL_PACKAGES is every published package, not a gate subset — the
           // data module draws no such distinction. Labelling it "gate CLIs"
@@ -100,23 +100,6 @@ export default function HomePage() {
       />
 
       <RecordBody>
-        <FieldBlock
-          fields={[
-            { label: 'Subject', value: 'Adopt the Agentic Development Lifecycle' },
-            { label: 'Class', value: 'Process change · software delivery' },
-            { label: 'Scope', value: 'macOS · Linux · Node 18+', mono: true },
-            {
-              // The installer mutates the machine, not just the repo: `npm install -g`
-              // plus native plugins for each detected harness. Reverting the repo
-              // cannot remove either, so the field says what a revert actually
-              // covers rather than implying a clean one-command rollback.
-              label: 'Back-out',
-              value: 'revert the repo · uninstall the CLI separately',
-              mono: true,
-            },
-          ]}
-        />
-
         {/* §1 — the thesis, at panel scale */}
         <Clause
           n="1"
@@ -151,7 +134,7 @@ export default function HomePage() {
             </>
           }
         >
-          <InstallCommand command={UNIVERSAL_INSTALL} label="Install the toolkit and your agent integrations" />
+          <InstallCommand command={UNIVERSAL_INSTALL} />
           <p className="mt-3 max-w-[72ch] text-[13px] leading-[1.55]" style={{ color: 'var(--rec-ink-3)' }}>
             macOS and Linux, Node 18+. Then{' '}
             <code className="rec-mono" style={{ color: 'var(--rec-ink)' }}>
@@ -159,6 +142,11 @@ export default function HomePage() {
             </code>{' '}
             in your repository. Cursor and OpenCode need one manual step, which the installer prints —{' '}
             <RecordLink href="/integrations">see what gets installed</RecordLink>. Windows is not supported.
+            {/* The installer mutates the machine, not just the repo: `npm install -g`
+                plus native plugins per detected harness. Reverting the repo removes
+                neither, so the back-out names both steps rather than implying a
+                clean one-command rollback. */}{' '}
+            Back-out: revert your repository, and uninstall the CLI separately.
           </p>
         </Clause>
 
@@ -207,7 +195,7 @@ export default function HomePage() {
                 className="grid grid-cols-[46px_minmax(0,1fr)] gap-y-1 md:grid-cols-[46px_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.8fr)] md:gap-y-0"
                 style={{ borderBottom: '1px solid var(--rec-rule)', background: 'var(--rec-paper-raised)' }}
               >
-                <div className="rec-mono px-3 py-3 text-[12px]" style={{ color: '#b4571a' }}>
+                <div className="rec-mono px-3 py-3 text-[12px]" style={{ color: '#a24e15' }}>
                   {id}
                 </div>
                 <div className="px-3 py-3 text-[14.5px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
@@ -238,7 +226,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-[1180px] px-6 py-14 md:px-8 md:py-20">
           <div className="flex flex-col gap-x-6 md:flex-row">
             <div className="mb-4 shrink-0 md:mb-0 md:w-[104px] md:pt-1">
-              <div className="rec-legend" style={{ color: '#686b78' }}>
+              <div className="rec-legend" style={{ color: '#9093a0' }}>
                 §5 Exhibits
               </div>
             </div>
@@ -263,7 +251,7 @@ export default function HomePage() {
                       <b className="rec-mono text-[11px] font-semibold tracking-[0.1em]" style={{ color: '#cbcdd2' }}>
                         EXHIBIT 5.{i + 1}
                       </b>
-                      <span className="text-[12.5px]" style={{ color: '#686b78' }}>
+                      <span className="text-[12.5px]" style={{ color: '#9093a0' }}>
                         {gate.gate}
                       </span>
                     </figcaption>
@@ -327,7 +315,7 @@ export default function HomePage() {
           title={<ClauseTitle>Spend heavy at the ends, light in the middle.</ClauseTitle>}
         >
           <blockquote
-            className="mt-7 max-w-[36ch] text-[clamp(21px,2.6vw,30px)] font-semibold leading-[1.22] tracking-[-0.02em]"
+            className="mt-7 max-w-[36ch] text-[clamp(21px,2.6vw,30px)] font-semibold leading-[1.3] tracking-[-0.02em]"
             style={{ color: 'var(--rec-ink)', borderLeft: '1px solid #ef7c2a', paddingLeft: 20 }}
           >
             The unit of account is cost per merged, verified change. Not tokens per developer per month.
@@ -384,7 +372,7 @@ export default function HomePage() {
                         className="h-px flex-1"
                         style={{ background: 'var(--rec-gate-edge)' }}
                       />
-                      <span className="rec-mono text-[10px] tracking-[0.12em]" style={{ color: 'var(--rec-gate-ink)' }}>
+                      <span className="rec-mono text-[11px] tracking-[0.12em]" style={{ color: 'var(--rec-gate-ink)' }}>
                         SIGNED BY A PERSON
                       </span>
                     </div>

@@ -231,7 +231,7 @@ inks (`rec-pass-ink`, `rec-fail-ink`, `rec-gate-ink`) that clear 4.5:1 on paper.
 Never put the terminal-bright green, red, or yellow on paper as text.
 
 **Semantics are fixed:** green passes, red refuses, amber is the human gate.
-Orange is reserved for the failure register's F-identifiers (`#b4571a` on paper).
+Orange is reserved for the failure register's F-identifiers (`#a24e15` on paper — the palette orange darkened to clear 4.5:1 on the raised paper tone).
 Blue is links only.
 
 ## Typography
