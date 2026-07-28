@@ -108,7 +108,13 @@ Recorded by the ceremony as the final root entry, always signed:
 For every standing approve in the root, the ceremony appends one signed
 `cross-model-review` entry with `data.verdict: "needs-attention"`,
 `data.sealedByCutover: true`, and the same `provider`, `authorProvider`,
-`revision` (and `ticket` when present) as the sealed approve.
+`revision` (and `ticket` when present) as the sealed approve. This is a
+deliberate reset, not an oversight: §6's terminal-revocation rule has no
+`sealedByCutover` exception, so every reader — pre-forest and forest-aware
+alike — evaluates a sealed tuple as revoked. Migration is the one moment every
+standing approval is known to predate the forest's trust semantics, so the
+ceremony forces fresh re-approval under the new model rather than grandfathering
+old ones in; §8 step 7 names this to the operator as a required follow-up.
 
 ### 4.7 Activation marker
 
