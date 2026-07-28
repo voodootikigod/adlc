@@ -55,14 +55,20 @@ describe('readObservedAttestations', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('excludes an entry whose signature does not verify under the given key', () => {
+  it('round-5 codex finding: FAILS CLOSED (throws) rather than silently excluding an entry whose signature does not verify', () => {
+    // A present-but-invalid signature in the TRUSTED STORE is either an
+    // ADLC_MANIFEST_KEY rotation (every historical entry needs migrating onto the
+    // new key — the same treatment this repo already gives the main manifest
+    // chain, see the #364 tests) or tampering by whoever has bypass-level write
+    // access to adlc-attestations. Silently treating it as "never observed" would
+    // let a truncated revocation go undetected; the store must be migrated or
+    // rebootstrapped, not quietly ignored.
     const dir = tmp();
     try {
       const storePath = join(dir, 'attestations.jsonl');
       const entry = signedEntry(WRONG_KEY, { seq: 1, revision: 'rev-1' });
       writeFileSync(storePath, `${JSON.stringify(entry)}\n`);
-      const result = readObservedAttestations(storePath, { key: KEY });
-      assert.deepEqual(result, []);
+      assert.throws(() => readObservedAttestations(storePath, { key: KEY }), /signature does not verify/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -156,6 +162,17 @@ describe('mirrorObservedAttestations', () => {
       const appended = mirrorObservedAttestations({ prEntries: [forged], storePath, key: KEY });
       assert.equal(appended, 0);
       assert.ok(!existsSync(storePath) || readFileSync(storePath, 'utf8').trim() === '');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('round-5 codex finding: refuses to mirror onto an EXISTING store that already contains a tampered entry (dedup must not silently mask corruption)', () => {
+    const dir = tmp();
+    try {
+      const storePath = join(dir, 'attestations.jsonl');
+      const tampered = signedEntry(WRONG_KEY, { seq: 1, revision: 'rev-1', verdict: 'needs-attention' });
+      writeFileSync(storePath, `${JSON.stringify(tampered)}\n`);
+      const fresh = signedEntry(KEY, { seq: 2, revision: 'rev-1', verdict: 'approve' });
+      assert.throws(() => mirrorObservedAttestations({ prEntries: [fresh], storePath, key: KEY }), /signature does not verify/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

@@ -401,7 +401,16 @@ if (positionals[0] === 'mirror-attestations') {
   }
   const { entries } = readEntries('manifest', values.dir);
   const crossModelEntries = entries.filter((entry) => (entry.gate ?? entry.type) === CROSS_MODEL_GATE);
-  const appended = mirrorObservedAttestations({ prEntries: crossModelEntries, storePath: values['attestation-store'], key });
+  let appended;
+  try {
+    appended = mirrorObservedAttestations({ prEntries: crossModelEntries, storePath: values['attestation-store'], key });
+  } catch (err) {
+    // #355 round-5 cross-model review (codex): the store itself can be tampered with
+    // (or the key rotated) — mirrorObservedAttestations fails closed rather than
+    // silently continuing onto a corrupted store. Surface it through the CLI's
+    // normal error path, not an uncaught exception.
+    opError(err.message);
+  }
   if (values.json) {
     printJson({ appended });
   } else {
@@ -470,7 +479,17 @@ if (positionals[0] === 'tier-check') {
   // distinctly from "no attestation" below; passing `undefined` when the flag is absent
   // makes hasCrossModelApproveForRevision behave exactly as it did before this existed.
   const attestationStorePath = values['attestation-store'];
-  const observedEntries = attestationStorePath ? readObservedAttestations(attestationStorePath, { key }) : undefined;
+  let observedEntries;
+  if (attestationStorePath) {
+    try {
+      observedEntries = readObservedAttestations(attestationStorePath, { key });
+    } catch (err) {
+      // #355 round-5 cross-model review (codex): a tampered/rotated-key store entry
+      // now fails closed (see attestation-store.mjs) instead of being silently
+      // dropped. Surface it through the CLI's normal error path.
+      opError(`tier-check: ${err.message}`);
+    }
+  }
 
   const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, observedEntries });
   // #364 — WHY it failed, not just THAT it failed. hasCrossModelApproveForRevision checks the

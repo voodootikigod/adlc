@@ -627,4 +627,29 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
       rmSync(storeDir, { recursive: true, force: true });
     }
   });
+
+  it('round-5 codex finding: a tampered store entry fails tier-check AND mirror-attestations closed, not silently ignored', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    const storePath = join(storeDir, 'attestations.jsonl');
+    try {
+      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      assert.equal(mirrorResult.status, 0);
+
+      // Tamper the mirrored store entry in place: content changed, stale sig kept.
+      const stored = JSON.parse(readFileSync(storePath, 'utf8').trim());
+      stored.data = { ...stored.data, verdict: 'needs-attention' };
+      writeFileSync(storePath, `${JSON.stringify(stored)}\n`);
+
+      const tierCheckResult = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+      assert.equal(tierCheckResult.status, 1, 'a tampered store must fail closed (operational error), not silently pass or silently ignore the tampered line');
+      assert.match(tierCheckResult.stderr, /signature does not verify/);
+
+      const secondMirror = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      assert.equal(secondMirror.status, 1, 'mirror-attestations must also refuse to write onto a store it cannot fully verify');
+      assert.match(secondMirror.stderr, /signature does not verify/);
+    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+  });
 });

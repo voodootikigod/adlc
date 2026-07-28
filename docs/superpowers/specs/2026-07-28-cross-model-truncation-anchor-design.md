@@ -186,7 +186,7 @@ small, non-overlapping additive one (`--allow-unsigned` next to `--attestation-s
 
 ## Cross-model review findings (codex, distinct from the anthropic author)
 
-Four review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
+Five review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
 made round 1's diff include unrelated upstream files):
 
 1. **Bootstrap run had no store file to `git add`** — `mirrorObservedAttestations` correctly never
@@ -233,6 +233,19 @@ made round 1's diff include unrelated upstream files):
    "ROLLBACK/TRUNCATION DETECTED" in the CLI's attribution message. Fixed by extracting the scoping
    rule into an exported `scopeObservedEntriesToAuthor()` both call sites share, so the two paths
    cannot drift apart again.
+8. **A tampered or key-rotated store entry was silently treated as absent** — `readObservedAttestations`
+   filtered out any entry whose signature no longer verified, and `mirrorObservedAttestations`'s
+   dedup read did the same. A present-but-invalid signature is either an `ADLC_MANIFEST_KEY` rotation
+   (every historical entry needs migrating onto the new key, exactly like the main manifest chain
+   already requires — see the #364 tests) or tampering by whoever has bypass-level write access to
+   the store's branch — silently dropping it would let a truncated revocation go undetected, and a
+   stale-but-present `sig` would permanently block a valid re-append via dedup, masking the
+   corruption. **This one was a judgment call, not an automatic fix**: the alternative (leave it
+   silent) is a strict subset of the already-accepted "bypass scope is repo-wide" residual risk and
+   avoids a new failure mode, but the chosen fix — fail closed on both read paths, matching the
+   established key-rotation-is-a-migration-event precedent — was confirmed with the repo owner
+   before implementing, given it makes ordinary key rotation an operational event requiring an
+   explicit store migration/rebootstrap, not something to apply reflexively.
 
 One finding was surfaced but NOT changed: the ruleset's bypass being repo-wide (not scoped to just
 `cross-model-gate.yml`) was already known, documented, and accepted — see the residual-scope note in

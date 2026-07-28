@@ -196,7 +196,15 @@ distributed template, unlike `docs/ci/*.yml`).
 observed it (pushed to the PR and the workflow ran at least once before truncation). A
 recorded-but-never-pushed revocation is invisible to everyone — the same exposure as an
 unsubmitted review. This is strictly better than the forgery/rewrite-only gate above, not a
-claim of completeness. See
+claim of completeness.
+
+**A tampered or key-rotated store entry FAILS CLOSED, not silently ignored.** `readObservedAttestations`
+and `mirrorObservedAttestations` both throw if any store entry's signature does not verify —
+this is either an `ADLC_MANIFEST_KEY` rotation (every historical store entry needs migrating
+onto the new key, the same treatment the main manifest chain already requires) or tampering by
+whoever has bypass-level write access to `adlc-attestations`. Rotating the signing key is
+therefore a migration event for this store too: rebootstrap or re-sign it, don't expect
+`tier-check --attestation-store` to keep working across a rotation without that step. See
 [the design doc](../../docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md)
 for the full threat model, the premortem/parallax findings that shaped the final design, and
 why the store path must live outside the tree being tiered.
