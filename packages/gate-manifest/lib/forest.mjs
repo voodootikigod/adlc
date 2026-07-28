@@ -238,7 +238,31 @@ export function readManifestForest(dir = ADLC_DIR) {
     bySegment.set(name, { entries: parsed.entries, anchor });
   }
 
+  // Depth from root/null (0), walking anchor.segment links. Today's writer
+  // (§7.1) only ever anchors to root or null, so every segment is depth 0 in
+  // practice — but the format (§4.4) also allows anchoring to another
+  // segment (repair-chain, §10, may produce this), and the (anchored-to
+  // segment, anchored-to seq, ULID) sort key alone would then sort a child
+  // BEFORE its parent whenever the parent's name string-sorts after the
+  // child's (e.g. parent 'root' vs a lowercase-named parent segment).
+  // Sorting by depth first guarantees a parent always precedes any segment
+  // anchored to it, transitively; the spec's 3-key tuple then breaks ties
+  // among segments at the same depth.
+  const depthCache = new Map();
+  function depthOf(name, seen = new Set()) {
+    if (depthCache.has(name)) return depthCache.get(name);
+    if (seen.has(name)) return 0; // cycle — verify() rejects this forest; don't hang here
+    seen.add(name);
+    const anchor = bySegment.get(name)?.anchor;
+    const target = anchor?.segment;
+    const depth = target && target !== 'root' && bySegment.has(target) ? depthOf(target, seen) + 1 : 0;
+    depthCache.set(name, depth);
+    return depth;
+  }
+
   const orderedNames = [...segmentNames].sort((a, b) => {
+    const depthDiff = depthOf(a) - depthOf(b);
+    if (depthDiff !== 0) return depthDiff;
     const aa = bySegment.get(a).anchor;
     const bb = bySegment.get(b).anchor;
     const aSeg = aa?.segment ?? '';

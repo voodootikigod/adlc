@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { verify } from '../lib/verify.mjs';
-import { discoverSegments, resolveAnchor, detectAnchorCycle } from '../lib/forest.mjs';
+import { discoverSegments, resolveAnchor, detectAnchorCycle, readManifestForest } from '../lib/forest.mjs';
 import { sha256 } from '../../core/index.mjs';
 import { signEntry, KEY_ENV } from '../lib/sign.mjs';
 
@@ -403,6 +403,29 @@ describe('forest verify() — AC1 adversarial rejections', () => {
     // §4.4: appendManifestEntry MUST reject payloads that supply `anchor` —
     // covered by the segment-writer slice's own test suite once that lands.
     assert.ok(true);
+  });
+});
+
+describe('readManifestForest — ordering', () => {
+  it('a segment anchored to another segment sorts AFTER its parent, even when its name string-sorts first', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      // Named so a naive string comparison of anchor.segment would put the
+      // child ('a-...', anchored to 'z-...') before its parent ('z-...',
+      // anchored to root) — depth-based ordering must still put the parent
+      // first regardless of filename.
+      const parentName = 'z-parent-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
+      const childName = 'a-child-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
+      const parentLines = buildChainLines([{ gate: 'parent-entry', anchor: null }]);
+      writeLines(join(adlc, 'manifest.d', parentName), parentLines);
+      const childAnchor = { segment: parentName, seq: 1, lineHash: lineHashOf(parentLines, 0) };
+      writeLines(join(adlc, 'manifest.d', childName), buildChainLines([{ gate: 'child-entry', anchor: childAnchor }]));
+
+      const { entries } = readManifestForest(adlc);
+      const gates = entries.map((e) => e.gate);
+      assert.deepEqual(gates, ['parent-entry', 'child-entry']);
+    } finally { cleanTmp(dir); }
   });
 });
 
