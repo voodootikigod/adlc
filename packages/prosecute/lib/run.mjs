@@ -51,12 +51,8 @@ function revisionIgnorePaths(cwd, dir, input, inputPath) {
  * bare `adlc-prosecute` invocation would use.
  */
 export function resolveProsecutionRevision({ cwd = process.cwd(), dir = ADLC_DIR, base = 'main', revision, input, inputPath } = {}) {
-  return resolveChangeSetRevision({
-    cwd,
-    base,
-    revision,
-    ignorePaths: revisionIgnorePaths(cwd, dir, input, inputPath),
-  });
+  const ignorePaths = revisionIgnorePaths(cwd, dir, input, inputPath);
+  return resolveChangeSetRevision({ cwd, base, revision, ignorePaths });
 }
 
 function ticketDefinitionHash(cwd, ticket, dir) {
