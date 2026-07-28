@@ -37,5 +37,10 @@ export function GET() {
     '',
   ].join('\n');
 
-  return new Response(header + llms(source).index());
+  // The Fumadocs index emits site-relative links. Everything above is
+  // absolute, and an LLM consuming llms.txt away from the site has no base
+  // URL to resolve `/docs/...` against, so absolutize them to match.
+  const docsIndex = llms(source).index().replaceAll('](/docs/', `](${SITE_URL}/docs/`);
+
+  return new Response(header + docsIndex);
 }
