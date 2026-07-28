@@ -58,4 +58,20 @@ describe('cross-model-gate.yml — #355 truncation anchor structural properties 
   it('no longer names #355 as an open follow-up', () => {
     assert.doesNotMatch(text, /truncation is tracked follow-up/i);
   });
+
+  it('does not persist a write-capable credential before npm ci runs (round-3 codex finding)', () => {
+    const checkoutIdx = text.indexOf('actions/checkout');
+    const npmCiIdx = text.indexOf('run: npm ci'); // the actual invocation, not an incidental mention
+    const persistIdx = text.indexOf('persist-credentials: false');
+    const credentialSetupIdx = text.indexOf('AUTHORIZATION: basic');
+    assert.ok(checkoutIdx > -1 && npmCiIdx > -1 && persistIdx > -1 && credentialSetupIdx > -1);
+    assert.ok(checkoutIdx < persistIdx && persistIdx < npmCiIdx, 'persist-credentials: false must apply to the checkout BEFORE npm ci runs');
+    assert.ok(npmCiIdx < credentialSetupIdx, 'the write-capable credential must not be configured until after npm ci has already run');
+  });
+
+  it('mirror-attestations only runs after a scoped credential is configured, not before', () => {
+    const credentialSetupIdx = text.indexOf('AUTHORIZATION: basic');
+    const mirrorRunIdx = text.indexOf('mirror-attestations');
+    assert.ok(credentialSetupIdx > -1 && mirrorRunIdx > -1 && credentialSetupIdx < mirrorRunIdx);
+  });
 });

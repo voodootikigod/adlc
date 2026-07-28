@@ -385,7 +385,20 @@ if (positionals[0] === 'mirror-attestations') {
   if (!values['attestation-store']) opError('mirror-attestations requires --attestation-store PATH');
   const key = getKey();
   if (!key) opError('mirror-attestations requires ADLC_MANIFEST_KEY to verify which entries are trustworthy to mirror');
-  const { entries } = readEntries('manifest', values.dir);
+  // #355 round-3 cross-model review (codex): each entry's OWN signature is still
+  // verified inside mirrorObservedAttestations, but that alone is not enough — a
+  // signed entry copied out of context from an unrelated, legitimate manifest is
+  // individually valid yet says nothing trustworthy about THIS manifest. Refuse to
+  // write to the shared, permanent store from a manifest whose chain does not verify
+  // or that has any unparseable line; the later gate step will reject this PR anyway,
+  // but the store must never be poisoned with entries from an untrustworthy read.
+  if (!manifestChainTrustworthy(values.dir)) {
+    opError(`mirror-attestations: the manifest chain at ${values.dir} does not verify — refusing to mirror from an untrustworthy manifest into the shared attestation store`);
+  }
+  const { entries, skipped } = readEntries('manifest', values.dir);
+  if (skipped.length > 0) {
+    opError(`mirror-attestations: the manifest at ${values.dir} has ${skipped.length} malformed line(s) — refusing to mirror from an untrustworthy manifest into the shared attestation store`);
+  }
   const crossModelEntries = entries.filter((entry) => (entry.gate ?? entry.type) === CROSS_MODEL_GATE);
   const appended = mirrorObservedAttestations({ prEntries: crossModelEntries, storePath: values['attestation-store'], key });
   if (values.json) {

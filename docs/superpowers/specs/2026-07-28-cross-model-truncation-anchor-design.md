@@ -186,8 +186,8 @@ small, non-overlapping additive one (`--allow-unsigned` next to `--attestation-s
 
 ## Cross-model review findings (codex, distinct from the anthropic author)
 
-Two review rounds against the actual diff (the second corrected for a stale local `main` ref that
-made the first round's diff include unrelated upstream files):
+Three review rounds against the actual diff (round 2 corrected for a stale local `main` ref that
+made round 1's diff include unrelated upstream files):
 
 1. **Bootstrap run had no store file to `git add`** — `mirrorObservedAttestations` correctly never
    creates `attestations.jsonl` when there is nothing to append (the right library behavior), but
@@ -210,6 +210,18 @@ made the first round's diff include unrelated upstream files):
    hash); an observed revocation from one author's context would falsely block a different
    author's own legitimate review at the same revision. Fixed: `hasCrossModelApproveForRevision`
    now scopes `observedEntries` to the run's `authorProvider` before the truncation check.
+5. **`npm ci` ran with a persisted write-capable credential available** — `actions/checkout`
+   persists git credentials by default, and this workflow's job now has `contents: write`; a
+   compromised transitive dependency's install/postinstall script could have used that ambient
+   credential to push a tampered `adlc-attestations` before the mirror/gate steps ever ran. Fixed:
+   `persist-credentials: false` on the initial checkout, with the write-capable credential
+   configured explicitly (the same header `actions/checkout` installs) in a dedicated step
+   immediately before the mirror+push step — well after `npm ci` has already run with none.
+6. **`mirror-attestations` wrote to the store before proving the manifest chain trustworthy** —
+   each entry's own signature was verified, but a signed entry copied out of context from an
+   unrelated, legitimate manifest is individually valid while saying nothing about the CURRENT
+   manifest's integrity. Fixed: `mirror-attestations` now calls `manifestChainTrustworthy()` and
+   checks for skipped/malformed lines, refusing to mirror from an untrustworthy manifest.
 
 One finding was surfaced but NOT changed: the ruleset's bypass being repo-wide (not scoped to just
 `cross-model-gate.yml`) was already known, documented, and accepted — see the residual-scope note in

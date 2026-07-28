@@ -567,4 +567,27 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
       assert.equal(JSON.parse(withAnchorJson.stdout).truncationDetected, true);
     } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
   });
+
+  it('round-3 codex finding: mirror-attestations refuses to write from a manifest whose chain is not trustworthy', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir();
+    const storePath = join(storeDir, 'attestations.jsonl');
+    try {
+      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+      const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+      assert.equal(rec.status, 0);
+
+      // Corrupt the manifest's signature (present-but-invalid), matching the #354 F1
+      // tamper pattern: the chain is no longer trustworthy even though the line parses.
+      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+      const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
+      entry.sig = `${entry.sig.slice(0, -4)}dead`;
+      writeFileSync(manifestPath, `${JSON.stringify(entry)}\n`);
+
+      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+      assert.equal(mirrorResult.status, 1, 'must fail closed rather than mirror from an untrustworthy manifest');
+      assert.match(mirrorResult.stderr, /chain/i);
+      assert.ok(!existsSync(storePath), 'the store must not be created/modified from a broken-chain manifest');
+    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+  });
 });

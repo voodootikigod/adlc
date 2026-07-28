@@ -73,6 +73,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # base history so the PR base SHA resolves for the diff
+          # #355 round-3 cross-model review (codex): actions/checkout persists a
+          # write-capable git credential by default. contents: write is now this
+          # workflow's permission (needed ONLY for the later mirror/push step), so an
+          # ambient persisted credential here would hand every base-lockfile
+          # install/postinstall script (npm ci, below) that same write access — a
+          # dependency compromise becomes a push primitive against a trust anchor.
+          # Set up the write credential explicitly, later, ONLY for the step that push
+          # actually needs (see "Configure a scoped git credential" below).
+          persist-credentials: false
 
       - name: Setup Node.js 20
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -109,6 +118,13 @@ jobs:
             git -C ./_attestations checkout --orphan adlc-attestations
             git -C ./_attestations rm -rf . --quiet 2>/dev/null || true
           fi
+
+      # Write credential begins HERE, not at checkout (see the persist-credentials note above)
+      # — this is the same header actions/checkout would install, just deferred until the
+      # narrow step that actually needs write access, well after npm ci already ran with none.
+      - name: Configure a scoped git credential for the attestation-store push
+        run: |
+          git config --global "http.https://github.com/.extraheader" "AUTHORIZATION: basic $(echo -n "x-access-token:${{ secrets.GITHUB_TOKEN }}" | base64 -w 0)"
 
       # Mirror + commit + push as ONE retryable cycle — cross-model review round 1 (codex)
       # caught two real bugs the earlier two-step version had:
