@@ -110,27 +110,45 @@ jobs:
             git -C ./_attestations rm -rf . --quiet 2>/dev/null || true
           fi
 
-      - name: Mirror newly-observed cross-model attestations — BASE code, PR data as input
-        working-directory: ./_pr
+      # Mirror + commit + push as ONE retryable cycle — cross-model review round 1 (codex)
+      # caught two real bugs the earlier two-step version had:
+      #   1. mirrorObservedAttestations returns early WITHOUT creating attestations.jsonl when
+      #      there is nothing new to append (the correct behavior for that library — see
+      #      lib/attestation-store.mjs). A bootstrap run before any cross-model attestation has
+      #      ever been recorded therefore has NO file to `git add`, which must not be an error.
+      #   2. `concurrency.group` only serializes runs for the SAME PR; two different PRs both
+      #      pushing to the shared adlc-attestations branch can race — a plain push has no
+      #      retry, so an unrelated PR's push can be spuriously rejected (non-fast-forward).
+      # On a push rejection this RESETS to the fresh remote tip and RE-RUNS mirror-attestations
+      # (rather than rebasing the stale local commit), so the retry is a clean re-derivation
+      # against current state, not a git-level text merge of two independent JSONL appends.
+      - name: Mirror newly-observed cross-model attestations and push (retries on a concurrent push from another PR)
         env:
           ADLC_MANIFEST_KEY: ${{ secrets.ADLC_MANIFEST_KEY }}
         run: |
-          node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" mirror-attestations \
-            --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl" --dir .adlc
-
-      - name: Push the updated attestation store (failure here FAILS the job — never gate on an unlanded update)
-        working-directory: ./_attestations
-        run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add attestations.jsonl
-          if git diff --cached --quiet; then
-            echo "no new attestations to mirror this run"
-          else
-            git commit -q -m "mirror cross-model attestations for PR #${{ github.event.pull_request.number }}"
-            git push origin HEAD:adlc-attestations
-          fi
+          git -C ./_attestations config user.name "github-actions[bot]"
+          git -C ./_attestations config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4 5; do
+            (cd ./_pr && node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" mirror-attestations \
+              --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl" --dir .adlc)
+            if [ -f ./_attestations/attestations.jsonl ]; then
+              git -C ./_attestations add attestations.jsonl
+            fi
+            if git -C ./_attestations diff --cached --quiet; then
+              echo "no new attestations to mirror this run"
+              exit 0
+            fi
+            git -C ./_attestations commit -q -m "mirror cross-model attestations for PR #${{ github.event.pull_request.number }}"
+            if git -C ./_attestations push origin HEAD:adlc-attestations; then
+              exit 0
+            fi
+            echo "push rejected (attempt $attempt/5) — another PR's mirror landed first; refetching and retrying"
+            git -C ./_attestations fetch origin adlc-attestations
+            git -C ./_attestations reset --hard origin/adlc-attestations
+          done
+          echo "could not push the attestation store after 5 attempts — failing closed, never gating on an unlanded update" >&2
+          exit 1
 
       - name: Verify cross-model attestation — BASE code, PR data, key isolated from PR code
         working-directory: ./_pr

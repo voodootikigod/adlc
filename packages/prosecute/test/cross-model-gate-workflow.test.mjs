@@ -11,13 +11,23 @@ const WORKFLOW_PATH = join(new URL('../../../', import.meta.url).pathname, '.git
 const text = readFileSync(WORKFLOW_PATH, 'utf8');
 
 describe('cross-model-gate.yml — #355 truncation anchor structural properties (AC6)', () => {
-  it('the mirror step runs and pushes BEFORE the gate step', () => {
+  it('the mirror+push step runs BEFORE the gate step', () => {
     const mirrorIdx = text.indexOf('mirror-attestations');
-    const pushIdx = text.indexOf('Push the updated attestation store');
-    const gateIdx = text.indexOf('tier-check');
+    const pushIdx = text.indexOf('git -C ./_attestations push origin');
+    const gateIdx = text.lastIndexOf('tier-check');
     assert.ok(mirrorIdx > -1 && pushIdx > -1 && gateIdx > -1, 'all three steps must be present');
     assert.ok(mirrorIdx < pushIdx, 'mirror must run before push');
     assert.ok(pushIdx < gateIdx, 'push must run before the gate step');
+  });
+
+  it('bootstrap (no file ever created) is not a git-add error (round-1 codex finding)', () => {
+    assert.match(text, /if \[ -f \.\/_attestations\/attestations\.jsonl \]; then/);
+  });
+
+  it('a push rejected by a concurrent PR is retried against the fresh tip, not treated as fatal (round-1 codex finding)', () => {
+    assert.match(text, /for attempt in 1 2 3 4 5; do/);
+    assert.match(text, /git -C \.\/_attestations fetch origin adlc-attestations/);
+    assert.match(text, /git -C \.\/_attestations reset --hard origin\/adlc-attestations/);
   });
 
   it('grants contents: write (needed only for the mirror-push step)', () => {
