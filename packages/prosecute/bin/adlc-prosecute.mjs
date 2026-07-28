@@ -242,9 +242,9 @@ ADLC P5 review-evidence recorder.
 Exit codes:
   0  two consecutive dry passes recorded (or a finding/attestation recorded)
   1  operational error (e.g. a finding missing --file/--desc — fails closed)
-  2  verified findings remain, dry-pass convergence failed, a trust-root-tier
-     change lacks a matching cross-model attestation, or (with --attestation-store)
-     a rollback/truncation was detected
+  2  verified findings remain, dry-pass convergence failed, or a trust-root-tier
+     change lacks a matching cross-model attestation
+     (with --attestation-store: also a rollback/truncation being detected)
 `);
   process.exit(0);
 }
