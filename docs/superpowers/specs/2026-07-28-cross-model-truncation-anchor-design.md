@@ -105,8 +105,14 @@ Five ambiguities below were surfaced by a `parallax` divergence pass and are res
 `hasCrossModelApproveForRevision` (`packages/prosecute/lib/cross-model.mjs`) gains an **optional**
 `observedEntries` parameter.
 
-- **Present:** run `assertNoTruncation` first; on `{ ok: false }` the gate itself fails closed
+- **Present:** `observedEntries` is first scoped to THIS run's `authorProvider` (normalized
+  comparison), then `assertNoTruncation` runs; on `{ ok: false }` the gate itself fails closed
   (rejected verdict / non-zero exit) before the existing `crossModelSatisfied` evaluation runs.
+  The author-scoping step is load-bearing, not cosmetic — revision alone is not a safe key,
+  since two unrelated PRs from different authors can coincidentally produce an identical tree
+  (revision is a pure content hash); without it, an observed revocation from one author's context
+  would falsely block a different author's own, legitimate review at the same revision (found by
+  cross-model review round 2, see §Cross-model review findings below).
 - **Absent:** behavior is byte-for-byte identical to today (#354). Every existing caller that
   omits the parameter must see no change at all — this is the backward-compatibility contract the
   opt-in framing depends on.
@@ -169,12 +175,45 @@ restated here for traceability:
 5. **`storePath` shape** — always a direct file path to `attestations.jsonl`, never a containing
    directory, across the library and the CLI flag. (§2, §4)
 
-## Known overlap risk
+## Known overlap risk (resolved)
 
-PR #375 (branch `fix/370-unsigned-attestation`, open as of this writing) also edits
-`packages/prosecute/bin/adlc-prosecute.mjs` (the `record-cross-model` handler) and its CLI test
-files. Whichever branch merges second must rebase and manually re-check for conflicts in these
-files — no assumption of a clean auto-merge.
+PR #375 (branch `fix/370-unsigned-attestation`) also edited `packages/prosecute/bin/adlc-prosecute.mjs`
+(the `record-cross-model` handler) and its CLI test files, and merged to `main` while this ticket
+was still building. Resolved by rebasing (twice — `main` also picked up #377 and #379/#381 in the
+same window) and re-recording the P1 premortem/parallax verdicts fresh against each new tip, since
+the hash-chained manifest cannot be text-merged. The `bin/adlc-prosecute.mjs` conflict itself was a
+small, non-overlapping additive one (`--allow-unsigned` next to `--attestation-store`).
+
+## Cross-model review findings (codex, distinct from the anthropic author)
+
+Two review rounds against the actual diff (the second corrected for a stale local `main` ref that
+made the first round's diff include unrelated upstream files):
+
+1. **Bootstrap run had no store file to `git add`** — `mirrorObservedAttestations` correctly never
+   creates `attestations.jsonl` when there is nothing to append (the right library behavior), but
+   the workflow's push step staged it unconditionally. The very first trust-root PR before any
+   cross-model attestation has ever been recorded would hard-fail the mirror step instead of
+   reaching `tier-check`'s intended "no attestation" message. Fixed: guard `git add` on the file
+   existing.
+2. **Concurrent PRs could race the shared `adlc-attestations` push** — `concurrency.group` only
+   serializes runs for the *same* PR; two different PRs pushing around the same time could hit a
+   non-fast-forward rejection with no retry. Fixed: merged mirror+commit+push into one retryable
+   cycle that, on a rejected push, resets to the fresh remote tip and re-runs `mirror-attestations`
+   from scratch (a clean re-derivation, not a git-level merge of two independent JSONL appends),
+   up to 5 attempts before failing closed.
+3. **The ruleset's `non_fast_forward` rule didn't actually make the branch append-only** — it only
+   blocks force-pushes/history rewrites, not an ordinary fast-forward commit that simply edits
+   `attestations.jsonl` to drop a line. Fixed: added the `update` rule, which restricts *all*
+   pushes (fast-forward included) to bypass-only actors.
+4. **Truncation detection was revision-only, not revision+author** — two unrelated PRs from
+   different authors can coincidentally produce an identical tree (revision is a pure content
+   hash); an observed revocation from one author's context would falsely block a different
+   author's own legitimate review at the same revision. Fixed: `hasCrossModelApproveForRevision`
+   now scopes `observedEntries` to the run's `authorProvider` before the truncation check.
+
+One finding was surfaced but NOT changed: the ruleset's bypass being repo-wide (not scoped to just
+`cross-model-gate.yml`) was already known, documented, and accepted — see the residual-scope note in
+`docs/github-rulesets/README.md`.
 
 ## Acceptance criteria
 

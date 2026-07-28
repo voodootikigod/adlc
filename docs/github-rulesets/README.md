@@ -45,10 +45,16 @@ environment.
 
 ## What the adlc-attestations ruleset enforces
 
-`creation` + `deletion` + `non_fast_forward` on `refs/heads/adlc-attestations`, with the
-**GitHub Actions app** (`actor_id: 15368`, `actor_type: Integration` — the real,
-API-verified ID of GitHub's own first-party `github-actions` app, not a guess) as the
-only bypass actor. This is the protected-ref mirror `.github/workflows/cross-model-gate.yml`
+`creation` + `update` + `deletion` + `non_fast_forward` on `refs/heads/adlc-attestations`.
+**`update` is load-bearing, not redundant with `non_fast_forward`**: `non_fast_forward`
+alone only blocks force-pushes/history rewrites — it does NOT stop a normal, ordinary
+fast-forward commit that simply edits `attestations.jsonl` to drop a previously mirrored
+line (a cross-model review round caught this: that gap would let any collaborator with
+push access silently rewrite the anchor via an everyday commit, no force-push needed).
+`update` restricts ALL pushes to bypass-only, closing that. The **GitHub Actions app**
+(`actor_id: 15368`, `actor_type: Integration` — the real, API-verified ID of GitHub's own
+first-party `github-actions` app, not a guess) is the only bypass actor. This is the
+protected-ref mirror `.github/workflows/cross-model-gate.yml`
 appends signed cross-model attestations to as they are observed, so a PR author cannot
 truncate a signed revocation from `.adlc/manifest.jsonl` and have the gate miss it — see
 `packages/prosecute/lib/attestation-store.mjs` and

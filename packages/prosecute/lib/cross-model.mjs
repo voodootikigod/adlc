@@ -383,11 +383,19 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, ke
  * anchor): entries read from a store OUTSIDE the PR-controlled tree (see
  * attestation-store.mjs), holding every cross-model entry a trusted CI run has ever
  * observed. When provided, `assertNoTruncation` runs FIRST: if the store holds a
- * signed entry for this revision that is missing from the manifest, the PR branch
- * dropped it (truncation) and the gate fails closed — even though the truncated
- * manifest alone would look like a clean, valid chain. Omitting `observedEntries`
- * reproduces today's behavior byte-for-byte; this is opt-in hardening, not a
- * required capability (see docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md).
+ * signed entry for this revision AND this author that is missing from the manifest,
+ * the PR branch dropped it (truncation) and the gate fails closed — even though the
+ * truncated manifest alone would look like a clean, valid chain. Omitting
+ * `observedEntries` reproduces today's behavior byte-for-byte; this is opt-in
+ * hardening, not a required capability (see
+ * docs/superpowers/specs/2026-07-28-cross-model-truncation-anchor-design.md).
+ *
+ * Observed entries are scoped to THIS run's author before the check (cross-model
+ * review round 2, codex): revision alone is not a safe key — two unrelated PRs from
+ * DIFFERENT authors can coincidentally produce the identical tree (revision is a pure
+ * content hash), and an observed revocation recorded for one author's context must
+ * not be mistaken for a dropped entry in a different author's manifest, which never
+ * held it and was never meant to.
  */
 export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key = getKey(), observedEntries } = {}) {
   // No key → cannot verify a signature → fail closed (an unverifiable attestation is a
@@ -402,7 +410,9 @@ export function hasCrossModelApproveForRevision({ dir, revision, authorProvider,
   // slice 2's terminal-revocation redesign.
   const { entries } = readEntries('manifest', dir);
   if (observedEntries !== undefined) {
-    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries, revision, key });
+    const runAuthor = normalizeProvider(authorProvider);
+    const authorScopedObserved = observedEntries.filter((entry) => normalizeProvider(entry?.data?.authorProvider) === runAuthor);
+    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries: authorScopedObserved, revision, key });
     if (!truncationCheck.ok) return false;
   }
   return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider), key });

@@ -689,4 +689,30 @@ describe('truncation anti-rollback anchor (#355, #354 F1 follow-up)', () => {
       assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic', observedEntries: [] }), true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+
+  it('round-2 codex finding: an observed revocation for a DIFFERENT authorProvider at the same revision does NOT falsely block (author-scoped, not revision-only)', () => {
+    // Two unrelated PRs can coincidentally produce the SAME tree (revision is a pure
+    // content hash). PR 1 (author anthropic) was revoked and mirrored; PR 2 (author
+    // openai) has its own genuine approve for its own author context and must not be
+    // rejected as a fake "truncation" of a revocation that was never about it.
+    const prOneDir = tmp();
+    const prTwoDir = tmp();
+    try {
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-shared', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir: prOneDir });
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-shared', provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', dir: prOneDir });
+      const { entries: observedFromPrOne } = readEntries('manifest', prOneDir);
+
+      // PR 2: a genuinely distinct author context, its own valid approve, same revision.
+      recordCrossModelReview({ ticket: 'T2', revision: 'rev-shared', provider: 'gemini', authorProvider: 'openai', verdict: 'approve', dir: prTwoDir });
+
+      assert.equal(
+        hasCrossModelApproveForRevision({ dir: prTwoDir, revision: 'rev-shared', authorProvider: 'openai', observedEntries: observedFromPrOne }),
+        true,
+        'an observed entry recorded for a different author must not block this author\'s own review',
+      );
+    } finally {
+      rmSync(prOneDir, { recursive: true, force: true });
+      rmSync(prTwoDir, { recursive: true, force: true });
+    }
+  });
 });
