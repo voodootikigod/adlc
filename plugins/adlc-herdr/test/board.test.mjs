@@ -3,7 +3,7 @@
 // close when the process exits); everything decision-shaped is pinned here.
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { groupBacklog, readLedgerTail, readLedgerByTicket, readLatestPhase, readTicketsViaExport, storeCacheKey, makeKeyedCache, ticketIdsFromStore, readdirBounded } from '../lib/adlc-state.mjs';
@@ -191,7 +191,15 @@ test('storeCacheKey uses the 0 sentinel when no store exists, keyed by repo', ()
 });
 
 test('storeCacheKey reflects the store mtime and advances when the store changes', () => {
-  mkdirSync(join(repo, '.adlc', 'tickets'), { recursive: true });
+  const ticketsDir = join(repo, '.adlc', 'tickets');
+  mkdirSync(ticketsDir, { recursive: true });
+  // Rewind the dir mtime to a fixed past instant BEFORE taking the first key.
+  // Without this, mkdir and the shard write below can land inside the same
+  // kernel timestamp tick (~1-4ms granularity on Linux), the dir mtime never
+  // visibly advances, and the k1 !== k2 assertion flakes — it passed on macOS
+  // only by APFS timing luck (found via the mutation-gate CI baseline, #378).
+  const past = (Date.now() - 5000) / 1000;
+  utimesSync(ticketsDir, past, past);
   const k1 = storeCacheKey(repo);
   assert.notEqual(k1, `${repo}@0`, 'a real store must not use the 0 sentinel');
   assert.ok(k1.startsWith(`${repo}@`));

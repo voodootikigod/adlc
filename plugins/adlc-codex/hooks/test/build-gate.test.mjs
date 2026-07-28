@@ -8,7 +8,24 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// recordBuildGateBypass spawnSync's `adlc` from ambient PATH, and this test file
+// calls it IN-PROCESS — so the resolved binary is whatever the test runner's PATH
+// happens to hold. Resolve the workspace-local CLI deterministically instead
+// (same WITH_ADLC convention as the claude-code sibling): the mutation-gate CI
+// job runs these tests WITHOUT run-tests.mjs's node_modules/.bin PATH prepend
+// and has no global adlc, while a dev machine may have a stale global one —
+// either way, ambient PATH is the wrong resolver for a hermetic test (#378).
+const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
+const NODE_DIR = dirname(process.execPath);
+
+function withAdlcOnPath(fn) {
+  const prev = process.env.PATH;
+  process.env.PATH = `${REPO_BIN}:${NODE_DIR}:${prev ?? ''}`;
+  try { return fn(); } finally { process.env.PATH = prev; }
+}
 
 import {
   computeRiskTier as hookComputeRiskTier,
@@ -140,7 +157,7 @@ test('recordBuildGateBypass writes a real build-gate-bypass entry to the gate-ma
   const dir = mkdtempSync(join(tmpdir(), 'adlc-build-gate-manifest-'));
   try {
     mkdirSync(join(dir, '.adlc'), { recursive: true });
-    const ok = recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir });
+    const ok = withAdlcOnPath(() => recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir }));
     assert.equal(ok, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -149,11 +166,13 @@ test('recordBuildGateBypass writes a real build-gate-bypass entry to the gate-ma
 
 test('recordBuildGateBypass returns false (never throws) when the adlc CLI cannot write', () => {
   // A cwd with no writable .adlc parent (a file where a directory is expected)
-  // simulates an unrecordable override — must report false, not throw.
+  // simulates an unrecordable override — must report false, not throw. The PATH
+  // shim matters here too: without a resolvable adlc this passes VACUOUSLY via
+  // spawn-ENOENT instead of exercising the real cannot-write branch it names.
   const dir = mkdtempSync(join(tmpdir(), 'adlc-build-gate-fail-'));
   try {
     writeFileSync(join(dir, '.adlc'), 'not a directory'); // .adlc is a FILE, not writable as a dir
-    const ok = recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir });
+    const ok = withAdlcOnPath(() => recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir }));
     assert.equal(ok, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
