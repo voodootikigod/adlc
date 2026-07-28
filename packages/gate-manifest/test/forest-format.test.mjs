@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 import { verify } from '../lib/verify.mjs';
 import { discoverSegments, resolveAnchor, detectAnchorCycle, readManifestForest } from '../lib/forest.mjs';
+import { renderEntry } from '../lib/show.mjs';
 import { sha256 } from '../../core/index.mjs';
 import { signEntry, KEY_ENV } from '../lib/sign.mjs';
 
@@ -445,6 +446,43 @@ describe('readManifestForest — ordering', () => {
       const gates = entries.map((e) => e.gate);
       assert.deepEqual(gates, ['parent-entry', 'child-entry']);
     } finally { cleanTmp(dir); }
+  });
+});
+
+describe('discoverSegments — grammar edge cases', () => {
+  it('accepts a slug containing every digit 0-9, not just 0-1 (full character-class range)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      writeLines(join(adlc, 'manifest.d', 'v0123456789-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(invalid, []);
+      assert.deepEqual(valid, ['v0123456789-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl']);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('.lineage is a structural file, not a segment — skipped, never reported as invalid', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      writeFileSync(join(adlc, 'manifest.d', '.lineage'), JSON.stringify({ segment: 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', branch: 'main' }));
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(valid, []);
+      assert.deepEqual(invalid, []);
+    } finally { cleanTmp(dir); }
+  });
+});
+
+describe('renderEntry — segment label (§6)', () => {
+  it('labels a non-root entry with its segment id', () => {
+    const lines = renderEntry({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', segment: 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', files: {}, prev: null });
+    assert.ok(lines.includes('  segment: feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'));
+  });
+
+  it('does not label a root entry (AC2: byte-identical to the pre-forest renderer)', () => {
+    const lines = renderEntry({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', segment: 'root', files: {}, prev: null });
+    assert.ok(!lines.some((l) => l.startsWith('  segment:')));
   });
 });
 
