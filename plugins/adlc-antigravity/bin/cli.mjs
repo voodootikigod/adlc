@@ -128,7 +128,15 @@ function agyInstallFromStagedCopy(sourceDir, agyBin) {
     const result = spawnSync(agyBin, ['plugin', 'install', join(stage, PLUGIN_NAME)], {
       stdio: 'inherit',
       timeout: AGY_TIMEOUT_MS,
-      killSignal: 'SIGKILL',
+      // SIGTERM, not SIGKILL. agy writes into the live plugin directory, so a
+      // forced kill mid-copy can leave a half-replaced install behind; SIGTERM
+      // gives it the chance to unwind. spawnSync accepts only ONE signal, so a
+      // graceful-then-forceful escalation would mean an async rewrite of this
+      // whole path — not worth it for a timeout that indicates a wedged agy
+      // either way. A child that ignores SIGTERM outlives us; we still fail fast
+      // and report, rather than hanging forever, which is the property that
+      // matters here.
+      killSignal: 'SIGTERM',
     });
     if (result.error) {
       // Includes the timeout case, where spawnSync kills the child and reports
@@ -187,7 +195,7 @@ if (command === 'install' || command === '--install') {
       probe = spawnSync(agyBin, ['--version'], {
         encoding: 'utf8',
         timeout: AGY_TIMEOUT_MS,
-        killSignal: 'SIGKILL',
+        killSignal: 'SIGTERM', // see the note on the install call
       });
     } catch (err) {
       probe = { status: null, error: err };

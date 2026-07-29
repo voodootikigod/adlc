@@ -75,6 +75,15 @@ node /abs/path/to/adlc/plugins/adlc-antigravity/bin/cli.mjs install
 >   `agy` for the helper to invoke. Starting from an empty directory removes both.
 >   (The helper also resolves `agy` itself while ignoring npm-injected bin
 >   directories, so the two controls are independent.)
+>
+> **Residual risk, stated rather than papered over.** `mktemp -d` honours `TMPDIR`,
+> and npm discovers a project by walking *upward* from the working directory. If
+> your `TMPDIR` points inside a repository, the scratch directory is still inside
+> that npm project and its `.npmrc` is still discovered — so the isolation is only
+> as good as `TMPDIR` being outside the repo you are standing in. npm offers no
+> flag that ignores an ancestor project config, so if you are installing from a
+> repository you do not trust, prefer the global-npm path above: `npm install -g`
+> resolves nothing relative to your working directory.
 
 **Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 
