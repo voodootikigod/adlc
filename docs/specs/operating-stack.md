@@ -4,7 +4,7 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 8** — revised after seven cross-model adversarial
+Status: **proposed, revision 9** — revised after eight cross-model adversarial
 review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
@@ -29,6 +29,11 @@ resultCommit; descent on the commit graph; squash merges record a lineage head;
 unavailable objects fail closed). A Gemini fresh-family round between rounds 6
 and 7 returned zero material findings. Finding trajectory: 6 → 6 → 5 → 3 → 3 →
 3 → 4 (round 7 includes ticket-authoring findings, addressed in T152/T151).
+Round 8: rewrites bridged via stable patch-ids (rebase/cherry-pick stay
+fleet-origin), author-family exclusion derives from the phase-2 resolvedAuthor
+(build aliases cannot misbind identity), T152 rewritten around the real P4
+producer (fleet dispatch) with a binding no-fabrication rule (unknown ≠ zero,
+usageStatus sibling).
 Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
@@ -290,17 +295,39 @@ is two records, both signed:
   ancestry-bearing anchor** — a change-set identity (`git-change:<base>:<digest>`)
   carries no parent links and may describe uncommitted state, so it cannot answer
   descent questions by itself (review round 7 finding). The binding records:
-  `{revision, repoIdentity, headCommit, resultCommit,
+  `{revision, repoIdentity, headCommit, resultCommit, patchIds,
+  resolvedAuthor: {model, provider},
   dispatchRecords: [{runId, ticket, attempt}, …]}` where `resultCommit` is the
-  immutable commit OID of the fleet's committed result and `headCommit` is the
-  HEAD the change-set digest was computed against.
+  immutable commit OID of the fleet's committed result, `headCommit` is the
+  HEAD the change-set digest was computed against, and `patchIds` are the
+  stable patch identities of the result commits (the rewrite bridge, below).
+  **`resolvedAuthor` closes the build-alias hole (round 8 finding 2):** build
+  channels may use a runtime alias (`default`), so the phase-1 provenance's
+  *declared* provider can differ from what actually executed — an ambient
+  default could resolve to another family. The phase-2 binding therefore
+  records the adapter-attested `resolvedModel` mapped through the operator
+  registry to a `resolvedProvider`, and **author-family exclusion derives from
+  `resolvedAuthor`, never from the phase-1 declaration**; a phase-2 binding
+  missing `resolvedAuthor`, or one whose resolved provider cannot be mapped,
+  fails closed.
 - **Descent is decided on the commit graph, fail-closed on ambiguity.** A
   candidate revision's lineage check walks git ancestry from the candidate's
   HEAD: if any ancestor is a recorded `resultCommit` (or lineage head, below),
   the revision is fleet-origin. Defined cases:
   - *Dirty working tree:* inherits its HEAD's classification (the digest may
     describe uncommitted edits; ancestry runs on the underlying HEAD).
-  - *Rebases and merges:* preserve ancestry naturally — no special handling.
+  - *Merges:* preserve ancestry naturally — no special handling.
+  - *Rebases and cherry-picks* (round 8 finding 1): history **rewrites** produce
+    commits that do NOT descend from the recorded `resultCommit` even though the
+    old object still resolves — so "not an ancestor" must never be read as
+    "not fleet-origin" for rewritten content. The ledger therefore also records
+    the **stable patch identity** (`git patch-id --stable`) of every
+    fleet-authored commit, and the lineage check is: commit-graph ancestry **or**
+    patch-id intersection between the candidate's commits and recorded fleet
+    patch-ids. A rewrite performed by trusted tooling (the fleet's own rebase
+    path) additionally re-binds the new commits as fresh lineage heads. A
+    candidate that matches neither ancestry nor patch-id but whose diff cannot
+    be fully attributed is ambiguity → fail closed.
   - *Squash merges:* destroy ancestry, so the fleet's PR-merge path records the
     post-squash mainline commit as an **additional lineage head** in the ledger
     at merge time; descent from it is then ordinary ancestry.
@@ -602,9 +629,16 @@ Ordered by dependency, each a candidate ticket:
    anchor cases run against real git history** (no synthetic ledger rows): an
    amendment committed on top of a recorded `resultCommit` is classified
    fleet-origin via commit-graph ancestry; a dirty tree on that HEAD inherits
-   the classification; a squash-merge fixture is fleet-origin only after the
-   merge path records the post-squash lineage head; a shallow clone where the
-   `resultCommit` object is unavailable fails closed. Verified by additional
+   the classification; **a rebase of the fleet commit onto a moved base — old
+   object still resolvable — is classified fleet-origin via the patch-id
+   bridge, as is a cherry-pick of it**; a squash-merge fixture is fleet-origin
+   only after the merge path records the post-squash lineage head; a shallow
+   clone where the `resultCommit` object is unavailable fails closed; **an
+   author-family exclusion resolves from the phase-2 `resolvedAuthor`, and a
+   build alias whose attested resolution differs in family from the phase-1
+   declaration excludes the RESOLVED family (a fixture where declared
+   anthropic resolves to openai must exclude openai reviewers), while a
+   binding missing `resolvedAuthor` fails closed**. Verified by additional
    cases in `packages/prosecute/test/author-binding.test.mjs` (`assert` per
    case against a fixture git repo).
 7. **Fallback through the real resolver.** Driving the actual registry loader and
