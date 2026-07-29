@@ -6,7 +6,7 @@
 // segment file should the NEXT append target". Neither question touches the
 // ledger lock.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { git, sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
@@ -111,9 +111,31 @@ export function currentBranch(cwd = process.cwd()) {
   }
 }
 
+// SECURITY (adversarial-review finding): `.lineage` is local, gitignored
+// bookkeeping (spec §4.8) — legitimately never committed. That means finding
+// it already on disk as a symlink is inherently suspicious: nothing in this
+// codebase's own workflow ever creates one there. Since `.gitignore` does NOT
+// stop a malicious PR branch from committing a file at an ignored path
+// anyway, a symlink planted there (e.g. pointing at a shell rc file outside
+// the repo) must never be READ THROUGH (information disclosure) or,
+// critically, WRITTEN THROUGH (arbitrary-file-overwrite / near-RCE, since the
+// written token embeds the branch name and Git branch names can contain
+// shell metacharacters). `lstatSync` (never `existsSync`, which follows
+// links — same rule forest.mjs's segment discovery already applies) checks
+// the raw filesystem object before either read or write.
+function isSymlinkOrOtherNonRegular(path) {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return false; // does not exist — nothing to refuse
+  }
+  return !st.isFile();
+}
+
 function readLineageToken(dir) {
   const p = lineagePath(dir);
-  if (!existsSync(p)) return null;
+  if (!existsSync(p) || isSymlinkOrOtherNonRegular(p)) return null;
   try {
     const token = JSON.parse(readFileSync(p, 'utf8'));
     if (!token || typeof token !== 'object') return null;
@@ -126,7 +148,17 @@ function readLineageToken(dir) {
 
 function writeLineageToken(dir, token) {
   mkdirSync(segmentDirPath(dir), { recursive: true });
-  writeFileSync(lineagePath(dir), JSON.stringify(token));
+  const p = lineagePath(dir);
+  if (isSymlinkOrOtherNonRegular(p)) unlinkSync(p); // replace, never follow — see the SECURITY note above readLineageToken
+  // O_NOFOLLOW makes the refusal atomic at the syscall level rather than
+  // trusting the lstat check above to still be true by the time we open —
+  // belt-and-suspenders against a symlink planted in the gap between them.
+  const fd = openSync(p, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW);
+  try {
+    writeFileSync(fd, JSON.stringify(token));
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

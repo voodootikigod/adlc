@@ -1,9 +1,7 @@
 // segment-writer.mjs — the locked append path for a segmented repo
 // (T-MANIFEST-FOREST slice 3, docs/specs/segmented-gate-manifest.md §7).
 // record.mjs's appendManifestEntry routes here once lineage.mjs's
-// isSegmentedRepo(dir) is true; root's own append path is untouched and
-// unreachable once segmented (§7 point 3 — "MUST refuse to append to root" —
-// is enforced structurally: this module is the only thing that runs).
+// isSegmentedRepo(dir) is true.
 
 import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -44,6 +42,18 @@ export function appendToSegment(payload, dir, { signatureVersion, cwd }) {
       // happens to be real), appending as though it were empty would silently
       // skip the anchor requirement and misnumber seq — fail loud instead.
       throw new Error(`segment ${resolved.name} was expected to be new but already has content — refusing to append`);
+    }
+    if (!resolved.isNew && rawLines.length === 0) {
+      // The mirror case (adversarial-review finding): resolveOpenSegment
+      // resolved to an EXISTING, already-open segment (outside this lock),
+      // but by the time this lock is held the file is empty or gone — some
+      // operator action, or a concurrent process, removed it between
+      // resolution and this append. Silently treating that as "start fresh"
+      // would write seq:1 WITHOUT the required anchor (isNew is false, so no
+      // anchor is added), producing a segment verify() rejects outright.
+      // Refuse instead: a real re-mint must go through resolveOpenSegment
+      // again, which will correctly mark it isNew and supply an anchor.
+      throw new Error(`segment ${resolved.name} was expected to already be open with content but is empty or missing — refusing to append without an anchor`);
     }
     const entries = rawLines.map((line, i) => {
       try { return JSON.parse(line); }

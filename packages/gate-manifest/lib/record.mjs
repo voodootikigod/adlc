@@ -35,15 +35,25 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
 
   // spec §7: once a repo has cut over (marker or a root manifest-cutover
   // entry — see lineage.mjs), EVERY append routes to the current lineage's
-  // segment instead of root. Root's own append path below is unreachable
-  // from here on for this repo — that IS spec §7 point 3's "MUST refuse to
-  // append to the root", enforced structurally rather than by a redundant
-  // guard the root path could never actually reach.
+  // segment instead of root.
   if (isSegmentedRepo(dir)) {
     return appendToSegment(payload, dir, { signatureVersion, cwd });
   }
 
   const [entry] = appendEntries('manifest', (state) => {
+    // RACE (adversarial-review finding): the isSegmentedRepo check above runs
+    // BEFORE this callback acquires the root ledger lock. The migration
+    // ceremony's own cutover append (spec §8 step 6) serializes on that SAME
+    // lock, so a writer that lost the race — it checked "not segmented",
+    // then blocked on the lock while cutover ran to completion, then finally
+    // got the lock — must not blindly append behind a cutover it never saw.
+    // Re-checking here, now that the lock (and therefore an up-to-date view
+    // of root) is actually held, is spec §7 point 3's "MUST refuse to append
+    // to the root" — the check above handles the common case cheaply; THIS
+    // is the one that is actually race-proof.
+    if (isSegmentedRepo(dir)) {
+      throw new Error('manifest chain is frozen; this repo uses .adlc/manifest.d/ — upgrade adlc if you are seeing this locally');
+    }
     if (state.skipped.length > 0) {
       throw new Error(`manifest contains malformed JSON at line ${state.skipped[0].line}`);
     }

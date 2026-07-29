@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -151,6 +151,43 @@ describe('currentBranch', () => {
     try {
       assert.equal(currentBranch(dir), null);
     } finally { clean(dir); }
+  });
+});
+
+describe('.lineage write path refuses to follow a symlink (adversarial-review finding)', () => {
+  it('a symlinked .lineage is replaced with a regular file — never written through', () => {
+    const { root, dir } = gitRepo();
+    const outsideTarget = join(root, '..', `outside-lineage-target-${Math.random().toString(36).slice(2)}.txt`);
+    writeFileSync(outsideTarget, 'untouched\n');
+    try {
+      activate(dir);
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      symlinkSync(outsideTarget, lineagePath(dir));
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }); // mints a segment, writes the token
+      assert.equal(readFileSync(outsideTarget, 'utf8'), 'untouched\n', 'the symlink target must never be written through');
+      assert.equal(lstatSync(lineagePath(dir)).isSymbolicLink(), false, '.lineage must be replaced with a regular file');
+      const token = JSON.parse(readFileSync(lineagePath(dir), 'utf8'));
+      assert.equal(typeof token.segment, 'string');
+    } finally {
+      clean(root);
+      rmSync(outsideTarget, { force: true });
+    }
+  });
+
+  it('a symlinked .lineage is treated as absent on read, never followed — mints fresh instead of resolving through it', () => {
+    const { root, dir } = gitRepo();
+    const outsideTarget = join(root, '..', `outside-lineage-read-${Math.random().toString(36).slice(2)}.txt`);
+    writeFileSync(outsideTarget, JSON.stringify({ segment: 'not-real-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', ulid: '01ARZ3NDEKTSV4RRFFQ69G5FAV', branch: currentBranch(root) }));
+    try {
+      activate(dir);
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      symlinkSync(outsideTarget, lineagePath(dir));
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      assert.equal(resolved.isNew, true, 'a symlinked token must never be trusted, even if its content looks valid');
+    } finally {
+      clean(root);
+      rmSync(outsideTarget, { force: true });
+    }
   });
 });
 
