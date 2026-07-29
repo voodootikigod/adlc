@@ -7,7 +7,7 @@
 
 import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { sha256, withLedgerLock, ADLC_DIR } from '@adlc/core';
+import { sha256, withLedgerLock } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 import { segmentPath, segmentDirPath } from './forest.mjs';
@@ -16,9 +16,12 @@ import { resolveOpenSegment } from './lineage.mjs';
 /**
  * Append `payload` to the current lineage's segment, minting a new one when
  * needed (spec §7.1). Caller (record.mjs) has already validated `payload`
- * carries none of the reserved chain fields, including `anchor`.
+ * carries none of the reserved chain fields, including `anchor`. Not a public
+ * entry point — record.mjs's appendManifestEntry is, and it always resolves
+ * `dir`/`signatureVersion`/`cwd` itself before calling here, so this takes no
+ * defaults of its own (an unreachable default is untestable dead code).
  */
-export function appendToSegment(payload, dir = ADLC_DIR, { signatureVersion = 2, cwd = process.cwd() } = {}) {
+export function appendToSegment(payload, dir, { signatureVersion, cwd }) {
   // Same chain-integrity precondition root append already enforces (record.mjs's
   // "we must not append onto a corrupted/unchained tail"), forest-wide: a
   // corrupted segment or a dangling/cyclic anchor must block every writer, not
