@@ -24,7 +24,7 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 **One-liner via npx (Recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
-npx adlc-agy install
+npx @adlc/antigravity install
 ```
 
 **Global npm Install.** Install `@adlc/antigravity` globally via npm, then let the bundled helper register it:
@@ -38,7 +38,7 @@ adlc-agy install
 
 ```sh
 npm install @adlc/antigravity
-npx adlc-agy install
+npx @adlc/antigravity install
 ```
 
 **Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout, `agy` takes the path directly:

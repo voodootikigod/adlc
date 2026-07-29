@@ -9,7 +9,7 @@ skills and a `PreToolUse` rails-guard that freezes ADLC rails. Requires the
 **One-liner via npx (recommended):**
 
 ```sh
-npx adlc-agy install
+npx @adlc/antigravity install
 ```
 
 **Global npm install:**
@@ -23,7 +23,7 @@ adlc-agy install
 
 ```sh
 npm install @adlc/antigravity
-npx adlc-agy install
+npx @adlc/antigravity install
 ```
 
 **From local checkout:**

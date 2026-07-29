@@ -726,11 +726,11 @@ export const ANTIGRAVITY_INTEGRATION = {
   // dies with `unknown marketplace: adlc/antigravity`. `adlc-agy install` stages
   // the plugin under an @-free path, so it is the npm path that actually works.
   install: [
-    'npx adlc-agy install',
+    'npx @adlc/antigravity install',
     'npm install -g @adlc/antigravity',
     'adlc-agy install',
   ],
-  note: 'Recommended: npx adlc-agy install — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  note: 'Recommended: npx @adlc/antigravity install — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
   pluginDir: 'plugins/adlc-antigravity',
   hero: {
     kicker: 'Antigravity integration',
@@ -828,7 +828,7 @@ export const ANTIGRAVITY_INTEGRATION = {
     title: 'operate: Antigravity plugin',
     lines: [
       '# Recommended one-liner via npx',
-      'npx adlc-agy install',
+      'npx @adlc/antigravity install',
       '',
       '# Or install globally, then register',
       'npm install -g @adlc/antigravity',

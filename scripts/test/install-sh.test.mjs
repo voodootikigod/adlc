@@ -519,7 +519,7 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     );
     assert.match(
       result.stdout,
-      /Antigravity:.*adlc-agy install/s,
+      /Antigravity:.*npx @adlc\/antigravity install/s,
       'a harness in MANUAL must get its own printed instruction',
     );
     // The instruction must not hand the user the very command that fails: a bare
@@ -528,6 +528,14 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     assert.ok(
       !/agy plugin install \S*@/.test(result.stdout),
       `the fallback instruction still tells the user to pass an @ path:\n${result.stdout}`,
+    );
+    // Nor may it name a package that does not exist. `adlc-agy` is a BIN name
+    // inside @adlc/antigravity, not a package: `npx adlc-agy install` resolves
+    // against the registry on any machine without the global install and 404s —
+    // and leaves an unclaimed name that someone else's code could answer to.
+    assert.ok(
+      !/npx adlc-agy/.test(result.stdout),
+      `the instruction names an unpublished npm package:\n${result.stdout}`,
     );
   } finally {
     box.cleanup();
@@ -570,6 +578,56 @@ test('install.sh hands agy a plugin path containing no "@"', () => {
     // The staging copy is a temp directory, not part of the install: agy copies
     // the plugin into its own config, so leaving the source behind would litter
     // TMPDIR on every run for no benefit.
+    assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh still stages @-free when TMPDIR itself contains an "@"', () => {
+  // Staging only helps if the STAGED PATH is @-free, and `mktemp -d` with no
+  // template inherits TMPDIR on GNU coreutils. A TMPDIR of
+  // /var/tmp/user@example.com would put the `@` straight back into the argument
+  // and reproduce the original failure — with the staging code sitting right
+  // there looking like it had handled it.
+  //
+  // mktemp is SHIMMED rather than driven by a hostile TMPDIR because BSD mktemp
+  // (macOS, where this suite usually runs) ignores TMPDIR for a template-less
+  // `-d`, which would make the test silently vacuous on the developer's machine
+  // while the bug stayed live on Linux.
+  const box = sandbox({ bins: ['node', 'npm', 'agy'] });
+  try {
+    const pkg = path.join(box.root, 'npmroot', '@adlc', 'antigravity');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+
+    // No template argument (the TMPDIR default) → answer with an @ path, as GNU
+    // mktemp would under a hostile TMPDIR. An explicit template → real mktemp.
+    const hostile = path.join(box.root, 'user@example.com');
+    mkdirSync(hostile, { recursive: true });
+    const mktempShim = path.join(box.root, 'bin', 'mktemp');
+    writeFileSync(
+      mktempShim,
+      `#!/bin/sh\nprintf '%s\\n' "mktemp $*" >> "${box.log}"\n` +
+        `case "$*" in\n  *X*) exec /usr/bin/mktemp "$@" ;;\nesac\n` +
+        `d="${hostile}/tmp.$$"\nmkdir -p "$d"\nprintf '%s\\n' "$d"\n`,
+    );
+    chmodSync(mktempShim, 0o755);
+
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+
+    const agyLine = box
+      .commands()
+      .split('\n')
+      .find((line) => line.startsWith('agy plugin install '));
+    assert.ok(agyLine, `agy was never invoked; log was:\n${box.commands()}`);
+    const target = agyLine.replace('agy plugin install ', '').trim();
+    assert.ok(
+      !target.includes('@'),
+      `a hostile TMPDIR put an "@" back into agy's argument: ${target}`,
+    );
+    assert.match(result.stdout, /installed for: .*Antigravity/);
     assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
   } finally {
     box.cleanup();

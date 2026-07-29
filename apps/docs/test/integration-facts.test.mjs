@@ -282,14 +282,20 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   // `.../@adlc/antigravity` is read as the separator and the install dies with
   // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
   // plugin under an @-free path, actually registers the plugin.
-  assert.match(ag?.note ?? '', /adlc-agy install/);
+  assert.match(ag?.note ?? '', /npx @adlc\/antigravity install/);
+
+  const advertised = [ag.note ?? '', ...ag.install, ...ag.operate.lines];
   assert.ok(
-    !ag.install.some((command) => /agy plugin install \S*@/.test(command)),
-    `an advertised command hands agy a path it parses as plugin@marketplace: ${ag.install.join(' | ')}`,
+    !advertised.some((line) => /agy plugin install \S*@/.test(line)),
+    `an advertised command hands agy a path it parses as plugin@marketplace: ${advertised.join(' | ')}`,
   );
+  // `adlc-agy` is a BIN name inside @adlc/antigravity, not a package name.
+  // `npx adlc-agy install` resolves against the registry on any machine without
+  // the global install and 404s — and it points at an unclaimed npm name that
+  // someone else's package could answer to.
   assert.ok(
-    !ag.operate.lines.some((line) => /agy plugin install \S*@/.test(line)),
-    `an operate line hands agy a path it parses as plugin@marketplace: ${ag.operate.lines.join(' | ')}`,
+    !advertised.some((line) => /npx adlc-agy/.test(line)),
+    `an advertised command names an unpublished npm package: ${advertised.join(' | ')}`,
   );
 });
 

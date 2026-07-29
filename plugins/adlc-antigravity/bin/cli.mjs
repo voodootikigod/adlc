@@ -36,7 +36,17 @@ const PLUGIN_NAME = 'adlc-antigravity';
 function agyInstallFromStagedCopy(sourceDir) {
   let stage;
   try {
-    stage = mkdtempSync(join(tmpdir(), 'adlc-agy-'));
+    // os.tmpdir() honours TMPDIR, which is NOT guaranteed to be @-free — a
+    // TMPDIR of /var/tmp/user@example.com would stage under a path carrying the
+    // exact character this whole function exists to avoid. Fall back to /tmp,
+    // which cannot contain one; if that is unusable, fail loudly rather than
+    // handing agy an argument it is certain to misparse.
+    let root = tmpdir();
+    if (root.includes('@')) root = '/tmp';
+    stage = mkdtempSync(join(root, 'adlc-agy-'));
+    if (stage.includes('@')) {
+      throw new Error(`no @-free temporary directory available (tried ${root})`);
+    }
     cpSync(sourceDir, join(stage, PLUGIN_NAME), { recursive: true });
   } catch (err) {
     console.error(`Failed to stage the plugin for agy: ${err.message}`);
@@ -58,10 +68,12 @@ if (command === '--help' || command === '-h' || command === 'help') {
 ADLC Google Antigravity Plugin Helper
 
 Usage:
-  npx adlc-agy install             Install and register the ADLC plugin with agy
-  npx @adlc/antigravity install    Alternative package name invocation
+  npx @adlc/antigravity install    Install and register the ADLC plugin with agy
   adlc-agy install                 Install when @adlc/antigravity is installed globally
   adlc-agy --help                  Display this help message
+
+  Note: "npx adlc-agy" does NOT work — adlc-agy is a bin name, not a package
+  name, so npx would look for an unpublished package by that name.
 
 Description:
   Registers the @adlc/antigravity plugin with Google Antigravity (agy).
@@ -110,6 +122,6 @@ if (command === 'install' || command === '--install') {
   }
 } else {
   console.error(`Unknown command: ${command}`);
-  console.error('Run `npx adlc-agy --help` for available commands.');
+  console.error('Run `npx @adlc/antigravity --help` for available commands.');
   process.exit(1);
 }

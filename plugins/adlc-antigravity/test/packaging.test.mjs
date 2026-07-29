@@ -232,3 +232,49 @@ test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
   }
 });
 
+test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () => {
+  // Staging only helps if the STAGED PATH is @-free, and os.tmpdir() honours
+  // TMPDIR. A TMPDIR of /var/tmp/user@example.com would put the `@` straight
+  // back into agy's argument and reproduce the original failure — with the
+  // staging code sitting right there looking like it had handled it.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-cli-'));
+  try {
+    const scopedRoot = join(work, 'node_modules', '@adlc', 'antigravity');
+    mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
+    writeFileSync(join(scopedRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
+    writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+
+    const binDir = join(work, 'bin');
+    const log = join(work, 'agy.log');
+    const hostileTmp = join(work, 'user@example.com');
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(hostileTmp, { recursive: true });
+    writeFileSync(join(binDir, 'agy'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`);
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        HOME: join(work, 'home'),
+        TMPDIR: hostileTmp,
+      },
+    });
+    assert.equal(res.status, 0, `cli.mjs install failed: ${res.stderr}`);
+
+    const logText = readFileSync(log, 'utf8');
+    const installLine = logText.split('\n').find((line) => line.startsWith('plugin install '));
+    assert.ok(installLine, `agy was never asked to install; log:\n${logText}`);
+    const target = installLine.replace('plugin install ', '').trim();
+    assert.ok(
+      !target.includes('@'),
+      `a hostile TMPDIR put an "@" back into agy's argument: ${target}`,
+    );
+    assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
