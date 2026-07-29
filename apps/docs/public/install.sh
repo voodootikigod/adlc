@@ -295,11 +295,10 @@ install_pi() {
 install_antigravity() {
     have agy || return 0
     log "Google Antigravity detected"
-    # `agy plugin install` only accepts a filesystem path, so the plugin has to
-    # land on disk first. The path is then VERIFIED rather than assumed: with
-    # version managers and custom prefixes, `npm install -g` can write somewhere
-    # `npm root -g` does not report, and handing agy a non-existent path produces
-    # a confusing downstream error instead of a clear one here.
+    # The plugin has to land on disk first, and the path is VERIFIED rather than
+    # assumed: with version managers and custom prefixes, `npm install -g` can
+    # write somewhere `npm root -g` does not report, and a non-existent path
+    # produces a confusing downstream error instead of a clear one here.
     if ! npm install -g @adlc/antigravity; then
         warn "Google Antigravity: npm install failed — see ${SITE}/integrations/antigravity"
         record_failed "Google Antigravity"
@@ -307,10 +306,10 @@ install_antigravity() {
     fi
 
     agy_root=$(npm root -g 2>/dev/null || echo "")
-    agy_plugin="${agy_root}/@adlc/antigravity"
-    if [ -z "$agy_root" ] || [ ! -d "$agy_plugin" ]; then
-        warn "Google Antigravity: @adlc/antigravity installed, but not found at"
-        warn "  ${agy_plugin:-<npm root -g unavailable>}"
+    agy_helper="${agy_root}/@adlc/antigravity/bin/cli.mjs"
+    if [ -z "$agy_root" ] || [ ! -f "$agy_helper" ]; then
+        warn "Google Antigravity: @adlc/antigravity installed, but its helper was not found at"
+        warn "  ${agy_helper:-<npm root -g unavailable>}"
         # SINGLE-quoted on purpose: this is a command for the user to TYPE, not
         # one to run here. Double quotes would expand $(mktemp -d) at warn time,
         # leaking a temp directory and printing a machine-specific path in place
@@ -320,43 +319,27 @@ install_antigravity() {
         return 0
     fi
 
-    # STAGE UNDER AN @-FREE PATH. agy resolves its target as `plugin@marketplace`
-    # BEFORE deciding whether it is a filesystem path, so an `@` anywhere in the
-    # argument is read as that separator — and every location npm gives a scoped
-    # package contains one. Handed the real directory, agy splits
-    # ".../node_modules/@adlc/antigravity" and dies with
-    # "unknown marketplace: adlc/antigravity", never touching the disk. agy COPIES
-    # the plugin into ~/.gemini/config/plugins/<name>/, so a throwaway directory
-    # is a complete install source, not a link the installed plugin depends on.
-    agy_stage=$(mktemp -d) || {
-        warn "Google Antigravity: could not create a staging directory — see ${SITE}/integrations/antigravity"
-        record_failed "Google Antigravity"
-        return 0
-    }
-    # GNU mktemp honours TMPDIR, and TMPDIR is NOT guaranteed @-free: a TMPDIR of
-    # /var/tmp/user@example.com would stage under a path carrying the very
-    # character this staging exists to avoid, and agy would reject it exactly as
-    # before. Retry under an explicit /tmp template, which cannot contain one.
-    case "$agy_stage" in
-        *@*)
-            rm -rf "$agy_stage"
-            agy_stage=$(mktemp -d /tmp/adlc-agy.XXXXXX) || {
-                warn "Google Antigravity: TMPDIR contains an '@', which agy reads as a"
-                warn "  marketplace separator, and /tmp is unusable — see ${SITE}/integrations/antigravity"
-                record_failed "Google Antigravity"
-                return 0
-            }
-            ;;
-    esac
-    if cp -R "$agy_plugin" "${agy_stage}/adlc-antigravity" &&
-        agy plugin install "${agy_stage}/adlc-antigravity"; then
+    # DELEGATE to the package's own helper instead of re-implementing the install.
+    #
+    # The helper owns four things this script would otherwise duplicate: staging
+    # under an @-free path (agy resolves its target as `plugin@marketplace` BEFORE
+    # treating it as a filesystem path, and every npm location for a scoped
+    # package contains an `@`, so the real directory is rejected with
+    # "unknown marketplace: adlc/antigravity"); resolving `agy` while ignoring
+    # npm-injected bin directories; a timeout on every agy subprocess; and
+    # fail-closed semantics when a present agy refuses the plugin.
+    #
+    # This script HAD its own copy of the staging logic, and the duplication did
+    # exactly what duplication does — the helper gained a subprocess timeout and
+    # this path silently kept none, so a wedged agy hung the whole installer past
+    # its summary and exit status. One implementation, one place to fix.
+    if node "$agy_helper" install; then
         ok "Google Antigravity"
         record_installed "Google Antigravity"
     else
-        warn "Google Antigravity: agy plugin install failed — see ${SITE}/integrations/antigravity"
+        warn "Google Antigravity: install failed — see ${SITE}/integrations/antigravity"
         record_failed "Google Antigravity"
     fi
-    rm -rf "$agy_stage"
 }
 
 install_herdr() {

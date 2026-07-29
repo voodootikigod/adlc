@@ -550,93 +550,41 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
   }
 });
 
-test('install.sh hands agy a plugin path containing no "@"', () => {
-  // THE BUG THIS PINS: agy resolves `plugin install <target>` as
-  // `plugin@marketplace` BEFORE deciding whether the target is a path, so an `@`
-  // anywhere in the argument is read as that separator. npm puts every scoped
-  // package under `<root>/@adlc/antigravity`, so passing the real directory made
-  // agy report `unknown marketplace: adlc/antigravity` and install nothing —
-  // while the installer's own summary reported a clean run for every OTHER
-  // harness and only a link for this one. The plugin must therefore be staged
-  // under an @-free path first.
-  const box = sandbox({ bins: ['node', 'npm', 'agy'] });
-  try {
-    // Give the stub `npm root -g` a real package to find, so the installer gets
-    // past its path check and actually reaches agy.
-    const pkg = path.join(box.root, 'npmroot', '@adlc', 'antigravity');
-    mkdirSync(pkg, { recursive: true });
-    writeFileSync(path.join(pkg, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
-
-    const result = runInstaller(box);
-    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
-
-    const agyLine = box
-      .commands()
-      .split('\n')
-      .find((line) => line.startsWith('agy plugin install '));
-    assert.ok(agyLine, `agy was never invoked; log was:\n${box.commands()}`);
-
-    const target = agyLine.replace('agy plugin install ', '').trim();
-    assert.ok(
-      !target.includes('@'),
-      `agy was handed a path it parses as plugin@marketplace: ${target}`,
-    );
-    assert.match(result.stdout, /installed for: .*Antigravity/);
-
-    // The staging copy is a temp directory, not part of the install: agy copies
-    // the plugin into its own config, so leaving the source behind would litter
-    // TMPDIR on every run for no benefit.
-    assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
-  } finally {
-    box.cleanup();
-  }
-});
-
-test('install.sh still stages @-free when TMPDIR itself contains an "@"', () => {
-  // Staging only helps if the STAGED PATH is @-free, and `mktemp -d` with no
-  // template inherits TMPDIR on GNU coreutils. A TMPDIR of
-  // /var/tmp/user@example.com would put the `@` straight back into the argument
-  // and reproduce the original failure — with the staging code sitting right
-  // there looking like it had handled it.
+test('install.sh delegates the Antigravity install to the package helper, never agy directly', () => {
+  // install.sh USED to stage the plugin and call `agy plugin install` itself, a
+  // second copy of logic the shipped helper already owns: @-free staging, agy
+  // resolution that ignores npm-injected bin dirs, a subprocess timeout, and
+  // fail-closed semantics. The duplication did what duplication does — the helper
+  // gained a timeout and this path kept none, so a wedged agy hung the whole
+  // installer past its own summary and exit status.
   //
-  // mktemp is SHIMMED rather than driven by a hostile TMPDIR because BSD mktemp
-  // (macOS, where this suite usually runs) ignores TMPDIR for a template-less
-  // `-d`, which would make the test silently vacuous on the developer's machine
-  // while the bug stayed live on Linux.
+  // So the property this test pins is DELEGATION, not staging: staging is proved
+  // where it now lives, in plugins/adlc-antigravity/test/packaging.test.mjs
+  // (including the hostile-TMPDIR case). Asserting it in both places would
+  // recreate the duplication in the tests.
   const box = sandbox({ bins: ['node', 'npm', 'agy'] });
   try {
-    const pkg = path.join(box.root, 'npmroot', '@adlc', 'antigravity');
-    mkdirSync(pkg, { recursive: true });
-    writeFileSync(path.join(pkg, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
-
-    // No template argument (the TMPDIR default) → answer with an @ path, as GNU
-    // mktemp would under a hostile TMPDIR. An explicit template → real mktemp.
-    const hostile = path.join(box.root, 'user@example.com');
-    mkdirSync(hostile, { recursive: true });
-    const mktempShim = path.join(box.root, 'bin', 'mktemp');
-    writeFileSync(
-      mktempShim,
-      `#!/bin/sh\nprintf '%s\\n' "mktemp $*" >> "${box.log}"\n` +
-        `case "$*" in\n  *X*) exec /usr/bin/mktemp "$@" ;;\nesac\n` +
-        `d="${hostile}/tmp.$$"\nmkdir -p "$d"\nprintf '%s\\n' "$d"\n`,
-    );
-    chmodSync(mktempShim, 0o755);
+    // Give the stub `npm root -g` a real helper to find.
+    const helperDir = path.join(box.root, 'npmroot', '@adlc', 'antigravity', 'bin');
+    mkdirSync(helperDir, { recursive: true });
+    writeFileSync(path.join(helperDir, 'cli.mjs'), '// helper\n');
 
     const result = runInstaller(box);
     assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
 
-    const agyLine = box
-      .commands()
+    const commands = box.commands();
+    const nodeLine = commands
       .split('\n')
-      .find((line) => line.startsWith('agy plugin install '));
-    assert.ok(agyLine, `agy was never invoked; log was:\n${box.commands()}`);
-    const target = agyLine.replace('agy plugin install ', '').trim();
+      .find((line) => line.startsWith('node ') && line.includes('cli.mjs'));
+    assert.ok(nodeLine, `the helper was never invoked; log was:\n${commands}`);
+    assert.match(nodeLine, /bin\/cli\.mjs install$/, `expected \`<helper> install\`: ${nodeLine}`);
+
+    // And agy must NOT be driven from here any more — that is the whole point.
     assert.ok(
-      !target.includes('@'),
-      `a hostile TMPDIR put an "@" back into agy's argument: ${target}`,
+      !/(^|\n)agy /.test(commands),
+      `install.sh must not invoke agy directly; it delegates:\n${commands}`,
     );
     assert.match(result.stdout, /installed for: .*Antigravity/);
-    assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
   } finally {
     box.cleanup();
   }
