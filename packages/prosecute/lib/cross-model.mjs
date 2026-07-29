@@ -17,7 +17,8 @@
 // cross-model-gate.yml, which lets the key verify signatures without ever exposing it
 // to PR-controlled code.)
 
-import { readEntries, isChangeSetRevision, changeSetBase, changeSetDigest } from '@adlc/core';
+import { dirname } from 'node:path';
+import { isChangeSetRevision, changeSetBase, changeSetDigest } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // Two independent defenses on the read side: verify() proves the append-only chain
 // was not corrupted-and-skipped to drop a revocation (#326 Codex F2); verifyEntrySig()
@@ -31,6 +32,7 @@ import { assertNoTruncation } from './attestation-store.mjs';
 // makes "which chain an entry lives in" a non-issue for crossModelSatisfied below
 // (order does not matter to the terminal-revocation rule at all, by design).
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
+import { peekOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
 
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
@@ -181,18 +183,27 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   if (!manifestChainTrustworthy(dir)) {
     throw new Error('carry-forward refused: the manifest hash chain does not verify — a broken chain could be hiding a dropped revocation');
   }
-  // Deliberately root-only for finding the chain's "latest" entry (T-MANIFEST-FOREST
-  // slice 2 covers the GATE's own terminal-revocation walk —
-  // hasCrossModelApprove/hasCrossModelApproveForRevision above — not this ergonomics
-  // feature's depth-cap bookkeeping). latestEntryForTicket's "actual chain head"
-  // concept needs a real total order to mean anything (depth-cap and fromRevision
-  // validation both depend on finding ONE true latest entry), and no writer produces
-  // segments yet (slice 3) nor has this repo migrated (T-MANIFEST-FOREST-MIGRATE) —
-  // root-only is correct for finding "the latest approve to carry" for every repo
-  // this can run against today. The forest-wide revocation check below (after a
-  // genuine prior approve is confirmed) is the exception: it does not need a total
-  // order, only forest-wide membership, so it is NOT root-only.
-  const { entries } = readEntries('manifest', dir);
+  // Scoped to root + THIS checkout's own open segment (T-MANIFEST-FOREST slice 3
+  // adversarial-review finding): record() now routes new cross-model attestations
+  // into a segment once the repo is cutover, so a root-only "latest" lookup could
+  // find a stale root approve after intervening segment carries and reset the
+  // depth cap. latestEntryForTicket's "actual chain head" concept needs a real
+  // total order to mean anything (depth-cap and fromRevision validation both
+  // depend on finding ONE true latest entry) — root-then-this-segment IS such an
+  // order (a segment's anchor can only point at root's state at mint time, and
+  // within one chain appends are strictly sequential), but there is no total
+  // order across UNRELATED segments, so this deliberately never reads any other
+  // lineage's segment (same scoping as doctor.mjs's storeHashBindingCheck and
+  // ticket-sync's planManifestMigration). peekOpenSegment (never mints) keeps
+  // this read-only check free of the write side effect resolveOpenSegment's
+  // minting branch carries. The forest-wide revocation check below (after a
+  // genuine prior approve is confirmed) is the exception: it does not need a
+  // total order, only forest-wide membership, so it reads every segment.
+  const forest = readManifestForest(dir);
+  const peeked = peekOpenSegment(dir, { cwd: dirname(dir) });
+  const entries = peeked
+    ? forest.entries.filter((e) => e.segment === 'root' || e.segment === peeked.name)
+    : forest.entries.filter((e) => e.segment === 'root');
   const prior = latestEntryForTicket(entries, ticket);
   if (!prior) {
     throw new Error(`carry-forward refused: no prior cross-model verdict recorded for ${fromRevision} under ticket ${ticket}`);

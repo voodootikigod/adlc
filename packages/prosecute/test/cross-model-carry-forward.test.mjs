@@ -12,7 +12,8 @@
 // chain at 3.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -34,6 +35,29 @@ function ledger() {
   return join(dir, '.adlc');
 }
 const clean = (d) => rmSync(join(d, '..'), { recursive: true, force: true });
+
+// A REAL git repo — peekOpenSegment shells out to `git rev-parse` to resolve the
+// current branch, unlike `ledger()`'s bare directory (where currentBranch is
+// always null, so a segment can never be "open" and this test's scenario cannot
+// be reproduced).
+function gitLedger() {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-carry-git-'));
+  const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', 'feat/carry-forward-test');
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(root, 'README.md'), 'fixture\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'init');
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  return join(root, '.adlc');
+}
+function activateSegments(dir) {
+  const segDir = join(dir, 'manifest.d');
+  mkdirSync(segDir, { recursive: true });
+  writeFileSync(join(segDir, '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+}
 
 // Two identities for the SAME reviewed change against DIFFERENT bases.
 const DIGEST = 'a'.repeat(64);
@@ -272,6 +296,41 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
         'a segment-recorded revocation of fromRevision must block carry-forward, not just root ones'
       );
       assert.equal(readEntries('manifest', dir).entries.length, 1, 'the refused carry must not append anything to root');
+    } finally { clean(dir); }
+  });
+
+  // Adversarial-review finding (T-MANIFEST-FOREST slice 3): record() now routes new
+  // cross-model attestations into a segment once the repo is cutover, so the
+  // "latest entry" lookup this depends on must be forest-aware too — a root-only
+  // lookup would find a STALE root approve after a fresh, later review landed in
+  // the segment, and happily mint a carry from it, silently ignoring the newer
+  // verdict and resetting the depth-cap bookkeeping the fresh review should have
+  // reset honestly.
+  it('refuses to carry forward from a stale ROOT revision once a later verdict for the same ticket lives in the open SEGMENT', () => {
+    const dir = gitLedger();
+    try {
+      seed(dir, rev(BASE1)); // pre-cutover approve for T1 @ BASE1, lands in root
+      activateSegments(dir);
+      // A fresh, independent review lands in the newly-opened segment — NOT a
+      // carry, a real distinct-provider approve, at a different revision.
+      recordCrossModelReview({
+        ticket: 'T1', revision: rev(BASE2), provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir,
+      });
+
+      assert.throws(
+        () => carry(dir, rev(BASE1), rev(BASE3)),
+        /fromRevision.*is not the latest recorded|latest is/,
+        'a root-only lookup would wrongly treat the stale root entry as the head; the segment entry must win'
+      );
+      // The correctly-scoped carry (from the SEGMENT's actual latest) must still work.
+      carry(dir, rev(BASE2), rev(BASE3));
+      const segDir = join(dir, 'manifest.d');
+      const segFile = readFileSync(join(segDir, readdirSync(segDir).find((n) => n.endsWith('.jsonl'))), 'utf8');
+      const lines = segFile.trim().split('\n').map((l) => JSON.parse(l));
+      const last = lines.at(-1);
+      assert.equal(last.data.revision, rev(BASE3));
+      assert.equal(last.data.carriedFrom, rev(BASE2), 'carried from the segment\'s own approve, not root\'s stale one');
+      assert.equal(last.data.carryDepth, 1);
     } finally { clean(dir); }
   });
 });

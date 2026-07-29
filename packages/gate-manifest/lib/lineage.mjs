@@ -179,14 +179,12 @@ function writeLineageToken(dir, token) {
 }
 
 /**
- * Resolve which segment file the NEXT append should target (spec §7.1).
- *
- * @returns {{ name: string, isNew: boolean, anchor?: object|null }}
- *   `isNew: true` means this append is the segment's FIRST entry and must
- *   carry `anchor` (also returned); `isNew: false` means append as a plain
- *   continuation of the named, already-open segment.
+ * Read-only: THIS branch's already-open segment, or null if none is open yet.
+ * NEVER mints — no `.lineage` write, no anchor computation. Safe to call from
+ * a read-side check (e.g. a carry-forward's "latest entry" lookup) that must
+ * not have the write side effect resolveOpenSegment's minting branch carries.
  */
-export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
+export function peekOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   const branch = currentBranch(cwd);
   const token = readLineageToken(dir);
   if (branch !== null && token && token.branch === branch) {
@@ -195,6 +193,21 @@ export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
       return { name: token.segment, isNew: false };
     }
   }
+  return null;
+}
+
+/**
+ * Resolve which segment file the NEXT append should target (spec §7.1).
+ *
+ * @returns {{ name: string, isNew: boolean, anchor?: object|null }}
+ *   `isNew: true` means this append is the segment's FIRST entry and must
+ *   carry `anchor` (also returned); `isNew: false` means append as a plain
+ *   continuation of the named, already-open segment.
+ */
+export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
+  const peeked = peekOpenSegment(dir, { cwd });
+  if (peeked) return peeked;
+  const branch = currentBranch(cwd);
 
   // No usable token: mint a new segment, anchored to root's current head line
   // if a root exists, else anchor: null (spec §4.4/§7.1 — never chase the
