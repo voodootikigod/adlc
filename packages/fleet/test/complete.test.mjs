@@ -370,6 +370,37 @@ test('a second segmented completion continues the SAME open segment, not a fresh
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a failed SECOND segmented completion (already-open segment) rolls back to the exact prior bytes, not to empty', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+    completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+
+    const service = new TicketService(detectTicketStore({ root }), { root });
+    service.apply(service.planCreate({ id: 'T2', title: 'second' }));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'author T2');
+
+    const segFile = openSegmentFile(root);
+    const priorBytes = readFileSync(segFile);
+
+    // A pre-commit hook that always rejects, forcing the failed-commit rollback path
+    // on a segment that already existed BEFORE this completion (the peeked, not
+    // freshly-minted, artifact).
+    const hooksDir = join(root, '.git', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(join(hooksDir, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    assert.throws(() => completeTicketOnIntegration({ repo: root, ticketId: 'T2', integrationBranch, git }));
+
+    assert.ok(existsSync(segFile), 'an already-open segment must NOT be deleted on rollback — only a freshly-minted one is');
+    assert.deepEqual(readFileSync(segFile), priorBytes, 'the segment is restored to its exact prior bytes, not truncated to empty');
+    assert.equal(isCompleted(root, 'T2'), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('a failed segmented completion commit rolls back the segment exactly (T-MANIFEST-FOREST)', () => {
   const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
   try {
