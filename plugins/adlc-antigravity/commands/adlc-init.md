@@ -7,9 +7,15 @@ description: Bootstrap ADLC in this repo for Antigravity — install the plugin 
 
 Bootstrap the ADLC runtime for use with `agy`.
 
-1. **Install this plugin into agy** (idempotent):
+1. **Install this plugin into agy** (idempotent). Always go through the bundled
+   helper — never hand `agy` the plugin directory yourself. `agy` reads its
+   install target as `plugin@marketplace` *before* treating it as a path, so an
+   `@` anywhere in the argument (an npm scope, or a checkout under
+   `/home/user@example.com/…`) is parsed as a marketplace and the install fails
+   with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
+   under an `@`-free path first:
    ```sh
-   agy plugin install /absolute/path/to/plugins/adlc-antigravity
+   node /absolute/path/to/plugins/adlc-antigravity/bin/cli.mjs install
    agy plugin list   # confirm "adlc-antigravity" with a "hooks" component
    ```
 2. **Initialize the ADLC workspace** (creates `.adlc/`, requires `npm i -g @adlc/cli`):

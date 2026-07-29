@@ -189,14 +189,34 @@ test('AC4: packed tarball extracted outside the repo imports rails-checker with 
  * assertion below can prove the copy landed inside the sandbox. process.execPath
  * is used instead of the string 'node' because PATH no longer resolves it.
  */
-function runCliSealed(args) {
+function runCliSealed(args, { agyScript } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sealed-'));
   const home = join(work, 'home');
   mkdirSync(home, { recursive: true });
+
+  // PATH omits agy by default, so the fallback branch runs. Pass agyScript to
+  // put a stub agy in front of it instead.
+  let pathValue = '/usr/bin:/bin';
+  if (agyScript) {
+    const binDir = join(work, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, 'agy'), agyScript);
+    chmodSync(join(binDir, 'agy'), 0o755);
+    pathValue = `${binDir}:${pathValue}`;
+  }
+
+  // HOME alone does NOT seal this. os.homedir() consults USERPROFILE first on
+  // Windows, then HOMEDRIVE+HOMEPATH — all inherited through ...process.env — so
+  // overriding only HOME leaves a Windows run copying into the developer's real
+  // .gemini directory, which is the exact corruption this helper exists to stop.
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: pathValue };
+  delete env.HOMEDRIVE;
+  delete env.HOMEPATH;
+
   const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), ...args], {
     encoding: 'utf8',
     timeout: 20_000,
-    env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin' },
+    env,
   });
   return { res, work, home, cleanup: () => rmSync(work, { recursive: true, force: true }) };
 }
@@ -223,6 +243,28 @@ test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () 
     assert.ok(
       existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity', 'plugin.json')),
       'the fallback copy must land under the sandboxed HOME, not the real one',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('bin/cli.mjs fails closed when a PRESENT agy rejects the plugin', () => {
+  // The direct copy is for a machine with NO agy. Reaching for it when an agy
+  // that IS installed refused the plugin turns a manifest/compatibility rejection
+  // into "✓ installed" with exit 0 — the plugin never registered, the cause lost
+  // in scrollback, and any automation reading the status told it succeeded.
+  const { res, home, cleanup } = runCliSealed(['install'], {
+    agyScript: '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\nexit 3\n',
+  });
+  try {
+    assert.equal(res.status, 1, `a rejected install must exit non-zero:\n${res.stdout}\n${res.stderr}`);
+    assert.match(res.stderr, /Not falling back to a direct copy/);
+    assert.doesNotMatch(res.stdout, /Successfully installed/);
+    // The load-bearing half: no silent direct copy behind agy's back.
+    assert.ok(
+      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity')),
+      'a rejected install must NOT be papered over by copying the files anyway',
     );
   } finally {
     cleanup();

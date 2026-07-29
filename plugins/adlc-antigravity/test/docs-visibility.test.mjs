@@ -76,3 +76,41 @@ test('the Antigravity plugin points at scripts/rails-guard-ci.mjs as a required-
     'the rails-guard-ci.mjs reference should be framed as a required-check recommendation'
   );
 });
+
+test('no shipped surface tells a user to run `agy plugin install <path>` directly', () => {
+  // The whole point of this integration's install path is that agy resolves its
+  // target as `plugin@marketplace` BEFORE treating it as a filesystem path, so an
+  // `@` ANYWHERE in the argument is read as the separator. Every npm location for
+  // a scoped package has one, and a source checkout is not safe either — a clone
+  // under /home/user@example.com/... reproduces it exactly.
+  //
+  // Prose that QUOTES the broken command to explain the hazard is fine and
+  // expected; an instruction a user copies is not. So only fenced code blocks are
+  // scanned: that is the difference between explaining the trap and setting it.
+  //
+  // This caught the shipped /adlc-init command still teaching the raw-path form
+  // while every guide around it warned against exactly that.
+  const SURFACES = [
+    'plugins/adlc-antigravity/commands/adlc-init.md',
+    'plugins/adlc-antigravity/README.md',
+    'docs/integrations/antigravity.md',
+    'apps/docs/content/docs/integrations/antigravity.mdx',
+  ];
+
+  let scanned = 0;
+  for (const relative of SURFACES) {
+    const text = readFileSync(join(REPO_ROOT, relative), 'utf8');
+    scanned += 1;
+    for (const [, block] of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+      for (const line of block.split('\n')) {
+        const match = line.match(/agy\s+plugin\s+install\s+(\S+)/);
+        if (!match) continue;
+        assert.fail(
+          `${relative} instructs a user to pass a path to agy directly: "${line.trim()}"\n` +
+            'Route it through the helper (bin/cli.mjs install), which stages under an @-free path.'
+        );
+      }
+    }
+  }
+  assert.equal(scanned, SURFACES.length, 'every listed surface must exist and be scanned');
+});

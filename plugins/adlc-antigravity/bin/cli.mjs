@@ -103,12 +103,25 @@ if (command === 'install' || command === '--install') {
     if (status === 0) {
       console.log('✓ Successfully installed @adlc/antigravity plugin via agy!');
       process.exit(0);
-    } else {
-      console.error('⚠️ `agy plugin install` returned non-zero status.');
     }
+    // FAIL CLOSED when agy is PRESENT and still refused the plugin.
+    //
+    // The direct copy below exists for a machine with no agy at all — it drops
+    // the files where agy would look. Using it to paper over a rejection by an
+    // agy that IS installed reports success for an install the authoritative
+    // installer declined: a manifest or compatibility error becomes a plugin that
+    // was never registered, with the cause buried in scrollback and the exit
+    // status saying 0. Automation reading that status cannot tell the difference.
+    console.error(
+      status === null
+        ? '`agy plugin install` was never reached — staging failed (see above).'
+        : `\`agy plugin install\` failed (exit ${status}); see agy's output above.`,
+    );
+    console.error('Not falling back to a direct copy: agy is installed and rejected this plugin.');
+    process.exit(1);
   }
 
-  // Fallback / manual placement into plugin dir
+  // Fallback for a machine with NO agy: place the files where agy would look.
   const targetDir = join(homedir(), '.gemini', 'config', 'plugins', 'adlc-antigravity');
   console.log(`Copying plugin files directly to ${targetDir}...`);
   try {
