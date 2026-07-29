@@ -247,33 +247,86 @@ test('migrateManifestEvidence in a segmented repo signs the re-attestation and c
   }
 });
 
-test('migrateManifestEvidence in a rootless segmented repo mints a segment whose FIRST entry carries the anchor, v2-signed', () => {
+test('migrateManifestEvidence mints a segment whose FIRST entry carries an anchor into root, v2-signed', () => {
   const { root, dir } = gitRepo();
   const KEY = 'rootless-anchor-key';
   try {
+    // Evidence recorded BEFORE cutover lands in root; activation then opens this
+    // branch's first segment, which the re-attestation itself mints and anchors.
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
     activate(dir);
-    // No prior evidence recorded — the re-attestation itself is the segment's first entry.
-    // Seed old-id evidence directly into a hand-built segment to migrate from.
-    const seedName = 'seed-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
-    const seedEntry = {
-      seq: 1, gate: 'prosecution', ts: '2026-01-01T00:00:00.000Z', ticket: 'T7',
-      data: { verdict: 'clear' }, files: {}, prev: null, anchor: null,
-    };
-    writeFileSync(join(dir, 'manifest.d', seedName), `${JSON.stringify(seedEntry)}\n`);
 
     const result = migrateManifestEvidence(root, 'T7', 'gh:r#3', {
       now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: KEY },
     });
     assert.equal(result.migrated, 1);
     const resolved = resolveOpenSegment(dir, { cwd: root });
-    assert.notEqual(resolved.name, seedName, 'the re-attestation lands in THIS branch\'s own segment, not the seeded one');
     const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
     const first = JSON.parse(raw[0]);
     assert.equal(Object.hasOwn(first, 'anchor'), true, 'the segment\'s first entry must carry the anchor');
+    assert.equal(first.data.migratedFrom, 'T7', 'it re-attests the ROOT evidence forward, not a no-op mint');
     assert.equal(first.sigVersion, 2, 'an anchor-carrying entry must be signed at v2');
     const { sig: _sig, segment: _segment, ...signed } = first;
     const expectedSig = createHmac('sha256', KEY).update(canonicalJson(signed)).digest('hex');
     assert.equal(first.sig, expectedSig, 'sig must be a real v2 HMAC over every field but sig/segment, not a placeholder');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migrateManifestEvidence never resurrects a stale root verdict over a causally-later segment one (adversarial-review finding)', () => {
+  const { root, dir } = gitRepo();
+  try {
+    // A root approval recorded at a HIGH seq before cutover...
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+    for (let i = 0; i < 20; i += 1) {
+      recordTicketEvidence(root, {
+        transactionId: `tx-pad-${i}`, operation: 'complete', ticketId: `PAD${i}`,
+        ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+      });
+    }
+    activate(dir);
+    // ...then a causally-LATER segment entry for the SAME gate, at a low seq
+    // (segments restart their own seq counter at 1) — this must win.
+    recordTicketEvidence(root, {
+      transactionId: 'tx-2', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'i'.repeat(64), storeHash: 't'.repeat(64),
+    });
+    const resolvedBefore = resolveOpenSegment(dir, { cwd: root });
+    assert.equal(resolvedBefore.isNew, false, 'precondition: the segment entry already landed');
+
+    const result = migrateManifestEvidence(root, 'T7', 'gh:r#4', { now: '2026-06-27T00:00:00Z', env: {} });
+    assert.equal(result.migrated, 1);
+    assert.equal(result.entries[0].data.migratedFrom, 'T7');
+    // The re-attested storeHash must be the SEGMENT entry's, not root's stale one.
+    assert.match(result.entries[0].data.migratedEvidenceHash, /^[0-9a-f]{64}$/);
+    const raw = readFileSync(segmentPath(dir, resolvedBefore.name), 'utf8').trim().split('\n');
+    const carried = JSON.parse(raw.at(-1));
+    assert.equal(carried.data.migratedFrom, 'T7');
+    const segmentSourceLine = JSON.parse(raw[0]);
+    assert.equal(segmentSourceLine.data.storeHash, 't'.repeat(64), 'the segment\'s own T7 entry (causally later) is the one carried forward');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migrateManifestEvidence ignores an UNRELATED lineage\'s segment — no total order across independent segments', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    // A hand-built segment simulating a DIFFERENT branch/lineage's evidence —
+    // never opened via this checkout's .lineage token.
+    const foreignName = 'foreign-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
+    const foreignEntry = {
+      seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'T7',
+      data: { verdict: 'clear' }, files: {}, prev: null, anchor: null,
+    };
+    writeFileSync(join(dir, 'manifest.d', foreignName), `${JSON.stringify(foreignEntry)}\n`);
+
+    const result = migrateManifestEvidence(root, 'T7', 'gh:r#5', { now: '2026-06-27T00:00:00Z', env: {} });
+    assert.equal(result.migrated, 0, 'an unrelated lineage\'s evidence must never be picked up — no total order across independent segments');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

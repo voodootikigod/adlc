@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
 import {
-  isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact,
+  isSegmentedRepo, resolveOpenSegment, readOwnChains, forestChainsIntact,
   segmentPath, lineagePath, withManifestLock, canonicalJson,
 } from '@adlc/tickets';
 
@@ -43,22 +43,37 @@ export function reassignId(tickets, oldId, newId) {
  * Plan the manifest re-attestation: the latest-per-gate entries currently bound
  * to `oldId` are the evidence to carry forward. Pure (no I/O). Latest wins per
  * gate so a re-attestation never resurrects a superseded verdict.
+ *
+ * `input` is either a flat array of entries from ONE chain (plain `seq`
+ * comparison decides "latest", robust to entries arriving out of array
+ * order), or — for T-MANIFEST-FOREST's readOwnChains — an array of chains in
+ * causal order (root first, at most one segment last). Chain identity is
+ * required, not inferred from position: each chain restarts `seq` at 1, so a
+ * later chain's entry ALWAYS outranks an earlier chain's for the same gate
+ * regardless of the seq values involved (adversarial-review finding: a stale
+ * root approval at a high seq must never outrank a causally-later segment
+ * rejection at a low one); only entries already known to be from the SAME
+ * chain are compared by seq.
  * @returns {Array<object>} source entries (one per gate) to re-attest under newId
  */
-export function planManifestMigration(entries, oldId, newId = null) {
-  const latestByGate = new Map();
-  for (const e of entries ?? []) {
-    if (!e || e.ticket !== oldId || typeof e.gate !== 'string') continue;
-    const prev = latestByGate.get(e.gate);
-    if (!prev || (typeof e.seq === 'number' ? e.seq : 0) >= (typeof prev.seq === 'number' ? prev.seq : 0)) {
-      latestByGate.set(e.gate, e);
+export function planManifestMigration(input, oldId, newId = null) {
+  const chains = Array.isArray(input?.[0]) ? input : [input ?? []];
+  const latestByGate = new Map(); // gate -> { entry, chainIndex }
+  chains.forEach((chain, chainIndex) => {
+    for (const e of chain ?? []) {
+      if (!e || e.ticket !== oldId || typeof e.gate !== 'string') continue;
+      const prev = latestByGate.get(e.gate);
+      const wins = !prev || chainIndex > prev.chainIndex
+        || (chainIndex === prev.chainIndex && (typeof e.seq === 'number' ? e.seq : 0) >= (typeof prev.entry.seq === 'number' ? prev.entry.seq : 0));
+      if (wins) latestByGate.set(e.gate, { entry: e, chainIndex });
     }
-  }
-  const sources = [...latestByGate.values()];
+  });
+  const sources = [...latestByGate.values()].map((v) => v.entry);
   if (!newId) return sources;
+  const allEntries = chains.flat();
   return sources.filter((source) => {
     const sourceHash = sha256(JSON.stringify(source));
-    return !(entries ?? []).some((entry) => entry?.ticket === newId
+    return !allEntries.some((entry) => entry?.ticket === newId
       && entry?.gate === source.gate
       && entry?.data?.migratedFrom === oldId
       && (entry.data.migratedEvidenceHash === sourceHash || legacyReattestationMatches(entry, source)));
@@ -138,7 +153,7 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
     if (!forestChainsIntact(adlcDir)) {
       throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken');
     }
-    const sources = planManifestMigration(readForestEntries(adlcDir), oldId, newId);
+    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId);
     if (sources.length === 0) return [];
 
     const resolved = resolveOpenSegment(adlcDir, { cwd });

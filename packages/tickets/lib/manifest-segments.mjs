@@ -149,6 +149,29 @@ export function readForestEntries(dir) {
   return [...root, ...segments];
 }
 
+/**
+ * Root's chain, followed by THIS branch's own open segment's chain (if one is
+ * already open) — never any OTHER lineage's segment. Returned as SEPARATE
+ * chains (not flattened) because `seq` is only meaningful WITHIN a chain:
+ * each chain restarts at 1, so a caller cannot compare `seq` across the
+ * returned arrays to find "the latest entry" — it must treat a LATER chain
+ * (by return-array position) as strictly newer than an EARLIER one
+ * regardless of the seq values inside it, and only compare `seq` for two
+ * entries already known to be from the SAME chain (adversarial-review
+ * finding: a stale root entry with a high seq must never outrank a
+ * causally-later segment entry with a low one). Matches the existing
+ * root+own-segment scoping used by storeHashBindingCheck and
+ * carryForwardCrossModelReview — no total order exists across UNRELATED
+ * segments, so this deliberately never reads them.
+ */
+export function readOwnChains(dir, { cwd = dirname(dir) } = {}) {
+  const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
+  if (!isSegmentedRepo(dir)) return [root];
+  const peeked = peekOpenSegment(dir, { cwd });
+  if (!peeked) return [root];
+  return [root, parseLines(readRawLines(segmentPath(dir, peeked.name)))];
+}
+
 // SECURITY: `.store.json` is repository-TRACKED, so a malicious branch can
 // commit it as a symlink to an unbounded source (e.g. a character device) —
 // isSegmentedRepo runs on every ticket evidence append. O_NOFOLLOW (never

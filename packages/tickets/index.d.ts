@@ -213,6 +213,7 @@ export function isSegmentedRepo(dir: string): boolean;
 export function resolveOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean; anchor?: Record<string, unknown> | null };
 export function peekOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean } | null;
 export function readForestEntries(dir: string): Record<string, unknown>[];
+export function readOwnChains(dir: string, options?: { cwd?: string }): Record<string, unknown>[][];
 export function forestChainsIntact(dir: string): boolean;
 export function segmentPath(dir: string, name: string): string;
 export function lineagePath(dir: string): string;
