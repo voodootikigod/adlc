@@ -38,7 +38,7 @@ const RESERVED_NAMES = new Set(['.store.json', '.lineage']);
 const LOCK_SUFFIX = '.lock';
 const MAX_LOCK_OWNER_BYTES = 512; // withLedgerLock's owner record is ~120 bytes; generous headroom, not a real limit
 function looksLikeGenuineLedgerLock(path, size) {
-  if (size > MAX_LOCK_OWNER_BYTES) return false; // real locks are tiny; anything bigger cannot be one
+  if (size >= MAX_LOCK_OWNER_BYTES) return false; // real locks are tiny; at/over the cap is refused, not guessed at (same convention as lineage.mjs's bounded reads)
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8').trim());

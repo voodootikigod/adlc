@@ -638,6 +638,40 @@ describe('discoverSegments — grammar edge cases', () => {
       assert.match(invalid[0].reason, /not a genuine advisory lock/);
     } finally { cleanTmp(dir); }
   });
+
+  it('the lock size-cap boundary is exact: 512 bytes is refused, 511 is accepted', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      const lockFile = join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock');
+      const build = (padLen) => JSON.stringify({ version: 1, token: 'x'.repeat(padLen), pid: 1, hostname: 'h', startedAt: '2026-01-01T00:00:00.000Z' });
+      let pad = 0;
+      let json = build(pad);
+      while (json.length < 512) { pad += 1; json = build(pad); }
+      assert.equal(json.length, 512, 'test construction sanity check');
+      writeFileSync(lockFile, json);
+      assert.deepEqual(discoverSegments(adlc).invalid.map((i) => i.name), ['feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'], 'exactly the cap must be refused');
+
+      const jsonUnderCap = build(pad - 1);
+      assert.equal(jsonUnderCap.length, 511);
+      writeFileSync(lockFile, jsonUnderCap);
+      assert.deepEqual(discoverSegments(adlc).invalid, [], 'one byte under the cap must be accepted as a genuine lock');
+    } finally { cleanTmp(dir); }
+  });
+
+  it('a *.lock file whose content is not even valid JSON is refused, not treated as a genuine lock', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), 'not json at all');
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(valid, []);
+      assert.equal(invalid.length, 1);
+      assert.match(invalid[0].reason, /not a genuine advisory lock/);
+    } finally { cleanTmp(dir); }
+  });
 });
 
 describe('renderEntry — segment label (§6)', () => {
