@@ -24,7 +24,7 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 **One-liner via npx (Recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
-npx @adlc/antigravity install
+npx @adlc/antigravity@latest install
 ```
 
 **Global npm Install.** Install `@adlc/antigravity` globally via npm, then let the bundled helper register it:
@@ -34,29 +34,37 @@ npm install -g @adlc/antigravity
 adlc-agy install
 ```
 
-**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules`, then register it:
+**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules`, then run the binary you just installed:
 
 ```sh
 npm install @adlc/antigravity
-npx @adlc/antigravity install
+./node_modules/.bin/adlc-agy install
 ```
 
-**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout, `agy` takes the path directly:
+**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout, run the checkout's own helper so it stages the plugin for you:
 
 ```sh
-agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
+node /abs/path/to/adlc/plugins/adlc-antigravity/bin/cli.mjs install
 ```
 
-> **Why not `agy plugin install $(npm root -g)/@adlc/antigravity`?** `agy` resolves
-> its install target as `plugin@marketplace` *before* deciding whether that target
-> is a filesystem path, so an `@` anywhere in the argument is read as the
-> separator. Every location npm gives a scoped package contains one, so passing
-> the real directory fails with `unknown marketplace: adlc/antigravity` and
-> installs nothing. `adlc-agy install` stages the plugin under an `@`-free path
-> and installs from there; `agy` copies the contents into
-> `~/.gemini/config/plugins/adlc-antigravity/`, so the staging directory is
-> discarded afterwards. A source checkout works directly only because its path
-> has no `@` in it.
+> **Why never hand the plugin directory to `agy` yourself?** `agy` resolves its
+> install target as `plugin@marketplace` *before* deciding whether that target is
+> a filesystem path, so an `@` anywhere in the argument is read as the separator.
+> Every location npm gives a scoped package contains one, so
+> `agy plugin install $(npm root -g)/@adlc/antigravity` fails with
+> `unknown marketplace: adlc/antigravity` and installs nothing. A source checkout
+> is not reliably safe either: an `@` in any parent directory — a clone under
+> `/home/user@example.com/...`, say — reproduces the same failure. The helper
+> stages the plugin under an `@`-free path and installs from there; `agy` copies
+> the contents into `~/.gemini/config/plugins/adlc-antigravity/`, so the staging
+> directory is discarded afterwards.
+>
+> **And why `@latest` on the npx commands?** `npx @adlc/antigravity` resolves a
+> bare name against the **current project** first, so a repository shipping a
+> workspace or dependency named `@adlc/antigravity` would have *its* binary
+> executed instead — verified reproducible. A version spec forces registry
+> resolution. It pins nothing; it only refuses local shadowing (the same reason
+> `install.sh` calls `plugins@<version>` rather than bare `plugins`).
 
 **Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 

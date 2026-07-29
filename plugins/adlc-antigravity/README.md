@@ -9,7 +9,7 @@ skills and a `PreToolUse` rails-guard that freezes ADLC rails. Requires the
 **One-liner via npx (recommended):**
 
 ```sh
-npx @adlc/antigravity install
+npx @adlc/antigravity@latest install
 ```
 
 **Global npm install:**
@@ -23,21 +23,28 @@ adlc-agy install
 
 ```sh
 npm install @adlc/antigravity
-npx @adlc/antigravity install
+./node_modules/.bin/adlc-agy install
 ```
 
 **From local checkout:**
 
 ```sh
-agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
+node /abs/path/to/adlc/plugins/adlc-antigravity/bin/cli.mjs install
 ```
 
-Do NOT hand `agy` the npm install location directly. `agy` resolves its target as
+Never hand `agy` a plugin directory yourself. `agy` resolves its target as
 `plugin@marketplace` before deciding whether it is a filesystem path, so the `@`
 in `.../@adlc/antigravity` is read as that separator and the install fails with
-`unknown marketplace: adlc/antigravity`. `adlc-agy install` stages the plugin
-under an `@`-free path and installs from there. A source checkout works directly
-only because its path has no `@`.
+`unknown marketplace: adlc/antigravity`. A source checkout is not reliably safe
+either — an `@` in any parent directory (a clone under `/home/user@example.com/…`)
+reproduces it. The helper stages the plugin under an `@`-free path and installs
+from there.
+
+The `@latest` above is load-bearing too: `npx @adlc/antigravity` resolves a bare
+name against the current project first, so a repo shipping a workspace or
+dependency named `@adlc/antigravity` would have its binary run instead. A version
+spec forces registry resolution — it pins nothing, it only refuses local
+shadowing.
 
 ## Manifest: `version` and `adlcContract`
 

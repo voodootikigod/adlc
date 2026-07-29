@@ -519,8 +519,16 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     );
     assert.match(
       result.stdout,
-      /Antigravity:.*npx @adlc\/antigravity install/s,
+      /Antigravity:.*npx @adlc\/antigravity@latest install/s,
       'a harness in MANUAL must get its own printed instruction',
+    );
+    // The version spec is load-bearing, not decoration: npx resolves a BARE name
+    // against the current project first, so `npx @adlc/antigravity` inside a repo
+    // shipping a workspace of that name runs THAT binary. Same hazard this script
+    // already pins for the `plugins` package.
+    assert.ok(
+      !/npx @adlc\/antigravity(?!@)/.test(result.stdout),
+      `an npx instruction lacks a version spec and can be shadowed locally:\n${result.stdout}`,
     );
     // The instruction must not hand the user the very command that fails: a bare
     // `agy plugin install <path>/@adlc/antigravity` is rejected by agy's

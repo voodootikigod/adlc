@@ -69,7 +69,7 @@ if (command === '--help' || command === '-h' || command === 'help') {
 ADLC Google Antigravity Plugin Helper
 
 Usage:
-  npx @adlc/antigravity install    Install and register the ADLC plugin with agy
+  npx @adlc/antigravity@latest install    Install and register the ADLC plugin with agy
   adlc-agy install                 Install when @adlc/antigravity is installed globally
   adlc-agy --help                  Display this help message
 
@@ -123,6 +123,6 @@ if (command === 'install' || command === '--install') {
   }
 } else {
   console.error(`Unknown command: ${command}`);
-  console.error('Run `npx @adlc/antigravity --help` for available commands.');
+  console.error('Run `npx @adlc/antigravity@latest --help` for available commands.');
   process.exit(1);
 }

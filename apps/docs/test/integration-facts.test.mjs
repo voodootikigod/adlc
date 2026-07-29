@@ -282,9 +282,23 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   // `.../@adlc/antigravity` is read as the separator and the install dies with
   // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
   // plugin under an @-free path, actually registers the plugin.
-  assert.match(ag?.note ?? '', /npx @adlc\/antigravity install/);
+  assert.match(ag?.note ?? '', /npx @adlc\/antigravity@latest install/);
 
   const advertised = [ag.note ?? '', ...ag.install, ...ag.operate.lines];
+
+  // Every npx invocation must carry a VERSION SPEC. npx resolves a bare name
+  // against the current project first, so `npx @adlc/antigravity` in a repo that
+  // ships a workspace or dependency of that name executes THAT binary instead —
+  // reproduced against a real local install. A scoped name is no protection. This
+  // is the same hazard install.sh already pins for the `plugins` package.
+  for (const line of advertised) {
+    for (const [, spec] of line.matchAll(/npx\s+(?:--\S+\s+)*(@?[\w./@-]+)/g)) {
+      assert.ok(
+        spec.includes('@', 1),
+        `npx must carry a version spec or a repo-local package can shadow it: ${line}`,
+      );
+    }
+  }
   assert.ok(
     !advertised.some((line) => /agy plugin install \S*@/.test(line)),
     `an advertised command hands agy a path it parses as plugin@marketplace: ${advertised.join(' | ')}`,

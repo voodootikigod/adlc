@@ -311,7 +311,7 @@ install_antigravity() {
     if [ -z "$agy_root" ] || [ ! -d "$agy_plugin" ]; then
         warn "Google Antigravity: @adlc/antigravity installed, but not found at"
         warn "  ${agy_plugin:-<npm root -g unavailable>}"
-        warn "Register it with: npx @adlc/antigravity install"
+        warn "Register it with: npx @adlc/antigravity@latest install"
         record_manual "Google Antigravity"
         return 0
     fi
@@ -429,7 +429,7 @@ summary() {
         manual_has "Cursor" && printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
         manual_has "OpenCode" && printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
         manual_has "pi" && printf '      pi:       needs Node >= 22.19; upgrade Node, then "pi install npm:@adlc/pi"\n'
-        manual_has "Google Antigravity" && printf '      Antigravity: @adlc/antigravity is installed but was not found under "npm root -g".\n                   Register it with: npx @adlc/antigravity install\n'
+        manual_has "Google Antigravity" && printf '      Antigravity: @adlc/antigravity is installed but was not found under "npm root -g".\n                   Register it with: npx @adlc/antigravity@latest install\n'
     fi
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"
