@@ -381,6 +381,28 @@ test('bin/cli.mjs rejects an ADLC_AGY_TIMEOUT_MS that would disable the bound', 
   }
 });
 
+test('bin/cli.mjs accepts the smallest positive ADLC_AGY_TIMEOUT_MS (boundary is 0, not 1)', () => {
+  // The contract is "positive and finite", so the boundary sits at 0. 1ms is
+  // pathological but legal; refusing it would impose an arbitrary undocumented
+  // floor. The run still fails — no real agy finishes in 1ms — but it must fail as
+  // a TIMEOUT, not as malformed configuration, and that distinction is the only
+  // thing separating a correct boundary from an off-by-one.
+  const { res, cleanup } = runCliSealed(['install'], {
+    agyScript: '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\nsleep 5\n',
+    extraEnv: { ADLC_AGY_TIMEOUT_MS: '1' },
+  });
+  try {
+    assert.doesNotMatch(
+      res.stderr,
+      /must be a positive, finite number/,
+      'a positive duration must not be refused as malformed configuration',
+    );
+    assert.equal(res.status, 1, 'a 1ms bound still cannot complete an install');
+  } finally {
+    cleanup();
+  }
+});
+
 test('bin/cli.mjs does not hang forever on a wedged agy', () => {
   // spawnSync with no timeout waits indefinitely. A wedged agy would hang the
   // helper with no failure path and no cleanup — the staging directory surviving
