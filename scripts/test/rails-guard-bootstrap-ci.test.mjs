@@ -79,6 +79,29 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+// Ambient inputs the gate honors that these scenarios must NOT inherit from whoever ran the
+// suite. Each scenario builds a throwaway repo and describes the base ref itself, so any of
+// these arriving from the outside describes a repo that does not exist here.
+//
+//   RAILS_BASE        LOAD-BEARING. It outranks BASE_REF in defaultBase() (lib/ci/args.mjs), so
+//                     an operator who exported it — routine when driving the gate by hand across
+//                     parallel worktrees — silently retargets every scenario at a branch the
+//                     synthetic repo has never heard of. Measured: 75 of 80 tests fail, all
+//                     exit 1. Pinning it here is what makes that impossible.
+//   GITHUB_EVENT_PATH DEFENSIVE, not a fix for an observed failure. It is ALWAYS set under GitHub
+//   ADLC_PR_REVIEWS   Actions, where it makes readPrContext() return a real PR context instead of
+//                     the null a local run sees. Measured, the suite passes 80/80 either way
+//                     today, so no current assertion depends on the difference — these are pinned
+//                     so the CI and local code paths cannot silently diverge later.
+//
+// Spread BEFORE each scenario's own `env`, so a test that deliberately supplies one still wins.
+// This mirrors packages/rails-guard/test/ci-bin.test.mjs, which already pins RAILS_BASE/BASE_REF.
+const HERMETIC_ENV = {
+  RAILS_BASE: '',
+  GITHUB_EVENT_PATH: '',
+  ADLC_PR_REVIEWS: '',
+};
+
 function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mutateHead, withCodeowners = true, codeownersContent = '.github/workflows/adlc-rails-guard.yml @adlc-admins\n' }) {
   const dir = mkdtempSync(join(tmpdir(), 'rg-bootstrap-'));
   try {
@@ -112,6 +135,7 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
       encoding: 'utf8',
       env: {
         ...process.env,
+        ...HERMETIC_ENV,
         BASE_REF: 'main',
         ADLC_RUNNER_PATH: '',
         RUNNER_ENVIRONMENT: 'github-hosted',
@@ -159,7 +183,7 @@ function runRailFreezeScenario({ baseConfig = BASE_UNSIGNED, baseTickets, headCo
     const result = spawnSync(process.execPath, [GATE_BIN], {
       cwd: dir,
       encoding: 'utf8',
-      env: { ...process.env, BASE_REF: 'main', ...scenarioEnv },
+      env: { ...process.env, ...HERMETIC_ENV, BASE_REF: 'main', ...scenarioEnv },
     });
     return {
       cwd: dir,

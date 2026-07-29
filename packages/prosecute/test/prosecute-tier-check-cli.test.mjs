@@ -39,9 +39,24 @@ function runBin(args, cwd, env = {}) {
 // a feat branch apply mutate(dir) and commit. Rails default to src/** so the ticket
 // store file itself is not a rails-deny-path match — the ticket-store surface is
 // exercised purely through the add-vs-alter calibration.
+// Commit dates are PINNED, not ambient. A revision is `git-change:<baseSha>:<contentDigest>`,
+// and a commit SHA hashes the author/committer timestamps alongside the tree — at 1-second
+// resolution. The cross-author collision test below builds two independent repos and requires
+// them to agree on the base SHA; with ambient dates that holds only when both `baseline` commits
+// land inside the same wall-clock second, which measured at 15/40 pairs straddling the boundary
+// on a loaded machine (0/40 once pinned). Pinning makes the collision the test asserts
+// constructed rather than accidental. Nothing in this file asserts two revisions DIFFER, so a
+// fixed clock weakens no other case.
+const PINNED_GIT_DATE = '2026-01-01T00:00:00Z';
+
 function scratchRepo({ baseTickets, mutate }) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-tier-check-'));
-  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const g = (...a) => execFileSync('git', a, {
+    cwd: dir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, GIT_AUTHOR_DATE: PINNED_GIT_DATE, GIT_COMMITTER_DATE: PINNED_GIT_DATE },
+  });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');
   g('config', 'user.name', 'tester');
