@@ -39,11 +39,15 @@ const LOCK_SUFFIX = '.lock';
 const MAX_LOCK_OWNER_BYTES = 512; // withLedgerLock's owner record is ~120 bytes; generous headroom, not a real limit
 function looksLikeGenuineLedgerLock(path, size) {
   if (size >= MAX_LOCK_OWNER_BYTES) return false; // real locks are tiny; at/over the cap is refused, not guessed at (same convention as lineage.mjs's bounded reads)
-  let parsed;
+  let parsed = null;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8').trim());
   } catch {
-    return false;
+    // leave parsed at its null default — falls through to the same shape
+    // check below, which already rejects a non-object just as unparseable
+    // content should be rejected. A dedicated `return false` here would be
+    // an equivalent mutant magnet (false and null are identically falsy to
+    // every caller, which only ever checks truthiness) for no benefit.
   }
   return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
     && typeof parsed.token === 'string' && typeof parsed.pid === 'number'
