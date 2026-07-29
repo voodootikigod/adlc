@@ -95,17 +95,57 @@ flag (default `claude-code`).
 `fleet.adapter`/`fleet.adapterCommand` could silently move unattended workers onto a
 less-contained harness. Choosing the harness (and any binary override) is therefore an
 operator trust decision — set via `--adapter` / `--adapter-command` / `--adapter-args`;
-a value in `.adlc/config.json` is ignored with a warning. Only `model` and `adapterStdin`
-(non-executable data) are read from repo config.
+a value in `.adlc/config.json` is ignored with a warning.
+
+**The model and its credential are operator-local too** (operating-stack §4/§10).
+`fleet.model` and `fleet.modelAuthKey` in `.adlc/config.json` are now **ignored
+with a warning**; use `--model` and `--model-auth-key`.
+
+- `model` used to be treated as "non-executable data", which was safe only by
+  accident: `claude-code`, `codex`, and `opencode` all silently dropped it, so it
+  reached nothing but the agy adapter. Now that every adapter forces its model
+  onto the command line, a repo-committed value would let a candidate tree choose
+  the model that builds and judges it.
+- `modelAuthKey` is more dangerous still: it names the ONE variable exempted from
+  `modelPlaneEnv`'s secret stripping, so a repo value chose which host secret
+  entered a code-capable, unsandboxed worker. A candidate could name
+  `ADLC_MANIFEST_KEY` and read the key that signs cross-model attestations.
+  `ADLC_MANIFEST_KEY` is additionally on a hard denylist — no `modelAuthKey`
+  unlocks it, not even an operator's.
+
+Only `adapterStdin` (a prompt-transport shape, not a supply or credential choice)
+is still read from repo config.
 
 Each adapter ships a grounded **default invocation** (`agy --print` is verified
 against antigravity-booster; `codex exec`, `opencode run`, `cursor-agent -p`, and
 the pi headless form are documented defaults with the confidence noted in each
 adapter's header). Because harness CLIs evolve, the command and args are
 **overridable** via the operator-local `--adapter-command` / `--adapter-args` CLI
-flags (and `fleet.model` for agy, which is non-executable data) — so a CLI change
-is a one-line fix, and an unknown `--adapter` fails closed at run start. Live
+flags (and `--model`) — so a CLI change is a one-line fix, and an unknown
+`--adapter` fails closed at run start. With a quartermaster registry engaged the
+argv overrides are refused outright, because the registry picks an adapter per
+ticket and one global binary cannot serve them all. Live
 end-to-end behavior per harness should be verified against the installed CLI.
+
+## Supply — the quartermaster registry (optional)
+
+When an operator-local channel registry exists, it — not `--adapter`/`--model` —
+decides the `{adapter, model, transport}` for **each ticket**, routed by
+[`@adlc/quartermaster`](../quartermaster) from the ticket's category and CPM
+float. The layer engages when `ADLC_QUARTERMASTER_REGISTRY` is set or
+`$XDG_CONFIG_HOME/adlc/quartermaster.json` exists; with neither, fleet behaves
+exactly as documented above.
+
+Once engaged it is **fail-closed**: a missing, disabled, or invalid registry
+aborts before dispatch, and `--adapter-command`/`--adapter-args` are refused
+(one global binary cannot serve a per-ticket adapter choice, and a wholesale argv
+override would discard the forced model). `fleet run --dry-run` prints the
+resolved seat and the argv the adapter itself renders, in text or `--json`.
+
+Nothing in the repo under review participates: a registry-shaped file inside the
+tree is ignored with a notice, and a configured path that is relative or inside
+the repo disables loading rather than reading it. Schema and the documented
+limits: [`docs/integrations/quartermaster-registry.md`](../../docs/integrations/quartermaster-registry.md).
 
 ## Configuration (`.adlc/config.json`)
 
@@ -114,7 +154,6 @@ end-to-end behavior per harness should be verified against the installed CLI.
   "fleet": {
     "gate": { "build": "npm run build --workspaces --if-present", "test": "npm test" },
     "init": "npm install",
-    "model": null,
     "adapterStdin": false,
     "concurrency": 2,
     "base": "main",

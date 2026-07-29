@@ -1,0 +1,137 @@
+---
+title: quartermaster
+description: The operator-local supply layer. Decides which model runs which lifecycle job from a registry outside the repo, and routes build work by derived class rather than by the caller's label.
+---
+
+# quartermaster
+
+**ADLC phase: P4 Build** · **Gate:** every dispatch resolves its `{adapter, model, transport}` from an operator-local registry outside the candidate tree, or it does not dispatch at all.
+
+<PhaseDiagram phase="P4" />
+
+## What it defends against
+
+<FailureMode id="F8" />
+
+`model-router` answers *how much model* a ticket deserves — a tier and a ladder
+mode. It deliberately does not answer *which concrete harness, on which
+subscription, through which transport*. Left unanswered, that question gets
+answered by whatever config happens to be nearest, and the nearest config is
+usually inside the repo being reviewed.
+
+That is the hole. A candidate tree that can name its own reviewer, or repoint
+`frontier` at something cheap, can lower the bar it is about to be judged
+against — and nothing downstream would look wrong. So the registry lives
+**entirely outside** every candidate tree, and the repo carries no knob at all:
+not a path, not an override, not a symbolic hint. A registry-shaped file found in
+the tree is ignored with a notice; a configured path that is relative or inside
+the repo *disables* loading rather than reading it.
+
+<Callout type="warn">
+  **"Operator-local" means "not selected by the candidate", not "unreachable by
+  it."** Fleet's model-plane worker is deliberately not filesystem-sandboxed (it
+  must authenticate with its provider), and the repo's own `fleet.gate` commands
+  run inside that worker. Candidate-authored code therefore executes with the
+  operator's filesystem privileges and could rewrite the registry itself. Moving
+  supply out of the tree turns a *declarative* downgrade into a *code-execution*
+  one; it does not close it. Closing it means isolating the model plane's
+  filesystem while keeping network egress — a change to fleet's containment
+  architecture, tracked in [#395](https://github.com/voodootikigod/adlc/issues/395).
+</Callout>
+
+The second half is that a registry label proves nothing about what ran. The
+dispatcher forces the registry's model onto the harness command line explicitly
+(`-m <model>`) instead of trusting an ambient default, so the model that ran is
+the model the records claim.
+
+<Callout type="warn">
+  **`transport` does not yet get that treatment.** It constrains validation and is
+  reported in the plan, but dispatch does not use it to select credentials — so
+  `frontier` (`subscription:*`) and `frontier-metered` (`api:*`), being the same
+  adapter and model, execute identically today. Work routed to the metered channel
+  may consume the subscription instead. Treat a declared transport as intent and a
+  validation constraint, not as a guarantee about which credential paid.
+  Tracked in [#396](https://github.com/voodootikigod/adlc/issues/396).
+</Callout>
+
+## The registry
+
+An operator-local `quartermaster.json` — `$XDG_CONFIG_HOME/adlc/quartermaster.json`
+by default, or wherever `ADLC_QUARTERMASTER_REGISTRY` points, provided that path is
+absolute and outside the repo under review. Channel names are a **closed set**
+fixed by the spec (`frontier`, `frontier-metered`, `mid`, `cheap`, plus the
+reviewer groups), so a registry cannot invent a route the routing contract never
+sanctioned. Adding a channel is a spec revision, not a config edit.
+
+Seven load-time rules apply, all fail-closed and all reported at once: closed
+names, an adapter allowlist drawn from the fleet's adapter modules, no
+command/argv-shaped field at any depth, distinct fallback transports, a closed
+transport taxonomy (`subscription:` / `api:` / `gateway:`), concrete model IDs for
+reviewer seats, and a `(adapter, model) → provider` table that must carry every
+**concrete** model and agree with the seat's declared provider. A missing,
+disabled, or invalid registry aborts before dispatch. There are no defaults.
+
+Channels must name **concrete model IDs**, not aliases like `default`. An alias is
+resolved by the harness from state the candidate can influence — Claude Code reads
+a project-committed `.claude/settings.json` model when no `--model` is passed — so
+§4c permits an alias only on an adapter that attests the model it actually ran.
+None do yet, so alias channels are rejected at load.
+
+Alias resolutions cannot be checked that way — a harness alias tracking a floating
+"latest" is not enumerable at load time — so for an alias the table is only
+checked to be non-empty, and the schema reference says so plainly rather than
+implying more.
+
+Full schema: [`docs/integrations/quartermaster-registry.md`](https://github.com/voodootikigod/adlc/blob/main/docs/integrations/quartermaster-registry.md).
+
+## Routing
+
+`routeJob` is a total function over a closed job enum that does not trust its
+caller. For `build.*` jobs the class is **derived** — `contract`/`spec`/
+`architecture` categories are spec-class, `float === 0` is critical-path,
+everything else is ladder-start — and a caller-supplied label that disagrees with
+the derivation throws. A mislabeled dispatch is a bug, not a route.
+
+Float is read from the **assignment**, never from the ticket: stored tickets have
+no float field, and defaulting an absent one would silently downgrade
+critical-path work to the cheap channel.
+
+## Usage
+
+The registry is operator-local configuration, not a command. To see what it would
+dispatch — resolved per ticket, with the argv the adapter itself renders — run the
+fleet's dry run:
+
+```sh
+adlc fleet run --dry-run
+```
+
+```
+  quartermaster registry: /Users/you/.config/adlc/quartermaster.json
+  T900     job=build.critical-path channel=frontier adapter=opencode model=operator/frontier-model transport=subscription:anthropic-max
+           argv: opencode ["run","-m","operator/frontier-model","<prompt>"]
+  T901     job=build.ladder-start channel=mid adapter=opencode model=zai/glm-5.2 transport=gateway:opencode-go
+           argv: opencode ["run","-m","zai/glm-5.2","<prompt>"]
+```
+
+Notices — an ignored in-repo registry, a disabled path — go to stderr. Adding
+`--json` returns the same seats and argv under a `quartermaster` key, through the
+identical validation path, so automation using it as a pre-dispatch check is
+never told a run is fine when the live run would fail closed. With no operator
+registry present the layer is simply not engaged, and the fleet keeps its
+`--adapter` / `--model` behavior.
+
+<Callout type="warn">
+  **Breaking change.** `fleet.model` in `.adlc/config.json` is now ignored with a
+  warning, like `fleet.adapter` before it. It was previously honoured as
+  "non-executable data" — safe only by accident, because the claude-code, codex,
+  and opencode adapters silently dropped it. Now that every adapter forces its
+  model onto the command line, a repo-committed value would be a candidate tree
+  choosing the model that builds and judges it. Use the operator-local `--model`
+  flag.
+</Callout>
+
+## Go deeper
+
+[packages/quartermaster](https://github.com/voodootikigod/adlc/tree/main/packages/quartermaster) ·
+[the operating-stack spec](https://github.com/voodootikigod/adlc/blob/main/docs/specs/operating-stack.md)

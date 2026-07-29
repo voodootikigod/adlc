@@ -17,6 +17,15 @@ import { reconcileRun } from '../lib/resume.mjs';
 import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
 import { runFleet, runExitCode, failedBlockedCount } from '../lib/run.mjs';
 import { selfIdentity, lockProbes } from '../lib/proc.mjs';
+import {
+  assertAdapterCanForceModel,
+  assertNoArgvOverride,
+  planSeats,
+  previewArgv,
+  quartermasterEngaged,
+} from '../lib/quartermaster.mjs';
+import { builderPrompt } from '../lib/charters.mjs';
+import { getAdapter } from '../lib/adapters/index.mjs';
 import { Sandbox } from '../lib/sandbox.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
@@ -24,6 +33,7 @@ const USAGE = `fleet — parallel ADLC ticket orchestration
 
 Usage:
   fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
+            [--adapter NAME] [--model MODEL] [--model-auth-key ENV_VAR]
             [--i-am-in-a-disposable-container]
   fleet status [--json]
   fleet unlock
@@ -52,6 +62,8 @@ function parseFlags(args) {
       json: { type: 'boolean' },
       'i-am-in-a-disposable-container': { type: 'boolean' },
       adapter: { type: 'string' },
+      model: { type: 'string' },
+      'model-auth-key': { type: 'string' },
       'adapter-command': { type: 'string' },
       'adapter-args': { type: 'string' },
     },
@@ -90,6 +102,8 @@ if (sub === 'run') {
     base: flags.base,
     disposableContainer: flags['i-am-in-a-disposable-container'] === true,
     adapter: flags.adapter,
+    model: flags.model,
+    modelAuthKey: flags['model-auth-key'],
     // Operator-local worker binary override (A2) — CLI only, never repo config.
     adapterCommand: flags['adapter-command'] ?? undefined,
     adapterArgs: flags['adapter-args'] ? flags['adapter-args'].split(',') : undefined,
@@ -122,19 +136,36 @@ if (sub === 'run') {
       subsetBlocked: blocked,
       completedExcluded: all.length - active.length,
     };
-    if (flags.json) { printJson(plan); process.exit(0); }
-    console.log(`fleet dry-run — integration branch ${plan.integrationBranch}, concurrency ${cap}, base ${config.base}`);
-    console.log(`  ready now (${plan.readyNow.length}): ${plan.readyNow.join(', ') || '(none)'}`);
-    console.log(`  first batch (cap ${cap}): ${plan.firstBatch.join(', ') || '(none)'}`);
-    console.log(`  waiting on deps (${plan.waitingOnDeps.length}): ${plan.waitingOnDeps.join(', ') || '(none)'}`);
-    if (plan.subsetBlocked.length) console.log(`  subset-blocked: ${plan.subsetBlocked.join(', ')}`);
-    console.log(`  completed (excluded): ${plan.completedExcluded}`);
-    console.log('no worktrees created, no workers dispatched (dry-run).');
-    process.exit(0);
+    // Quartermaster planning runs for BOTH output modes, BEFORE either exits.
+    //
+    // `--json` is the format automation uses as a pre-dispatch check, so it must
+    // be the stricter one, never the laxer: exiting here with the legacy plan
+    // would report success for a registry that is malformed, missing, relative,
+    // or in-repo, and the failure would surface only in the live run. The plan is
+    // async (the adapter renders its own argv), so the exit MUST happen inside
+    // the continuation — and the live run sits in an `else`, or the dry-run
+    // would fall through into a real dispatch while the plan was still printing.
+    // Route from the FULL store (CPM float is a whole-graph property, and the
+    // completion-aware filter must see the tombstones to drop edges pointing at
+    // them), then report only the selected subset. Passing a pre-filtered list
+    // here would make `--tickets` change the channels the dry-run predicts, and
+    // would crash on any edge targeting a completed ticket.
+    buildQuartermasterPlan({ repo: process.cwd(), dir, tickets: all, onlyIds, config }).then((quartermaster) => {
+      if (flags.json) { printJson({ ...plan, quartermaster }); process.exit(0); }
+      console.log(`fleet dry-run — integration branch ${plan.integrationBranch}, concurrency ${cap}, base ${config.base}`);
+      console.log(`  ready now (${plan.readyNow.length}): ${plan.readyNow.join(', ') || '(none)'}`);
+      console.log(`  first batch (cap ${cap}): ${plan.firstBatch.join(', ') || '(none)'}`);
+      console.log(`  waiting on deps (${plan.waitingOnDeps.length}): ${plan.waitingOnDeps.join(', ') || '(none)'}`);
+      if (plan.subsetBlocked.length) console.log(`  subset-blocked: ${plan.subsetBlocked.join(', ')}`);
+      console.log(`  completed (excluded): ${plan.completedExcluded}`);
+      printQuartermasterPlan(quartermaster);
+      console.log('no worktrees created, no workers dispatched (dry-run).');
+      process.exit(0);
+    });
+  } else {
+    // ---- LIVE RUN: preflight → resume reconcile → runFleet ----
+    runLive({ repo: process.cwd(), dir, all, config, onlyIds }).then((code) => process.exit(code));
   }
-
-  // ---- LIVE RUN: preflight → resume reconcile → runFleet ----
-  runLive({ repo: process.cwd(), dir, all, config, onlyIds }).then((code) => process.exit(code));
 }
 
 if (!['run', 'status', 'unlock'].includes(sub)) {
@@ -149,6 +180,81 @@ if (import.meta.url === `file://${process.argv[1]}`) runCli();
 // Collaborators are injectable (defaulting to the real implementations) purely for
 // testability: the production call site passes no overrides, so behavior is unchanged, but a
 // unit test can drive the preflight / run / exit-code path without a real sandbox.
+/**
+ * Print what the operator-local registry WOULD dispatch, without dispatching.
+ *
+ * The argv comes from the adapter's own `dispatch` under a capture-only exec, so
+ * the dry-run cannot claim one command line while the live run uses another. The
+ * prompt is elided for readability; every other argument is verbatim.
+ */
+async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
+  if (!quartermasterEngaged({ env: process.env, repoDir: repo })) {
+    // Legacy dispatch: no registry to validate the seat, so the dry-run owes the
+    // operator the same two checks the live path makes — or it would approve a
+    // configuration the live run then rejects, which is the dry-run/live
+    // divergence this layer exists to remove.
+    try {
+      // (a) the harness exists at all. `buildLiveDeps` resolves it eagerly on
+      //     this path (fleet AC4), so a dry-run that skipped it would green-light
+      //     a typo'd --adapter that aborts the real run at assembly.
+      getAdapter(config.adapter ?? 'claude-code');
+      // (b) --model is not silently dropped by an adapter that cannot carry it.
+      assertAdapterCanForceModel({ adapter: config.adapter, model: config.model, adapterArgs: config.adapterArgs });
+    } catch (e) {
+      opError(`fleet: ${e.message}`);
+    }
+    return { engaged: false, seats: [] };
+  }
+
+  let planned;
+  try {
+    assertNoArgvOverride(config);
+    planned = planSeats({ tickets, onlyIds, repoDir: repo, env: process.env, adlcDir: dir });
+  } catch (e) {
+    for (const n of e.notices ?? []) console.error(`notice: ${n}`);
+    opError(`quartermaster: ${e.message}`); // exits 1 — fail closed, no fallback channel
+  }
+  for (const n of planned.notices) console.error(`notice: ${n}`);
+
+  const seats = [];
+  for (const ticket of tickets) {
+    const entry = planned.seats.get(ticket.id);
+    if (!entry) continue;
+    const { job, route, seat } = entry;
+    const prompt = builderPrompt(ticket, config.gate);
+    const argv = await previewArgv({ seat, prompt });
+    seats.push({
+      id: ticket.id,
+      job,
+      channel: route.channel,
+      adapter: seat.adapter,
+      model: seat.model,
+      transport: seat.transport,
+      provider: seat.provider,
+      // The prompt is elided so the plan stays readable; every other argument is
+      // verbatim, straight from the adapter's own dispatch.
+      argv: { command: argv.cmd, args: argv.args.map((a) => (a === prompt ? '<prompt>' : a)) },
+    });
+  }
+  return { engaged: true, registryPath: planned.registryPath, notices: planned.notices, seats };
+}
+
+/** Render a built quartermaster plan for the human-readable dry run. */
+function printQuartermasterPlan(quartermaster) {
+  if (!quartermaster.engaged) {
+    console.log('  quartermaster: not engaged (no operator-local registry) — dispatch uses --adapter / --model.');
+    return;
+  }
+  console.log(`  quartermaster registry: ${quartermaster.registryPath}`);
+  for (const seat of quartermaster.seats) {
+    console.log(
+      `  ${seat.id.padEnd(8)} job=${seat.job} channel=${seat.channel} adapter=${seat.adapter} ` +
+        `model=${seat.model} transport=${seat.transport}`
+    );
+    console.log(`           argv: ${seat.argv.command} ${JSON.stringify(seat.argv.args)}`);
+  }
+}
+
 export async function runLive({ repo, dir, all, config, onlyIds }, {
   io = defaultIo(),
   preflight = runPreflight,
@@ -208,7 +314,35 @@ export async function runLive({ repo, dir, all, config, onlyIds }, {
 
     const runId = resume ? resume.status.runId : `${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
     const baseSha = resume ? resume.status.baseSha : repoGit('rev-parse', config.base);
-    const deps = build({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io });
+    // Quartermaster (operating-stack §4c, §5): resolve every ticket's seat from
+    // the operator-local registry BEFORE any worker is dispatched. Fail closed —
+    // a disabled path or an invalid registry aborts the run rather than falling
+    // back to a channel nobody authorized.
+    let seats;
+    if (quartermasterEngaged({ env: io.env, repoDir: repo })) {
+      try {
+        assertNoArgvOverride(config);
+        const planned = planSeats({ tickets: all, repoDir: repo, env: io.env, adlcDir: dir });
+        for (const n of planned.notices) console.error(`notice: ${n}`);
+        console.error(`quartermaster: dispatching from ${planned.registryPath}`);
+        seats = planned.seats;
+      } catch (e) {
+        for (const n of e.notices ?? []) console.error(`notice: ${n}`);
+        console.error(`quartermaster: ${e.message}`);
+        return 1;
+      }
+    } else {
+      // Legacy dispatch — no registry seat to validate, but --model must still
+      // not be silently discarded by an adapter that cannot carry it (§4c).
+      try {
+        assertAdapterCanForceModel({ adapter: config.adapter, model: config.model, adapterArgs: config.adapterArgs });
+      } catch (e) {
+        console.error(`fleet: ${e.message}`);
+        return 1;
+      }
+    }
+
+    const deps = build({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io, seats });
     const summary = await run({
       all, runId, resume,
       config: { ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date().toISOString() },

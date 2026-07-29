@@ -51,10 +51,24 @@ test('worker HARNESS + binary are operator-local; repo config is ignored+warned 
   assert.ok(repoAdapter.warnings.some((w) => /K1|harness is operator-local|adapter/i.test(w)));
   // The operator CLI flag IS honored.
   assert.equal(resolveRunConfig({}, { adapter: 'codex' }).adapter, 'codex');
-  // model + adapterStdin (non-executable data) stay repo-config-safe.
-  const c = resolveRunConfig({ model: 'gpt-x', adapterStdin: true }, {});
-  assert.equal(c.model, 'gpt-x');
-  assert.equal(c.adapterStdin, true);
+  // The worker MODEL is operator-local too (operating-stack §4/§10). It used to be
+  // repo-config-safe only because claude-code/codex/opencode silently dropped it;
+  // now that every adapter forces its model onto the command line, a repo value
+  // would let a candidate tree choose the model that builds and judges it.
+  const repoModel = resolveRunConfig({ model: 'gpt-x', adapterStdin: true }, {});
+  assert.equal(repoModel.model, null, 'repo config cannot choose the worker model');
+  assert.ok(repoModel.warnings.some((w) => /fleet\.model|operator-local/i.test(w)));
+  // The operator CLI flag IS honored.
+  assert.equal(resolveRunConfig({}, { model: 'gpt-x' }).model, 'gpt-x');
+  // adapterStdin (non-executable transport shape, not a supply choice) stays repo-safe.
+  assert.equal(repoModel.adapterStdin, true);
+  // The worker CREDENTIAL is operator-local and is the most dangerous of the
+  // three: `modelAuthKey` names the ONE variable exempted from secret stripping,
+  // so a repo value chooses which host secret reaches an unsandboxed worker.
+  const repoAuth = resolveRunConfig({ modelAuthKey: 'ADLC_MANIFEST_KEY' }, {});
+  assert.equal(repoAuth.modelAuthKey, null, 'repo config cannot choose which secret enters the worker');
+  assert.ok(repoAuth.warnings.some((w) => /modelAuthKey|operator-local/i.test(w)));
+  assert.equal(resolveRunConfig({}, { modelAuthKey: 'ANTHROPIC_API_KEY' }).modelAuthKey, 'ANTHROPIC_API_KEY');
   // A repo-committed adapterCommand/adapterArgs is IGNORED + warned (security A2).
   const repo = resolveRunConfig({ adapterCommand: '/bin/sh', adapterArgs: ['-c', 'evil'] }, {});
   assert.equal(repo.adapterCommand, null, 'repo config cannot set the worker binary');

@@ -38,6 +38,14 @@ function isSecretName(name) {
   return SECRET_PATTERNS.some((re) => re.test(name));
 }
 
+/**
+ * Secrets no `modelAuthKey` may unlock. The ledger signing key authenticates
+ * cross-model attestations; a worker that can read it can forge the evidence the
+ * merge gate trusts, which is a strictly worse outcome than any build failure
+ * caused by withholding it.
+ */
+export const NEVER_EXEMPT = new Set(['ADLC_MANIFEST_KEY']);
+
 function isAdlcControl(name) {
   return name.startsWith('ADLC_');
 }
@@ -83,9 +91,16 @@ export function repoCommandEnv(source = process.env, { passthrough = [], synthet
  */
 export function modelPlaneEnv(source = process.env, { modelAuthKey, extra = {} } = {}) {
   const out = {};
+  // Defence in depth: some secrets must never be exemptable, whoever asks.
+  // `modelAuthKey` exists to let ONE provider credential through, but the ADLC
+  // ledger signing key is not a provider credential — a worker holding it could
+  // forge the cross-model attestations the gate is built on. There is no
+  // legitimate configuration in which a model worker needs it, so the exemption
+  // does not apply to it even from the operator-local CLI flag.
+  const exemptable = NEVER_EXEMPT.has(modelAuthKey) ? null : modelAuthKey;
   for (const [k, v] of Object.entries(source)) {
     if (v === undefined) continue;
-    if (k === modelAuthKey) { out[k] = v; continue; }
+    if (k === exemptable) { out[k] = v; continue; }
     if (isSecretName(k)) continue; // strip all other secrets
     if (k === 'PATH' || k === 'HOME' || isAdlcControl(k) || ALWAYS_KEEP.has(k)) {
       out[k] = v;

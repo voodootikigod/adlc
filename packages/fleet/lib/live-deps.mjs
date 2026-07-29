@@ -139,15 +139,47 @@ function parseStatusPaths(out) {
  * @param sandboxSpec { mode, backend } resolved by preflight (spec §7.3)
  * @param reviewRunner optional override; defaults to the real adversarial-review runner
  */
-export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunner, io = defaultIo() }) {
+export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunner, seats, io = defaultIo() }) {
   const repoGit = io.git(repo);
   // EVERY integration-branch operation runs in the run's dedicated worktree, never in
   // the shared main checkout. The path is deterministic so it resolves identically on
   // a resume, before createIntegrationBranch has run.
   const integrationPath = join(repo, worktrees.INTEGRATION_WORKTREE);
   const integrationGit = io.git(integrationPath);
-  // Resolve the configured worker harness (T44). Fails closed on an unknown name.
-  const adapter = getAdapter(config.adapter ?? 'claude-code');
+  // Resolve the configured worker harness (T44), fail-closed on an unknown name
+  // — but ONLY when it is actually the thing that will run.
+  //
+  // With a registry engaged every ticket takes its adapter from a seat and
+  // `config.adapter` is never consulted, so validating it there made a stale
+  // `--adapter` abort live assembly over a value the run would never use, while
+  // the dry-run (which previews only seat adapters) reported success. That
+  // divergence is precisely what this layer exists to remove.
+  //
+  // The eager check is KEPT for the legacy path, because AC4 requires an unknown
+  // adapter to fail at assembly rather than at first dispatch — deferring it
+  // would trade a clear abort for a mid-run failure.
+  const seatsPresent = seats instanceof Map ? seats.size > 0 : false;
+  const legacyAdapter = seatsPresent ? null : getAdapter(config.adapter ?? 'claude-code');
+
+  // Quartermaster seats (operating-stack §4c, §5): when the operator has a
+  // registry, the harness AND the model are per-ticket registry data, not a
+  // single run-wide flag. `seats` is absent when the layer is not engaged, and
+  // dispatch keeps its pre-quartermaster behavior.
+  const seatFor = (ticket) => seats?.get(ticket?.id)?.seat ?? null;
+  const adapterFor = (ticket) => {
+    const seat = seatFor(ticket);
+    if (seat) return getAdapter(seat.adapter);
+    if (!legacyAdapter) {
+      // Seats were present at assembly but this ticket has none — it was never
+      // routed. Falling back to `config.adapter` would dispatch it on supply the
+      // registry did not authorize, so refuse.
+      throw new Error(
+        `fleet: no quartermaster seat for ticket ${ticket?.id ?? '(unknown)'}, and an engaged registry supersedes ` +
+          '--adapter. Refusing to dispatch on unauthorized supply.'
+      );
+    }
+    return legacyAdapter;
+  };
   const review = reviewRunner ?? makeReviewRunner({
     reviewBin: config.reviewBin ?? 'adversarial-review',
     provider: config.reviewProvider,
@@ -213,7 +245,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     // provision is OPTIONAL per the WorkerAdapter contract (§4): only claude-code
     // writes a settings file; codex/agy/opencode/pi/cursor have none (adversarial-review A1).
-    provision: ({ worktree }) => adapter.provision?.({ worktree, config, writeJson: io.writeJson }),
+    provision: ({ ticket, worktree }) => adapterFor(ticket).provision?.({ worktree, config, writeJson: io.writeJson }),
 
     dispatch: async ({ ticket, worktree, strike, deadEnds = [] }) => {
       const prompt = strike > 1 ? fixPrompt(ticket, config.gate, deadEnds) : builderPrompt(ticket, config.gate);
@@ -221,13 +253,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         modelAuthKey: config.modelAuthKey,
         extra: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: ticket.id },
       });
-      const res = await adapter.dispatch({
+      const seat = seatFor(ticket);
+      const res = await adapterFor(ticket).dispatch({
         worktree, prompt, timeoutMs: (config.timeoutMinutes ?? 30) * 60000, env,
         exec: (cmd, args, opts) => io.spawnWorker(cmd, args, opts),
         // Operator-local binary override (A2) + non-executable data from config.
         command: config.adapterCommand ?? undefined,
         args: config.adapterArgs ?? undefined,
-        model: config.model ?? undefined,
+        // §4c force half: the registry's model goes onto the command line
+        // explicitly, never the harness's ambient default. A seat always wins
+        // over `fleet.model` — the whole point of the registry is that supply is
+        // decided by the operator's file, not by run config.
+        model: seat ? seat.model : (config.model ?? undefined),
         useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
       });
       // Persist the transcript BEFORE anything can return early, so the flail

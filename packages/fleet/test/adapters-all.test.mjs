@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getAdapter } from '../lib/adapters/index.mjs';
+import { getAdapter, ADAPTERS, adapterCatalog } from '../lib/adapters/index.mjs';
 
 const PROMPT = 'build ticket T1 as specified';
 const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ANTHROPIC_API_KEY: 'sk' };
@@ -79,4 +79,96 @@ test('agy: --model is added from the model option', async () => {
   const rec = [];
   await getAdapter('agy').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'Claude Opus 4.6' });
   assert.deepEqual(rec[0].args, ['--print', '--model', 'Claude Opus 4.6']);
+});
+
+// ---- operating-stack §4c: FORCE the concrete model onto the command line ----
+//
+// The registry's model is worthless if the adapter drops it: the harness would
+// quietly run its ambient default while every usage record and attestation
+// claimed the registry's model. Each expectation below is the argv the installed
+// CLI actually accepts (`opencode run --help`, `codex exec --help`,
+// `claude --help` all document -m/--model).
+
+const FORCED = {
+  'claude-code': {
+    model: 'claude-opus-5',
+    args: ['-p', PROMPT, '--permission-mode', 'acceptEdits', '--output-format', 'text', '--model', 'claude-opus-5'],
+  },
+  codex: { model: 'gpt-5.3-codex', args: ['exec', '-m', 'gpt-5.3-codex', PROMPT] },
+  opencode: { model: 'zai/glm-5.2', args: ['run', '-m', 'zai/glm-5.2', PROMPT] },
+};
+
+for (const [adapterName, exp] of Object.entries(FORCED)) {
+  test(`${adapterName}: the registry model is forced explicitly into argv (§4c)`, async () => {
+    const rec = [];
+    await getAdapter(adapterName).dispatch({
+      worktree: '/wt/T1', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: exp.model,
+    });
+    assert.deepEqual(rec[0].args, exp.args);
+  });
+
+  test(`${adapterName}: the "default" sentinel is NOT put on the command line`, async () => {
+    const rec = [];
+    await getAdapter(adapterName).dispatch({
+      worktree: '/wt/T1', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'default',
+    });
+    assert.ok(!rec[0].args.includes('default'), `${adapterName} must let the harness resolve its own default`);
+    assert.ok(!rec[0].args.includes('-m') && !rec[0].args.includes('--model'), `${adapterName}: no model flag`);
+  });
+}
+
+// ---- operating-stack §4b rule 6: the alias contract is ADAPTER-owned ----
+
+test('every adapter declares its run-time alias set, including the default sentinel', () => {
+  for (const adapterName of ADAPTERS) {
+    const declared = getAdapter(adapterName).aliases;
+    assert.ok(Array.isArray(declared), `${adapterName} must export an aliases array`);
+    assert.ok(declared.includes('default'), `${adapterName} must declare the 'default' sentinel`);
+    for (const alias of declared) assert.equal(typeof alias, 'string');
+  }
+});
+
+test('adapterCatalog covers exactly the registered adapters and mirrors their aliases', () => {
+  const catalog = adapterCatalog();
+  assert.deepEqual(Object.keys(catalog).sort(), [...ADAPTERS].sort());
+  for (const adapterName of ADAPTERS) {
+    assert.deepEqual(catalog[adapterName].aliases, [...getAdapter(adapterName).aliases]);
+  }
+});
+
+// ---- §4c: an adapter must not claim a model-forcing it cannot deliver ----
+
+test('every adapter declares whether it can force an explicit model', () => {
+  for (const adapterName of ADAPTERS) {
+    assert.equal(typeof getAdapter(adapterName).forcesModel, 'boolean', `${adapterName}.forcesModel`);
+  }
+});
+
+test('a declared forcesModel is PROVEN by the argv the adapter renders', async () => {
+  // The declaration is what registry validation trusts, so it cannot be a
+  // comment: an adapter claiming to force must actually put the model on the
+  // command line, and one claiming it cannot must leave argv unchanged.
+  for (const adapterName of ADAPTERS) {
+    const adapter = getAdapter(adapterName);
+    const withModel = [];
+    const without = [];
+    await adapter.dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(withModel), model: 'probe/model-x' });
+    await adapter.dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(without) });
+
+    const carried = withModel[0].args.includes('probe/model-x');
+    assert.equal(
+      carried,
+      adapter.forcesModel,
+      `${adapterName}: declares forcesModel=${adapter.forcesModel} but ${carried ? 'DID' : 'did NOT'} put the model in argv`
+    );
+    if (!adapter.forcesModel) {
+      assert.deepEqual(withModel[0].args, without[0].args, `${adapterName}: a model must not alter argv it cannot carry`);
+    }
+  }
+});
+
+test('agy: the default sentinel is not emitted as a literal --model default', async () => {
+  const rec = [];
+  await getAdapter('agy').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'default' });
+  assert.deepEqual(rec[0].args, ['--print'], 'agy must let its harness resolve the default, not name a model called "default"');
 });

@@ -1,38 +1,36 @@
 {
-  "name": "@adlc/fleet",
+  "name": "@adlc/quartermaster",
   "version": "1.7.0",
-  "description": "Parallel, gated ADLC ticket orchestration across supported agent harnesses.",
+  "description": "Operator-local channel registry + lifecycle-job routing (the ADLC quartermaster layer) — no LLM calls, no repo-side channel selection.",
   "type": "module",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/voodootikigod/adlc.git",
-    "directory": "packages/fleet"
+    "directory": "packages/quartermaster"
   },
-  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/fleet#readme",
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/quartermaster#readme",
   "bugs": "https://github.com/voodootikigod/adlc/issues",
   "keywords": [
     "adlc",
-    "agents",
-    "orchestration",
-    "codex"
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "quartermaster",
+    "gate"
   ],
-  "bin": {
-    "adlc-fleet": "./bin/fleet.mjs"
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
   },
   "files": [
-    "bin/",
+    "index.mjs",
     "lib/",
     "README.md",
     "LICENSE"
   ],
-  "dependencies": {
-    "@adlc/core": "1.7.0",
-    "@adlc/model-router": "1.7.0",
-    "@adlc/quartermaster": "1.7.0",
-    "@adlc/tickets": "1.7.0"
-  },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },

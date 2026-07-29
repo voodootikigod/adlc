@@ -14,6 +14,22 @@ import { defaultExec, mapResult } from './_shared.mjs';
 export const name = 'pi';
 export const pool = 'default';
 
+/** Run-time aliases this harness resolves for itself (operating-stack §4b rule 6). */
+export const aliases = Object.freeze(['default']);
+
+/** The headless invocation is still unverified (see the header) and exposes no model flag here, so this
+ * adapter cannot force the registry's model (§4c). */
+export const forcesModel = false;
+
+/**
+ * §4c ATTEST half: whether this adapter reports the concrete model its harness
+ * actually ran (`resolvedModel`). NONE do yet — that is spec §9.3 — so an
+ * alias-based channel cannot be bound to any adapter today, which is exactly
+ * what §4c round-11 requires: without attestation, an alias is an unverifiable
+ * claim about what executed.
+ */
+export const attestsResolvedModel = false;
+
 export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command = 'pi', args, useStdin = false }) {
   const argv = args ?? ['run', prompt];
   const opts = { cwd: worktree, env, timeout: timeoutMs };

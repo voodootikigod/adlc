@@ -51,6 +51,19 @@ export function resolveRunConfig(config = {}, flags = {}) {
         'config must not silently switch the fleet onto a harness with weaker worker containment (K1) — ignored.'
     );
   }
+  if (config.model != null) {
+    warnings.push(
+      'SECURITY: .adlc/config.json set fleet.model; the worker MODEL is operator-local (--model) only — a repo config ' +
+        'must not choose the model that judges it (operating-stack §4, §10) — ignored.'
+    );
+  }
+  if (config.modelAuthKey != null) {
+    warnings.push(
+      'SECURITY: .adlc/config.json set fleet.modelAuthKey; the worker CREDENTIAL is operator-local ' +
+        '(--model-auth-key) only. `modelAuthKey` names the ONE env var exempted from secret stripping, so a repo ' +
+        'value chooses which host secret enters an unsandboxed worker — ignored.'
+    );
+  }
   return {
     gate: config.gate ?? null,
     init: config.init ?? null,
@@ -61,15 +74,31 @@ export function resolveRunConfig(config = {}, flags = {}) {
     prosecuteFailOn: config.prosecuteFailOn ?? DEFAULTS.prosecuteFailOn,
     reviewBin: config.reviewBin ?? null,
     reviewProvider: config.reviewProvider ?? null,
-    modelAuthKey: config.modelAuthKey ?? null,
+    // OPERATOR-LOCAL, and the most dangerous of the three.
+    //
+    // `modelAuthKey` names the single environment variable that is EXEMPTED from
+    // `modelPlaneEnv`'s secret stripping, so whoever sets it chooses which host
+    // secret reaches a code-capable, unsandboxed worker. Read from repo config, a
+    // candidate could name `ADLC_MANIFEST_KEY` — the key that signs cross-model
+    // attestations — and have the worker read the repo's own trust anchor, then
+    // forge approvals with it. Same rule as `adapter` and `model`: CLI only.
+    modelAuthKey: flags.modelAuthKey ?? null,
     // Worker harness selection (T44). OPERATOR-LOCAL only (adversarial-review K1):
     // a repo-committed config must not silently switch the fleet onto a harness
     // with weaker worker containment (only claude-code installs a per-worktree
     // permission allowlist). Default 'claude-code' — fully contained. The worker
     // BINARY override (adapterCommand/adapterArgs, A2) is likewise CLI-only.
-    // `model`/`adapterStdin` are non-executable data and stay repo-config-safe.
     adapter: flags.adapter ?? 'claude-code',
-    model: config.model ?? null,
+    // The worker MODEL is operator-local too, as of the quartermaster layer.
+    //
+    // It used to be read from repo config as "non-executable data". That was only
+    // ever safe by accident: claude-code, codex, and opencode all silently DROPPED
+    // the model, so the value reached nothing but the agy adapter. Now that every
+    // adapter forces its model onto the command line (§4c), a repo-committed
+    // `fleet.model` would be a candidate tree choosing the model that builds and
+    // judges it — the exact downgrade operating-stack §4/§10 exist to forbid. So
+    // it moves to the CLI, alongside `adapter`, and a repo value is warned + ignored.
+    model: flags.model ?? null,
     adapterStdin: config.adapterStdin === true,
     adapterCommand: flags.adapterCommand ?? null,
     adapterArgs: flags.adapterArgs ?? null,

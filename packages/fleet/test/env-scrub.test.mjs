@@ -68,3 +68,32 @@ test('model plane with no model key strips every secret (subscription-auth case)
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.PATH, '/usr/bin');
 });
+
+// The ledger signing key authenticates cross-model attestations. A worker that
+// could read it could forge the very evidence the merge gate trusts, so no
+// `modelAuthKey` may unlock it — not even one an operator passes deliberately.
+// This is the last line of defence behind making `modelAuthKey` operator-local:
+// even a correct config cannot turn the trust anchor into a worker credential.
+test('ADLC_MANIFEST_KEY is never exemptable, whoever names it', () => {
+  const src = { PATH: '/usr/bin', HOME: '/home/op', ADLC_MANIFEST_KEY: 'signing-key', ANTHROPIC_API_KEY: 'sk-real' };
+
+  // Named as the model auth key — still stripped.
+  assert.equal(modelPlaneEnv(src, { modelAuthKey: 'ADLC_MANIFEST_KEY' }).ADLC_MANIFEST_KEY, undefined);
+  // And naming it does not smuggle other secrets through either.
+  assert.equal(modelPlaneEnv(src, { modelAuthKey: 'ADLC_MANIFEST_KEY' }).ANTHROPIC_API_KEY, undefined);
+  // A genuine provider credential still works.
+  assert.equal(modelPlaneEnv(src, { modelAuthKey: 'ANTHROPIC_API_KEY' }).ANTHROPIC_API_KEY, 'sk-real');
+  // ...and does not drag the signing key along with it.
+  assert.equal(modelPlaneEnv(src, { modelAuthKey: 'ANTHROPIC_API_KEY' }).ADLC_MANIFEST_KEY, undefined);
+});
+
+test('an arbitrary host secret can only be exempted by naming it explicitly', () => {
+  const src = { PATH: '/usr/bin', GITHUB_TOKEN: 'ghp_x', AWS_SECRET_ACCESS_KEY: 'aws' };
+  const none = modelPlaneEnv(src, {});
+  assert.equal(none.GITHUB_TOKEN, undefined, 'secrets are stripped by default');
+  assert.equal(none.AWS_SECRET_ACCESS_KEY, undefined);
+  // Exempting one does not exempt the rest.
+  const one = modelPlaneEnv(src, { modelAuthKey: 'GITHUB_TOKEN' });
+  assert.equal(one.GITHUB_TOKEN, 'ghp_x');
+  assert.equal(one.AWS_SECRET_ACCESS_KEY, undefined);
+});

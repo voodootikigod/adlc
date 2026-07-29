@@ -13,9 +13,35 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnAsync } from '../spawn-async.mjs';
+import { modelArgs } from './_shared.mjs';
 
 export const name = 'claude-code';
 export const pool = 'default';
+
+/**
+ * Run-time aliases this harness resolves for itself (operating-stack §4b rule 6).
+ *
+ * `claude --help` documents `--model` as taking "an alias for the latest model
+ * (e.g. 'fable', 'opus', or 'sonnet') or a model's full name" — the alias set is
+ * open-ended by construction, since each alias tracks whatever "latest" means
+ * today. The list is therefore deliberately OVER-inclusive: a name listed here
+ * that turns out to be concrete only costs a reviewer seat an explicit model ID,
+ * while a mutable alias missing from the list would let reviewer identity drift
+ * under the attestation — the failure this rule exists to prevent.
+ */
+export const aliases = Object.freeze(['default', 'fable', 'opus', 'sonnet', 'haiku', 'opusplan']);
+
+/** `--model` accepts an alias or a full model name, so this adapter can serve a registry seat (§4c). */
+export const forcesModel = true;
+
+/**
+ * §4c ATTEST half: whether this adapter reports the concrete model its harness
+ * actually ran (`resolvedModel`). NONE do yet — that is spec §9.3 — so an
+ * alias-based channel cannot be bound to any adapter today, which is exactly
+ * what §4c round-11 requires: without attestation, an alias is an unverifiable
+ * claim about what executed.
+ */
+export const attestsResolvedModel = false;
 
 /**
  * Translate a config command string into a Claude Code permission rule. A raw
@@ -70,8 +96,10 @@ function defaultWriteJson(path, obj) {
  *
  * @param exec injectable spawn: (cmd, args, opts) => { status, stdout, stderr, signal }
  */
-export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec }) {
-  const args = ['-p', prompt, '--permission-mode', 'acceptEdits', '--output-format', 'text'];
+export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, model }) {
+  // §4c force half: the registry's model goes on the command line explicitly —
+  // never the harness's ambient default.
+  const args = ['-p', prompt, '--permission-mode', 'acceptEdits', '--output-format', 'text', ...modelArgs('--model', model)];
   const res = await exec('claude', args, { cwd: worktree, env, timeout: timeoutMs });
   const timedOut = res.signal === 'SIGTERM' || res.killed === true || res.timedOut === true;
   return {
