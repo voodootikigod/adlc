@@ -34,7 +34,11 @@ import { sha256 } from './canonical.mjs';
 
 const SEGMENT_DIRNAME = 'manifest.d';
 const SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
-const RESERVED_NAMES = new Set(['.store.json', '.lineage']);
+// Only `.store.json` needs an explicit reserved-name skip: `.lineage` is
+// ALSO excluded, but for free, by SEGMENT_NAME_RE alone (it doesn't end in
+// exactly `.jsonl`) — listing it here too would be a genuinely unobservable
+// (equivalent-mutant-prone) redundancy, not a second real guard.
+const RESERVED_NAMES = new Set(['.store.json']);
 const MARKER_NAME = '.store.json';
 const LINEAGE_NAME = '.lineage';
 const MARKER_FORMAT = 'adlc-manifest-segments';

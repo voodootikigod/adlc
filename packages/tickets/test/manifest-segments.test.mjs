@@ -3,7 +3,7 @@
 // and recordTicketEvidence's routing through it.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,6 +61,37 @@ describe('isSegmentedRepo (mirrors @adlc/gate-manifest)', () => {
     try {
       activate(dir);
       assert.equal(isSegmentedRepo(dir), true);
+    } finally { clean(root); }
+  });
+
+  it('a symlinked marker is never followed — treated as absent', () => {
+    const { root, dir } = gitRepo();
+    const outsideTarget = join(root, '..', `outside-marker-${Math.random().toString(36).slice(2)}.txt`);
+    writeFileSync(outsideTarget, JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      symlinkSync(outsideTarget, join(dir, 'manifest.d', '.store.json'));
+      assert.equal(isSegmentedRepo(dir), false);
+    } finally { clean(root); rmSync(outsideTarget, { force: true }); }
+  });
+
+  it('the marker read cap boundary is exact: 4096 bytes is refused, 4095 is accepted', () => {
+    const { root, dir } = gitRepo();
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      const markerFile = join(dir, 'manifest.d', '.store.json');
+      const build = (padLen) => JSON.stringify({ format: 'adlc-manifest-segments', version: 1, pad: 'x'.repeat(padLen) });
+      let pad = 0;
+      let json = build(pad);
+      while (json.length < 4096) { pad += 1; json = build(pad); }
+      assert.equal(json.length, 4096, 'test construction sanity check');
+      writeFileSync(markerFile, json);
+      assert.equal(isSegmentedRepo(dir), false, 'exactly the cap must be refused');
+
+      const jsonUnderCap = build(pad - 1);
+      assert.equal(jsonUnderCap.length, 4095);
+      writeFileSync(markerFile, jsonUnderCap);
+      assert.equal(isSegmentedRepo(dir), true, 'one byte under the cap must be accepted');
     } finally { clean(root); }
   });
 });
