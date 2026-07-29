@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256 } from '@adlc/core';
-import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries } from '@adlc/tickets';
+import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries, canonicalJson } from '@adlc/tickets';
 import { reassignId, planManifestMigration, migrateManifestEvidence } from '../lib/reassign.mjs';
 
 // ---- reassignId (pure, store-wide edge rewrite) ----
@@ -247,8 +247,9 @@ test('migrateManifestEvidence in a segmented repo signs the re-attestation and c
   }
 });
 
-test('migrateManifestEvidence in a rootless segmented repo mints a segment whose FIRST entry carries the anchor', () => {
+test('migrateManifestEvidence in a rootless segmented repo mints a segment whose FIRST entry carries the anchor, v2-signed', () => {
   const { root, dir } = gitRepo();
+  const KEY = 'rootless-anchor-key';
   try {
     activate(dir);
     // No prior evidence recorded — the re-attestation itself is the segment's first entry.
@@ -260,13 +261,19 @@ test('migrateManifestEvidence in a rootless segmented repo mints a segment whose
     };
     writeFileSync(join(dir, 'manifest.d', seedName), `${JSON.stringify(seedEntry)}\n`);
 
-    const result = migrateManifestEvidence(root, 'T7', 'gh:r#3', { now: '2026-06-27T00:00:00Z', env: {} });
+    const result = migrateManifestEvidence(root, 'T7', 'gh:r#3', {
+      now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: KEY },
+    });
     assert.equal(result.migrated, 1);
     const resolved = resolveOpenSegment(dir, { cwd: root });
     assert.notEqual(resolved.name, seedName, 'the re-attestation lands in THIS branch\'s own segment, not the seeded one');
     const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
     const first = JSON.parse(raw[0]);
     assert.equal(Object.hasOwn(first, 'anchor'), true, 'the segment\'s first entry must carry the anchor');
+    assert.equal(first.sigVersion, 2, 'an anchor-carrying entry must be signed at v2');
+    const { sig: _sig, segment: _segment, ...signed } = first;
+    const expectedSig = createHmac('sha256', KEY).update(canonicalJson(signed)).digest('hex');
+    assert.equal(first.sig, expectedSig, 'sig must be a real v2 HMAC over every field but sig/segment, not a placeholder');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

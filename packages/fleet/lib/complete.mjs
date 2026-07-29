@@ -29,7 +29,7 @@ function completionStorePath(store, id) {
 }
 
 function segmentArtifact(dir, name) {
-  return { abs: segmentPath(dir, name), rel: `.adlc/manifest.d/${name}`, segmented: true, pending: false };
+  return { abs: segmentPath(dir, name), rel: `.adlc/manifest.d/${name}`, pending: false };
 }
 
 /**
@@ -54,11 +54,11 @@ function segmentArtifact(dir, name) {
 function resolveManifestArtifact(repo) {
   const dir = join(repo, '.adlc');
   if (!isSegmentedRepo(dir)) {
-    return { abs: join(repo, MANIFEST_FILE), rel: MANIFEST_FILE, segmented: false, pending: false };
+    return { abs: join(repo, MANIFEST_FILE), rel: MANIFEST_FILE, pending: false };
   }
   const peeked = peekOpenSegment(dir, { cwd: repo });
   if (peeked) return segmentArtifact(dir, peeked.name);
-  return { abs: null, rel: null, segmented: true, pending: true };
+  return { abs: null, rel: null, pending: true };
 }
 
 /** Re-resolve a `pending` artifact after the write that was supposed to mint it. */
@@ -241,7 +241,9 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
     // is specifically about ROOT: no equivalent rail exists yet for minting a new
     // segment (T-MANIFEST-FOREST slice 6, not shipped), and a segmented repo's root
     // staying absent/frozen is the EXPECTED state, not a signal to skip.
-    if (!artifact.segmented && priorManifest === null) return { completed: false, reason: 'no-manifest-baseline' };
+    if (artifact.abs === join(repo, MANIFEST_FILE) && priorManifest === null) {
+      return { completed: false, reason: 'no-manifest-baseline' };
+    }
 
     // The tip BEFORE the completion commit — the caller re-gates the new commit and
     // rolls back to exactly here if that gate fails.
