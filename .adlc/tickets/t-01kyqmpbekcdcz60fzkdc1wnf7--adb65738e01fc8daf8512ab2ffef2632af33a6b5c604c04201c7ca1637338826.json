@@ -1,0 +1,16 @@
+{
+  "body": "Spec: .adlc/specs/manifest-key-hermeticity.md, Layer 1. Problem: `scripts/run-tests.mjs` spawns every test segment with the operator's full environment, so an exported ADLC_MANIFEST_KEY flips key-present/key-absent branches deep in library code (measured 2026-07-29: gate-manifest + tickets segments 0/2 with the key exported, 2/2 without), and an exported RAILS_BASE retargets rails-guard tests at nonexistent branches (measured: 75/80 bootstrap tests fail). Both failures name a package, not a variable, so operators burn a diagnosis cycle each time.\n\nBuild: in scripts/run-tests.mjs, construct the child env for every spawned segment by (a) DELETING ADLC_MANIFEST_KEY, RAILS_BASE, and BASE_REF when their value is NON-EMPTY, (b) PRESERVING an explicitly-empty value ('') — presence-not-truthiness is load-bearing: packages/prosecute/lib/load-env-local.mjs rule 2 treats an explicitly-empty key as a deliberate fail-closed that beats the .env.local file loader, and deleting it would re-enable file fallback in spawned bins, (c) leaving unset vars absent. When at least one variable was scrubbed, print exactly one notice line to the runner's output naming the scrubbed variable(s), e.g. `note: ADLC_MANIFEST_KEY was set in your shell — scrubbed for test segments`. No notice when nothing was scrubbed. Tests that need a key keep setting their own inline (e.g. packages/prosecute/test/prosecute-tier-check-cli.test.mjs sets a literal test key at file top) — do not migrate any test file.\n\nAcceptance criteria (spec AC1.1, AC1.2):\n1. `ADLC_MANIFEST_KEY=leak-test node scripts/run-tests.mjs` → all segments pass, scrub notice printed exactly once. `node scripts/run-tests.mjs` with the var unset → all segments pass, no notice line.\n2. New test scripts/test/run-tests-hermetic.test.mjs asserts, against the exported env-construction helper (export it from run-tests.mjs for testability, do not spawn the full suite in the unit test): non-empty ADLC_MANIFEST_KEY/RAILS_BASE/BASE_REF are ABSENT from the child env; '' values are PRESERVED as ''; unset stay absent; the notice logic fires once for any non-empty scrub and never otherwise. Verify: `node --test scripts/test/run-tests-hermetic.test.mjs`.\n3. `npm run preflight` passes with `ADLC_MANIFEST_KEY=leak-test` exported in the invoking shell (preflight drives the same runner).",
+  "category": "test",
+  "duration": 1,
+  "edges": [
+    {
+      "to": "T-01KYQMPBWFP2Y8CTVWR3W38X2Z"
+    }
+  ],
+  "id": "T-01KYQMPBEKCDCZ60FZKDC1WNF7",
+  "scope": [
+    "scripts/run-tests.mjs",
+    "scripts/test/run-tests-hermetic.test.mjs"
+  ],
+  "title": "Test runner scrubs ambient ADLC_MANIFEST_KEY (and RAILS_BASE/BASE_REF) from spawned segments"
+}

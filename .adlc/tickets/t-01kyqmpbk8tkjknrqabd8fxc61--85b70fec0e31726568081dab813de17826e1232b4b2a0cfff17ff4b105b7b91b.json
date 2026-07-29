@@ -1,0 +1,37 @@
+{
+  "body": "Spec: .adlc/specs/manifest-key-hermeticity.md, Layer 2 and design principle P1 (a set key never changes the outcome of any operation that did not explicitly receive it; libraries have NO ambient fallback — only bins resolve the environment).\n\nProblem: four library functions read ADLC_MANIFEST_KEY ambiently at depth — packages/gate-manifest/lib/repair.mjs:85 (`const key = getKey()`), packages/gate-manifest/lib/verify.mjs:227 (same), packages/gate-manifest/lib/record.mjs:72 (same), packages/tickets/lib/evidence.mjs:106 (raw `process.env.ADLC_MANIFEST_KEY`) — so every caller, tests included, inherits an invisible input. Measured 2026-07-29: with the key exported, gate-manifest.test.mjs:339 (repairChain takes the wrong branch and throws) and tickets doctor.test.mjs:144 (checkpoint authenticates when the test asserts unauthenticated) fail.\n\nBuild: (1) a shared key-validation helper (natural home: packages/gate-manifest/lib/sign.mjs alongside getKey): accepts a NON-EMPTY string (a key) or null (no key, deterministically); THROWS on undefined/omission (never fall back to env — `{...opts, key: undefined}` must fail fast), and THROWS on '' or any non-string (a zero-length HMAC key is publicly guessable, and '' means deliberate-fail-closed everywhere else in this system). (2) `key` becomes a REQUIRED parameter, no default, on repairChain, the verify path in verify.mjs, the record path in record.mjs, and the evidence writer in evidence.mjs (threaded from doctor.mjs and the ticket lifecycle commands). (3) cross-model.mjs's existing `key = getKey()` default params migrate to the same required contract so one idiom governs the whole surface. (4) Bins (adlc-prosecute.mjs, adlc-tickets.mjs, gate-manifest bin) resolve the environment ONCE at the top (getKey()/loadManifestKeyFromEnvLocal, unchanged behavior) and thread the validated value down; CLI contracts unchanged. (5) The two ambient-branch tests pin their branch explicitly via key: null / a literal instead of depending on the shell. (6) CALLER INVENTORY (mandatory first step): the four functions have production callers beyond their own packages — repository inspection found call chains into record/appendManifestEntry from build-gate, coldstart, parallax, premortem, rails-guard, runner, and prosecute/run, all currently omitting key. Known omission sites the inventory must cover at minimum: gate-manifest bin, gate-manifest/lib/attest.mjs, tickets transaction/migration/recovery paths, prosecute/lib/run.mjs — plus everything the grep finds. Inventory EVERY caller of the four functions (grep for record(, appendManifestEntry(, and the verify entrypoint), record the inventory in the implementing PR, thread an explicitly resolved key from each bin through each chain, and add a CLI regression test per affected package proving its command still records/verifies. Scoping to the four definitions alone would convert working CLIs into throw sites and cannot satisfy the full-suite criterion. (7) OWNERSHIP BOUNDARY (layering-safe): the dependency graph already runs @adlc/gate-manifest -> @adlc/core -> @adlc/tickets, and tickets deliberately duplicates signature logic today to avoid closing that loop — so a tickets -> gate-manifest dependency is FORBIDDEN. Place the validation primitive in a LEAF layer importing neither core nor tickets (a new leaf module/package, or within tickets itself, which everything above already reaches); every consumer DECLARES the dependency in its package.json (workspace hoisting is not resolution — a deep sibling import that works in the monorepo fails a standalone install); add a conformance test resolving the helper through the declared graph. If duplication is retained instead, pin both implementations to shared conformance vectors. (8) Release: this is a BREAKING change to exported package APIs — audit the actual exported surface of the affected packages; anything reachable by an external consumer ships under the breaking-change release level with migration notes; anything that should never have been public is removed from exports with the internal boundary documented. A minor bump with a changelog line is NOT sufficient.\n\nAcceptance criteria (spec AC2.1, AC2.2):\n1. `ADLC_MANIFEST_KEY=x node --test packages/gate-manifest/test/gate-manifest.test.mjs packages/tickets/test/doctor.test.mjs` passes, and the same command with the var unset passes — identical results both ways.\n2. New test packages/gate-manifest/test/key-contract.test.mjs: each of the four functions called with key omitted, undefined, '', or a non-string THROWS; with key: null takes the no-key branch even when process.env.ADLC_MANIFEST_KEY is set; with a literal key takes the keyed branch even when the env var is unset. Verify: `node --test packages/gate-manifest/test/key-contract.test.mjs`.\n3. Full suite green: `node scripts/run-tests.mjs`. No bin behavior change: `packages/prosecute/test/prosecute-tier-check-cli.test.mjs` and `packages/prosecute/test/prosecute-cross-model-cli.test.mjs` pass unmodified except where they exercised the ambient default directly.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [
+    {
+      "to": "T-01KYQMPBQT6Z2H507VGRCFANWM"
+    }
+  ],
+  "id": "T-01KYQMPBK8TKJKNRQABD8FXC61",
+  "scope": [
+    "packages/gate-manifest/lib/sign.mjs",
+    "packages/gate-manifest/lib/repair.mjs",
+    "packages/gate-manifest/lib/verify.mjs",
+    "packages/gate-manifest/lib/record.mjs",
+    "packages/gate-manifest/test/**",
+    "packages/tickets/lib/evidence.mjs",
+    "packages/tickets/lib/doctor.mjs",
+    "packages/tickets/test/**",
+    "packages/prosecute/lib/cross-model.mjs",
+    "packages/prosecute/bin/adlc-prosecute.mjs",
+    "packages/prosecute/test/**",
+    "packages/tickets/bin/adlc-tickets.mjs",
+    "packages/build-gate/**",
+    "packages/coldstart/**",
+    "packages/parallax/**",
+    "packages/premortem/**",
+    "packages/rails-guard/**",
+    "packages/runner/**",
+    "packages/gate-manifest/package.json",
+    "packages/tickets/package.json",
+    "packages/gate-manifest/**",
+    "packages/tickets/lib/**",
+    "packages/prosecute/lib/run.mjs"
+  ],
+  "title": "Manifest key becomes an explicit, validated, required parameter at every library boundary"
+}
