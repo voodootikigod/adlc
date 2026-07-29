@@ -31,7 +31,8 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.7.0"
+    "@adlc/core": "1.7.0",
+    "@adlc/gate-manifest": "1.7.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

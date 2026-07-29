@@ -3,7 +3,8 @@
 // Thin CLI: parse args, call lib, exit with the correct code.
 
 import { readFileSync, existsSync } from 'node:fs';
-import { parseArgs, opError, printJson } from '@adlc/core';
+import { parseArgs, opError, printJson, sha256 } from '@adlc/core';
+import { appendManifestEntry } from '@adlc/gate-manifest';
 import { parseLog } from '../lib/parse-log.mjs';
 import { analyze } from '../lib/analyze.mjs';
 import { formatResult } from '../lib/format.mjs';
@@ -19,6 +20,8 @@ const { values, positionals } = parseArgs({
     'max-bytes':  { type: 'string' },
     'spent-tokens': { type: 'string' },
     budget:       { type: 'string' },
+    record:       { type: 'boolean', default: false },
+    ticket:       { type: 'string' },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -46,6 +49,10 @@ Options:
                     budget signal when --spent-tokens exceeds it. Both flags
                     must be given together — with either omitted, the budget
                     signal stays silent rather than guessing (ADLC C6).
+  --record          On a clean verdict, append a 'flail-check' manifest entry
+                    to .adlc/manifest.jsonl (ADLC P4 evidence).
+  --ticket <id>     Ticket to scope the recorded manifest entry to (optional;
+                    recorded as null when omitted).
   --json            Machine-readable JSON output.
   --help            Show this help.
 
@@ -143,6 +150,21 @@ if (values.json) {
   printJson(result);
 } else {
   console.log(formatResult(result));
+}
+
+// ---------------------------------------------------------------------------
+// Record on clean verdict
+// ---------------------------------------------------------------------------
+
+if (values.record && result.verdict !== 'flail') {
+  appendManifestEntry({
+    ts: new Date().toISOString(),
+    type: 'flail-check',
+    ticket: values.ticket ?? null,
+    verdict: result.verdict,
+    logFile,
+    logHash: sha256(raw),
+  });
 }
 
 // ---------------------------------------------------------------------------

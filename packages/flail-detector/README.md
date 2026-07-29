@@ -9,7 +9,7 @@ deterministic; no LLM calls.
 ## Usage
 
 ```
-flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--json]
+flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--record] [--ticket <id>] [--json]
 ```
 
 ### Arguments
@@ -27,6 +27,8 @@ flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n
 | `--max-bytes <n>` | _(no limit)_ | Trigger the **size** signal when the log file exceeds n bytes. |
 | `--spent-tokens <n>` | _(none)_ | Measured token spend for this ticket (e.g. from `adlc spend --ticket <id> --json`). Must be given with `--budget`. |
 | `--budget <n>` | _(none)_ | The ticket's declared token budget (`ticket.budget`, or `model-router`'s emitted per-ticket `budget`). Triggers the **budget** signal when `--spent-tokens` exceeds it. Must be given with `--spent-tokens` — either alone is a usage error. |
+| `--record` | off | On a clean verdict, append a `flail-check` entry to `.adlc/manifest.jsonl` (ADLC P4 evidence — see `@adlc/runner`). Never writes on a `flail` verdict. |
+| `--ticket <id>` | _(none)_ | Ticket to scope the recorded manifest entry to. Optional — recorded as `null` when omitted, same as `rails-guard --record`. |
 | `--json` | off | Machine-readable JSON output for orchestrators. |
 | `--help` | — | Print help and exit 0. |
 
@@ -142,6 +144,9 @@ flail-detector session.log --spent-tokens 85000 --budget 50000
 
 # JSON for orchestrators
 flail-detector session.log --json
+
+# Record P4 evidence on a clean pass (adlc run p4 requires this)
+flail-detector session.log --scope 'src/**' --record --ticket T42
 ```
 
 ## ADLC Phase
@@ -165,6 +170,9 @@ the agent.
 
 ## Core Gaps
 
-None. This tool uses only `parseArgs`, `opError`, `printJson`, `pass`,
-`gateFail`, and `globMatch` from `@adlc/core`. No LLM, no git, no ledger
-writes.
+None. This tool uses only `parseArgs`, `opError`, `printJson`, `sha256`, `pass`,
+`gateFail`, and `globMatch` from `@adlc/core`. No LLM, no git. `--record` is the
+one ledger write this tool performs, via `@adlc/gate-manifest`'s
+`appendManifestEntry`, mirroring `rails-guard`'s `--record` (issue #106) —
+without it, `adlc run p4`'s `flail-check` requirement could never be satisfied
+by any documented flow.
