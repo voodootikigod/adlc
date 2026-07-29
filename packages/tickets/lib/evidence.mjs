@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { conflict } from './errors.mjs';
 import { sha256, canonicalJson } from './canonical.mjs';
 import { fsyncDirectory } from './durability.mjs';
-import { isSegmentedRepo, resolveOpenSegment, readForestEntries, segmentPath, lineagePath } from './manifest-segments.mjs';
+import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath } from './manifest-segments.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
@@ -89,6 +89,14 @@ function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash
  */
 function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision }) {
   return withManifestLock(lineagePath(dir), () => {
+    // Adversarial-review finding: a corrupted OTHER segment (crash, manual
+    // edit, or a malicious branch) must not let a ticket transaction finalize
+    // — and delete its recovery journal — against evidence appended to an
+    // already-invalid forest. Mirrors gate-manifest's own segment-writer.mjs
+    // precondition (chain-only, no signature requirement).
+    if (!forestChainsIntact(dir)) {
+      throw conflict('INVALID_MANIFEST', 'manifest forest is invalid: a segment or root chain is broken — refusing to append or trust the idempotency scan');
+    }
     const existing = findMatchingEvidence(readForestEntries(dir), { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash });
     if (existing) return existing;
 

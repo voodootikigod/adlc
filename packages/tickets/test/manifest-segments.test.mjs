@@ -198,6 +198,29 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
     } finally { clean(root); }
   });
 
+  it('refuses to append when a DIFFERENT segment (not the target) has a broken chain', () => {
+    const { root, dir } = gitRepo('feat/branch-a');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence()); // real segment for branch-a
+      const branchASegment = resolveOpenSegment(dir, { cwd: root }).name;
+
+      execFileSync('git', ['checkout', '-q', '-b', 'feat/branch-b'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+
+      // Corrupt branch-a's segment — NOT the one branch-b is about to target.
+      const segFile = segmentPath(dir, branchASegment);
+      const entry = JSON.parse(readFileSync(segFile, 'utf8').trim());
+      entry.prev = 'f'.repeat(64);
+      writeFileSync(segFile, `${JSON.stringify(entry)}\n`);
+
+      assert.throws(
+        () => recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-branch-b' })),
+        (error) => error.code === 'INVALID_MANIFEST',
+        'a corrupted sibling segment must block the append, not just a corrupted target',
+      );
+    } finally { clean(root); }
+  });
+
   it('idempotency scan is forest-wide: a prior root entry (pre-migration) is still found once segmented', () => {
     const { root, dir } = gitRepo();
     try {

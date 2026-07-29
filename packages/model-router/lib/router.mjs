@@ -6,7 +6,8 @@
  */
 
 import { loadTickets, computeFloat } from '@adlc/core';
-import { readEntries, ADLC_DIR } from '@adlc/core';
+import { ADLC_DIR } from '@adlc/core';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { buildPriors } from './priors.mjs';
 import { assignAll } from './assign.mjs';
 import { FRONTIER_CATEGORIES } from './assign.mjs';
@@ -47,8 +48,9 @@ export async function runRouter(opts = {}) {
     throw Object.assign(new Error(cpmResult.error), { isOpError: true });
   }
 
-  // Load manifest ledger for priors
-  const { entries, skipped: skippedLedger } = readEntries('manifest', adlcDir);
+  // Load manifest ledger for priors — forest-aware (T-MANIFEST-FOREST): once
+  // segmented, priors recorded post-cutover live in manifest.d/, not root.
+  const { entries, skipped: skippedLedger } = readManifestForest(adlcDir);
   const priors = buildPriors(entries);
 
   // Assign routes

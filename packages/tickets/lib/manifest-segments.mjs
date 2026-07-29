@@ -104,6 +104,39 @@ function parseLines(lines) {
   }).filter(Boolean);
 }
 
+// Chain-only (no signature) integrity: each entry's `prev` must equal
+// sha256(previous raw line) and `seq` must increase by 1 from 1. Mirrors the
+// chain half of @adlc/gate-manifest/lib/verify.mjs's verifyChain — no
+// signature requirement, matching segment-writer.mjs's OWN precondition
+// (requireSignatures: false), and no anchor/cycle resolution (out of scope
+// here, see manifest-segments.mjs's header).
+function chainIsIntact(lines) {
+  let prevLine = null;
+  let prevSeq = 0;
+  for (const line of lines) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { return false; }
+    const expectedPrev = prevLine === null ? null : sha256(prevLine);
+    if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) return false;
+    prevLine = line;
+    prevSeq = entry.seq;
+  }
+  return true;
+}
+
+/**
+ * True iff root's chain AND every discovered segment's chain are each
+ * internally intact (adversarial-review finding: a corrupted OTHER segment
+ * must block a ticket evidence append the same way gate-manifest's own
+ * segment-writer.mjs refuses to append onto a forest it hasn't confirmed is
+ * valid — a ticket transaction must not finalize, and delete its recovery
+ * journal, against evidence that lands in an already-broken forest).
+ */
+export function forestChainsIntact(dir) {
+  if (!chainIsIntact(readRawLines(join(dir, 'manifest.jsonl')))) return false;
+  return discoverSegmentNames(dir).every((name) => chainIsIntact(readRawLines(segmentPath(dir, name))));
+}
+
 /**
  * Every entry from root plus every segment, in file-discovery order (not the
  * anchor-depth ordering gate-manifest's own reader uses for display — order

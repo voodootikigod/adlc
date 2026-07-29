@@ -372,6 +372,33 @@ test('runRouter: priors influence critical path tier', async () => {
   }
 });
 
+// T-MANIFEST-FOREST (adversarial-review finding): priors must reflect
+// evidence recorded post-cutover in a segment, not just root.
+test('runRouter: priors reflect entries recorded in a manifest.d/ segment, not just root', async () => {
+  const tmp = makeTmp();
+  try {
+    const adlc = join(tmp, '.adlc');
+    mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+    const lines = [
+      { type: 'build', model: 'cheap', firstPass: true },
+      { type: 'build', model: 'cheap', firstPass: true },
+      { type: 'build', model: 'cheap', firstPass: true },
+      { type: 'build', model: 'cheap', firstPass: true },
+      { type: 'build', model: 'cheap', firstPass: true },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+    writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), lines);
+    const ticketsPath = writeTickets(tmp, [
+      { id: 'T1', title: 'Solo', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] },
+    ]);
+    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: adlc });
+    const t1 = result.assignments.find((a) => a.id === 'T1');
+    assert.equal(t1.tier, 'cheap', 'priors from the segment must count toward routing, same as root would');
+    assert.equal(t1.mode, 'direct');
+  } finally {
+    cleanup(tmp);
+  }
+});
+
 // ── integration: floor gate (exit 2) via CLI ──────────────────────────────────
 
 test('CLI: exit 2 when ticket below floor', () => {

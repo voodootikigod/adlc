@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename } from '../index.mjs';
@@ -350,6 +351,74 @@ test('doctor storehash-manifest-bind: a store with no recorded evidence yet is i
     const check = bindCheck(report);
     assert.equal(check.ok, true);
     assert.equal(check.bound, false, 'nothing to bind against yet');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// T-MANIFEST-FOREST (adversarial-review finding): storeHashBindingCheck must
+// bind to evidence recorded in this branch's own segment, not just root —
+// needs a real git repo, since segment resolution reads the current branch.
+function gitStoreWithSegmentedEvidence() {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-segment-'));
+  const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', 'feat/doctor-segment-test');
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(root, 'README.md'), 'fixture\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'init');
+  writeDirectory(root, []);
+  mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+  const store = new DirectoryTicketStore(join(root, '.adlc', 'tickets'));
+  const service = new TicketService(store, { root });
+  service.apply(service.planCreate(ticket('A')));
+  service.apply(service.planComplete('A')); // evidence-required → recorded into the segment
+  return { root, store, service };
+}
+
+test('doctor storehash-manifest-bind: binds to evidence recorded in a segment (segmented repo), not just root', () => {
+  const { root, store } = gitStoreWithSegmentedEvidence();
+  try {
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, true, JSON.stringify(check));
+    assert.equal(check.bound, true, 'must bind to the segment-recorded checkpoint, not report "no evidence yet"');
+    assert.equal(check.storeHash, check.boundStoreHash);
+    assert.notEqual(check.drift, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a signed segment checkpoint is authenticated the same as a signed root one', () => {
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  process.env.ADLC_MANIFEST_KEY = 'doctor-segment-test-key';
+  try {
+    const { root, store } = gitStoreWithSegmentedEvidence();
+    try {
+      const check = bindCheck(doctorTicketStore(store, { root }));
+      assert.equal(check.bound, true);
+      assert.equal(check.authenticated, true);
+      assert.equal(check.signaturesVerified, true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+  }
+});
+
+test('doctor storehash-manifest-bind: a corrupted segment chain fails closed, not silently ignored', () => {
+  const { root, store } = gitStoreWithSegmentedEvidence();
+  try {
+    const segDir = join(root, '.adlc', 'manifest.d');
+    const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+    const segPath = join(segDir, segName);
+    const entry = JSON.parse(readFileSync(segPath, 'utf8').trim());
+    entry.prev = 'f'.repeat(64); // break the chain
+    writeFileSync(segPath, `${JSON.stringify(entry)}\n`);
+
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false);
+    assert.equal(check.code, 'MANIFEST_CHAIN_INVALID');
+    assert.match(check.reason, new RegExp(segName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
