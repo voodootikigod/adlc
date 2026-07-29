@@ -1,6 +1,6 @@
 {
   "name": "@adlc/pi",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "ADLC integration for the pi terminal coding agent: in-session rail/scope/suppression enforcement, native adlc_prosecute/adlc_gate tools, lifecycle skills.",
   "type": "module",
   "license": "MIT",
@@ -54,12 +54,12 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
-    "@adlc/build-gate": "^1.6.0",
-    "@adlc/core": "^1.6.0",
-    "@adlc/flail-detector": "^1.6.0",
-    "@adlc/gate-manifest": "^1.6.0",
-    "@adlc/rails-guard": "^1.6.0",
-    "@adlc/tickets": "1.6.0"
+    "@adlc/build-gate": "^1.7.0",
+    "@adlc/core": "^1.7.0",
+    "@adlc/flail-detector": "^1.7.0",
+    "@adlc/gate-manifest": "^1.7.0",
+    "@adlc/rails-guard": "^1.7.0",
+    "@adlc/tickets": "1.7.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.3"

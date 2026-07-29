@@ -1,6 +1,6 @@
 {
   "name": "@adlc/cursor",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "ADLC native Cursor plugin — marketplace hooks, skills, rules, and /adlc-* commands (npm scaffolder remains as legacy fallback).",
   "type": "module",
   "main": "hooks/adlc-rails-guard.mjs",
@@ -56,10 +56,10 @@
     "assets/"
   ],
   "dependencies": {
-    "@adlc/build-gate": "^1.6.0",
-    "@adlc/core": "^1.6.0",
-    "@adlc/flail-detector": "^1.6.0",
-    "@adlc/tickets": "^1.6.0"
+    "@adlc/build-gate": "^1.7.0",
+    "@adlc/core": "^1.7.0",
+    "@adlc/flail-detector": "^1.7.0",
+    "@adlc/tickets": "^1.7.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

@@ -9,6 +9,47 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-07-29
+
+### Added
+- **gate-manifest / prosecute:** cross-model manifest forest — a read layer plus a
+  cross-model reader that walks it and closes the prior TRUNCATION gap
+  (T-MANIFEST-FOREST slices 1–2) (#384, #389, #355, #387)
+- **herdr:** new `adlc-herdr` plugin — ADLC lifecycle visibility at the
+  terminal-multiplexer layer, built out across board/palette actions, event glue,
+  a fleet observer bridge, and marketplace auto-sync (#333, #340, #346, #357, #360)
+- **copilot:** `plugins/adlc-copilot`, the 7th ADLC harness integration (#242, #290)
+- **cursor / antigravity:** native integration parity build-out, anti-flail
+  handling, and marketplace branding fixes (#241, #294, #305, #318)
+- **install:** one-command install, `skills.sh` distribution, install CTA above
+  the fold, and agent-led onboarding (#351)
+- **tickets:** make `adlc ticket` self-describing, and close what that surfaced (#366)
+- **marketing:** rebuild the marketing site as a controlled-change record; add
+  Copilot to the integration set; make `@adlc/herdr` a publish target (#371, #361)
+
+### Fixed
+- **docs:** marketing site design polish — impeccable critique fixes, P0 claims/form, exhibits everywhere (#385)
+- **gate-manifest:** scope legacy-unsigned tolerance to the honest prefix; record-cross-model now
+  fails closed without a signing key; node24 action pins in the shipped rails-guard template (#378, #383, #370, #236, #375)
+- **prosecute:** correct trust-root tiering for the sharded ticket store; wire the
+  P5→P7 finding bridge into every harness (#319, #322, #323)
+- **tickets:** bound the active-ticket pointer and store readers against a hostile
+  store; make the migration write a working `.gitignore` (#341, #343, #328)
+- **rails-guard:** make the frozen-rail denial state its scope honestly; hermetic
+  tests, scoped bypass, in-session observability for rails-bypass (#243, #332, #204, #336)
+- **flail-detector / fleet:** collect `file_path` from any container, not a fixed
+  key set; make the flail gate actually detect a flail; make a fail-open flail
+  consultation observable (#114, #335, #334, #284, #304, #309, #316)
+- **mutation-gate / ci:** exclude deleted files from the changed set; classify
+  mutation-gate source by include-list, not exclusion; recognize the bot author
+  `gh` reports so the drift tracker updates (#329, #330, #289, #265, #266)
+- **hollow-test:** a kill must mean the tests ran and failed (#293, #306)
+- **tokenomics:** cap unbounded prompt payloads in parallax/fleet (#280, #296)
+- **herdr:** keep the ticket visible in the board header, and measure the board in terminal cells (#368)
+- **marketing:** head the chain column "At this phase", not "Approver" (#373)
+- **adlc-pi:** delete the dead `index.js` carrying the pre-#290 shell classifier (#307, #331)
+- **cursor:** stop the packaging test mutating the real `package.json` (#327)
+
 ## [1.6.0] - 2026-07-22
 
 A lockstep release rewrites the `version` field in every one of the suite's 34
