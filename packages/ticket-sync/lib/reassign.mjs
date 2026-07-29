@@ -13,8 +13,14 @@
 // reduces latest-per-gate by ticket id, so the new id inherits the status without
 // touching history. (Display-only evidence; the ledger stays tamper-evident.)
 
+import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
+import {
+  isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact,
+  segmentPath, lineagePath, withManifestLock, canonicalJson,
+} from '@adlc/tickets';
 
 /**
  * Reassign one ticket id store-wide (pure, immutable). Returns a NEW ticket array
@@ -67,9 +73,9 @@ function legacyReattestationMatches(entry, source) {
     && JSON.stringify(entry.files ?? {}) === JSON.stringify(source.files ?? {});
 }
 
-// Mirror of @adlc/gate-manifest sign.mjs canonicalEntryBytes — the signed payload
-// is { seq, gate, ts, ticket?, data?, files, prev } in this fixed key order, sig
-// excluded. Kept local (zero cross-package coupling); pinned by a test.
+// Mirror of @adlc/gate-manifest sign.mjs canonicalEntryBytes (v1) — the signed
+// payload is { seq, gate, ts, ticket?, data?, files, prev } in this fixed key
+// order, sig excluded. Kept local (zero cross-package coupling); pinned by a test.
 function canonicalEntryBytes(entry) {
   const c = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
   if (entry.ticket !== undefined) c.ticket = entry.ticket;
@@ -77,6 +83,96 @@ function canonicalEntryBytes(entry) {
   c.files = entry.files;
   c.prev = entry.prev;
   return JSON.stringify(c);
+}
+
+// v2 signing (all fields except sig/segment, canonically sorted) — required
+// for a segment's anchor-carrying first entry (spec §4.4: v1's fixed field
+// set never covers `anchor`). Mirrors @adlc/gate-manifest/lib/sign.mjs.
+function signV2(key, entry) {
+  const { sig: _sig, segment: _segment, ...signed } = entry;
+  return createHmac('sha256', key).update(canonicalJson(signed)).digest('hex');
+}
+
+// Build the re-attestation entries for one contiguous append (root OR one
+// segment). `firstAnchor`, when provided, marks this as a brand-new segment's
+// first entry: it carries `anchor` and is forced to sign at v2.
+function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev, firstAnchor }) {
+  let prev = startPrev;
+  let seq = startSeq;
+  const additions = [];
+  sources.forEach((src, index) => {
+    seq += 1;
+    const carriesAnchor = index === 0 && firstAnchor !== undefined;
+    const entry = {
+      seq,
+      ...(carriesAnchor ? { anchor: firstAnchor } : {}),
+      gate: src.gate,
+      ts: now,
+      ticket: newId,
+      data: { ...(src.data ?? {}), migratedFrom: oldId, migratedEvidenceHash: sha256(JSON.stringify(src)) },
+      files: src.files ?? {},
+      prev,
+    };
+    if (key) {
+      if (carriesAnchor) {
+        entry.sigVersion = 2;
+        entry.sig = signV2(key, entry);
+      } else {
+        entry.sig = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
+      }
+    }
+    additions.push(entry);
+    prev = sha256(JSON.stringify(entry));
+  });
+  return additions;
+}
+
+/**
+ * Append-only re-attestation, once segmented (T-MANIFEST-FOREST). Mirrors
+ * @adlc/tickets' own recordSegmentedTicketEvidence: checkout-wide .lineage
+ * lock around resolution AND the write, chain-integrity precondition, and
+ * refusal to silently treat a stale/emptied target segment as fresh.
+ */
+function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
+  return withManifestLock(lineagePath(adlcDir), () => {
+    if (!forestChainsIntact(adlcDir)) {
+      throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken');
+    }
+    const sources = planManifestMigration(readForestEntries(adlcDir), oldId, newId);
+    if (sources.length === 0) return [];
+
+    const resolved = resolveOpenSegment(adlcDir, { cwd });
+    const targetPath = segmentPath(adlcDir, resolved.name);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    return withManifestLock(targetPath, () => {
+      const content = existsSync(targetPath) ? readFileSync(targetPath, 'utf8') : '';
+      const rawLines = content.split('\n').filter((line) => line.trim() !== '');
+      if (resolved.isNew && rawLines.length > 0) {
+        throw new Error(`segment ${resolved.name} was expected to be new but already has content`);
+      }
+      if (!resolved.isNew && rawLines.length === 0) {
+        throw new Error(`segment ${resolved.name} was expected to already be open with content but is empty or missing`);
+      }
+      let previous = null;
+      for (const line of rawLines) {
+        try { previous = JSON.parse(line); } catch { throw new Error(`segment ${resolved.name} contains malformed JSON`); }
+      }
+      const prevRawLine = rawLines.at(-1) ?? null;
+      const additions = buildReattestationEntries(sources, {
+        oldId, newId, now, key,
+        startSeq: previous ? previous.seq : 0,
+        startPrev: prevRawLine === null ? null : sha256(prevRawLine),
+        firstAnchor: resolved.isNew ? resolved.anchor : undefined,
+      });
+      const lines = additions.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+      const fd = openSync(targetPath, 'a');
+      try {
+        writeFileSync(fd, lines);
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
+      return additions;
+    });
+  });
 }
 
 /**
@@ -94,24 +190,23 @@ function canonicalEntryBytes(entry) {
 export function migrateManifestEvidence(dir, oldId, newId, { now, env = process.env, appendBatch = appendEntries } = {}) {
   const adlcDir = `${dir}/.adlc`;
   const key = (() => { const k = env?.ADLC_MANIFEST_KEY; return typeof k === 'string' && k.length ? k : null; })();
+
+  // T-MANIFEST-FOREST (adversarial-review finding): this writer used to call
+  // core's appendEntries directly on root unconditionally. Post-cutover that
+  // both appends behind the frozen root AND makes manifest-cutover cease to
+  // be root's tail — defeating isSegmentedRepo's fallback signal if the
+  // activation marker is later lost.
+  if (isSegmentedRepo(adlcDir)) {
+    const out = migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd: dir });
+    return { migrated: out.length, entries: out };
+  }
+
   const out = appendBatch('manifest', ({ entries, skipped, lastRawLine }) => {
     if (skipped.length) throw new Error(`cannot re-attest evidence: manifest contains malformed line ${skipped[0].line}`);
     const sources = planManifestMigration(entries, oldId, newId);
-    let prev = lastRawLine !== null ? sha256(lastRawLine) : null;
-    let seq = entries.length ? Math.max(...entries.map((e) => (typeof e.seq === 'number' ? e.seq : 0))) : 0;
-    const additions = [];
-    for (const src of sources) {
-      seq += 1;
-      const entry = { seq, gate: src.gate, ts: now };
-      entry.ticket = newId;
-      entry.data = { ...(src.data ?? {}), migratedFrom: oldId, migratedEvidenceHash: sha256(JSON.stringify(src)) };
-      entry.files = src.files ?? {};
-      entry.prev = prev;
-      if (key) entry.sig = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
-      additions.push(entry);
-      prev = sha256(JSON.stringify(entry));
-    }
-    return additions;
+    const startPrev = lastRawLine !== null ? sha256(lastRawLine) : null;
+    const startSeq = entries.length ? Math.max(...entries.map((e) => (typeof e.seq === 'number' ? e.seq : 0))) : 0;
+    return buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev });
   }, adlcDir);
   return { migrated: out.length, entries: out };
 }

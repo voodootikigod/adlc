@@ -21,6 +21,7 @@ export * from './lib/pointer.mjs';
 export * from './lib/pointer-write.mjs';
 export * from './lib/prompt.mjs';
 export * from './lib/evidence.mjs';
+export * from './lib/manifest-segments.mjs';
 export * from './lib/stores/legacy.mjs';
 export * from './lib/stores/directory.mjs';
 export * from './lib/stores/git-tree.mjs';

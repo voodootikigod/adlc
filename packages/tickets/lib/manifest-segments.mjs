@@ -301,5 +301,3 @@ export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
   return { name, isNew: true, anchor };
 }
-
-export { discoverSegmentNames };

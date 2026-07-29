@@ -209,6 +209,12 @@ export function exportLegacyStore(store: LegacyTicketStore | DirectoryTicketStor
 export function doctorTicketStore(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; archive?: boolean }): Record<string, unknown>;
 export function recordTicketEvidence(root: string, options: Record<string, unknown>): Record<string, unknown>;
 export function withManifestLock<T>(path: string, fn: () => T, options?: { retries?: number; delayMs?: number }): T;
+export function isSegmentedRepo(dir: string): boolean;
+export function resolveOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean; anchor?: Record<string, unknown> | null };
+export function readForestEntries(dir: string): Record<string, unknown>[];
+export function forestChainsIntact(dir: string): boolean;
+export function segmentPath(dir: string, name: string): string;
+export function lineagePath(dir: string): string;
 export function fsyncFile(path: string): void;
 export function fsyncDirectory(path: string): boolean;
 export function durableMkdir(path: string): void;

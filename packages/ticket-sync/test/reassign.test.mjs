@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sha256 } from '@adlc/core';
+import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries } from '@adlc/tickets';
 import { reassignId, planManifestMigration, migrateManifestEvidence } from '../lib/reassign.mjs';
 
 // ---- reassignId (pure, store-wide edge rewrite) ----
@@ -173,4 +178,115 @@ test('migrateManifestEvidence derives sequence and prev from state observed insi
   const result = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T', env: {}, appendBatch });
   assert.equal(result.entries[0].seq, 3);
   assert.equal(result.entries[0].prev, sha256(JSON.stringify(external)));
+});
+
+// ---- migrateManifestEvidence: segmented repo (T-MANIFEST-FOREST) ----
+// Real filesystem + git repo, unlike the fake-ledger tests above: segment
+// routing shells out to `git rev-parse` to resolve the branch.
+
+function gitRepo(branch = 'feat/reassign-test') {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-reassign-segments-'));
+  const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', branch);
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(root, 'README.md'), 'fixture\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'init');
+  const dir = join(root, '.adlc');
+  mkdirSync(dir, { recursive: true });
+  return { root, dir };
+}
+
+function activate(dir) {
+  mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+  writeFileSync(join(dir, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+}
+
+test('migrateManifestEvidence routes to the segment writer once segmented — root is never created', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', env: {} });
+    assert.equal(result.migrated, 1);
+    assert.equal(result.entries[0].ticket, 'gh:acme/app#7');
+    assert.equal(result.entries[0].data.migratedFrom, 'T7');
+    assert.equal(existsSync(join(dir, 'manifest.jsonl')), false, 'root must never be created once segmented');
+    const { entries } = { entries: readForestEntries(dir) };
+    assert.equal(entries.filter((e) => e.ticket === 'gh:acme/app#7').length, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migrateManifestEvidence in a segmented repo signs the re-attestation and continues the open segment', () => {
+  const { root, dir } = gitRepo();
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  process.env.ADLC_MANIFEST_KEY = 'reassign-segment-key';
+  try {
+    activate(dir);
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+    const before = resolveOpenSegment(dir, { cwd: root });
+    assert.equal(before.isNew, false);
+    migrateManifestEvidence(root, 'T7', 'gh:r#9', { now: '2026-06-27T00:00:00Z', env: process.env });
+    const after = resolveOpenSegment(dir, { cwd: root });
+    assert.equal(after.name, before.name, 'the re-attestation continues the same open segment, not a new one');
+    const raw = readFileSync(segmentPath(dir, after.name), 'utf8').trim().split('\n');
+    assert.equal(raw.length, 2);
+    const reattestation = JSON.parse(raw[1]);
+    assert.equal(typeof reattestation.sig, 'string');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+  }
+});
+
+test('migrateManifestEvidence in a rootless segmented repo mints a segment whose FIRST entry carries the anchor', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    // No prior evidence recorded — the re-attestation itself is the segment's first entry.
+    // Seed old-id evidence directly into a hand-built segment to migrate from.
+    const seedName = 'seed-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl';
+    const seedEntry = {
+      seq: 1, gate: 'prosecution', ts: '2026-01-01T00:00:00.000Z', ticket: 'T7',
+      data: { verdict: 'clear' }, files: {}, prev: null, anchor: null,
+    };
+    writeFileSync(join(dir, 'manifest.d', seedName), `${JSON.stringify(seedEntry)}\n`);
+
+    const result = migrateManifestEvidence(root, 'T7', 'gh:r#3', { now: '2026-06-27T00:00:00Z', env: {} });
+    assert.equal(result.migrated, 1);
+    const resolved = resolveOpenSegment(dir, { cwd: root });
+    assert.notEqual(resolved.name, seedName, 'the re-attestation lands in THIS branch\'s own segment, not the seeded one');
+    const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
+    const first = JSON.parse(raw[0]);
+    assert.equal(Object.hasOwn(first, 'anchor'), true, 'the segment\'s first entry must carry the anchor');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migrateManifestEvidence refuses to append when a segment chain is broken', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+    const resolved = resolveOpenSegment(dir, { cwd: root });
+    const segFile = segmentPath(dir, resolved.name);
+    const entry = JSON.parse(readFileSync(segFile, 'utf8').trim());
+    entry.prev = 'f'.repeat(64);
+    writeFileSync(segFile, `${JSON.stringify(entry)}\n`);
+
+    assert.throws(
+      () => migrateManifestEvidence(root, 'T7', 'gh:r#4', { now: '2026-06-27T00:00:00Z', env: {} }),
+      /manifest forest is invalid/,
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
