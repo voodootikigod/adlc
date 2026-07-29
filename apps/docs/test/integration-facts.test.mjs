@@ -299,6 +299,20 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
       );
     }
   }
+
+  // The neutral-cwd hop must be AND-chained. Not string-shape pedantry: with
+  // `||`, npx runs in the CALLER's directory whenever the cd SUCCEEDS — the
+  // control inverted — and in the caller's directory on failure too, which is
+  // exactly the hostile-.npmrc case the scratch dir exists to avoid. The
+  // operator is the security property here, so it is pinned deliberately.
+  for (const line of advertised) {
+    if (!line.includes('mktemp -d') || !line.includes('npx ')) continue;
+    assert.match(
+      line,
+      /mktemp -d\)"\s*&&\s*npx /,
+      `the neutral-cwd hop must be "&&" so npx runs INSIDE the scratch dir: ${line}`,
+    );
+  }
   assert.ok(
     !advertised.some((line) => /agy plugin install \S*@/.test(line)),
     `an advertised command hands agy a path it parses as plugin@marketplace: ${advertised.join(' | ')}`,
