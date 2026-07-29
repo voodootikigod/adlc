@@ -4,13 +4,13 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { readEntries, ADLC_DIR } from '../../core/index.mjs';
+import { readEntries, sha256, ADLC_DIR } from '../../core/index.mjs';
 
 const BIN = fileURLToPath(new URL('../bin/flail-detector.mjs', import.meta.url));
 
@@ -61,7 +61,7 @@ describe('--record: bin writes a flail-check manifest entry on a clean verdict',
     assert.equal(entry.verdict, 'clean');
     assert.ok(typeof entry.ts === 'string', 'ts must be a string');
     assert.equal(entry.logFile, logFile);
-    assert.ok(typeof entry.logHash === 'string' && entry.logHash.length > 0, 'logHash must be a non-empty string');
+    assert.equal(entry.logHash, sha256(readFileSync(logFile)), 'logHash must be the sha256 of the analyzed log content');
   });
 
   test('--record without --ticket still records, with ticket null', () => {
