@@ -277,6 +277,34 @@ describe('appendManifestEntry routes to the segment writer once segmented (spec 
     } finally { clean(root); }
   });
 
+  it('a continuation entry (not the anchor-carrying first one) signs at the default v2, not some other version', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      withKey('seg-key', () => {
+        appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }); // first: anchor-carrying, forced v2 regardless
+        const second = appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }); // continuation: default applies
+        assert.equal(second.sigVersion, 2);
+        assert.equal(verifyEntrySig('seg-key', second), true);
+      });
+    } finally { clean(root); }
+  });
+
+  it('tolerates a legacy unsigned root prefix when checking chain integrity before a segment append', () => {
+    const { root, dir } = gitRepo();
+    try {
+      record({ gate: 'evidence', dir }); // no key set yet: an honest unsigned legacy entry
+      activate(dir);
+      withKey('seg-key', () => {
+        // A key IS present now, so this only succeeds if the integrity precondition
+        // tolerates root's unsigned legacy prefix (requireSignatures:false) instead of
+        // demanding every entry be signed (requireSignatures:true would reject this).
+        const entry = appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+        assert.equal(entry.seq, 1);
+      });
+    } finally { clean(root); }
+  });
+
   it('reserved field "anchor" is refused before it ever reaches the segment writer', () => {
     const { root, dir } = gitRepo();
     try {
