@@ -239,7 +239,7 @@ describe('record → verify round-trip', () => {
 
   it('refuses a payload that supplies any reserved chain field', () => {
     try {
-      for (const field of ['seq', 'prev', 'sig', 'sigVersion', 'segment']) {
+      for (const field of ['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor']) {
         assert.throws(
           () => appendManifestEntry({ type: 'p5-complete', [field]: 'x' }, dir),
           new RegExp(field),

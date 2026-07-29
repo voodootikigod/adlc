@@ -7,19 +7,23 @@ import { existsSync, readFileSync } from 'node:fs';
 import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
+import { isSegmentedRepo } from './lineage.mjs';
+import { appendToSegment } from './segment-writer.mjs';
 
 // `segment` is reserved too: forest.mjs's readManifestForest annotates every
 // entry it returns with its source segment (see sign.mjs's canonicalEntryBytes
 // for why that annotation must never be signed) — a caller-supplied `segment`
-// would be indistinguishable from that read-only annotation.
-const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment'];
+// would be indistinguishable from that read-only annotation. `anchor` is
+// reserved per spec §4.4: only a segment's first entry may carry one, and
+// only the writer itself (segment-writer.mjs) may set it.
+const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor'];
 
 /**
  * Atomically append an arbitrary top-level evidence entry to the C11 manifest.
  * Sequence allocation and the byte-exact previous-line hash happen under the
  * same ledger lock as the write, so runner and gate evidence share one chain.
  */
-export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2 } = {}) {
+export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2, cwd = process.cwd() } = {}) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new TypeError('manifest payload must be an object');
   }
@@ -27,6 +31,16 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
     if (Object.hasOwn(payload, field)) {
       throw new Error(`manifest payload must not provide reserved chain field: ${field}`);
     }
+  }
+
+  // spec §7: once a repo has cut over (marker or a root manifest-cutover
+  // entry — see lineage.mjs), EVERY append routes to the current lineage's
+  // segment instead of root. Root's own append path below is unreachable
+  // from here on for this repo — that IS spec §7 point 3's "MUST refuse to
+  // append to the root", enforced structurally rather than by a redundant
+  // guard the root path could never actually reach.
+  if (isSegmentedRepo(dir)) {
+    return appendToSegment(payload, dir, { signatureVersion, cwd });
   }
 
   const [entry] = appendEntries('manifest', (state) => {

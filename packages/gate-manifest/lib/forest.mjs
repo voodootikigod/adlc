@@ -217,8 +217,11 @@ function parseLenient(rawLines, segmentLabel) {
   return { entries, skipped };
 }
 
-// spec §4.2: ULID is the last 26 chars before `.jsonl`.
-function ulidOf(segmentName) {
+// spec §4.2: ULID is the last 26 chars before `.jsonl`. Exported so the
+// writer (lineage.mjs, T-MANIFEST-FOREST slice 3) can confirm a `.lineage`
+// token's cached ULID still matches the segment file it names, without
+// re-deriving the slicing logic.
+export function ulidOf(segmentName) {
   return segmentName.slice(segmentName.length - '.jsonl'.length - 26, segmentName.length - '.jsonl'.length);
 }
 
