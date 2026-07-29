@@ -11,16 +11,25 @@ Target ticket: **$ARGUMENTS** (default to the active ticket).
 
 ## Steps
 1. Run the configured build, lint, and test commands (from `.adlc/config.json` or
-   the project's `package.json`). Capture exit codes.
+   the project's `package.json`). Capture exit codes and keep the output in a
+   log file.
 2. If any fail, STOP — report the failures; the change is not eligible for P5.
-3. On success, RECORD the build evidence with
-   `adlc gate-manifest record p4-build --files <changed files>` (or, if that is
-   unavailable, append an unsigned `p4-build` entry to `.adlc/manifest.jsonl`,
-   flagged `unsigned_fallback`). Note: `adlc-runner run p4 --ticket <id>` does
-   **not** record — it is a read-only ASSERTION that the P4 evidence is already
-   present (it exits 2 on a green build with no prior record), so run it (if the
-   runner is available) only AFTER recording, as a confirmation.
+3. Check the session for flail: `adlc flail-detector <log-file> --record --ticket
+   <id>` (add `--scope <glob>` when the ticket declares scope globs). It flags
+   repeated errors, scope violations, edit churn, and oversized logs — exit `2`
+   means the build session itself is unhealthy; investigate before proceeding.
+   On a clean verdict, `--record` appends the `flail-check` manifest entry
+   `adlc-runner run p4` requires.
+4. On success, RECORD the build evidence with
+   `adlc gate-manifest record p4-build --ticket <id> --files <changed files>`
+   (or, if that is unavailable, append an unsigned `p4-build` entry to
+   `.adlc/manifest.jsonl`, flagged `unsigned_fallback`). `adlc-runner run p4` is
+   a read-only ASSERTION requiring `p4-build`/`rails-check`/`flail-check`
+   manifest entries — the `p4-build` record above and the `flail-check` record
+   from step 3 cover two of the three; `rails-check` comes from `adlc
+   rails-guard --record` at P3. With all three recorded for this ticket,
+   `adlc-runner run p4 --ticket <id>` should now exit 0.
 
 ## Summarize
-Report each command's result and what was recorded. When green, point the user at
-`/adlc-prosecute` (P5).
+Report each command's result, the flail verdict, and what was recorded. When
+green, point the user at `/adlc-prosecute` (P5).

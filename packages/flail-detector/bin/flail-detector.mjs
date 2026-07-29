@@ -28,7 +28,7 @@ const { values, positionals } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--json]
+  console.log(`flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--record] [--ticket <id>] [--json]
 
 Session-log flail analysis (ADLC C6) — mechanical two-strike rule.
 
