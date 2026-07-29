@@ -468,4 +468,59 @@ describe('appendManifestEntry routes to the segment writer once segmented (spec 
       );
     } finally { clean(root); }
   });
+
+  // Adversarial-review finding: a rootless segmented repo's ONLY activation
+  // signal (once root doesn't exist to carry a cutover entry) is the marker
+  // file. If it's lost/corrupted, isSegmentedRepo silently reports "not
+  // segmented", and the root-append path would have happily created
+  // manifest.jsonl for the first time — retroactively making every existing
+  // anchor: null segment invalid (spec §4.4 forbids anchor: null once a root
+  // exists).
+  it('refuses to create a root when rootless segments already exist but the marker is lost', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }); // a real anchor:null segment
+      rmSync(markerPath(dir), { force: true }); // simulate the marker being lost/corrupted
+      assert.equal(isSegmentedRepo(dir), false, 'test precondition: marker loss must make isSegmentedRepo false');
+      assert.throws(
+        () => appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }),
+        /refusing to create the root manifest/,
+      );
+      assert.equal(existsSync(join(dir, 'manifest.jsonl')), false, 'root must never be created when doing so would invalidate existing segments');
+    } finally { clean(root); }
+  });
+
+  // Adversarial-review finding: verify()'s chain-integrity precondition used
+  // to run BEFORE the checkout-wide .lineage lock was acquired. A second
+  // writer's verify() could therefore observe another writer's segment file
+  // in its transient, just-created-but-not-yet-written state (openSync(...,
+  // 'a') creates the file before the first line is written) and fail the
+  // whole forest instead of simply queuing on the lock. Proven here without
+  // real concurrency: pre-hold the .lineage lock (simulating another writer
+  // already inside the critical section) over a forest that is ALSO
+  // genuinely broken. If verify() still ran before the lock, this would fail
+  // fast with "manifest forest is invalid"; since it now runs after
+  // acquiring the lock, it must instead retry-and-time-out trying to get the
+  // lock first, surfacing withLedgerLock's OWN error.
+  it('verify() runs INSIDE the checkout-wide lock, not before it — a held lock is what blocks, not a stale invalid-forest read', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+      const { valid } = discoverSegments(dir);
+      const segFile = segmentPath(dir, valid[0]);
+      const entry = JSON.parse(readFileSync(segFile, 'utf8').trim());
+      entry.prev = 'f'.repeat(64); // break the chain — verify() would fail this forest
+      writeFileSync(segFile, `${JSON.stringify(entry)}\n`);
+
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      writeFileSync(`${lineagePath(dir)}.lock`, JSON.stringify({ version: 1, token: 'someone-else', pid: 99999, hostname: 'other-host', startedAt: new Date().toISOString() }));
+      assert.throws(
+        () => appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }),
+        /could not acquire ledger lock/,
+        'must retry the LOCK first (and time out on it), not fail fast on a stale-outside-the-lock verify() read',
+      );
+    } finally { clean(root); }
+  });
 });

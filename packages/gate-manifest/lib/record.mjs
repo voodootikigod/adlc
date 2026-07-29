@@ -10,6 +10,7 @@ import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 import { isSegmentedRepo } from './lineage.mjs';
 import { appendToSegment } from './segment-writer.mjs';
+import { discoverSegments } from './forest.mjs';
 
 // `segment` is reserved too: forest.mjs's readManifestForest annotates every
 // entry it returns with its source segment (see sign.mjs's canonicalEntryBytes
@@ -86,6 +87,23 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
       const integrity = verify(dir, { requireSignatures: false });
       if (!integrity.valid) {
         throw new Error(`manifest chain is invalid: ${integrity.message}`);
+      }
+    } else {
+      // Adversarial-review finding: a ROOTLESS segmented repo (anchor: null
+      // segments, activated only via .store.json since there is no cutover
+      // entry yet to fall back on — greenfield scaffold / slice 4) has no
+      // OTHER signal once that marker is lost, corrupted, or unreadable:
+      // isSegmentedRepo already returned false above, so this empty-root
+      // branch is the LAST checkpoint before a root gets created for the
+      // first time. Spec §4.4: "anchor: null is unavailable once a root
+      // exists" — silently creating one here would retroactively invalidate
+      // every existing rootless segment's forest membership. Fail closed
+      // instead of corrupting real evidence that was valid a moment ago.
+      const { valid: existingSegments } = discoverSegments(dir);
+      if (existingSegments.length > 0) {
+        throw new Error(
+          `refusing to create the root manifest: manifest.d/ already holds ${existingSegments.length} segment(s) anchored to nothing (anchor: null), legal only in a rootless forest — creating a root now would make every one of them invalid (spec §4.4). This usually means the activation marker (.adlc/manifest.d/.store.json) was lost or corrupted; restore it rather than appending to root.`
+        );
       }
     }
     const previous = state.entries.at(-1);
