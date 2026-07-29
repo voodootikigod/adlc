@@ -4,7 +4,7 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 10** — revised after nine cross-model adversarial
+Status: **proposed, revision 11** — revised after ten cross-model adversarial
 review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
@@ -39,6 +39,11 @@ fail-closed overlap classifier; composite authorship became a per-contributor
 resolvedAuthor mapping; P5 packet usage is "claimed" never "reported"; P4 usage
 requires adapter parsers of real machine-readable harness output; the
 pass-completed entry is the sole usage carrier (exactly-once, exact totals).
+Round 10: modelProviders table gives alias resolutions a trusted provider
+mapping (no phase-1 fallback); overlap classifier became rename/copy-aware
+(source + destination paths); the ledger-head review set must itself be
+complete and satisfied (no backward search past a partial head); P5 usage
+carriers deduplicate by callId across packet retries.
 Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
@@ -149,6 +154,15 @@ Validation rules (load-time, before any dispatch):
    a validation error — reviewer identity must be a concrete model ID. Build
    channels may use `default` (their identity is less load-bearing), but their
    usage records still carry the attested resolved model (§4c).
+7. **Concrete-model provider mapping (round 10 finding 1):** the registry
+   carries a `modelProviders` table — `(adapter, concreteModel) → normalized
+   provider` — covering **every model an allowed build alias can resolve to**.
+   Phase-2 `resolvedAuthor` mapping (§6) resolves through this table only:
+   an attested concrete model absent from the table **fails closed** (the
+   binding cannot be completed), and implementations must never fall back to
+   the phase-1 declared provider or to model-string heuristics. Channels whose
+   alias resolutions are not enumerable must use concrete model IDs instead of
+   aliases.
 
 ### 4c. WorkerAdapter contract: force and attest the concrete model
 
@@ -254,15 +268,19 @@ valid seats must not be combinable across retries or registry revisions:
   values are identical and where each seat matches **one distinct member** of the
   snapshot. Seats from different `reviewSetId`s or mixed digests never combine; a
   retry mints a fresh set and starts from zero.
-- **Terminal-set semantics — the newest complete set is authoritative (round 6
-  finding 3).** Selection is not existential: for a given revision, only the
-  **latest complete** review set counts, and any material verdict in that set
-  blocks approval — an older approving set never outranks a newer
-  `needs-attention`. To make truncation detectable, the review driver records
-  each `(revision, reviewSetId)` head in the **same out-of-tree ledger** as fleet
-  provenance; at verification, a manifest whose latest set for the revision is
-  older than the ledger head — or missing — **fails closed** (a deleted negative
-  suffix is a chain-integrity failure, not a reversion to the earlier approve).
+- **Terminal-set semantics — the ledger-head set is the only set (rounds 6 and
+  10).** Selection is not existential and never searches backward: for a given
+  revision, **only the ledger-head review set counts, and it must itself be
+  complete and satisfied**. A head set that is incomplete (a member unreachable
+  after another seat recorded), under-satisfied, or carrying any material
+  verdict **blocks approval outright** — the verifier must not fall back to an
+  older complete approving set (round 10 finding 3: a partial newer set would
+  otherwise launder an earlier approve past a newer `needs-attention` seat).
+  The review driver records each `(revision, reviewSetId)` head in the **same
+  out-of-tree ledger** as fleet provenance; at verification, a manifest whose
+  latest set for the revision is older than the ledger head — or missing —
+  **fails closed** (a deleted negative suffix is a chain-integrity failure,
+  not a reversion to the earlier approve).
 - Carry-forward names **exactly one previously satisfied `reviewSetId`** — which
   must be the ledger-head set for its revision — and carries that set's complete
   seats; it cannot assemble a set from fragments.
@@ -343,10 +361,15 @@ is two records, both signed:
     change-set paths of any fleet binding** that has not been released by a
     signed human-takeover (or superseded by a trusted re-bind) is **ambiguous →
     fail closed** — fleet-origin presumed, asserted authorship unavailable
-    until a takeover record exists. False positives (a human editing a file the
-    fleet also touched) are resolved by the same takeover ceremony, which is
-    cheap and audited; false negatives would be silent authorship laundering,
-    which is not.
+    until a takeover record exists. **Path sets are rename/copy-aware (round 10
+    finding 2):** changed paths are computed with git's rename/copy detection
+    and include **both source and destination** of every rename or copy — so
+    moving fleet-authored content to a new file before editing it still
+    intersects the recorded source path. Trusted re-binds preserve the union of
+    historical paths, not just the current ones. False positives (a human
+    editing a file the fleet also touched) are resolved by the same takeover
+    ceremony, which is cheap and audited; false negatives would be silent
+    authorship laundering, which is not.
   - *Squash merges:* destroy ancestry, so the fleet's PR-merge path records the
     post-squash mainline commit as an **additional lineage head** in the ledger
     at merge time; descent from it is then ordinary ancestry.
@@ -620,7 +643,12 @@ Ordered by dependency, each a candidate ticket:
    cases in `packages/prosecute/test/cross-model.test.mjs` (`assert` on throws,
    entry fields including digest and reviewSetId, carried seat count, both reader
    behaviors, the interleaved-sets rejection, the substitution and resolvedModel
-   rejections, adapter argv, and both terminal-set cases).
+   rejections, adapter argv, and both terminal-set cases). **Partial-head
+   cases (round 10):** approve-set A followed by ledger-head set B containing
+   one `needs-attention` seat with the second member unreachable → blocked
+   (no backward search to A); approve-set A followed by head set B with one
+   approving seat but under quorum → blocked. Both asserted in the same test
+   file.
 6. **Two-phase author binding through a real dispatch.** An end-to-end test
    dispatches a worker (phase-1 provenance signed, keyed `{runId, ticket,
    attempt}`, no revision), lets it **edit the worktree**, computes the actual
@@ -653,7 +681,12 @@ Ordered by dependency, each a candidate ticket:
    bridge, as is a cherry-pick of it**; **a cherry-pick of the fleet commit
    with a one-byte modification on an overlapping path — matching neither
    ancestry nor patch-id — is AMBIGUOUS and fails closed until a signed
-   human-takeover record exists (the overlap classifier)**; a squash-merge
+   human-takeover record exists (the overlap classifier)**; **a cherry-pick
+   whose content is MOVED to a new path and edited (rename/copy + one-byte
+   change) still fails closed — path sets are rename/copy-aware and include
+   source and destination**; **a build-alias resolution whose attested
+   concrete model is absent from the registry's `modelProviders` table fails
+   closed rather than falling back to the phase-1 declared provider**; a squash-merge
    fixture is fleet-origin only after the merge path records the post-squash
    lineage head; a shallow clone where the `resultCommit` object is
    unavailable fails closed; **author-family exclusion resolves from the
