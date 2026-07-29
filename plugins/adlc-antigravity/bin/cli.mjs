@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, mkdirSync, mkdtempSync, cpSync, rmSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, cpSync, renameSync, rmSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
@@ -174,24 +174,45 @@ if (command === 'install' || command === '--install') {
   }
 
   // Fallback for a machine with NO agy: place the files where agy would look.
-  const targetDir = join(homedir(), '.gemini', 'config', 'plugins', 'adlc-antigravity');
+  const pluginsDir = join(homedir(), '.gemini', 'config', 'plugins');
+  const targetDir = join(pluginsDir, PLUGIN_NAME);
+
   console.log(`Copying plugin files directly to ${targetDir}...`);
+  // BUILD, THEN SWAP. The live directory is not touched until a complete copy
+  // exists beside it, and the old one is kept until the swap succeeds.
+  //
+  // REPLACE rather than merge: cpSync over an existing directory only overwrites
+  // files still present in the SOURCE, so an upgrade strands every skill, agent,
+  // command and hook a later version DELETED — and agy loads whatever sits there,
+  // so a retired hook keeps firing from a plugin reporting the new version.
+  // Replacing is also what makes rollback necessary: an interrupted or failed
+  // copy must not leave the user with no plugin at all.
+  //
+  // Building beside the target before touching it also makes the SELF-REINSTALL
+  // case correct for free — `node ~/.gemini/.../bin/cli.mjs install` with no agy
+  // on PATH has packageRoot === targetDir, and a delete-then-copy would erase the
+  // very files it was copying from. An explicit source===target guard was written
+  // for that and then removed: the swap already handles it, so the guard was an
+  // unreachable branch no test could distinguish.
+  const incoming = `${targetDir}.incoming-${process.pid}`;
+  const previous = `${targetDir}.previous-${process.pid}`;
+  let movedAside = false;
   try {
-    // REPLACE, don't merge. cpSync over an existing directory only overwrites
-    // files that still exist in the SOURCE, so an upgrade leaves behind every
-    // skill, agent, command and hook a later version DELETED. agy loads whatever
-    // sits in this directory, so a retired hook would keep firing and a removed
-    // skill would keep being offered — from a plugin reporting the new version.
-    // agy's own install path replaces the directory; the fallback must match it.
-    //
-    // Scoped to this plugin's own directory, which the helper owns outright.
-    rmSync(targetDir, { recursive: true, force: true });
-    mkdirSync(targetDir, { recursive: true });
-    cpSync(packageRoot, targetDir, { recursive: true });
+    mkdirSync(pluginsDir, { recursive: true });
+    rmSync(incoming, { recursive: true, force: true });
+    cpSync(packageRoot, incoming, { recursive: true });
+    if (existsSync(targetDir)) {
+      renameSync(targetDir, previous);
+      movedAside = true;
+    }
+    renameSync(incoming, targetDir);
+    if (movedAside) rmSync(previous, { recursive: true, force: true });
     console.log(`✓ Plugin copied to ${targetDir}`);
     console.log('Note: Run `/adlc-init` inside your agent session to complete setup.');
     process.exit(0);
   } catch (err) {
+    rmSync(incoming, { recursive: true, force: true });
+    if (movedAside && !existsSync(targetDir)) renameSync(previous, targetDir);
     console.error(`Failed to copy plugin files to ${targetDir}:`, err.message);
     process.exit(1);
   }

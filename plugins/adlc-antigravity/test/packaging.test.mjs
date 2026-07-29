@@ -335,6 +335,33 @@ test('bin/cli.mjs direct-copy REPLACES an existing install, dropping removed fil
   }
 });
 
+test('bin/cli.mjs self-reinstall from the installed copy does not erase the plugin', () => {
+  // `node ~/.gemini/config/plugins/adlc-antigravity/bin/cli.mjs install` from a
+  // session with no agy on PATH makes packageRoot === targetDir. A replace-first
+  // fallback deletes the directory it is about to copy FROM, so the advertised
+  // idempotent reinstall would erase the plugin and its hooks outright.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-self-'));
+  try {
+    const home = join(work, 'home');
+    const target = join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity');
+    mkdirSync(join(target, 'bin'), { recursive: true });
+    writeFileSync(join(target, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
+    writeFileSync(join(target, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+
+    const res = spawnSync(process.execPath, [join(target, 'bin', 'cli.mjs'), 'install'], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: sealedEnv(home, '/usr/bin:/bin'), // no agy → the direct-copy branch
+    });
+
+    assert.equal(res.status, 0, `self-reinstall failed: ${res.stdout}\n${res.stderr}`);
+    assert.ok(existsSync(join(target, 'plugin.json')), 'the installed plugin must survive a self-reinstall');
+    assert.ok(existsSync(join(target, 'bin', 'cli.mjs')), 'the helper itself must survive a self-reinstall');
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('bin/cli.mjs fails closed when a PRESENT agy fails its version probe', () => {
   // The complement of the rejection case. Treating a discovered-but-broken agy as
   // an ABSENT one routes straight back into copy-and-report-success: version
