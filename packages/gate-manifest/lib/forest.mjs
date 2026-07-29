@@ -38,6 +38,16 @@ const RESERVED_NAMES = new Set(['.store.json', '.lineage']);
 const LOCK_SUFFIX = '.lock';
 const MAX_LOCK_OWNER_BYTES = 512; // withLedgerLock's owner record is ~120 bytes; generous headroom, not a real limit
 function looksLikeGenuineLedgerLock(path, size) {
+  // withLedgerLock creates the lock file (openSync(..., 'wx')) and writes its
+  // owner JSON (writeFileSync) as two SEPARATE syscalls — a genuine lock is
+  // briefly 0 bytes between them (adversarial-review finding). Treating an
+  // empty file as "not a genuine lock" would fail the whole forest for
+  // anyone whose read lands in that split-second window, exactly the
+  // false-positive the earlier NAME-only skip was trying to avoid — just via
+  // a different mechanism. Safe to special-case: an EMPTY file can never
+  // hide a real segment's content (that requires actual bytes), so treating
+  // empty as "transient, skip it" reopens no part of that earlier hole.
+  if (size === 0) return true;
   if (size >= MAX_LOCK_OWNER_BYTES) return false; // real locks are tiny; at/over the cap is refused, not guessed at (same convention as lineage.mjs's bounded reads)
   let parsed = null;
   try {

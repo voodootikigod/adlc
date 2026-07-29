@@ -611,6 +611,27 @@ describe('discoverSegments — grammar edge cases', () => {
     } finally { cleanTmp(dir); }
   });
 
+  // adversarial-review finding: withLedgerLock creates the lock file
+  // (openSync 'wx') and writes its owner JSON (writeFileSync) as two
+  // SEPARATE syscalls — a genuine lock is briefly 0 bytes between them. An
+  // empty file must be treated the same as a genuine lock (skipped), not
+  // reported invalid, or a concurrent reader whose scan lands in that
+  // split-second window fails the whole forest for a perfectly healthy
+  // in-flight write.
+  it('a *.lock file that is transiently EMPTY (mid-creation) is treated as a genuine lock, not invalid', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), '');
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(invalid, []);
+      assert.deepEqual(valid, ['feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl']);
+      assert.equal(verify(adlc).valid, true);
+    } finally { cleanTmp(dir); }
+  });
+
   it('a real segment renamed to end in .lock is NOT silently hidden — its content does not match a genuine lock', () => {
     const dir = makeTmp();
     try {
