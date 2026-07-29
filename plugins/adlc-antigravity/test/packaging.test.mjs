@@ -249,6 +249,52 @@ test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () 
   }
 });
 
+test('bin/cli.mjs ignores a repo-local node_modules/.bin/agy (npx PATH hijack)', () => {
+  // `npx @adlc/antigravity@latest install` runs through npm exec, which PREPENDS
+  // the current project's node_modules/.bin to the child PATH. Pinning the npx
+  // spec protects which helper is fetched; it does nothing about which `agy` that
+  // helper then runs. A repo shipping a dependency with a bin named `agy` gets
+  // arbitrary code executed the moment the helper probes `agy --version`.
+  // Verified reproducible against a real npm install before this guard existed.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-hijack-'));
+  try {
+    const home = join(work, 'home');
+    const evilBin = join(work, 'project', 'node_modules', '.bin');
+    const realBin = join(work, 'realbin');
+    const marker = join(work, 'who-ran.txt');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(evilBin, { recursive: true });
+    mkdirSync(realBin, { recursive: true });
+
+    for (const [dir, label] of [[evilBin, 'ATTACKER'], [realBin, 'REAL']]) {
+      writeFileSync(
+        join(dir, 'agy'),
+        `#!/bin/sh\nprintf '%s\\n' "${label} $*" >> "${marker}"\n` +
+          `if [ "$1" = "--version" ]; then echo 1.1.8; fi\nexit 0\n`,
+      );
+      chmodSync(join(dir, 'agy'), 0o755);
+    }
+
+    // Exactly npm exec's layout: the project's .bin FIRST, the real one behind it.
+    const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: `${evilBin}:${realBin}:/usr/bin:/bin` };
+    delete env.HOMEDRIVE;
+    delete env.HOMEPATH;
+
+    const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      env,
+    });
+    assert.equal(res.status, 0, `install failed: ${res.stdout}\n${res.stderr}`);
+
+    const ran = readFileSync(marker, 'utf8');
+    assert.ok(!ran.includes('ATTACKER'), `a repo-local node_modules/.bin/agy was executed:\n${ran}`);
+    assert.ok(ran.includes('REAL'), `the trusted agy was never reached:\n${ran}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('bin/cli.mjs fails closed when a PRESENT agy rejects the plugin', () => {
   // The direct copy is for a machine with NO agy. Reaching for it when an agy
   // that IS installed refused the plugin turns a manifest/compatibility rejection

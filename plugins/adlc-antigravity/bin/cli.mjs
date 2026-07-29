@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, cpSync, rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { accessSync, constants, mkdirSync, mkdtempSync, cpSync, rmSync } from 'node:fs';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 
@@ -15,6 +15,39 @@ const command = args[0] || 'install';
 
 /** The directory name agy will adopt for the installed plugin. */
 const PLUGIN_NAME = 'adlc-antigravity';
+
+/**
+ * Resolve `agy` to an ABSOLUTE path, ignoring npm-injected bin directories.
+ *
+ * `npx @adlc/antigravity@latest install` runs through npm exec, which prepends
+ * the CURRENT PROJECT's `node_modules/.bin` to the child PATH. A repository that
+ * ships a dependency or workspace exposing a bin named `agy` therefore gets its
+ * binary executed by this helper the moment it probes `agy --version` — the same
+ * local-shadowing attack the `@latest` pin closes for the helper itself, one
+ * process level deeper. Verified reproducible: a planted bin ran as `agy`.
+ *
+ * Dropping npm's bin directories cannot hide a legitimate install: agy is a
+ * standalone binary that lives on the real PATH, not an npm package.
+ *
+ * @returns {string | null} absolute path to agy, or null when it is not present.
+ */
+function resolveAgyBin() {
+  const npmInjected = join('node_modules', '.bin');
+  for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    const normalized = dir.replace(/[\\/]+$/, '');
+    if (normalized.endsWith(npmInjected) || normalized.endsWith('node-gyp-bin')) continue;
+    for (const name of ['agy', 'agy.exe']) {
+      const candidate = join(dir, name);
+      try {
+        accessSync(candidate, constants.X_OK);
+        return candidate;
+      } catch {
+        // not here — keep looking
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * Run `agy plugin install` against a copy of the plugin placed under a path
@@ -31,9 +64,10 @@ const PLUGIN_NAME = 'adlc-antigravity';
  * reference to the source, so the staging directory is disposable.
  *
  * @param {string} sourceDir Plugin directory to install from.
+ * @param {string} agyBin Absolute path to agy, from resolveAgyBin().
  * @returns {number | null} agy's exit status, or null if staging failed.
  */
-function agyInstallFromStagedCopy(sourceDir) {
+function agyInstallFromStagedCopy(sourceDir, agyBin) {
   // ONE cleanup site, in `finally`. An earlier shape cleaned up in both a catch
   // (staging failed) and a finally (install finished), and the catch copy was
   // unreachable from any test that does not contrive a filesystem failure — so
@@ -53,7 +87,7 @@ function agyInstallFromStagedCopy(sourceDir) {
       throw new Error(`no @-free temporary directory available (tried ${root})`);
     }
     cpSync(sourceDir, join(stage, PLUGIN_NAME), { recursive: true });
-    return spawnSync('agy', ['plugin', 'install', join(stage, PLUGIN_NAME)], {
+    return spawnSync(agyBin, ['plugin', 'install', join(stage, PLUGIN_NAME)], {
       stdio: 'inherit',
     }).status;
   } catch (err) {
@@ -87,19 +121,24 @@ Description:
 if (command === 'install' || command === '--install') {
   console.log(`Installing @adlc/antigravity plugin from: ${packageRoot}`);
 
+  // Resolved ONCE to an absolute path, with npm's injected bin dirs excluded, and
+  // reused for both calls — so a repo-local `agy` cannot hijack either one.
+  const agyBin = resolveAgyBin();
   let agyInstalled = false;
-  try {
-    const res = spawnSync('agy', ['--version'], { encoding: 'utf8' });
-    if (res.status === 0) {
-      agyInstalled = true;
+  if (agyBin) {
+    try {
+      const res = spawnSync(agyBin, ['--version'], { encoding: 'utf8' });
+      if (res.status === 0) {
+        agyInstalled = true;
+      }
+    } catch {
+      agyInstalled = false;
     }
-  } catch {
-    agyInstalled = false;
   }
 
   if (agyInstalled) {
     console.log('Google Antigravity (agy) detected. Running agy plugin install...');
-    const status = agyInstallFromStagedCopy(packageRoot);
+    const status = agyInstallFromStagedCopy(packageRoot, agyBin);
     if (status === 0) {
       console.log('✓ Successfully installed @adlc/antigravity plugin via agy!');
       process.exit(0);
