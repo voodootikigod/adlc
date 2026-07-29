@@ -270,6 +270,23 @@ test('doctor storehash-manifest-bind: a forged / chain-broken manifest is NOT tr
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('doctor storehash-manifest-bind: a manifest line that is not valid JSON FAILS the integrity check', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // Not a chain break, not a bad signature — the line itself does not parse.
+    // Distinct failure mode from the forged/chain-broken case above; must not be
+    // silently skipped or treated as an ignorable trailing line.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    writeFileSync(manifestPath, readFileSync(manifestPath, 'utf8') + 'not-json-at-all\n');
+
+    const report = doctorTicketStore(store, { root });
+    const check = bindCheck(report);
+    assert.equal(check.ok, false, 'a malformed manifest line FAILS the integrity check');
+    assert.equal(check.code, 'MANIFEST_MALFORMED', 'the malformed-entry code is reported, not miscategorized as a chain break');
+    assert.equal(report.ok, false, 'and fails the overall report');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 // Signature verification (adversarial-review round 6): the backward hash chain
 // leaves the FINAL entry unprotected, so with a key configured every entry must
 // also carry a valid HMAC or the last entry's storeHash could be edited in place.
