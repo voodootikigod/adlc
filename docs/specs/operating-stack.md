@@ -4,7 +4,7 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 11** — revised after ten cross-model adversarial
+Status: **proposed, revision 12** — revised after eleven cross-model adversarial
 review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
@@ -43,7 +43,12 @@ Round 10: modelProviders table gives alias resolutions a trusted provider
 mapping (no phase-1 fallback); overlap classifier became rename/copy-aware
 (source + destination paths); the ledger-head review set must itself be
 complete and satisfied (no backward search past a partial head); P5 usage
-carriers deduplicate by callId across packet retries.
+carriers deduplicate by callId across packet retries. Round 11 (consistency
+propagation — no new attack classes): modelProviders threaded into the registry
+example, validation rule 7, AC2, and T151; resolvedModel attestation made
+mandatory for every adapter on alias-based build channels incl. claude-code;
+copy detection specified as exhaustive (--find-copies-harder semantics,
+fail-closed on skipped/exhausted detection) with the retained-source copy AC.
 Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
@@ -128,6 +133,11 @@ process does.
     "cross-model-trust-root": { "quorum": 2, "members": [
       { "adapter": "opencode", "model": "moonshot/kimi-k3",   "transport": "gateway:opencode-go", "provider": "moonshot" },
       { "adapter": "codex",    "model": "gpt-5.3-codex",      "transport": "subscription:chatgpt-plus", "provider": "openai", "directAuth": true } ] }
+  },
+  "modelProviders": {
+    "claude-code": { "claude-opus-5": "anthropic", "claude-sonnet-5": "anthropic", "claude-haiku-4-5": "anthropic" },
+    "codex":       { "gpt-5.3-codex": "openai" },
+    "opencode":    { "zai/glm-5.2": "zai", "deepseek/v4-flash": "deepseek", "qwen/qwen3.7-coder": "alibaba", "moonshot/kimi-k3": "moonshot" }
   }
 }
 ```
@@ -177,9 +187,16 @@ with two obligations, both required for reviewer seats:
   the harness says actually executed (from its own output/metadata). The recorder
   compares `resolvedModel` to the seat's snapshot member and **rejects the seat
   on mismatch** (fail closed, not silent substitution).
+- **Attestation is mandatory for every adapter allowed on an alias-based build
+  channel (round 11 finding 2)** — not just reviewer seats. The reference
+  `frontier`/`frontier-metered` channels use `claude-code` with `default`, so
+  the claude-code adapter must surface `resolvedModel` (its harness's
+  machine-readable output reports the model) or those channels must switch to
+  concrete model IDs. An adapter that cannot attest may not be bound to any
+  alias-based channel — validation rejects the combination.
 
-This changes build item 3: `fleet/adapters/opencode.mjs` is **not** unchanged —
-it (and the codex adapter) must pass the model argument and surface
+This changes build item 3: `fleet/adapters/opencode.mjs`, `codex.mjs`, **and
+`claude-code.mjs`** must pass the model argument (where applicable) and surface
 `resolvedModel`.
 
 The repo carries only `docs/integrations/quartermaster-registry.md` — schema
@@ -362,11 +379,16 @@ is two records, both signed:
     signed human-takeover (or superseded by a trusted re-bind) is **ambiguous →
     fail closed** — fleet-origin presumed, asserted authorship unavailable
     until a takeover record exists. **Path sets are rename/copy-aware (round 10
-    finding 2):** changed paths are computed with git's rename/copy detection
-    and include **both source and destination** of every rename or copy — so
-    moving fleet-authored content to a new file before editing it still
-    intersects the recorded source path. Trusted re-binds preserve the union of
-    historical paths, not just the current ones. False positives (a human
+    finding 2; round 11 finding 3):** changed paths are computed with git's
+    **exhaustive** copy detection — `--find-copies-harder` (which considers
+    unmodified files as copy sources; plain `-C` does not) or an equivalent
+    deterministic source-attribution algorithm — and include **both source and
+    destination** of every rename or copy, so copying a fleet-authored file to
+    a new path (source untouched) and editing the copy still intersects the
+    recorded source path. If copy detection is skipped, truncated by its
+    candidate limit, or otherwise exhausted, the classifier **fails closed**
+    rather than proceeding with a partial path set. Trusted re-binds preserve
+    the union of historical paths, not just the current ones. False positives (a human
     editing a file the fleet also touched) are resolved by the same takeover
     ceremony, which is cheap and audited; false negatives would be silent
     authorship laundering, which is not.
@@ -594,13 +616,16 @@ Ordered by dependency, each a candidate ticket:
    repo, loading is disabled and dispatch fails closed. Verified by
    `packages/quartermaster/test/registry-isolation.test.mjs` (`assert` on dispatched
    argv, notice text, and fail-closed exit).
-2. **Registry validation rules 1–6.** Fixtures: unknown channel name; missing §4a
+2. **Registry validation rules 1–7.** Fixtures: unknown channel name; missing §4a
    channel; adapter not in `packages/fleet/lib/adapters/`; any `command`/argv-shaped
    key; `frontier` and `frontier-metered` sharing a transport; non-gateway
    trust-root member lacking `directAuth`; **a reviewer-group member with
    `model: "default"` or any run-time alias (rejected) vs. a build channel with
-   `default` (accepted)** — each invalid fixture rejected at load with an error
-   naming the rule. Verified by
+   `default` (accepted)**; **an alias-based build channel whose adapter has no
+   `modelProviders` entries (rejected — nothing its alias can resolve to is
+   mapped) vs. one with a complete table (accepted); a `modelProviders` value
+   that is not a normalized provider string (rejected)** — each invalid fixture
+   rejected at load with an error naming the rule. Verified by
    `packages/quartermaster/test/registry-validation.test.mjs` (`assert` per fixture).
 3. **`routeJob` derivation through the real pipeline.** An end-to-end test loads a
    fixture ticket DAG, runs `@adlc/core`'s `computeFloat`, feeds
@@ -684,7 +709,14 @@ Ordered by dependency, each a candidate ticket:
    human-takeover record exists (the overlap classifier)**; **a cherry-pick
    whose content is MOVED to a new path and edited (rename/copy + one-byte
    change) still fails closed — path sets are rename/copy-aware and include
-   source and destination**; **a build-alias resolution whose attested
+   source and destination**; **a COPY that leaves the source unchanged and
+   edits only the destination also fails closed (exhaustive copy detection /
+   `--find-copies-harder` semantics), and a run where copy detection is
+   skipped or exhausted fails closed rather than proceeding partially**;
+   **the reference `frontier` channel end-to-end: a claude-code dispatch with
+   alias `default` yields an adapter-attested `resolvedModel` mapped through
+   `modelProviders` into the phase-2 contributor entry (assert the concrete
+   model and provider in the binding)**; **a build-alias resolution whose attested
    concrete model is absent from the registry's `modelProviders` table fails
    closed rather than falling back to the phase-1 declared provider**; a squash-merge
    fixture is fleet-origin only after the merge path records the post-squash
