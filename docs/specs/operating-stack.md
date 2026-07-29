@@ -4,7 +4,7 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 6** — revised after five cross-model adversarial
+Status: **proposed, revision 7** — revised after six cross-model adversarial
 review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
@@ -18,8 +18,12 @@ quorum seats bound to one review-set snapshot, readiness made interval-scoped an
 historical. Round 5: fleet origin anchored in an out-of-tree run ledger (record
 deletion cannot downgrade to asserted authorship), quorum seats bound to exact
 snapshot members (adapter+model), readiness became a two-direction state
-transition (disabled gaps representable). Finding trajectory: 6 → 6 → 5 → 3 → 3
-(severity narrowing each round).
+transition (disabled gaps representable). Round 6: adapters must force and
+attest the concrete executed model (no `default` aliases for reviewer seats),
+authorship became set-valued with lineage (composites and amendments stay
+fleet-origin absent an explicit human-takeover record), review sets gained
+terminal semantics with an out-of-tree head anchor (a deleted negative suffix
+fails closed). Finding trajectory: 6 → 6 → 5 → 3 → 3 → 3.
 Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
@@ -103,7 +107,7 @@ process does.
       { "adapter": "opencode", "model": "qwen/qwen3.7-coder", "transport": "gateway:opencode-go", "provider": "alibaba" } ] },
     "cross-model-trust-root": { "quorum": 2, "members": [
       { "adapter": "opencode", "model": "moonshot/kimi-k3",   "transport": "gateway:opencode-go", "provider": "moonshot" },
-      { "adapter": "codex",    "model": "default",            "transport": "subscription:chatgpt-plus", "provider": "openai", "directAuth": true } ] }
+      { "adapter": "codex",    "model": "gpt-5.3-codex",      "transport": "subscription:chatgpt-plus", "provider": "openai", "directAuth": true } ] }
   }
 }
 ```
@@ -125,6 +129,29 @@ Validation rules (load-time, before any dispatch):
 5. **Fail closed:** missing registry, disabled path, schema violation, or a channel
    the routing contract requests that has no entry → gate failure before dispatch.
    No defaults.
+6. **No mutable aliases for reviewer-group members (round 6 finding 1):** a
+   member `model` of `default` (or any alias the adapter resolves at run time) is
+   a validation error — reviewer identity must be a concrete model ID. Build
+   channels may use `default` (their identity is less load-bearing), but their
+   usage records still carry the attested resolved model (§4c).
+
+### 4c. WorkerAdapter contract: force and attest the concrete model
+
+A registry label proves nothing about what ran. The adapter contract is extended
+with two obligations, both required for reviewer seats:
+
+- **Force:** the dispatcher passes the registry `model` explicitly into the
+  adapter invocation (e.g. `opencode run -m <model>`, the codex model flag) —
+  never relying on the harness's ambient default. An adapter that cannot accept
+  an explicit model cannot serve a reviewer seat.
+- **Attest:** the adapter's result reports `resolvedModel` — the concrete model
+  the harness says actually executed (from its own output/metadata). The recorder
+  compares `resolvedModel` to the seat's snapshot member and **rejects the seat
+  on mismatch** (fail closed, not silent substitution).
+
+This changes build item 3: `fleet/adapters/opencode.mjs` is **not** unchanged —
+it (and the codex adapter) must pass the model argument and surface
+`resolvedModel`.
 
 The repo carries only `docs/integrations/quartermaster-registry.md` — schema
 reference and an annotated example. Dispatch never reads it.
@@ -212,8 +239,18 @@ valid seats must not be combinable across retries or registry revisions:
   values are identical and where each seat matches **one distinct member** of the
   snapshot. Seats from different `reviewSetId`s or mixed digests never combine; a
   retry mints a fresh set and starts from zero.
-- Carry-forward names **exactly one previously satisfied `reviewSetId`** and
-  carries that set's complete seats; it cannot assemble a set from fragments.
+- **Terminal-set semantics — the newest complete set is authoritative (round 6
+  finding 3).** Selection is not existential: for a given revision, only the
+  **latest complete** review set counts, and any material verdict in that set
+  blocks approval — an older approving set never outranks a newer
+  `needs-attention`. To make truncation detectable, the review driver records
+  each `(revision, reviewSetId)` head in the **same out-of-tree ledger** as fleet
+  provenance; at verification, a manifest whose latest set for the revision is
+  older than the ledger head — or missing — **fails closed** (a deleted negative
+  suffix is a chain-integrity failure, not a reversion to the earlier approve).
+- Carry-forward names **exactly one previously satisfied `reviewSetId`** — which
+  must be the ledger-head set for its revision — and carries that set's complete
+  seats; it cannot assemble a set from fragments.
 
 - **Producers:** `recordCrossModelReview` **and** `carryForwardCrossModelReview`
   emit v2. Carry-forward copies the identity fields of the carried entry verbatim
@@ -250,20 +287,31 @@ is two records, both signed:
   (round 5 finding 1).** Branch-carried manifest records can be deleted by a
   branch author (the manifest reader tolerates dropped branch-only entries by
   design), so "no provenance records" must never be read as "human-authored."
-  The fleet additionally writes each `revision → {runId, ticket, attempt}`
-  binding to an **out-of-tree run ledger** (operator/CI-side, same custody class
-  as the registry; surfaced to CI through the trusted-context pattern already
-  used by `cross-model-gate.yml`). The verifier consults the ledger first:
-  - Ledger names the revision → fleet-origin. The in-tree phase-2 binding must
-    exist and agree; missing or disagreeing → **fail closed**. Deleting the
-    branch-carried records changes nothing — the ledger still names the revision.
-  - Ledger has no entry for the revision → the asserted path is permitted.
-- The quorum verifier resolves the author family via **ledger → binding →
+  The fleet writes to an **out-of-tree run ledger** (operator/CI-side, same
+  custody class as the registry; surfaced to CI through the trusted-context
+  pattern already used by `cross-model-gate.yml`).
+- **Authorship is a set with lineage, not a single exact-keyed row (round 6
+  finding 2).** The ledger records two things:
+  1. `revision → contributing dispatch records` — **set-valued**: a composite
+     revision lists every contributing `{runId, ticket, attempt}`, and the
+     independence rule excludes **every** contributing family from reviewer
+     seats, not just one resolved author.
+  2. A **lineage high-water mark** per fleet run/branch (the run's head
+     revisions). A revision *descending from* a fleet lineage head — a one-byte
+     amendment, a merge of fleet output — is still **fleet-origin**: the exact
+     key missing from the ledger does not permit the asserted path. Fleet-origin
+     without a matching binding → fail closed. The only way a fleet-descended
+     revision re-enters the asserted path is an explicit, signed **human-takeover
+     record** written by the operator (a deliberate ceremony, not an inference).
+  - Ledger has no entry **and** the revision descends from no fleet lineage → the
+    asserted path is permitted.
+- The quorum verifier resolves the author family set via **ledger → binding →
   provenance**. A conflicting CLI/env assertion is recorded as non-gating
   metadata and cannot change the gating comparison.
-- When the ledger has no entry (human-authored outside the fleet), the asserted
-  value is used but the attestation records `authorIdentity: "asserted"` so
-  audits can distinguish bound from asserted provenance.
+- When the ledger has no entry and no lineage matches (human-authored outside the
+  fleet), the asserted value is used but the attestation records
+  `authorIdentity: "asserted"` so audits can distinguish bound from asserted
+  provenance.
 - **Honest limit, stated plainly:** none of this proves which model a gateway
   actually served (ADR-0007's conceded class). What the design guarantees is
   (a) forging a provider label — reviewer *or* author — requires compromising the
@@ -386,10 +434,13 @@ Ordered by dependency, each a candidate ticket:
    validation rules 1–5), §5 routing with build-class derivation and mislabel
    rejection, consumed by fleet dispatch. *Build: new package (or extend
    `model-router`).*
-3. **OpenCode Go wiring**: verify `opencode run -m <model>` headless against Go
-   models on both machines; point the fleet's blocking cross-model prosecution at
-   the opencode adapter via the registry; keep fail-closed. *Enhance: operator
-   config + docs; `fleet/adapters/opencode.mjs` unchanged.*
+3. **OpenCode Go wiring + adapter model contract (§4c)**: verify
+   `opencode run -m <model>` headless against Go models on both machines; extend
+   the opencode and codex adapters to **pass the model argument explicitly and
+   surface `resolvedModel`** in their results; point the fleet's blocking
+   cross-model prosecution at the opencode adapter via the registry; keep
+   fail-closed. *Enhance: `fleet/adapters/opencode.mjs`, `fleet/adapters/codex.mjs`,
+   operator config + docs.*
 4. **Attestation schema v2 + quorum** (§6): version bump across **every**
    producer and reader — `recordCrossModelReview`, `carryForwardCrossModelReview`
    (quorum-set-preserving carry), `hasCrossModelApprove*`, the new quorum
@@ -449,10 +500,12 @@ Ordered by dependency, each a candidate ticket:
    repo, loading is disabled and dispatch fails closed. Verified by
    `packages/quartermaster/test/registry-isolation.test.mjs` (`assert` on dispatched
    argv, notice text, and fail-closed exit).
-2. **Registry validation rules 1–5.** Fixtures: unknown channel name; missing §4a
+2. **Registry validation rules 1–6.** Fixtures: unknown channel name; missing §4a
    channel; adapter not in `packages/fleet/lib/adapters/`; any `command`/argv-shaped
    key; `frontier` and `frontier-metered` sharing a transport; non-gateway
-   trust-root member lacking `directAuth` — each rejected at load with an error
+   trust-root member lacking `directAuth`; **a reviewer-group member with
+   `model: "default"` or any run-time alias (rejected) vs. a build channel with
+   `default` (accepted)** — each invalid fixture rejected at load with an error
    naming the rule. Verified by
    `packages/quartermaster/test/registry-validation.test.mjs` (`assert` per fixture).
 3. **`routeJob` derivation through the real pipeline.** An end-to-end test loads a
@@ -485,10 +538,18 @@ Ordered by dependency, each a candidate ticket:
    digests even though each seat verifies individually. **Member substitution:**
    a seat recorded by a cheaper model sharing the trust-root member's provider
    and transport (registered in another group) is rejected — it does not match
-   the named snapshot member's `(adapter, model, transport)`. Verified by new
+   the named snapshot member's `(adapter, model, transport)`; likewise a seat
+   whose adapter-attested `resolvedModel` (§4c) disagrees with the snapshot
+   member is rejected, with an end-to-end case asserting the real adapter argv
+   carries the explicit model argument. **Terminal-set semantics:** with approve
+   set A then a later `needs-attention` set B on the same revision, the gate
+   blocks (newest complete set is authoritative); with B's entries deleted from
+   the manifest but the out-of-tree ledger head naming B, verification fails
+   closed rather than reverting to A. Verified by new
    cases in `packages/prosecute/test/cross-model.test.mjs` (`assert` on throws,
    entry fields including digest and reviewSetId, carried seat count, both reader
-   behaviors, the interleaved-sets rejection, and the substitution rejection).
+   behaviors, the interleaved-sets rejection, the substitution and resolvedModel
+   rejections, adapter argv, and both terminal-set cases).
 6. **Two-phase author binding through a real dispatch.** An end-to-end test
    dispatches a worker (phase-1 provenance signed, keyed `{runId, ticket,
    attempt}`, no revision), lets it **edit the worktree**, computes the actual
@@ -502,9 +563,16 @@ Ordered by dependency, each a candidate ticket:
    deletion fails closed:** with the out-of-tree run ledger naming the revision,
    deleting **all** branch-carried provenance and binding records still fails the
    gate (the ledger is authoritative for fleet origin; absence of in-tree records
-   is never read as human authorship). Verified by
+   is never read as human authorship). **Set-valued authorship and lineage:** a
+   composite revision with contributing dispatches from two provider families
+   excludes reviewers of **both** families from quorum seats; a one-byte
+   amendment on top of a fleet lineage head — whose exact revision is absent
+   from the ledger — is still classified fleet-origin and fails closed without a
+   signed human-takeover record, and passes the asserted path only after one is
+   written. Verified by
    `packages/prosecute/test/author-binding.test.mjs` (`assert` on quorum failure,
-   fail-closed gate, deletion-case fail-closed, metadata field, and
+   fail-closed gate, deletion-case fail-closed, both-family exclusion, the
+   amendment lineage case with and without takeover, metadata field, and
    asserted-provenance marker — no pre-matched fixture records).
 7. **Fallback through the real resolver.** Driving the actual registry loader and
    resolver (not stubs): `prosecute.verdict` with a simulated pre-execution auth
