@@ -13,6 +13,7 @@
     "attio:provision": "node scripts/attio-provision.mjs"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "botid": "^1.5.11",
     "fumadocs-core": "16.10.7",
     "fumadocs-mdx": "15.0.13",
