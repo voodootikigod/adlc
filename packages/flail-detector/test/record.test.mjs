@@ -25,6 +25,13 @@ function manifestEntryCount(dir) {
     : 0;
 }
 
+test('--help documents --record and --ticket <id>', () => {
+  const result = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--record\s+On a clean verdict, append a 'flail-check' manifest entry/);
+  assert.match(result.stdout, /--ticket <id>\s+Ticket to scope the recorded manifest entry to/);
+});
+
 describe('--record: bin writes a flail-check manifest entry on a clean verdict', () => {
   let dir;
 
