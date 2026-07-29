@@ -29,6 +29,12 @@ const PLUGIN_NAME = 'adlc-antigravity';
  * Dropping npm's bin directories cannot hide a legitimate install: agy is a
  * standalone binary that lives on the real PATH, not an npm package.
  *
+ * Only a bare `agy` is looked for, deliberately — no `agy.exe`. This integration
+ * is POSIX-only in session (see "Platform notes" in docs/integrations/
+ * antigravity.md), so a Windows candidate would be an untested branch supporting
+ * a platform the plugin does not claim. Add it together with a Windows test if
+ * that ever changes.
+ *
  * @returns {string | null} absolute path to agy, or null when it is not present.
  */
 function resolveAgyBin() {
@@ -36,14 +42,12 @@ function resolveAgyBin() {
   for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
     const normalized = dir.replace(/[\\/]+$/, '');
     if (normalized.endsWith(npmInjected) || normalized.endsWith('node-gyp-bin')) continue;
-    for (const name of ['agy', 'agy.exe']) {
-      const candidate = join(dir, name);
-      try {
-        accessSync(candidate, constants.X_OK);
-        return candidate;
-      } catch {
-        // not here — keep looking
-      }
+    const candidate = join(dir, 'agy');
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // not here — keep looking
     }
   }
   return null;
