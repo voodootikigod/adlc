@@ -41,11 +41,10 @@ export const ADAPTERS = [...REGISTRY.keys()];
  * harness's ambient default under a plan claiming the registry's model.
  */
 function capabilitiesOf(mod) {
-  return {
-    aliases: [...(mod.aliases ?? [])],
-    forcesModel: mod.forcesModel === true,
-    attestsResolvedModel: mod.attestsResolvedModel === true,
-  };
+  const aliases = [...(mod.aliases ?? [])];
+  const forcesModel = mod.forcesModel === true;
+  const attestsResolvedModel = mod.attestsResolvedModel === true;
+  return { aliases, forcesModel, attestsResolvedModel };
 }
 
 export function adapterCatalog() {
