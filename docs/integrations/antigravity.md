@@ -24,7 +24,7 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 **One-liner via npx (Recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
-npx @adlc/antigravity@latest install
+cd "$(mktemp -d)" && npx @adlc/antigravity@latest install
 ```
 
 **Global npm Install.** Install `@adlc/antigravity` globally via npm, then let the bundled helper register it:
@@ -59,12 +59,22 @@ node /abs/path/to/adlc/plugins/adlc-antigravity/bin/cli.mjs install
 > the contents into `~/.gemini/config/plugins/adlc-antigravity/`, so the staging
 > directory is discarded afterwards.
 >
-> **And why `@latest` on the npx commands?** `npx @adlc/antigravity` resolves a
-> bare name against the **current project** first, so a repository shipping a
-> workspace or dependency named `@adlc/antigravity` would have *its* binary
-> executed instead — verified reproducible. A version spec forces registry
-> resolution. It pins nothing; it only refuses local shadowing (the same reason
-> `install.sh` calls `plugins@<version>` rather than bare `plugins`).
+> **And why `cd "$(mktemp -d)" && npx @adlc/antigravity@latest`?** Both halves are
+> load-bearing, and each was reproduced against a real npm install before being
+> adopted. This is a machine-level install that never needs your repository, so
+> running it from a scratch directory costs nothing.
+>
+> - **`@latest`.** `npx @adlc/antigravity` resolves a bare name against the
+>   **current project** first, so a repository shipping a workspace or dependency
+>   named `@adlc/antigravity` gets *its* binary executed. A version spec forces
+>   registry resolution — it pins nothing, it only refuses local shadowing (the
+>   same reason `install.sh` calls `plugins@<version>` rather than bare `plugins`).
+> - **The neutral directory.** npm reads the current project's `.npmrc` and
+>   prepends its `node_modules/.bin` to the child's PATH. A hostile repo can
+>   therefore redirect the `@adlc` scope to its own registry, or plant a bin named
+>   `agy` for the helper to invoke. Starting from an empty directory removes both.
+>   (The helper also resolves `agy` itself while ignoring npm-injected bin
+>   directories, so the two controls are independent.)
 
 **Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 

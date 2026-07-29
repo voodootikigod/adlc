@@ -18,7 +18,7 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 **One-liner via npx (recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
-npx @adlc/antigravity@latest install
+cd "$(mktemp -d)" && npx @adlc/antigravity@latest install
 ```
 
 **Global npm install.** Install `@adlc/antigravity` globally, then let the bundled helper register it:
@@ -56,12 +56,20 @@ directory is discarded afterwards.
 </Callout>
 
 <Callout type="warn">
-**The `@latest` is load-bearing.** `npx @adlc/antigravity` resolves a bare name
-against the **current project** first, so a repository shipping a workspace or
-dependency named `@adlc/antigravity` would have *its* binary executed instead —
-verified reproducible. A version spec forces registry resolution. It pins nothing;
-it only refuses local shadowing, the same reason `install.sh` invokes
-`plugins@<version>` rather than bare `plugins`.
+**Both halves of the one-liner are load-bearing**, and each was reproduced against
+a real npm install before being adopted. This is a machine-level install that never
+needs your repository, so running it from a scratch directory costs nothing.
+
+- **`@latest`** — `npx @adlc/antigravity` resolves a bare name against the
+  **current project** first, so a repo shipping a workspace or dependency named
+  `@adlc/antigravity` gets *its* binary executed. A version spec forces registry
+  resolution; it pins nothing, it only refuses local shadowing — the same reason
+  `install.sh` invokes `plugins@<version>` rather than bare `plugins`.
+- **`cd "$(mktemp -d)"`** — npm reads the current project's `.npmrc` and prepends
+  its `node_modules/.bin` to the child's PATH, so a hostile repo can redirect the
+  `@adlc` scope to its own registry or plant a bin named `agy` for the helper to
+  invoke. An empty directory removes both. (The helper also resolves `agy` while
+  ignoring npm-injected bin directories, so the two controls are independent.)
 </Callout>
 
 **Universal installer (planned, not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:

@@ -733,11 +733,11 @@ export const ANTIGRAVITY_INTEGRATION = {
   //    instead (reproduced against a real local install). A version spec forces
   //    registry resolution; it pins nothing, it only refuses local shadowing.
   install: [
-    'npx @adlc/antigravity@latest install',
+    'cd "$(mktemp -d)" && npx @adlc/antigravity@latest install',
     'npm install -g @adlc/antigravity',
     'adlc-agy install',
   ],
-  note: 'Recommended: npx @adlc/antigravity@latest install — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  note: 'Recommended: cd "$(mktemp -d)" && npx @adlc/antigravity@latest install — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
   pluginDir: 'plugins/adlc-antigravity',
   hero: {
     kicker: 'Antigravity integration',
@@ -835,7 +835,7 @@ export const ANTIGRAVITY_INTEGRATION = {
     title: 'operate: Antigravity plugin',
     lines: [
       '# Recommended one-liner via npx',
-      'npx @adlc/antigravity@latest install',
+      'cd "$(mktemp -d)" && npx @adlc/antigravity@latest install',
       '',
       '# Or install globally, then register',
       'npm install -g @adlc/antigravity',

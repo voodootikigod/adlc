@@ -107,9 +107,12 @@ if (command === '--help' || command === '-h' || command === 'help') {
 ADLC Google Antigravity Plugin Helper
 
 Usage:
-  npx @adlc/antigravity@latest install    Install and register the ADLC plugin with agy
-  adlc-agy install                 Install when @adlc/antigravity is installed globally
-  adlc-agy --help                  Display this help message
+  adlc-agy install     Install when @adlc/antigravity is installed globally
+  adlc-agy --help      Display this help message
+
+  Recommended one-liner (neutral cwd keeps a hostile repo's .npmrc and
+  node_modules out of the resolution):
+    cd "$(mktemp -d)" && npx @adlc/antigravity@latest install
 
   Note: "npx adlc-agy" does NOT work — adlc-agy is a bin name, not a package
   name, so npx would look for an unpublished package by that name.
@@ -127,20 +130,26 @@ if (command === 'install' || command === '--install') {
 
   // Resolved ONCE to an absolute path, with npm's injected bin dirs excluded, and
   // reused for both calls — so a repo-local `agy` cannot hijack either one.
+  //
+  // The direct copy below is reached ONLY when agy is genuinely absent
+  // (resolveAgyBin returned null). A PRESENT agy that misbehaves — a failed
+  // version probe, or a rejected install — is a hard failure. Treating a broken
+  // agy as an absent one would route straight back into the copy-and-report-
+  // success path that the fail-closed branch exists to remove.
   const agyBin = resolveAgyBin();
-  let agyInstalled = false;
   if (agyBin) {
+    let probe;
     try {
-      const res = spawnSync(agyBin, ['--version'], { encoding: 'utf8' });
-      if (res.status === 0) {
-        agyInstalled = true;
-      }
-    } catch {
-      agyInstalled = false;
+      probe = spawnSync(agyBin, ['--version'], { encoding: 'utf8' });
+    } catch (err) {
+      probe = { status: null, error: err };
     }
-  }
+    if (probe.status !== 0) {
+      console.error(`Found agy at ${agyBin}, but \`agy --version\` failed${probe.error ? `: ${probe.error.message}` : ` (exit ${probe.status})`}.`);
+      console.error('Not falling back to a direct copy: an agy this broken cannot register the plugin.');
+      process.exit(1);
+    }
 
-  if (agyInstalled) {
     console.log('Google Antigravity (agy) detected. Running agy plugin install...');
     const status = agyInstallFromStagedCopy(packageRoot, agyBin);
     if (status === 0) {

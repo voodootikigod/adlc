@@ -295,6 +295,26 @@ test('bin/cli.mjs ignores a repo-local node_modules/.bin/agy (npx PATH hijack)',
   }
 });
 
+test('bin/cli.mjs fails closed when a PRESENT agy fails its version probe', () => {
+  // The complement of the rejection case. Treating a discovered-but-broken agy as
+  // an ABSENT one routes straight back into copy-and-report-success: version
+  // skew or a broken runtime would silently become "installed" for a plugin that
+  // agy never validated or registered.
+  const { res, home, cleanup } = runCliSealed(['install'], {
+    agyScript: '#!/bin/sh\nexit 7\n', // present and executable, but --version fails
+  });
+  try {
+    assert.equal(res.status, 1, `a broken agy must exit non-zero:\n${res.stdout}\n${res.stderr}`);
+    assert.match(res.stderr, /agy --version` failed/);
+    assert.ok(
+      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity')),
+      'a broken agy must NOT be papered over by copying the files anyway',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test('bin/cli.mjs fails closed when a PRESENT agy rejects the plugin', () => {
   // The direct copy is for a machine with NO agy. Reaching for it when an agy
   // that IS installed refused the plugin turns a manifest/compatibility rejection

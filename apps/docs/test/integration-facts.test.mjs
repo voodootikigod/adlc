@@ -282,7 +282,7 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   // `.../@adlc/antigravity` is read as the separator and the install dies with
   // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
   // plugin under an @-free path, actually registers the plugin.
-  assert.match(ag?.note ?? '', /npx @adlc\/antigravity@latest install/);
+  assert.match(ag?.note ?? "", /npx @adlc\/antigravity@latest install/);
 
   const advertised = [ag.note ?? '', ...ag.install, ...ag.operate.lines];
 
