@@ -326,7 +326,11 @@ test('...while a BUILD channel with model "default" is accepted (its identity is
 // 'default'. One fixture per declared alias of the two adapters that carry
 // reviewer seats in the reference registry, read from the adapters themselves so
 // a newly-declared alias is covered without editing this test.
-for (const adapterName of ['opencode', 'codex']) {
+// claude-code carries the LARGEST alias set and the only open-ended one, so it is
+// the adapter where a silently-shrunk list does the most damage: a dropped alias
+// stops being rejected and starts passing as a concrete reviewer identity —
+// exactly the drift rule 6 exists to stop.
+for (const adapterName of ['opencode', 'codex', 'claude-code']) {
   for (const alias of adapters[adapterName].aliases) {
     test(`rule 6: reviewer member on "${adapterName}" using its declared alias "${alias}" is rejected`, () => {
       assertRejected(

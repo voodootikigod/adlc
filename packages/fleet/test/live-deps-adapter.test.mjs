@@ -91,3 +91,44 @@ test('an unknown fleet.adapter fails closed at buildLiveDeps (AC4)', () => {
     /unknown fleet worker adapter: "bogus"/,
   );
 });
+
+// The seats-present branch of buildLiveDeps had NO coverage — a surviving
+// mutant on `seats.size > 0` proved it, because every existing test passes
+// `seats: undefined`, where the ternary short-circuits and the comparison is
+// never evaluated. These two tests exercise the branch itself.
+
+const seatMap = (adapter, model) =>
+  new Map([['T1', { seat: { adapter, model, transport: 'gateway:opencode-go', provider: 'zai' } }]]);
+
+test('an engaged registry supersedes --adapter entirely, including a stale one', async () => {
+  const rec = [];
+  // `--adapter no-such-harness` would abort assembly on the legacy path (AC4).
+  // With seats present it is never consulted, so assembly must succeed and
+  // dispatch must use the SEAT's adapter — otherwise the dry-run (which previews
+  // only seat adapters) would disagree with the live run.
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    config: { adapter: 'no-such-harness', gate: { test: 'true' } },
+    seats: seatMap('opencode', 'zai/glm-5.2'),
+    io: fakeIo(rec, env),
+  });
+  await deps.dispatch({ ticket, worktree: '/wt/T1', strike: 1 });
+  assert.equal(rec[0].cmd, 'opencode', 'the seat adapter runs, not the stale --adapter');
+  assert.ok(rec[0].args.includes('-m') && rec[0].args.includes('zai/glm-5.2'), 'the seat model is forced');
+});
+
+test('a ticket with no seat refuses to dispatch rather than falling back to --adapter', async () => {
+  const rec = [];
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    config: { adapter: 'codex', gate: { test: 'true' } },
+    seats: seatMap('opencode', 'zai/glm-5.2'), // covers T1 only
+    io: fakeIo(rec, env),
+  });
+  await assert.rejects(
+    () => deps.dispatch({ ticket: { ...ticket, id: 'T-UNROUTED' }, worktree: '/wt/x', strike: 1 }),
+    /no quartermaster seat/,
+    'an unrouted ticket must not run on supply the registry never authorized'
+  );
+  assert.equal(rec.length, 0, 'nothing was spawned');
+});

@@ -45,7 +45,7 @@ export function loadRegistry({
   for (const ignored of findIgnoredInRepoRegistries(repoDir, { exists })) {
     notices.push(
       `quartermaster: IGNORED registry-shaped file inside the repo under review (${ignored}). ` +
-        'Nothing in a candidate tree selects channels (§4, §10); only the operator-local registry is read.'
+        'Nothing in a candidate tree selects channels; only the operator-local registry is read.'
     );
   }
 

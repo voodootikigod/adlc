@@ -172,3 +172,23 @@ test('agy: the default sentinel is not emitted as a literal --model default', as
   await getAdapter('agy').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'default' });
   assert.deepEqual(rec[0].args, ['--print'], 'agy must let its harness resolve the default, not name a model called "default"');
 });
+
+// The alias set is a claim about an EXTERNAL CLI, so it cannot be derived from
+// anything in this repo — which means a test that reads `adapter.aliases` to
+// build its own fixtures cannot notice the list shrinking. It shrinks with the
+// fixtures and every generated case still passes.
+//
+// This asserts the set independently. It is not a source-text pin: dropping an
+// entry has observable consequences — that alias stops being rejected for a
+// reviewer seat and starts passing as a concrete model ID, which is precisely
+// the reviewer-identity drift §4b rule 6 exists to prevent. Adding aliases is
+// fine (a superset only rejects more), removing one is the regression.
+test('claude-code declares at least the aliases its harness documents', () => {
+  // Grounded in `claude --help`: "--model … Provide an alias for the latest
+  // model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name", plus the
+  // registry's own `default` sentinel and the remaining documented aliases.
+  const documented = ['default', 'fable', 'opus', 'sonnet', 'haiku', 'opusplan'];
+  const declared = new Set(getAdapter('claude-code').aliases);
+  const missing = documented.filter((a) => !declared.has(a));
+  assert.deepEqual(missing, [], `claude-code dropped documented alias(es): ${missing.join(', ')}`);
+});
