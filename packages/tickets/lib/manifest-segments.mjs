@@ -272,6 +272,33 @@ function ulidOf(segmentName) {
 }
 
 /**
+ * Read-only lookup of the current lineage's ALREADY-OPEN segment, if one
+ * exists — never mints, never writes .lineage. Returns null when there is no
+ * usable existing segment (the next real append would have to mint one).
+ *
+ * Exists for callers that need to know "what will THIS append target"
+ * *before* actually appending, without racing the real writer: minting has a
+ * side effect (writing a fresh .lineage token) that does not yet correspond
+ * to any file on disk, so calling the full resolveOpenSegment twice before a
+ * real append happens can make each call mint a DIFFERENT segment (the
+ * second call's token check fails because the first mint's file was never
+ * created). A caller that only needs "is there already an open one" is safe
+ * to call this before the real write; one that needs the eventual path when
+ * a fresh mint is possible must re-resolve with resolveOpenSegment AFTER the
+ * real write completes, once the file genuinely exists.
+ */
+export function peekOpenSegment(dir, { cwd = dirname(dir) } = {}) {
+  const branch = currentBranch(cwd);
+  const token = readLineageToken(dir);
+  if (branch !== null && token && token.branch === branch) {
+    if (discoverSegmentNames(dir).includes(token.segment) && ulidOf(token.segment) === token.ulid) {
+      return { name: token.segment, isNew: false };
+    }
+  }
+  return null;
+}
+
+/**
  * Resolve which segment the next ticket-evidence append should target,
  * mirroring @adlc/gate-manifest/lib/lineage.mjs's resolveOpenSegment (spec
  * §7.1) so both producers share the SAME open segment for one branch rather
@@ -280,13 +307,9 @@ function ulidOf(segmentName) {
  * @returns {{ name: string, isNew: boolean, anchor?: object|null }}
  */
 export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
+  const peeked = peekOpenSegment(dir, { cwd });
+  if (peeked) return peeked;
   const branch = currentBranch(cwd);
-  const token = readLineageToken(dir);
-  if (branch !== null && token && token.branch === branch) {
-    if (discoverSegmentNames(dir).includes(token.segment) && ulidOf(token.segment) === token.ulid) {
-      return { name: token.segment, isNew: false };
-    }
-  }
   const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
   const rootLast = rootLines.at(-1) ?? null;
   let anchor = null;

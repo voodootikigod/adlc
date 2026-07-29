@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -283,6 +283,119 @@ test('on a repo with NO manifest baseline, completion is skipped — it never cr
     assert.equal(isCompleted(root, 'T1'), false, 'the ticket stays open');
     assert.ok(!existsSync(join(root, '.adlc', 'manifest.jsonl')), 'no manifest was created');
     assert.equal(git('status', '--porcelain'), '', 'the checkout is untouched');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- T-MANIFEST-FOREST: segmented repo (adversarial-review finding) ----
+// TicketService's evidence writer routes to a segment once activated; Fleet's
+// completion/rollback must stage, commit, and withdraw THAT file, not root's
+// manifest.jsonl unconditionally.
+
+function activateSegments(root) {
+  const dir = join(root, '.adlc', 'manifest.d');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+}
+
+function openSegmentFile(root) {
+  const segDir = join(root, '.adlc', 'manifest.d');
+  const name = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+  return name ? join(segDir, name) : null;
+}
+
+test('completeTicketOnIntegration in a segmented repo commits the SEGMENT, never touches root (T-MANIFEST-FOREST)', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+    const before = commitCount(git);
+
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+
+    assert.equal(res.completed, true);
+    assert.equal(isCompleted(root, 'T1'), true);
+    assert.equal(commitCount(git), before + 1);
+    assert.match(res.ledgerPath, /^\.adlc\/manifest\.d\/.+\.jsonl$/);
+    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'root must never be created once segmented');
+
+    const touched = git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean);
+    assert.ok(touched.includes(res.ledgerPath), `commit touches the segment file: ${touched.join(', ')}`);
+    assert.ok(!touched.includes('.adlc/manifest.jsonl'), 'root must not be part of the completion commit');
+
+    const segFile = openSegmentFile(root);
+    const firstEntry = JSON.parse(readFileSync(segFile, 'utf8').trim().split('\n')[0]);
+    assert.equal(Object.hasOwn(firstEntry, 'anchor'), true, 'the segment\'s first entry must carry the anchor');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('withdrawing a segmented completion removes the freshly-minted segment entirely — no stray evidence left behind', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    assert.equal(res.completed, true);
+    const segFile = openSegmentFile(root);
+    assert.ok(existsSync(segFile), 'precondition: the segment exists after completion');
+
+    revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, ledgerPath: res.ledgerPath, integrationBranch, git });
+
+    assert.equal(isCompleted(root, 'T1'), false, 'the completion annotation is withdrawn');
+    assert.equal(git('rev-parse', 'HEAD'), res.preCompletionSha);
+    assert.equal(existsSync(segFile), false, 'a freshly-minted segment must be removed entirely on withdrawal, not left with a withdrawn entry a later commit could sweep in');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a second segmented completion continues the SAME open segment, not a fresh one', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+    completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+
+    const service = new TicketService(detectTicketStore({ root }), { root });
+    service.apply(service.planCreate({ id: 'T2', title: 'second' }));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'author T2');
+
+    const res2 = completeTicketOnIntegration({ repo: root, ticketId: 'T2', integrationBranch, git });
+    assert.equal(res2.completed, true);
+    const segDir = join(root, '.adlc', 'manifest.d');
+    const segments = readdirSync(segDir).filter((n) => n.endsWith('.jsonl'));
+    assert.equal(segments.length, 1, 'both completions must land in the SAME segment, not mint a second one');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a failed segmented completion commit rolls back the segment exactly (T-MANIFEST-FOREST)', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+
+    // A pre-commit hook that always rejects, forcing completeTicketOnIntegration's
+    // failed-commit rollback path.
+    const hooksDir = join(root, '.git', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(join(hooksDir, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const before = commitCount(git);
+    assert.throws(() => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git }));
+
+    assert.equal(commitCount(git), before, 'no commit landed');
+    // .lineage is local, gitignored bookkeeping (spec §4.8) this fixture never
+    // configured a .gitignore rule for — it legitimately stays on disk as an
+    // untracked artifact regardless of the rollback's correctness. What matters
+    // is that no SEGMENT (the actual evidence) or ticket-store change survives.
+    const status = git('status', '--porcelain').split('\n').filter(Boolean);
+    assert.deepEqual(status.filter((line) => !line.endsWith('.adlc/manifest.d/.lineage')), [], `the checkout has no committable evidence left dangling: ${status.join(', ')}`);
+    const segFiles = existsSync(join(root, '.adlc', 'manifest.d')) ? readdirSync(join(root, '.adlc', 'manifest.d')).filter((n) => n.endsWith('.jsonl')) : [];
+    assert.deepEqual(segFiles, [], 'the newly-minted segment must be removed entirely, not left with a withdrawn entry');
+    assert.equal(isCompleted(root, 'T1'), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -79,7 +79,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
               return { ok: false, output: `${reason}; integration branch quarantined` };
             }
             try {
-              await deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha, shardPath: completion.shardPath, completionSha: completion.completionSha });
+              await deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha, shardPath: completion.shardPath, completionSha: completion.completionSha, ledgerPath: completion.ledgerPath });
             } catch (revertError) {
               const reason = `a gate-rejected completion commit could not be withdrawn (${revertError.message})`;
               markContaminated(reason);
