@@ -4,6 +4,7 @@
 // while holding the ledger lock; parsed/re-serialized entries are never used.
 
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
 import { getKey, signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
@@ -22,8 +23,18 @@ const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment', 'a
  * Atomically append an arbitrary top-level evidence entry to the C11 manifest.
  * Sequence allocation and the byte-exact previous-line hash happen under the
  * same ledger lock as the write, so runner and gate evidence share one chain.
+ *
+ * `cwd` (used only for segmented-repo branch resolution, spec §7.1) defaults
+ * to `dirname(dir)`, NOT `process.cwd()` (adversarial-review finding): every
+ * ledger dir in this codebase is `<repo-root>/.adlc`, so the target repo's
+ * root is `dir`'s parent. A caller that runs from one repo but records into
+ * ANOTHER's ledger via an explicit `dir` (e.g. an orchestrator recording into
+ * a worker checkout) would otherwise derive the branch from the WRONG
+ * repository — silently binding a segment to the controller's branch instead
+ * of the target's. `dirname('.adlc')` is `'.'`, which resolves identically to
+ * `process.cwd()` for the common case, so this changes nothing there.
  */
-export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2, cwd = process.cwd() } = {}) {
+export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2, cwd = dirname(dir) } = {}) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new TypeError('manifest payload must be an object');
   }

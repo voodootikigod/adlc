@@ -6,7 +6,7 @@
 // segment file should the NEXT append target". Neither question touches the
 // ledger lock.
 
-import { existsSync, lstatSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
+import { lstatSync, writeFileSync, openSync, readSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { git, sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
@@ -15,6 +15,7 @@ import { segmentDirPath, discoverSegments, readRawLines, ulidOf } from './forest
 const MARKER_NAME = '.store.json';
 const LINEAGE_NAME = '.lineage';
 const MARKER_FORMAT = 'adlc-manifest-segments';
+const MARKER_VERSION = 1;
 
 export function markerPath(dir) {
   return join(segmentDirPath(dir), MARKER_NAME);
@@ -24,15 +25,41 @@ export function lineagePath(dir) {
   return join(segmentDirPath(dir), LINEAGE_NAME);
 }
 
-function hasActivationMarker(dir) {
-  const p = markerPath(dir);
-  if (!existsSync(p)) return false;
+// SECURITY (adversarial-review finding): `.store.json` is repository-tracked
+// (unlike `.lineage`), so a malicious branch can commit it as a symlink to an
+// unbounded source (e.g. a character device) — `isSegmentedRepo` runs on
+// EVERY manifest append, so an unbounded `readFileSync` through such a link
+// would hang or exhaust memory before the JSON parse ever gets a chance to
+// fail. Read with `O_NOFOLLOW` (never follows a symlink — throws ELOOP
+// instead) and a hard byte cap (a real marker/token is under 200 bytes; capping
+// at 4 KiB is generous headroom, not a real limit on anything legitimate) into
+// a fixed buffer, never `readFileSync`'s unbounded read. Reused for
+// `.lineage`'s read for the identical reason: `.gitignore` does not stop a
+// malicious branch from committing a file at an ignored path either.
+const MAX_LOCAL_JSON_BYTES = 4096;
+function readBoundedJsonNoFollow(path) {
+  let fd;
   try {
-    const parsed = JSON.parse(readFileSync(p, 'utf8'));
-    return Boolean(parsed) && typeof parsed === 'object' && parsed.format === MARKER_FORMAT;
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch {
-    return false; // a corrupted marker is not a valid marker — fall through to the cutover-entry test
+    return null; // missing, a symlink, or otherwise unreadable — treat as absent
   }
+  try {
+    const buf = Buffer.alloc(MAX_LOCAL_JSON_BYTES);
+    const bytesRead = readSync(fd, buf, 0, MAX_LOCAL_JSON_BYTES, 0);
+    if (bytesRead >= MAX_LOCAL_JSON_BYTES) return null; // at/over the cap — refuse to guess whether it was truncated
+    return JSON.parse(buf.subarray(0, bytesRead).toString('utf8'));
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function hasActivationMarker(dir) {
+  const parsed = readBoundedJsonNoFollow(markerPath(dir));
+  return Boolean(parsed) && typeof parsed === 'object'
+    && parsed.format === MARKER_FORMAT && parsed.version === MARKER_VERSION;
 }
 
 function rootEndsInCutover(dir) {
@@ -111,18 +138,14 @@ export function currentBranch(cwd = process.cwd()) {
   }
 }
 
-// SECURITY (adversarial-review finding): `.lineage` is local, gitignored
-// bookkeeping (spec §4.8) — legitimately never committed. That means finding
-// it already on disk as a symlink is inherently suspicious: nothing in this
-// codebase's own workflow ever creates one there. Since `.gitignore` does NOT
-// stop a malicious PR branch from committing a file at an ignored path
-// anyway, a symlink planted there (e.g. pointing at a shell rc file outside
-// the repo) must never be READ THROUGH (information disclosure) or,
-// critically, WRITTEN THROUGH (arbitrary-file-overwrite / near-RCE, since the
-// written token embeds the branch name and Git branch names can contain
-// shell metacharacters). `lstatSync` (never `existsSync`, which follows
-// links — same rule forest.mjs's segment discovery already applies) checks
-// the raw filesystem object before either read or write.
+// SECURITY (adversarial-review finding): a symlink planted at `.lineage`
+// (e.g. pointing at a shell rc file outside the repo) must never be WRITTEN
+// THROUGH — the written token embeds the branch name, and Git branch names
+// can contain shell metacharacters, so following the link would be an
+// arbitrary-file-overwrite / near-RCE primitive. `lstatSync` (never
+// `existsSync`, which follows links — same rule forest.mjs's segment
+// discovery already applies) checks the raw filesystem object before write;
+// the read side's refusal is `readBoundedJsonNoFollow`'s `O_NOFOLLOW` above.
 function isSymlinkOrOtherNonRegular(path) {
   let st;
   try {
@@ -134,16 +157,10 @@ function isSymlinkOrOtherNonRegular(path) {
 }
 
 function readLineageToken(dir) {
-  const p = lineagePath(dir);
-  if (!existsSync(p) || isSymlinkOrOtherNonRegular(p)) return null;
-  try {
-    const token = JSON.parse(readFileSync(p, 'utf8'));
-    if (!token || typeof token !== 'object') return null;
-    if (typeof token.segment !== 'string' || typeof token.ulid !== 'string' || typeof token.branch !== 'string') return null;
-    return token;
-  } catch {
-    return null; // a corrupted local token blocks nothing — mint a fresh segment instead
-  }
+  const token = readBoundedJsonNoFollow(lineagePath(dir));
+  if (!token || typeof token !== 'object') return null;
+  if (typeof token.segment !== 'string' || typeof token.ulid !== 'string' || typeof token.branch !== 'string') return null;
+  return token; // a corrupted/oversized/symlinked local token blocks nothing — mint a fresh segment instead
 }
 
 function writeLineageToken(dir, token) {

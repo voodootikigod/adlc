@@ -88,6 +88,36 @@ describe('isSegmentedRepo (spec §4.7)', () => {
       assert.equal(isSegmentedRepo(dir), false);
     } finally { clean(root); }
   });
+
+  it('an unsupported marker version is not honored', () => {
+    const { root, dir } = gitRepo();
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      writeFileSync(markerPath(dir), JSON.stringify({ format: 'adlc-manifest-segments', version: 2 }));
+      assert.equal(isSegmentedRepo(dir), false);
+    } finally { clean(root); }
+  });
+
+  it('a symlinked marker (adversarial-review finding) is never followed — treated as absent, not read', () => {
+    const { root, dir } = gitRepo();
+    const outsideTarget = join(root, '..', `outside-marker-${Math.random().toString(36).slice(2)}.txt`);
+    writeFileSync(outsideTarget, JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      symlinkSync(outsideTarget, markerPath(dir));
+      assert.equal(isSegmentedRepo(dir), false, 'a symlinked marker must never be followed, even if its target looks valid');
+    } finally { clean(root); rmSync(outsideTarget, { force: true }); }
+  });
+
+  it('a marker larger than the read cap is refused rather than read unbounded (adversarial-review finding)', () => {
+    const { root, dir } = gitRepo();
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      const oversized = JSON.stringify({ format: 'adlc-manifest-segments', version: 1, padding: 'x'.repeat(8192) });
+      writeFileSync(markerPath(dir), oversized);
+      assert.equal(isSegmentedRepo(dir), false);
+    } finally { clean(root); }
+  });
 });
 
 describe('deriveSlug (spec §7.1)', () => {
@@ -272,6 +302,24 @@ describe('appendManifestEntry routes to the segment writer once segmented (spec 
       assert.equal(entry.seq, 1);
       assert.equal(existsSync(join(dir, 'manifest.jsonl')), true);
       assert.equal(discoverSegments(dir).valid.length, 0);
+    } finally { clean(root); }
+  });
+
+  // Adversarial-review finding: `cwd` must default to the TARGET repo (dir's
+  // parent), not this test runner's own `process.cwd()` — which is a
+  // DIFFERENT repo, on a different branch, than the fixture repo `dir` lives
+  // in. Omitting `cwd` entirely below is the point: if the old
+  // `process.cwd()` default were still in effect, the minted segment's slug
+  // would reflect THIS repo's branch, not the fixture's.
+  it('derives cwd from dir by default, not process.cwd() — the target repo\'s branch is used, not the caller\'s', () => {
+    const { root, dir } = gitRepo('feat/target-repo-branch');
+    try {
+      activate(dir);
+      const entry = appendManifestEntry({ gate: 'evidence' }, dir);
+      assert.equal(entry.seq, 1);
+      const { valid } = discoverSegments(dir);
+      assert.equal(valid.length, 1);
+      assert.match(valid[0], /^feat-target-repo-branch-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/);
     } finally { clean(root); }
   });
 

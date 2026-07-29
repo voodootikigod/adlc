@@ -19,8 +19,19 @@ export const SEGMENT_DIRNAME = 'manifest.d';
 // bad-filename-grammar rejection, not a normalized match.
 const SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
 // .store.json and .lineage are structural files under manifest.d/, not segments
-// (spec §4.7); grammar checks skip exactly these two names.
+// (spec §4.7); grammar checks skip exactly these two names. Any `*.lock` name
+// is also skipped, not reported invalid: `withLedgerLock` (T-MANIFEST-FOREST
+// slice 3, the writer) names its advisory lock `<segment>.jsonl.lock`, which
+// does not match SEGMENT_NAME_RE (it does not end in exactly `.jsonl`) — left
+// unhandled, a lock file live for the brief duration of an in-flight append
+// would make discoverSegments report it as a bad-filename-grammar segment,
+// which verify() treats as failing the WHOLE forest (adversarial-review
+// finding: this breaks the "concurrent writers serialize on the lock"
+// guarantee spec §7 promises, turning graceful queuing into an outright
+// "manifest forest is invalid" for any writer or reader that runs while
+// another writer briefly holds the lock).
 const RESERVED_NAMES = new Set(['.store.json', '.lineage']);
+const LOCK_SUFFIX = '.lock';
 
 export function segmentDirPath(dir) {
   return join(dir, SEGMENT_DIRNAME);
@@ -70,7 +81,7 @@ export function discoverSegments(dir) {
   }
 
   for (const name of names) {
-    if (RESERVED_NAMES.has(name)) continue;
+    if (RESERVED_NAMES.has(name) || name.endsWith(LOCK_SUFFIX)) continue;
     const full = join(segDir, name);
     let st;
     try {

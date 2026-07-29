@@ -581,6 +581,29 @@ describe('discoverSegments — grammar edge cases', () => {
       assert.deepEqual(invalid, []);
     } finally { cleanTmp(dir); }
   });
+
+  // adversarial-review finding: withLedgerLock (T-MANIFEST-FOREST slice 3, the
+  // writer) names its advisory lock '<segment>.jsonl.lock', which does NOT
+  // match SEGMENT_NAME_RE (it doesn't end in exactly '.jsonl'). Left
+  // unhandled, discoverSegments would report a live lock file as a
+  // bad-filename-grammar segment, and verify() treats ANY non-empty `invalid`
+  // as failing the WHOLE forest — turning "another writer is mid-append,
+  // please wait" into "the manifest forest is invalid" for every concurrent
+  // reader or writer, breaking spec §7's "concurrent writers serialize"
+  // guarantee.
+  it('a live *.lock file is a structural artifact, not a segment — skipped, never reported as invalid', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
+      writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), JSON.stringify({ token: 'in-flight-writer' }));
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(invalid, []);
+      assert.deepEqual(valid, ['feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl']);
+      assert.equal(verify(adlc).valid, true, 'a concurrent writer holding a segment lock must not fail verify() for everyone else');
+    } finally { cleanTmp(dir); }
+  });
 });
 
 describe('renderEntry — segment label (§6)', () => {
