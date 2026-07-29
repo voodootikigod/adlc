@@ -119,6 +119,20 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
     } finally { clean(root); }
   });
 
+  it('recognizes a segment whose slug contains digits 2-9 (full character-class range, not just 0-1)', () => {
+    const { root, dir } = gitRepo('feat/t789-full-digit-range');
+    try {
+      activate(dir);
+      const first = recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' }));
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      assert.match(resolved.name, /^feat-t789-full-digit-range-/, 'the slug must keep every digit 0-9, not just 0-1');
+      assert.equal(resolved.isNew, false, 'the just-written segment must be recognized as already open, proving the grammar still matches it');
+      const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
+      assert.equal(raw.length, 1);
+      assert.equal(JSON.parse(raw[0]).data.transactionId, first.data.transactionId);
+    } finally { clean(root); }
+  });
+
   it('a second evidence append on the same branch continues the same segment', () => {
     const { root, dir } = gitRepo();
     try {
