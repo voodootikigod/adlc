@@ -118,6 +118,25 @@ describe('isSegmentedRepo (spec §4.7)', () => {
       assert.equal(isSegmentedRepo(dir), false);
     } finally { clean(root); }
   });
+
+  it('the read cap boundary is exact: a marker of exactly 4096 bytes is refused, 4095 is accepted', () => {
+    const { root, dir } = gitRepo();
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      const build = (padLen) => JSON.stringify({ format: 'adlc-manifest-segments', version: 1, pad: 'x'.repeat(padLen) });
+      let pad = 0;
+      let json = build(pad);
+      while (json.length < 4096) { pad += 1; json = build(pad); }
+      assert.equal(json.length, 4096, 'test construction sanity check');
+      writeFileSync(markerPath(dir), json);
+      assert.equal(isSegmentedRepo(dir), false, 'exactly the cap must be refused, not treated as fitting');
+
+      const jsonUnderCap = build(pad - 1);
+      assert.equal(jsonUnderCap.length, 4095);
+      writeFileSync(markerPath(dir), jsonUnderCap);
+      assert.equal(isSegmentedRepo(dir), true, 'one byte under the cap must be accepted');
+    } finally { clean(root); }
+  });
 });
 
 describe('deriveSlug (spec §7.1)', () => {
