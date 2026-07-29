@@ -17,7 +17,20 @@ function writeEvidence(type, data, dir) {
 
 function manifestArtifactPaths(cwd, dir) {
   const root = resolve(cwd, dir);
-  return [join(root, 'manifest.jsonl'), join(root, 'manifest.lock'), join(root, 'tickets.json')];
+  // manifest.d/ (T-MANIFEST-FOREST slice 3: the segment writer) is the
+  // segmented equivalent of manifest.jsonl/manifest.lock — ledger bookkeeping,
+  // not reviewable code. Without this, a segmented repo's P5 evidence append
+  // would change the tracked tree (new/modified segment file), moving the
+  // very revision the NEXT evidence append (cross-model review, P6) has to
+  // bind to — the same "evidence writes must not move the reviewed revision"
+  // property manifest.jsonl already has, just unreached until a writer
+  // existed to make manifest.d/ files real (adversarial-review finding).
+  // Ignoring the whole directory (not just *.jsonl) also covers the
+  // activation marker (.store.json) and .lineage/.lock, matching how root's
+  // OWN cutover entry is likewise excluded via manifest.jsonl already being
+  // ignored in full — the marker gets no separate reviewability manifest.jsonl's
+  // entries don't already lack.
+  return [join(root, 'manifest.jsonl'), join(root, 'manifest.lock'), join(root, 'manifest.d'), join(root, 'tickets.json')];
 }
 
 function isInsideCwd(cwd, absolute) {

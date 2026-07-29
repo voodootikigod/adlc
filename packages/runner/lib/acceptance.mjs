@@ -125,7 +125,12 @@ function staleTicketDefinitionError(recordedHash, currentHash) {
 
 function manifestArtifactPaths(cwd, dir) {
   const root = resolve(cwd, dir);
-  return [join(root, 'manifest.jsonl'), join(root, 'manifest.lock'), join(root, 'tickets.json')];
+  // manifest.d/ (T-MANIFEST-FOREST slice 3) is the segmented equivalent of
+  // manifest.jsonl/manifest.lock — see prosecute/lib/run.mjs's identical
+  // helper for the full rationale (adversarial-review finding: without this,
+  // a segmented repo's evidence appends move the revision they are supposed
+  // to attest).
+  return [join(root, 'manifest.jsonl'), join(root, 'manifest.lock'), join(root, 'manifest.d'), join(root, 'tickets.json')];
 }
 
 export function recordAcceptancePacket({

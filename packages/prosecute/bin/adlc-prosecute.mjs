@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths, untrackedNonIgnoredPaths, readEntries } from '@adlc/core';
+import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths, untrackedNonIgnoredPaths } from '@adlc/core';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
@@ -399,7 +400,11 @@ if (positionals[0] === 'mirror-attestations') {
   if (!manifestChainTrustworthy(values.dir)) {
     opError(`mirror-attestations: the manifest chain at ${values.dir} does not verify — refusing to mirror from an untrustworthy manifest into the shared attestation store`);
   }
-  const { entries } = readEntries('manifest', values.dir);
+  // Forest-aware (adversarial-review finding, T-MANIFEST-FOREST slice 3): once
+  // a repo is segmented, every new cross-model entry lives in manifest.d/, not
+  // root. A root-only read here mirrors NOTHING post-cutover, silently
+  // dropping the anti-truncation anchor for every future approval/revocation.
+  const { entries } = readManifestForest(values.dir);
   const crossModelEntries = entries.filter((entry) => (entry.gate ?? entry.type) === CROSS_MODEL_GATE);
   let appended;
   try {
@@ -508,7 +513,12 @@ if (positionals[0] === 'tier-check') {
   // failing path, and only meaningful when a store was actually supplied.
   let truncationDetected = false;
   if (!satisfied && chainTrustworthy && observedEntries !== undefined) {
-    const { entries: prEntries } = readEntries('manifest', values.dir);
+    // Forest-aware for the same reason as mirror-attestations above: this
+    // must see the SAME entries hasCrossModelApproveForRevision evaluated
+    // (forest-wide since slice 2), or a segmented repo's truncation
+    // attribution silently degrades to "root-only", the exact regression
+    // this diagnostic branch exists to distinguish from a real gap.
+    const { entries: prEntries } = readManifestForest(values.dir);
     // Same author-scoping hasCrossModelApproveForRevision applies internally (round-4
     // finding): recomputing this with UNSCOPED observedEntries would misreport a
     // cross-author revision collision as truncation instead of a missing attestation.

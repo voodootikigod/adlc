@@ -590,18 +590,52 @@ describe('discoverSegments — grammar edge cases', () => {
   // as failing the WHOLE forest — turning "another writer is mid-append,
   // please wait" into "the manifest forest is invalid" for every concurrent
   // reader or writer, breaking spec §7's "concurrent writers serialize"
-  // guarantee.
-  it('a live *.lock file is a structural artifact, not a segment — skipped, never reported as invalid', () => {
+  // guarantee. The skip is CONTENT-aware (a follow-up adversarial-review
+  // finding on the first fix): only a name ending in .lock whose content
+  // genuinely matches withLedgerLock's own owner-record shape is skipped —
+  // a real segment renamed to dodge grammar validation does not match that
+  // shape and is still caught, see the negative case below.
+  const genuineLockOwner = () => JSON.stringify({ version: 1, token: 'owner-token-uuid', pid: 12345, hostname: 'ci-runner', startedAt: '2026-01-01T00:00:00.000Z' });
+
+  it('a live *.lock file with a genuine owner-record body is a structural artifact, not a segment — skipped', () => {
     const dir = makeTmp();
     try {
       const adlc = join(dir, '.adlc');
       mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
       writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'x', anchor: null }]));
-      writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), JSON.stringify({ token: 'in-flight-writer' }));
+      writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), genuineLockOwner());
       const { valid, invalid } = discoverSegments(adlc);
       assert.deepEqual(invalid, []);
       assert.deepEqual(valid, ['feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl']);
       assert.equal(verify(adlc).valid, true, 'a concurrent writer holding a segment lock must not fail verify() for everyone else');
+    } finally { cleanTmp(dir); }
+  });
+
+  it('a real segment renamed to end in .lock is NOT silently hidden — its content does not match a genuine lock', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      // A real, chained segment's bytes — an attacker's rename target, not a lock.
+      writeLines(join(adlc, 'manifest.d', 'evil-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), buildChainLines([{ gate: 'cross-model-review', data: { verdict: 'approve' }, anchor: null }]));
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(valid, [], 'a disguised real segment must never be treated as valid content either');
+      assert.equal(invalid.length, 1);
+      assert.equal(invalid[0].name, 'evil-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock');
+      assert.match(invalid[0].reason, /not a genuine advisory lock/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('an oversized *.lock file is refused, not treated as a genuine lock', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+      writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), JSON.stringify({ version: 1, token: 'x'.repeat(2000), pid: 1, hostname: 'h', startedAt: '2026-01-01T00:00:00.000Z' }));
+      const { valid, invalid } = discoverSegments(adlc);
+      assert.deepEqual(valid, []);
+      assert.equal(invalid.length, 1);
+      assert.match(invalid[0].reason, /not a genuine advisory lock/);
     } finally { cleanTmp(dir); }
   });
 });

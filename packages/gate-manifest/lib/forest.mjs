@@ -19,19 +19,36 @@ export const SEGMENT_DIRNAME = 'manifest.d';
 // bad-filename-grammar rejection, not a normalized match.
 const SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
 // .store.json and .lineage are structural files under manifest.d/, not segments
-// (spec §4.7); grammar checks skip exactly these two names. Any `*.lock` name
-// is also skipped, not reported invalid: `withLedgerLock` (T-MANIFEST-FOREST
-// slice 3, the writer) names its advisory lock `<segment>.jsonl.lock`, which
-// does not match SEGMENT_NAME_RE (it does not end in exactly `.jsonl`) — left
-// unhandled, a lock file live for the brief duration of an in-flight append
-// would make discoverSegments report it as a bad-filename-grammar segment,
-// which verify() treats as failing the WHOLE forest (adversarial-review
-// finding: this breaks the "concurrent writers serialize on the lock"
-// guarantee spec §7 promises, turning graceful queuing into an outright
-// "manifest forest is invalid" for any writer or reader that runs while
-// another writer briefly holds the lock).
+// (spec §4.7); grammar checks skip exactly these two names.
 const RESERVED_NAMES = new Set(['.store.json', '.lineage']);
+
+// A `*.lock` name is ALSO skippable, not reported invalid — but ONLY when its
+// content genuinely looks like `withLedgerLock`'s own owner record
+// (T-MANIFEST-FOREST slice 3, the writer, names its advisory lock
+// `<segment>.jsonl.lock`, which does not match SEGMENT_NAME_RE since it does
+// not end in exactly `.jsonl`). A NAME-ONLY skip was tried first and reverted
+// (adversarial-review finding): it let a malicious branch rename a real
+// segment — one holding a needs-attention revocation, say — to end in
+// `.lock`, silently vanishing it from the forest entirely instead of being
+// caught as bad-filename-grammar, undetectably resurrecting a revoked
+// approve. Requiring the CONTENT to match the lock's own narrow, distinctive
+// shape closes that: a renamed segment's real JSONL content will never match
+// it, so it falls through to the ordinary bad-filename-grammar rejection
+// below instead of disappearing.
 const LOCK_SUFFIX = '.lock';
+const MAX_LOCK_OWNER_BYTES = 512; // withLedgerLock's owner record is ~120 bytes; generous headroom, not a real limit
+function looksLikeGenuineLedgerLock(path, size) {
+  if (size > MAX_LOCK_OWNER_BYTES) return false; // real locks are tiny; anything bigger cannot be one
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8').trim());
+  } catch {
+    return false;
+  }
+  return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
+    && typeof parsed.token === 'string' && typeof parsed.pid === 'number'
+    && typeof parsed.hostname === 'string' && typeof parsed.startedAt === 'string';
+}
 
 export function segmentDirPath(dir) {
   return join(dir, SEGMENT_DIRNAME);
@@ -81,7 +98,7 @@ export function discoverSegments(dir) {
   }
 
   for (const name of names) {
-    if (RESERVED_NAMES.has(name) || name.endsWith(LOCK_SUFFIX)) continue;
+    if (RESERVED_NAMES.has(name)) continue;
     const full = join(segDir, name);
     let st;
     try {
@@ -100,6 +117,11 @@ export function discoverSegments(dir) {
     }
     if (!st.isFile()) {
       invalid.push({ name, reason: 'not a regular file' });
+      continue;
+    }
+    if (name.endsWith(LOCK_SUFFIX)) {
+      if (looksLikeGenuineLedgerLock(full, st.size)) continue; // a transient advisory lock, not a segment
+      invalid.push({ name, reason: 'lock-suffixed object is not a genuine advisory lock' });
       continue;
     }
     if (!SEGMENT_NAME_RE.test(name)) {
