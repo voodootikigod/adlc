@@ -168,7 +168,7 @@ function p4Fixture() {
 
 function writeP4Evidence(dir, content) {
   writeManifest(dir, [
-    { type: 'rails-green', ticket: 'T1' },
+    { type: 'p4-build', ticket: 'T1' },
     {
       type: 'rails-check',
       ticket: 'T1',
@@ -182,7 +182,7 @@ function writeP4Evidence(dir, content) {
 
 function writeP4EvidenceForTicket(dir, ticket, content) {
   writeManifest(dir, [
-    { type: 'rails-green', ticket },
+    { type: 'p4-build', ticket },
     {
       type: 'rails-check',
       ticket,
@@ -206,6 +206,28 @@ describe('assertPhase', () => {
     }
   });
 
+  it('reports exactly the missing marker when only one of the three p4 markers is absent', () => {
+    const { cwd, dir, railPath } = p4Fixture();
+    try {
+      writeManifest(dir, [
+        { type: 'p4-build', ticket: 'T1' },
+        {
+          type: 'rails-check',
+          ticket: 'T1',
+          railsDiffEmpty: true,
+          suppressionsClean: true,
+          railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
+        },
+        // flail-check deliberately omitted
+      ]);
+      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.missing, ['flail-check']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('requires ticket-scoped evidence for p3 and p4', () => {
     const { cwd, dir, railPath } = p4Fixture();
     try {
@@ -223,7 +245,7 @@ describe('assertPhase', () => {
 
       const t1 = assertPhase('p4', { dir, ticket: 'T1', cwd });
       assert.equal(t1.ok, false);
-      assert.deepEqual(t1.missing, ['rails-green', 'rails-check', 'flail-check']);
+      assert.deepEqual(t1.missing, ['p4-build', 'rails-check', 'flail-check']);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -233,7 +255,7 @@ describe('assertPhase', () => {
     const { cwd, dir } = p4Fixture();
     try {
       writeManifest(dir, [
-        { type: 'rails-green', ticket: 'T1' },
+        { type: 'p4-build', ticket: 'T1' },
         { type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true },
         { type: 'flail-check', ticket: 'T1' },
       ]);

@@ -18,21 +18,22 @@ Target ticket: the text after the command (default to the active ticket in
 2. Run a **targeted** test pass for the active ticket: the test files covering
    the ticket's `scope` globs (e.g. `node --test <matching test files>`), so a
    green full suite can't mask a skipped local suite.
-3. Check the session for flail: `adlc flail-detector <log-file> --scope <glob>`
-   (use the ticket's `scope` globs). It flags repeated errors, scope violations,
-   edit churn, and oversized logs — exit `2` means the build session itself is
-   unhealthy; investigate before proceeding.
+3. Check the session for flail: `adlc flail-detector <log-file> --scope <glob>
+   --record --ticket <id>` (use the ticket's `scope` globs). It flags repeated
+   errors, scope violations, edit churn, and oversized logs — exit `2` means the
+   build session itself is unhealthy; investigate before proceeding. On a clean
+   verdict, `--record` appends the `flail-check` manifest entry `adlc-runner
+   run p4` requires.
 4. If any of the above fail, STOP — report the failures; the change is not
    eligible for P5.
 5. On success, record the build evidence:
    `adlc gate-manifest record p4-build --ticket <id> --files <changed files>
    --data '{"tests":"<command run>","result":"green","flail":"<verdict>"}'`.
-   (Note: `adlc-runner run p4` is a read-only ASSERTION requiring
-   `rails-green`/`rails-check`/`flail-check` manifest entries — of which the
-   current toolkit only ever emits `rails-check` (via `adlc rails-guard
-   --record`) — so it exits 2 even after this step. Formal `run p4` assertion
-   is not currently satisfiable from this command's flow; the `p4-build`
-   record above IS the P4 evidence.)
+   (Note: `adlc-runner run p4` is a read-only ASSERTION requiring `p4-build`/
+   `rails-check`/`flail-check` manifest entries — the `p4-build` record above
+   and the `flail-check` record from step 3 cover two of the three; `rails-check`
+   comes from `adlc rails-guard --record` at P3. With all three recorded for
+   this ticket, `adlc-runner run p4 --ticket <id>` should now exit 0.)
 
 ## Summarize
 Report each command's result, the flail verdict, and what was recorded. When

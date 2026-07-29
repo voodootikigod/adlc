@@ -13,7 +13,7 @@ const PHASE_REQUIREMENTS = {
   p1: ['spec-lint', 'premortem', 'spec-approval'],
   p2: ['coldstart', 'merge-forecast'],
   p3: ['rails-red', 'hollow-test', 'rails-frozen'],
-  p4: ['rails-green', 'rails-check', 'flail-check'],
+  p4: ['p4-build', 'rails-check', 'flail-check'],
   p5: ['p5-complete'],
   p6: ['p5-complete', 'p6-acceptance-packet'],
   p7: ['lesson-foundry', 'rejection-mining', 'skill-rot'],
