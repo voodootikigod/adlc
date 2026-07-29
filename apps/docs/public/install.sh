@@ -311,18 +311,33 @@ install_antigravity() {
     if [ -z "$agy_root" ] || [ ! -d "$agy_plugin" ]; then
         warn "Google Antigravity: @adlc/antigravity installed, but not found at"
         warn "  ${agy_plugin:-<npm root -g unavailable>}"
-        warn "Locate it with 'npm root -g', then: agy plugin install <path>/@adlc/antigravity"
+        warn "Register it with: npx adlc-agy install"
         record_manual "Google Antigravity"
         return 0
     fi
 
-    if agy plugin install "$agy_plugin"; then
+    # STAGE UNDER AN @-FREE PATH. agy resolves its target as `plugin@marketplace`
+    # BEFORE deciding whether it is a filesystem path, so an `@` anywhere in the
+    # argument is read as that separator — and every location npm gives a scoped
+    # package contains one. Handed the real directory, agy splits
+    # ".../node_modules/@adlc/antigravity" and dies with
+    # "unknown marketplace: adlc/antigravity", never touching the disk. agy COPIES
+    # the plugin into ~/.gemini/config/plugins/<name>/, so a throwaway directory
+    # is a complete install source, not a link the installed plugin depends on.
+    agy_stage=$(mktemp -d) || {
+        warn "Google Antigravity: could not create a staging directory — see ${SITE}/integrations/antigravity"
+        record_failed "Google Antigravity"
+        return 0
+    }
+    if cp -R "$agy_plugin" "${agy_stage}/adlc-antigravity" &&
+        agy plugin install "${agy_stage}/adlc-antigravity"; then
         ok "Google Antigravity"
         record_installed "Google Antigravity"
     else
         warn "Google Antigravity: agy plugin install failed — see ${SITE}/integrations/antigravity"
         record_failed "Google Antigravity"
     fi
+    rm -rf "$agy_stage"
 }
 
 install_herdr() {
@@ -399,7 +414,7 @@ summary() {
         manual_has "Cursor" && printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
         manual_has "OpenCode" && printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
         manual_has "pi" && printf '      pi:       needs Node >= 22.19; upgrade Node, then "pi install npm:@adlc/pi"\n'
-        manual_has "Google Antigravity" && printf '      Antigravity: @adlc/antigravity is installed but was not found under "npm root -g".\n                   Locate it, then: agy plugin install <path>/@adlc/antigravity\n'
+        manual_has "Google Antigravity" && printf '      Antigravity: @adlc/antigravity is installed but was not found under "npm root -g".\n                   Register it with: npx adlc-agy install\n'
     fi
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"

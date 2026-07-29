@@ -720,12 +720,17 @@ export const ANTIGRAVITY_INTEGRATION = {
   name: 'Google Antigravity',
   status: 'local',
   tagline: 'Advisory PreToolUse rails-guard for agy, plus skills and a prosecutor agent. The unbypassable CI rail-freeze gate is the real control.',
+  // `agy plugin install <path>` cannot be handed the npm location directly: agy
+  // resolves its target as `plugin@marketplace` BEFORE treating it as a path, so
+  // the `@` in `.../@adlc/antigravity` is read as that separator and the install
+  // dies with `unknown marketplace: adlc/antigravity`. `adlc-agy install` stages
+  // the plugin under an @-free path, so it is the npm path that actually works.
   install: [
-    'npm install -g @adlc/antigravity',
-    'agy plugin install $(npm root -g)/@adlc/antigravity',
     'npx adlc-agy install',
+    'npm install -g @adlc/antigravity',
+    'adlc-agy install',
   ],
-  note: 'Recommended: install globally via npm (npm install -g @adlc/antigravity) and register with agy, or run npx adlc-agy install. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  note: 'Recommended: npx adlc-agy install — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
   pluginDir: 'plugins/adlc-antigravity',
   hero: {
     kicker: 'Antigravity integration',
@@ -817,17 +822,17 @@ export const ANTIGRAVITY_INTEGRATION = {
   },
   installSection: {
     kicker: 'Install',
-    title: 'Install via global npm or npx',
+    title: 'Install via npx or global npm',
   },
   operate: {
     title: 'operate: Antigravity plugin',
     lines: [
-      '# Recommended global npm install',
-      'npm install -g @adlc/antigravity',
-      'agy plugin install $(npm root -g)/@adlc/antigravity',
-      '',
-      '# Or one-liner via npx',
+      '# Recommended one-liner via npx',
       'npx adlc-agy install',
+      '',
+      '# Or install globally, then register',
+      'npm install -g @adlc/antigravity',
+      'adlc-agy install',
       '',
       '# Arm enforcement for an active ticket',
       'export ADLC_P4_ENFORCEMENT=1',

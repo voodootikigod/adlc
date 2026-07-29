@@ -276,7 +276,21 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   assert.match(ag?.enforcement.session.body ?? '', /fail-open|Advisory/i);
   assert.match(ag?.enforcement.ci.body ?? '', /unbypassable|rails-guard-ci/i);
   assert.match(ag?.note ?? '', /ADLC_P4_ENFORCEMENT=1/);
-  assert.match(ag?.note ?? '', /npm install -g @adlc\/antigravity/);
+  // The note used to recommend `npm install -g` + pointing agy at the resulting
+  // path. That path CANNOT work: agy resolves its target as `plugin@marketplace`
+  // before treating it as a filesystem path, so the `@` in
+  // `.../@adlc/antigravity` is read as the separator and the install dies with
+  // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
+  // plugin under an @-free path, actually registers the plugin.
+  assert.match(ag?.note ?? '', /adlc-agy install/);
+  assert.ok(
+    !ag.install.some((command) => /agy plugin install \S*@/.test(command)),
+    `an advertised command hands agy a path it parses as plugin@marketplace: ${ag.install.join(' | ')}`,
+  );
+  assert.ok(
+    !ag.operate.lines.some((line) => /agy plugin install \S*@/.test(line)),
+    `an operate line hands agy a path it parses as plugin@marketplace: ${ag.operate.lines.join(' | ')}`,
+  );
 });
 
 test('Pi marketing publication claim matches a non-private @adlc/pi package', () => {

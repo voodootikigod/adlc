@@ -6,24 +6,24 @@ skills and a `PreToolUse` rails-guard that freezes ADLC rails. Requires the
 
 ## Install
 
-**Global npm install (recommended):**
-
-```sh
-npm install -g @adlc/antigravity
-agy plugin install $(npm root -g)/@adlc/antigravity
-```
-
-**One-liner via npx:**
+**One-liner via npx (recommended):**
 
 ```sh
 npx adlc-agy install
+```
+
+**Global npm install:**
+
+```sh
+npm install -g @adlc/antigravity
+adlc-agy install
 ```
 
 **Local project install:**
 
 ```sh
 npm install @adlc/antigravity
-agy plugin install ./node_modules/@adlc/antigravity
+npx adlc-agy install
 ```
 
 **From local checkout:**
@@ -31,6 +31,13 @@ agy plugin install ./node_modules/@adlc/antigravity
 ```sh
 agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 ```
+
+Do NOT hand `agy` the npm install location directly. `agy` resolves its target as
+`plugin@marketplace` before deciding whether it is a filesystem path, so the `@`
+in `.../@adlc/antigravity` is read as that separator and the install fails with
+`unknown marketplace: adlc/antigravity`. `adlc-agy install` stages the plugin
+under an `@`-free path and installs from there. A source checkout works directly
+only because its path has no `@`.
 
 ## Manifest: `version` and `adlcContract`
 

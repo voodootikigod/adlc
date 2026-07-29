@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -180,5 +180,55 @@ test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () 
   const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), 'install'], { encoding: 'utf8', timeout: 10_000 });
   assert.match(res.stdout, /Installing @adlc\/antigravity plugin from:/);
   assert.doesNotMatch(res.stdout, /ADLC Google Antigravity Plugin Helper/);
+});
+
+test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
+  // agy resolves `plugin install <target>` as `plugin@marketplace` BEFORE
+  // deciding whether the target is a filesystem path, so an `@` anywhere in the
+  // argument is read as that separator. This package's only npm install
+  // locations — `<npm root -g>/@adlc/antigravity` and
+  // `node_modules/@adlc/antigravity` — both contain one, so passing packageRoot
+  // straight through made agy answer `unknown marketplace: adlc/antigravity`
+  // and fall through to the manual copy path on every single run.
+  //
+  // The package root here is deliberately shaped like a real npm install: the
+  // bug is invisible from a source checkout, whose path has no `@`.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-cli-'));
+  try {
+    const scopedRoot = join(work, 'node_modules', '@adlc', 'antigravity');
+    mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
+    writeFileSync(join(scopedRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
+    writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+
+    // A stub agy that records its argv. HOME is redirected too, so the fallback
+    // copy path can never touch the developer's real ~/.gemini.
+    const binDir = join(work, 'bin');
+    const log = join(work, 'agy.log');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, 'agy'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`);
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, HOME: join(work, 'home') },
+    });
+    assert.equal(res.status, 0, `cli.mjs install failed: ${res.stderr}`);
+
+    const logText = readFileSync(log, 'utf8');
+    const installLine = logText.split('\n').find((line) => line.startsWith('plugin install '));
+    assert.ok(installLine, `agy was never asked to install; log:\n${logText}`);
+
+    const target = installLine.replace('plugin install ', '').trim();
+    assert.ok(!target.includes('@'), `agy was handed a path it parses as plugin@marketplace: ${target}`);
+    assert.match(res.stdout, /Successfully installed/);
+
+    // agy COPIES the plugin into ~/.gemini/config/plugins/<name>/, so the staged
+    // source is disposable — and must actually be disposed of, or every install
+    // leaks a full copy of the plugin into TMPDIR.
+    assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 });
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, cpSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,6 +12,46 @@ const packageRoot = resolve(__dirname, '..');
 
 const args = process.argv.slice(2);
 const command = args[0] || 'install';
+
+/** The directory name agy will adopt for the installed plugin. */
+const PLUGIN_NAME = 'adlc-antigravity';
+
+/**
+ * Run `agy plugin install` against a copy of the plugin placed under a path
+ * containing no `@`.
+ *
+ * agy resolves its target as `plugin@marketplace` BEFORE deciding whether it is
+ * a filesystem path, so an `@` ANYWHERE in the argument is taken as that
+ * separator. Every location npm gives a scoped package has one: handed
+ * `.../node_modules/@adlc/antigravity` directly, agy reports
+ * `unknown marketplace: adlc/antigravity` and never looks at the disk.
+ *
+ * Staging is safe because agy COPIES the directory into
+ * `~/.gemini/config/plugins/<name>/` — the installed plugin does not keep a
+ * reference to the source, so the staging directory is disposable.
+ *
+ * @param {string} sourceDir Plugin directory to install from.
+ * @returns {number | null} agy's exit status, or null if staging failed.
+ */
+function agyInstallFromStagedCopy(sourceDir) {
+  let stage;
+  try {
+    stage = mkdtempSync(join(tmpdir(), 'adlc-agy-'));
+    cpSync(sourceDir, join(stage, PLUGIN_NAME), { recursive: true });
+  } catch (err) {
+    console.error(`Failed to stage the plugin for agy: ${err.message}`);
+    if (stage) rmSync(stage, { recursive: true, force: true });
+    return null;
+  }
+  try {
+    const result = spawnSync('agy', ['plugin', 'install', join(stage, PLUGIN_NAME)], {
+      stdio: 'inherit',
+    });
+    return result.status;
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
 
 if (command === '--help' || command === '-h' || command === 'help') {
   console.log(`
@@ -46,10 +86,8 @@ if (command === 'install' || command === '--install') {
 
   if (agyInstalled) {
     console.log('Google Antigravity (agy) detected. Running agy plugin install...');
-    const result = spawnSync('agy', ['plugin', 'install', packageRoot], {
-      stdio: 'inherit',
-    });
-    if (result.status === 0) {
+    const status = agyInstallFromStagedCopy(packageRoot);
+    if (status === 0) {
       console.log('✓ Successfully installed @adlc/antigravity plugin via agy!');
       process.exit(0);
     } else {

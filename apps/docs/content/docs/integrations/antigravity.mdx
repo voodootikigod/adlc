@@ -15,31 +15,43 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 
 ## Install
 
-**Global npm install (recommended).** Install `@adlc/antigravity` globally via npm, then point `agy` at the globally installed package path:
-
-```sh
-npm install -g @adlc/antigravity
-agy plugin install $(npm root -g)/@adlc/antigravity
-```
-
-**One-liner via npx.** Alternatively, run the helper CLI directly via `npx` to install and register:
+**One-liner via npx (recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
 npx adlc-agy install
+```
+
+**Global npm install.** Install `@adlc/antigravity` globally, then let the bundled helper register it:
+
+```sh
+npm install -g @adlc/antigravity
+adlc-agy install
 ```
 
 **Local project install.** If you prefer to install `@adlc/antigravity` inside a project's `node_modules`:
 
 ```sh
 npm install @adlc/antigravity
-agy plugin install ./node_modules/@adlc/antigravity
+npx adlc-agy install
 ```
 
-**Local checkout (from source).** For local development or installing directly from a local `adlc` source checkout:
+**Local checkout (from source).** For local development or installing directly from a local `adlc` source checkout, `agy` takes the path directly:
 
 ```sh
 agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 ```
+
+<Callout type="warn">
+**Do not point `agy` at the npm location.** `agy` resolves its install target as
+`plugin@marketplace` *before* deciding whether that target is a filesystem path,
+so an `@` anywhere in the argument is read as the separator. Every location npm
+gives a scoped package contains one, so `agy plugin install $(npm root -g)/@adlc/antigravity`
+fails with `unknown marketplace: adlc/antigravity` and installs nothing.
+`adlc-agy install` stages the plugin under an `@`-free path and installs from
+there; `agy` copies the contents into `~/.gemini/config/plugins/adlc-antigravity/`,
+so the staging directory is discarded afterwards. A source checkout works directly
+only because its path has no `@`.
+</Callout>
 
 **Universal installer (planned, not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 

@@ -519,9 +519,58 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     );
     assert.match(
       result.stdout,
-      /Antigravity:.*agy plugin install/s,
+      /Antigravity:.*adlc-agy install/s,
       'a harness in MANUAL must get its own printed instruction',
     );
+    // The instruction must not hand the user the very command that fails: a bare
+    // `agy plugin install <path>/@adlc/antigravity` is rejected by agy's
+    // marketplace parser (see the @-free staging test below).
+    assert.ok(
+      !/agy plugin install \S*@/.test(result.stdout),
+      `the fallback instruction still tells the user to pass an @ path:\n${result.stdout}`,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh hands agy a plugin path containing no "@"', () => {
+  // THE BUG THIS PINS: agy resolves `plugin install <target>` as
+  // `plugin@marketplace` BEFORE deciding whether the target is a path, so an `@`
+  // anywhere in the argument is read as that separator. npm puts every scoped
+  // package under `<root>/@adlc/antigravity`, so passing the real directory made
+  // agy report `unknown marketplace: adlc/antigravity` and install nothing —
+  // while the installer's own summary reported a clean run for every OTHER
+  // harness and only a link for this one. The plugin must therefore be staged
+  // under an @-free path first.
+  const box = sandbox({ bins: ['node', 'npm', 'agy'] });
+  try {
+    // Give the stub `npm root -g` a real package to find, so the installer gets
+    // past its path check and actually reaches agy.
+    const pkg = path.join(box.root, 'npmroot', '@adlc', 'antigravity');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+
+    const agyLine = box
+      .commands()
+      .split('\n')
+      .find((line) => line.startsWith('agy plugin install '));
+    assert.ok(agyLine, `agy was never invoked; log was:\n${box.commands()}`);
+
+    const target = agyLine.replace('agy plugin install ', '').trim();
+    assert.ok(
+      !target.includes('@'),
+      `agy was handed a path it parses as plugin@marketplace: ${target}`,
+    );
+    assert.match(result.stdout, /installed for: .*Antigravity/);
+
+    // The staging copy is a temp directory, not part of the install: agy copies
+    // the plugin into its own config, so leaving the source behind would litter
+    // TMPDIR on every run for no benefit.
+    assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
   } finally {
     box.cleanup();
   }

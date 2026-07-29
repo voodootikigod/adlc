@@ -21,31 +21,42 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 > [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) — **make it a required
 > check** before relying on this integration for enforcement.
 
-**Global npm Install (Recommended).** Install `@adlc/antigravity` globally via npm, then point `agy` at the global package location:
-
-```sh
-npm install -g @adlc/antigravity
-agy plugin install $(npm root -g)/@adlc/antigravity
-```
-
-**One-liner via npx.** Alternatively, run the helper CLI directly via `npx` to install and register:
+**One-liner via npx (Recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
 npx adlc-agy install
 ```
 
-**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules` and register with `agy`:
+**Global npm Install.** Install `@adlc/antigravity` globally via npm, then let the bundled helper register it:
+
+```sh
+npm install -g @adlc/antigravity
+adlc-agy install
+```
+
+**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules`, then register it:
 
 ```sh
 npm install @adlc/antigravity
-agy plugin install ./node_modules/@adlc/antigravity
+npx adlc-agy install
 ```
 
-**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout:
+**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout, `agy` takes the path directly:
 
 ```sh
 agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
 ```
+
+> **Why not `agy plugin install $(npm root -g)/@adlc/antigravity`?** `agy` resolves
+> its install target as `plugin@marketplace` *before* deciding whether that target
+> is a filesystem path, so an `@` anywhere in the argument is read as the
+> separator. Every location npm gives a scoped package contains one, so passing
+> the real directory fails with `unknown marketplace: adlc/antigravity` and
+> installs nothing. `adlc-agy install` stages the plugin under an `@`-free path
+> and installs from there; `agy` copies the contents into
+> `~/.gemini/config/plugins/adlc-antigravity/`, so the staging directory is
+> discarded afterwards. A source checkout works directly only because its path
+> has no `@` in it.
 
 **Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 
