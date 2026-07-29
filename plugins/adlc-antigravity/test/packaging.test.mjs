@@ -208,7 +208,7 @@ function sealedEnv(home, pathValue) {
  * assertion below can prove the copy landed inside the sandbox. process.execPath
  * is used instead of the string 'node' because PATH no longer resolves it.
  */
-function runCliSealed(args, { agyScript, seedTarget } = {}) {
+function runCliSealed(args, { agyScript, seedTarget, extraEnv } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sealed-'));
   const home = join(work, 'home');
   mkdirSync(home, { recursive: true });
@@ -232,7 +232,7 @@ function runCliSealed(args, { agyScript, seedTarget } = {}) {
     pathValue = `${binDir}:${pathValue}`;
   }
 
-  const env = sealedEnv(home, pathValue);
+  const env = { ...sealedEnv(home, pathValue), ...(extraEnv ?? {}) };
 
   const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), ...args], {
     encoding: 'utf8',
@@ -359,6 +359,40 @@ test('bin/cli.mjs self-reinstall from the installed copy does not erase the plug
     assert.ok(existsSync(join(target, 'bin', 'cli.mjs')), 'the helper itself must survive a self-reinstall');
   } finally {
     rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('bin/cli.mjs does not hang forever on a wedged agy', () => {
+  // spawnSync with no timeout waits indefinitely. A wedged agy would hang the
+  // helper with no failure path and no cleanup — the staging directory surviving
+  // for the lifetime of the hang, and any automation waiting forever.
+  const { res, home, cleanup } = runCliSealed(['install'], {
+    agyScript: '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\nsleep 600\n',
+    extraEnv: { ADLC_AGY_TIMEOUT_MS: '1500' },
+  });
+  try {
+    assert.equal(res.status, 1, `a hung agy must fail, not hang:\n${res.stdout}\n${res.stderr}`);
+    assert.match(res.stderr, /did not complete/);
+    // Fail closed still applies: a hang is a PRESENT agy that did not install.
+    assert.ok(
+      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity')),
+      'a hung agy must not be papered over by copying the files anyway',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('bin/cli.mjs does not hang forever on a wedged agy version probe', () => {
+  const { res, cleanup } = runCliSealed(['install'], {
+    agyScript: '#!/bin/sh\nsleep 600\n', // hangs on --version itself
+    extraEnv: { ADLC_AGY_TIMEOUT_MS: '1500' },
+  });
+  try {
+    assert.equal(res.status, 1, `a hung version probe must fail, not hang:\n${res.stdout}\n${res.stderr}`);
+    assert.match(res.stderr, /agy --version` failed/);
+  } finally {
+    cleanup();
   }
 });
 

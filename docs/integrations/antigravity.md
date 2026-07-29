@@ -24,7 +24,7 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 **One-liner via npx (Recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
 
 ```sh
-cd "$(mktemp -d)" && npx @adlc/antigravity@latest install
+(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)
 ```
 
 **Global npm Install.** Install `@adlc/antigravity` globally via npm, then let the bundled helper register it:

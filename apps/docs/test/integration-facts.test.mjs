@@ -312,6 +312,15 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
       /mktemp -d\)"\s*&&\s*npx /,
       `the neutral-cwd hop must be "&&" so npx runs INSIDE the scratch dir: ${line}`,
     );
+    // …and it must be a SUBSHELL. A bare `cd "$(mktemp -d)" && npx …` changes the
+    // caller's interactive shell, so a successful install leaves the user sitting
+    // in a scratch directory — and the very next documented step, /adlc-init,
+    // then scaffolds .adlc/ there instead of in their repository.
+    assert.match(
+      line,
+      /\(cd "\$\(mktemp -d\)"/,
+      `the neutral-cwd hop must be a subshell or it strands the caller's cwd: ${line}`,
+    );
   }
   assert.ok(
     !advertised.some((line) => /agy plugin install \S*@/.test(line)),

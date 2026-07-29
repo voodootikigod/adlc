@@ -17,6 +17,24 @@ const command = args[0] || 'install';
 const PLUGIN_NAME = 'adlc-antigravity';
 
 /**
+ * Wall-clock bound on every agy subprocess.
+ *
+ * spawnSync with no timeout waits forever. A wedged agy — deadlocked, blocked on
+ * a prompt, waiting on a dead network mount — would hang the helper with no
+ * failure path and no cleanup: the staging directory survives for the lifetime of
+ * the hang, and any automation invoking this waits indefinitely.
+ *
+ * Settable because 120s is a judgement call, not a fact: a cold cache on slow
+ * storage can legitimately exceed it, and an operator who hits that needs a knob,
+ * not a patch. Bad values fall back to the default rather than becoming Infinity
+ * or NaN (NaN would disable the timeout entirely, reintroducing the hang).
+ */
+const AGY_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.ADLC_AGY_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
+})();
+
+/**
  * Resolve `agy` to an ABSOLUTE path, ignoring npm-injected bin directories.
  *
  * `npx @adlc/antigravity@latest install` runs through npm exec, which prepends
@@ -91,9 +109,19 @@ function agyInstallFromStagedCopy(sourceDir, agyBin) {
       throw new Error(`no @-free temporary directory available (tried ${root})`);
     }
     cpSync(sourceDir, join(stage, PLUGIN_NAME), { recursive: true });
-    return spawnSync(agyBin, ['plugin', 'install', join(stage, PLUGIN_NAME)], {
+    const result = spawnSync(agyBin, ['plugin', 'install', join(stage, PLUGIN_NAME)], {
       stdio: 'inherit',
-    }).status;
+      timeout: AGY_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    });
+    if (result.error) {
+      // Includes the timeout case, where spawnSync kills the child and reports
+      // ETIMEDOUT. Distinguished from a plain non-zero exit: agy printed nothing
+      // useful, so say what actually happened.
+      console.error(`\`agy plugin install\` did not complete: ${result.error.message}`);
+      return null;
+    }
+    return result.status;
   } catch (err) {
     console.error(`Failed to stage the plugin for agy: ${err.message}`);
     return null;
@@ -112,7 +140,7 @@ Usage:
 
   Recommended one-liner (neutral cwd keeps a hostile repo's .npmrc and
   node_modules out of the resolution):
-    cd "$(mktemp -d)" && npx @adlc/antigravity@latest install
+    (cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)
 
   Note: "npx adlc-agy" does NOT work — adlc-agy is a bin name, not a package
   name, so npx would look for an unpublished package by that name.
@@ -140,7 +168,11 @@ if (command === 'install' || command === '--install') {
   if (agyBin) {
     let probe;
     try {
-      probe = spawnSync(agyBin, ['--version'], { encoding: 'utf8' });
+      probe = spawnSync(agyBin, ['--version'], {
+        encoding: 'utf8',
+        timeout: AGY_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      });
     } catch (err) {
       probe = { status: null, error: err };
     }
@@ -166,7 +198,7 @@ if (command === 'install' || command === '--install') {
     // status saying 0. Automation reading that status cannot tell the difference.
     console.error(
       status === null
-        ? '`agy plugin install` was never reached — staging failed (see above).'
+        ? '`agy plugin install` did not complete — see the reason above.'
         : `\`agy plugin install\` failed (exit ${status}); see agy's output above.`,
     );
     console.error('Not falling back to a direct copy: agy is installed and rejected this plugin.');

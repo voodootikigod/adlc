@@ -9,7 +9,7 @@ skills and a `PreToolUse` rails-guard that freezes ADLC rails. Requires the
 **One-liner via npx (recommended):**
 
 ```sh
-cd "$(mktemp -d)" && npx @adlc/antigravity@latest install
+(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)
 ```
 
 **Global npm install:**
