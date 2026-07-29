@@ -57,7 +57,7 @@ export function loadRegistry({
 
   if (!exists(resolved.path)) {
     throw new RegistryLoadError(
-      `quartermaster: no registry at ${resolved.path}. Dispatch fails closed — there are no default channels (§4b rule 5).`,
+      `quartermaster: no registry at ${resolved.path}. Dispatch fails closed — there are no default channels.`,
       { notices, path: resolved.path }
     );
   }

@@ -34,24 +34,22 @@ export const ADAPTERS = [...REGISTRY.keys()];
  * allowlist identical to the set of modules in this directory: adding an adapter
  * cannot forget to update the validator.
  */
+/**
+ * One adapter's declared capabilities. Both booleans default to FALSE, which is
+ * the fail-closed direction: an adapter that forgets to declare a capability
+ * cannot be bound to a seat that needs it, rather than silently running the
+ * harness's ambient default under a plan claiming the registry's model.
+ */
+function capabilitiesOf(mod) {
+  return {
+    aliases: [...(mod.aliases ?? [])],
+    forcesModel: mod.forcesModel === true,
+    attestsResolvedModel: mod.attestsResolvedModel === true,
+  };
+}
+
 export function adapterCatalog() {
-  return Object.fromEntries(
-    [...REGISTRY.entries()].map(([adapterName, mod]) => [
-      adapterName,
-      {
-        aliases: [...(mod.aliases ?? [])],
-        // §4c: whether this adapter can put an explicit model on the command
-        // line. Defaulting to FALSE is the fail-closed direction — an adapter
-        // that forgets to declare it cannot be bound to a seat naming a model,
-        // rather than silently running the harness's ambient default under a
-        // plan that claims the registry's.
-        forcesModel: mod.forcesModel === true,
-        // §4c attest half. Fail-closed default again: an adapter that does not
-        // declare it cannot be bound to an alias-based channel.
-        attestsResolvedModel: mod.attestsResolvedModel === true,
-      },
-    ])
-  );
+  return Object.fromEntries([...REGISTRY.entries()].map(([name, mod]) => [name, capabilitiesOf(mod)]));
 }
 
 /**
