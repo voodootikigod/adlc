@@ -4,7 +4,7 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 7** — revised after six cross-model adversarial
+Status: **proposed, revision 8** — revised after seven cross-model adversarial
 review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
@@ -23,7 +23,12 @@ attest the concrete executed model (no `default` aliases for reviewer seats),
 authorship became set-valued with lineage (composites and amendments stay
 fleet-origin absent an explicit human-takeover record), review sets gained
 terminal semantics with an out-of-tree head anchor (a deleted negative suffix
-fails closed). Finding trajectory: 6 → 6 → 5 → 3 → 3 → 3.
+fails closed). Round 7 (post-rebase, full change-set incl. build tickets):
+phase-2 binding gained an ancestry-bearing anchor (repoIdentity + headCommit +
+resultCommit; descent on the commit graph; squash merges record a lineage head;
+unavailable objects fail closed). A Gemini fresh-family round between rounds 6
+and 7 returned zero material findings. Finding trajectory: 6 → 6 → 5 → 3 → 3 →
+3 → 4 (round 7 includes ticket-authoring findings, addressed in T152/T151).
 Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
@@ -281,8 +286,28 @@ is two records, both signed:
   revision field — none exists yet.
 - **Phase 2 — revision binding** (written by the fleet's post-build gate path,
   the same trusted process that computes the change-set digest): binds the actual
-  reviewed revision to its contributing dispatch record(s):
-  `{revision, dispatchRecords: [{runId, ticket, attempt}, …]}`.
+  reviewed revision to its contributing dispatch record(s) **and to an
+  ancestry-bearing anchor** — a change-set identity (`git-change:<base>:<digest>`)
+  carries no parent links and may describe uncommitted state, so it cannot answer
+  descent questions by itself (review round 7 finding). The binding records:
+  `{revision, repoIdentity, headCommit, resultCommit,
+  dispatchRecords: [{runId, ticket, attempt}, …]}` where `resultCommit` is the
+  immutable commit OID of the fleet's committed result and `headCommit` is the
+  HEAD the change-set digest was computed against.
+- **Descent is decided on the commit graph, fail-closed on ambiguity.** A
+  candidate revision's lineage check walks git ancestry from the candidate's
+  HEAD: if any ancestor is a recorded `resultCommit` (or lineage head, below),
+  the revision is fleet-origin. Defined cases:
+  - *Dirty working tree:* inherits its HEAD's classification (the digest may
+    describe uncommitted edits; ancestry runs on the underlying HEAD).
+  - *Rebases and merges:* preserve ancestry naturally — no special handling.
+  - *Squash merges:* destroy ancestry, so the fleet's PR-merge path records the
+    post-squash mainline commit as an **additional lineage head** in the ledger
+    at merge time; descent from it is then ordinary ancestry.
+  - *Unavailable objects* (shallow clone, gc'd commits, unknown repo identity):
+    the ancestry question is unanswerable → **fail closed** (treat as
+    fleet-origin; prosecution requires the trusted context where objects
+    resolve). Ambiguity never falls through to the asserted-author path.
 - **Fleet origin is established out-of-tree, never inferred from record presence
   (round 5 finding 1).** Branch-carried manifest records can be deleted by a
   branch author (the manifest reader tolerates dropped branch-only entries by
@@ -573,7 +598,15 @@ Ordered by dependency, each a candidate ticket:
    `packages/prosecute/test/author-binding.test.mjs` (`assert` on quorum failure,
    fail-closed gate, deletion-case fail-closed, both-family exclusion, the
    amendment lineage case with and without takeover, metadata field, and
-   asserted-provenance marker — no pre-matched fixture records).
+   asserted-provenance marker — no pre-matched fixture records). **Ancestry
+   anchor cases run against real git history** (no synthetic ledger rows): an
+   amendment committed on top of a recorded `resultCommit` is classified
+   fleet-origin via commit-graph ancestry; a dirty tree on that HEAD inherits
+   the classification; a squash-merge fixture is fleet-origin only after the
+   merge path records the post-squash lineage head; a shallow clone where the
+   `resultCommit` object is unavailable fails closed. Verified by additional
+   cases in `packages/prosecute/test/author-binding.test.mjs` (`assert` per
+   case against a fixture git repo).
 7. **Fallback through the real resolver.** Driving the actual registry loader and
    resolver (not stubs): `prosecute.verdict` with a simulated pre-execution auth
    failure on `frontier` dispatches `frontier-metered`, `assert` the two attempts'
