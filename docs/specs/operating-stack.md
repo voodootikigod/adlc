@@ -4,7 +4,7 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 4** — revised after three cross-model adversarial
+Status: **proposed, revision 5** — revised after four cross-model adversarial
 review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
@@ -13,6 +13,9 @@ incompatibility, undefined telemetry producers. Round 3: float lives on the
 assignment not the ticket, spend needs transport dimensions, attestation schema
 must version across ALL producers/readers (incl. carry-forward), author identity
 was caller-asserted, cap-hit readiness indistinguishable from zero events.
+Round 4: authorship split into dispatch provenance + post-build revision binding,
+quorum seats bound to one review-set snapshot, readiness made interval-scoped and
+historical. Finding trajectory: 6 → 6 → 5 → 3.
 Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
@@ -184,9 +187,24 @@ this: Kimi-K3-via-gateway (one seat) + codex-direct-to-OpenAI (one seat).
 
 **Bound identity — schema v2, versioned across every producer and reader (round 3
 finding 3).** Attestation entries gain `attestationSchema: 2` with fields
-`provider`, `transport`, `model`, `seatRole` (`"member"` | `"escalation"`), and
-`registryDigest` (SHA-256 of the registry file used at resolution). The migration
-is atomic across the whole surface, not just `recordCrossModelReview`:
+`provider`, `transport`, `model`, `seatRole` (`"member"` | `"escalation"`),
+`registryDigest` (SHA-256 of the registry file used at resolution), and — per the
+quorum-snapshot rule below — `reviewSetId` and `groupSnapshot`. The migration is
+atomic across the whole surface, not just `recordCrossModelReview`:
+
+**Seats bind to one coherent quorum snapshot (round 4 finding 2).** Individually
+valid seats must not be combinable across retries or registry revisions:
+
+- The review driver mints one `reviewSetId` (unique per review invocation) and
+  every seat entry of that invocation carries it, plus a `groupSnapshot`
+  `{group, quorum, members: [{provider, transport}, …]}` frozen at invocation.
+- The verifier evaluates **one review set atomically**: quorum is satisfied iff a
+  single `reviewSetId` contains ≥ `quorum` approving seats whose `registryDigest`
+  values are identical and whose seats match the snapshot's members. Seats from
+  different `reviewSetId`s or mixed digests never combine; a retry mints a fresh
+  set and starts from zero.
+- Carry-forward names **exactly one previously satisfied `reviewSetId`** and
+  carries that set's complete seats; it cannot assemble a set from fragments.
 
 - **Producers:** `recordCrossModelReview` **and** `carryForwardCrossModelReview`
   emit v2. Carry-forward copies the identity fields of the carried entry verbatim
@@ -204,18 +222,28 @@ is atomic across the whole surface, not just `recordCrossModelReview`:
   registry or whose provider disagrees with the registry's binding; `provider`
   comes from the registry, never from a CLI flag or any committed file.
 
-**Author identity is bound the same way (round 3 finding 4).** The distinctness
-and quorum rules compare reviewer families against the **author's** family — which
-today arrives as a caller-asserted `--author-provider` flag. Under this spec:
+**Author identity is bound in two phases (round 3 finding 4; round 4 finding 1).**
+The distinctness and quorum rules compare reviewer families against the
+**author's** family — which today arrives as a caller-asserted `--author-provider`
+flag. A single dispatch-time record cannot carry the reviewed revision, because
+the revision does not exist until the worker has edited the tree. So the binding
+is two records, both signed:
 
-- A quartermaster-dispatched build writes a signed **authorship record** into the
-  manifest at dispatch time: `{channel, provider, model, transport,
-  registryDigest, revision}`.
-- When an authorship record exists for the revision, the quorum verifier reads the
-  author family **from it**; a conflicting CLI/env assertion is recorded as
-  non-gating metadata and cannot change the gating comparison (a same-family
-  reviewer cannot be made to look independent by flag).
-- When no authorship record exists (human-authored outside the fleet), the
+- **Phase 1 — dispatch provenance** (written at dispatch, before the build): keyed
+  by immutable run identity `{runId, ticket, attempt}`, carrying the resolved
+  channel identity `{channel, provider, model, transport, registryDigest}`. No
+  revision field — none exists yet.
+- **Phase 2 — revision binding** (written by the fleet's post-build gate path,
+  the same trusted process that computes the change-set digest): binds the actual
+  reviewed revision to its contributing dispatch record(s):
+  `{revision, dispatchRecords: [{runId, ticket, attempt}, …]}`.
+- The quorum verifier resolves the author family via **binding → provenance**.
+  For **fleet-origin revisions, this fails closed**: a revision produced by a
+  fleet run that lacks a phase-2 binding cannot be prosecuted with an asserted
+  author — the missing binding is a gate failure, not a fallback to the flag. A
+  conflicting CLI/env assertion is recorded as non-gating metadata and cannot
+  change the gating comparison.
+- When no fleet provenance exists at all (human-authored outside the fleet), the
   asserted value is used but the attestation records `authorIdentity: "asserted"`
   so audits can distinguish bound from asserted provenance.
 - **Honest limit, stated plainly:** none of this proves which model a gateway
@@ -273,17 +301,28 @@ Non-usage telemetry lives in `.adlc/telemetry/events.jsonl` (append-only; each
 record `{v: 1, ts, kind, ...}`; unknown `kind`s are skipped and counted). All
 times UTC; windows are rolling and inclusive of the current day.
 
-**Producer readiness is explicit, not inferred (round 3 finding 5).** A monitor
-must never read "zero matching records" as "nothing happened" when the producer
-was never enabled. The operator registry carries a per-channel capability block —
-`"capabilities": { "capHitClassification": true }` — set only after the harness's
-exit-code classification has been probed (§11 Q3). A monitor whose trigger depends
-on a capability the **active channel lacks** reports **unknown**, even when
-`events.jsonl` exists and is well-formed with other kinds.
+**Producer readiness is explicit, interval-scoped, and historical (round 3
+finding 5; round 4 finding 3).** A monitor must never read "zero matching records"
+as "nothing happened" when the producer was not enabled — including for *part of*
+its evaluation window. The operator registry carries a per-channel capability
+block — `"capabilities": { "capHitClassification": true }` — set only after the
+harness's exit-code classification has been probed (§11 Q3). Two consequences:
+
+- **Readiness is an event, so coverage has history:** whenever the registry loads
+  with a capability enabled for a channel, the dispatch wrapper appends a
+  `producer-readiness` event (`{channel, capability, transport, registryDigest}`);
+  readiness intervals run from each such event while subsequent loads agree.
+- **Capability-gated monitors evaluate only covered intervals for the current
+  transport.** `cap-hit` events carry `transport` and `registryDigest`; events
+  from a since-replaced transport are excluded. If any part of the trailing
+  window is uncovered for the active channel's current transport, the monitor
+  reports **unknown**, naming the uncovered span — 29 unobserved days plus one
+  quiet day is unknown, not quiet.
 
 | `kind` | Producer (who writes it) | Fields |
 | --- | --- | --- |
-| `cap-hit` | dispatch wrapper, from exit-code classification — emitted only when the channel's `capHitClassification` capability is true | `channel` |
+| `cap-hit` | dispatch wrapper, from exit-code classification — emitted only when the channel's `capHitClassification` capability is true | `channel`, `transport`, `registryDigest` |
+| `producer-readiness` | dispatch wrapper, on registry load with a capability enabled | `channel`, `capability`, `transport`, `registryDigest` |
 | `rate-limit` | dispatch wrapper, from adapter 429/limit classification | `channel`, `model` |
 | `merge` | fleet, on each successful integration-branch merge (same code path that marks `completed:true`) | `runId`, `ticket` |
 | `fallback` | dispatch wrapper, on a §7 traversal | `from`, `to`, `job` |
@@ -301,7 +340,7 @@ updated, not duplicated. Monitors never mutate the registry.
 
 | Trigger | Rule (deterministic) | Issue |
 | --- | --- | --- |
-| Frontier cap-hits | **unknown** unless the active `frontier` channel has `capHitClassification: true`; else `cap-hit` on >2 distinct UTC days in trailing 30 days | "Re-upgrade subscription" |
+| Frontier cap-hits | **unknown** unless readiness intervals for the active `frontier` transport cover the full trailing 30 days; else `cap-hit` (current transport only) on >2 distinct UTC days in that window | "Re-upgrade subscription" |
 | Rate-window collision | ≥1 `rate-limit` on a UTC day that also has ≥1 `merge` | "Add direct API for model X" |
 | Metered overflow | `aggregateSpend` over `api:*`-transport entries, priced via versioned `pricing.json` (`{version, model, inPerMTok, outPerMTok, currency:"USD"}`), > `overflowUsdThreshold` (default 30, operator-local) in trailing 30 days; pricing version quoted in the finding | "Revisit tiering" |
 | Idle frontier reviewer | 0 `seatRole:"escalation"` attestations in trailing 60 days **and** ≥5 trust-root reviews in the window (opportunity denominator) | "Cancel frontier reviewer line" |
@@ -413,19 +452,29 @@ Ordered by dependency, each a candidate ticket:
    the registry binding, throws; a valid record carries `attestationSchema: 2`,
    `provider`, `transport`, `model`, `seatRole`, and the registry SHA-256.
    `carryForwardCrossModelReview` of a quorum-2 approval emits **two** carried v2
-   entries preserving each seat's identity fields; a v1/legacy entry offered to
-   the trust-root quorum verifier is rejected (fail closed) while the routine
-   reader still accepts it pre-flag-day. Verified by new cases in
+   entries preserving each seat's identity fields and naming the one satisfied
+   `reviewSetId`; a v1/legacy entry offered to the trust-root quorum verifier is
+   rejected (fail closed) while the routine reader still accepts it pre-flag-day.
+   **Snapshot atomicity:** an approving gateway seat from review set A (registry
+   digest X) plus an approving direct seat from review set B (digest Y) does
+   **not** satisfy quorum — the verifier rejects mixed `reviewSetId`s and mixed
+   digests even though each seat verifies individually. Verified by new cases in
    `packages/prosecute/test/cross-model.test.mjs` (`assert` on throws, entry
-   fields including digest, carried seat count, and both reader behaviors).
-6. **Author identity binding defeats flag spoofing.** With a dispatch-time
-   authorship record present naming provider `openai`, a prosecution invoked with
-   `--author-provider anthropic` still fails quorum when the direct-auth seat is
-   an `openai` reviewer (same family as the *bound* author); the conflicting flag
-   is recorded as non-gating metadata; absent an authorship record, the attestation
-   carries `authorIdentity: "asserted"`. Verified by
+   fields including digest and reviewSetId, carried seat count, both reader
+   behaviors, and the interleaved-sets rejection).
+6. **Two-phase author binding through a real dispatch.** An end-to-end test
+   dispatches a worker (phase-1 provenance signed, keyed `{runId, ticket,
+   attempt}`, no revision), lets it **edit the worktree**, computes the actual
+   post-build change-set revision, and signs the phase-2 binding; the verifier
+   then resolves author family `openai` via binding → provenance, and a
+   prosecution invoked with `--author-provider anthropic` still fails quorum when
+   the direct-auth seat is an `openai` reviewer — the flag is recorded as
+   non-gating metadata. A fleet-origin revision with a provenance record but
+   **no phase-2 binding** fails closed (asserted author not accepted). A
+   non-fleet revision carries `authorIdentity: "asserted"`. Verified by
    `packages/prosecute/test/author-binding.test.mjs` (`assert` on quorum failure,
-   metadata field, and asserted-provenance marker).
+   fail-closed gate, metadata field, and asserted-provenance marker — no
+   pre-matched fixture records).
 7. **Fallback through the real resolver.** Driving the actual registry loader and
    resolver (not stubs): `prosecute.verdict` with a simulated pre-execution auth
    failure on `frontier` dispatches `frontier-metered`, `assert` the two attempts'
@@ -449,12 +498,14 @@ Ordered by dependency, each a candidate ticket:
    same-day pair trips the collision trigger; recorded `seatRole:"escalation"`
    attestations suppress the idle-reviewer trigger while ≥5 reviews without them
    fire it; fixtures for each row also cover the non-crossing case (exit 0) and
-   missing-file **unknown** (exit 2 naming the file); **a well-formed, nonempty
-   events file with the active frontier channel's `capHitClassification` capability
-   false yields cap-hit = unknown at exit 2, not quiet**; a second run against an
+   missing-file **unknown** (exit 2 naming the file); **readiness transitions:**
+   a well-formed events file whose `producer-readiness` interval starts on day 29
+   of the 30-day window yields cap-hit = unknown naming the uncovered span (not
+   quiet), and cap-hit events carrying a since-replaced frontier `transport` are
+   excluded after a rebinding (no false re-upgrade issue); a second run against an
    open issue key updates rather than duplicates (gh stubbed). Verified by
-   `packages/quartermaster/test/check.test.mjs` (`assert` on exit codes and issue
-   calls).
+   `packages/quartermaster/test/check.test.mjs` (`assert` on exit codes, uncovered
+   span in output, transport exclusion, and issue calls).
 10. **This spec passes its own gate.** `node packages/spec-lint/bin/spec-lint.mjs
    docs/specs/operating-stack.md` exits 0 (no WISH criteria). Verified by running
    the command in CI; exit code 0 required.
