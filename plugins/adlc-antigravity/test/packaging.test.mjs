@@ -170,6 +170,25 @@ test('AC4: packed tarball extracted outside the repo imports rails-checker with 
 });
 
 /**
+ * Build an environment whose HOME is sealed on EVERY platform.
+ *
+ * HOME alone is not enough: os.homedir() consults USERPROFILE first on Windows,
+ * then HOMEDRIVE+HOMEPATH — all inherited through ...process.env. A test that
+ * overrides only HOME still resolves the developer's real profile there, and
+ * cli.mjs's direct-copy fallback would write into their live .gemini plugin.
+ * One helper so the four call sites cannot drift apart again.
+ *
+ * @param {string} home Sandbox home directory.
+ * @param {string} pathValue PATH for the child process.
+ */
+function sealedEnv(home, pathValue) {
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: pathValue };
+  delete env.HOMEDRIVE;
+  delete env.HOMEPATH;
+  return env;
+}
+
+/**
  * Run bin/cli.mjs with HOME and PATH SEALED OFF from the developer's machine.
  *
  * This is a containment control, not tidiness. cli.mjs installs for real: it
@@ -205,13 +224,7 @@ function runCliSealed(args, { agyScript } = {}) {
     pathValue = `${binDir}:${pathValue}`;
   }
 
-  // HOME alone does NOT seal this. os.homedir() consults USERPROFILE first on
-  // Windows, then HOMEDRIVE+HOMEPATH — all inherited through ...process.env — so
-  // overriding only HOME leaves a Windows run copying into the developer's real
-  // .gemini directory, which is the exact corruption this helper exists to stop.
-  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: pathValue };
-  delete env.HOMEDRIVE;
-  delete env.HOMEPATH;
+  const env = sealedEnv(home, pathValue);
 
   const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), ...args], {
     encoding: 'utf8',
@@ -276,9 +289,7 @@ test('bin/cli.mjs ignores a repo-local node_modules/.bin/agy (npx PATH hijack)',
     }
 
     // Exactly npm exec's layout: the project's .bin FIRST, the real one behind it.
-    const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: `${evilBin}:${realBin}:/usr/bin:/bin` };
-    delete env.HOMEDRIVE;
-    delete env.HOMEPATH;
+    const env = sealedEnv(home, `${evilBin}:${realBin}:/usr/bin:/bin`);
 
     const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
@@ -366,7 +377,7 @@ test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
     const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 20_000,
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, HOME: join(work, 'home') },
+      env: sealedEnv(join(work, 'home'), `${binDir}:${process.env.PATH}`),
     });
     assert.equal(res.status, 0, `cli.mjs install failed: ${res.stderr}`);
 
@@ -410,12 +421,7 @@ test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () =>
     const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 20_000,
-      env: {
-        ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
-        HOME: join(work, 'home'),
-        TMPDIR: hostileTmp,
-      },
+      env: { ...sealedEnv(join(work, 'home'), `${binDir}:${process.env.PATH}`), TMPDIR: hostileTmp },
     });
     assert.equal(res.status, 0, `cli.mjs install failed: ${res.stderr}`);
 

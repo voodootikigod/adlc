@@ -188,6 +188,10 @@ if (command === 'install' || command === '--install') {
   }
 } else {
   console.error(`Unknown command: ${command}`);
-  console.error('Run `npx @adlc/antigravity@latest --help` for available commands.');
+  // Points at the already-running binary rather than repeating an npx one-liner:
+  // whoever sees this is executing this file, so re-deriving the package through
+  // npm resolution would be pointless AND a second place for the neutral-cwd and
+  // version-spec controls to drift out of sync (they already had).
+  console.error('Run `adlc-agy --help` for available commands.');
   process.exit(1);
 }
