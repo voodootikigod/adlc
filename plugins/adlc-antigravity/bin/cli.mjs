@@ -34,6 +34,11 @@ const PLUGIN_NAME = 'adlc-antigravity';
  * @returns {number | null} agy's exit status, or null if staging failed.
  */
 function agyInstallFromStagedCopy(sourceDir) {
+  // ONE cleanup site, in `finally`. An earlier shape cleaned up in both a catch
+  // (staging failed) and a finally (install finished), and the catch copy was
+  // unreachable from any test that does not contrive a filesystem failure — so
+  // it was two mutable lines with no observer. Collapsing the two paths means
+  // every success-path test also exercises the cleanup.
   let stage;
   try {
     // os.tmpdir() honours TMPDIR, which is NOT guaranteed to be @-free — a
@@ -48,18 +53,14 @@ function agyInstallFromStagedCopy(sourceDir) {
       throw new Error(`no @-free temporary directory available (tried ${root})`);
     }
     cpSync(sourceDir, join(stage, PLUGIN_NAME), { recursive: true });
+    return spawnSync('agy', ['plugin', 'install', join(stage, PLUGIN_NAME)], {
+      stdio: 'inherit',
+    }).status;
   } catch (err) {
     console.error(`Failed to stage the plugin for agy: ${err.message}`);
-    if (stage) rmSync(stage, { recursive: true, force: true });
     return null;
-  }
-  try {
-    const result = spawnSync('agy', ['plugin', 'install', join(stage, PLUGIN_NAME)], {
-      stdio: 'inherit',
-    });
-    return result.status;
   } finally {
-    rmSync(stage, { recursive: true, force: true });
+    if (stage) rmSync(stage, { recursive: true, force: true });
   }
 }
 
