@@ -4,13 +4,16 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 3** — revised after two cross-model adversarial review
-rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap, gateway
-identity assertion, missing quorum, non-computable monitors, undefined fallback.
-Round 2: symbolic selection still downgradeable, fallback transport collision,
-gateway quorum collapse, unvalidated job labels, usage-schema incompatibility,
-undefined telemetry producers. Proposed plugin/package name: `adlc-quartermaster`
-(alternatives in §11).
+Status: **proposed, revision 4** — revised after three cross-model adversarial
+review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
+gateway identity assertion, missing quorum, non-computable monitors, undefined
+fallback. Round 2: symbolic selection still downgradeable, fallback transport
+collision, gateway quorum collapse, unvalidated job labels, usage-schema
+incompatibility, undefined telemetry producers. Round 3: float lives on the
+assignment not the ticket, spend needs transport dimensions, attestation schema
+must version across ALL producers/readers (incl. carry-forward), author identity
+was caller-asserted, cap-hit readiness indistinguishable from zero events.
+Proposed plugin/package name: `adlc-quartermaster` (alternatives in §11).
 
 ---
 
@@ -121,21 +124,27 @@ reference and an annotated example. Dispatch never reads it.
 
 ## 5. Lifecycle-job routing contract (validated, not caller-trusted)
 
-**Design rules (round 1 finding 2; round 2 finding 4).** `assign.mjs` keeps
-emitting `{tier, mode, budget}` unchanged. Channel selection is a distinct total
-function — and it does not trust the caller's job label:
+**Design rules (round 1 finding 2; round 2 finding 4; round 3 finding 1).**
+`assign.mjs` keeps emitting `{tier, mode, budget, float}` unchanged (its output
+already carries the CPM float — see `assignTicket`'s return shape). Channel
+selection is a distinct total function — and it does not trust the caller's job
+label:
 
 ```
 routeJob({ job, assignment, ticket }) -> { channel } | { reviewerGroup } | { deterministic: true }
 ```
 
 - `job` is a closed enum (unknown → throw).
-- `ticket` carries the authoritative scheduling facts (`float`, `category`).
-  For `build.*` jobs, `routeJob` **derives** the build class itself:
-  `category ∈ {contract, spec, architecture}` → spec-class; else `float === 0` →
-  critical-path; else ladder-start. A caller-supplied `build.*` label that
-  disagrees with the derivation **throws** (mislabeled dispatch is a bug, not a
-  route).
+- **Float comes from the assignment, not the ticket.** Stored tickets have no
+  `float` field — CPM float is computed by `@adlc/core`'s `computeFloat(tickets)`
+  and placed on the router assignment. For `build.*` jobs, `routeJob` derives the
+  build class from `ticket.category` and `assignment.float`:
+  `category ∈ {contract, spec, architecture}` → spec-class; else
+  `assignment.float === 0` → critical-path; else ladder-start.
+  `assignment.float` **must be a finite number** — absent or non-numeric float
+  throws (it must never default to ladder-start, which would silently downgrade
+  critical-path work). A caller-supplied `build.*` label that disagrees with the
+  derivation **throws** (mislabeled dispatch is a bug, not a route).
 - Non-build jobs are structural (the call site *is* the lifecycle stage — the
   prosecution driver calls with `prosecute.*`, the gate runner with `gate.*`), so
   label validation is derivation for `build.*` and enum-membership elsewhere.
@@ -173,20 +182,47 @@ whose auth handshake is with the provider itself (`directAuth: true` marks this;
 validation requires it on non-gateway members). The reference registry satisfies
 this: Kimi-K3-via-gateway (one seat) + codex-direct-to-OpenAI (one seat).
 
-**Bound identity.** When automation records an attestation:
+**Bound identity — schema v2, versioned across every producer and reader (round 3
+finding 3).** Attestation entries gain `attestationSchema: 2` with fields
+`provider`, `transport`, `model`, `seatRole` (`"member"` | `"escalation"`), and
+`registryDigest` (SHA-256 of the registry file used at resolution). The migration
+is atomic across the whole surface, not just `recordCrossModelReview`:
 
-- `provider` comes from the operator-local registry, never from a CLI flag or any
-  committed file.
-- The signed entry records `provider`, `transport`, resolved `model`, and the
-  SHA-256 digest of the registry file used at resolution — so a later verifier can
-  detect an attestation minted under a since-revised registry.
-- The recorder rejects a record whose `(model, transport)` is absent from the
-  registry or whose provider disagrees with the registry's binding.
+- **Producers:** `recordCrossModelReview` **and** `carryForwardCrossModelReview`
+  emit v2. Carry-forward copies the identity fields of the carried entry verbatim
+  (it re-binds nothing — it attests "same diff, same reviewers") and **carries the
+  complete quorum seat set**, one entry per original member, never a single
+  collapsed verdict.
+- **Readers:** `hasCrossModelApprove` / `hasCrossModelApproveForRevision` (and the
+  quorum verifier this spec adds) branch on schema version. For **trust-root**
+  quorum, v1/legacy entries — which lack transport — **cannot occupy a seat**
+  (fail closed: unbound entries can't be transport-discounted, so they can't prove
+  diversity). For **routine** review, v1 entries remain acceptable until the flag
+  day recorded in the migration ticket, so existing carried approvals don't block
+  unchanged diffs.
+- The recorder rejects a v2 record whose `(model, transport)` is absent from the
+  registry or whose provider disagrees with the registry's binding; `provider`
+  comes from the registry, never from a CLI flag or any committed file.
+
+**Author identity is bound the same way (round 3 finding 4).** The distinctness
+and quorum rules compare reviewer families against the **author's** family — which
+today arrives as a caller-asserted `--author-provider` flag. Under this spec:
+
+- A quartermaster-dispatched build writes a signed **authorship record** into the
+  manifest at dispatch time: `{channel, provider, model, transport,
+  registryDigest, revision}`.
+- When an authorship record exists for the revision, the quorum verifier reads the
+  author family **from it**; a conflicting CLI/env assertion is recorded as
+  non-gating metadata and cannot change the gating comparison (a same-family
+  reviewer cannot be made to look independent by flag).
+- When no authorship record exists (human-authored outside the fleet), the
+  asserted value is used but the attestation records `authorIdentity: "asserted"`
+  so audits can distinguish bound from asserted provenance.
 - **Honest limit, stated plainly:** none of this proves which model a gateway
   actually served (ADR-0007's conceded class). What the design guarantees is
-  (a) forging a provider label requires compromising the operator-local registry
-  or the CI key — not a PR branch; and (b) gateway uncertainty can never satisfy
-  more than one quorum seat.
+  (a) forging a provider label — reviewer *or* author — requires compromising the
+  operator-local registry or the CI key, not a PR branch or a CLI flag; and
+  (b) gateway uncertainty can never satisfy more than one quorum seat.
 
 ## 7. Fallback: a state machine, not a graph
 
@@ -217,10 +253,19 @@ schema, and name every producer.**
 `packages/gate-manifest/lib/spend.mjs` already defines the spend contract:
 `usage: { inputTokens, outputTokens, cachedTokens, provider, model, tier }`,
 aggregated by `aggregateSpend()`. This spec **adopts those field names verbatim**
-and adds nothing to them except that recorders SHOULD populate `provider`/`model`
-from the registry resolution. Monitors read manifest entries through
-`aggregateSpend()` — no parallel token schema exists. (Rev 2's `tokensIn/tokensOut`
-envelope is deleted; it would have aggregated to zero.)
+— no parallel token schema exists (rev 2's `tokensIn/tokensOut` envelope is
+deleted; it would have aggregated to zero).
+
+**Routing dimensions ride the entry, not the usage object (round 3 finding 2).**
+`aggregateSpend()` collapses to phase/gate totals and discards provider/model/
+transport — so an entry recorded by a quartermaster dispatch carries three
+**mandatory sibling fields** alongside the untouched `usage` object: `channel`,
+`transport`, and `registryDigest`. Spend consumers **filter entries first,
+aggregate second**: the overflow monitor selects entries whose `transport` has the
+`api:` prefix (within the time window), then pipes only those through
+`aggregateSpend()`, pricing per `usage.model`. This is what distinguishes
+`subscription:anthropic-max` spend from `api:anthropic-batch` spend when a
+fallback traversal produces both with identical provider/model/tier.
 
 ### 8b. Event records: every consumer has a named producer
 
@@ -228,9 +273,17 @@ Non-usage telemetry lives in `.adlc/telemetry/events.jsonl` (append-only; each
 record `{v: 1, ts, kind, ...}`; unknown `kind`s are skipped and counted). All
 times UTC; windows are rolling and inclusive of the current day.
 
+**Producer readiness is explicit, not inferred (round 3 finding 5).** A monitor
+must never read "zero matching records" as "nothing happened" when the producer
+was never enabled. The operator registry carries a per-channel capability block —
+`"capabilities": { "capHitClassification": true }` — set only after the harness's
+exit-code classification has been probed (§11 Q3). A monitor whose trigger depends
+on a capability the **active channel lacks** reports **unknown**, even when
+`events.jsonl` exists and is well-formed with other kinds.
+
 | `kind` | Producer (who writes it) | Fields |
 | --- | --- | --- |
-| `cap-hit` | dispatch wrapper, from exit-code classification (probe per harness, §11 Q3; unprobed harnesses never emit it) | `channel` |
+| `cap-hit` | dispatch wrapper, from exit-code classification — emitted only when the channel's `capHitClassification` capability is true | `channel` |
 | `rate-limit` | dispatch wrapper, from adapter 429/limit classification | `channel`, `model` |
 | `merge` | fleet, on each successful integration-branch merge (same code path that marks `completed:true`) | `runId`, `ticket` |
 | `fallback` | dispatch wrapper, on a §7 traversal | `from`, `to`, `job` |
@@ -248,7 +301,7 @@ updated, not duplicated. Monitors never mutate the registry.
 
 | Trigger | Rule (deterministic) | Issue |
 | --- | --- | --- |
-| Frontier cap-hits | `cap-hit` on >2 distinct UTC days in trailing 30 days | "Re-upgrade subscription" |
+| Frontier cap-hits | **unknown** unless the active `frontier` channel has `capHitClassification: true`; else `cap-hit` on >2 distinct UTC days in trailing 30 days | "Re-upgrade subscription" |
 | Rate-window collision | ≥1 `rate-limit` on a UTC day that also has ≥1 `merge` | "Add direct API for model X" |
 | Metered overflow | `aggregateSpend` over `api:*`-transport entries, priced via versioned `pricing.json` (`{version, model, inPerMTok, outPerMTok, currency:"USD"}`), > `overflowUsdThreshold` (default 30, operator-local) in trailing 30 days; pricing version quoted in the finding | "Revisit tiering" |
 | Idle frontier reviewer | 0 `seatRole:"escalation"` attestations in trailing 60 days **and** ≥5 trust-root reviews in the window (opportunity denominator) | "Cancel frontier reviewer line" |
@@ -274,11 +327,13 @@ Ordered by dependency, each a candidate ticket:
    models on both machines; point the fleet's blocking cross-model prosecution at
    the opencode adapter via the registry; keep fail-closed. *Enhance: operator
    config + docs; `fleet/adapters/opencode.mjs` unchanged.*
-4. **Attestation binding + quorum** (§6): `transport`/`model`/registry-digest/
-   `seatRole` fields on `recordCrossModelReview`, recorder mismatch rejection,
-   reviewer-group validation with gateway discounting, under-satisfaction
-   fail-closed. *Enhance: `prosecute/cross-model.mjs`, `gate-manifest` record
-   shape; consumes `multimodel-review.md`'s `--providers`.*
+4. **Attestation schema v2 + quorum** (§6): version bump across **every**
+   producer and reader — `recordCrossModelReview`, `carryForwardCrossModelReview`
+   (quorum-set-preserving carry), `hasCrossModelApprove*`, the new quorum
+   verifier — plus the dispatch-time authorship record, recorder mismatch
+   rejection, gateway discounting, legacy fail-closed for trust-root, and the
+   routine-tier flag day. *Enhance: `prosecute/cross-model.mjs`, `gate-manifest`
+   record shape; consumes `multimodel-review.md`'s `--providers`.*
 5. **Telemetry producers + monitors** (§8b–c): event writers in the dispatch
    wrapper and fleet merge path, `adlc quartermaster check`. *Build: new package;
    producer-to-monitor round-trip tested.*
@@ -337,11 +392,15 @@ Ordered by dependency, each a candidate ticket:
    trust-root member lacking `directAuth` — each rejected at load with an error
    naming the rule. Verified by
    `packages/quartermaster/test/registry-validation.test.mjs` (`assert` per fixture).
-3. **`routeJob` derivation and totality.** Table-driven test over every §5 row,
-   plus: `float === 0` ticket labeled `build.ladder-start` → throw;
-   `category: "spec"` ticket labeled `build.critical-path` → throw; `float === 0`
-   with assignment tier `mid` → channel `frontier`; unknown job → throw;
-   `gate.deterministic.*` with a channel assertion → throw. Verified by
+3. **`routeJob` derivation through the real pipeline.** An end-to-end test loads a
+   fixture ticket DAG, runs `@adlc/core`'s `computeFloat`, feeds
+   `assignTicket`'s actual output to `routeJob` — no synthetic `float` fields on
+   tickets — and asserts: a zero-float ordinary ticket routes `frontier` even when
+   assignment tier is `mid`; a zero-float ticket labeled `build.ladder-start` →
+   throw; `category: "spec"` labeled `build.critical-path` → throw; an assignment
+   with absent/non-numeric `float` → throw (never ladder-start); unknown job →
+   throw; `gate.deterministic.*` with a channel assertion → throw; plus the
+   table-driven sweep over every §5 row. Verified by
    `packages/quartermaster/test/route-job.test.mjs`.
 4. **Quorum with gateway discounting.** A trust-root group of two gateway-transport
    members with distinct declared providers fails validation (one effective
@@ -349,35 +408,53 @@ Ordered by dependency, each a candidate ticket:
    two members unreachable → nonzero exit, under-satisfaction notice, no `approve`
    recorded. Verified by `packages/prosecute/test/quorum.test.mjs` (`assert` on
    validation error, exit code, and notice text).
-5. **Attestation identity is bound.** Recording with a `(model, transport)` absent
-   from the registry, or a provider disagreeing with the registry binding, throws;
-   a valid record carries `provider`, `transport`, `model`, `seatRole`, and the
-   registry SHA-256. Verified by new cases in
-   `packages/prosecute/test/cross-model.test.mjs` (`assert` on throw and on entry
-   fields including digest).
-6. **Fallback through the real resolver.** Driving the actual registry loader and
+5. **Attestation schema v2 across all producers and readers.** Recording with a
+   `(model, transport)` absent from the registry, or a provider disagreeing with
+   the registry binding, throws; a valid record carries `attestationSchema: 2`,
+   `provider`, `transport`, `model`, `seatRole`, and the registry SHA-256.
+   `carryForwardCrossModelReview` of a quorum-2 approval emits **two** carried v2
+   entries preserving each seat's identity fields; a v1/legacy entry offered to
+   the trust-root quorum verifier is rejected (fail closed) while the routine
+   reader still accepts it pre-flag-day. Verified by new cases in
+   `packages/prosecute/test/cross-model.test.mjs` (`assert` on throws, entry
+   fields including digest, carried seat count, and both reader behaviors).
+6. **Author identity binding defeats flag spoofing.** With a dispatch-time
+   authorship record present naming provider `openai`, a prosecution invoked with
+   `--author-provider anthropic` still fails quorum when the direct-auth seat is
+   an `openai` reviewer (same family as the *bound* author); the conflicting flag
+   is recorded as non-gating metadata; absent an authorship record, the attestation
+   carries `authorIdentity: "asserted"`. Verified by
+   `packages/prosecute/test/author-binding.test.mjs` (`assert` on quorum failure,
+   metadata field, and asserted-provenance marker).
+7. **Fallback through the real resolver.** Driving the actual registry loader and
    resolver (not stubs): `prosecute.verdict` with a simulated pre-execution auth
    failure on `frontier` dispatches `frontier-metered`, `assert` the two attempts'
    transports differ, and both usage entries plus one `fallback` event are
    recorded; a mid-run timeout does not traverse; any other job with an
    unreachable channel fails the gate. Verified by
    `packages/quartermaster/test/fallback.test.mjs`.
-7. **Usage round-trip through the existing aggregator.** Entries recorded per §8a
-   flow through `aggregateSpend()` and produce nonzero `byPhase` totals for P4/P5
-   (guarding against the rev-2 field-name bug); the overflow monitor prices those
-   same entries via a fixture `pricing.json` and quotes its version. Verified by
-   `packages/gate-manifest/test/usage-roundtrip.test.mjs` (`assert` on totals and
-   on the monitor's priced finding).
-8. **Producer-to-monitor round trips.** For each §8b `kind`, the *producing* code
-   path (dispatch wrapper / fleet merge path) writes the record and the
-   corresponding monitor consumes it: a merge + rate-limit same-day pair trips the
-   collision trigger; recorded `seatRole:"escalation"` attestations suppress the
-   idle-reviewer trigger while ≥5 reviews without them fire it; fixtures for each
-   row also cover the non-crossing case (exit 0) and missing-file **unknown**
-   (exit 2 naming the file); a second run against an open issue key updates rather
-   than duplicates (gh stubbed). Verified by
+8. **Usage round-trip with transport filtering.** Entries recorded per §8a — with
+   the mandatory `channel`/`transport`/`registryDigest` siblings — flow through
+   `aggregateSpend()` and produce nonzero `byPhase` totals for P4/P5 (guarding
+   against the rev-2 field-name bug). The overflow monitor, given a mixed fixture
+   (same provider/model/tier under `subscription:anthropic-max` and
+   `api:anthropic-batch`, plus a second API model at a different price), prices
+   **only** the `api:*` entries, per `usage.model`, quoting the `pricing.json`
+   version. Verified by
+   `packages/gate-manifest/test/usage-roundtrip.test.mjs` (`assert` on totals, on
+   subscription-entry exclusion, and on per-model pricing in the finding).
+9. **Producer-to-monitor round trips, including producer readiness.** For each §8b
+   `kind`, the *producing* code path (dispatch wrapper / fleet merge path) writes
+   the record and the corresponding monitor consumes it: a merge + rate-limit
+   same-day pair trips the collision trigger; recorded `seatRole:"escalation"`
+   attestations suppress the idle-reviewer trigger while ≥5 reviews without them
+   fire it; fixtures for each row also cover the non-crossing case (exit 0) and
+   missing-file **unknown** (exit 2 naming the file); **a well-formed, nonempty
+   events file with the active frontier channel's `capHitClassification` capability
+   false yields cap-hit = unknown at exit 2, not quiet**; a second run against an
+   open issue key updates rather than duplicates (gh stubbed). Verified by
    `packages/quartermaster/test/check.test.mjs` (`assert` on exit codes and issue
    calls).
-9. **This spec passes its own gate.** `node packages/spec-lint/bin/spec-lint.mjs
+10. **This spec passes its own gate.** `node packages/spec-lint/bin/spec-lint.mjs
    docs/specs/operating-stack.md` exits 0 (no WISH criteria). Verified by running
    the command in CI; exit code 0 required.
