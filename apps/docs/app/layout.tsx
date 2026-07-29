@@ -38,9 +38,24 @@ export const metadata: Metadata = {
   openGraph: {
     siteName: 'ADLC',
     type: 'website',
+    // A plain static path, deliberately query-string-free: Vercel Skew
+    // Protection appends "?dpl=<id>" to same-origin URLs in the rendered
+    // HTML without checking for an existing "?", and Next.js's
+    // opengraph-image.png file convention appends its own cache-busting
+    // query — the two collided into an invalid double-"?" URL that broke
+    // Twitter's card fetch.
+    images: [
+      {
+        url: '/opengraph-image.png',
+        width: 1200,
+        height: 630,
+        alt: 'A single blue light trace crossing a glowing gate arch on a dark field: the ADLC mark.',
+      },
+    ],
   },
   twitter: {
     card: 'summary_large_image',
+    images: ['/opengraph-image.png'],
   },
 };
 
