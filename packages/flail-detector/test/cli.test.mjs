@@ -10,17 +10,23 @@ import { join } from 'node:path';
 
 const CLI = new URL('../bin/flail-detector.mjs', import.meta.url).pathname;
 
+let tmpDir;
+
 /**
  * Run the CLI with given args and optional stdin content.
+ *
+ * Defaults cwd to the isolated tmpDir, NEVER process.cwd() — flail-detector
+ * can write to .adlc/manifest.jsonl (--record), and these tests must not risk
+ * touching this repository's own tracked manifest if that ever fires
+ * unexpectedly (e.g. under mutation testing of the --record default).
  */
 function run(args, { cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    cwd: cwd ?? process.cwd(),
+    cwd: cwd ?? tmpDir,
   });
 }
 
-let tmpDir;
 test.before(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'flail-detector-test-'));
 });
