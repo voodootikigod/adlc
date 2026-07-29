@@ -12,13 +12,13 @@
 // chain at 3.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   recordCrossModelReview, carryForwardCrossModelReview, CARRY_FORWARD_MAX_DEPTH,
 } from '../lib/cross-model.mjs';
-import { readEntries } from '@adlc/core';
+import { readEntries, ledgerPath, sha256 } from '@adlc/core';
 
 process.env.ADLC_MANIFEST_KEY = 'carry-forward-test-key';
 
@@ -51,6 +51,28 @@ const carry = (dir, fromRevision, revision) => carryForwardCrossModelReview({
   ticket: 'T1', fromRevision, revision, dir,
 });
 const lastEntry = (dir) => readEntries('manifest', dir).entries.at(-1);
+
+// Hand-build a segment file directly, same pattern as cross-model.test.mjs's
+// writeCrossModelSegment (the segment WRITER is T-MANIFEST-FOREST slice 3, not
+// yet built). A needs-attention entry does not need a signature (spec §6).
+function writeRevocationSegment(dir, name, { ticket, revision }) {
+  const lines = readFileSync(ledgerPath('manifest', dir), 'utf8').split('\n').filter((l) => l.trim());
+  const last = lines.at(-1);
+  const anchor = { segment: 'root', seq: JSON.parse(last).seq, lineHash: sha256(last) };
+  const entry = {
+    seq: 1,
+    gate: 'cross-model-review',
+    ts: '2026-01-01T00:00:00.000Z',
+    ticket,
+    data: { provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', revision },
+    files: {},
+    prev: null,
+    anchor,
+  };
+  const segDir = join(dir, 'manifest.d');
+  mkdirSync(segDir, { recursive: true });
+  writeFileSync(join(segDir, name), JSON.stringify(entry) + '\n');
+}
 
 describe('carryForwardCrossModelReview (#365 B)', () => {
   it('carries a verdict forward when only the base moved, and records the link and depth', () => {
@@ -227,6 +249,29 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
         verdict: 'needs-attention', dir,
       });
       assert.throws(() => carry(dir, rev(BASE1), rev(BASE2)), /approve/i);
+    } finally { clean(dir); }
+  });
+
+  // Adversarial-review finding (T-MANIFEST-FOREST slice 2, PR #389 rebase round):
+  // this function's "latest entry" lookup is root-only (see the comment above it in
+  // cross-model.mjs), but a revocation for fromRevision can legitimately live in a
+  // SEGMENT (spec §6 — an out-of-band flag, or a migration cutover seal) even before
+  // slice 3's writer exists, the same way the read-side gate's own forest-walk tests
+  // hand-build segments today. Without a forest-wide revocation check, carry-forward
+  // would miss the segment's needs-attention entry entirely, find the still-present
+  // root approve, and mint a FRESH, validly-signed approve for the new revision —
+  // resurrecting a verdict the reviewer explicitly revoked.
+  it('refuses to carry forward fromRevision if it has been revoked in a SEGMENT, not just root', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1)); // approve for T1 @ BASE1, in root
+      writeRevocationSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', { ticket: 'T1', revision: rev(BASE1) });
+      assert.throws(
+        () => carry(dir, rev(BASE1), rev(BASE2)),
+        /revoked/i,
+        'a segment-recorded revocation of fromRevision must block carry-forward, not just root ones'
+      );
+      assert.equal(readEntries('manifest', dir).entries.length, 1, 'the refused carry must not append anything to root');
     } finally { clean(dir); }
   });
 });

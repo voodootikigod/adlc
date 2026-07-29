@@ -181,14 +181,17 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   if (!manifestChainTrustworthy(dir)) {
     throw new Error('carry-forward refused: the manifest hash chain does not verify — a broken chain could be hiding a dropped revocation');
   }
-  // Deliberately root-only (T-MANIFEST-FOREST slice 2 covers the GATE's own
-  // terminal-revocation walk — hasCrossModelApprove/hasCrossModelApproveForRevision
-  // above — not this ergonomics feature). latestEntryForTicket's "actual chain head"
+  // Deliberately root-only for finding the chain's "latest" entry (T-MANIFEST-FOREST
+  // slice 2 covers the GATE's own terminal-revocation walk —
+  // hasCrossModelApprove/hasCrossModelApproveForRevision above — not this ergonomics
+  // feature's depth-cap bookkeeping). latestEntryForTicket's "actual chain head"
   // concept needs a real total order to mean anything (depth-cap and fromRevision
   // validation both depend on finding ONE true latest entry), and no writer produces
   // segments yet (slice 3) nor has this repo migrated (T-MANIFEST-FOREST-MIGRATE) —
-  // carry-forward staying root-only is correct for every repo this can run against
-  // today. Revisit once segments exist for real.
+  // root-only is correct for finding "the latest approve to carry" for every repo
+  // this can run against today. The forest-wide revocation check below (after a
+  // genuine prior approve is confirmed) is the exception: it does not need a total
+  // order, only forest-wide membership, so it is NOT root-only.
   const { entries } = readEntries('manifest', dir);
   const prior = latestEntryForTicket(entries, ticket);
   if (!prior) {
@@ -214,6 +217,25 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
     throw new Error(
       `carry-forward refused: the prior verdict for ${fromRevision} is ` +
       `"${prior.data?.verdict}", not approve — only an approve can be carried`
+    );
+  }
+
+  // A revocation for this exact (ticket, fromRevision) key can legitimately live in
+  // a SEGMENT even before slice 3's writer exists (spec §6: a migration cutover
+  // seal, or a reviewer's own out-of-band flag, can be hand-written to manifest.d/
+  // the same way the read-side gate's own forest-walk tests do) — carry-forward must
+  // not resurrect an approval that has been revoked anywhere in the forest under a
+  // new revision, so this check walks the WHOLE forest, unlike the root-only "latest
+  // entry" lookup above (adversarial-review finding: root-only carry-forward missed
+  // a segment-recorded revocation of fromRevision and would happily mint a fresh
+  // approve for the new revision).
+  const { entries: forestEntries } = readManifestForest(dir);
+  const revokedFromRevision = forestEntries.some((entry) => revocationCandidate(entry, { ticket, revision: fromRevision }));
+  if (revokedFromRevision) {
+    throw new Error(
+      `carry-forward refused: fromRevision (${fromRevision}) under ticket ${ticket} has a needs-attention ` +
+      'entry recorded against it somewhere in the manifest forest — a revoked verdict cannot be carried ' +
+      'forward; record a fresh distinct-provider review instead'
     );
   }
 
