@@ -26,13 +26,29 @@ const PLUGIN_NAME = 'adlc-antigravity';
  *
  * Settable because 120s is a judgement call, not a fact: a cold cache on slow
  * storage can legitimately exceed it, and an operator who hits that needs a knob,
- * not a patch. Bad values fall back to the default rather than becoming Infinity
- * or NaN (NaN would disable the timeout entirely, reintroducing the hang).
+ * not a patch.
+ *
+ * An unusable value is REJECTED, not quietly replaced by the default. Both ways
+ * of getting this wrong disable the protection outright rather than shortening
+ * it — spawnSync treats `0` as "no timeout", and `Infinity` is not a duration at
+ * all — so silently substituting the default would leave an operator believing a
+ * bound they set is in force when the hang it exists to stop is back.
  */
-const AGY_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.ADLC_AGY_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
-})();
+const AGY_TIMEOUT_DEFAULT_MS = 120_000;
+
+function resolveAgyTimeoutMs(configured) {
+  if (configured === undefined || configured === '') return AGY_TIMEOUT_DEFAULT_MS;
+  const raw = Number(configured);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    console.error(
+      `ADLC_AGY_TIMEOUT_MS must be a positive, finite number of milliseconds; got "${configured}".`,
+    );
+    process.exit(1);
+  }
+  return raw;
+}
+
+const AGY_TIMEOUT_MS = resolveAgyTimeoutMs(process.env.ADLC_AGY_TIMEOUT_MS);
 
 /**
  * Resolve `agy` to an ABSOLUTE path, ignoring npm-injected bin directories.

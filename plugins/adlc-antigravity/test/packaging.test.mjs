@@ -362,6 +362,25 @@ test('bin/cli.mjs self-reinstall from the installed copy does not erase the plug
   }
 });
 
+test('bin/cli.mjs rejects an ADLC_AGY_TIMEOUT_MS that would disable the bound', () => {
+  // Both of these DISABLE the protection rather than shorten it: spawnSync treats
+  // 0 as "no timeout", and Infinity is not a duration. Quietly falling back to the
+  // default would leave an operator believing their bound is in force while the
+  // hang it exists to prevent is back — so an unusable value is refused outright.
+  for (const value of ['0', 'Infinity', '-1', 'soon']) {
+    const { res, cleanup } = runCliSealed(['install'], {
+      agyScript: '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\nexit 0\n',
+      extraEnv: { ADLC_AGY_TIMEOUT_MS: value },
+    });
+    try {
+      assert.equal(res.status, 1, `ADLC_AGY_TIMEOUT_MS=${value} must be refused, not accepted`);
+      assert.match(res.stderr, /must be a positive, finite number of milliseconds/);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
 test('bin/cli.mjs does not hang forever on a wedged agy', () => {
   // spawnSync with no timeout waits indefinitely. A wedged agy would hang the
   // helper with no failure path and no cleanup — the staging directory surviving
