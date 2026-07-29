@@ -169,17 +169,64 @@ test('AC4: packed tarball extracted outside the repo imports rails-checker with 
   }
 });
 
+/**
+ * Run bin/cli.mjs with HOME and PATH SEALED OFF from the developer's machine.
+ *
+ * This is a containment control, not tidiness. cli.mjs installs for real: it
+ * spawns the ambient `agy`, and when agy is missing or reports failure it falls
+ * back to `cpSync(packageRoot, ~/.gemini/config/plugins/adlc-antigravity)`. Run
+ * with the inherited environment, that writes into the developer's LIVE plugin.
+ *
+ * That is not hypothetical. The mutation gate mutates cli.mjs in place, and the
+ * `status === 0` → `status === 1` mutant made a SUCCESSFUL agy install read as a
+ * failure — so these tests copied MUTATED source into the live plugin, which was
+ * later found serving `if (status === 1)`. The gate restores the repo checkout;
+ * it cannot restore anything outside it. Any test that executes this CLI must
+ * therefore be sealed, including ones that only expect to print help: a mutant
+ * that flips the `--help` guard falls straight through into the install path.
+ *
+ * PATH deliberately omits `agy`, so the fallback branch is what runs and the
+ * assertion below can prove the copy landed inside the sandbox. process.execPath
+ * is used instead of the string 'node' because PATH no longer resolves it.
+ */
+function runCliSealed(args) {
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sealed-'));
+  const home = join(work, 'home');
+  mkdirSync(home, { recursive: true });
+  const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), ...args], {
+    encoding: 'utf8',
+    timeout: 20_000,
+    env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin' },
+  });
+  return { res, work, home, cleanup: () => rmSync(work, { recursive: true, force: true }) };
+}
+
 test('AC4: bin/cli.mjs executable displays help output on --help', () => {
-  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), '--help'], { encoding: 'utf8', timeout: 10_000 });
-  assert.equal(res.status, 0);
-  assert.match(res.stdout, /adlc-agy install/);
-  assert.match(res.stdout, /agy plugin install <path>/);
+  const { res, cleanup } = runCliSealed(['--help']);
+  try {
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /adlc-agy install/);
+    assert.match(res.stdout, /agy plugin install <path>/);
+  } finally {
+    cleanup();
+  }
 });
 
 test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () => {
-  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), 'install'], { encoding: 'utf8', timeout: 10_000 });
-  assert.match(res.stdout, /Installing @adlc\/antigravity plugin from:/);
-  assert.doesNotMatch(res.stdout, /ADLC Google Antigravity Plugin Helper/);
+  const { res, home, cleanup } = runCliSealed(['install']);
+  try {
+    assert.match(res.stdout, /Installing @adlc\/antigravity plugin from:/);
+    assert.doesNotMatch(res.stdout, /ADLC Google Antigravity Plugin Helper/);
+    // CONTAINMENT, asserted rather than assumed: with no agy on PATH the helper
+    // takes its direct-copy fallback, and that copy must land under the sandbox
+    // HOME. If this file ever escapes again, this assertion is what notices.
+    assert.ok(
+      existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity', 'plugin.json')),
+      'the fallback copy must land under the sandboxed HOME, not the real one',
+    );
+  } finally {
+    cleanup();
+  }
 });
 
 test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
