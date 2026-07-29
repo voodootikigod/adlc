@@ -18,9 +18,16 @@ Bootstrap the ADLC runtime for use with `agy`.
    node /absolute/path/to/plugins/adlc-antigravity/bin/cli.mjs install
    agy plugin list   # confirm "adlc-antigravity" with a "hooks" component
    ```
-2. **Initialize the ADLC workspace** (creates `.adlc/`, requires `npm i -g @adlc/cli`):
+2. **Initialize the ADLC workspace** (creates `.adlc/`). This one *must* run
+   inside the target repository, so the neutral-directory trick used for the
+   install one-liner does not apply — and that is exactly why it does not fall
+   back to `npx @adlc/cli`: npm would resolve a bare name against the repository
+   you are standing in, so a repo shipping a workspace or dependency named
+   `@adlc/cli` would have *its* binary run against your tree. Install the toolkit
+   globally once, then run the real binary:
    ```sh
-   adlc init || npx @adlc/cli init
+   command -v adlc >/dev/null || npm install -g @adlc/cli
+   adlc init
    ```
 3. **Resolve ticket storage.** New repositories use `.adlc/tickets/` plus
    `.adlc/ticket-archive/`. If legacy `.adlc/tickets.json` exists, run

@@ -177,6 +177,15 @@ if (command === 'install' || command === '--install') {
   const targetDir = join(homedir(), '.gemini', 'config', 'plugins', 'adlc-antigravity');
   console.log(`Copying plugin files directly to ${targetDir}...`);
   try {
+    // REPLACE, don't merge. cpSync over an existing directory only overwrites
+    // files that still exist in the SOURCE, so an upgrade leaves behind every
+    // skill, agent, command and hook a later version DELETED. agy loads whatever
+    // sits in this directory, so a retired hook would keep firing and a removed
+    // skill would keep being offered — from a plugin reporting the new version.
+    // agy's own install path replaces the directory; the fallback must match it.
+    //
+    // Scoped to this plugin's own directory, which the helper owns outright.
+    rmSync(targetDir, { recursive: true, force: true });
     mkdirSync(targetDir, { recursive: true });
     cpSync(packageRoot, targetDir, { recursive: true });
     console.log(`✓ Plugin copied to ${targetDir}`);

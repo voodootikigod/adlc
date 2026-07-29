@@ -208,10 +208,18 @@ function sealedEnv(home, pathValue) {
  * assertion below can prove the copy landed inside the sandbox. process.execPath
  * is used instead of the string 'node' because PATH no longer resolves it.
  */
-function runCliSealed(args, { agyScript } = {}) {
+function runCliSealed(args, { agyScript, seedTarget } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sealed-'));
   const home = join(work, 'home');
   mkdirSync(home, { recursive: true });
+
+  // Pre-populate the live plugin directory to model an UPGRADE over an install
+  // that already exists.
+  for (const [relative, contents] of Object.entries(seedTarget ?? {})) {
+    const abs = join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity', relative);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, contents);
+  }
 
   // PATH omits agy by default, so the fallback branch runs. Pass agyScript to
   // put a stub agy in front of it instead.
@@ -303,6 +311,27 @@ test('bin/cli.mjs ignores a repo-local node_modules/.bin/agy (npx PATH hijack)',
     assert.ok(ran.includes('REAL'), `the trusted agy was never reached:\n${ran}`);
   } finally {
     rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('bin/cli.mjs direct-copy REPLACES an existing install, dropping removed files', () => {
+  // cpSync over an existing directory only overwrites files still present in the
+  // source, so an upgrade would strand every skill/agent/hook a later version
+  // deleted. agy loads whatever is in this directory, so a retired hook would
+  // keep firing from a plugin reporting the new version.
+  const { res, home, cleanup } = runCliSealed(['install'], {
+    seedTarget: { 'skills/retired-skill.md': 'a skill a later version deleted\n' },
+  });
+  try {
+    assert.equal(res.status, 0, `install failed: ${res.stdout}\n${res.stderr}`);
+    const target = join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity');
+    assert.ok(existsSync(join(target, 'plugin.json')), 'the new payload must be installed');
+    assert.ok(
+      !existsSync(join(target, 'skills', 'retired-skill.md')),
+      'a file removed upstream must not survive the upgrade',
+    );
+  } finally {
+    cleanup();
   }
 });
 
