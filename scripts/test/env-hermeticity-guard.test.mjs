@@ -83,10 +83,18 @@ function sensitiveVarsForEntrypoint(pathText) {
  */
 function resolveEntrypointVariables(source) {
   const vars = new Map();
-  const assignRe = /(?:const|let)\s+(\w+)\s*=[^;\n]*;/g;
+  // Spans a FEW lines (not just to the first '\n'): join()/new URL() entrypoint
+  // assignments are occasionally formatter-wrapped across lines. Bounded by ';' so it
+  // still terminates at the statement end, not runs away across the whole file.
+  const assignRe = /(?:const|let)\s+(\w+)\s*=[\s\S]*?;/g;
   let m;
   while ((m = assignRe.exec(source))) {
-    const sensitive = sensitiveVarsForEntrypoint(m[0]);
+    // Two candidate forms: the raw text (catches `new URL('../bin/adlc-x.mjs', ...)`,
+    // a single string already containing the pattern), and every quoted string token
+    // joined with '/' (catches `join(ROOT, 'packages', 'x', 'bin', 'adlc-x.mjs')` —
+    // segmented arguments that never appear as one contiguous substring).
+    const tokens = [...m[0].matchAll(/['"`]([^'"`]+)['"`]/g)].map((t) => t[1]);
+    const sensitive = sensitiveVarsForEntrypoint(m[0]) || sensitiveVarsForEntrypoint(tokens.join('/'));
     if (sensitive) vars.set(m[1], sensitive);
   }
   return vars;
@@ -120,6 +128,24 @@ function extractSpawnCallTexts(source) {
 }
 
 /**
+ * Map of local variable name -> true, for every `const`/`let` object-literal
+ * assignment whose body contains a literal `...process.env` spread (the
+ * `const HERMETIC_ENV = { ...process.env, RAILS_BASE: '' };` shape used as a shared
+ * template, then referenced by bare identifier at the actual spawn call).
+ * @param {string} source
+ * @returns {Set<string>}
+ */
+function resolveAmbientEnvVariables(source) {
+  const names = new Set();
+  const assignRe = /(?:const|let)\s+(\w+)\s*=\s*\{[\s\S]*?\};/g;
+  let m;
+  while ((m = assignRe.exec(source))) {
+    if (m[0].includes('...process.env')) names.add(m[1]);
+  }
+  return names;
+}
+
+/**
  * True iff `varText` (the source of ONE variable's required-var check) is satisfied
  * anywhere in `source` — an inline object key (`VARNAME: <anything>`), a
  * `process.env.VARNAME = <literal>` pin, or a suppression comment
@@ -129,13 +155,22 @@ function extractSpawnCallTexts(source) {
  * @returns {boolean}
  */
 function isNeutralizedOrSuppressed(source, varName) {
-  const keyForm = new RegExp(`\\b${varName}\\s*:`);
+  // `VARNAME:` alone is not enough — `VARNAME: process.env.VARNAME` is a complete
+  // no-op that re-injects the ambient value under a different-looking key. Require the
+  // key form to match ANY `VARNAME:` occurrence EXCEPT one whose RHS (up to the next
+  // comma/brace) is exactly `process.env.VARNAME`.
+  const keyOccurrenceRe = new RegExp(`\\b${varName}\\s*:\\s*([^,}\n]*)`, 'g');
+  let keyForm = false;
+  let km;
+  while ((km = keyOccurrenceRe.exec(source))) {
+    if (km[1].trim() !== `process.env.${varName}`) { keyForm = true; break; }
+  }
   const pinForm = new RegExp(`process\\.env\\.${varName}\\s*=`);
   // The reason must be on the SAME LINE as the dash: `\s*` between the dash and the
   // required non-whitespace char would otherwise span the newline into whatever code
   // follows on the NEXT line, turning an empty reason into a false "suppressed".
   const suppressForm = new RegExp(`//[ \\t]*env-hermeticity:[ \\t]*inherits[ \\t]+${varName}[ \\t]*(?:—|--|-)[ \\t]*\\S`);
-  return keyForm.test(source) || pinForm.test(source) || suppressForm.test(source);
+  return keyForm || pinForm.test(source) || suppressForm.test(source);
 }
 
 /**
@@ -148,10 +183,13 @@ function isNeutralizedOrSuppressed(source, varName) {
  */
 function findViolationsInSource(filePath, source) {
   const entrypointVars = resolveEntrypointVariables(source);
+  const ambientEnvVars = resolveAmbientEnvVariables(source);
   const violations = [];
   const flaggedVars = new Set();
   for (const callText of extractSpawnCallTexts(source)) {
-    if (!callText.includes('...process.env')) continue;
+    const spreadsAmbient = callText.includes('...process.env')
+      || [...ambientEnvVars].some((v) => new RegExp(`\\b${v}\\b`).test(callText));
+    if (!spreadsAmbient) continue;
     let required = null;
     // Direct literal match (an entrypoint path typed inline at the call site).
     required = sensitiveVarsForEntrypoint(callText);
@@ -356,4 +394,66 @@ test('a per-file scan does not false-positive: an unrelated spawn\'s ...process.
     });
   `;
   assert.deepEqual(findViolationsInSource('fixtures/mixed-spawns.test.mjs', fixture), []);
+});
+
+// ── codex adversarial review findings, closed ──────────────────────────────────────
+
+test('a self-referential no-op (VARNAME: process.env.VARNAME) does NOT count as neutralization', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], {
+        env: { ...process.env, ADLC_MANIFEST_KEY: process.env.ADLC_MANIFEST_KEY },
+      });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/self-referential.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a same-value re-injection neutralizes nothing');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('a multi-line (formatter-wrapped) entrypoint assignment still resolves', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = join(
+      ROOT,
+      'packages',
+      'prosecute',
+      'bin',
+      'adlc-prosecute.mjs',
+    );
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/multiline-assign.test.mjs', fixture);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('a shared ambient-env template variable (const X = { ...process.env }; env: X) is scanned like an inline spread', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const AMBIENT_ENV = { ...process.env };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: AMBIENT_ENV });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/shared-ambient-env.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a call referencing a known ambient-env template must be scanned');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('a shared ambient-env template that ALSO neutralizes inline is compliant', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const AMBIENT_ENV = { ...process.env, ADLC_MANIFEST_KEY: 'test-key' };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: AMBIENT_ENV });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/shared-ambient-env-safe.test.mjs', fixture), []);
 });
