@@ -18,6 +18,7 @@ import {
   readAdoptionRecord,
   resolveActiveGenerationPaths,
   CONFIG_FILENAME,
+  MAX_CONFIG_JSON_BYTES,
 } from '../lib/generation-descriptor.mjs';
 
 const FP_A = 'a'.repeat(64);
@@ -114,6 +115,12 @@ test('a malformed keyFingerprint throws (wrong length, non-hex, or missing)', ()
   assert.throws(() => validateAdoptionRecord({ schemaVersion: 1 }), /keyFingerprint/);
 });
 
+test('a fingerprint containing the digit 0 is a valid hex character, not rejected', () => {
+  const fp = `0${'a'.repeat(63)}`;
+  const record = validateAdoptionRecord({ schemaVersion: 1, keyFingerprint: fp });
+  assert.equal(record.keyFingerprint, fp);
+});
+
 test('a malformed generation id throws through the same validation as validateGenerationId', () => {
   assert.throws(() => validateAdoptionRecord({ schemaVersion: 1, keyFingerprint: FP_A, generation: '../etc' }));
 });
@@ -179,6 +186,32 @@ test('config.json exceeding the byte cap is present but invalid, not silently tr
   assert.equal(result.present, true);
   assert.equal(result.valid, false);
   assert.match(result.reason, /exceeds/);
+});
+
+test('a config.json of EXACTLY the byte cap length is rejected (boundary precision, not off by one)', () => {
+  const { dir } = makeAdlcDir();
+  const template = (fillerLength) =>
+    JSON.stringify({ signing: { schemaVersion: 1, keyFingerprint: FP_A, filler: 'x'.repeat(fillerLength) } });
+  const shortfall = MAX_CONFIG_JSON_BYTES - Buffer.byteLength(template(0));
+  const content = template(shortfall);
+  assert.equal(Buffer.byteLength(content), MAX_CONFIG_JSON_BYTES, 'test setup: content must land exactly at the cap');
+  writeFileSync(join(dir, CONFIG_FILENAME), content);
+  const result = readAdoptionRecord(dir);
+  assert.equal(result.present, true);
+  assert.equal(result.valid, false, 'a file of exactly MAX_CONFIG_JSON_BYTES must be rejected, not accepted');
+});
+
+test('a config.json ONE BYTE under the cap is read and parsed normally', () => {
+  const { dir } = makeAdlcDir();
+  const template = (fillerLength) =>
+    JSON.stringify({ signing: { schemaVersion: 1, keyFingerprint: FP_A, filler: 'x'.repeat(fillerLength) } });
+  const shortfall = MAX_CONFIG_JSON_BYTES - 1 - Buffer.byteLength(template(0));
+  const content = template(shortfall);
+  assert.equal(Buffer.byteLength(content), MAX_CONFIG_JSON_BYTES - 1, 'test setup: content must land one byte under the cap');
+  writeFileSync(join(dir, CONFIG_FILENAME), content);
+  const result = readAdoptionRecord(dir);
+  assert.equal(result.present, true);
+  assert.equal(result.valid, true);
 });
 
 // ── resolveActiveGenerationPaths ────────────────────────────────────────────────────

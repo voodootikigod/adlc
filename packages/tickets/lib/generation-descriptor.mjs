@@ -36,7 +36,7 @@ const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 // readBoundedJsonNoFollow caps at 4096 bytes for a small lineage token; config.json is a
 // general project file with unrelated keys plus a growing, append-only priorFingerprints
 // list — 64KB gives room for hundreds of rotations before this cap is even a concern).
-const MAX_CONFIG_JSON_BYTES = 65536;
+export const MAX_CONFIG_JSON_BYTES = 65536;
 
 /**
  * True iff `generation` is a legacy (pre-adoption / generation-0) marker: absent, null,
@@ -59,7 +59,7 @@ export function isLegacyGeneration(generation) {
 export function validateGenerationId(id) {
   if (typeof id !== 'string' || !GENERATION_ID_RE.test(id)) {
     throw invalid('INVALID_GENERATION_ID',
-      `generation id must be a lowercase alphanumeric path component (1-64 chars); got ${JSON.stringify(id)}`);
+      `generation id must be a lowercase alphanumeric path component matching ${GENERATION_ID_RE}; got ${JSON.stringify(id)}`);
   }
   return id;
 }
