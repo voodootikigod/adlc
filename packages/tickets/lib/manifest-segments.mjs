@@ -530,7 +530,16 @@ function firstEntryOf(dir, segmentName) {
  * never matched here — they remain reachable only via a still-valid
  * `.lineage` token (peekOpenSegment). This is a deliberate, honest scope
  * boundary, not an oversight: recovery becomes reliable going forward without
- * a disruptive rewrite of already-committed segments.
+ * a disruptive rewrite of already-committed segments (tracked as a follow-up
+ * — T-01KYTQ4BADHSDJNBFNZHB2ZG5V).
+ *
+ * ALSO deliberately out of scope: resolveOpenSegment (below) never consults
+ * this function, so a WRITE that happens before any read on a fresh clone
+ * (token absent) mints a fresh segment rather than continuing a real,
+ * unambiguous, already-committed one for this branch — and once that fresh
+ * segment's token exists, peekOpenSegment's fast path means this function
+ * never scans further, permanently hiding the older evidence again for the
+ * rest of that checkout's lifetime. Same follow-up ticket.
  *
  * NEVER mints (like peekOpenSegment) and NEVER guesses among multiple
  * candidates: a writer resolving where to APPEND must stay precise

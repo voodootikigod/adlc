@@ -137,6 +137,18 @@ independently re-verify the specific entries they use regardless of this
 filter — belt-and-suspenders, since those paths do not all go through
 `readOwnChains`.
 
+Two gaps remain, deliberately deferred to a follow-up
+(T-01KYTQ4BADHSDJNBFNZHB2ZG5V) rather than folded into this same change: (1)
+`resolveOpenSegment` (the WRITE side) never consults `recoverOpenSegment` — a
+write that happens before any read on a fresh clone mints a fresh segment
+rather than continuing a real, unambiguous, already-committed one for this
+branch, and once that fresh segment's token exists, recovery's fast path
+never scans further, permanently hiding the older evidence again; (2)
+segments minted before this field existed have no `branch` field and gain
+nothing from this mechanism — the original evidence-loss bug persists
+unchanged for all pre-existing segment history until a migration/re-
+attestation ceremony (or an authenticated lineage index) is designed.
+
 ### 4.5 Cutover entry (root, last entry)
 
 Recorded by the ceremony as the final root entry, always signed:
