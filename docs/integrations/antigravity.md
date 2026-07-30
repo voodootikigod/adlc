@@ -95,6 +95,8 @@ npx plugins add voodootikigod/adlc
 
 Then `/adlc-init` (or manual bootstrap). Enforcement: `export ADLC_P4_ENFORCEMENT=1` with an active ticket.
 
+**Install timeout.** Each `agy` subprocess is bounded by `ADLC_AGY_TIMEOUT_MS` (milliseconds, default `120000`). A failure reading `timed out after 120000ms` is that bound, not `agy` crashing — re-run with a larger value if the install is legitimately slow (cold cache, network-mounted storage). The value must be positive and finite; `0` and `Infinity` would disable the bound and are refused rather than silently ignored.
+
 ## Formal ADLC Coverage
 
 | Phase | Antigravity surface |

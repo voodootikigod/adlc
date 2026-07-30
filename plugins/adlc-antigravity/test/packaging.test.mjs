@@ -418,6 +418,10 @@ test('bin/cli.mjs bounds an agy that IGNORES SIGTERM', () => {
   });
   try {
     const elapsed = Date.now() - started;
+    // No harness escape hatch: if the OUTER spawnSync timeout fired instead of our
+    // bound, res.error is set and status is null, so this must be checked or the
+    // test could pass on the harness's timeout rather than the behaviour under test.
+    assert.ok(!res.error, `the outer harness timed out, not our bound: ${res.error?.code}`);
     assert.equal(res.status, 1, `an unkillable-by-TERM agy must still fail:\n${res.stderr}`);
     assert.match(res.stderr, /did not complete/);
     // 1s timeout + 2s grace + overhead. The 600s sleep is the control: without
@@ -425,6 +429,62 @@ test('bin/cli.mjs bounds an agy that IGNORES SIGTERM', () => {
     assert.ok(elapsed < 30_000, `the bound did not hold — took ${elapsed}ms`);
   } finally {
     cleanup();
+  }
+});
+
+test('bin/cli.mjs kills the whole agy PROCESS TREE on timeout, leaving no worker behind', () => {
+  // Signalling only the child PID bounds only the process we spawned. An agy that
+  // forks a worker leaves it running past the timeout — holding inherited
+  // descriptors and outliving the staging directory it reads from — and repeated
+  // preflight/mutation runs accumulate them. This project's own timeout stub is
+  // exactly that topology, and it was leaking a sleep process on every run.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-tree-'));
+  try {
+    const home = join(work, 'home');
+    const binDir = join(work, 'bin');
+    const workerPid = join(work, 'worker.pid');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+
+    // agy forks a worker that records its own PID, then both wedge.
+    writeFileSync(
+      join(binDir, 'agy'),
+      '#!/bin/sh\n' +
+        'if [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\n' +
+        `( echo $$ > "${workerPid}"; trap '' TERM; sleep 600 ) &\n` +
+        "trap '' TERM\nsleep 600\n",
+    );
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '1000' },
+    });
+    assert.ok(!res.error, `the outer harness timed out, not our bound: ${res.error?.code}`);
+    assert.equal(res.status, 1, `a wedged agy tree must fail:\n${res.stderr}`);
+
+    const pid = Number(readFileSync(workerPid, 'utf8').trim());
+    assert.ok(Number.isInteger(pid) && pid > 0, 'the stub must have recorded a worker pid');
+
+    // SIGKILL delivery is asynchronous; give the group a moment to actually die.
+    const deadline = Date.now() + 5_000;
+    let alive = true;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        alive = false;
+        break;
+      }
+    }
+    if (alive) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* best effort cleanup */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* best effort cleanup */ }
+    }
+    assert.equal(alive, false, `a descendant of agy survived the timeout (pid ${pid})`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
 });
 

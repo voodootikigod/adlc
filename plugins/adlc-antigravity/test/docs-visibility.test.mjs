@@ -114,3 +114,35 @@ test('no shipped surface tells a user to run `agy plugin install <path>` directl
   }
   assert.equal(scanned, SURFACES.length, 'every listed surface must exist and be scanned');
 });
+
+test('the ADLC_AGY_TIMEOUT_MS recovery knob is discoverable, not comment-only', () => {
+  // The implementation accepts that a legitimate install can exceed 120s and adds
+  // this knob as the remedy. A knob documented only in a source comment is not a
+  // remedy: a user who hits the bound sees an elapsed duration and retries the same
+  // published command forever. So every surface that tells someone how to install
+  // has to name it, and so does the failure message itself.
+  const SURFACES = [
+    'plugins/adlc-antigravity/README.md',
+    'docs/integrations/antigravity.md',
+    'apps/docs/content/docs/integrations/antigravity.mdx',
+    'plugins/adlc-antigravity/bin/cli.mjs',
+  ];
+  for (const relative of SURFACES) {
+    const text = readFileSync(join(REPO_ROOT, relative), 'utf8');
+    assert.match(text, /ADLC_AGY_TIMEOUT_MS/, `${relative} never names the timeout knob`);
+    assert.match(
+      text,
+      /millisecond/i,
+      `${relative} names the knob without its units — "300" is 300ms or 5min depending on the guess`,
+    );
+  }
+
+  // And the error a user actually sees must point at it, since that is the moment
+  // they need it.
+  const cli = readFileSync(join(REPO_ROOT, 'plugins/adlc-antigravity/bin/cli.mjs'), 'utf8');
+  assert.match(
+    cli,
+    /timed out after[\s\S]{0,200}ADLC_AGY_TIMEOUT_MS/,
+    'the timeout error must name the knob that fixes it'
+  );
+});

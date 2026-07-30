@@ -46,6 +46,16 @@ dependency named `@adlc/antigravity` would have its binary run instead. A versio
 spec forces registry resolution — it pins nothing, it only refuses local
 shadowing.
 
+## Environment
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ADLC_AGY_TIMEOUT_MS` | `120000` | Wall-clock bound on each `agy` subprocess, in **milliseconds**. Must be a positive, finite number — anything else (including `0` and `Infinity`, both of which would disable the bound) is refused rather than silently ignored. Raise it if `agy` is legitimately slow: a cold cache or network-mounted storage can exceed 120s. |
+| `ADLC_P4_ENFORCEMENT` | unset | Set to `1`, with an active ticket, to arm in-session rail enforcement. |
+
+If an install fails with `timed out after 120000ms`, that is this bound, not `agy`
+crashing — retry with a larger `ADLC_AGY_TIMEOUT_MS`.
+
 ## Manifest: `version` and `adlcContract`
 
 `plugin.json` is the authoritative manifest. `agy plugin install` copies the whole

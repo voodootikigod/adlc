@@ -80,18 +80,39 @@ function runBounded(command, args, { inherit = false } = {}) {
   return new Promise((resolvePromise) => {
     let child;
     try {
-      child = spawn(command, args, { stdio: inherit ? 'inherit' : 'ignore' });
+      // detached: true puts agy in its OWN PROCESS GROUP so the whole tree can be
+      // signalled. Signalling just the child PID bounds only the process we
+      // spawned: an agy that forks a worker leaves that worker running after the
+      // timeout, holding inherited descriptors and outliving the staging directory
+      // it was reading from. This project's own timeout stub is that topology — a
+      // shell plus `sleep` — and it was leaking a sleep process on every run.
+      child = spawn(command, args, { stdio: inherit ? 'inherit' : 'ignore', detached: true });
     } catch (error) {
       resolvePromise({ status: null, error });
       return;
     }
 
+    // Negative PID targets the group. Falls back to the single child if the group
+    // is already gone (ESRCH) or the platform refuses it, so a kill failure can
+    // never turn the bound into an unhandled throw.
+    const signalTree = (signal) => {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          // already gone
+        }
+      }
+    };
+
     let timedOut = false;
     let killTimer;
     const termTimer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      killTimer = setTimeout(() => child.kill('SIGKILL'), AGY_GRACE_MS);
+      signalTree('SIGTERM');
+      killTimer = setTimeout(() => signalTree('SIGKILL'), AGY_GRACE_MS);
     }, AGY_TIMEOUT_MS);
 
     const done = (result) => {
@@ -102,7 +123,13 @@ function runBounded(command, args, { inherit = false } = {}) {
     child.on('error', (error) => done({ status: null, error }));
     child.on('exit', (code) => done(
       timedOut
-        ? { status: null, error: new Error(`timed out after ${AGY_TIMEOUT_MS}ms`) }
+        ? {
+            status: null,
+            error: new Error(
+              `timed out after ${AGY_TIMEOUT_MS}ms` +
+                ' — raise the bound with ADLC_AGY_TIMEOUT_MS=<milliseconds> if this install is legitimately slow',
+            ),
+          }
         : { status: code },
     ));
   });
@@ -222,6 +249,13 @@ Usage:
 
   Note: "npx adlc-agy" does NOT work — adlc-agy is a bin name, not a package
   name, so npx would look for an unpublished package by that name.
+
+Environment:
+  ADLC_AGY_TIMEOUT_MS   Wall-clock bound on each agy subprocess, in
+                        milliseconds. Default 120000. Must be a positive,
+                        finite number; anything else is refused rather than
+                        silently ignored. Raise it if agy is legitimately slow
+                        (cold cache, network-mounted storage).
 
 Description:
   Registers the @adlc/antigravity plugin with Google Antigravity (agy).
