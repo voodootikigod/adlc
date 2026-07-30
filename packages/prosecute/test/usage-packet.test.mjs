@@ -1,0 +1,279 @@
+// Concern: T152 P5 packet usage path (operating-stack §8a) — the exactly-once
+// carrier, retry idempotency, and the claimed/reported boundary.
+//
+// Every case drives the REAL producer: the `adlc-prosecute --input` CLI writing
+// into a temp ledger, read back with the REAL aggregator. Hand-constructing
+// manifest entries here would test the aggregator against a shape no producer
+// must emit — the test-integrity failure T152's acceptance criteria name.
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
+import { aggregateSpend } from '@adlc/gate-manifest/lib/spend.mjs';
+import { FIXTURE_REVISION, finding, gitRepo, killedFinding, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
+
+const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+
+const USAGE = Object.freeze({ inputTokens: 900, outputTokens: 150, cachedTokens: 40, provider: 'anthropic', model: 'claude-sonnet-4-6', tier: 'mid' });
+
+/**
+ * Build a packet whose passes are supplied by the caller. Trust-root tiering is
+ * working-tree-inclusive, so the CLI must run in a clean throwaway repo or the
+ * ambient repo's dirtiness leaks into the verdict (see prosecute-cli.test.mjs).
+ */
+function packet(dir, passes) {
+  return {
+    provenance: {
+      reviewer: 'fixture-reviewer',
+      session: 'fixture-session',
+      command: 'fixture review command',
+      transcript: transcript(dir),
+    },
+    review_packet: reviewPacket(dir),
+    no_findings_attestation: {
+      reason: 'fixture reviewer found no candidates',
+      method: 'review transcript audit',
+      evidence: 'review.txt',
+    },
+    passes,
+  };
+}
+
+const DRY_TAIL = [
+  { lens: 'correctness', findings: [], dry_evidence: 'no findings in correctness pass' },
+  { lens: 'tests', findings: [], dry_evidence: 'no findings in tests pass' },
+  { lens: 'behavior', findings: [], dry_evidence: 'no findings in behavior pass' },
+];
+
+/** Run the CLI against an isolated clean repo; returns the parsed --json verdict. */
+function prosecute(dir, inputPath, repo, { expectFailure = false } = {}) {
+  const argv = [BIN, '--input', inputPath, '--ticket', 'T1', '--revision', FIXTURE_REVISION, '--base', 'HEAD', '--dir', dir, '--json'];
+  try {
+    return JSON.parse(execFileSync(process.execPath, argv, { cwd: repo.dir, encoding: 'utf8' }));
+  } catch (err) {
+    if (!expectFailure) throw err;
+    return JSON.parse(err.stdout || '{}');
+  }
+}
+
+function cleanRepo() {
+  const repo = gitRepo();
+  writeFileSync(join(repo.dir, '.gitkeep'), '');
+  repo.g('add', '-A');
+  repo.g('commit', '-qm', 'base');
+  return repo;
+}
+
+function entriesFor(dir) {
+  return loadFiltered({ dir }).entries;
+}
+
+describe('P5 packet usage — the exactly-once carrier', () => {
+  it('attaches usage to the pass-completed entry ONLY, as claimed, aggregating to exactly one call', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      // A finding-bearing pass emits pass-started + two finding entries +
+      // pass-completed. If usage rode every entry, this pass alone would
+      // aggregate to 4 calls and 4x the tokens.
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+
+      const verdict = prosecute(dir, inputPath, repo);
+      assert.equal(verdict.exitCode, 0);
+
+      const entries = entriesFor(dir);
+      const carriers = entries.filter((e) => e?.data?.usage !== undefined);
+      assert.equal(carriers.length, 1, 'exactly one entry may carry usage per model call');
+      assert.equal(carriers[0].type, 'p5-pass-completed', 'the pass-completed entry is the sole carrier');
+      assert.equal(carriers[0].data.usageStatus, 'claimed', 'packet-supplied usage is CLAIMED, never reported');
+
+      // The pass really did emit the multi-entry shape this AC guards against.
+      const passEntries = entries.filter((e) => typeof e.type === 'string' && e.type.startsWith('p5-'));
+      assert.ok(passEntries.length > 1, `precondition: the pass must emit several entries (got ${passEntries.length})`);
+
+      // Exact numbers, not merely nonzero.
+      const agg = aggregateSpend(entries);
+      assert.equal(agg.total.calls, 1);
+      assert.equal(agg.byPhase.P5.calls, 1);
+      assert.equal(agg.byPhase.P5.inputTokens, 900);
+      assert.equal(agg.byPhase.P5.outputTokens, 150);
+      assert.equal(agg.byPhase.P5.cachedTokens, 40);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('records no usage key and usageStatus unreported when the packet supplies none', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()] },
+        ...DRY_TAIL,
+      ])));
+
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+
+      const completed = entriesFor(dir).filter((e) => e.type === 'p5-pass-completed');
+      assert.ok(completed.length > 0);
+      for (const entry of completed) {
+        assert.equal(entry.data.usageStatus, 'unreported');
+        assert.equal('usage' in entry.data, false, 'absent usage must stay absent — never a zeroed object');
+      }
+      assert.equal(aggregateSpend(entriesFor(dir)).total.calls, 0);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('P5 packet usage — retry idempotency', () => {
+  it('re-running the SAME packet appends no second carrier: still exactly one call', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+      const afterFirst = aggregateSpend(entriesFor(dir));
+      assert.equal(afterFirst.total.calls, 1, 'precondition: the first run recorded exactly one call');
+
+      // Operator rerun / crash recovery over an unchanged packet.
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+
+      const afterSecond = aggregateSpend(entriesFor(dir));
+      assert.equal(afterSecond.total.calls, 1, 'a replay must not re-bank spend already on the ledger');
+      assert.equal(afterSecond.byPhase.P5.inputTokens, 900, 'and must not double the counters');
+      assert.equal(afterSecond.byPhase.P5.outputTokens, 150);
+
+      // The replay still records — it just records a POINTER, not the counters.
+      const replay = entriesFor(dir).filter((e) => e?.data?.usageReplayOf !== undefined);
+      assert.equal(replay.length, 1);
+      assert.equal(replay[0].data.usageStatus, 'claimed');
+      assert.equal('usage' in replay[0].data, false, 'a replay carrier must not repeat the counters');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a replay whose usage CONTRADICTS the recorded carrier, naming both values', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+
+      // Same callId, same revision, same packet — different spend. One of the
+      // two is wrong, and silently keeping either would launder a bad number.
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: { ...USAGE, outputTokens: 999 } },
+        ...DRY_TAIL,
+      ])));
+
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.equal(verdict.status, 'op-error');
+      const message = (verdict.errors ?? []).join('\n');
+      assert.match(message, /call-1/, 'the error must name the callId in conflict');
+      assert.match(message, /150/, 'and the value already on the ledger');
+      assert.match(message, /999/, 'and the value the replay now claims');
+
+      // The rejected replay must not have banked anything.
+      assert.equal(aggregateSpend(entriesFor(dir)).byPhase.P5.outputTokens, 150);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('P5 packet usage — validation and the claimed/reported boundary', () => {
+  it('rejects a malformed usage block naming the offending field', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [finding()], usage: { ...USAGE, inputTokens: -1 } },
+        ...DRY_TAIL,
+      ])));
+
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.notEqual(verdict.exitCode, 0);
+      const message = [...(verdict.errors ?? []), verdict.status ?? ''].join('\n');
+      assert.match(message, /inputTokens/, 'the validation error must name the field');
+      assert.match(message, /non-negative integer/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an unknown usage field rather than silently dropping it', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [finding()], usage: { ...USAGE, reasoningTokens: 40 } },
+        ...DRY_TAIL,
+      ])));
+
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.notEqual(verdict.exitCode, 0);
+      assert.match((verdict.errors ?? []).join('\n'), /reasoningTokens.*not a recognized usage field/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('NO packet can mint attested telemetry: a usageStatus of "reported" is never produced by this path', () => {
+    // `reported` is reserved for usage an ADAPTER parsed out of its harness's
+    // own machine-readable output. Shape validation cannot prove a provider
+    // ever emitted these counters, so a packet claiming otherwise must not be
+    // able to launder itself into attested telemetry — whether by supplying
+    // the status directly or by any code path downstream.
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE, usageStatus: 'reported' },
+        ...DRY_TAIL,
+      ])));
+
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      // Either the packet field is refused outright, or it is ignored and the
+      // carrier still records `claimed`. Both are acceptable; silently trusting
+      // it is not. Measured against the real CLI this takes the DOWNGRADE
+      // branch — the packet's `usageStatus` is ignored — so assert the carrier
+      // positively says `claimed` rather than merely "not reported", which
+      // would also pass on an absent status.
+      if (verdict.exitCode === 0) {
+        const carriers = entriesFor(dir).filter((e) => e?.data?.usage !== undefined);
+        assert.equal(carriers.length, 1, 'precondition: the run recorded a carrier to inspect');
+        assert.equal(carriers[0].data.usageStatus, 'claimed', 'a packet must never produce attested telemetry');
+        for (const entry of entriesFor(dir)) {
+          assert.notEqual(entry?.data?.usageStatus, 'reported', 'no entry anywhere may claim to be attested');
+        }
+      } else {
+        assert.ok((verdict.errors ?? []).length > 0, 'a refusal must say why');
+      }
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+});
