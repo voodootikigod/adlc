@@ -19,7 +19,7 @@ import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
 import {
   isSegmentedRepo, resolveOpenSegment, readOwnChains, forestChainsIntact,
-  segmentPath, lineagePath, withManifestLock, canonicalJson,
+  segmentPath, lineagePath, withManifestLock, canonicalJson, entrySigValid,
 } from '@adlc/tickets';
 
 /**
@@ -54,14 +54,25 @@ export function reassignId(tickets, oldId, newId) {
  * root approval at a high seq must never outrank a causally-later segment
  * rejection at a low one); only entries already known to be from the SAME
  * chain are compared by seq.
+ *
+ * `key`, when provided (adversarial-review finding): a candidate source must
+ * carry a valid signature to be re-attested — forestChainsIntact's per-chain
+ * legacy-unsigned-prefix tolerance (needed so an honest chain that predates
+ * signing can still verify) is NOT enough on its own to authenticate ONE
+ * entry as genuine. Without this, a wholly-unsigned forged segment (passes
+ * the chain-wide check by design — indistinguishable from an honest chain
+ * that predates signing) could supply a forged verdict that this function
+ * then signs FRESH under the new id, laundering it into a validly
+ * HMAC-signed attestation nobody with the key ever actually approved.
  * @returns {Array<object>} source entries (one per gate) to re-attest under newId
  */
-export function planManifestMigration(input, oldId, newId = null) {
+export function planManifestMigration(input, oldId, newId = null, key = null) {
   const chains = Array.isArray(input?.[0]) ? input : [input ?? []];
   const latestByGate = new Map(); // gate -> { entry, chainIndex }
   chains.forEach((chain, chainIndex) => {
     for (const e of chain ?? []) {
       if (!e || e.ticket !== oldId || typeof e.gate !== 'string') continue;
+      if (key !== null && !entrySigValid(key, e)) continue;
       const prev = latestByGate.get(e.gate);
       const wins = !prev || chainIndex > prev.chainIndex
         || (chainIndex === prev.chainIndex && (typeof e.seq === 'number' ? e.seq : 0) >= (typeof prev.entry.seq === 'number' ? prev.entry.seq : 0));
@@ -157,7 +168,7 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
     if (!forestChainsIntact(adlcDir, { key })) {
       throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken, or an entry is unsigned/forged');
     }
-    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId);
+    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId, key);
     if (sources.length === 0) return [];
 
     const resolved = resolveOpenSegment(adlcDir, { cwd });
@@ -222,7 +233,7 @@ export function migrateManifestEvidence(dir, oldId, newId, { now, env = process.
 
   const out = appendBatch('manifest', ({ entries, skipped, lastRawLine }) => {
     if (skipped.length) throw new Error(`cannot re-attest evidence: manifest contains malformed line ${skipped[0].line}`);
-    const sources = planManifestMigration(entries, oldId, newId);
+    const sources = planManifestMigration(entries, oldId, newId, key);
     const startPrev = lastRawLine !== null ? sha256(lastRawLine) : null;
     const startSeq = entries.length ? Math.max(...entries.map((e) => (typeof e.seq === 'number' ? e.seq : 0))) : 0;
     return buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev });

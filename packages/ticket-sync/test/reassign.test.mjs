@@ -137,8 +137,14 @@ test('migrateManifestEvidence chains a multi-gate migration correctly (entry N l
 });
 
 test('migrateManifestEvidence signs re-attestation entries when ADLC_MANIFEST_KEY is set', () => {
-  const lg = fakeLedger([ev('T7', 'prosecution', 1, { verdict: 'clear' })]);
   const KEY = 'secret-key';
+  // The source itself must be validly signed to be a migratable candidate
+  // (adversarial-review finding: planManifestMigration now requires
+  // entrySigValid when a key is present).
+  const source = ev('T7', 'prosecution', 1, { verdict: 'clear' });
+  const sourceCanonical = { seq: source.seq, gate: source.gate, ts: source.ts, ticket: source.ticket, data: source.data, files: source.files, prev: source.prev };
+  source.sig = createHmac('sha256', KEY).update(JSON.stringify(sourceCanonical)).digest('hex');
+  const lg = fakeLedger([source]);
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', {
     now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: KEY }, appendBatch: lg.appendBatch,
   });
@@ -222,6 +228,33 @@ test('migrateManifestEvidence routes to the segment writer once segmented — ro
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Adversarial-review finding: an UNSIGNED source entry (recorded without a key —
+// indistinguishable, on the wire, from an attacker's forgery written by anyone
+// with local filesystem access) must never be trusted as a genuine candidate to
+// re-attest once a signing key IS available at migration time. Without the
+// entrySigValid check, this function would sign the copied data FRESH under the
+// new id, laundering an unsigned claim into a validly HMAC-signed attestation.
+test('migrateManifestEvidence never signs a re-attestation sourced from an UNSIGNED entry, even in this checkout\'s own segment', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    // Recorded with NO key active — an honest legacy entry, or indistinguishable
+    // from a forgery planted by anyone with local write access to the checkout.
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+
+    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#9', {
+      now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: 'migration-time-key' },
+    });
+    assert.equal(result.migrated, 0, 'an unsigned source must never be laundered into a freshly signed attestation');
+    const resolved = resolveOpenSegment(dir, { cwd: root });
+    const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
+    assert.equal(raw.length, 1, 'nothing was appended for the refused migration');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('migrateManifestEvidence in a segmented repo signs the re-attestation and continues the open segment', () => {
   const { root, dir } = gitRepo();
   const prevKey = process.env.ADLC_MANIFEST_KEY;
@@ -250,6 +283,8 @@ test('migrateManifestEvidence in a segmented repo signs the re-attestation and c
 test('migrateManifestEvidence mints a segment whose FIRST entry carries an anchor into root, v2-signed', () => {
   const { root, dir } = gitRepo();
   const KEY = 'rootless-anchor-key';
+  const prevKey = process.env.ADLC_MANIFEST_KEY;
+  process.env.ADLC_MANIFEST_KEY = KEY; // source evidence must itself be signed to be a migratable candidate
   try {
     // Evidence recorded BEFORE cutover lands in root; activation then opens this
     // branch's first segment, which the re-attestation itself mints and anchors.
@@ -272,7 +307,10 @@ test('migrateManifestEvidence mints a segment whose FIRST entry carries an ancho
     const { sig: _sig, segment: _segment, ...signed } = first;
     const expectedSig = createHmac('sha256', KEY).update(canonicalJson(signed)).digest('hex');
     assert.equal(first.sig, expectedSig, 'sig must be a real v2 HMAC over every field but sig/segment, not a placeholder');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+  }
 });
 
 test('migrateManifestEvidence never resurrects a stale root verdict over a causally-later segment one (adversarial-review finding)', () => {
