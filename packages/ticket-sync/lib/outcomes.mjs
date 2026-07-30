@@ -20,12 +20,12 @@ const seqOf = (e) => (typeof e?.seq === 'number' ? e.seq : Date.parse(e?.ts ?? '
 
 function deriveStatus(gates, chainIndexOf) {
   let p5 = null;
-  let p5ChainIndex = -1;
+  let p5ChainIndex = null; // no numeric sentinel needed — `p5 === null` alone gates the first assignment
   for (const g of P5_GATES) {
     const e = gates[g];
     if (!e) continue;
     const ci = chainIndexOf(g);
-    if (!p5 || ci > p5ChainIndex || (ci === p5ChainIndex && seqOf(e) >= seqOf(p5))) { p5 = e; p5ChainIndex = ci; }
+    if (p5 === null || ci > p5ChainIndex || (ci === p5ChainIndex && seqOf(e) >= seqOf(p5))) { p5 = e; p5ChainIndex = ci; }
   }
   if (!p5) return null; // no P5 evidence → no status (no fabricated pass)
   const v = p5.data?.verdict;

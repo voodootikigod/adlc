@@ -333,4 +333,36 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
       assert.equal(last.data.carryDepth, 1);
     } finally { clean(dir); }
   });
+
+  // Adversarial-review finding: the "latest entry" lookup must be scoped to root +
+  // THIS checkout's own segment ONLY — no total order exists across independent
+  // lineages. An UNRELATED segment (never opened via this checkout's .lineage
+  // token) must never be treated as a source of "the true latest" entry, even
+  // when it names the same ticket.
+  it('ignores an UNRELATED lineage\'s segment when finding the latest entry — no total order across independent segments', () => {
+    const dir = gitLedger();
+    try {
+      seed(dir, rev(BASE1)); // pre-cutover approve for T1 @ BASE1, lands in root
+      activateSegments(dir);
+      recordCrossModelReview({
+        ticket: 'T1', revision: rev(BASE2), provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir,
+      }); // THIS checkout's own segment
+
+      // A hand-built segment simulating a DIFFERENT branch/lineage's evidence —
+      // never opened via this checkout's .lineage token.
+      writeRevocationSegment(dir, 'foreign-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', { ticket: 'T1', revision: rev(BASE4) });
+      const foreignSeg = join(dir, 'manifest.d', 'foreign-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl');
+      const foreignEntry = JSON.parse(readFileSync(foreignSeg, 'utf8').trim());
+      foreignEntry.data.verdict = 'approve'; // an approve, not a revocation, at a revision that looks newer
+      writeFileSync(foreignSeg, JSON.stringify(foreignEntry) + '\n');
+
+      assert.throws(
+        () => carry(dir, rev(BASE4), rev(BASE5)),
+        /fromRevision.*is not the latest recorded|latest is/,
+        'the foreign segment\'s approve must never be reachable as "the latest" — it belongs to a different lineage'
+      );
+      // The correctly-scoped carry (from THIS checkout's own segment) must still work.
+      carry(dir, rev(BASE2), rev(BASE5));
+    } finally { clean(dir); }
+  });
 });
