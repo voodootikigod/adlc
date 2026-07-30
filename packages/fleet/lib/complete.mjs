@@ -139,13 +139,26 @@ function restoreFile(absPath, priorBytes) {
  * concurrent evidence. An extra append-only evidence line is harmless; losing
  * another writer's evidence is not.
  */
-export function revertCompletionCommit({ repo, toSha, shardPath = null, completionSha = null, integrationBranch, ledgerPath = MANIFEST_FILE, git = defaultGit(repo) } = {}) {
+export function revertCompletionCommit({ repo, toSha, shardPath = null, completionSha = null, integrationBranch, ledgerPath = MANIFEST_FILE, raced = false, git = defaultGit(repo) } = {}) {
   // Branch IDENTITY, not just commit identity. A SHA match alone is insufficient:
   // another branch can legitimately point at the completion commit, so if the shared
   // checkout switched to one of those, every SHA precondition below would pass and the
   // `reset --soft` would rewind THAT branch — leaving the rejected completion sitting
   // on the integration branch. Same guard completeTicketOnIntegration uses.
   if (!integrationBranch) throw new Error('revertCompletionCommit requires integrationBranch to verify the checkout before rewinding');
+  // `raced: true` (adversarial-review finding): the completion commit's ledgerPath was
+  // a BRAND NEW file that, at commit time, already held a concurrent recorder's entry
+  // alongside our own — the "ledger unchanged since our commit" check below only
+  // proves nothing ELSE has touched the file SINCE the commit; it cannot see that the
+  // commit itself was never exclusively ours. A `git restore` here would reset
+  // ledgerPath to its pre-commit (nonexistent) state, deleting the concurrent
+  // recorder's entry along with ours. Refuse outright — same "withdrawal is exact or
+  // it does not happen" rule as the two preconditions below — and let the caller
+  // escalate to quarantine, which is the honest outcome: a human must reconcile which
+  // entry is genuine, not this function guessing.
+  if (raced) {
+    throw new Error('refusing to withdraw: the completion commit shares its ledger file with a concurrent recorder\'s entry — a blind restore would delete their evidence too');
+  }
   // Withdrawal is EXACT or it does not happen. Two preconditions, both checked against
   // the shared checkout as it is RIGHT NOW:
   //   1. HEAD is still our completion commit. Otherwise a --soft reset would silently
@@ -356,7 +369,16 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
     // The exact commit we created — the withdrawal path requires HEAD to still be
     // this, so it can never uncommit someone else's work.
     const completionSha = git('rev-parse', 'HEAD');
-    return { completed: true, preCompletionSha, completionSha, shardPath: storePath, ledgerPath: artifact.rel };
+    // `raced: true` (adversarial-review finding) means this commit's ledgerPath was a
+    // BRAND NEW file whose content, at commit time, already held MORE than our own
+    // entry — a concurrent recorder won the mint and appended before we did, and our
+    // commit captured both entries together (the write itself is correct: nothing was
+    // lost here). The caller MUST carry this forward to revertCompletionCommit: a
+    // later withdrawal that blindly restores `ledgerPath` to its pre-commit (absent)
+    // state would delete the concurrent recorder's entry along with ours, since the
+    // ledger-unchanged-since-commit check alone cannot see that the commit itself was
+    // never exclusively ours.
+    return { completed: true, preCompletionSha, completionSha, shardPath: storePath, ledgerPath: artifact.rel, raced: artifact.raced === true };
   } finally {
     releaseTicketLock(lock);
   }

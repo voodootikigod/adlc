@@ -389,8 +389,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     // Withdraw ONLY the completion commit when the gate re-run over it fails; the
     // shipped merge underneath is never touched.
-    revertCompletion: ({ toSha, shardPath, completionSha, integrationBranch, ledgerPath }) =>
-      revertCompletionCommit({ repo: integrationPath, toSha, shardPath, completionSha, integrationBranch, ledgerPath, git: integrationGit }),
+    revertCompletion: ({ toSha, shardPath, completionSha, integrationBranch, ledgerPath, raced }) =>
+      revertCompletionCommit({ repo: integrationPath, toSha, shardPath, completionSha, integrationBranch, ledgerPath, raced, git: integrationGit }),
 
     cleanup: ({ worktree, state }) => {
       // Keep failed worktrees for inspection; remove merged ones.

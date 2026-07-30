@@ -15,7 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -52,6 +52,35 @@ function isIgnoredIn(cwd, path) {
 
 const isIgnored = (path) => isIgnoredIn(REPO_ROOT, path);
 
+// `--no-index` has no stat info for a path that does not exist on disk, so it
+// cannot tell a bare directory query (no trailing slash — samplePath's output
+// for a `!dir/` negation) is a directory rather than a file, and a directory-
+// anchored rule cannot match it — the query silently falls through to whatever
+// non-directory-anchored blanket rule matches next, which looks EXACTLY like a
+// genuinely shadowed negation. This only stays invisible for negations whose
+// directory happens to already be populated in this checkout (`.omo/evidence/`
+// is committed content); a negation for a directory this repo creates
+// CONDITIONALLY (`.adlc/manifest.d/`, only once a repo segments — T-MANIFEST-
+// FOREST) would otherwise be flagged dead by an artifact of checkout state, not
+// by anything actually wrong with the pattern. Make the directory genuinely
+// exist for the duration of the probe instead, removing exactly what this
+// created (deepest first) so a pre-existing directory is never touched.
+function withDirEnsured(repoRoot, relDir, fn) {
+  const parts = relDir.split('/').filter(Boolean);
+  const created = [];
+  let current = repoRoot;
+  for (const part of parts) {
+    current = join(current, part);
+    if (!existsSync(current)) { mkdirSync(current); created.push(current); }
+  }
+  try { return fn(); }
+  finally {
+    for (const dir of created.reverse()) {
+      try { rmdirSync(dir); } catch { /* not empty (real content landed there mid-probe) or already gone */ }
+    }
+  }
+}
+
 const negations = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
   .split(/\r?\n/)
   .map((line) => line.trim())
@@ -59,7 +88,13 @@ const negations = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
 
 test('every .gitignore negation is effective, not shadowed by a later blanket rule', () => {
   assert.ok(negations.length > 0, 'expected .gitignore to declare negations — otherwise this guard is vacuous');
-  const dead = negations.filter((pattern) => isIgnored(samplePath(pattern)));
+  const dead = negations.filter((pattern) => {
+    const sample = samplePath(pattern);
+    const body = pattern.slice(1);
+    return body.endsWith('/')
+      ? withDirEnsured(REPO_ROOT, body.slice(0, -1), () => isIgnored(sample))
+      : isIgnored(sample);
+  });
   assert.deepEqual(
     dead,
     [],

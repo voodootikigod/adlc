@@ -15,6 +15,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initializeTicketStores, TicketService, detectTicketStore, ticketFilename, readTicketLock } from '@adlc/tickets';
+import { appendManifestEntry } from '@adlc/gate-manifest';
 import { runFleet, integrationBranchName } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit } from '../lib/complete.mjs';
@@ -33,7 +34,26 @@ function makeRepo(ticket = { id: 'T1', title: 'first' }, { bootstrapManifest = t
   const root = mkdtempSync(join(tmpdir(), 'fleet-complete-'));
   const git = gitRunner(root);
   git('init', '-b', 'main');
-  git('commit', '--allow-empty', '-q', '-m', 'root');
+  // A realistic .gitignore (mirrors this repo's own .adlc/* block, spec §4.8): without
+  // it, completeTicketOnIntegration's explicit `git add -- ... artifact.rel` for a
+  // segment path is untested against the actual ignore rules that gate whether `git
+  // add` throws (a bare `-A`/`.` staging, used elsewhere in this fixture, silently
+  // skips ignored paths instead of throwing — it would NOT have caught a missing
+  // `!.adlc/manifest.d/` exception the way the real explicit-pathspec add does).
+  writeFileSync(join(root, '.gitignore'), [
+    '.adlc/*',
+    '!.adlc/tickets.json',
+    '!.adlc/tickets/',
+    '!.adlc/tickets/**',
+    '!.adlc/manifest.jsonl',
+    '!.adlc/manifest.d/',
+    '!.adlc/manifest.d/**',
+    '.adlc/manifest.d/.lineage',
+    '.adlc/tickets.lock',
+    '',
+  ].join('\n'));
+  git('add', '.gitignore');
+  git('commit', '-q', '-m', 'root');
   initializeTicketStores(root);
   // Bootstrap a manifest ledger so completion evidence APPENDS — the supported case
   // (rails-guard-ci allows append, denies create). Tests that want the un-bootstrapped
@@ -516,15 +536,71 @@ test('a failed segmented completion commit rolls back the segment exactly (T-MAN
     assert.throws(() => completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git }));
 
     assert.equal(commitCount(git), before, 'no commit landed');
-    // .lineage is local, gitignored bookkeeping (spec §4.8) this fixture never
-    // configured a .gitignore rule for — it legitimately stays on disk as an
-    // untracked artifact regardless of the rollback's correctness. What matters
-    // is that no SEGMENT (the actual evidence) or ticket-store change survives.
+    // .lineage is local, gitignored bookkeeping (spec §4.8, matched by this
+    // fixture's own .gitignore) — it legitimately stays on disk as an untracked,
+    // IGNORED artifact regardless of the rollback's correctness (git status
+    // --porcelain omits ignored paths by default, so it never appears below).
+    // What matters is that no SEGMENT (the actual evidence) or ticket-store
+    // change survives.
     const status = git('status', '--porcelain').split('\n').filter(Boolean);
-    assert.deepEqual(status.filter((line) => !line.endsWith('.adlc/manifest.d/.lineage')), [], `the checkout has no committable evidence left dangling: ${status.join(', ')}`);
+    assert.deepEqual(status, [], `the checkout has no committable evidence left dangling: ${status.join(', ')}`);
     const segFiles = existsSync(join(root, '.adlc', 'manifest.d')) ? readdirSync(join(root, '.adlc', 'manifest.d')).filter((n) => n.endsWith('.jsonl')) : [];
     assert.deepEqual(segFiles, [], 'the newly-minted segment must be removed entirely, not left with a withdrawn entry');
     assert.equal(isCompleted(root, 'T1'), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Adversarial-review finding: completeTicketOnIntegration's SUCCESS path commits
+// the entire ledgerPath file, including a concurrent recorder's entry that won the
+// mint race for a brand-new segment (resolveManifestArtifactAfterWrite's `raced`
+// flag). That flag used to be dropped on the floor — never returned, never reaching
+// revertCompletionCommit — so a LATER withdrawal (the post-completion re-gate
+// failing) would `git restore` ledgerPath back to its pre-commit (nonexistent)
+// state, deleting the concurrent recorder's entry along with the withdrawn one.
+// Simulated with the same mid-transaction injection technique as the checkout-switch
+// tests above: a real gate-manifest append lands in what becomes THIS completion's
+// freshly-minted segment, in the window between Fleet's pre-write peek (no segment
+// open) and its own write.
+function makeMidTransactionConcurrentRecorderGit(baseGit, root) {
+  let revParseHeadCount = 0;
+  return (...args) => {
+    const result = baseGit(...args);
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+      revParseHeadCount += 1;
+      if (revParseHeadCount === 2) {
+        appendManifestEntry({ gate: 'concurrent-recorder', data: { note: 'raced' } }, join(root, '.adlc'), { cwd: root, key: null });
+      }
+    }
+    return result;
+  };
+}
+
+test('a completion that shares its freshly-minted segment with a concurrent recorder is refused on withdrawal, never deletes their entry (T-MANIFEST-FOREST)', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+
+    const racingGit = makeMidTransactionConcurrentRecorderGit(git, root);
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: racingGit });
+
+    assert.equal(res.completed, true, 'the write itself is correct — nothing is lost at commit time');
+    assert.equal(res.raced, true, 'the completion must flag that its segment was shared with a concurrent recorder');
+
+    const segFile = openSegmentFile(root);
+    const linesAfterCommit = readFileSync(segFile, 'utf8').trim().split('\n');
+    assert.equal(linesAfterCommit.length, 2, 'both the concurrent recorder\'s entry and this completion\'s entry landed in the commit');
+
+    // The caller re-gates the completion commit; it fails, so withdrawal is attempted —
+    // this must refuse rather than delete the concurrent recorder's entry.
+    assert.throws(
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, integrationBranch, ledgerPath: res.ledgerPath, raced: res.raced, git }),
+      /refusing to withdraw/,
+      'withdrawal must refuse a raced completion rather than blindly restore ledgerPath to its pre-commit (nonexistent) state',
+    );
+    assert.ok(existsSync(segFile), 'the segment — holding the concurrent recorder\'s entry — must survive the refused withdrawal');
+    assert.equal(readFileSync(segFile, 'utf8').trim().split('\n').length, 2, 'both entries remain intact; nothing was deleted');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
