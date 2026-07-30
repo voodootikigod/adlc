@@ -102,14 +102,19 @@ export function orderLocalByDependency(tickets) {
 // the OLD recovery matched on the derived filename slug — a LOSSY,
 // attacker-controllable identity that could publish a FOREIGN lineage's
 // status as this branch's own. Recovery now matches on the EXACT `branch`
-// field every segment's first entry carries (spec §4.4) — non-lossy, and
-// part of the signed content once a key is configured; see readOwnChains's
-// own doc. A genuinely ambiguous recovery (two committed segments both
-// declaring this branch) propagates as a real thrown error rather than
-// silently rendering a status computed from root alone, which could remove a
-// real, earned status label.
-function readOwnChainsOrRefuse(adlcDir, cwd) {
-  return readOwnChains(adlcDir, { cwd, allowRecovery: true });
+// field every segment's first entry carries (spec §4.4) — non-lossy — but
+// exact identity is not authenticity (adversarial-review finding, round 2):
+// an UNSIGNED segment can still claim any branch by name. `key` is passed
+// through so readOwnChains filters recovered entries to only those that are
+// actually signature-verified, and disables recovery entirely when no key is
+// available (push has no field to mark a rendered label "unauthenticated"
+// the way doctor.mjs does, so an unverifiable recovery must not be trusted
+// at all here — see readOwnChains's own doc). A genuinely ambiguous recovery
+// (two committed segments both declaring this branch) propagates as a real
+// thrown error rather than silently rendering a status computed from root
+// alone, which could remove a real, earned status label.
+function readOwnChainsOrRefuse(adlcDir, cwd, key) {
+  return readOwnChains(adlcDir, { cwd, allowRecovery: true, key });
 }
 
 /** Serialize a ticket's body: prose + canonical block (or prose-only when no block). */
@@ -169,7 +174,7 @@ export async function push({
   // render from root alone.
   let outcomes;
   try {
-    outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChainsOrRefuse(join(dir, '.adlc'), dir));
+    outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChainsOrRefuse(join(dir, '.adlc'), dir, key));
   } catch (error) {
     return { exitCode: 1, errors: [`cannot determine gate status: ${error.message}`] };
   }
@@ -228,7 +233,7 @@ export async function push({
         // Same recover-or-refuse rule as the initial load — see
         // readOwnChainsOrRefuse's doc above.
         try {
-          outcomes = reduceTicketOutcomes(readOwnChainsOrRefuse(join(dir, '.adlc'), dir));
+          outcomes = reduceTicketOutcomes(readOwnChainsOrRefuse(join(dir, '.adlc'), dir, key));
         } catch (error) {
           // Adversarial-review finding: a failure here used to just set `failed`
           // and fall through into Pass 1/2, which still render remote labels and

@@ -472,6 +472,23 @@ describe('appendManifestEntry routes to the segment writer once segmented (spec 
     } finally { clean(root); }
   });
 
+  // T-MANIFEST-FOREST, fourth round, adversarial-review finding: a caller-
+  // supplied `branch` used to be silently overwritten by (and, before that
+  // fix, could silently OVERWRITE) the writer's own `currentBranch()` value,
+  // since `normalized` (built from `...payload`) was spread AFTER the
+  // writer-computed `branch`. A payload claiming a false branch, once
+  // v2-signed, would authenticate a lie recoverOpenSegment later trusts.
+  it('reserved field "branch" is refused before it ever reaches the segment writer', () => {
+    const { root, dir } = gitRepo('feat/real-branch');
+    try {
+      activate(dir);
+      assert.throws(
+        () => appendManifestEntry({ gate: 'evidence', branch: 'main' }, dir, { cwd: root }),
+        /reserved chain field: branch/,
+      );
+    } finally { clean(root); }
+  });
+
   it('entries are signed when a key is present, and the anchor-carrying entry is v2 EVEN if v1 was requested', () => {
     const { root, dir } = gitRepo();
     try {

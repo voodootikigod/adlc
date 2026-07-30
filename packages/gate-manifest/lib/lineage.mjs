@@ -239,14 +239,19 @@ function firstEntryOf(dir, segmentName) {
  * consumer, launder) an unrelated branch's segment as this branch's own. The
  * `branch` field is the exact Git ref string, part of the entry's own signed
  * content once a key is configured (an anchor-carrying entry is always
- * v2-signed — spec §4.4), so recovery here is bounded to the SAME trust tier
- * the segment's content already carries: cryptographically exact when
- * signed, best-effort hash-chain-only when not, same as every other read in
- * this codebase (see doctor's `authenticated: key !== null`). A caller that
- * needs the recovered content to feed a FRESH signature (reassignment,
- * carry-forward) already independently verifies the specific entries it
- * reads (entrySigValid/verifyEntrySig) before trusting them — this function
- * only answers "which FILE is mine", not "is its content trustworthy".
+ * v2-signed — spec §4.4) — but exact identity is not authenticity: THIS
+ * FUNCTION DOES NOT VERIFY ANY SIGNATURE. An unsigned segment can still claim
+ * any branch by name; matching its `branch` field only proves the claim, not
+ * that anyone with the key made it (adversarial-review finding,
+ * T-MANIFEST-FOREST fourth round — `@adlc/tickets`' readOwnChains learned
+ * this the hard way when push.mjs published a hand-planted "clear" verdict
+ * from an unsigned but exact-branch-matching recovered segment). Every
+ * caller MUST independently verify (entrySigValid/verifyEntrySig) whatever
+ * specific entries it actually intends to trust or re-sign before doing so
+ * — this function only answers "which FILE is mine", never "is its content
+ * trustworthy". `@adlc/tickets`' readOwnChains(dir, {allowRecovery, key})
+ * does this filtering for its own callers; a caller of THIS function gets no
+ * such filtering for free.
  *
  * Segments minted BEFORE this change carry no `branch` field and are simply
  * never matched here — they remain reachable only via a still-valid

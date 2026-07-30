@@ -105,14 +105,19 @@ function appendLockedEntry(payload, resolved, targetPath, signatureVersion, key)
   };
   const chained = {
     seq: previous ? previous.seq + 1 : 1,
-    // `branch` (T-MANIFEST-FOREST, fourth round): the EXACT git branch that
-    // minted this segment, recorded once on the first entry alongside
-    // `anchor` — a non-lossy identity recoverOpenSegment matches on, unlike
-    // the derived filename slug (see lineage.mjs's recoverOpenSegment doc).
-    // Omitted (not `anchor`-style `null`) when resolveOpenSegment minted
+    ...normalized,
+    // `anchor`/`branch` spread AFTER `...normalized`, not before (adversarial-
+    // review finding, T-MANIFEST-FOREST fourth round): `RESERVED_CHAIN_FIELDS`
+    // in record.mjs already rejects a payload that supplies either field
+    // outright, but constructing these writer-owned structural fields LAST is
+    // defense-in-depth — a payload can never overwrite them regardless of
+    // what upstream validation does or doesn't catch. `branch` is the EXACT
+    // git branch that minted this segment, recorded once on the first entry
+    // alongside `anchor` — a non-lossy identity recoverOpenSegment matches on,
+    // unlike the derived filename slug (see lineage.mjs's recoverOpenSegment
+    // doc). Omitted (not `anchor`-style `null`) when resolveOpenSegment minted
     // this segment from a detached HEAD, which has no branch identity.
     ...(resolved.isNew ? { anchor: resolved.anchor, ...(resolved.branch !== undefined ? { branch: resolved.branch } : {}) } : {}),
-    ...normalized,
     prev: prevRawLine === null ? null : sha256(prevRawLine),
   };
 

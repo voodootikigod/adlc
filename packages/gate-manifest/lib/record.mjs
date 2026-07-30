@@ -18,8 +18,14 @@ import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 // for why that annotation must never be signed) — a caller-supplied `segment`
 // would be indistinguishable from that read-only annotation. `anchor` is
 // reserved per spec §4.4: only a segment's first entry may carry one, and
-// only the writer itself (segment-writer.mjs) may set it.
-const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor'];
+// only the writer itself (segment-writer.mjs) may set it. `branch` (T-MANIFEST-
+// FOREST, fourth round, adversarial-review finding) is reserved for the same
+// reason as `anchor`: it is the non-lossy identity recoverOpenSegment matches
+// on and is part of the signed byte range on a v2 entry — a caller-supplied
+// `branch` would silently overwrite the writer's own `currentBranch()` value
+// and get authenticated as if genuine, letting a payload from branch A sign
+// itself as belonging to branch B.
+const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor', 'branch'];
 
 /**
  * Atomically append an arbitrary top-level evidence entry to the C11 manifest.

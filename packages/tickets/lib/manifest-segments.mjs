@@ -281,31 +281,42 @@ export function readForestEntries(dir) {
  * candidate — a READ must fail closed rather than guess; callers should let
  * that propagate as a real failure, never swallow it into "no evidence".
  *
- * Every production consumer now opts in (T-MANIFEST-FOREST, fourth round —
- * closes the ticket's original AC1/AC2, superseding the third round's
- * "nobody opts in" conclusion below). The THIRD round correctly found that
- * the OLD recoverOpenSegment matched on the derived filename slug — a LOSSY,
- * CALLER-CONTROLLED identity (`deriveSlug` lowercases, collapses, and
- * truncates, and nothing stops a branch from deriving the same slug as an
- * unrelated committed segment's). That made recovery unsafe for EVERY
- * consumer, informational or signing: doctor's "authenticated" field and
- * push's published GitHub labels are trust assertions, not harmless local
- * displays, and reassignment/carry-forward mint FRESH SIGNED entries from
- * what they read. recoverOpenSegment's identity now matches the EXACT
- * `branch` field every segment's first entry carries (spec §4.4) instead —
- * non-lossy, and part of the entry's own signed content once a key is
- * configured, so a caller cannot manufacture a colliding claim without the
- * signing key. Every consumer that mints a FRESH signature from recovered
- * content still independently verifies the SPECIFIC entries it trusts
- * (entrySigValid/verifyEntrySig) before doing so — this function only
- * answers "which segment FILE is mine", never "is its content trustworthy".
+ * `key` gates recovery's TRUST, not just its identity match (adversarial-
+ * review finding, T-MANIFEST-FOREST fourth round, round 2): matching on the
+ * exact `branch` field only proves a segment CLAIMS to belong to this branch
+ * — that claim is only as trustworthy as its signature. Some consumers of
+ * this function (reassignment, carry-forward) already independently verify
+ * the SPECIFIC entries they mint a fresh signature from before trusting them
+ * — but push.mjs does not (it renders a display status straight from what
+ * this returns), so an unsigned, exact-branch-claiming forged segment could
+ * publish a fabricated P5 pass. Recovered entries are therefore filtered to
+ * only those passing `entrySigValid(key, entry)` when `key` is non-null;
+ * when `key` is null, nothing can be verified, so recovery is disabled
+ * entirely and this degrades to the strict, token-only default — the same
+ * "cannot verify, cannot trust" boundary `doctor.mjs`'s
+ * `authenticated: key !== null` already expresses elsewhere. Every
+ * production consumer now opts in (closes the ticket's original AC1/AC2,
+ * superseding the third round's "nobody opts in" conclusion). The THIRD
+ * round correctly found that the OLD recoverOpenSegment matched on the
+ * derived filename slug — a LOSSY, CALLER-CONTROLLED identity (`deriveSlug`
+ * lowercases, collapses, and truncates, and nothing stops a branch from
+ * deriving the same slug as an unrelated committed segment's) — which made
+ * recovery unsafe for every consumer, informational or signing. Matching on
+ * the exact `branch` field instead (spec §4.4) closes the CROSS-BRANCH
+ * collision risk; the signature filter here closes the remaining FORGERY
+ * risk (an unsigned segment can still claim any branch it likes by name).
  */
-export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false } = {}) {
+export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, key = null } = {}) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
   if (!isSegmentedRepo(dir)) return [root];
-  const peeked = allowRecovery ? recoverOpenSegment(dir, { cwd }) : peekOpenSegment(dir, { cwd });
-  if (!peeked) return [root];
-  return [root, parseLines(readRawLines(segmentPath(dir, peeked.name)))];
+  const peeked = peekOpenSegment(dir, { cwd });
+  if (peeked) return [root, parseLines(readRawLines(segmentPath(dir, peeked.name)))];
+  if (!allowRecovery || key === null) return [root];
+  const recovered = recoverOpenSegment(dir, { cwd });
+  if (!recovered) return [root];
+  const entries = parseLines(readRawLines(segmentPath(dir, recovered.name)))
+    .filter((entry) => entrySigValid(key, entry));
+  return [root, entries];
 }
 
 // SECURITY: `.store.json` is repository-TRACKED, so a malicious branch can

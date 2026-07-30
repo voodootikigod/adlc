@@ -241,17 +241,20 @@ test('migrateManifestEvidence routes to the segment writer once segmented — ro
 // evidence across a lost `.lineage` token (recoverOpenSegment matches on the
 // EXACT `branch` field every segment's first entry carries, not the lossy
 // filename slug — see recoverOpenSegment's own doc), so this no longer
-// strands T7's real evidence under the abandoned old id.
+// strands T7's real evidence under the abandoned old id. A key is required
+// (recovery filters to only signature-verified entries — see readOwnChains's
+// own doc; an unsigned source is never trusted regardless of identity match).
 test('migrateManifestEvidence recovers real evidence across a lost .lineage token (fresh-clone/branch-switch case) — never strands it', () => {
   const { root, dir } = gitRepo();
+  const KEY = 'reassign-recovery-key';
   try {
     activate(dir);
     recordTicketEvidence(root, {
       transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
-      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: KEY,
     });
     rmSync(lineagePath(dir), { force: true });
-    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null });
+    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: KEY });
     assert.equal(result.migrated, 1, 'a lost token must not hide real, committed evidence');
     assert.equal(result.entries[0].data.migratedFrom, 'T7');
   } finally { rmSync(root, { recursive: true, force: true }); }

@@ -214,7 +214,7 @@ export function resolveOpenSegment(dir: string, options?: { cwd?: string }): { n
 export function peekOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean } | null;
 export function recoverOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: false } | null;
 export function readForestEntries(dir: string): Record<string, unknown>[];
-export function readOwnChains(dir: string, options?: { cwd?: string; allowRecovery?: boolean }): Record<string, unknown>[][];
+export function readOwnChains(dir: string, options?: { cwd?: string; allowRecovery?: boolean; key?: string | null }): Record<string, unknown>[][];
 export function forestChainsIntact(dir: string, options?: { key?: string | null }): boolean;
 export function entrySigValid(key: string, entry: Record<string, unknown>): boolean;
 export function canonicalEntryBytes(entry: Record<string, unknown>): string;

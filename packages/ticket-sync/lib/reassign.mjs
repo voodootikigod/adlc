@@ -184,19 +184,21 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
     // an unrelated lineage's evidence into a validly-signed entry nobody with
     // the key actually approved for THIS ticket. recoverOpenSegment now
     // matches on the EXACT `branch` field every segment's first entry carries
-    // (spec §4.4) — non-lossy, and part of the signed content once a key is
-    // configured — so a caller cannot manufacture a colliding claim without
-    // the signing key; see readOwnChains's own doc. `planManifestMigration`
-    // below still only re-attests SPECIFIC entries whose own signature
-    // (entrySigValid) it independently trusts, so an unsigned/forged source
-    // in the recovered segment is never carried forward regardless.
+    // (spec §4.4) — non-lossy — but exact identity is not authenticity
+    // (adversarial-review finding, round 2): `key` is passed through so
+    // readOwnChains filters recovered entries to only signature-verified ones,
+    // and disables recovery entirely without a key (see readOwnChains's own
+    // doc). `planManifestMigration` below ALSO independently re-checks
+    // entrySigValid on every candidate it re-attests — belt-and-suspenders,
+    // not redundant: it is what protects reads that bypass this call
+    // entirely (root, or a token-matched non-recovered segment).
     //
     // A genuinely AMBIGUOUS recovery (two committed segments both declaring
     // this branch — e.g. a token lost mid-stream, then a second mint)
     // propagates as a real thrown error here rather than silently treating it
     // as "nothing to migrate" — proceeding with the ID rewrite anyway would
     // strand real evidence under the abandoned old id forever.
-    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd, allowRecovery: true }), oldId, newId, key);
+    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd, allowRecovery: true, key }), oldId, newId, key);
     if (sources.length === 0) return [];
 
     const resolved = resolveOpenSegment(adlcDir, { cwd });

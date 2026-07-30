@@ -3,11 +3,12 @@
 // and recordTicketEvidence's routing through it.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, renameSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sha256 } from '../lib/canonical.mjs';
 import { recordTicketEvidence } from '../lib/evidence.mjs';
 import {
   isSegmentedRepo, resolveOpenSegment, recoverOpenSegment, readForestEntries, segmentPath,
@@ -522,14 +523,62 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
     } finally { clean(root); }
   });
 
-  it('allowRecovery: true opts into the exact branch-field recovery scan', () => {
+  // `key` is required for recovery to trust anything it finds (adversarial-
+  // review finding, T-MANIFEST-FOREST fourth round): exact branch matching
+  // proves identity, not authenticity — an unsigned segment can still claim
+  // any branch by name. Without a key nothing can be signature-verified, so
+  // recovery is disabled entirely and this still falls back to root-only.
+  it('allowRecovery: true with NO key does not recover — cannot verify authenticity, so it does not trust identity alone', () => {
     const { root, dir } = gitRepo();
     try {
       activate(dir);
       recordTicketEvidence(root, baseEvidence());
       rmSync(lineagePath(dir), { force: true });
-      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true });
+      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: null });
+      assert.equal(chains.length, 1, 'no key means nothing can be verified — must not trust an unverifiable recovery');
+    } finally { clean(root); }
+  });
+
+  it('allowRecovery: true WITH a key opts into the exact branch-field recovery scan, trusting only signature-verified entries', () => {
+    const { root, dir } = gitRepo();
+    const KEY = 'recovery-trust-key';
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ key: KEY }));
+      rmSync(lineagePath(dir), { force: true });
+      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY });
       assert.equal(chains.length, 2, 'root + the recovered segment');
+      assert.equal(chains[1].length, 1, 'the real, signed entry must be recovered');
+    } finally { clean(root); }
+  });
+
+  // The exploit an unauthenticated recovery would enable (adversarial-review
+  // finding): a segment can be hand-planted with an EXACT branch match but no
+  // valid signature — identity claimed, authenticity absent. Recovery must
+  // refuse to trust it even though the branch field matches perfectly.
+  it('allowRecovery: true WITH a key never trusts an unsigned entry, even when its branch field matches exactly', () => {
+    const { root, dir } = gitRepo('feat/forged-branch');
+    const KEY = 'recovery-trust-key';
+    try {
+      activate(dir);
+      // A real signed entry establishes the segment...
+      recordTicketEvidence(root, baseEvidence({ key: KEY }));
+      // ...then a SECOND, UNSIGNED entry is appended by hand, simulating an
+      // attacker with commit access who lacks the signing key.
+      const segDir = join(dir, 'manifest.d');
+      const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+      const segPath = join(segDir, segName);
+      const firstRaw = readFileSync(segPath, 'utf8').trim();
+      const forged = {
+        seq: 2, gate: 'prosecution', ts: new Date().toISOString(), ticket: 'A',
+        data: { verdict: 'clear' }, files: {}, prev: sha256(firstRaw),
+      };
+      writeFileSync(segPath, `${firstRaw}\n${JSON.stringify(forged)}\n`);
+      rmSync(lineagePath(dir), { force: true });
+
+      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY });
+      assert.equal(chains.length, 2);
+      assert.ok(!chains[1].some((e) => e.gate === 'prosecution'), 'the unsigned forged entry must never be trusted, regardless of its exact branch match');
     } finally { clean(root); }
   });
 });

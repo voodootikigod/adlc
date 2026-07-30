@@ -123,6 +123,20 @@ different git ref by construction. Segments minted before this field existed
 simply never match `recoverOpenSegment`'s scan; they remain reachable only via
 a still-valid `.lineage` token.
 
+Exact identity is not authenticity: `recoverOpenSegment` itself (gate-manifest
+and tickets alike) only matches on the `branch` field's value and does not
+verify a signature — a caller must decide, from its OWN context, whether that
+matters. `@adlc/tickets`' `readOwnChains(dir, {allowRecovery: true, key})`
+does: when `key` is non-null, entries from a recovered (not token-matched)
+segment are filtered to only those passing `entrySigValid(key, entry)`, so an
+unsigned segment that merely claims the right branch cannot get its content
+trusted; when `key` is null, nothing can be verified, so recovery is disabled
+entirely and this falls back to root-only. Consumers that mint a FRESH
+signature from recovered content (reassignment, cross-model carry-forward)
+independently re-verify the specific entries they use regardless of this
+filter — belt-and-suspenders, since those paths do not all go through
+`readOwnChains`.
+
 ### 4.5 Cutover entry (root, last entry)
 
 Recorded by the ceremony as the final root entry, always signed:
