@@ -252,7 +252,11 @@ test('--json carries the resolved seats and the argv, not just the legacy plan',
   const byId = Object.fromEntries(json.quartermaster.seats.map((s) => [s.id, s]));
   assert.equal(byId.T900.channel, 'frontier');
   assert.equal(byId.T900.model, 'operator/frontier-model');
-  assert.deepEqual(byId.T900.argv.args, ['run', '-m', 'operator/frontier-model', '<prompt>']);
+  // `--format json` is load-bearing (T152): it is the only opencode mode that
+  // emits the step_finish token events the P4 usage parser reads. The dry-run
+  // argv must mirror the live argv exactly, or automation pre-checks a command
+  // the real dispatch does not run.
+  assert.deepEqual(byId.T900.argv.args, ['run', '--format', 'json', '-m', 'operator/frontier-model', '<prompt>']);
   assert.equal(byId.T901.channel, 'mid');
   assert.equal(byId.T901.model, 'zai/glm-5.2');
   // The legacy scheduler plan is still there — this is an addition, not a swap.

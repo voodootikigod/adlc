@@ -31,6 +31,15 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const fixture = (name) => readFileSync(join(FIXTURES, name), 'utf8');
 
 /**
+ * The plain-mode capture is stored JSON-escaped rather than raw: its bytes
+ * include ANSI escapes (U+001B), and the repo forbids raw control characters in
+ * tracked text files (issue #215, scripts/test/source-hygiene.test.mjs).
+ * Parsing restores the exact captured bytes, so the fixture is still a real
+ * capture — just spelled in a form the hygiene guard can accept.
+ */
+const plainCapture = () => JSON.parse(fixture('opencode-run-plain.json')).stdout;
+
+/**
  * A stub shaped exactly like production `spawnAsync`'s return: no `usage`, no
  * convenience fields. `rec` captures the argv so a test can prove the adapter
  * actually asked its harness for machine-readable output.
@@ -128,7 +137,7 @@ describe('P4 dispatch usage — the no-fabrication rule', () => {
   // which would book an unmeasured call as a measured free one, and never an
   // error, which would turn an unparseable transcript into a failed build.
   const UNPARSEABLE = {
-    'real plain-text output (no machine-readable mode)': () => fixture('opencode-run-plain.txt'),
+    'real plain-text output (no machine-readable mode)': plainCapture,
     'empty stdout': () => '',
     'truncated json': () => '{"type":"result","usage":{"input_tok',
     'valid json with no usage block': () => '{"type":"result","result":"ok"}',
@@ -156,7 +165,7 @@ describe('P4 dispatch usage — the no-fabrication rule', () => {
   });
 
   it('opencode: plain-text stdout falls back to the raw output rather than an empty transcript', async () => {
-    const plain = fixture('opencode-run-plain.txt');
+    const plain = plainCapture();
     const { result } = await dispatchWith('opencode', { stdout: plain });
     assert.equal(result.usageStatus, 'unreported');
     assert.equal(result.output, plain, 'no events parsed means keep everything the harness printed');

@@ -1,0 +1,4 @@
+{
+  "_comment": "Real captured stdout of `opencode run` WITHOUT --format json. Stored JSON-escaped, not raw: the bytes include ANSI escapes (U+001B), and the repo forbids raw control characters in tracked text files (issue #215, scripts/test/source-hygiene.test.mjs). JSON.parse restores the exact captured bytes.",
+  "stdout": "\u001b[0m\n> Sisyphus - ultraworker · glm-5.2\n\u001b[0m\nok\n"
+}
