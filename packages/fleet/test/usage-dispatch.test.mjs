@@ -316,3 +316,58 @@ describe('P4 recording seam — one carrier per DISPATCH, not per verdict', () =
     assert.deepEqual(usageEvidence({ exitCode: 0 }), { usageStatus: 'unreported' });
   });
 });
+
+describe('P4 dispatch usage — cache accounting is derived, never assumed', () => {
+  // Four real captures across two models all report cache 0/0, which is
+  // consistent with cache being counted INSIDE `input` and with it being
+  // counted outside. The parser therefore asks the payload which identity it
+  // satisfies rather than hard-coding one.
+  const step = (tokens) => JSON.stringify({ type: 'step_finish', part: { tokens } });
+
+  it('cache INSIDE input: outputTokens is the plain remainder', async () => {
+    // 10 + 2 + 3 == 15 == total, so cache is already accounted for in input.
+    const { result } = await dispatchWith('opencode', {
+      stdout: step({ total: 15, input: 10, output: 2, reasoning: 3, cache: { read: 4, write: 1 } }),
+    });
+    assert.equal(result.usageStatus, 'reported');
+    assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 5, cachedTokens: 5 });
+  });
+
+  it('cache OUTSIDE input: cache is not also booked as generated output', async () => {
+    // 10 + 2 + 3 + 150 == 165 == total. A plain `total - input` would report
+    // outputTokens 155 — folding all 150 cached tokens into generated output
+    // AND counting them again as cachedTokens, then pricing them at the output
+    // rate. The correct generated figure is 5.
+    const { result } = await dispatchWith('opencode', {
+      stdout: step({ total: 165, input: 10, output: 2, reasoning: 3, cache: { read: 100, write: 50 } }),
+    });
+    assert.equal(result.usageStatus, 'reported');
+    assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 5, cachedTokens: 150 });
+    assert.notEqual(result.usage.outputTokens, 155, 'the double-count must not reappear');
+  });
+
+  it('an accounting matching NEITHER identity is unreported, not mis-booked', async () => {
+    const { result } = await dispatchWith('opencode', {
+      stdout: step({ total: 999, input: 10, output: 2, reasoning: 3, cache: { read: 1, write: 1 } }),
+    });
+    assert.equal(result.usageStatus, 'unreported');
+    assert.equal('usage' in result, false);
+  });
+
+  it('a partial token block is unreported, never assembled from zeros', async () => {
+    // Defaulting missing counters to 0 would certify `tokens: {}` as a measured
+    // FREE call — collapsing unknown into free, the exact no-fabrication failure.
+    for (const tokens of [{}, { total: 15, input: 10 }, { total: 15, input: 10, output: 2, reasoning: 3 }, { total: 15, input: 10, output: 2, reasoning: 3, cache: { read: 1 } }]) {
+      const { result } = await dispatchWith('opencode', { stdout: step(tokens) });
+      assert.equal(result.usageStatus, 'unreported', `partial block ${JSON.stringify(tokens)} must not report`);
+      assert.equal('usage' in result, false);
+    }
+  });
+
+  it('the real captures still parse — the stricter rule did not break them', async () => {
+    for (const name of ['opencode-run-json.jsonl', 'opencode-run-json-reasoning.jsonl']) {
+      const { result } = await dispatchWith('opencode', { stdout: fixture(name) });
+      assert.equal(result.usageStatus, 'reported', `${name} must still parse`);
+    }
+  });
+});

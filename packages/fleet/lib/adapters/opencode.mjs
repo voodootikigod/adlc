@@ -5,7 +5,7 @@
 // installed `opencode` version. Overridable via `command`/`args`.
 
 import { defaultExec, mapResult, modelArgs } from './_shared.mjs';
-import { UNREPORTED, jsonLines, normalizeUsage, reported } from './usage.mjs';
+import { UNREPORTED, isCount, jsonLines, normalizeUsage, reported } from './usage.mjs';
 
 export const name = 'opencode';
 export const pool = 'default';
@@ -60,35 +60,59 @@ export function parseUsage(output) {
     if (evt.type !== 'step_finish') continue;
     const tokens = evt.part?.tokens;
     if (tokens === null || typeof tokens !== 'object') continue;
+    // EVERY field must be present and clean before it is accumulated. Defaulting
+    // a missing counter to 0 would let a partial or version-skewed payload
+    // assemble into a complete-looking triple that normalizeUsage cannot reject
+    // — certifying an empty `tokens: {}` as a measured FREE call. A payload we
+    // do not fully understand is unreported, not zero (adversarial-review).
+    const parts = [tokens.input, tokens.total, tokens.output, tokens.reasoning, tokens.cache?.read, tokens.cache?.write];
+    if (!parts.every(isCount)) return UNREPORTED;
     sawCarrier = true;
-    input += tokens.input ?? 0;
-    total += tokens.total ?? 0;
-    outputRaw += tokens.output ?? 0;
-    reasoning += tokens.reasoning ?? 0;
-    cacheRead += tokens.cache?.read ?? 0;
-    cacheWrite += tokens.cache?.write ?? 0;
+    input += tokens.input;
+    total += tokens.total;
+    outputRaw += tokens.output;
+    reasoning += tokens.reasoning;
+    cacheRead += tokens.cache.read;
+    cacheWrite += tokens.cache.write;
   }
 
   if (!sawCarrier) return UNREPORTED;
 
-  // outputTokens is `total - input`, NOT `output`. Measured against the real
-  // CLI, reasoning tokens are ADDITIVE rather than a subset of output:
-  //   kimi-k3: input 61669 + output 16 = 61685, but total = 61732 = 61685 + 47
-  // so mapping outputTokens <- output silently DROPS billed reasoning tokens
-  // and makes a reasoning-heavy phase look cheaper than it was. Deriving from
-  // the harness's own total is also robust to opencode adding a fourth token
-  // category later, since it never trusts the component split.
+  // outputTokens is a REMAINDER off the harness's own total, not `output`.
+  // Measured against the real CLI, reasoning is ADDITIVE rather than a subset:
+  //   kimi-k3: input 62779 + output 42 = 62821, but total = 62845 = 62821 + 24
+  // so mapping outputTokens <- output silently DROPS billed reasoning and makes
+  // a reasoning-heavy phase look cheaper than it was. Folding it in is what
+  // every existing mapping already does — OpenAI's completion_tokens and
+  // Anthropic's output_tokens both include it. A dedicated reasoningTokens
+  // counter is a real improvement, but it changes spend.mjs, this ticket's
+  // declared rail, so it belongs to #408.
   //
-  // Folding reasoning into outputTokens is correct, not a workaround: spend's
-  // diagnostics() works purely in phase shares of (input + output), and every
-  // existing mapping already folds it the same way — OpenAI's
-  // completion_tokens and Anthropic's output_tokens both include it. A
-  // dedicated reasoningTokens counter is a real improvement, but it changes
-  // spend.mjs, which is this ticket's declared rail — it belongs to #408.
+  // WHICH remainder depends on whether opencode counts cache INSIDE `input`,
+  // and that could NOT be settled empirically: four real captures across two
+  // models all report cache read/write of 0, which is consistent with BOTH
+  // accountings. Guessing is not safe in either direction — if cache sits
+  // outside `input`, a plain `total - input` folds every cached token into
+  // outputTokens AND counts it again as cachedTokens, inflating output and
+  // pricing cache at the output rate. So the payload is asked which identity
+  // IT satisfies:
+  //
+  //   input + output + reasoning          == total  -> cache is inside input
+  //   input + output + reasoning + cache  == total  -> cache is outside input
+  //
+  // Both yield the same generated-token figure, so the ledger is correct under
+  // either. A payload satisfying NEITHER is an accounting we do not understand,
+  // and is unreported rather than silently mis-booked (adversarial-review).
+  const cached = cacheRead + cacheWrite;
+  const generated = outputRaw + reasoning;
+  const cacheInsideInput = input + generated === total;
+  const cacheOutsideInput = input + generated + cached === total;
+  if (!cacheInsideInput && !cacheOutsideInput) return UNREPORTED;
+
   const usage = normalizeUsage({
     inputTokens: input,
-    outputTokens: total - input,
-    cachedTokens: cacheRead + cacheWrite,
+    outputTokens: cacheInsideInput ? total - input : total - input - cached,
+    cachedTokens: cached,
   });
   if (usage === null) return UNREPORTED;
 

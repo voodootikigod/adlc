@@ -295,7 +295,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           // repeating across strikes can never reach the repeated-error signal.
           const output = `${res.output}\ncommit failed: ${e.message}`;
           write(`commit failed: ${e.message}\n`);
-          return { exitCode: 1, output, timedOut: false };
+          // SPREAD `res`, do not rebuild it: the model call already happened and
+          // its usage was already parsed. Returning a fresh three-field object
+          // dropped usage/usageStatus/usageRaw, so a worker that succeeded but
+          // produced nothing committable — a routine outcome — had its real
+          // spend recorded as 'unreported' (adversarial-review).
+          return { ...res, exitCode: 1, output, timedOut: false };
         }
       }
       return { ...res, blocked: /TICKET-BLOCKED/.test(res.output) };

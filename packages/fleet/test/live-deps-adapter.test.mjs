@@ -305,3 +305,39 @@ test('registryDigest is omitted, never fabricated, when the seat has none', () =
   const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
   assert.equal('registryDigest' in JSON.parse(call[call.indexOf('--data') + 1]), false);
 });
+
+test('a commit failure after a successful call PRESERVES the parsed usage', async () => {
+  // The model call already happened and its usage was already parsed. Rebuilding
+  // the result as a fresh three-field object dropped usage/usageStatus/usageRaw,
+  // so a worker that succeeded but produced nothing committable — a routine
+  // outcome — had its real spend recorded as 'unreported'.
+  const rec = [];
+  const io = fakeIo(rec, env);
+  io.spawnWorker = async (cmd, args, opts) => {
+    rec.push({ cmd, args, env: opts?.env });
+    // A real captured payload on stdout, so usage is genuinely parsed.
+    return { status: 0, stdout: '{"type":"result","result":"ok","usage":{"input_tokens":10,"output_tokens":54,"cache_read_input_tokens":5,"cache_creation_input_tokens":5}}', stderr: '' };
+  };
+  // The routine way to reach this path: the worker succeeded but produced
+  // nothing committable, so the commit errors.
+  io.git = () => (...args) => {
+    if (args[0] === 'commit') throw new Error('nothing to commit, working tree clean');
+    if (args[0] === 'rev-parse') return 'SHA';
+    return '';
+  };
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'claude-code', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    io,
+  });
+
+  const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+
+  // The commit fails in this stubbed world (no real git), which is the path
+  // under test: the dispatch reports failure but MUST keep its telemetry.
+  assert.equal(res.exitCode, 1, 'precondition: this run took the commit-failure path');
+  assert.equal(res.usageStatus, 'reported', 'the call happened, so its spend must survive the orchestration failure');
+  assert.equal(res.usage.inputTokens, 10);
+  assert.equal(res.usage.outputTokens, 54);
+});
