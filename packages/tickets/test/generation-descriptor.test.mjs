@@ -415,3 +415,32 @@ test('a genuinely real manifest.jsonl leaf file (regular file, no symlink anywhe
   writeFileSync(manifestPath, '{"seq":1}\n');
   assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, manifestPath));
 });
+
+// ── containment: targetPath must actually be INSIDE dir ─────────────────────────────
+
+test('a SIBLING path (outside dir entirely) is rejected, not walked and certified safe', () => {
+  const { root, dir } = makeAdlcDir();
+  const sibling = join(root, 'CONTRIBUTING.md');
+  writeFileSync(sibling, 'not part of .adlc');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, sibling), /not inside/);
+});
+
+test('an ANCESTOR path (dir\'s own parent) is rejected', () => {
+  const { root, dir } = makeAdlcDir();
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, root), /not inside/);
+});
+
+test('a path escaping via .. components (e.g. .adlc/../../etc) is rejected even if every real component exists', () => {
+  const { root, dir } = makeAdlcDir();
+  const outside = join(root, 'outside-file.txt');
+  writeFileSync(outside, 'data');
+  const escaping = join(dir, '..', 'outside-file.txt');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, escaping), /not inside/);
+});
+
+test('a genuine descendant path is unaffected by the containment check', () => {
+  const { dir } = makeAdlcDir();
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  mkdirSync(generationDir, { recursive: true });
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir, { mustExist: false }));
+});

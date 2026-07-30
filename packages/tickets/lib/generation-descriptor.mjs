@@ -20,7 +20,7 @@
 // it is joined directly into a filesystem path.
 
 import { lstatSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative, sep, isAbsolute } from 'node:path';
 import { invalid } from './errors.mjs';
 
 export const ADOPTION_RECORD_KEY = 'signing';
@@ -113,13 +113,20 @@ export function resolveGenerationDir(dir, generation) {
  *   (generationDir, manifestPath, or segmentDirPath) — the EXACT path about to be used
  * @param {{mustExist?: boolean}} [options]  mustExist: whether a not-yet-created
  *   component fails closed (true) or is tolerated as "nothing to redirect through yet"
- *   (false). DEFAULTS TO TRUE: the common case is verifying an ALREADY-ACTIVE
- *   generation an adoption record names, which must genuinely exist — a missing active
- *   generation silently passing would let a partial checkout, failed recovery, or
- *   tampering look like a valid empty forest to code that treats "no error" as "safe to
- *   read" and a missing file as "empty". Only an off-path TRANSITION BUILDER
- *   constructing a brand-new, not-yet-published generation should opt into
- *   `mustExist: false` explicitly.
+ *   (false). DEFAULTS TO TRUE. This is a per-CALL decision, not one true answer for the
+ *   whole module — the three paths resolveActiveGenerationPaths returns have DIFFERENT
+ *   existence expectations even in a fully-adopted, active generation:
+ *     - generationDir: should exist once adopted/rotated — call with the default
+ *       (true) when verifying the ALREADY-ACTIVE generation an adoption record names; a
+ *       missing one means a partial checkout, failed recovery, or tampering, and
+ *       silently passing would let that look like a valid empty forest.
+ *     - manifestPath / segmentDirPath: MAY legitimately not exist yet even in an
+ *       adopted generation — a ledger file is typically created lazily on its first
+ *       append, so a brand-new or genuinely-empty generation has no manifest.jsonl on
+ *       disk at all. Callers reading/verifying these two should pass
+ *       `mustExist: false` explicitly (an absent leaf means "nothing written yet", not
+ *       "unsafe") — as should an off-path TRANSITION BUILDER constructing any
+ *       not-yet-published path.
  */
 export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = true } = {}) {
   const checkComponent = (current, isLast) => {
@@ -142,7 +149,18 @@ export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = t
   if (!checkComponent(dir, targetPath === dir)) return;
   if (targetPath === dir) return;
 
+  // `relative()` alone does not prove `targetPath` is actually a descendant of `dir` —
+  // for a sibling or ancestor path it returns a string starting with `..` (or, on
+  // Windows, an absolute path when the two are on different drives), and walking THAT
+  // would confine components OUTSIDE dir entirely, certifying them as safe. A caller
+  // passing a mismatched path (e.g. assembled independently rather than through
+  // resolveActiveGenerationPaths) must be refused here, not silently checked against
+  // the wrong tree.
   const rel = relative(dir, targetPath);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw invalid('GENERATION_DIR_UNSAFE', `${targetPath} is not inside ${dir}`);
+  }
+
   const parts = rel.split(sep);
   let current = dir;
   for (let i = 0; i < parts.length; i += 1) {
