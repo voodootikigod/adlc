@@ -38,6 +38,21 @@ export function lineagePath(dir) {
 // malicious branch from committing a file at an ignored path either.
 const MAX_LOCAL_JSON_BYTES = 4096;
 function readBoundedJsonNoFollow(path) {
+  // lstatSync FIRST, not just O_NOFOLLOW on the open (cross-platform finding):
+  // O_NOFOLLOW's enforcement is not portable — it is not reliably honored by
+  // Node's fs layer on Windows, where symlinks are reparse points handled
+  // differently than POSIX symlinks, so an open() alone silently followed a
+  // symlinked marker there. lstatSync + isSymbolicLink() is a portable,
+  // OS-independent check; O_NOFOLLOW stays too for its atomicity on
+  // platforms that do honor it (belt-and-suspenders, matching this file's
+  // own write-side isSymlinkOrOtherNonRegular check).
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return null; // missing — treat as absent
+  }
+  if (!st.isFile()) return null; // a symlink, directory, or other non-regular object — never followed
   let fd;
   try {
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);

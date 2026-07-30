@@ -289,6 +289,20 @@ export function readOwnChains(dir, { cwd = dirname(dir) } = {}) {
 // bytes) closes both the symlink-follow and unbounded-read paths. Mirrors
 // gate-manifest/lib/lineage.mjs's readBoundedJsonNoFollow exactly.
 function readBoundedJsonNoFollow(path) {
+  // lstatSync FIRST, not just O_NOFOLLOW on the open (cross-platform finding,
+  // mirrors @adlc/gate-manifest/lib/lineage.mjs's identical fix): O_NOFOLLOW's
+  // enforcement is not portable — Windows CI showed a symlinked marker was
+  // silently followed, since O_NOFOLLOW is not reliably honored there (Windows
+  // symlinks are reparse points, handled differently than POSIX symlinks by
+  // Node's fs layer). lstatSync + isFile() is a portable, OS-independent
+  // check; O_NOFOLLOW stays for its atomicity where it IS honored.
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return null;
+  }
+  if (!st.isFile()) return null; // a symlink, directory, or other non-regular object — never followed
   let fd;
   try {
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);

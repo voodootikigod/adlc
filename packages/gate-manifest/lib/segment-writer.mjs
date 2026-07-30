@@ -34,26 +34,33 @@ export function appendToSegment(payload, dir, { signatureVersion, cwd }) {
   // ever write to it directly, not only writers that go through
   // resolveOpenSegment.
   //
-  // The chain-integrity check (verify()) MUST run INSIDE this lock, not
-  // before it (a second adversarial-review finding on the first version of
-  // this fix): openSync(path, 'a') creates a segment's file the instant a
-  // writer starts publishing its FIRST line, before that line is actually
-  // written — a transient, genuinely-empty segment on disk. A second writer
-  // whose verify() ran OUTSIDE the lock could observe exactly that instant,
-  // see an anchorless empty segment, and fail the whole forest instead of
-  // simply blocking on the lock like it should. Checking only after the
-  // lock is held means a queued writer only ever observes a FINISHED
-  // publish, never a transient one.
-  return withLedgerLock(lineagePath(dir), () => {
-    const integrity = verify(dir, { requireSignatures: false });
-    if (!integrity.valid) {
-      throw new Error(`manifest forest is invalid: ${integrity.message}`);
-    }
-    const resolved = resolveOpenSegment(dir, { cwd });
-    const targetPath = segmentPath(dir, resolved.name);
-    mkdirSync(segmentDirPath(dir), { recursive: true });
-    return withLedgerLock(targetPath, () => appendLockedEntry(payload, resolved, targetPath, signatureVersion));
-  });
+  // The callback is a NAMED function, not inline (mutation-gate operator
+  // limitation, #293): a mutation replacing this multi-line `return X` with
+  // `return null` left dangling braces behind and never parsed, so the
+  // segment-writer's own locking precondition had no mutation coverage at
+  // the default CI budget. A single-line return of a named function call
+  // mutates cleanly.
+  return withLedgerLock(lineagePath(dir), () => appendWithinLedgerLock(payload, dir, { signatureVersion, cwd }));
+}
+
+// The chain-integrity check (verify()) MUST run INSIDE the .lineage lock, not
+// before it (a second adversarial-review finding on the first version of this
+// fix): openSync(path, 'a') creates a segment's file the instant a writer
+// starts publishing its FIRST line, before that line is actually written — a
+// transient, genuinely-empty segment on disk. A second writer whose verify()
+// ran OUTSIDE the lock could observe exactly that instant, see an anchorless
+// empty segment, and fail the whole forest instead of simply blocking on the
+// lock like it should. Checking only after the lock is held means a queued
+// writer only ever observes a FINISHED publish, never a transient one.
+function appendWithinLedgerLock(payload, dir, { signatureVersion, cwd }) {
+  const integrity = verify(dir, { requireSignatures: false });
+  if (!integrity.valid) {
+    throw new Error(`manifest forest is invalid: ${integrity.message}`);
+  }
+  const resolved = resolveOpenSegment(dir, { cwd });
+  const targetPath = segmentPath(dir, resolved.name);
+  mkdirSync(segmentDirPath(dir), { recursive: true });
+  return withLedgerLock(targetPath, () => appendLockedEntry(payload, resolved, targetPath, signatureVersion));
 }
 
 function appendLockedEntry(payload, resolved, targetPath, signatureVersion) {
