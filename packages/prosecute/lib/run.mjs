@@ -225,9 +225,21 @@ function recordedUsageByCall(dir) {
   return recorded;
 }
 
-/** Do two usage blocks report the same spend? Compared on the counters only. */
+/**
+ * Do two usage blocks describe the SAME call — counters AND provenance?
+ *
+ * Provenance is compared, not just the counters (adversarial-review). `model`
+ * is what pricing multiplies the counters by, so "same tokens, different model"
+ * is a genuinely different charge, not an idempotent replay. Treating it as a
+ * replay silently retained the FIRST label, which both blocks a correction of a
+ * mislabeled record and can suppress a real second call made after a model
+ * change. Presence is significant too: gaining or losing a label is a change.
+ */
 function sameUsage(a, b) {
-  return ['inputTokens', 'outputTokens', 'cachedTokens'].every((k) => (a?.[k] ?? 0) === (b?.[k] ?? 0));
+  const counters = ['inputTokens', 'outputTokens', 'cachedTokens'];
+  const labels = ['provider', 'model', 'tier'];
+  return counters.every((k) => (a?.[k] ?? 0) === (b?.[k] ?? 0))
+    && labels.every((k) => (a?.[k] ?? null) === (b?.[k] ?? null));
 }
 
 /**

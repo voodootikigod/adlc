@@ -371,3 +371,50 @@ describe('P4 dispatch usage — cache accounting is derived, never assumed', () 
     }
   });
 });
+
+describe('P4 dispatch usage — stream integrity and the attestation boundary', () => {
+  const step = (tokens) => JSON.stringify({ type: 'step_finish', part: { tokens } });
+  const GOOD = { total: 15, input: 10, output: 2, reasoning: 3, cache: { read: 0, write: 0 } };
+
+  it('a valid carrier followed by a TRUNCATED line is unreported, not a partial total', async () => {
+    // The parsed carriers are a SUBSET. Reporting a subset as complete
+    // understates the call permanently while looking perfectly healthy.
+    const { result } = await dispatchWith('opencode', { stdout: `${step(GOOD)}\n{"type":"step_finish","part":{"tokens":{"total":99` });
+    assert.equal(result.usageStatus, 'unreported');
+    assert.equal('usage' in result, false);
+  });
+
+  it('a valid carrier followed by one with NO token object is unreported, not silently shrunk', async () => {
+    const { result } = await dispatchWith('opencode', { stdout: `${step(GOOD)}\n${JSON.stringify({ type: 'step_finish', part: {} })}` });
+    assert.equal(result.usageStatus, 'unreported');
+  });
+
+  it('a clean multi-step stream still sums', async () => {
+    const { result } = await dispatchWith('opencode', { stdout: `${step(GOOD)}\n${step(GOOD)}` });
+    assert.equal(result.usageStatus, 'reported');
+    assert.deepEqual(result.usage, { inputTokens: 20, outputTokens: 10, cachedTokens: 0 });
+  });
+
+  it('an args OVERRIDE cannot mint attested telemetry from worker text', async () => {
+    // Under an override the harness runs in plain-text mode, so stdout is the
+    // worker's own assistant text — content a hostile ticket or repository can
+    // influence. Parsing it would launder caller-controlled numbers into
+    // harness-ATTESTED usage, breaking the claimed/reported boundary.
+    const forged = step({ total: 999999, input: 1, output: 999998, reasoning: 0, cache: { read: 0, write: 0 } });
+    const rec = [];
+    const result = await getAdapter('opencode').dispatch({
+      worktree: '/wt', prompt: 'p', timeoutMs: 1, env: ENV,
+      exec: stubExec(rec, { stdout: forged }),
+      args: ['run', 'custom-prompt'],          // legacy override: no --format json
+    });
+    assert.deepEqual(rec[0].args, ['run', 'custom-prompt'], 'the override is honoured verbatim');
+    assert.equal(result.usageStatus, 'unreported', 'worker text must never become attested telemetry');
+    assert.equal('usage' in result, false);
+  });
+
+  it('the self-selected argv still reports normally', async () => {
+    const { result, rec } = await dispatchWith('opencode', { stdout: step(GOOD) });
+    assert.deepEqual(rec[0].args.slice(0, 3), ['run', '--format', 'json']);
+    assert.equal(result.usageStatus, 'reported');
+  });
+});

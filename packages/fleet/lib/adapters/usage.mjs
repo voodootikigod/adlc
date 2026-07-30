@@ -83,15 +83,24 @@ export function usageEvidence(result) {
  * not JSON is not an error — it is not an event. Returns only the objects.
  */
 export function jsonLines(text) {
-  if (typeof text !== 'string') return [];
-  const out = [];
+  if (typeof text !== 'string') return { events: [], malformed: false };
+  const events = [];
+  let malformed = false;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
-    if (trimmed === '' || (trimmed[0] !== '{' && trimmed[0] !== '[')) continue;
+    if (trimmed === '') continue;
+    if (trimmed[0] !== '{' && trimmed[0] !== '[') continue;
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed !== null && typeof parsed === 'object') out.push(parsed);
-    } catch { /* not an event line */ }
+      if (parsed !== null && typeof parsed === 'object') events.push(parsed);
+      else malformed = true;
+    } catch {
+      // A line that OPENS like JSON but does not parse is a truncation signal,
+      // not noise: this reads the harness's STDOUT, which in machine-readable
+      // mode is pure JSONL. Silently dropping it turned a pipe that died
+      // mid-stream into a confident partial total (adversarial-review).
+      malformed = true;
+    }
   }
-  return out;
+  return { events, malformed };
 }

@@ -462,3 +462,49 @@ describe('P5 packet usage — identity and diagnostics', () => {
     }
   });
 });
+
+describe('P5 packet usage — a replay must match provenance, not just counters', () => {
+  it('same counters but a DIFFERENT model is a conflict, not an idempotent replay', () => {
+    // `model` is what pricing multiplies the counters by, so same-tokens-
+    // different-model is a genuinely different charge. Accepting it as a replay
+    // silently retained the FIRST label — blocking correction of a mislabeled
+    // record and suppressing a real second call after a model change.
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: { ...USAGE, model: 'anthropic/claude-opus-5' } },
+        ...DRY_TAIL,
+      ])));
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.equal(verdict.status, 'op-error', 'contradictory provenance must be refused');
+      assert.match((verdict.errors ?? []).join('\n'), /call-1/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a genuinely identical replay — counters AND provenance — is still idempotent', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+      assert.equal(aggregateSpend(entriesFor(dir)).total.calls, 1, 'the stricter comparison must not break real idempotency');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+});

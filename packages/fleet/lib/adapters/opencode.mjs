@@ -56,10 +56,19 @@ export function parseUsage(output) {
   let outputRaw = 0;
   let reasoning = 0;
 
-  for (const evt of jsonLines(output)) {
+  const { events, malformed } = jsonLines(output);
+  // A truncated or partly-unparseable stream cannot be summed honestly: the
+  // carriers we DID parse are a subset, and reporting a subset as complete
+  // understates the call permanently while looking perfectly healthy.
+  if (malformed) return UNREPORTED;
+
+  for (const evt of events) {
     if (evt.type !== 'step_finish') continue;
     const tokens = evt.part?.tokens;
-    if (tokens === null || typeof tokens !== 'object') continue;
+    // A carrier with NO usable token object is fatal, not skippable — skipping
+    // it silently drops that step's spend from the sum (a newer CLI emitting a
+    // carrier we don't understand must downgrade the whole call, not shrink it).
+    if (tokens === null || typeof tokens !== 'object') return UNREPORTED;
     // EVERY field must be present and clean before it is accumulated. Defaulting
     // a missing counter to 0 would let a partial or version-skewed payload
     // assemble into a complete-looking triple that normalizeUsage cannot reject
@@ -138,7 +147,7 @@ export function parseUsage(output) {
  */
 export function parseText(output) {
   const parts = [];
-  for (const evt of jsonLines(output)) {
+  for (const evt of jsonLines(output).events) {
     if (evt.type === 'text' && typeof evt.part?.text === 'string') parts.push(evt.part.text);
   }
   return parts.length > 0 ? parts.join('') : null;
@@ -147,11 +156,23 @@ export function parseText(output) {
 export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command = 'opencode', args, model }) {
   // Ask for machine-readable events so usage is observable at all. Added only
   // to the DEFAULT argv: an explicit `args` override is the caller's contract,
-  // and silently appending a format flag could contradict it. Such a run simply
-  // parses as unreported, which is the honest answer.
+  // and silently appending a format flag could contradict it.
+  //
+  // TRUST BOUNDARY (adversarial-review, injection): usage is parsed ONLY when
+  // this adapter chose the argv itself. Under an `args` override the harness is
+  // in plain-text mode, so stdout is the worker's own assistant text — content
+  // a hostile ticket or repository can influence. Parsing it anyway let crafted
+  // `step_finish` lines in that text be recorded as usageStatus 'reported',
+  // i.e. caller-controlled numbers laundered into harness-ATTESTED telemetry.
+  // That is precisely the claimed/reported boundary this ticket exists to hold.
+  // (An earlier comment here asserted an override "simply parses as
+  // unreported"; the code did not do that. It does now.)
+  const selfSelected = args === undefined;
   const argv = args ?? ['run', '--format', 'json', ...modelArgs('-m', model), prompt];
   const res = await exec(command, argv, { cwd: worktree, env, timeout: timeoutMs });
   const mapped = mapResult(res);
+  if (!selfSelected) return { ...mapped, ...UNREPORTED };
+
   const stdout = `${res.stdout ?? ''}`;
   const text = parseText(stdout);
   return {
