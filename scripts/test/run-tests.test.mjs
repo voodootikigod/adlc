@@ -103,3 +103,35 @@ test('an unknown segment filter is an OPERATIONAL error: exit 1, never the gate-
   assert.equal(status, 1);
   assert.match(stderr, /no test segment matches/);
 });
+
+test('win32: differently-cased spellings are scrubbed too (env names are case-insensitive there)', () => {
+  const { env, scrubbed } = buildSegmentEnv(
+    { adlc_manifest_key: 'k', Rails_Base: 'b', BASE_REF: 'main', HOME: '/h' },
+    { platform: 'win32' },
+  );
+  assert.equal(Object.hasOwn(env, 'adlc_manifest_key'), false);
+  assert.equal(Object.hasOwn(env, 'Rails_Base'), false);
+  assert.equal(Object.hasOwn(env, 'BASE_REF'), false);
+  assert.deepEqual([...scrubbed].sort(), ['ADLC_MANIFEST_KEY', 'BASE_REF', 'RAILS_BASE'], 'reported names are canonical');
+  assert.equal(env.HOME, '/h');
+});
+
+test('posix: a differently-cased spelling is a DIFFERENT variable and is preserved', () => {
+  const { env, scrubbed } = buildSegmentEnv(
+    { adlc_manifest_key: 'unrelated', ADLC_MANIFEST_KEY: 'k' },
+    { platform: 'linux' },
+  );
+  assert.equal(env.adlc_manifest_key, 'unrelated', 'lowercase variant is untouched on POSIX');
+  assert.equal(Object.hasOwn(env, 'ADLC_MANIFEST_KEY'), false);
+  assert.deepEqual(scrubbed, ['ADLC_MANIFEST_KEY']);
+});
+
+test("win32: an explicitly-empty canonical value still blocks scrubbing of ITSELF but a non-empty variant is removed", () => {
+  const { env, scrubbed } = buildSegmentEnv(
+    { ADLC_MANIFEST_KEY: '', adlc_manifest_key: 'k' },
+    { platform: 'win32' },
+  );
+  assert.equal(env.ADLC_MANIFEST_KEY, '', "explicit '' preserved");
+  assert.equal(Object.hasOwn(env, 'adlc_manifest_key'), false, 'the non-empty variant is scrubbed');
+  assert.deepEqual(scrubbed, ['ADLC_MANIFEST_KEY']);
+});

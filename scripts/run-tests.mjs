@@ -50,17 +50,30 @@ export const SCRUBBED_ENV_VARS = ['ADLC_MANIFEST_KEY', 'RAILS_BASE', 'BASE_REF']
  * @param {NodeJS.ProcessEnv} [baseEnv]
  * @returns {{env: NodeJS.ProcessEnv, scrubbed: string[]}} scrubbed lists what was deleted
  */
-export function buildSegmentEnv(baseEnv = process.env) {
+export function buildSegmentEnv(baseEnv = process.env, { platform = process.platform } = {}) {
   const env = {
     ...baseEnv,
     PATH: `${join(REPO_ROOT, 'node_modules', '.bin')}${delimiter}${baseEnv.PATH ?? ''}`,
   };
   const scrubbed = [];
+  // Windows environment names are case-insensitive: a child process resolves
+  // `adlc_manifest_key` as ADLC_MANIFEST_KEY, so an uppercase-only check would let a
+  // mixed-case export defeat the scrub there. On POSIX, casing is significant and a
+  // lowercase variant is a DIFFERENT variable nothing reads — scrubbing it would be
+  // overreach — so the fold applies on win32 only. Reported names are canonical.
+  const caseInsensitive = platform === 'win32';
   for (const name of SCRUBBED_ENV_VARS) {
-    if (Object.hasOwn(env, name) && env[name] !== '') {
-      delete env[name];
-      scrubbed.push(name);
+    const matches = caseInsensitive
+      ? Object.keys(env).filter((k) => k.toUpperCase() === name)
+      : (Object.hasOwn(env, name) ? [name] : []);
+    let removed = false;
+    for (const match of matches) {
+      if (env[match] !== '') {
+        delete env[match];
+        removed = true;
+      }
     }
+    if (removed) scrubbed.push(name);
   }
   return { env, scrubbed };
 }
