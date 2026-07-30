@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { withLedgerLock } from '@adlc/core';
 import {
   ACTIVE_DIRECTORY, DirectoryTicketStore, LEGACY_FILE, detectTicketStore, TicketService, ticketFilename,
-  acquireTicketLock, releaseTicketLock, isSegmentedRepo, resolveOpenSegment, peekOpenSegment, segmentPath,
+  acquireTicketLock, releaseTicketLock, isSegmentedRepo, peekOpenSegment, segmentPath,
 } from '@adlc/tickets';
 import { defaultGit } from './worktrees.mjs';
 
@@ -61,12 +61,25 @@ function resolveManifestArtifact(repo) {
   return { abs: null, rel: null, pending: true };
 }
 
-/** Re-resolve a `pending` artifact after the write that was supposed to mint it. */
+/**
+ * Re-resolve the artifact after the write. Always re-peeks (not just when
+ * `pending`) so this reflects where the write ACTUALLY landed, not merely a
+ * pre-write guess (adversarial-review finding): an external checkout switch
+ * between resolveManifestArtifact's peek and service.apply's real write can
+ * redirect the evidence into a DIFFERENT segment than the one already open —
+ * the write resolves against whatever branch is CURRENT at write time, same
+ * as any other manifest writer. When that happens, `raced: true` tells the
+ * caller the captured `priorManifest`/`afterManifest` belong to the WRONG
+ * file — it must not attempt a targeted restore against them.
+ */
 function resolveManifestArtifactAfterWrite(repo, artifact) {
-  if (!artifact.pending) return artifact;
   const dir = join(repo, '.adlc');
-  const resolved = resolveOpenSegment(dir, { cwd: repo }); // safe now: the file genuinely exists
-  return segmentArtifact(dir, resolved.name);
+  if (!isSegmentedRepo(dir)) return artifact; // root never moves
+  const peeked = peekOpenSegment(dir, { cwd: repo }); // safe now: the file genuinely exists
+  if (!peeked) return artifact; // unreachable in practice after a real write; keep the prior guess
+  const resolved = segmentArtifact(dir, peeked.name);
+  if (!artifact.pending && artifact.abs !== resolved.abs) return { ...resolved, raced: true };
+  return resolved;
 }
 
 /**
@@ -304,12 +317,22 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
       // Lock order is ticket → manifest here, matching the transaction layer, so this
       // cannot deadlock against a concurrent recorder.
       let ledgerDirty = false;
-      withLedgerLock(manifestAbs, () => {
-        const now = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
-        const stillOurTail = now !== null && afterManifest !== null && now.equals(afterManifest);
-        if (stillOurTail) restoreFile(manifestAbs, priorManifest);
-        else ledgerDirty = true;
-      });
+      if (artifact.raced) {
+        // The write landed in a DIFFERENT segment than the one priorManifest was
+        // captured for (a checkout-switch race, see resolveManifestArtifactAfterWrite)
+        // — priorManifest belongs to the wrong file, so a targeted restore here would
+        // corrupt whatever this segment actually contained. Never guess: flag dirty so
+        // the caller quarantines the branch instead of silently leaving false evidence
+        // behind under the pretense of a clean rollback.
+        ledgerDirty = true;
+      } else {
+        withLedgerLock(manifestAbs, () => {
+          const now = existsSync(manifestAbs) ? readFileSync(manifestAbs) : null;
+          const stillOurTail = now !== null && afterManifest !== null && now.equals(afterManifest);
+          if (stillOurTail) restoreFile(manifestAbs, priorManifest);
+          else ledgerDirty = true;
+        });
+      }
       try { git('reset', '-q', '--', storePath, artifact.rel); } catch { /* best-effort unstage */ }
       if (ledgerDirty) error.ledgerDirty = true;
       throw error;

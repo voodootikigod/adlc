@@ -401,6 +401,63 @@ test('a failed SECOND segmented completion (already-open segment) rolls back to 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Adversarial-review finding: an external checkout switch between resolveManifestArtifact's
+// peek (before the write) and TicketService.apply's real write (which resolves the CURRENT
+// branch independently) can redirect the evidence into a DIFFERENT segment than the one Fleet
+// captured priorManifest for. Simulated by repointing HEAD's symbolic ref (no working-tree
+// change) partway through the transaction, on the SECOND `rev-parse HEAD` call — the first
+// belongs to the entry assertOnBranch check, the second is preCompletionSha, right before
+// service.apply runs.
+function makeMidTransactionBranchSwitchGit(baseGit, root, switchToBranch) {
+  let revParseHeadCount = 0;
+  return (...args) => {
+    const result = baseGit(...args);
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+      revParseHeadCount += 1;
+      if (revParseHeadCount === 2) {
+        execFileSync('git', ['symbolic-ref', 'HEAD', `refs/heads/${switchToBranch}`], { cwd: root, stdio: 'ignore' });
+      }
+    }
+    return result;
+  };
+}
+
+test('a checkout switch mid-transaction is detected and quarantined, never silently mis-restored (T-MANIFEST-FOREST)', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+    // Open integration's own segment first (the peeked, already-open case).
+    completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    const integrationSegFile = openSegmentFile(root);
+    const integrationSegBytesBefore = readFileSync(integrationSegFile);
+
+    const service = new TicketService(detectTicketStore({ root }), { root });
+    service.apply(service.planCreate({ id: 'T2', title: 'second' }));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'author T2');
+    git('branch', 'other-branch');
+
+    const racingGit = makeMidTransactionBranchSwitchGit(git, root, 'other-branch');
+    let caught;
+    try {
+      completeTicketOnIntegration({ repo: root, ticketId: 'T2', integrationBranch, git: racingGit });
+      assert.fail('expected the race to be detected and thrown');
+    } catch (error) { caught = error; }
+
+    assert.equal(caught.ledgerDirty, true, 'a detected race must flag the ledger dirty for quarantine, not report a clean rollback');
+    assert.deepEqual(
+      readFileSync(integrationSegFile), integrationSegBytesBefore,
+      'integration\'s own segment (captured priorManifest belongs to it) must never be touched by a restore targeting the WRONG file'
+    );
+    assert.equal(isCompleted(root, 'T2'), false, 'the ticket store itself is still safely reverted (covered by the ticket lock, not the raced segment)');
+  } finally {
+    execFileSync('git', ['symbolic-ref', 'HEAD', `refs/heads/${integrationBranch}`], { cwd: root, stdio: 'ignore' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a failed segmented completion commit rolls back the segment exactly (T-MANIFEST-FOREST)', () => {
   const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
   try {
