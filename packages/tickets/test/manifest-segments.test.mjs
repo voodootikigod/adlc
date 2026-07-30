@@ -512,13 +512,18 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
 // prosecute carry-forward) must NOT opt in — see readOwnChains's own doc for the
 // full rationale (derived slugs are a lossy, attacker-controllable identity).
 describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only (lineage-durability finding)', () => {
-  it('default (no allowRecovery): does not recover — returns root-only once the token is lost, even with a real committed segment', () => {
+  it('default (no allowRecovery): does not recover — returns root-only once the token is lost, even with a real committed segment AND a key that could verify it', () => {
     const { root, dir } = gitRepo();
+    const KEY = 'default-allow-recovery-key';
     try {
       activate(dir);
-      recordTicketEvidence(root, baseEvidence());
+      recordTicketEvidence(root, baseEvidence({ key: KEY }));
       rmSync(lineagePath(dir), { force: true });
-      const chains = readOwnChains(dir, { cwd: root });
+      // `key` is passed but `allowRecovery` is NOT — proves the default is
+      // genuinely `false`, not merely absorbed by key-gating (a real,
+      // signature-verifiable segment exists here, so a flipped default would
+      // otherwise go unnoticed).
+      const chains = readOwnChains(dir, { cwd: root, key: KEY });
       assert.equal(chains.length, 1, 'must fall back to root-only, never guess at a segment via the caller-controlled slug');
     } finally { clean(root); }
   });
