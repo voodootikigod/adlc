@@ -6,7 +6,7 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, resolveOpenSegment, segmentPath, manifestKey, entrySigValid } from './manifest-segments.mjs';
+import { isSegmentedRepo, peekOpenSegment, segmentPath, manifestKey, entrySigValid } from './manifest-segments.mjs';
 
 /**
  * Validate `.adlc/current-ticket.json` the way the gates read it.
@@ -136,8 +136,14 @@ function storeHashBindingCheck(root, snapshot) {
   // state at mint time.
   const dir = join(root, '.adlc');
   if (isSegmentedRepo(dir)) {
-    const resolved = resolveOpenSegment(dir, { cwd: root });
-    if (!resolved.isNew) {
+    // peekOpenSegment (never mints), NOT resolveOpenSegment — this is a read-only
+    // doctor check with no writer lock held; resolveOpenSegment's minting branch
+    // writes the .lineage token as a side effect, which could race a genuine
+    // writer that already minted its own token but has not yet created the
+    // segment file, splitting that writer's evidence across two segments
+    // (adversarial-review finding).
+    const resolved = peekOpenSegment(dir, { cwd: root });
+    if (resolved) {
       const segFile = segmentPath(dir, resolved.name);
       let segLines;
       try {
@@ -149,9 +155,9 @@ function storeHashBindingCheck(root, snapshot) {
       if (!segResult.ok) return { ...check, ok: false, code: segResult.code, reason: segResult.reason };
       if (segResult.boundStoreHash !== null) boundStoreHash = segResult.boundStoreHash;
     }
-    // resolved.isNew === true means this branch has never recorded evidence
-    // into a segment yet — nothing to add; root's own boundStoreHash (if any)
-    // still stands as the latest known checkpoint for this checkout.
+    // resolved === null means this branch has never recorded evidence into a
+    // segment yet — nothing to add; root's own boundStoreHash (if any) still
+    // stands as the latest known checkpoint for this checkout.
   }
 
   if (!boundStoreHash) return { ...check, bound: false, reason: 'no evidence-required transaction recorded yet' };

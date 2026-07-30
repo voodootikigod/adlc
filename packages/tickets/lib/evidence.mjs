@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { conflict } from './errors.mjs';
 import { sha256, canonicalJson } from './canonical.mjs';
 import { fsyncDirectory } from './durability.mjs';
-import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath, manifestKey } from './manifest-segments.mjs';
+import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath, manifestKey, entrySigValid } from './manifest-segments.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
@@ -59,9 +59,21 @@ function signV2(key, entry) {
   return createHmac('sha256', key).update(canonicalJson(signed)).digest('hex');
 }
 
-function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash, storeHash, archiveHash, transactionId }) {
+// `key`, when provided (adversarial-review finding): a candidate matching
+// transactionId/action is trusted as genuine ONLY if it also carries a valid
+// signature — forestChainsIntact's per-chain legacy-unsigned-prefix tolerance
+// (needed so an honest chain that predates signing can still verify) is
+// deliberately NOT enough on its own to authenticate ONE specific entry as
+// real evidence: a wholly-unsigned forged segment (no signed entry anywhere
+// in it) passes that chain-wide check by design, so without this, an
+// attacker could still forge a specific idempotency match even with signing
+// active. An unsigned/invalid-signed candidate is treated as absent (not a
+// match, not a conflict) — the real write proceeds and appends genuine
+// evidence instead of trusting the forgery or refusing outright.
+function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash, storeHash, archiveHash, transactionId, key = null }) {
   for (const entry of entries) {
     if (entry?.data?.transactionId === transactionId && entry?.data?.action === action) {
+      if (key !== null && !entrySigValid(key, entry)) continue;
       const matches = entry.gate === `ticket-${operation}`
         && (entry.ticket ?? null) === ticketId
         && entry.data.operation === operation
@@ -102,7 +114,7 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
     if (!forestChainsIntact(dir, { key })) {
       throw conflict('INVALID_MANIFEST', 'manifest forest is invalid: a segment or root chain is broken, or an entry is unsigned/forged — refusing to append or trust the idempotency scan');
     }
-    const existing = findMatchingEvidence(readForestEntries(dir), { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash });
+    const existing = findMatchingEvidence(readForestEntries(dir), { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key });
     if (existing) return existing;
 
     const resolved = resolveOpenSegment(dir, { cwd: dirname(dir) });

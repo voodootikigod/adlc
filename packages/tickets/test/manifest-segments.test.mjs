@@ -273,4 +273,45 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
       });
     } finally { clean(root); }
   });
+
+  // Adversarial-review finding: an ENTIRELY unsigned forged SEGMENT (as opposed
+  // to an unsigned entry appended after a signed one, above) passes
+  // forestChainsIntact by design — a chain with zero signed entries is
+  // indistinguishable from an honest chain that predates signing, per
+  // gate-manifest's own documented "legacy chain" limit. findMatchingEvidence
+  // must not rely on that chain-wide tolerance alone: it must require the
+  // SPECIFIC candidate entry to carry a valid signature before trusting it.
+  it('refuses to trust a match found in a wholly-UNSIGNED forged segment, even though its chain passes on its own', () => {
+    const { root, dir } = gitRepo();
+    try {
+      withKey('forge-test-key-2', () => {
+        activate(dir);
+        recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' })); // real, signed, own segment
+
+        // A BRAND NEW segment, entirely unsigned end-to-end — never touches the
+        // real segment. Its own chain is internally valid and has zero signed
+        // entries, so forestChainsIntact accepts it as an honest legacy chain.
+        const forgedName = `forged-${'Y'.repeat(26)}.jsonl`;
+        const forged = {
+          seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+          data: {
+            operation: 'complete', action: 'apply', transactionId: 'tx-forged-2',
+            ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
+          },
+          files: {}, prev: null, anchor: null,
+        };
+        writeFileSync(join(dir, 'manifest.d', forgedName), `${JSON.stringify(forged)}\n`);
+
+        // The real write proceeds — it must NOT trust the forged entry as
+        // already-recorded evidence, and must NOT refuse the whole forest either
+        // (the forged segment's OWN chain is honestly legacy-unsigned).
+        const result = recordTicketEvidence(root, baseEvidence({
+          transactionId: 'tx-forged-2', ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+        }));
+        assert.equal(typeof result.sig, 'string', 'the write that actually happened is genuinely signed');
+        const resolved = resolveOpenSegment(dir, { cwd: root });
+        assert.notEqual(resolved.name, forgedName, 'the real evidence lands in this checkout\'s own segment, not the forged one');
+      });
+    } finally { clean(root); }
+  });
 });

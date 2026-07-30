@@ -439,6 +439,37 @@ test('doctor storehash-manifest-bind: a corrupted segment chain fails closed, no
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Adversarial-review finding: a read-only doctor check must never mint a segment
+// as a side effect. resolveOpenSegment (mint-capable) writes .lineage even when
+// it decides not to create anything else — a race against a real writer that
+// already minted its own token but had not yet created the segment file would
+// overwrite that token, splitting the writer's evidence across two segments.
+test('doctor storehash-manifest-bind: never mints a segment or writes .lineage (read-only)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-segment-nomint-'));
+  try {
+    const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    g('init', '-q', '-b', 'feat/doctor-nomint-test');
+    g('config', 'user.email', 't@t.co');
+    g('config', 'user.name', 'tester');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(root, 'README.md'), 'fixture\n');
+    g('add', '.');
+    g('commit', '-q', '-m', 'init');
+    const path = writeDirectory(root, [ticket('A')]);
+    mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    // Segmented, but nothing has recorded evidence into a segment yet.
+
+    const before = readdirSync(join(root, '.adlc', 'manifest.d')).sort();
+    const check = bindCheck(doctorTicketStore(new DirectoryTicketStore(path), { root }));
+    assert.equal(check.bound, false, 'no evidence recorded yet');
+    assert.deepEqual(
+      readdirSync(join(root, '.adlc', 'manifest.d')).sort(), before,
+      'doctor must not mint a segment or write .lineage as a side effect of a read-only check'
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('doctor current-ticket: reports that it could not validate when the store is unreadable', () => {
   // Bounded (the active-store check already failed, so the verdict is ok:false
   // either way) but report-only silence here would mislead: the operator must see
