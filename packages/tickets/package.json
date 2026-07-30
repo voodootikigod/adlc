@@ -12,7 +12,8 @@
       "default": "./index.mjs"
     },
     "./package.json": "./package.json",
-    "./lib/key-contract.mjs": "./lib/key-contract.mjs"
+    "./lib/key-contract.mjs": "./lib/key-contract.mjs",
+    "./lib/generation-descriptor.mjs": "./lib/generation-descriptor.mjs"
   },
   "bin": {
     "adlc-tickets": "./bin/adlc-tickets.mjs"
