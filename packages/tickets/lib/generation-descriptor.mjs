@@ -129,6 +129,20 @@ export function resolveGenerationDir(dir, generation) {
  *       not-yet-published path.
  */
 export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = true } = {}) {
+  // LEXICAL containment check FIRST, unconditionally — before any filesystem access or
+  // ENOENT-tolerant early return. `relative()` alone does not prove `targetPath` is
+  // actually a descendant of `dir`: for a sibling or ancestor path it returns a string
+  // starting with `..` (or, on Windows, an absolute path when the two are on different
+  // drives). Checking this only AFTER `dir` itself is confirmed to exist would let a
+  // not-yet-created `dir` (the normal `mustExist:false` case, e.g. before initial
+  // adoption) short-circuit past containment entirely: `checkComponent(dir, ...)`
+  // returning false on ENOENT would return from the whole function before the
+  // out-of-tree target was ever inspected, certifying it safe by omission.
+  const rel = targetPath === dir ? '' : relative(dir, targetPath);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw invalid('GENERATION_DIR_UNSAFE', `${targetPath} is not inside ${dir}`);
+  }
+
   const checkComponent = (current, isLast) => {
     let st;
     try {
@@ -148,18 +162,6 @@ export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = t
 
   if (!checkComponent(dir, targetPath === dir)) return;
   if (targetPath === dir) return;
-
-  // `relative()` alone does not prove `targetPath` is actually a descendant of `dir` —
-  // for a sibling or ancestor path it returns a string starting with `..` (or, on
-  // Windows, an absolute path when the two are on different drives), and walking THAT
-  // would confine components OUTSIDE dir entirely, certifying them as safe. A caller
-  // passing a mismatched path (e.g. assembled independently rather than through
-  // resolveActiveGenerationPaths) must be refused here, not silently checked against
-  // the wrong tree.
-  const rel = relative(dir, targetPath);
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw invalid('GENERATION_DIR_UNSAFE', `${targetPath} is not inside ${dir}`);
-  }
 
   const parts = rel.split(sep);
   let current = dir;

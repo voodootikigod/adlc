@@ -444,3 +444,21 @@ test('a genuine descendant path is unaffected by the containment check', () => {
   mkdirSync(generationDir, { recursive: true });
   assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir, { mustExist: false }));
 });
+
+test('containment is still enforced when dir itself does NOT YET EXIST and mustExist:false — the exact gap this closes', () => {
+  // Before this fix: checkComponent(dir, ...) hit ENOENT, returned false with
+  // mustExist:false, and the whole function returned BEFORE the containment check ever
+  // ran — so an out-of-tree target was silently "approved" whenever dir hadn't been
+  // created yet (the normal state before initial adoption).
+  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const dir = join(root, '.adlc'); // deliberately never created
+  const outsideSibling = join(root, 'CONTRIBUTING.md');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, outsideSibling, { mustExist: false }), /not inside/);
+});
+
+test('a genuine descendant is still tolerated when dir does not yet exist and mustExist:false', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const dir = join(root, '.adlc');
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir, { mustExist: false }));
+});
