@@ -215,6 +215,11 @@ function collectParameterNames(ast) {
  *   processEnvAliasVars: every name bound directly to `process.env` itself (e.g.
  *     `const inherited = process.env;`) — NOT an object literal, so it is invisible to
  *     `objectLiteralVars`, but spreading it is exactly as unsafe as `...process.env`.
+ *     NOT excluded on a parameter-name collision, unlike `objectLiteralVars`: dropping
+ *     an alias here has no "ambiguous, must flag" fallback the way an unresolved env
+ *     property does — `spreadsProcessEnvDeep` would simply see no ambient spread at
+ *     all and skip the call entirely. A false collision only risks flagging a spread of
+ *     an unrelated same-named local as unsafe — never a missed real leak.
  * @param {object} ast
  * @returns {{entrypointVars: Map<string,Set<string>>, objectLiteralVars: Map<string,object>, processEnvAliasVars: Set<string>}}
  */
@@ -238,7 +243,7 @@ function resolveModuleVariables(ast) {
         objectLiteralVars.set(name, node.init);
       }
     }
-    if (isProcessEnv(node.init) && !paramNames.has(name)) processEnvAliasVars.add(name);
+    if (isProcessEnv(node.init)) processEnvAliasVars.add(name);
     const pathText = resolveCallToPathText(node.init);
     if (pathText) {
       const sensitive = sensitiveVarsForEntrypoint(pathText);
@@ -1592,5 +1597,24 @@ test('a LATER data argument that happens to name a different entrypoint does not
   `;
   const violations = findViolationsInSource('fixtures/data-argument-entrypoint-collision.test.mjs', fixture);
   assert.equal(violations.length, 1, 'the call actually runs adlc-prosecute.mjs (BIN) — it must be checked for ADLC_MANIFEST_KEY, not RAILS_BASE/BASE_REF from an unrelated data argument');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+// ── final review: an unrelated parameter name must not hide a process.env alias ───
+
+test('an unrelated function parameter sharing a name with a process.env alias does not hide that alias from spread detection', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const inherited = process.env;
+    function unrelatedHelper(inherited) {
+      return inherited.length;
+    }
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...inherited } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/alias-name-collision.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a real process.env alias must not be dropped because an unrelated parameter elsewhere reuses its name');
   assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
 });
