@@ -672,29 +672,49 @@ function resolveSpawnCalleeName(callee, bindings) {
   return null;
 }
 
+/** True iff `node` is exactly `process.execPath`. */
+function isProcessExecPath(node) {
+  return !!node && node.type === 'MemberExpression' && !node.computed &&
+    node.object?.type === 'Identifier' && node.object.name === 'process' &&
+    node.property?.type === 'Identifier' && node.property.name === 'execPath';
+}
+
 /**
- * Which entrypoint does this CallExpression target, if any? Scans every argument for a
- * direct literal match or a reference to a resolved entrypoint variable (position-
- * independent — matches this codebase's varied call shapes: `[BIN, ...args]`,
- * `[BIN, 'sub', ...]`).
+ * The single node occupying the EXECUTABLE position of a spawn call — never a later
+ * (data) argument. For a direct call (`exec(BIN, ...)`, `execFileSync(BIN, ...)`) that
+ * is the first argument; for the `execFileSync(process.execPath, [BIN, ...args], ...)`
+ * shape this codebase uses throughout, it is the FIRST element of the args array (the
+ * script Node actually runs), not `process.execPath` itself (which never matches any
+ * entrypoint pattern) and not any later CLI argument.
+ * @param {object} node  a CallExpression already confirmed to be a spawn call
+ * @returns {object|null}
+ */
+function executablePositionArg(node) {
+  const first = node.arguments[0];
+  if (!first) return null;
+  if (isProcessExecPath(first) && node.arguments[1]?.type === 'ArrayExpression') {
+    return node.arguments[1].elements[0] ?? null;
+  }
+  return first;
+}
+
+/**
+ * Which entrypoint does this CallExpression target, if any? Resolves ONLY the
+ * executable position (see `executablePositionArg`) — earlier scanning every argument
+ * meant a later DATA argument that happened to textually contain a different
+ * entrypoint's filename (e.g. a fixture path like `'fixtures/rails-guard-ci.mjs'`
+ * passed as CLI input to a totally different binary) could be mistaken for the actual
+ * target, checking the wrong sensitive-var set for the call that is genuinely running.
  * @param {object} node  a CallExpression already confirmed to be a spawn call
  * @param {Map<string,Set<string>>} entrypointVars
  * @returns {string[]|Set<string>|null}
  */
 function findRequiredVars(node, entrypointVars) {
-  for (const arg of node.arguments) {
-    const literalPath = resolveCallToPathText(arg);
-    if (literalPath) { const s = sensitiveVarsForEntrypoint(literalPath); if (s) return s; }
-    if (arg.type === 'Identifier' && entrypointVars.has(arg.name)) return entrypointVars.get(arg.name);
-    if (arg.type === 'ArrayExpression') {
-      for (const el of arg.elements) {
-        if (!el) continue;
-        const elPath = resolveCallToPathText(el);
-        if (elPath) { const s = sensitiveVarsForEntrypoint(elPath); if (s) return s; }
-        if (el.type === 'Identifier' && entrypointVars.has(el.name)) return entrypointVars.get(el.name);
-      }
-    }
-  }
+  const target = executablePositionArg(node);
+  if (!target) return null;
+  const literalPath = resolveCallToPathText(target);
+  if (literalPath) return sensitiveVarsForEntrypoint(literalPath);
+  if (target.type === 'Identifier' && entrypointVars.has(target.name)) return entrypointVars.get(target.name);
   return null;
 }
 
@@ -1558,4 +1578,19 @@ test('two DIFFERENT entrypoints declared under the same variable name in unrelat
   const vars = violations.map((v) => v.variable).sort();
   assert.deepEqual(vars, ['BASE_REF', 'BASE_REF', 'RAILS_BASE', 'RAILS_BASE'],
     'both calls resolve BIN against the UNION of both entrypoints, so both are checked for RAILS_BASE/BASE_REF too, not just the adlc-prosecute.mjs call\'s ADLC_MANIFEST_KEY');
+});
+
+// ── round-10 review: only the executable position determines the entrypoint match ──
+
+test('a LATER data argument that happens to name a different entrypoint does not change which sensitive variables are checked', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, '--input', 'fixtures/rails-guard-ci.mjs'], { env: { ...process.env, RAILS_BASE: '', BASE_REF: '' } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/data-argument-entrypoint-collision.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'the call actually runs adlc-prosecute.mjs (BIN) — it must be checked for ADLC_MANIFEST_KEY, not RAILS_BASE/BASE_REF from an unrelated data argument');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
 });
