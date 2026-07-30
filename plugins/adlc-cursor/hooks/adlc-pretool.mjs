@@ -192,6 +192,9 @@ export async function consultBuildGate(payload, {
       degraded,
       bypass: env.ADLC_BUILD_GATE_BYPASS === '1',
       recordBypass: () => override.recordOverride({
+        // The hook is the process entry point: env resolution happens HERE (the
+        // dispatcher's import surface is pinned to @adlc/build-gate/lib/ by test).
+        key: typeof env.ADLC_MANIFEST_KEY === 'string' && env.ADLC_MANIFEST_KEY.length > 0 ? env.ADLC_MANIFEST_KEY : null,
         ticketId: active.id,
         signals,
         depth,

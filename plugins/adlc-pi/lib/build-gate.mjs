@@ -13,6 +13,7 @@
 import { computeRiskTier } from '@adlc/build-gate/lib/risk.mjs';
 import { decideBuildGate } from '@adlc/build-gate/lib/decide.mjs';
 import { recordOverride } from '@adlc/build-gate/lib/override.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 /** Context-window fill percentage past which a session counts as degraded. */
 export const DEFAULT_CONTEXT_PERCENT_THRESHOLD = 80;
@@ -60,6 +61,7 @@ export function checkBuildGate({ ticket, usage, compacted, env = process.env, ro
     bypass: env.ADLC_BUILD_GATE_BYPASS === '1',
     recordBypass: () =>
       recordOverride({
+        key: getKey(env),
         ticketId: ticket.id,
         signals,
         depth: Math.round(percent),

@@ -11,8 +11,8 @@ import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { recordCrossModelReview, hasCrossModelApprove, hasCrossModelApproveForRevision, manifestChainBreakReason } from '../lib/cross-model.mjs';
-import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { recordCrossModelReview as realRecordCrossModelReview, hasCrossModelApprove as realHasCrossModelApprove, hasCrossModelApproveForRevision as realHasCrossModelApproveForRevision, manifestChainBreakReason as realManifestChainBreakReason } from '../lib/cross-model.mjs';
+import { record as realGmRecord } from '@adlc/gate-manifest/lib/record.mjs';
 import { signEntry } from '@adlc/gate-manifest/lib/sign.mjs';
 import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest, readEntries } from '@adlc/core';
 import { gitRepo } from './helpers.mjs';
@@ -58,10 +58,22 @@ function rootAnchor(dir) {
 const KEY = 'test-cross-model-signing-key';
 process.env.ADLC_MANIFEST_KEY = KEY;
 
+// The libraries take `key` as an explicit required parameter now (spec Layer 2, P1);
+// the env assignment above stays only to prove it is inert. currentKey scopes what the
+// wrappers thread; withoutKey() flips it to null exactly as it used to unset the env.
+let currentKey = KEY;
+const record = (o = {}) => realGmRecord({ key: currentKey, ...o });
+const manifestChainBreakReason = (dir) => realManifestChainBreakReason(dir, currentKey);
+const recordCrossModelReview = (o = {}) => realRecordCrossModelReview({ key: currentKey, ...o });
+const hasCrossModelApprove = (o = {}) => realHasCrossModelApprove({ key: currentKey, ...o });
+const hasCrossModelApproveForRevision = (o = {}) => realHasCrossModelApproveForRevision({ key: currentKey, ...o });
+
 function withoutKey(fn) {
   const prev = process.env.ADLC_MANIFEST_KEY;
+  const prevCurrent = currentKey;
+  currentKey = null;
   delete process.env.ADLC_MANIFEST_KEY;
-  try { return fn(); } finally { if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
+  try { return fn(); } finally { currentKey = prevCurrent; if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
 }
 
 function tmp() {
@@ -522,14 +534,12 @@ describe('signature verification (#326 — a PR author cannot forge an approve)'
 
   it('an approve signed with a DIFFERENT key (attacker signs with their own) is REJECTED', () => {
     const dir = tmp();
-    const prev = process.env.ADLC_MANIFEST_KEY;
     try {
-      process.env.ADLC_MANIFEST_KEY = 'attacker-controlled-key';
-      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-      process.env.ADLC_MANIFEST_KEY = prev; // back to the real (CI) key
-      // Verified against the real key, the wrong-key signature does not match ⇒ rejected.
+      // Explicit keys per call (spec Layer 2): the attacker SIGNS with their key,
+      // the gate VERIFIES with the real one — no env mutation involved.
+      recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir, key: 'attacker-controlled-key' });
       assert.equal(hasCrossModelApproveForRevision({ dir, revision: 'rev-1', authorProvider: 'anthropic' }), false);
-    } finally { process.env.ADLC_MANIFEST_KEY = prev; rmSync(dir, { recursive: true, force: true }); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('NO key at read time fails closed, even for a genuinely-signed attestation', () => {

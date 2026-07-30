@@ -9,6 +9,7 @@ import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
 import { ADLC_DIR } from '@adlc/core';
+import { getKey } from '../lib/sign.mjs';
 
 const USAGE =
   'usage: gate-manifest <verb> [options]\n' +
@@ -61,6 +62,7 @@ if (verb === 'record') {
       rawData: flags.data,
       rawFiles: flags.files,
       dir: flags.dir,
+      key: getKey(),
     });
   } catch (err) {
     opError(err.message);
@@ -90,7 +92,7 @@ if (verb === 'verify') {
   // flag tolerates a missing sig ONLY on that contiguous legacy prefix; a missing
   // sig on any entry after signing was adopted, or a present-but-invalid sig
   // anywhere, still fails the chain. See verify()'s requireSignatures doc.
-  const result = verify(flags.dir, { requireSignatures: !flags['allow-legacy-unsigned'] });
+  const result = verify(flags.dir, { requireSignatures: !flags['allow-legacy-unsigned'], key: getKey() });
 
   if (flags.json) {
     printJson(result);
@@ -124,7 +126,7 @@ if (verb === 'show') {
 
 // ── attest ───────────────────────────────────────────────────────────────────
 if (verb === 'attest') {
-  const md = buildAttest({ ticket: flags.ticket, dir: flags.dir });
+  const md = buildAttest({ ticket: flags.ticket, dir: flags.dir, key: getKey() });
   console.log(md);
   pass();
 }
@@ -134,6 +136,7 @@ if (verb === 'repair-chain') {
   let result;
   try {
     result = repairChain({
+      key: getKey(),
       dir: flags.dir,
       reason: flags.reason,
       write: flags.write,

@@ -234,3 +234,20 @@ test('doctor takes no provider/runner — it is structurally offline (signature 
     assert.ok(Array.isArray(r.checks) && typeof r.exitCode === 'number');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('doctor inspects the ARCHIVE: a malformed archive store fails a store:archive check', () => {
+  // Pins the archive: true in doctor's doctorTicketStore call — flipped off, the sync
+  // doctor would silently stop looking at archived tickets and this fixture would pass.
+  const dir = mk({ tickets: null });
+  try {
+    // Directory store so the archive checks apply, plus a BROKEN archive store file.
+    mkdirSync(join(dir, '.adlc', 'tickets'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets', '.store.json'), JSON.stringify({ version: 1, order: [] }));
+    mkdirSync(join(dir, '.adlc', 'ticket-archive'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'ticket-archive', '.store.json'), '{broken');
+    const r = doctor({ dir });
+    const archiveCheck = r.checks.find((c) => c.name.includes('archive'));
+    assert.ok(archiveCheck, `doctor must surface an archive check; got: ${r.checks.map((c) => c.name).join(', ')}`);
+    assert.equal(archiveCheck.ok, false, 'a malformed archive must fail its check');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

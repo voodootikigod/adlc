@@ -6,8 +6,13 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { assertPhase } from '../lib/assertions.mjs';
 import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
-import { appendManifestEntry } from '@adlc/gate-manifest';
-import { recordAcceptancePacket } from '../lib/acceptance.mjs';
+import { appendManifestEntry as realAppendManifestEntry } from '@adlc/gate-manifest';
+import { recordAcceptancePacket as realRecordAcceptancePacket } from '../lib/acceptance.mjs';
+
+// These tests always ran keyless (no env setup anywhere in the file); the libraries now
+// take `key` explicitly (spec Layer 2), so say so once here instead of at 40 call sites.
+const appendManifestEntry = (entry, dir, opts = {}) => realAppendManifestEntry(entry, dir, { key: null, ...opts });
+const recordAcceptancePacket = (opts = {}) => realRecordAcceptancePacket({ key: null, ...opts });
 import { ticketHash as domainTicketHash } from '@adlc/tickets';
 
 const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);

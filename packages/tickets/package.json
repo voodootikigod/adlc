@@ -11,7 +11,8 @@
       "types": "./index.d.ts",
       "default": "./index.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./lib/key-contract.mjs": "./lib/key-contract.mjs"
   },
   "bin": {
     "adlc-tickets": "./bin/adlc-tickets.mjs"

@@ -161,12 +161,10 @@ function parseLines(lines) {
 // `sig` (this package's canonicalJson is byte-identical to core's, verified
 // by test). Keep in lockstep with sign.mjs. Shared by doctor.mjs and the
 // signature-aware chain check below — the one place both need it.
-const MANIFEST_KEY_ENV = 'ADLC_MANIFEST_KEY';
-
-export function manifestKey(env = process.env) {
-  const k = env[MANIFEST_KEY_ENV];
-  return typeof k === 'string' && k.length > 0 ? k : null;
-}
+//
+// No ambient env read lives here (manifest-key-hermeticity, T2/#410): every
+// caller in this package now receives its signing key as an explicit
+// parameter, resolved once by the entry point (a bin) — see key-contract.mjs.
 
 export function canonicalEntryBytes(entry) {
   if (entry.sigVersion === 2) {

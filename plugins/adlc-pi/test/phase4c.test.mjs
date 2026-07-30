@@ -248,7 +248,7 @@ test('AC2: session_shutdown with unresolved denies appends a chain-valid manifes
     const manifestPath = join(root, '.adlc', 'manifest.jsonl');
     assert.ok(existsSync(manifestPath), 'manifest written on unresolved shutdown');
     assert.match(readFileSync(manifestPath, 'utf8'), /pi-session-shutdown-open-ticket/);
-    const verdict = verify(join(root, '.adlc'));
+    const verdict = verify(join(root, '.adlc'), { key: null });
     assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

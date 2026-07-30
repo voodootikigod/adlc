@@ -13,7 +13,7 @@ test('sensitive mutations append signed dual-hash evidence and retries are idemp
   process.env.ADLC_MANIFEST_KEY = 'test-manifest-key';
   try {
     const store = new DirectoryTicketStore(writeDirectory(root, [ticket('A')]));
-    const service = new TicketService(store, { root, protectedIds: ['A'] });
+    const service = new TicketService(store, { root, protectedIds: ['A'], key: 'test-manifest-key' });
     const after = service.apply(service.planComplete('A', { authorized: true }));
     const path = join(root, '.adlc/manifest.jsonl');
     const [line] = readFileSync(path, 'utf8').trim().split('\n');
@@ -24,10 +24,10 @@ test('sensitive mutations append signed dual-hash evidence and retries are idemp
     assert.equal(entry.data.bindingScope, 'ticket');
     const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts, ticket: entry.ticket, data: entry.data, files: entry.files, prev: entry.prev };
     assert.equal(entry.sig, createHmac('sha256', 'test-manifest-key').update(JSON.stringify(canonical)).digest('hex'));
-    recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket });
+    recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket, key: 'test-manifest-key' });
     assert.equal(readFileSync(path, 'utf8').trim().split('\n').length, 1);
     assert.throws(
-      () => recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket, storeHash: '0'.repeat(64) }),
+      () => recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket, storeHash: '0'.repeat(64), key: 'test-manifest-key' }),
       (error) => error.code === 'EVIDENCE_IDEMPOTENCY_CONFLICT',
     );
   } finally {
@@ -45,8 +45,6 @@ test('sensitive mutations append signed dual-hash evidence and retries are idemp
 // "already recorded" even with signing active.
 test('root idempotency scan never trusts a matching but UNSIGNED forged entry once a key is configured', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-ticket-evidence-forge-'));
-  const previous = process.env.ADLC_MANIFEST_KEY;
-  process.env.ADLC_MANIFEST_KEY = 'forge-test-key';
   try {
     mkdirSync(join(root, '.adlc'), { recursive: true });
     const path = join(root, '.adlc/manifest.jsonl');
@@ -63,14 +61,12 @@ test('root idempotency scan never trusts a matching but UNSIGNED forged entry on
 
     const result = recordTicketEvidence(root, {
       transactionId: 'tx-forged', operation: 'complete', ticketId: 'A',
-      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: 'forge-test-key',
     });
     assert.equal(typeof result.sig, 'string', 'the write that actually happened is genuinely signed, not the forged unsigned entry');
     const lines = readFileSync(path, 'utf8').trim().split('\n');
     assert.equal(lines.length, 2, 'the real write is APPENDED after the forged line, not treated as a duplicate match');
   } finally {
-    if (previous === undefined) delete process.env.ADLC_MANIFEST_KEY;
-    else process.env.ADLC_MANIFEST_KEY = previous;
     rmSync(root, { recursive: true, force: true });
   }
 });

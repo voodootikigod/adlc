@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { recordOverride } from '../lib/override.mjs';
+import { recordOverride as realRecordOverride } from '../lib/override.mjs';
+// keyless by design in these tests; the lib takes `key` explicitly now (spec Layer 2)
+const recordOverride = (o = {}) => realRecordOverride({ key: null, ...o });
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 
@@ -87,7 +89,7 @@ test('gate-manifest verify() still passes after recordOverride appends to an exi
   withTempDir((dir) => {
     const adlcDir = join(dir, '.adlc');
     // Seed a normal gate-manifest entry first, exactly like a real preflight run would.
-    record({ gate: 'preflight', ticket: 'T1', rawData: undefined, rawFiles: undefined, dir: adlcDir });
+    record({ key: null, gate: 'preflight', ticket: 'T1', rawData: undefined, rawFiles: undefined, dir: adlcDir });
 
     const ok = recordOverride({
       ticketId: 'T1',
@@ -99,7 +101,7 @@ test('gate-manifest verify() still passes after recordOverride appends to an exi
     });
     assert.equal(ok, true);
 
-    const result = verify(adlcDir);
+    const result = verify(adlcDir, { key: null });
     assert.equal(result.valid, true, result.message);
     assert.equal(result.count, 2);
   });
@@ -109,9 +111,9 @@ test('gate-manifest verify() still passes after further entries are appended fol
   withTempDir((dir) => {
     const adlcDir = join(dir, '.adlc');
     recordOverride({ ticketId: 'T1', signals: [], depth: 50, sessionBytes: 1000, reason: 'bypass', dir: adlcDir });
-    record({ gate: 'preflight', ticket: 'T2', rawData: undefined, rawFiles: undefined, dir: adlcDir });
+    record({ key: null, gate: 'preflight', ticket: 'T2', rawData: undefined, rawFiles: undefined, dir: adlcDir });
 
-    const result = verify(adlcDir);
+    const result = verify(adlcDir, { key: null });
     assert.equal(result.valid, true, result.message);
     assert.equal(result.count, 2);
   });

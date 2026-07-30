@@ -12,6 +12,7 @@ import { LegacyTicketStore } from './stores/legacy.mjs';
 import { recordTicketEvidence } from './evidence.mjs';
 import { validateTickets } from './schema.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 // The tracked surface of `.adlc/` after a migration. `!.adlc/manifest.jsonl` is
 // NOT optional: the rails-guard CI migration gate requires hash-bound
@@ -177,7 +178,8 @@ export function migrationPlan(root = '.') {
   return { version: 1, operation: 'migrate', source: LEGACY_FILE, target: ACTIVE_DIRECTORY, ticketCount: before.tickets.length, archivedTicketCount: archived.tickets.length, beforeHash: before.hash, afterHash: before.hash, archiveHash: archived.hash, files: [...before.tickets.map((ticket) => join(ACTIVE_DIRECTORY, ticketFilename(ticket.id))), ...archived.tickets.map((ticket) => join(ARCHIVE_DIRECTORY, ticketFilename(ticket.id)))] };
 }
 
-export function migrateLegacyStore(root = '.', { write = false, yes = false, requireClean = true, faultInjector = null } = {}) {
+export function migrateLegacyStore(root = '.', { write = false, yes = false, requireClean = true, faultInjector = null, key = null } = {}) {
+  key = validateKeyParam(key);
   const plan = migrationPlan(root);
   if (!write) return plan;
   if (!yes) throw conflict('CONFIRMATION_REQUIRED', 'migration write requires --yes');
@@ -252,7 +254,7 @@ export function migrateLegacyStore(root = '.', { write = false, yes = false, req
     if (legacyArchive.exists) durableRemove(join(root, LEGACY_ARCHIVE_FILE));
     faultInjector?.('legacy-removed', { id });
     ensureMigrationGitignore(root);
-    recordTicketEvidence(root, { transactionId: id, operation: 'migrate', storeHash: directory.load().hash, archiveHash: legacyArchive.hash });
+    recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', storeHash: directory.load().hash, archiveHash: legacyArchive.hash });
     faultInjector?.('gitignore-updated', { id });
     durableRemove(runtime, { recursive: true, force: true });
     return { ...plan, applied: true };
@@ -262,7 +264,8 @@ export function migrateLegacyStore(root = '.', { write = false, yes = false, req
   } finally { releaseTicketLock(lock); }
 }
 
-export function recoverMigration(root, id, { direction } = {}) {
+export function recoverMigration(root, id, { direction, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!['complete', 'rollback'].includes(direction)) throw conflict('RECOVERY_DIRECTION_REQUIRED', 'choose complete or rollback');
   const { runtime, journal } = loadMigrationJournal(root, id);
   const legacyPath = safeJournalPath(root, journal.source, 'source');
@@ -319,8 +322,8 @@ export function recoverMigration(root, id, { direction } = {}) {
       // Recovery must establish the same canonical apply binding as the uninterrupted
       // path. recordTicketEvidence is transaction/action-idempotent, so this is safe
       // whether the crash happened before or after the original append.
-      recordTicketEvidence(root, { transactionId: id, operation: 'migrate', storeHash: directory.hash, archiveHash: journal.archiveHash });
-      recordTicketEvidence(root, { transactionId: id, operation: 'migrate', action: 'recover-complete', storeHash: directory.hash, archiveHash: journal.archiveHash });
+      recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', storeHash: directory.hash, archiveHash: journal.archiveHash });
+      recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', action: 'recover-complete', storeHash: directory.hash, archiveHash: journal.archiveHash });
       durableRemove(runtime, { recursive: true, force: true });
       return new DirectoryTicketStore(directoryPath).load();
     }
@@ -359,7 +362,7 @@ export function recoverMigration(root, id, { direction } = {}) {
       durableRename(temporaryArchive, legacyArchivePath);
       if (loadLegacyArchive(root).hash !== journal.archiveHash) throw conflict('RECOVERY_VERIFY_FAILED', 'restored legacy archive does not match its recorded hash');
     } else if (existsSync(legacyArchivePath)) durableRemove(legacyArchivePath, { force: true });
-    recordTicketEvidence(root, { transactionId: id, operation: 'migrate', action: 'recover-rollback', storeHash: journal.beforeHash, archiveHash: journal.archiveHash });
+    recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', action: 'recover-rollback', storeHash: journal.beforeHash, archiveHash: journal.archiveHash });
     durableRemove(runtime, { recursive: true, force: true });
     return new LegacyTicketStore(legacyPath).load();
   } finally { releaseTicketLock(lock); }

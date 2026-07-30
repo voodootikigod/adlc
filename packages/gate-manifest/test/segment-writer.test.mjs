@@ -13,22 +13,37 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { appendManifestEntry, record } from '../lib/record.mjs';
-import { verify } from '../lib/verify.mjs';
+import { appendManifestEntry as realAppendManifestEntry, record as realRecord } from '../lib/record.mjs';
+import { verify as realVerify } from '../lib/verify.mjs';
 import { discoverSegments, readManifestForest, segmentPath, ulidOf } from '../lib/forest.mjs';
 import { isSegmentedRepo, markerPath, lineagePath, resolveOpenSegment, deriveSlug, generateSegmentUlid, currentBranch } from '../lib/lineage.mjs';
 import { verifyEntrySig, KEY_ENV } from '../lib/sign.mjs';
 import { sha256 } from '@adlc/core';
 
+// The libraries no longer read the environment (spec Layer 2, P1): `key` is an
+// explicit required parameter. withKey keeps its shape — every existing test still
+// says `withKey('k', () => ...)` — but now scopes the CURRENT TEST KEY that the
+// wrappers below thread explicitly into each call. Mirrors gate-manifest.test.mjs.
+let currentTestKey = null;
 function withKey(key, fn) {
   const prev = process.env[KEY_ENV];
+  const prevCurrent = currentTestKey;
+  currentTestKey = key;
   if (key === null) delete process.env[KEY_ENV];
   else process.env[KEY_ENV] = key;
   try { return fn(); } finally {
+    currentTestKey = prevCurrent;
     if (prev === undefined) delete process.env[KEY_ENV];
     else process.env[KEY_ENV] = prev;
   }
 }
+
+// Explicit-key wrappers: every call in this file goes through the new required-key
+// contract, with the key scoped by withKey (null outside any withKey).
+const appendManifestEntry = (payload, dir, opts = {}) =>
+  realAppendManifestEntry(payload, dir, { key: currentTestKey, ...opts });
+const record = (opts) => realRecord({ key: currentTestKey, ...opts });
+const verify = (dir, opts = {}) => realVerify(dir, { key: currentTestKey, ...opts });
 
 // A real git repo fixture: lineage resolution reads the current branch, which
 // only means something inside an actual repository.

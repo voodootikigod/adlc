@@ -37,6 +37,7 @@ function computeNeedsCeremony(stale, ticketsById) {
  * @returns {{ok: true, baseRef: string, write: boolean, ceremony: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], ceremonyCompleted: {id: string, reason: string, rails: string[]}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
+  const { key: pruneKey = null } = options;
   const {
     cwd = process.cwd(),
     ticketsPath = '.adlc/tickets.json',
@@ -156,6 +157,7 @@ export function runTicketPrune(options = {}) {
           continue;
         }
         const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), id, {
+          key: pruneKey,
           root: cwd,
           expectedSnapshotHash: current.hash,
           // The RE-classified reason, not the first pass's: archiveTicket embeds this

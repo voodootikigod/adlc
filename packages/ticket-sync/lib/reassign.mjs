@@ -20,6 +20,7 @@ import { appendEntries, sha256 } from '@adlc/core';
 import {
   isSegmentedRepo, resolveOpenSegment, readOwnChains, forestChainsIntact,
   segmentPath, lineagePath, withManifestLock, canonicalJson, entrySigValid,
+  validateKeyParam,
 } from '@adlc/tickets';
 
 /**
@@ -213,13 +214,13 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
  * @param {string} newId
  * @param {object} opts
  * @param {string} opts.now    ISO timestamp for the new entries
- * @param {NodeJS.ProcessEnv} [opts.env]  for the optional ADLC_MANIFEST_KEY
+ * @param {string|null} opts.key  signing key (validateKeyParam); resolved by the caller, never read from env here
  * @param {Function} [opts.appendBatch] injectable ownership-safe batch appender
  * @returns {{ migrated: number, entries: object[] }}
  */
-export function migrateManifestEvidence(dir, oldId, newId, { now, env = process.env, appendBatch = appendEntries } = {}) {
+export function migrateManifestEvidence(dir, oldId, newId, { now, key: keyParam, appendBatch = appendEntries } = {}) {
   const adlcDir = `${dir}/.adlc`;
-  const key = (() => { const k = env?.ADLC_MANIFEST_KEY; return typeof k === 'string' && k.length ? k : null; })();
+  const key = validateKeyParam(keyParam); // required: an omitted key is a caller bug, never an env read at library depth
 
   // T-MANIFEST-FOREST (adversarial-review finding): this writer used to call
   // core's appendEntries directly on root unconditionally. Post-cutover that

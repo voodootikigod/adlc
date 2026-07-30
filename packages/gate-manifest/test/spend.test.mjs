@@ -152,9 +152,9 @@ describe('loadSpend (integration with the real manifest ledger)', () => {
   it('aggregates usage recorded via record() into the same dir', () => {
     const dir = makeTmp();
     try {
-      record({ gate: 'coldstart', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 400, outputTokens: 80 }) }) });
-      record({ gate: 'prosecute', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 900, outputTokens: 150 }) }) });
-      record({ gate: 'rails-guard', dir }); // no usage — deterministic gate, must not be counted
+      record({ key: null, gate: 'coldstart', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 400, outputTokens: 80 }) }) });
+      record({ key: null, gate: 'prosecute', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 900, outputTokens: 150 }) }) });
+      record({ key: null, gate: 'rails-guard', dir }); // no usage — deterministic gate, must not be counted
 
       const { aggregate } = loadSpend({ dir });
       assert.equal(aggregate.entriesTotal, 3);
@@ -170,8 +170,8 @@ describe('loadSpend (integration with the real manifest ledger)', () => {
   it('filters by ticket when given', () => {
     const dir = makeTmp();
     try {
-      record({ gate: 'coldstart', ticket: 'T-1', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 100 }) }) });
-      record({ gate: 'coldstart', ticket: 'T-2', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 500 }) }) });
+      record({ key: null, gate: 'coldstart', ticket: 'T-1', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 100 }) }) });
+      record({ key: null, gate: 'coldstart', ticket: 'T-2', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 500 }) }) });
 
       const { aggregate } = loadSpend({ dir, ticket: 'T-1' });
       assert.equal(aggregate.entriesTotal, 1);

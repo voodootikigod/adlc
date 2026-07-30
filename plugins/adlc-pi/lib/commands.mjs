@@ -48,6 +48,7 @@ function parseJsonStdout(stdout) {
  *   completion callback (which pi calls without a ctx).
  */
 export function registerCommands(pi, { env = process.env, reload, getActive, getCwd } = {}) {
+  const manifestKey = typeof env.ADLC_MANIFEST_KEY === 'string' && env.ADLC_MANIFEST_KEY.length > 0 ? env.ADLC_MANIFEST_KEY : null;
   const ticketsPathFor = (cwd) => {
     const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS;
     return configured ? (isAbsolute(configured) ? configured : join(cwd, configured)) : join(cwd, '.adlc', 'tickets.json');
@@ -244,7 +245,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       }
 
       // Evidence rail (best-effort; never blocks the switch).
-      recordGateEvent({ pi, ctx, root, ticketId: chosenId, type: 'ticket-switch', detail: { to: chosenId } });
+      recordGateEvent({ key: manifestKey, pi, ctx, root, ticketId: chosenId, type: 'ticket-switch', detail: { to: chosenId } });
 
       // Reload NOW so the very next tool_call gates against the new ticket —
       // no turn boundary needed (spec AC2).
@@ -303,6 +304,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           ticket: ticketId,
           rawData: JSON.stringify({ spec: specArg, sha256: hash, verdict: 'approved' }),
           dir: join(root, '.adlc'),
+          key: manifestKey,
         });
       } catch (err) {
         ctx.ui.notify(`ADLC: failed to record spec approval: ${err.message}`, 'error');
@@ -415,6 +417,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       // Mirror the human acceptance onto the pi evidence rail (the CLI already
       // recorded the p6-acceptance-packet; this is the session-side note).
       recordGateEvent({
+        key: manifestKey,
         pi,
         ctx,
         root,
@@ -494,7 +497,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
 
       const active = typeof getActive === 'function' ? getActive() : null;
       const ticketId = active && active.ticketId ? active.ticketId : undefined;
-      recordGateEvent({ pi, ctx, root, ticketId, type: 'adlc-rollback', detail: { entryId: target.id, label: target.label } });
+      recordGateEvent({ key: manifestKey, pi, ctx, root, ticketId, type: 'adlc-rollback', detail: { entryId: target.id, label: target.label } });
       ctx.ui.notify(`ADLC: rolled back (forked) to ${target.digest}.`, 'info');
     },
   });

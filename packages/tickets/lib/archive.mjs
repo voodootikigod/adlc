@@ -8,6 +8,7 @@ import { acquireTicketLock, releaseTicketLock } from './lock.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
 import { applyDirectoryTransaction } from './transaction.mjs';
 import { durableMkdir, durableWrite } from './durability.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 function validateArchivePath(root, path) {
   const expected = resolve(root, ARCHIVE_DIRECTORY);
@@ -24,7 +25,8 @@ function ensureArchive(path) {
   return store;
 }
 
-export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, faultInjector = null } = {}) {
+export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, faultInjector = null, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'archiving requires explicit authorization');
   validateArchivePath(root, archivePath);
   const lock = acquireTicketLock(root, { command: 'ticket:archive' });
@@ -41,6 +43,7 @@ export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHa
     const archived = { ...JSON.parse(JSON.stringify(ticket)), _adlcArchive: { version: 1, archivedAt: new Date().toISOString(), reason, ticketHash: ticketHash(ticket), sourceStoreHash: active.hash, sourceRevision } };
     const remaining = active.mutableTickets().filter((item) => item.id !== id);
     const updated = applyDirectoryTransaction(activeStore, remaining, {
+      key,
       expectedSnapshotHash: active.hash,
       operation: 'archive',
       evidenceRequired: true,
@@ -62,7 +65,8 @@ export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHa
   } finally { releaseTicketLock(lock); }
 }
 
-export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHash, root = '.', authorized = false, faultInjector = null } = {}) {
+export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHash, root = '.', authorized = false, faultInjector = null, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'restore requires explicit authorization');
   validateArchivePath(root, archivePath);
   const lock = acquireTicketLock(root, { command: 'ticket:restore' });
@@ -81,6 +85,7 @@ export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHa
     delete ticket._adlcArchive;
     if (!metadata || ticketHash(ticket) !== metadata.ticketHash) throw invalid('ARCHIVE_HASH_MISMATCH', `archived ticket ${id} does not match recorded hash`);
     const restored = applyDirectoryTransaction(activeStore, [...active.mutableTickets(), ticket], {
+      key,
       expectedSnapshotHash: active.hash,
       operation: 'restore',
       evidenceRequired: true,

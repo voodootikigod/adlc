@@ -6,7 +6,8 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, peekOpenSegment, segmentPath, manifestKey, entrySigValid } from './manifest-segments.mjs';
+import { isSegmentedRepo, peekOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 /**
  * Validate `.adlc/current-ticket.json` the way the gates read it.
@@ -59,7 +60,7 @@ function currentTicketCheck(root, snapshot) {
  * removes the shard the same way a hand-delete would and records no evidence
  * either, so absence is inherently ambiguous and left to the archive/graph checks.
  */
-// manifestKey/entrySigValid now live in manifest-segments.mjs — shared with
+// entrySigValid now lives in manifest-segments.mjs — shared with
 // forestChainsIntact's own signature-aware chain check, and still the only
 // place in this package that mirrors @adlc/gate-manifest's sign.mjs
 // byte-for-byte (see that file's header for why this cannot be imported
@@ -97,14 +98,13 @@ function walkChainForStoreHash(lines, key, chainLabel) {
   return { ok: true, boundStoreHash };
 }
 
-function storeHashBindingCheck(root, snapshot) {
+function storeHashBindingCheck(root, snapshot, key) {
   const check = { name: 'storehash-manifest-bind', ok: true };
   // No live storeHash to compare — the active-store check already carries that
   // failure; stay inert here rather than double-reporting or throwing.
   if (!snapshot) return { ...check, bound: false, reason: 'active store did not load; storeHash binding not checked' };
 
   const manifestPath = join(root, '.adlc/manifest.jsonl');
-  const key = manifestKey();
   let boundStoreHash = null;
 
   // Verify the manifest is a well-formed, unbroken hash chain BEFORE trusting any
@@ -196,7 +196,7 @@ function storeHashBindingCheck(root, snapshot) {
   return check;
 }
 
-export function doctorTicketStore(store, { root = '.', archive = false } = {}) {
+export function doctorTicketStore(store, { root = '.', archive = false, key: keyParam = null } = {}) {
   const checks = [];
   let snapshot = null;
   try {
@@ -210,7 +210,7 @@ export function doctorTicketStore(store, { root = '.', archive = false } = {}) {
   const lockPath = join(root, LOCK_DIRECTORY);
   checks.push({ name: 'writer-lock', ok: !existsSync(lockPath), present: existsSync(lockPath), metadata: readTicketLock(root) });
   checks.push(currentTicketCheck(root, snapshot));
-  checks.push(storeHashBindingCheck(root, snapshot));
+  checks.push(storeHashBindingCheck(root, snapshot, validateKeyParam(keyParam)));
   if (archive) {
     const path = join(root, ARCHIVE_DIRECTORY);
     if (!existsSync(path)) checks.push({ name: 'archive', ok: true, present: false, ticketCount: 0 });

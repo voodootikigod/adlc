@@ -17,6 +17,7 @@ import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
 import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used — see below —
@@ -104,6 +105,7 @@ if (promptOnlyMode) {
     const entry = recordVerdict({
       ticket,
       verdict,
+      key: getKey(),
       extra: { ticketIds: targets.map((t) => t.id), tier },
     });
     console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}${ticket ? ` ticket=${ticket}` : ''}`);
@@ -148,7 +150,7 @@ try {
 
 const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
 const recordPlan = buildRecordPlan(results, targets, { model: resolveExpectedModel(tier), tier });
-for (const entry of recordPlan) record(entry);
+for (const entry of recordPlan) record({ ...entry, key: getKey() });
 
 // ── Output ───────────────────────────────────────────────────────────────────
 

@@ -12,8 +12,9 @@ import {
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ADLC_DIR, ledgerPath, sha256, withLedgerLock } from '@adlc/core';
-import { getKey, signEntry, verifyEntrySig } from './sign.mjs';
+import { signEntry, verifyEntrySig } from './sign.mjs';
 import { verify } from './verify.mjs';
+import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 
 const RESERVED = new Set(['seq', 'prev', 'sig', 'sigVersion']);
 
@@ -59,7 +60,9 @@ export function repairChain({
   reason,
   write = false,
   attestUnsigned = false,
+  key: keyParam,
 } = {}) {
+  const providedKey = validateKeyParam(keyParam);
   if (typeof reason !== 'string' || reason.trim().length < 8) {
     throw new Error('repair reason must be at least 8 characters');
   }
@@ -74,7 +77,7 @@ export function repairChain({
     try { return JSON.parse(line); }
     catch (err) { throw new Error(`manifest line ${lineNo} is malformed: ${err.message}`); }
   });
-  const integrity = verify(dir);
+  const integrity = verify(dir, { key: providedKey });
   if (integrity.valid) throw new Error('manifest chain is already valid; repair refused');
   const invalidEntryIndex = entries.findIndex(
     (entry) => !entry || typeof entry !== 'object' || Array.isArray(entry),
@@ -82,7 +85,7 @@ export function repairChain({
   if (invalidEntryIndex !== -1) {
     throw new Error(`manifest line ${sourceLines[invalidEntryIndex].lineNo} must contain an entry object`);
   }
-  const key = getKey();
+  const key = providedKey;
   const unsignedLines = sourceLines
     .filter((_, index) => typeof entries[index]?.sig !== 'string')
     .map(({ lineNo }) => lineNo);

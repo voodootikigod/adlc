@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path';
 import { conflict } from './errors.mjs';
 import { sha256, canonicalJson } from './canonical.mjs';
 import { fsyncDirectory } from './durability.mjs';
-import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath, manifestKey, entrySigValid } from './manifest-segments.mjs';
+import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath, entrySigValid } from './manifest-segments.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
@@ -99,8 +100,7 @@ function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash
  * itself (protects the segment's bytes against anything else that might
  * ever write to it directly).
  */
-function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision }) {
-  const key = manifestKey();
+function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision, key }) {
   return withManifestLock(lineagePath(dir), () => {
     // Adversarial-review finding: a corrupted OTHER segment (crash, manual
     // edit, or a malicious branch) must not let a ticket transaction finalize
@@ -172,6 +172,7 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
 
 /** Append an idempotent, hash-bound transaction/recovery record to gate-manifest. */
 export function recordTicketEvidence(root, {
+  key,
   transactionId,
   operation,
   action = 'apply',
@@ -181,6 +182,9 @@ export function recordTicketEvidence(root, {
   archiveHash = null,
   revision = process.env.ADLC_REVISION ?? null,
 } = {}) {
+  // Validate FIRST: the idempotent-retry early return must not bypass the key
+  // contract — an invalid key is a caller bug on every path, retries included.
+  const signingKey = validateKeyParam(key);
   const dir = join(root, '.adlc');
   // spec §7: once segmented, every append routes to the current lineage's
   // segment instead of root (adversarial-review finding: this writer used to
@@ -190,7 +194,7 @@ export function recordTicketEvidence(root, {
   // segmented repo — retroactively invalidating every existing anchor:null
   // segment, spec §4.4).
   if (isSegmentedRepo(dir)) {
-    return recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision });
+    return recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision, key: signingKey });
   }
   const path = join(root, '.adlc/manifest.jsonl');
   return withManifestLock(path, () => {
@@ -202,12 +206,11 @@ export function recordTicketEvidence(root, {
     if (isSegmentedRepo(dir)) {
       throw conflict('MANIFEST_FROZEN', 'manifest chain is frozen; this repo uses .adlc/manifest.d/ — upgrade adlc if you are seeing this locally');
     }
-    const key = manifestKey();
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
         if (entry.data?.transactionId === transactionId && entry.data?.action === action) {
-          // `key`, when configured, means the candidate must carry a valid
+          // `signingKey`, when configured, means the candidate must carry a valid
           // signature to be trusted as genuine (P5 prosecution finding —
           // mirrors the segmented path's findMatchingEvidence): an attacker
           // able to append an unsigned line to root with fabricated-but-
@@ -215,7 +218,7 @@ export function recordTicketEvidence(root, {
           // it silently accepted as "already recorded", even with signing
           // active. An unsigned/invalid candidate here is treated as absent,
           // not a match — the real write proceeds below instead.
-          if (key !== null && !entrySigValid(key, entry)) continue;
+          if (signingKey !== null && !entrySigValid(signingKey, entry)) continue;
           const matches = entry.gate === `ticket-${operation}`
             && (entry.ticket ?? null) === ticketId
             && entry.data.operation === operation
@@ -266,7 +269,7 @@ export function recordTicketEvidence(root, {
       files: {},
       prev: previous ? sha256(previous) : null,
     };
-    if (key) entry.sig = sign(key, entry);
+    if (signingKey) entry.sig = sign(signingKey, entry);
     const descriptor = openSync(path, 'a');
     try {
       writeFileSync(descriptor, `${JSON.stringify(entry)}\n`);

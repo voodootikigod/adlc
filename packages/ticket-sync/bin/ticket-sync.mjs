@@ -10,6 +10,7 @@ import { push } from '../lib/push.mjs';
 import { doctor } from '../lib/doctor.mjs';
 import { makeGhRunner } from '../lib/gh.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
+import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
 const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [--allow-rail-narrowing] [--json]
 
@@ -86,6 +87,7 @@ async function main() {
       provider: githubProvider(),
       runner: makeGhRunner(),
       gitRemoteUrl: gitRemoteUrl(),
+      key: resolveKeyFromEnv(),
       write: flags.write,
       force: flags.force,
       allowRailNarrowing: flags['allow-rail-narrowing'],
@@ -98,6 +100,7 @@ async function main() {
     const result = await push({
       dir: process.cwd(),
       provider: githubProvider(),
+      key: resolveKeyFromEnv(),
       runner: makeGhRunner(),
       gitRemoteUrl: gitRemoteUrl(),
       write: flags.write,
@@ -107,7 +110,7 @@ async function main() {
   }
 
   if (sub === 'sync') {
-    const common = { dir: process.cwd(), provider: githubProvider(), runner: makeGhRunner(), gitRemoteUrl: gitRemoteUrl() };
+    const common = { dir: process.cwd(), provider: githubProvider(), runner: makeGhRunner(), gitRemoteUrl: gitRemoteUrl(), key: resolveKeyFromEnv() };
     const { exitCode, pulled, pushed } = await syncFlow(
       () => pull({ ...common, write: flags.write, force: flags.force, allowRailNarrowing: flags['allow-rail-narrowing'] }),
       () => push({ ...common, write: flags.write }),
@@ -122,7 +125,7 @@ async function main() {
   }
 
   if (sub === 'doctor') {
-    const result = doctor({ dir: process.cwd() });
+    const result = doctor({ dir: process.cwd(), key: resolveKeyFromEnv() });
     if (flags.json) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } else {

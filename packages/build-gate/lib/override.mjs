@@ -35,7 +35,7 @@ import { ADLC_DIR } from '@adlc/core';
  * @param {string} [opts.dir] - ledger directory (default ADLC_DIR, '.adlc')
  * @returns {boolean} true ONLY if the entry was durably appended; never throws.
  */
-export function recordOverride({ ticketId, signals, depth, sessionBytes, reason, dir = ADLC_DIR }) {
+export function recordOverride({ ticketId, signals, depth, sessionBytes, reason, dir = ADLC_DIR, key }) {
   try {
     record({
       gate: 'build-gate-bypass',
@@ -47,6 +47,7 @@ export function recordOverride({ ticketId, signals, depth, sessionBytes, reason,
         reason: reason ?? null,
       }),
       dir,
+      key,
     });
     return true;
   } catch {

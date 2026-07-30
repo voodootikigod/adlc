@@ -24,6 +24,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } fr
 import { join, dirname, isAbsolute } from 'node:path';
 import { spawnAsync } from './spawn-async.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
+import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -384,7 +385,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     // apply path the CLI uses, committing the add-only completed:true diff so it
     // rides the single PR. Idempotent and best-effort at the call site (§run.mjs).
     completeTicket: ({ ticket, integrationBranch }) =>
-      completeTicketOnIntegration({ repo: integrationPath, ticketId: ticket.id, integrationBranch, git: integrationGit }),
+      completeTicketOnIntegration({ repo: integrationPath, ticketId: ticket.id, integrationBranch, git: integrationGit, key: resolveKeyFromEnv(io.env) }),
 
     // Withdraw ONLY the completion commit when the gate re-run over it fails; the
     // shipped merge underneath is never touched.

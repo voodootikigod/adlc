@@ -316,7 +316,7 @@ test('AC4: /adlc-approve-spec on an existing file with confirm=true appends a ch
     const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
     assert.match(manifest, /spec-approval/);
     assert.match(manifest, /feature\.md/, 'entry names the spec path');
-    const verdict = verify(join(root, '.adlc'));
+    const verdict = verify(join(root, '.adlc'), { key: null });
     assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

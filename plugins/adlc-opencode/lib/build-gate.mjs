@@ -16,6 +16,7 @@ import { isDegraded, DEFAULT_DEPTH_THRESHOLD } from '@adlc/build-gate/lib/depth-
 import { decideBuildGate } from '@adlc/build-gate/lib/decide.mjs';
 import { recordOverride } from '@adlc/build-gate/lib/override.mjs';
 import { resolveActiveTicketId } from '../rails-checker.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 /**
  * Per-session context-fitness tracker. Pure state; the plugin instantiates one
@@ -82,6 +83,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
     bypass: env.ADLC_BUILD_GATE_BYPASS === '1',
     recordBypass: () =>
       recordOverride({
+        key: getKey(env),
         ticketId: active.id,
         signals,
         depth,

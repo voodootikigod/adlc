@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { sha256, withLedgerLock } from '@adlc/core';
-import { getKey, signEntry } from './sign.mjs';
+import { signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 import { segmentPath, segmentDirPath } from './forest.mjs';
 import { resolveOpenSegment, lineagePath } from './lineage.mjs';
@@ -14,12 +14,14 @@ import { resolveOpenSegment, lineagePath } from './lineage.mjs';
 /**
  * Append `payload` to the current lineage's segment, minting a new one when
  * needed (spec §7.1). Caller (record.mjs) has already validated `payload`
- * carries none of the reserved chain fields, including `anchor`. Not a public
- * entry point — record.mjs's appendManifestEntry is, and it always resolves
- * `dir`/`signatureVersion`/`cwd` itself before calling here, so this takes no
- * defaults of its own (an unreachable default is untestable dead code).
+ * carries none of the reserved chain fields, including `anchor`, and has
+ * already resolved `key` via validateKeyParam. Not a public entry point —
+ * record.mjs's appendManifestEntry is, and it always resolves
+ * `dir`/`signatureVersion`/`cwd`/`key` itself before calling here, so this
+ * takes no defaults of its own (an unreachable default is untestable dead
+ * code).
  */
-export function appendToSegment(payload, dir, { signatureVersion, cwd }) {
+export function appendToSegment(payload, dir, { signatureVersion, cwd, key }) {
   // Adversarial-review finding: resolving the open segment (reading/minting
   // against .lineage) and actually writing to it used to be UNSYNCHRONIZED
   // with each other. Two first-ever writers on the same branch could both
@@ -40,7 +42,7 @@ export function appendToSegment(payload, dir, { signatureVersion, cwd }) {
   // segment-writer's own locking precondition had no mutation coverage at
   // the default CI budget. A single-line return of a named function call
   // mutates cleanly.
-  return withLedgerLock(lineagePath(dir), () => appendWithinLedgerLock(payload, dir, { signatureVersion, cwd }));
+  return withLedgerLock(lineagePath(dir), () => appendWithinLedgerLock(payload, dir, { signatureVersion, cwd, key }));
 }
 
 // The chain-integrity check (verify()) MUST run INSIDE the .lineage lock, not
@@ -52,18 +54,18 @@ export function appendToSegment(payload, dir, { signatureVersion, cwd }) {
 // empty segment, and fail the whole forest instead of simply blocking on the
 // lock like it should. Checking only after the lock is held means a queued
 // writer only ever observes a FINISHED publish, never a transient one.
-function appendWithinLedgerLock(payload, dir, { signatureVersion, cwd }) {
-  const integrity = verify(dir, { requireSignatures: false });
+function appendWithinLedgerLock(payload, dir, { signatureVersion, cwd, key }) {
+  const integrity = verify(dir, { requireSignatures: false, key });
   if (!integrity.valid) {
     throw new Error(`manifest forest is invalid: ${integrity.message}`);
   }
   const resolved = resolveOpenSegment(dir, { cwd });
   const targetPath = segmentPath(dir, resolved.name);
   mkdirSync(segmentDirPath(dir), { recursive: true });
-  return withLedgerLock(targetPath, () => appendLockedEntry(payload, resolved, targetPath, signatureVersion));
+  return withLedgerLock(targetPath, () => appendLockedEntry(payload, resolved, targetPath, signatureVersion, key));
 }
 
-function appendLockedEntry(payload, resolved, targetPath, signatureVersion) {
+function appendLockedEntry(payload, resolved, targetPath, signatureVersion, key) {
   const content = existsSync(targetPath) ? readFileSync(targetPath, 'utf8') : '';
   const rawLines = content.split('\n').filter((line) => line.trim() !== '');
   if (resolved.isNew && rawLines.length > 0) {
@@ -108,7 +110,6 @@ function appendLockedEntry(payload, resolved, targetPath, signatureVersion) {
     prev: prevRawLine === null ? null : sha256(prevRawLine),
   };
 
-  const key = getKey();
   // spec §4.4: the anchor is tamper-evident only under v2 (v2 signs every
   // field the entry carries; v1's fixed field set predates segments and
   // never included `anchor`). Force v2 whenever this entry carries one,

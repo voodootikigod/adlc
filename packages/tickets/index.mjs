@@ -25,3 +25,4 @@ export * from './lib/manifest-segments.mjs';
 export * from './lib/stores/legacy.mjs';
 export * from './lib/stores/directory.mjs';
 export * from './lib/stores/git-tree.mjs';
+export { validateKeyParam, resolveKeyFromEnv } from './lib/key-contract.mjs';

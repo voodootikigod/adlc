@@ -7,12 +7,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { appendManifestEntry, record, buildEntry, parseData, parseFileList, readLastRawLine } from '../lib/record.mjs';
-import { verify } from '../lib/verify.mjs';
+import { appendManifestEntry as realAppendManifestEntry, record as realRecord, buildEntry, parseData, parseFileList, readLastRawLine } from '../lib/record.mjs';
+import { verify as realVerify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { canonicalEntryBytes, KEY_ENV, signEntry, verifyEntrySig } from '../lib/sign.mjs';
-import { repairChain } from '../lib/repair.mjs';
+import { repairChain as realRepairChain } from '../lib/repair.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
 
 // ── key env helper ─────────────────────────────────────────────────────────────
@@ -20,17 +20,37 @@ import { sha256, ledgerPath } from '../../core/index.mjs';
 // sign.getKey). withKey sets it for the duration of fn and always restores,
 // so signing tests stay isolated from one another and from the no-key tests.
 
+// The libraries no longer read the environment (spec Layer 2, P1): `key` is an
+// explicit required parameter. withKey keeps its shape — every existing test still
+// says `withKey('k', () => ...)` — but now scopes the CURRENT TEST KEY that the
+// wrappers below thread explicitly into each call. It ALSO still sets process.env
+// to the same value: proving the env is inert is the point — if any library
+// consulted it, the explicit-param tests and the env would agree by construction,
+// and the dedicated key-contract tests (which set env to a DIFFERENT sentinel)
+// would catch the fallback.
+let currentTestKey = null;
 function withKey(key, fn) {
   const prev = process.env[KEY_ENV];
+  const prevCurrent = currentTestKey;
+  currentTestKey = key;
   if (key === null) delete process.env[KEY_ENV];
   else process.env[KEY_ENV] = key;
   try {
     return fn();
   } finally {
+    currentTestKey = prevCurrent;
     if (prev === undefined) delete process.env[KEY_ENV];
     else process.env[KEY_ENV] = prev;
   }
 }
+
+// Explicit-key wrappers: every call in this file goes through the new required-key
+// contract, with the key scoped by withKey (null outside any withKey).
+const appendManifestEntry = (payload, dir, opts = {}) =>
+  realAppendManifestEntry(payload, dir, { key: currentTestKey, ...opts });
+const record = (opts) => realRecord({ key: currentTestKey, ...opts });
+const verify = (dir, opts = {}) => realVerify(dir, { key: currentTestKey, ...opts });
+const repairChain = (opts = {}) => realRepairChain({ key: currentTestKey, ...opts });
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

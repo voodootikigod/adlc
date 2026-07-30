@@ -35,18 +35,11 @@ function clean(root) {
   rmSync(root, { recursive: true, force: true });
 }
 
-function withKey(key, fn) {
-  const prev = process.env.ADLC_MANIFEST_KEY;
-  process.env.ADLC_MANIFEST_KEY = key;
-  try { return fn(); } finally {
-    if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY;
-    else process.env.ADLC_MANIFEST_KEY = prev;
-  }
-}
-
+// The key is an EXPLICIT parameter (spec Layer 2, P1): every recordTicketEvidence
+// call below passes it directly — env manipulation is inert by design.
 const baseEvidence = (over = {}) => ({
   transactionId: 'tx-1', operation: 'complete', ticketId: 'A',
-  ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), ...over,
+  ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null, ...over,
 });
 
 describe('isSegmentedRepo (mirrors @adlc/gate-manifest)', () => {
@@ -176,11 +169,9 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
     const { root, dir } = gitRepo();
     try {
       activate(dir);
-      withKey('seg-key', () => {
-        const entry = recordTicketEvidence(root, baseEvidence());
-        assert.equal(entry.sigVersion, 2);
-        assert.equal(typeof entry.sig, 'string');
-      });
+      const entry = recordTicketEvidence(root, baseEvidence({ key: 'seg-key' }));
+      assert.equal(entry.sigVersion, 2);
+      assert.equal(typeof entry.sig, 'string');
     } finally { clean(root); }
   });
 
@@ -242,35 +233,33 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
   it('refuses to trust a forged, correctly-chained-but-UNSIGNED entry once this chain\'s signed era has begun', () => {
     const { root, dir } = gitRepo();
     try {
-      withKey('forge-test-key', () => {
-        activate(dir);
-        recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' })); // real, signed
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1', key: 'forge-test-key' })); // real, signed
 
-        // Forge a SECOND entry: correctly hash-chained, but no `sig` at all —
-        // exactly what an attacker without the signing key can produce.
-        const resolved = resolveOpenSegment(dir, { cwd: root });
-        const segFile = segmentPath(dir, resolved.name);
-        const raw = readFileSync(segFile, 'utf8').trim().split('\n');
-        const prevLine = raw.at(-1);
-        const forged = {
-          seq: 2, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
-          data: {
-            operation: 'complete', action: 'apply', transactionId: 'tx-forged',
-            ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
-          },
-          files: {},
-          prev: createHash('sha256').update(prevLine).digest('hex'),
-        };
-        writeFileSync(segFile, `${prevLine}\n${JSON.stringify(forged)}\n`);
+      // Forge a SECOND entry: correctly hash-chained, but no `sig` at all —
+      // exactly what an attacker without the signing key can produce.
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      const segFile = segmentPath(dir, resolved.name);
+      const raw = readFileSync(segFile, 'utf8').trim().split('\n');
+      const prevLine = raw.at(-1);
+      const forged = {
+        seq: 2, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+        data: {
+          operation: 'complete', action: 'apply', transactionId: 'tx-forged',
+          ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
+        },
+        files: {},
+        prev: createHash('sha256').update(prevLine).digest('hex'),
+      };
+      writeFileSync(segFile, `${prevLine}\n${JSON.stringify(forged)}\n`);
 
-        assert.throws(
-          () => recordTicketEvidence(root, baseEvidence({
-            transactionId: 'tx-forged', ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
-          })),
-          (error) => error.code === 'INVALID_MANIFEST',
-          'the forged entry must not be trusted as genuine evidence, even though it matches the lookup exactly'
-        );
-      });
+      assert.throws(
+        () => recordTicketEvidence(root, baseEvidence({
+          transactionId: 'tx-forged', ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: 'forge-test-key',
+        })),
+        (error) => error.code === 'INVALID_MANIFEST',
+        'the forged entry must not be trusted as genuine evidence, even though it matches the lookup exactly'
+      );
     } finally { clean(root); }
   });
 
@@ -284,34 +273,32 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
   it('refuses to trust a match found in a wholly-UNSIGNED forged segment, even though its chain passes on its own', () => {
     const { root, dir } = gitRepo();
     try {
-      withKey('forge-test-key-2', () => {
-        activate(dir);
-        recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' })); // real, signed, own segment
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1', key: 'forge-test-key-2' })); // real, signed, own segment
 
-        // A BRAND NEW segment, entirely unsigned end-to-end — never touches the
-        // real segment. Its own chain is internally valid and has zero signed
-        // entries, so forestChainsIntact accepts it as an honest legacy chain.
-        const forgedName = `forged-${'Y'.repeat(26)}.jsonl`;
-        const forged = {
-          seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
-          data: {
-            operation: 'complete', action: 'apply', transactionId: 'tx-forged-2',
-            ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
-          },
-          files: {}, prev: null, anchor: null,
-        };
-        writeFileSync(join(dir, 'manifest.d', forgedName), `${JSON.stringify(forged)}\n`);
+      // A BRAND NEW segment, entirely unsigned end-to-end — never touches the
+      // real segment. Its own chain is internally valid and has zero signed
+      // entries, so forestChainsIntact accepts it as an honest legacy chain.
+      const forgedName = `forged-${'Y'.repeat(26)}.jsonl`;
+      const forged = {
+        seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+        data: {
+          operation: 'complete', action: 'apply', transactionId: 'tx-forged-2',
+          ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
+        },
+        files: {}, prev: null, anchor: null,
+      };
+      writeFileSync(join(dir, 'manifest.d', forgedName), `${JSON.stringify(forged)}\n`);
 
-        // The real write proceeds — it must NOT trust the forged entry as
-        // already-recorded evidence, and must NOT refuse the whole forest either
-        // (the forged segment's OWN chain is honestly legacy-unsigned).
-        const result = recordTicketEvidence(root, baseEvidence({
-          transactionId: 'tx-forged-2', ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
-        }));
-        assert.equal(typeof result.sig, 'string', 'the write that actually happened is genuinely signed');
-        const resolved = resolveOpenSegment(dir, { cwd: root });
-        assert.notEqual(resolved.name, forgedName, 'the real evidence lands in this checkout\'s own segment, not the forged one');
-      });
+      // The real write proceeds — it must NOT trust the forged entry as
+      // already-recorded evidence, and must NOT refuse the whole forest either
+      // (the forged segment's OWN chain is honestly legacy-unsigned).
+      const result = recordTicketEvidence(root, baseEvidence({
+        transactionId: 'tx-forged-2', ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: 'forge-test-key-2',
+      }));
+      assert.equal(typeof result.sig, 'string', 'the write that actually happened is genuinely signed');
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      assert.notEqual(resolved.name, forgedName, 'the real evidence lands in this checkout\'s own segment, not the forged one');
     } finally { clean(root); }
   });
 

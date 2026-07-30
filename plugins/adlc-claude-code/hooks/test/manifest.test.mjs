@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { record as realRecord } from '@adlc/gate-manifest/lib/record.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
@@ -20,12 +20,18 @@ const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // worksp
 
 const KEY = 'test-manifest-hook-key';
 
+// The library takes `key` explicitly now (spec Layer 2); withKey scopes what the
+// wrapper threads, and still mirrors into env to prove the env is inert.
+let currentTestKey = null;
+const record = (o = {}) => realRecord({ key: currentTestKey, ...o });
 function withKey(key, fn) {
   const prev = process.env.ADLC_MANIFEST_KEY;
+  const prevCurrent = currentTestKey;
+  currentTestKey = key;
   if (key === null) delete process.env.ADLC_MANIFEST_KEY;
   else process.env.ADLC_MANIFEST_KEY = key;
   try { return fn(); }
-  finally { if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
+  finally { currentTestKey = prevCurrent; if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
 }
 
 /** Run the `manifest` Stop hook against `dir`. Returns the parsed stdout JSON, or {} if empty. */

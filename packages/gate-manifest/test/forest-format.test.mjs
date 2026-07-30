@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, readdirSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { verify } from '../lib/verify.mjs';
+import { verify as realVerify } from '../lib/verify.mjs';
 import { discoverSegments, resolveAnchor, detectAnchorCycle, readManifestForest } from '../lib/forest.mjs';
 import { renderEntry } from '../lib/show.mjs';
 import { sha256 } from '../../core/index.mjs';
@@ -28,11 +28,18 @@ function cleanTmp(dir) {
   rmSync(dir, { recursive: true, force: true });
 }
 
+let currentTestKey = null;
+// Explicit-key wrapper — the library takes `key` as a required parameter now; withKey
+// scopes the value the wrapper threads (see gate-manifest.test.mjs for the rationale).
+const verify = (dir, opts = {}) => realVerify(dir, { key: currentTestKey, ...opts });
 function withKey(key, fn) {
+  const prevCurrent = currentTestKey;
+  currentTestKey = key;
   const prev = process.env[KEY_ENV];
   if (key === null) delete process.env[KEY_ENV];
   else process.env[KEY_ENV] = key;
   try { return fn(); } finally {
+    currentTestKey = prevCurrent;
     if (prev === undefined) delete process.env[KEY_ENV];
     else process.env[KEY_ENV] = prev;
   }

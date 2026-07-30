@@ -221,7 +221,7 @@ export function revertCompletionCommit({ repo, toSha, shardPath = null, completi
  *
  * @returns {{completed: boolean, alreadyComplete?: boolean, reason?: string}}
  */
-export function completeTicketOnIntegration({ repo, ticketId, integrationBranch, git = defaultGit(repo), detectStore = detectTicketStore } = {}) {
+export function completeTicketOnIntegration({ repo, ticketId, integrationBranch, git = defaultGit(repo), detectStore = detectTicketStore, key = null } = {}) {
   // Every git operation below targets the SHARED checkout's current HEAD. The merge
   // mutex serializes only this fleet process — another local process can change the
   // checkout between the post-merge gate and here — so verify we are actually on the
@@ -277,7 +277,7 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
     // rolls back to exactly here if that gate fails.
     const preCompletionSha = git('rev-parse', 'HEAD');
 
-    const service = new TicketService(store, { root: repo });
+    const service = new TicketService(store, { root: repo, key });
     service.apply(service.planComplete(ticketId), { lock });
     // Re-resolve now that the write has happened: a `pending` artifact's real
     // name only exists on disk after this point (see resolveManifestArtifact).

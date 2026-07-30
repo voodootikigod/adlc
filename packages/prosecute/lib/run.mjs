@@ -11,8 +11,8 @@ function now() {
   return new Date().toISOString();
 }
 
-function writeEvidence(type, data, dir, cwd) {
-  return appendManifestEntry({ ts: now(), type, ...data }, dir, { cwd });
+function writeEvidence(type, data, dir, cwd, key) {
+  return appendManifestEntry({ ts: now(), type, ...data }, dir, { cwd, key });
 }
 
 function manifestArtifactPaths(cwd, dir) {
@@ -196,6 +196,7 @@ function seedOpenFindingsFromManifest(dir, ticket, revision) {
 
 export function runProsecution(input, {
   ticket,
+  key = null,
   dir = ADLC_DIR,
   target = input?.target ?? 'working tree',
   base = 'main',
@@ -279,7 +280,7 @@ export function runProsecution(input, {
       ticketHash,
       storeHash,
       bindingScope: 'ticket',
-    }, dir, cwd);
+    }, dir, cwd, key);
 
     for (const finding of pass.findings) {
       writeEvidence('p5-finding-raw', {
@@ -290,7 +291,7 @@ export function runProsecution(input, {
         lens: pass.lens,
         finding,
         ...binding,
-      }, dir, cwd);
+      }, dir, cwd, key);
       writeEvidence(`p5-finding-${finding.verified_status}`, {
         ticket,
         target,
@@ -299,7 +300,7 @@ export function runProsecution(input, {
         lens: pass.lens,
         finding,
         ...binding,
-      }, dir, cwd);
+      }, dir, cwd, key);
     }
 
     const result = classifyPass(pass);
@@ -314,7 +315,7 @@ export function runProsecution(input, {
         consecutiveDry,
         dryEvidence: pass.dry_evidence ?? null,
         ...binding,
-      }, dir, cwd);
+      }, dir, cwd, key);
     } else {
       consecutiveDry = 0;
       for (const finding of pass.findings) {
@@ -340,7 +341,7 @@ export function runProsecution(input, {
       needsHuman: result.needsHuman.length,
       consecutiveDry,
       ...binding,
-    }, dir, cwd);
+    }, dir, cwd, key);
 
     passResults.push({
       pass: passNo,
@@ -359,7 +360,7 @@ export function runProsecution(input, {
     // Trust-root tier: a clean same-model P5 is not sufficient. Require a
     // cross-model adversarial approve from a DISTINCT provider, bound to this
     // revision. Missing -> gate-fail (exit 2), never a silent pass.
-    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision, authorProvider })) {
+    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision, authorProvider, key })) {
       writeEvidence('p5-cross-model-missing', {
         ticket,
         target,
@@ -367,7 +368,7 @@ export function runProsecution(input, {
         pass: passResults.length,
         consecutiveDry,
         dryLenses: Array.from(dryLenses).sort(),
-      }, dir, cwd);
+      }, dir, cwd, key);
       return {
         status: 'gate-fail',
         exitCode: 2,
@@ -393,7 +394,7 @@ export function runProsecution(input, {
       ticketHash,
       storeHash,
       bindingScope: 'ticket',
-    }, dir, cwd);
+    }, dir, cwd, key);
     return {
       status: 'pass',
       exitCode: 0,

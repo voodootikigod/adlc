@@ -310,11 +310,12 @@ test('doctor storehash-manifest-bind: with a key set, a validly-signed manifest 
   const { root, store } = storeWithEvidence();
   const prevKey = process.env.ADLC_MANIFEST_KEY;
   try {
-    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
     const live = store.load().hash;
     writeSignedManifest(root, 'test-signing-key', { storeHash: live });
 
-    const check = bindCheck(doctorTicketStore(store, { root }));
+    // The key is an EXPLICIT parameter now — env manipulation is inert by design
+    // (spec Layer 2, P1): doctor consults only what it is handed.
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
     assert.equal(check.ok, true, 'a correctly-signed ledger verifies');
     assert.equal(check.signaturesVerified, true, 'and reports that signatures WERE checked');
     assert.notEqual(check.drift, true, 'the bound hash matches the live store');
@@ -328,14 +329,13 @@ test('doctor storehash-manifest-bind: an in-place edit of the FINAL entry storeH
   const { root, store } = storeWithEvidence();
   const prevKey = process.env.ADLC_MANIFEST_KEY;
   try {
-    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
     const entry = writeSignedManifest(root, 'test-signing-key', { storeHash: store.load().hash });
     // The exploit: rewrite the last entry's storeHash but leave its signature (and
     // the chain, which does not protect the final line) untouched.
     const forged = { ...entry, data: { ...entry.data, storeHash: 'deadbeefdeadbeef' } };
     writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${JSON.stringify(forged)}\n`);
 
-    const report = doctorTicketStore(store, { root });
+    const report = doctorTicketStore(store, { root, key: 'test-signing-key' });
     const check = bindCheck(report);
     assert.equal(check.ok, false, 'the tampered final entry fails verification');
     assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');
@@ -374,7 +374,7 @@ test('doctor storehash-manifest-bind: a store with no recorded evidence yet is i
 // T-MANIFEST-FOREST (adversarial-review finding): storeHashBindingCheck must
 // bind to evidence recorded in this branch's own segment, not just root —
 // needs a real git repo, since segment resolution reads the current branch.
-function gitStoreWithSegmentedEvidence() {
+function gitStoreWithSegmentedEvidence({ key = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-segment-'));
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'feat/doctor-segment-test');
@@ -388,7 +388,7 @@ function gitStoreWithSegmentedEvidence() {
   mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
   const store = new DirectoryTicketStore(join(root, '.adlc', 'tickets'));
-  const service = new TicketService(store, { root });
+  const service = new TicketService(store, { root, key });
   service.apply(service.planCreate(ticket('A')));
   service.apply(service.planComplete('A')); // evidence-required → recorded into the segment
   return { root, store, service };
@@ -407,19 +407,16 @@ test('doctor storehash-manifest-bind: binds to evidence recorded in a segment (s
 });
 
 test('doctor storehash-manifest-bind: a signed segment checkpoint is authenticated the same as a signed root one', () => {
-  const prevKey = process.env.ADLC_MANIFEST_KEY;
-  process.env.ADLC_MANIFEST_KEY = 'doctor-segment-test-key';
+  // The key is an EXPLICIT parameter now — env manipulation is inert by design
+  // (spec Layer 2, P1): both evidence recording and doctor consult only what
+  // they are handed.
+  const { root, store } = gitStoreWithSegmentedEvidence({ key: 'doctor-segment-test-key' });
   try {
-    const { root, store } = gitStoreWithSegmentedEvidence();
-    try {
-      const check = bindCheck(doctorTicketStore(store, { root }));
-      assert.equal(check.bound, true);
-      assert.equal(check.authenticated, true);
-      assert.equal(check.signaturesVerified, true);
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  } finally {
-    if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
-  }
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'doctor-segment-test-key' }));
+    assert.equal(check.bound, true);
+    assert.equal(check.authenticated, true);
+    assert.equal(check.signaturesVerified, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('doctor storehash-manifest-bind: a corrupted segment chain fails closed, not silently ignored', () => {

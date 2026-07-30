@@ -54,7 +54,7 @@ export async function readVerdictSource(source) {
  * @param {string} [opts.dir]             ledger directory (default .adlc)
  * @returns the recorded manifest entry
  */
-export function recordVerdict({ ticket, verdict, extra = {}, dir } = {}) {
+export function recordVerdict({ ticket, verdict, extra = {}, dir, key } = {}) {
   const data = { promptOnly: true, verdict, ...extra };
-  return record({ gate: GATE_NAME, ticket, rawData: JSON.stringify(data), dir });
+  return record({ gate: GATE_NAME, ticket, rawData: JSON.stringify(data), dir, key });
 }

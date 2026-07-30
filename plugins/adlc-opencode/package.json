@@ -43,7 +43,8 @@
   "dependencies": {
     "@adlc/build-gate": "^1.7.0",
     "@adlc/core": "^1.7.0",
-    "@adlc/flail-detector": "^1.7.0"
+    "@adlc/flail-detector": "^1.7.0",
+    "@adlc/gate-manifest": "^1.7.0"
   },
   "publishConfig": {
     "access": "public",
