@@ -29,7 +29,7 @@ test('is silent when there is nothing to remind about', () => {
 test('the reminder does NOT change recording semantics (no auto-mutation)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gm-reminder-'));
   try {
-    const entry = record({ gate: 'p6-accept', ticket: 'T1', dir });
+    const entry = record({ key: null, gate: 'p6-accept', ticket: 'T1', dir });
     // What was recorded is exactly a p6-accept evidence entry for T1 — no
     // completed flag, no ticket mutation, nothing the reminder injected.
     assert.equal(entry.gate, 'p6-accept');

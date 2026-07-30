@@ -13,7 +13,7 @@ test('sensitive mutations append signed dual-hash evidence and retries are idemp
   process.env.ADLC_MANIFEST_KEY = 'test-manifest-key';
   try {
     const store = new DirectoryTicketStore(writeDirectory(root, [ticket('A')]));
-    const service = new TicketService(store, { root, protectedIds: ['A'] });
+    const service = new TicketService(store, { root, protectedIds: ['A'], key: 'test-manifest-key' });
     const after = service.apply(service.planComplete('A', { authorized: true }));
     const path = join(root, '.adlc/manifest.jsonl');
     const [line] = readFileSync(path, 'utf8').trim().split('\n');
@@ -24,10 +24,10 @@ test('sensitive mutations append signed dual-hash evidence and retries are idemp
     assert.equal(entry.data.bindingScope, 'ticket');
     const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts, ticket: entry.ticket, data: entry.data, files: entry.files, prev: entry.prev };
     assert.equal(entry.sig, createHmac('sha256', 'test-manifest-key').update(JSON.stringify(canonical)).digest('hex'));
-    recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket });
+    recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket, key: 'test-manifest-key' });
     assert.equal(readFileSync(path, 'utf8').trim().split('\n').length, 1);
     assert.throws(
-      () => recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket, storeHash: '0'.repeat(64) }),
+      () => recordTicketEvidence(root, { ...entry.data, ticketId: entry.ticket, storeHash: '0'.repeat(64), key: 'test-manifest-key' }),
       (error) => error.code === 'EVIDENCE_IDEMPOTENCY_CONFLICT',
     );
   } finally {

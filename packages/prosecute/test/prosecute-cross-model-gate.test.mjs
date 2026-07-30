@@ -10,13 +10,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProsecution } from '../lib/run.mjs';
-import { recordCrossModelReview } from '../lib/cross-model.mjs';
-import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { recordCrossModelReview as realRecordCrossModelReview } from '../lib/cross-model.mjs';
+import { record as realGmRecord } from '@adlc/gate-manifest/lib/record.mjs';
 import { FIXTURE_REVISION, input, tmpAdlc } from './helpers.mjs';
 
 // #326 hardening: attestations must be HMAC-signed to be trusted; set the key so
 // recordCrossModelReview signs and the gate can verify.
 process.env.ADLC_MANIFEST_KEY = 'test-cross-model-gate-signing-key';
+
+// Explicit-key wrappers (spec Layer 2): env stays set only to prove it is inert.
+const TEST_KEY = 'test-cross-model-gate-signing-key';
+const recordCrossModelReview = (o = {}) => realRecordCrossModelReview({ key: TEST_KEY, ...o });
+const record = (o = {}) => realGmRecord({ key: TEST_KEY, ...o });
 
 const REV = FIXTURE_REVISION;
 
@@ -41,7 +46,7 @@ function entryTypes(dir) {
 describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => {
   it('AC3: exits 2 when no matching cross-model attestation exists', () => {
     const dir = tmpAdlc();
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 2);
@@ -55,7 +60,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
   it('AC3: exits 0 once a distinct-provider approve bound to the current revision exists', () => {
     const dir = tmpAdlc();
     recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 0);
@@ -66,7 +71,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
   it('AC3: a stale-revision approve does NOT clear the gate', () => {
     const dir = tmpAdlc();
     recordCrossModelReview({ ticket: 'T1', revision: 'stale-rev', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 2);
@@ -77,7 +82,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
     // recordCrossModelReview refuses to create this, so inject it directly to
     // prove the READ side (hasCrossModelApprove) also rejects a forged same-model entry.
     record({ gate: 'cross-model-review', ticket: 'T1', rawData: JSON.stringify({ provider: 'anthropic', authorProvider: 'anthropic', verdict: 'approve', revision: REV }), dir });
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic',
     });
     assert.equal(result.exitCode, 2);
@@ -92,7 +97,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
         { lens: 'security', findings: [], dry_evidence: 'no security findings' },
         { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
       ],
-    }), { dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic' });
+    }), { key: TEST_KEY, dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'anthropic' });
     assert.equal(result.exitCode, 2);
     assert.match(result.message, /fewer than three distinct dry lenses/);
     const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
@@ -105,7 +110,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
     // is measured against the prosecution-declared author, so the gate must fail.
     const dir = tmpAdlc();
     recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: true, authorProvider: 'openai',
     });
     assert.equal(result.exitCode, 2);
@@ -117,7 +122,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
     // author, so a trust-root-tier run without --author-provider is an op-error.
     const dir = tmpAdlc();
     recordCrossModelReview({ ticket: 'T1', revision: REV, provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: true, // authorProvider omitted
     });
     assert.equal(result.exitCode, 1);
@@ -128,7 +133,7 @@ describe('cross-model gate — trust-root tier (requireCrossModel=true)', () => 
 describe('cross-model gate — non-trust-root tier is unaffected (AC4)', () => {
   it('requireCrossModel=false passes exactly as today (no cross-model entry needed)', () => {
     const dir = tmpAdlc();
-    const result = runProsecution(input(dir, { passes: cleanPasses() }), {
+    const result = runProsecution(input(dir, { passes: cleanPasses() }), { key: TEST_KEY,
       dir, ticket: 'T1', revision: REV, requireCrossModel: false,
     });
     assert.equal(result.exitCode, 0);
@@ -140,8 +145,8 @@ describe('cross-model gate — non-trust-root tier is unaffected (AC4)', () => {
   it('the default (option omitted) is byte-identical to explicit requireCrossModel=false', () => {
     const dirA = tmpAdlc();
     const dirB = tmpAdlc();
-    const resA = runProsecution(input(dirA, { passes: cleanPasses() }), { dir: dirA, ticket: 'T1', revision: REV });
-    const resB = runProsecution(input(dirB, { passes: cleanPasses() }), { dir: dirB, ticket: 'T1', revision: REV, requireCrossModel: false });
+    const resA = runProsecution(input(dirA, { passes: cleanPasses() }), { key: TEST_KEY, dir: dirA, ticket: 'T1', revision: REV });
+    const resB = runProsecution(input(dirB, { passes: cleanPasses() }), { key: TEST_KEY, dir: dirB, ticket: 'T1', revision: REV, requireCrossModel: false });
     assert.deepEqual({ ...resA }, { ...resB });
     // Same ordered evidence shape, and neither run touches the cross-model path.
     assert.deepEqual(entryTypes(dirA), entryTypes(dirB));
@@ -152,7 +157,7 @@ describe('cross-model gate — non-trust-root tier is unaffected (AC4)', () => {
     const dir = tmpAdlc();
     const result = runProsecution(input(dir, {
       passes: [{ lens: 'security', findings: [], dry_evidence: 'no findings' }],
-    }), { dir, ticket: 'T1', revision: REV });
+    }), { key: TEST_KEY, dir, ticket: 'T1', revision: REV });
     assert.equal(result.exitCode, 2);
     assert.match(result.message, /convergence budget ended before two consecutive dry passes/);
   });

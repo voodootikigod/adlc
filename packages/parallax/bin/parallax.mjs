@@ -22,6 +22,7 @@ import {
 } from '../lib/prompts.mjs';
 import { renderReport, renderRouteConflict } from '../lib/scoring.mjs';
 import { runSpecMode, runEdgeMode, runRouteMode } from '../lib/modes.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 const USAGE = `parallax — measured-ambiguity interrogation (ADLC D3)
 
@@ -111,7 +112,7 @@ async function recordPromptOnlyVerdict(prompts, extra) {
   }
   const { readVerdictSource, recordVerdict } = await import('../lib/verdict.mjs');
   const verdict = await readVerdictSource(values['record-verdict']);
-  const entry = recordVerdict({ verdict, extra });
+  const entry = recordVerdict({ verdict, extra, key: getKey() });
   console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
   process.exit(0);
 }

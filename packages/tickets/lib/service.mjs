@@ -19,9 +19,10 @@ const changedFields = (before, after) => [...new Set([...Object.keys(before ?? {
   .filter((key) => comparable(before?.[key]) !== comparable(after?.[key])).sort();
 
 export class TicketService {
-  constructor(store, { root = '.', protectedIds = [] } = {}) {
+  constructor(store, { root = '.', protectedIds = [], key = null } = {}) {
     this.store = store;
     this.root = root;
+    this.key = key;
     this.protectedIds = new Set(protectedIds);
   }
 
@@ -227,10 +228,10 @@ export class TicketService {
     if (expectedPlanHash !== plan.planHash) throw conflict('STALE_PLAN', 'mutation plan hash does not match its contents');
     if (storeHash(plan._tickets) !== plan.afterHash) throw conflict('STALE_PLAN', 'mutation plan payload does not match its after hash');
     if (this.store instanceof DirectoryTicketStore) {
-      return applyDirectoryTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock });
+      return applyDirectoryTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock, key: this.key });
     }
     if (this.store instanceof LegacyTicketStore) {
-      return applyLegacyTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock });
+      return applyLegacyTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock, key: this.key });
     }
     throw policy('READ_ONLY_STORE', 'this ticket store is read-only');
   }

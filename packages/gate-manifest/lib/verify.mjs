@@ -4,8 +4,9 @@
 // Sequence numbers must be strictly monotonically increasing, per chain.
 
 import { sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
-import { getKey, verifyEntrySig } from './sign.mjs';
+import { verifyEntrySig } from './sign.mjs';
 import { discoverSegments, readRawLines, segmentPath, resolveAnchor, detectAnchorCycle } from './forest.mjs';
+import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 
 /**
  * Result of a chain verification.
@@ -223,8 +224,8 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
  * @param {boolean} [opts.requireSignatures=true]  see verifyChain
  * @returns {VerifyResult}
  */
-export function verify(dir = ADLC_DIR, { requireSignatures = true } = {}) {
-  const key = getKey();
+export function verify(dir = ADLC_DIR, { requireSignatures = true, key: keyParam } = {}) {
+  const key = validateKeyParam(keyParam);
   const rootRaw = readRawLines(ledgerPath('manifest', dir));
   const { valid: segmentNames, invalid: invalidSegments } = discoverSegments(dir);
 

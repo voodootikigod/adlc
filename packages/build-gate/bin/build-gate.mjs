@@ -15,6 +15,7 @@ import { computeRiskTier } from '../lib/risk.mjs';
 import { computeDepthSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD, DEFAULT_BYTES_THRESHOLD } from '../lib/depth-signal.mjs';
 import { decideBuildGate } from '../lib/decide.mjs';
 import { recordOverride } from '../lib/override.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 const { values, positionals } = parseArgs({
   options: {
@@ -130,6 +131,7 @@ const result = decideBuildGate({
   bypass,
   recordBypass: () =>
     recordOverride({
+      key: getKey(),
       ticketId: ticket.id,
       signals,
       depth,

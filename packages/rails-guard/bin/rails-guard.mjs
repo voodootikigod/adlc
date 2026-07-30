@@ -23,6 +23,7 @@ import { readFileSync, lstatSync } from 'node:fs';
 import { runChecks } from '../lib/check.mjs';
 import { formatViolations, buildResult } from '../lib/output.mjs';
 import { computeFencedLines, isMdxFile } from '../lib/suppressions.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -285,7 +286,7 @@ if (values.record && violations.length === 0) {
     railsDiffEmpty: true,
     suppressionsClean: true,
     railFiles,
-  });
+  }, undefined, { key: getKey() });
 }
 
 // --- exit ---

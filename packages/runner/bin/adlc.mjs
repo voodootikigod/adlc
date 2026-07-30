@@ -2,6 +2,7 @@
 import { parseArgs, printJson, opError } from '@adlc/core';
 import { assertPhase, requirementsForPhase } from '../lib/assertions.mjs';
 import { recordAcceptancePacket } from '../lib/acceptance.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 const { values, positionals } = parseArgs({
   options: {
@@ -43,6 +44,7 @@ const verb = positionals[0];
 const phase = positionals[1];
 if (verb === 'accept') {
   const result = recordAcceptancePacket({
+    key: getKey(),
     dir: values.dir,
     ticket: values.ticket,
     packet: values.packet,

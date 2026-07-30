@@ -15,6 +15,7 @@
 
 import { join } from 'node:path';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 /**
  * @param {object} opts
@@ -40,6 +41,7 @@ export function recordGateEvent({ pi, ctx, root, ticketId, type, detail = {} }) 
       ticket: ticketId ?? undefined,
       rawData: JSON.stringify(detail),
       dir: join(root, '.adlc'),
+      key: getKey(),
     });
   } catch (err) {
     ctx?.ui?.notify?.(`ADLC: manifest evidence write failed: ${err.message}`, 'warning');

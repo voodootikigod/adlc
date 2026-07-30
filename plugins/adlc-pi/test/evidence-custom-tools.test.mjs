@@ -90,7 +90,7 @@ test('AC1: a rail deny records a session entry AND a chain-valid manifest line',
     const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
     assert.match(manifest, /pi-rail-deny/);
     // The mirror must be CHAIN-VALID (raw appends would corrupt the ledger).
-    const verdict = verify(join(root, '.adlc'));
+    const verdict = verify(join(root, '.adlc'), { key: null });
     assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -5,8 +5,9 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
-import { getKey, signEntry } from './sign.mjs';
+import { signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
+import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 
 // `segment` is reserved too: forest.mjs's readManifestForest annotates every
 // entry it returns with its source segment (see sign.mjs's canonicalEntryBytes
@@ -19,7 +20,8 @@ const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment'];
  * Sequence allocation and the byte-exact previous-line hash happen under the
  * same ledger lock as the write, so runner and gate evidence share one chain.
  */
-export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2 } = {}) {
+export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2, key } = {}) {
+  const signingKey = validateKeyParam(key);
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new TypeError('manifest payload must be an object');
   }
@@ -48,7 +50,7 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
       // append (and any other) refuses until the chain is repaired (`repair-chain`).
       // That is intentional: silently continuing to append unsigned entries onto a
       // signed ledger would degrade provenance with no signal that anything changed.
-      const integrity = verify(dir, { requireSignatures: false });
+      const integrity = verify(dir, { requireSignatures: false, key: signingKey });
       if (!integrity.valid) {
         throw new Error(`manifest chain is invalid: ${integrity.message}`);
       }
@@ -69,10 +71,9 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
       ...normalized,
       prev: state.lastRawLine === null ? null : sha256(state.lastRawLine),
     };
-    const key = getKey();
-    if (key) {
+    if (signingKey) {
       if (signatureVersion === 2) chained.sigVersion = 2;
-      chained.sig = signEntry(key, chained);
+      chained.sig = signEntry(signingKey, chained);
     }
     return [chained];
   }, dir);
@@ -164,14 +165,15 @@ export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq
  * @returns the recorded entry object
  * @throws Error for malformed --data JSON
  */
-export function record({ gate, ticket, rawData, rawFiles, dir = ADLC_DIR }) {
+export function record({ gate, ticket, rawData, rawFiles, dir = ADLC_DIR, key }) {
+  const signingKey = validateKeyParam(key);
   const data = parseData(rawData);
   const filePaths = parseFileList(rawFiles);
   const payload = { gate, ts: new Date().toISOString() };
   if (ticket !== undefined) payload.ticket = ticket;
   if (data !== undefined) payload.data = data;
   payload.files = filePaths.length > 0 ? hashFiles(filePaths) : {};
-  return appendManifestEntry(payload, dir, { signatureVersion: 1 });
+  return appendManifestEntry(payload, dir, { signatureVersion: 1, key: signingKey });
 }
 
 /**

@@ -202,7 +202,7 @@ test('AC3: a gate run appends an adlc-gate-run evidence entry (gate + exit code)
     assert.equal(sessionEntry.data.ticketId, 'T1');
 
     // The mirrored manifest ledger stays hash-chain valid.
-    const verdict = verify(join(root, '.adlc'));
+    const verdict = verify(join(root, '.adlc'), { key: null });
     assert.equal(verdict.valid, true, `manifest chain valid: ${JSON.stringify(verdict)}`);
   } finally {
     rmSync(root, { recursive: true, force: true });

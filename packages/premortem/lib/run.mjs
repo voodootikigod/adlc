@@ -22,7 +22,7 @@ import { renderReport } from './render.mjs';
  *                  the gate-manifest ledger
  */
 export async function run(opts) {
-  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode, recordVerdictSource } = opts;
+  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode, recordVerdictSource, key = null } = opts;
 
   // --- read spec ---
   let specContent;
@@ -46,7 +46,7 @@ export async function run(opts) {
       console.log(display);
       const { readVerdictSource, recordVerdict } = await import('./verdict.mjs');
       const verdict = await readVerdictSource(recordVerdictSource);
-      const entry = recordVerdict({ verdict, extra: { specPath } });
+      const entry = recordVerdict({ verdict, extra: { specPath }, key });
       console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
       process.exit(0);
     }

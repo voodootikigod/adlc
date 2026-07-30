@@ -407,12 +407,9 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
       assert.equal(rec.status, 0, 'precondition: the approve records cleanly, signing already adopted');
       // A later append with NO key — signing lapsed, not rotated. adlc-prosecute has no
       // bare `record` verb, so append directly via the library function used by CLI.
-      const prevKey = process.env.ADLC_MANIFEST_KEY;
-      delete process.env.ADLC_MANIFEST_KEY;
-      try {
-        record({ gate: 'unrelated-gate', dir: join(dir, '.adlc') });
-      } finally {
-        process.env.ADLC_MANIFEST_KEY = prevKey;
+      // key: null is the explicit "no key" form now (spec Layer 2) — no env dance.
+      {
+        record({ gate: 'unrelated-gate', dir: join(dir, '.adlc'), key: null });
       }
       return { dir, rev: revision };
     })();
@@ -443,13 +440,7 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
       // A SECOND signed entry, so the corruption below lands on a non-first entry
       // (the first entry's prev must be null — a different check — so corrupting
       // it would not exercise the 'prev hash mismatch' branch this test targets).
-      const prevKey = process.env.ADLC_MANIFEST_KEY;
-      process.env.ADLC_MANIFEST_KEY = KEY_A;
-      try {
-        record({ gate: 'second-entry', dir: join(dir, '.adlc') });
-      } finally {
-        process.env.ADLC_MANIFEST_KEY = prevKey;
-      }
+      record({ gate: 'second-entry', dir: join(dir, '.adlc'), key: KEY_A });
 
       // Corrupt the chain directly: break the prev-hash link without touching any
       // signature. This is neither a rotation (sigs are untouched) nor an unsigned

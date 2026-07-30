@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { resolveKeyFromEnv } from '../lib/key-contract.mjs';
 import {
   DirectoryTicketStore,
   LegacyTicketStore,
@@ -74,7 +75,7 @@ async function main() {
   const root = resolve(flags.root ?? '.');
   const storeCommand = command === 'store' ? positionals[1] : null;
   if (storeCommand === 'migrate') {
-    emit(migrateLegacyStore(root, { write: Boolean(flags.write), yes: Boolean(flags.yes) }), flags.json);
+    emit(migrateLegacyStore(root, { write: Boolean(flags.write), yes: Boolean(flags.yes), key: resolveKeyFromEnv() }), flags.json);
     return;
   }
   if (storeCommand === 'recover') {
@@ -84,10 +85,10 @@ async function main() {
     let journal;
     try { journal = JSON.parse(readFileSync(join(root, TRANSACTION_DIRECTORY, transactions[0], 'journal.json'), 'utf8')); }
     catch (error) { throw new TicketStoreError('invalid', 'INVALID_JOURNAL', `cannot read transaction journal: ${error.message}`); }
-    if (journal.operation === 'migrate') emit(recoverMigration(root, transactions[0], { direction }), flags.json);
+    if (journal.operation === 'migrate') emit(recoverMigration(root, transactions[0], { direction, key: resolveKeyFromEnv() }), flags.json);
     else {
       const recoveryStore = detectTicketStore({ root, ticketStore: flags['ticket-store'], legacyTickets: flags.tickets, allowRecovery: true });
-      emit(recoverDirectoryTransaction(recoveryStore, transactions[0], { root, direction }), flags.json);
+      emit(recoverDirectoryTransaction(recoveryStore, transactions[0], { root, direction, key: resolveKeyFromEnv() }), flags.json);
     }
     return;
   }
@@ -104,7 +105,7 @@ async function main() {
     return;
   }
   if (command === 'doctor') {
-    emit(doctorTicketStore(store, { root, archive: Boolean(flags.archive) }), flags.json);
+    emit(doctorTicketStore(store, { root, archive: Boolean(flags.archive), key: resolveKeyFromEnv() }), flags.json);
     return;
   }
   const snapshot = store.load();
@@ -122,7 +123,7 @@ async function main() {
   const mutationCommands = new Set(['create', 'update', 'edit', 'discard', 'complete', 'archive', 'restore']);
   if (!mutationCommands.has(command)) throw new TicketStoreError('invalid', 'UNKNOWN_COMMAND', `unknown ticket command: ${command}`);
   store = await offerLegacyMigration(store, root, flags, { emit: (value) => emit(value, false) });
-  const service = new TicketService(store, { root });
+  const service = new TicketService(store, { root, key: resolveKeyFromEnv() });
   let plan;
   // Set only by the edit command. The draft survives a dry run and is removed
   // after a successful write; anything else prints where it is.
@@ -172,7 +173,7 @@ async function main() {
   else if (command === 'complete') plan = service.planComplete(positionals[1], { authorized: Boolean(flags.authorize) });
   else if (command === 'archive' || command === 'restore') {
     if (!(store instanceof DirectoryTicketStore)) throw new TicketStoreError('policy', 'DIRECTORY_STORE_REQUIRED', `${command} requires a directory store`);
-    const options = { expectedSnapshotHash: snapshot.hash, reason: flags.reason, sourceRevision: flags.revision, root, authorized: Boolean(flags.authorize) };
+    const options = { expectedSnapshotHash: snapshot.hash, reason: flags.reason, sourceRevision: flags.revision, root, authorized: Boolean(flags.authorize), key: resolveKeyFromEnv() };
     if (!flags.write) { emit({ operation: command, ticketId: positionals[1], expectedSnapshotHash: snapshot.hash, evidenceRequired: true, dryRun: true }, flags.json); return; }
     const result = command === 'archive'
       ? archiveTicket(store, join(root, '.adlc/ticket-archive'), positionals[1], options)

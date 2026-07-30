@@ -30,9 +30,9 @@ function dataSummary(data) {
  * @param {string} [opts.dir]  ledger directory (default ADLC_DIR)
  * @returns {string}  markdown text
  */
-export function buildAttest({ ticket, dir = ADLC_DIR } = {}) {
+export function buildAttest({ ticket, dir = ADLC_DIR, key = null } = {}) {
   const { entries } = loadFiltered({ ticket, dir });
-  const chainResult = verify(dir);
+  const chainResult = verify(dir, { key });
 
   const heading = ticket
     ? `## Gate evidence for ${ticket}`

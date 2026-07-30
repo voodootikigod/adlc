@@ -578,7 +578,7 @@ describe('coldstart → gate-manifest end-to-end usage recording (issue #272)', 
 
       const usage = aggregateCheckAllUsage(results);
       assert.ok(usage, 'aggregate usage must be present for this mock run');
-      record({ gate: 'coldstart', ticket: 'T1', rawData: JSON.stringify({ usage, ticketIds: ['T1'], tier: 'cheap' }), dir });
+      record({ key: null, gate: 'coldstart', ticket: 'T1', rawData: JSON.stringify({ usage, ticketIds: ['T1'], tier: 'cheap' }), dir });
 
       const { entries } = loadFiltered({ dir });
       assert.equal(entries.length, 1);

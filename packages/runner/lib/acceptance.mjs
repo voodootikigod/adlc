@@ -129,6 +129,7 @@ function manifestArtifactPaths(cwd, dir) {
 }
 
 export function recordAcceptancePacket({
+  key,
   dir = '.adlc',
   ticket,
   packet,
@@ -222,7 +223,7 @@ export function recordAcceptancePacket({
     ticketHash: currentBinding.ticketHash,
     storeHash: currentBinding.storeHash,
     bindingScope: 'ticket',
-  }, dir);
+  }, dir, { key });
 
   return {
     ok: true,

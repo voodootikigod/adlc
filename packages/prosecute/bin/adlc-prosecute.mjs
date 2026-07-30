@@ -329,6 +329,7 @@ if (positionals[0] === 'record-cross-model') {
         fromRevision: values['carry-forward'],
         revision,
         dir: values.dir,
+        key: getKey(),
       });
     } catch (err) {
       opError(err.message); // fail closed: an unmoved/mismatched/uncapped/missing-prior carry is an operational error, never recorded
@@ -350,6 +351,7 @@ if (positionals[0] === 'record-cross-model') {
       authorProvider: values['author-provider'],
       verdict: values.verdict,
       dir: values.dir,
+      key: getKey(),
     });
   } catch (err) {
     opError(err.message); // fail closed: a same-provider or malformed attestation is exit 1, never recorded
@@ -396,7 +398,7 @@ if (positionals[0] === 'mirror-attestations') {
   // (called by manifestChainTrustworthy) returns invalid on the first line it
   // cannot JSON.parse, before readEntries' tolerant `skipped` collection could
   // ever matter — checking `skipped` again here would be unreachable dead code.
-  if (!manifestChainTrustworthy(values.dir)) {
+  if (!manifestChainTrustworthy(values.dir, key)) {
     opError(`mirror-attestations: the manifest chain at ${values.dir} does not verify — refusing to mirror from an untrustworthy manifest into the shared attestation store`);
   }
   const { entries } = readEntries('manifest', values.dir);
@@ -503,7 +505,7 @@ if (positionals[0] === 'tier-check') {
   // own manifestChainTrustworthy check passed, so satisfied ⇒ the chain verified. Re-deriving
   // it would re-read and re-verify the whole ledger on the PASS path for an answer already
   // known (cross-model review finding, MEDIUM). The || keeps the failing path exact.
-  const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir);
+  const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir, key);
   // Same short-circuit logic for the THIRD cause (#355): only worth re-deriving on the
   // failing path, and only meaningful when a store was actually supplied.
   let truncationDetected = false;
@@ -531,7 +533,7 @@ if (positionals[0] === 'tier-check') {
     // actionable ones specifically; fall back to a NEUTRAL message for the rest rather
     // than asserting a specific (and likely wrong) root cause like key rotation for
     // what could be raw ledger corruption or tampering unrelated to any key.
-    const reason = manifestChainBreakReason(values.dir);
+    const reason = manifestChainBreakReason(values.dir, key);
     const causeLine = reason === 'unsigned entry'
       ? `The usual cause is that an entry was appended WITHOUT ADLC_MANIFEST_KEY set after this ledger had already adopted signing — a config gap somewhere the entry was recorded, not a rotation. Ensure the key is set for every future record. To repair: \`adlc gate-manifest repair-chain --reason "<why>" --write --attest-unsigned\` — NOTE this re-signs EVERY currently-unsigned entry in the WHOLE manifest under today's key, including any honest legacy prefix that predates signing, not just the lapsed one; review \`adlc gate-manifest verify --allow-legacy-unsigned\` output first to confirm that is what you want.\n`
       : reason === 'signature invalid'
@@ -648,6 +650,7 @@ const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROV
 
 const result = runProsecution(input, {
   ticket: values.ticket,
+  key: getKey(),
   target: values.target,
   base: values.base,
   revision: values.revision,

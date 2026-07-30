@@ -42,6 +42,7 @@ test('real gate-manifest round-trip: a run over an unchanged ticket, against a R
 
     // Simulate a prior real coldstart run having recorded a PASS.
     record({
+      key: null,
       gate: 'coldstart',
       ticket: ticket.id,
       dir,
@@ -76,6 +77,7 @@ test('real gate-manifest round-trip: a genuinely unrecorded ticket runs fresh, t
 
     // Mirror what bin/coldstart.mjs does after checkAll returns: record the result.
     record({
+      key: null,
       gate: 'coldstart',
       ticket: ticket.id,
       dir,
@@ -97,7 +99,7 @@ test('real gate-manifest round-trip: a recorded --record-verdict entry (no data.
     const model = 'claude-haiku-4-5';
 
     // A --prompt-only --record-verdict entry has data.verdict, not data.cache.
-    record({ gate: 'coldstart', ticket: ticket.id, dir, rawData: JSON.stringify({ promptOnly: true, verdict: 'PASS: looks fine.' }) });
+    record({ key: null, gate: 'coldstart', ticket: ticket.id, dir, rawData: JSON.stringify({ promptOnly: true, verdict: 'PASS: looks fine.' }) });
 
     const checkTicketFn = makeCallCountingCheckTicketFn();
     const results = await checkAll([ticket], 'cheap', { dir, checkTicketFn, resolveModelFn: () => model });

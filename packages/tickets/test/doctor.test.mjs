@@ -292,11 +292,12 @@ test('doctor storehash-manifest-bind: with a key set, a validly-signed manifest 
   const { root, store } = storeWithEvidence();
   const prevKey = process.env.ADLC_MANIFEST_KEY;
   try {
-    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
     const live = store.load().hash;
     writeSignedManifest(root, 'test-signing-key', { storeHash: live });
 
-    const check = bindCheck(doctorTicketStore(store, { root }));
+    // The key is an EXPLICIT parameter now — env manipulation is inert by design
+    // (spec Layer 2, P1): doctor consults only what it is handed.
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
     assert.equal(check.ok, true, 'a correctly-signed ledger verifies');
     assert.equal(check.signaturesVerified, true, 'and reports that signatures WERE checked');
     assert.notEqual(check.drift, true, 'the bound hash matches the live store');
@@ -310,14 +311,13 @@ test('doctor storehash-manifest-bind: an in-place edit of the FINAL entry storeH
   const { root, store } = storeWithEvidence();
   const prevKey = process.env.ADLC_MANIFEST_KEY;
   try {
-    process.env.ADLC_MANIFEST_KEY = 'test-signing-key';
     const entry = writeSignedManifest(root, 'test-signing-key', { storeHash: store.load().hash });
     // The exploit: rewrite the last entry's storeHash but leave its signature (and
     // the chain, which does not protect the final line) untouched.
     const forged = { ...entry, data: { ...entry.data, storeHash: 'deadbeefdeadbeef' } };
     writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${JSON.stringify(forged)}\n`);
 
-    const report = doctorTicketStore(store, { root });
+    const report = doctorTicketStore(store, { root, key: 'test-signing-key' });
     const check = bindCheck(report);
     assert.equal(check.ok, false, 'the tampered final entry fails verification');
     assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');

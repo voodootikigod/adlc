@@ -20,6 +20,7 @@ import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { ticketHash, writeActiveTicket } from '@adlc/tickets';
 import { recordGateEvent } from './evidence.mjs';
 import { buildRollbackCandidates } from './rollback.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 // Parse a CLI's `--json` stdout into an object, or null when it is not JSON.
 // pi.exec results carry stdout as a string; a non-JSON body (an operational
@@ -303,6 +304,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           ticket: ticketId,
           rawData: JSON.stringify({ spec: specArg, sha256: hash, verdict: 'approved' }),
           dir: join(root, '.adlc'),
+          key: getKey(),
         });
       } catch (err) {
         ctx.ui.notify(`ADLC: failed to record spec approval: ${err.message}`, 'error');

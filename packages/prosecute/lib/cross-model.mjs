@@ -24,8 +24,9 @@ import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // proves each attestation was signed with the CI-only key, so a PR author cannot FORGE
 // a fresh, well-chained approve. The chain check alone left that forge open by design.
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
-import { getKey, verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
+import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { assertNoTruncation } from './attestation-store.mjs';
+import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 // T-MANIFEST-FOREST slice 2: the gate now walks the whole forest (root + segments),
 // not just root — see readManifestForest's doc for the deterministic ordering that
 // makes "which chain an entry lives in" a non-issue for crossModelSatisfied below
@@ -69,7 +70,8 @@ function normalizeProvider(value) {
  *
  * @returns the recorded manifest entry.
  */
-export function recordCrossModelReview({ ticket, revision, provider, authorProvider, verdict, dir } = {}) {
+export function recordCrossModelReview({ ticket, revision, provider, authorProvider, verdict, dir, key } = {}) {
+  key = validateKeyParam(key);
   requireNonEmptyString(ticket, 'ticket');
   requireNonEmptyString(revision, 'revision');
   requireNonEmptyString(provider, 'provider');
@@ -86,6 +88,7 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
     ticket,
     rawData: JSON.stringify({ provider, authorProvider, verdict, revision }),
     dir,
+    key,
   });
 }
 
@@ -151,7 +154,8 @@ function latestEntryForTicket(entries, ticket) {
  * SIGNED entry carrying it forward — laundering a forged claim into a real attestation through
  * whoever holds the signing key.
  */
-export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key = getKey() } = {}) {
+export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key } = {}) {
+  key = validateKeyParam(key);
   requireNonEmptyString(ticket, 'ticket');
   requireNonEmptyString(fromRevision, 'fromRevision');
   requireNonEmptyString(revision, 'revision');
@@ -178,7 +182,7 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   if (!key) {
     throw new Error('carry-forward refused: no signing key available, so the prior entry cannot be signature-verified');
   }
-  if (!manifestChainTrustworthy(dir)) {
+  if (!manifestChainTrustworthy(dir, key)) {
     throw new Error('carry-forward refused: the manifest hash chain does not verify — a broken chain could be hiding a dropped revocation');
   }
   // Deliberately root-only for finding the chain's "latest" entry (T-MANIFEST-FOREST
@@ -253,6 +257,7 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   return record({
     gate: CROSS_MODEL_GATE,
     ticket,
+    key,
     rawData: JSON.stringify({
       provider: prior.data.provider,
       authorProvider: prior.data.authorProvider,
@@ -417,8 +422,8 @@ function crossModelSatisfied(entries, match) {
 // adversarial review before record-cross-model finally names the real cause. Exposing the
 // predicate lets the CLI attribute the failure correctly; it changes no decision, and the
 // gating call below is unchanged, so nothing here relaxes what is enforced.
-export function manifestChainTrustworthy(dir) {
-  return verify(dir, { requireSignatures: false }).valid === true;
+export function manifestChainTrustworthy(dir, key) {
+  return verify(dir, { requireSignatures: false, key: validateKeyParam(key) }).valid === true;
 }
 
 // #378 — since manifestChainTrustworthy's requireSignatures:false is now scoped
@@ -428,14 +433,15 @@ export function manifestChainTrustworthy(dir) {
 // a NEW failure mode this predicate can report, that unscoped tolerance never
 // could). Callers that attribute the failure to the operator (e.g. tier-check's
 // diagnostic) need to tell these apart rather than always blaming rotation.
-export function manifestChainBreakReason(dir) {
-  return verify(dir, { requireSignatures: false }).break?.reason ?? null;
+export function manifestChainBreakReason(dir, key) {
+  return verify(dir, { requireSignatures: false, key: validateKeyParam(key) }).break?.reason ?? null;
 }
 
-export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, key = getKey() } = {}) {
+export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, key } = {}) {
+  key = validateKeyParam(key);
   // No key → the reader cannot verify any attestation's signature → nothing is trusted.
   if (!ticket || !revision || !authorProvider || !key) return false;
-  if (!manifestChainTrustworthy(dir)) return false;
+  if (!manifestChainTrustworthy(dir, key)) return false;
   // Walks the whole forest (root + segments) — safe now that crossModelSatisfied
   // is order-independent (see its comment): there is no single total order
   // across chains to get wrong.
@@ -467,7 +473,8 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, ke
  * not be mistaken for a dropped entry in a different author's manifest, which never
  * held it and was never meant to.
  */
-export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key = getKey(), observedEntries } = {}) {
+export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key, observedEntries } = {}) {
+  key = validateKeyParam(key);
   // No key → cannot verify a signature → fail closed (an unverifiable attestation is a
   // forgeable one; the CI gate must not trust the PR-controlled manifest without the key).
   // Only the key is fast-checked here: a missing/empty `revision` or `authorProvider` is
@@ -475,7 +482,7 @@ export function hasCrossModelApproveForRevision({ dir, revision, authorProvider,
   // entry's `data.revision`; an empty runAuthor is rejected), so guarding them here too
   // would be redundant and unverifiable — candidateReview is the single enforcement point.
   if (!key) return false;
-  if (!manifestChainTrustworthy(dir)) return false;
+  if (!manifestChainTrustworthy(dir, key)) return false;
   // See hasCrossModelApprove above: walks the whole forest.
   const { entries } = readManifestForest(dir);
   if (observedEntries !== undefined) {

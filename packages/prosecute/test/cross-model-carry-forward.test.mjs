@@ -16,16 +16,23 @@ import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  recordCrossModelReview, carryForwardCrossModelReview, CARRY_FORWARD_MAX_DEPTH,
+  recordCrossModelReview as realRecordCrossModelReview, carryForwardCrossModelReview as realCarryForwardCrossModelReview, CARRY_FORWARD_MAX_DEPTH,
 } from '../lib/cross-model.mjs';
 import { readEntries, ledgerPath, sha256 } from '@adlc/core';
 
 process.env.ADLC_MANIFEST_KEY = 'carry-forward-test-key';
 
+// Explicit-key wrappers (spec Layer 2): env stays set only to prove it is inert.
+let currentKey = 'carry-forward-test-key';
+const recordCrossModelReview = (o = {}) => realRecordCrossModelReview({ key: currentKey, ...o });
+const carryForwardCrossModelReview = (o = {}) => realCarryForwardCrossModelReview({ key: currentKey, ...o });
+
 function withoutKey(fn) {
   const prev = process.env.ADLC_MANIFEST_KEY;
+  const prevCurrent = currentKey;
+  currentKey = null;
   delete process.env.ADLC_MANIFEST_KEY;
-  try { return fn(); } finally { if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
+  try { return fn(); } finally { currentKey = prevCurrent; if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
 }
 
 function ledger() {
@@ -44,8 +51,8 @@ const BASE3 = '3'.repeat(40);
 const BASE4 = '4'.repeat(40);
 const BASE5 = '5'.repeat(40);
 
-const seed = (dir, revision) => recordCrossModelReview({
-  ticket: 'T1', revision, provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir,
+const seed = (dir, revision, over = {}) => recordCrossModelReview({
+  ticket: 'T1', revision, provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir, ...over,
 });
 const carry = (dir, fromRevision, revision) => carryForwardCrossModelReview({
   ticket: 'T1', fromRevision, revision, dir,
@@ -157,15 +164,14 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
 
   it('refuses to carry forward a prior entry signed with a DIFFERENT (attacker-controlled) key', () => {
     const dir = ledger();
-    const prev = process.env.ADLC_MANIFEST_KEY;
     try {
-      process.env.ADLC_MANIFEST_KEY = 'attacker-controlled-key';
-      seed(dir, rev(BASE1));
-      process.env.ADLC_MANIFEST_KEY = prev; // back to the real key
+      // Explicit keys per call (spec Layer 2): the attacker seeds under THEIR key;
+      // the carry attempt runs under the real one. No env mutation involved.
+      seed(dir, rev(BASE1), { key: 'attacker-controlled-key' });
       // A present-but-wrong-key signature is TAMPERING (#354 F1), which the chain check itself
       // already rejects — either refusal reason is correct; what matters is that it refuses.
       assert.throws(() => carry(dir, rev(BASE1), rev(BASE2)), /not signature-verified|manifest hash chain does not verify/);
-    } finally { process.env.ADLC_MANIFEST_KEY = prev; clean(dir); }
+    } finally { clean(dir); }
   });
 
   it('refuses to carry forward with NO signing key available, even for a genuinely-signed prior entry', () => {

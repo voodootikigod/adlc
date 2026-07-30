@@ -7,6 +7,7 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 /**
  * Validate `.adlc/current-ticket.json` the way the gates read it.
@@ -64,12 +65,6 @@ function currentTicketCheck(root, snapshot) {
 // tickets (the base layer) would create a cycle. The v1 form is a fixed key order;
 // v2 signs canonical JSON of every field but `sig` (this package's canonicalJson is
 // byte-identical to core's, verified by test). Keep in lockstep with sign.mjs.
-const MANIFEST_KEY_ENV = 'ADLC_MANIFEST_KEY';
-
-function manifestKey(env = process.env) {
-  const k = env[MANIFEST_KEY_ENV];
-  return typeof k === 'string' && k.length > 0 ? k : null;
-}
 
 function canonicalEntryBytes(entry) {
   if (entry.sigVersion === 2) {
@@ -93,7 +88,7 @@ function entrySigValid(key, entry) {
   return timingSafeEqual(a, b);
 }
 
-function storeHashBindingCheck(root, snapshot) {
+function storeHashBindingCheck(root, snapshot, key) {
   const check = { name: 'storehash-manifest-bind', ok: true };
   // No live storeHash to compare — the active-store check already carries that
   // failure; stay inert here rather than double-reporting or throwing.
@@ -114,7 +109,6 @@ function storeHashBindingCheck(root, snapshot) {
   // arbitrary "bound" hash, and a malformed line silently skipped could hide a break.
   // The chain format is the ledger writer's (evidence.mjs / ledger.mjs): each entry's
   // `prev` is sha256 of the previous raw line, and `seq` increments from 1.
-  const key = manifestKey();
   let boundStoreHash = null;
   let prevLine = null;
   let prevSeq = 0;
@@ -177,7 +171,7 @@ function storeHashBindingCheck(root, snapshot) {
   return check;
 }
 
-export function doctorTicketStore(store, { root = '.', archive = false } = {}) {
+export function doctorTicketStore(store, { root = '.', archive = false, key: keyParam = null } = {}) {
   const checks = [];
   let snapshot = null;
   try {
@@ -191,7 +185,7 @@ export function doctorTicketStore(store, { root = '.', archive = false } = {}) {
   const lockPath = join(root, LOCK_DIRECTORY);
   checks.push({ name: 'writer-lock', ok: !existsSync(lockPath), present: existsSync(lockPath), metadata: readTicketLock(root) });
   checks.push(currentTicketCheck(root, snapshot));
-  checks.push(storeHashBindingCheck(root, snapshot));
+  checks.push(storeHashBindingCheck(root, snapshot, validateKeyParam(keyParam)));
   if (archive) {
     const path = join(root, ARCHIVE_DIRECTORY);
     if (!existsSync(path)) checks.push({ name: 'archive', ok: true, present: false, ticketCount: 0 });

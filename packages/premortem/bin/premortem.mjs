@@ -3,6 +3,7 @@
 
 import { parseArgs, opError } from '@adlc/core';
 import { run } from '../lib/run.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 const { values, positionals } = parseArgs({
   options: {
@@ -58,4 +59,5 @@ await run({
   json: values.json,
   promptOnlyMode: values['prompt-only'],
   recordVerdictSource: values['record-verdict'],
+  key: getKey(),
 });
