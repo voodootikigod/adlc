@@ -39,13 +39,18 @@ const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 export const MAX_CONFIG_JSON_BYTES = 65536;
 
 /**
- * True iff `generation` is a legacy (pre-adoption / generation-0) marker: absent, null,
- * the number 0, or the string '0'.
+ * True iff `generation` is a legacy (pre-adoption / generation-0) marker: absent, the
+ * number 0, or the string '0'. `null` is DELIBERATELY EXCLUDED — an absent `generation`
+ * field means "never rotated, still legacy" (a legitimate, common state), but an
+ * EXPLICIT `null` in a record that otherwise validates is not a documented value at
+ * all; treating it as legacy-equivalent would let a corrupted or tampered record
+ * (`signing.generation: null`, e.g. from a serialization bug that dropped a real id)
+ * silently downgrade to the historical forest instead of failing validation.
  * @param {unknown} generation
  * @returns {boolean}
  */
 export function isLegacyGeneration(generation) {
-  return generation === undefined || generation === null || generation === 0 || generation === '0';
+  return generation === undefined || generation === 0 || generation === '0';
 }
 
 /**
@@ -79,16 +84,18 @@ export function resolveGenerationDir(dir, generation) {
 }
 
 /**
- * Verify no path component between `dir` (exclusive) and `targetPath` (inclusive) is a
- * symlink — i.e. that `targetPath` is genuinely reached by descending real directories
- * from `dir`, not redirected through a component a branch committed as a symlink (e.g.
- * `.adlc/manifest-generations/g1` pointing at an attacker-controlled directory
- * elsewhere in the checkout, OR `manifest-generations/g1/manifest.jsonl` itself being a
- * symlink to a decoy file or an unbounded device while every directory ABOVE it is
- * genuinely real). `targetPath` may be a directory (e.g. `generationDir` or
- * `segmentDirPath`) or a file (e.g. `manifestPath`) — every INTERMEDIATE component must
- * be a real directory, but the FINAL component is only required not to be a symlink
- * (only its intermediate ancestors are directory-checked).
+ * Verify `dir` ITSELF plus no path component between `dir` (exclusive) and
+ * `targetPath` (inclusive) is a symlink — i.e. that `targetPath` is genuinely reached
+ * by descending real directories from a genuinely real `dir`, not redirected through
+ * `.adlc` itself being a symlink (which would silently relocate the adoption record,
+ * every generation, and everything else this module resolves), nor through a
+ * component a branch committed as a symlink (e.g. `.adlc/manifest-generations/g1`
+ * pointing at an attacker-controlled directory elsewhere in the checkout), nor through
+ * `manifest-generations/g1/manifest.jsonl` itself being a symlink to a decoy file or an
+ * unbounded device while every directory ABOVE it is genuinely real). `targetPath` may
+ * be a directory (e.g. `generationDir` or `segmentDirPath`) or a file (e.g.
+ * `manifestPath`) — every INTERMEDIATE component (including `dir` itself) must be a
+ * real directory, but the FINAL component is only required not to be a symlink.
  *
  * resolveGenerationDir/resolveActiveGenerationPaths return PATH STRINGS ONLY and never
  * touch the filesystem — this is deliberate (this module has no consumers yet, and a
@@ -100,28 +107,27 @@ export function resolveGenerationDir(dir, generation) {
  * once, cached, at an earlier point, and not only on the directory while trusting the
  * leaf file beneath it — exactly as this module's own readAdoptionRecord,
  * @adlc/gate-manifest's forest.mjs, and @adlc/tickets's own manifest-segments.mjs
- * already do lstatSync-immediately-before-open at their own point of access. A no-op
- * for the legacy layout (targetPath === dir): there is nothing beneath dir to confine.
- * @param {string} dir  the .adlc directory (trusted; never itself re-checked here)
+ * already do lstatSync-immediately-before-open at their own point of access.
+ * @param {string} dir  the .adlc directory (now itself verified, not assumed trusted)
  * @param {string} targetPath  a path returned by resolveActiveGenerationPaths
  *   (generationDir, manifestPath, or segmentDirPath) — the EXACT path about to be used
- * @param {{mustExist?: boolean}} [options]  mustExist: throw on a not-yet-created
- *   component too (default false — a component that does not exist yet has nothing to
- *   redirect through, which is the normal case before a generation's first write)
+ * @param {{mustExist?: boolean}} [options]  mustExist: whether a not-yet-created
+ *   component fails closed (true) or is tolerated as "nothing to redirect through yet"
+ *   (false). DEFAULTS TO TRUE: the common case is verifying an ALREADY-ACTIVE
+ *   generation an adoption record names, which must genuinely exist — a missing active
+ *   generation silently passing would let a partial checkout, failed recovery, or
+ *   tampering look like a valid empty forest to code that treats "no error" as "safe to
+ *   read" and a missing file as "empty". Only an off-path TRANSITION BUILDER
+ *   constructing a brand-new, not-yet-published generation should opt into
+ *   `mustExist: false` explicitly.
  */
-export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = false } = {}) {
-  if (targetPath === dir) return;
-  const rel = relative(dir, targetPath);
-  const parts = rel.split(sep);
-  let current = dir;
-  for (let i = 0; i < parts.length; i += 1) {
-    current = join(current, parts[i]);
-    const isLast = i === parts.length - 1;
+export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = true } = {}) {
+  const checkComponent = (current, isLast) => {
     let st;
     try {
       st = lstatSync(current);
     } catch (err) {
-      if (err.code === 'ENOENT' && !mustExist) return;
+      if (err.code === 'ENOENT' && !mustExist) return false;
       throw invalid('GENERATION_DIR_UNSAFE', `cannot verify ${current} is safe: ${err.code ?? err.message}`);
     }
     if (st.isSymbolicLink()) {
@@ -130,6 +136,18 @@ export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = f
     if (!isLast && !st.isDirectory()) {
       throw invalid('GENERATION_DIR_UNSAFE', `${current} is not a directory`);
     }
+    return true;
+  };
+
+  if (!checkComponent(dir, targetPath === dir)) return;
+  if (targetPath === dir) return;
+
+  const rel = relative(dir, targetPath);
+  const parts = rel.split(sep);
+  let current = dir;
+  for (let i = 0; i < parts.length; i += 1) {
+    current = join(current, parts[i]);
+    if (!checkComponent(current, i === parts.length - 1)) return;
   }
 }
 
