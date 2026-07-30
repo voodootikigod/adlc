@@ -20,7 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +28,8 @@ import { pull } from '../lib/pull.mjs';
 import { push } from '../lib/push.mjs';
 import { serializeBlock } from '../lib/block.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
-import { recordTicketEvidence } from '@adlc/tickets';
+import { recordTicketEvidence, segmentPath } from '@adlc/tickets';
+import { sha256 } from '@adlc/core';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // The REAL consumer gate, resolved from the repo root (packages/ticket-sync/test → root).
@@ -351,14 +352,17 @@ test('pull still deletes a block field the remote dropped', async () => {
 // committed segment holds real evidence — the exact scenario the original
 // ticket named: a fresh CI checkout of a branch with committed segment
 // evidence.
-test('push recovers real evidence across a lost .lineage token (fresh-clone/branch-switch case) — succeeds, never refuses', async () => {
+test('push recovers real evidence across a lost .lineage token (fresh-clone/branch-switch case) — publishes the REAL status, not a stale/missing one', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-recovery-'));
   try {
     git(dir, ['init', '-q', '-b', 'feat/push-recovery']);
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
     mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [] }, null, 2)}\n`);
+    writeFileSync(
+      join(dir, '.adlc', 'tickets.json'),
+      `${JSON.stringify({ tickets: [{ id: 'T1', title: 'Do the thing', scope: ['src/**'], duration: 1 }] }, null, 2)}\n`,
+    );
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'base']);
     writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
@@ -367,10 +371,24 @@ test('push recovers real evidence across a lost .lineage token (fresh-clone/bran
     // shape elsewhere in this package's tests.
     mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
     writeFileSync(join(dir, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    // Mints the segment's first (anchor + branch carrying) entry.
     recordTicketEvidence(dir, {
       transactionId: 'tx-1', operation: 'complete', ticketId: 'T1',
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
     });
+    // A REAL P5 pass for T1, hand-appended as the segment's second entry — this
+    // is the evidence a lost token must not hide from outcomes.mjs's status
+    // reduction. Root stays untouched (rootless segmented repo), so a fallback
+    // to root-only would find NOTHING for T1, not merely a stale value.
+    const segDir = join(dir, '.adlc', 'manifest.d');
+    const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+    const segPath = segmentPath(join(dir, '.adlc'), segName);
+    const firstRawLine = readFileSync(segPath, 'utf8').trim().split('\n')[0];
+    const p5 = {
+      seq: 2, gate: 'prosecution', ts: '2026-06-01T00:00:00Z', ticket: 'T1',
+      data: { verdict: 'clear' }, files: {}, prev: sha256(firstRawLine),
+    };
+    writeFileSync(segPath, `${firstRawLine}\n${JSON.stringify(p5)}\n`);
     // Discard the token — this checkout can no longer identify its own segment
     // by token, only by the exact `branch` field the segment's first entry
     // carries, even though a real committed segment (with real evidence) exists
@@ -378,8 +396,12 @@ test('push recovers real evidence across a lost .lineage token (fresh-clone/bran
     rmSync(join(dir, '.adlc', 'manifest.d', '.lineage'), { force: true });
 
     const gh = fakeGitHub();
-    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: false, now: 'T' });
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
     assert.equal(r.exitCode, 0, `must recover and succeed, never refuse: ${JSON.stringify(r.errors)}`);
+    assert.ok(
+      gh.state.issues[0].labels.includes('adlc:passed'),
+      `recovered p5-pass evidence must be published — a lost token must never publish a missing/stale status instead: ${JSON.stringify(gh.state.issues[0]?.labels)}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -327,6 +327,7 @@ test('migrateManifestEvidence mints a segment whose FIRST entry carries an ancho
     const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
     const first = JSON.parse(raw[0]);
     assert.equal(Object.hasOwn(first, 'anchor'), true, 'the segment\'s first entry must carry the anchor');
+    assert.equal(first.branch, 'feat/reassign-test', 'the segment\'s first entry must also carry the exact minting branch (T-MANIFEST-FOREST, fourth round)');
     assert.equal(first.data.migratedFrom, 'T7', 'it re-attests the ROOT evidence forward, not a no-op mint');
     assert.equal(first.sigVersion, 2, 'an anchor-carrying entry must be signed at v2');
     const { sig: _sig, segment: _segment, ...signed } = first;
