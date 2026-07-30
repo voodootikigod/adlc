@@ -36,10 +36,17 @@ node_modules/
 # same as manifest.jsonl above — Fleet's segmented completion commits these
 # (packages/fleet/lib/complete.mjs). The lineage token stays untracked: it is
 # branch-local bookkeeping (which segment THIS checkout has open), never
-# meant to travel with the commit (spec §7 point 1).
+# meant to travel with the commit (spec §7 point 1). `*.lock` (adversarial-
+# review finding) is @adlc/core's withLedgerLock advisory lock file — transient,
+# unlinked when the critical section exits, but a crashed writer can leave one
+# behind with a live owner record. This codebase's locks are never stolen from
+# a potentially-live owner (see evidence.test.mjs), so a COMMITTED stale lock
+# would deadlock every future writer permanently; it must never be trackable,
+# same as `.lineage` itself.
 !.adlc/manifest.d/
 !.adlc/manifest.d/**
 .adlc/manifest.d/.lineage
+.adlc/manifest.d/*.lock
 # P7 findings ledger (ADR 0014). Tracked like the manifest above so the P5→P7
 # bridge survives fleet worktrees and CI and the lesson-foundry gate can run
 # against real data. Entries are CURATED PROSE finding records — never raw tool

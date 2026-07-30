@@ -116,6 +116,23 @@ test('.adlc/findings.jsonl is tracked (its negation is live), so the P7 ledger i
   );
 });
 
+test('T-MANIFEST-FOREST segments are tracked, but the lineage token and lock files never are (spec §4.8)', () => {
+  // Adversarial-review finding: `!.adlc/manifest.d/**` un-ignores EVERYTHING under
+  // the directory by design (segments must be trackable), but a bare `.adlc/manifest.d/.lineage`
+  // re-ignore only re-excludes that one exact name — @adlc/core's withLedgerLock
+  // advisory lock files (`.lineage.lock`, `<segment>.jsonl.lock`) are a DIFFERENT
+  // name and would otherwise be swept up as trackable too. This codebase's locks
+  // are never stolen from a potentially-live owner, so a lock file committed by a
+  // crashed writer's `git add -A` would deadlock every future writer permanently —
+  // dedicated guard, not just the generic negation scan above (which only checks
+  // `!` lines, not these `.lock` RE-ignore lines).
+  assert.equal(isIgnored('.adlc/manifest.d/some-segment-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), false, 'a segment file must be trackable');
+  assert.equal(isIgnored('.adlc/manifest.d/.store.json'), false, 'the activation marker must be trackable');
+  assert.equal(isIgnored('.adlc/manifest.d/.lineage'), true, 'the lineage token must stay untracked (branch-local bookkeeping)');
+  assert.equal(isIgnored('.adlc/manifest.d/.lineage.lock'), true, 'a stale lineage lock must never be committable — this codebase never steals locks');
+  assert.equal(isIgnored('.adlc/manifest.d/some-segment-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl.lock'), true, 'a stale segment lock must never be committable');
+});
+
 test('the guard itself detects a stranded negation (self-test)', () => {
   // Pins the mechanism the assertion above depends on. Without this, a bug that
   // made isIgnored() always return false would leave the real test green while

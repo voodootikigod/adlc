@@ -15,7 +15,8 @@
 // inside the repo, which disables loading rather than reading it.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { computeFloat, readEntries, ADLC_DIR } from '@adlc/core';
+import { computeFloat, ADLC_DIR } from '@adlc/core';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { assignAll } from '@adlc/model-router/lib/assign.mjs';
 import { buildPriors } from '@adlc/model-router/lib/priors.mjs';
 import { activeTickets as routableTickets } from '@adlc/model-router/lib/active-tickets.mjs';
@@ -178,7 +179,7 @@ export function planSeats({
 
   const cpm = computeFloat(routable);
   if (cpm.error) throw new Error(`quartermaster: cannot route — ${cpm.error}`);
-  const { entries } = readEntries('manifest', adlcDir);
+  const { entries } = readManifestForest(adlcDir);
   const assignments = assignAll(routable, cpm, buildPriors(entries), floor);
   const assignmentById = new Map(assignments.map((a) => [a.id, a]));
 

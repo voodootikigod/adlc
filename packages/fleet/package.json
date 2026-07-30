@@ -29,6 +29,7 @@
   ],
   "dependencies": {
     "@adlc/core": "1.7.0",
+    "@adlc/gate-manifest": "1.7.0",
     "@adlc/model-router": "1.7.0",
     "@adlc/quartermaster": "1.7.0",
     "@adlc/tickets": "1.7.0"

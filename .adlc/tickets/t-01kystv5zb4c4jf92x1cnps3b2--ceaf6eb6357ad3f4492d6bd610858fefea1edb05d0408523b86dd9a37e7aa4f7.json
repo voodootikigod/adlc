@@ -1,0 +1,16 @@
+{
+  "body": "readOwnChains (packages/tickets/lib/manifest-segments.mjs) and its mirror peekOpenSegment (packages/gate-manifest/lib/lineage.mjs) can only find THIS checkout's currently-open segment via the local, gitignored .lineage token. That token never travels with a clone (it is deliberately untracked, spec section 7 point 1) and is overwritten whenever the checkout switches to a different branch that also has an open segment. Consequently: a fresh CI checkout of a branch that already has committed segment evidence sees only root via readOwnChains, so ticket-sync push, doctor's storeHashBindingCheck, id reassignment, and prosecute's cross-model carry-forward all silently behave as though no segment evidence exists. In ticket-sync this is externally visible: a push can remove a configured status label and replace it with 'no gate evidence recorded yet' even though the branch's segment, committed and pushed, says otherwise. Surfaced by a distinct-provider adversarial review (Codex) of PR #411 (T-MANIFEST-FOREST slice 3); confidence 0.99, HIGH severity, both rounds of review (first flagged as 'Committed evidence disappears from consumers when the local lineage token is absent', reconfirmed the second round with the added A-to-B-to-A branch-switch case). Deliberately deferred rather than fixed inline in slice 3: a robust fix needs a real design decision (persist enough tracked lineage identity to recover across clones, e.g. matching by branch-derived slug plus a scan-and-disambiguate fallback, or fail closed and require the caller to specify a segment explicitly) rather than a rushed patch to a security-relevant read path this late in an already-large PR.\n\nAcceptance criteria:\n1. A fresh clone of a branch with already-committed segment evidence still resolves that evidence via readOwnChains/readOwnChains-equivalent APIs used by ticket-sync push, doctor, reassignment, and prosecute carry-forward -- without requiring a local .lineage token to already exist. Verify: a new test that clones a fixture repo fresh (no .lineage) and asserts the segment evidence is found.\n2. A checkout that switches A to B to A does not lose visibility into A's own already-open segment merely because B's open-segment resolution overwrote the token in between. Verify: a new test exercising exactly that sequence.\n3. Where full recovery is not possible (e.g. multiple candidate segments for one branch with no disambiguating signal), the consumer fails closed (refuses / reports uncertain) rather than silently reporting 'no evidence' -- never a false negative that looks like a clean, evidence-free state. Verify: a new test for the ambiguous-candidates case.\n4. Full suite green: npm test.",
+  "category": "bug",
+  "duration": 3,
+  "edges": [],
+  "id": "T-01KYSTV5ZB4C4JF92X1CNPS3B2",
+  "rails": [],
+  "scope": [
+    "packages/tickets/lib/manifest-segments.mjs",
+    "packages/gate-manifest/lib/lineage.mjs",
+    "packages/ticket-sync/**",
+    "packages/tickets/lib/doctor.mjs",
+    "packages/prosecute/lib/cross-model.mjs"
+  ],
+  "title": "Make .lineage recovery durable across fresh clones and branch switches (T-MANIFEST-FOREST)"
+}
