@@ -13,7 +13,7 @@
 //      emits, which is exactly the assumption worth testing.
 //
 // NOTE: the fleet's per-ticket gate-manifest RECORDING of this usage is not
-// covered here. It is blocked on T-01KYSNGQB4W8CTX16FMD6QAK67 — fleet records
+// covered here. It is blocked on issue #418 — fleet records
 // `gate: 'p4'`, which PHASE_BY_GATE does not map, so such an entry aggregates
 // to 'unphased' rather than byPhase.P4. Asserting byPhase.P4 today would mean
 // either editing spend.mjs (a T152 rail) or recording under a gate name that
@@ -208,7 +208,7 @@ describe('P4 dispatch usage — test integrity', () => {
 // produce it. What they do NOT assert is `aggregate.byPhase.P4`: the fleet
 // records `gate: 'p4'`, which PHASE_BY_GATE does not map, so such an entry
 // aggregates to 'unphased'. That two-line mapping change is
-// T-01KYSNGQB4W8CTX16FMD6QAK67, which cannot land until T152 completes and its
+// issue #418, which cannot land until T152 completes and its
 // spend.mjs rail expires. Flipping these assertions to byPhase.P4 is that
 // ticket's final step.
 
