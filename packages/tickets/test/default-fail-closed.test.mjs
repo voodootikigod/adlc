@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DirectoryTicketStore, archiveTicket, restoreTicket, doctorTicketStore,
 } from '../index.mjs';
@@ -105,7 +106,7 @@ test('store recover routes by journal.operation: an interrupted MIGRATE journal 
       write: true, yes: true, requireClean: false, key: null,
       faultInjector(name) { if (name === 'directory-renamed') throw new Error('fault:directory-renamed'); },
     }), /fault:directory-renamed/);
-    const bin = new URL('../bin/adlc-tickets.mjs', import.meta.url).pathname;
+    const bin = fileURLToPath(new URL('../bin/adlc-tickets.mjs', import.meta.url));
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [bin, 'store', 'recover', '--complete', '--json'], {
