@@ -53,6 +53,60 @@ const AGY_TIMEOUT_MS = resolveAgyTimeoutMs(process.env.ADLC_AGY_TIMEOUT_MS);
 /** Grace between SIGTERM and SIGKILL. */
 const AGY_GRACE_MS = 2_000;
 
+/** Children currently running, and staging dirs to remove if we are interrupted. */
+const activeChildren = new Set();
+const activeStages = new Set();
+
+/**
+ * Signal a child's whole PROCESS GROUP, falling back to the child alone.
+ *
+ * Negative PID targets the group. The fallback covers a group that is already
+ * gone (ESRCH) or a platform that refuses the form, so a kill failure can never
+ * turn a bound into an unhandled throw.
+ */
+function signalGroup(child, signal) {
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/**
+ * Forward Ctrl-C (and SIGTERM) to agy's process group before exiting.
+ *
+ * agy is spawned DETACHED so the timeout can bound its whole tree — and that same
+ * detachment means the terminal's Ctrl-C never reaches it: the signal goes to our
+ * foreground group only. Without this, Ctrl-C returns the user's prompt while agy
+ * carries on rewriting ~/.gemini/config/plugins behind them, and a retry races an
+ * install they believe they cancelled. The staging `finally` does not run either,
+ * because the default disposition terminates us outright.
+ */
+let shuttingDown = false;
+function onInterrupt(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const child of activeChildren) signalGroup(child, 'SIGTERM');
+  setTimeout(() => {
+    for (const child of activeChildren) signalGroup(child, 'SIGKILL');
+    for (const stage of activeStages) {
+      try {
+        rmSync(stage, { recursive: true, force: true });
+      } catch {
+        // best effort — we are on our way out
+      }
+    }
+    // 128 + signal number, the shell convention for signal-terminated exits.
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  }, AGY_GRACE_MS).unref();
+}
+process.on('SIGINT', () => onInterrupt('SIGINT'));
+process.on('SIGTERM', () => onInterrupt('SIGTERM'));
+
 /**
  * Run a command under a HARD wall-clock bound.
  *
@@ -84,54 +138,54 @@ function runBounded(command, args, { inherit = false } = {}) {
       // signalled. Signalling just the child PID bounds only the process we
       // spawned: an agy that forks a worker leaves that worker running after the
       // timeout, holding inherited descriptors and outliving the staging directory
-      // it was reading from. This project's own timeout stub is that topology — a
-      // shell plus `sleep` — and it was leaking a sleep process on every run.
+      // it was reading from.
       child = spawn(command, args, { stdio: inherit ? 'inherit' : 'ignore', detached: true });
     } catch (error) {
       resolvePromise({ status: null, error });
       return;
     }
-
-    // Negative PID targets the group. Falls back to the single child if the group
-    // is already gone (ESRCH) or the platform refuses it, so a kill failure can
-    // never turn the bound into an unhandled throw.
-    const signalTree = (signal) => {
-      try {
-        process.kill(-child.pid, signal);
-      } catch {
-        try {
-          child.kill(signal);
-        } catch {
-          // already gone
-        }
-      }
-    };
+    activeChildren.add(child);
 
     let timedOut = false;
     let killTimer;
-    const termTimer = setTimeout(() => {
-      timedOut = true;
-      signalTree('SIGTERM');
-      killTimer = setTimeout(() => signalTree('SIGKILL'), AGY_GRACE_MS);
-    }, AGY_TIMEOUT_MS);
-
-    const done = (result) => {
+    let settled = false;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(termTimer);
       clearTimeout(killTimer);
+      activeChildren.delete(child);
       resolvePromise(result);
     };
-    child.on('error', (error) => done({ status: null, error }));
-    child.on('exit', (code) => done(
-      timedOut
-        ? {
-            status: null,
-            error: new Error(
-              `timed out after ${AGY_TIMEOUT_MS}ms` +
-                ' — raise the bound with ADLC_AGY_TIMEOUT_MS=<milliseconds> if this install is legitimately slow',
-            ),
-          }
-        : { status: code },
-    ));
+
+    const termTimer = setTimeout(() => {
+      timedOut = true;
+      signalGroup(child, 'SIGTERM');
+      // Escalation is deliberately NOT cancelled by the leader exiting. A group
+      // leader that handles SIGTERM promptly can exit while a worker ignores it;
+      // clearing this timer on the leader's exit would resolve the promise and
+      // delete the staging directory with that worker still running against it.
+      // So the timeout path always waits for the group SIGKILL before settling.
+      killTimer = setTimeout(() => {
+        signalGroup(child, 'SIGKILL');
+        settle({
+          status: null,
+          error: new Error(
+            `timed out after ${AGY_TIMEOUT_MS}ms` +
+              ' — raise the bound with ADLC_AGY_TIMEOUT_MS=<milliseconds> if this install is legitimately slow',
+          ),
+        });
+      }, AGY_GRACE_MS);
+    }, AGY_TIMEOUT_MS);
+
+    child.on('error', (error) => settle({ status: null, error }));
+    child.on('exit', (code) => {
+      // Waits on 'exit', not 'close': 'close' waits for stdio EOF, which a
+      // GRANDCHILD holds open long after the child is gone. Nothing here reads the
+      // child's output, so there is no pipe to own.
+      if (timedOut) return; // the escalation above owns settling this path
+      settle({ status: code });
+    });
   });
 }
 
@@ -213,6 +267,7 @@ async function agyInstallFromStagedCopy(sourceDir, agyBin) {
     let root = tmpdir();
     if (root.includes('@')) root = '/tmp';
     stage = mkdtempSync(join(root, 'adlc-agy-'));
+    activeStages.add(stage);
     if (stage.includes('@')) {
       throw new Error(`no @-free temporary directory available (tried ${root})`);
     }
@@ -231,7 +286,10 @@ async function agyInstallFromStagedCopy(sourceDir, agyBin) {
     console.error(`Failed to stage the plugin for agy: ${err.message}`);
     return null;
   } finally {
-    if (stage) rmSync(stage, { recursive: true, force: true });
+    if (stage) {
+      activeStages.delete(stage);
+      rmSync(stage, { recursive: true, force: true });
+    }
   }
 }
 

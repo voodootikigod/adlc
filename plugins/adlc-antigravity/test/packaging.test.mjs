@@ -10,8 +10,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -432,27 +432,57 @@ test('bin/cli.mjs bounds an agy that IGNORES SIGTERM', () => {
   }
 });
 
-test('bin/cli.mjs kills the whole agy PROCESS TREE on timeout, leaving no worker behind', () => {
-  // Signalling only the child PID bounds only the process we spawned. An agy that
-  // forks a worker leaves it running past the timeout — holding inherited
-  // descriptors and outliving the staging directory it reads from — and repeated
-  // preflight/mutation runs accumulate them. This project's own timeout stub is
-  // exactly that topology, and it was leaking a sleep process on every run.
+/** Poll until `pid` is gone, or the deadline passes. Returns true if it survived. */
+function survives(pid, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Best-effort reaping so a failing assertion does not litter the machine. */
+function reap(pid) {
+  for (const target of [-pid, pid]) {
+    try {
+      process.kill(target, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+}
+
+test('bin/cli.mjs SIGKILLs a surviving agy WORKER even when the leader exits on SIGTERM', () => {
+  // The topology that matters, and the one an earlier version of this test missed:
+  // the group LEADER handles SIGTERM and exits promptly while a WORKER ignores it.
+  // If escalation is cancelled by the leader's exit, the helper resolves and
+  // deletes the staging directory with that worker still running against it.
+  //
+  // The worker PID is captured with `$!`, not `$$`. Verified on this platform:
+  // inside `( … ) &`, `$$` expands to the LEADER's pid, so the earlier test was
+  // asserting that the leader died — something a plain single-PID kill also does.
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-tree-'));
+  let workerPidValue = 0;
   try {
     const home = join(work, 'home');
     const binDir = join(work, 'bin');
-    const workerPid = join(work, 'worker.pid');
+    const pidFile = join(work, 'worker.pid');
     mkdirSync(home, { recursive: true });
     mkdirSync(binDir, { recursive: true });
 
-    // agy forks a worker that records its own PID, then both wedge.
     writeFileSync(
       join(binDir, 'agy'),
       '#!/bin/sh\n' +
         'if [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\n' +
-        `( echo $$ > "${workerPid}"; trap '' TERM; sleep 600 ) &\n` +
-        "trap '' TERM\nsleep 600\n",
+        // Worker ignores SIGTERM; its real pid is recorded via $!.
+        "( trap '' TERM; sleep 600 ) &\n" +
+        `echo $! > "${pidFile}"\n` +
+        // Leader takes the default disposition: SIGTERM exits it immediately.
+        'wait\n',
     );
     chmodSync(join(binDir, 'agy'), 0o755);
 
@@ -464,26 +494,73 @@ test('bin/cli.mjs kills the whole agy PROCESS TREE on timeout, leaving no worker
     assert.ok(!res.error, `the outer harness timed out, not our bound: ${res.error?.code}`);
     assert.equal(res.status, 1, `a wedged agy tree must fail:\n${res.stderr}`);
 
-    const pid = Number(readFileSync(workerPid, 'utf8').trim());
-    assert.ok(Number.isInteger(pid) && pid > 0, 'the stub must have recorded a worker pid');
-
-    // SIGKILL delivery is asynchronous; give the group a moment to actually die.
-    const deadline = Date.now() + 5_000;
-    let alive = true;
-    while (Date.now() < deadline) {
-      try {
-        process.kill(pid, 0);
-      } catch {
-        alive = false;
-        break;
-      }
-    }
-    if (alive) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* best effort cleanup */ }
-      try { process.kill(pid, 'SIGKILL'); } catch { /* best effort cleanup */ }
-    }
-    assert.equal(alive, false, `a descendant of agy survived the timeout (pid ${pid})`);
+    workerPidValue = Number(readFileSync(pidFile, 'utf8').trim());
+    assert.ok(Number.isInteger(workerPidValue) && workerPidValue > 0, 'stub must record a worker pid');
+    assert.equal(
+      survives(workerPidValue, 5_000),
+      false,
+      `a SIGTERM-ignoring worker survived the timeout (pid ${workerPidValue})`,
+    );
   } finally {
+    if (workerPidValue) reap(workerPidValue);
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging', () => {
+  // Detaching agy so the timeout can bound its tree also detaches it from the
+  // terminal: Ctrl-C reaches only OUR process group. Without forwarding, the user
+  // gets their prompt back while agy keeps rewriting the live plugin directory,
+  // and the staging `finally` never runs because the default disposition kills us.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sigint-'));
+  let leaderPidValue = 0;
+  try {
+    const home = join(work, 'home');
+    const binDir = join(work, 'bin');
+    const pidFile = join(work, 'agy.pid');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, 'agy'),
+      '#!/bin/sh\n' +
+        'if [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\n' +
+        `echo $$ > "${pidFile}"\n` +
+        'sleep 600\n',
+    );
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    // Snapshot BEFORE, and compare only the delta. Scanning all of TMPDIR for the
+    // staging prefix would fail on litter from unrelated earlier runs — this test
+    // owns what THIS invocation leaves behind, nothing else.
+    const stagingBefore = new Set(
+      readdirSync(tmpdir()).filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry)),
+    );
+
+    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
+      stdio: 'ignore',
+    });
+
+    // Wait for agy to be running, then interrupt the helper as a user would.
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && !existsSync(pidFile)) { /* spin */ }
+    assert.ok(existsSync(pidFile), 'the stub agy never started');
+    leaderPidValue = Number(readFileSync(pidFile, 'utf8').trim());
+    child.kill('SIGINT');
+
+    assert.equal(
+      survives(leaderPidValue, 10_000),
+      false,
+      `agy survived Ctrl-C of its parent (pid ${leaderPidValue})`,
+    );
+    // Staging must not survive a cancelled install either — the `finally` cannot
+    // run once a signal terminates us, so the interrupt handler has to do it.
+    const leaked = readdirSync(tmpdir())
+      .filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry))
+      .filter((entry) => !stagingBefore.has(entry));
+    assert.deepEqual(leaked, [], `cancelled install left staging behind: ${leaked.join(', ')}`);
+  } finally {
+    if (leaderPidValue) reap(leaderPidValue);
     rmSync(work, { recursive: true, force: true });
   }
 });
