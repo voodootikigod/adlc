@@ -64,16 +64,20 @@ const activeStages = new Set();
  * gone (ESRCH) or a platform that refuses the form, so a kill failure can never
  * turn a bound into an unhandled throw.
  */
-function signalGroup(child, signal) {
+function signalPidGroup(pid, signal) {
   try {
-    process.kill(-child.pid, signal);
+    process.kill(-pid, signal);
   } catch {
     try {
-      child.kill(signal);
+      process.kill(pid, signal);
     } catch {
       // already gone
     }
   }
+}
+
+function signalGroup(child, signal) {
+  signalPidGroup(child.pid, signal);
 }
 
 /**
@@ -103,23 +107,45 @@ function failureExitStatus() {
 }
 
 let shuttingDown = false;
+/** Resolves once cancellation has escalated and cleaned up; awaited before exiting. */
+let cancellationDone = null;
+
 function onInterrupt(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   interruptSignal = signal;
-  for (const child of activeChildren) signalGroup(child, 'SIGTERM');
-  setTimeout(() => {
-    for (const child of activeChildren) signalGroup(child, 'SIGKILL');
-    for (const stage of activeStages) {
-      try {
-        rmSync(stage, { recursive: true, force: true });
-      } catch {
-        // best effort — we are on our way out
+
+  // SNAPSHOT the process groups NOW, by pid.
+  //
+  // activeChildren is mutable and a child is removed from it the moment it exits.
+  // A group leader that handles SIGTERM exits promptly, so re-reading the set after
+  // the grace period would find it empty and SIGKILL nothing — leaving a
+  // SIGTERM-ignoring worker alive to keep rewriting the plugin directory while a
+  // retry races it. This is the same leader-exits/worker-survives hazard the
+  // timeout path already handles, and it has to be handled here too.
+  const groups = [...activeChildren].map((child) => child.pid);
+  for (const pid of groups) signalPidGroup(pid, 'SIGTERM');
+
+  cancellationDone = new Promise((resolveCancellation) => {
+    // NOT unref'd: this timer is what keeps the process alive long enough to
+    // finish escalating. Letting the event loop drain first would exit with the
+    // worker still running.
+    setTimeout(() => {
+      for (const pid of groups) signalPidGroup(pid, 'SIGKILL');
+      for (const stage of activeStages) {
+        try {
+          rmSync(stage, { recursive: true, force: true });
+        } catch {
+          // best effort — we are on our way out
+        }
       }
-    }
-    // 128 + signal number, the shell convention for signal-terminated exits.
-    process.exit(signal === 'SIGINT' ? 130 : 143);
-  }, AGY_GRACE_MS).unref();
+      resolveCancellation();
+    }, AGY_GRACE_MS);
+  });
+
+  // Exit here once escalation completes, in case the main flow has already
+  // finished and nothing is waiting on it.
+  cancellationDone.then(() => process.exit(failureExitStatus()));
 }
 process.on('SIGINT', () => onInterrupt('SIGINT'));
 process.on('SIGTERM', () => onInterrupt('SIGTERM'));
@@ -380,6 +406,9 @@ if (command === 'install' || command === '--install') {
         : `\`agy plugin install\` failed (exit ${status}); see agy's output above.`,
     );
     console.error('Not falling back to a direct copy: agy is installed and rejected this plugin.');
+    // A cancelled install must not exit before escalation has finished killing the
+    // group — otherwise the worker outlives us and races the user's retry.
+    if (cancellationDone) await cancellationDone;
     process.exit(failureExitStatus());
   }
 

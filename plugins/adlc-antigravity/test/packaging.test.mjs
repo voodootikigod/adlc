@@ -578,6 +578,58 @@ test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging',
   }
 });
 
+test('bin/cli.mjs Ctrl-C kills a SIGTERM-IGNORING worker after the leader exits', async () => {
+  // The topology the first Ctrl-C test missed: it used a leader whose whole tree
+  // died on SIGTERM, so it could not see that escalation had lost its handle.
+  // activeChildren is mutable and drops a child the moment it exits, so a leader
+  // that exits promptly leaves the delayed SIGKILL with nothing to signal — and a
+  // worker that ignores SIGTERM keeps rewriting the plugin directory while the
+  // user's retry races it.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sigint2-'));
+  let workerPidValue = 0;
+  try {
+    const home = join(work, 'home');
+    const binDir = join(work, 'bin');
+    const pidFile = join(work, 'worker.pid');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, 'agy'),
+      '#!/bin/sh\n' +
+        'if [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\n' +
+        // Worker ignores SIGTERM; recorded via $! (NOT $$, which is the leader).
+        "( trap '' TERM; sleep 600 ) &\n" +
+        `echo $! > "${pidFile}"\n` +
+        // Leader takes the default disposition, so SIGTERM exits it at once.
+        'wait\n',
+    );
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
+      stdio: 'ignore',
+    });
+    const exited = new Promise((resolveExit) => child.on('exit', (code) => resolveExit(code)));
+
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && !existsSync(pidFile)) { /* spin */ }
+    assert.ok(existsSync(pidFile), 'the stub agy never started its worker');
+    workerPidValue = Number(readFileSync(pidFile, 'utf8').trim());
+    child.kill('SIGINT');
+
+    const code = await exited;
+    assert.equal(code, 130, `expected exit 130 for a Ctrl-C'd install, got ${code}`);
+    assert.equal(
+      survives(workerPidValue, 5_000),
+      false,
+      `a SIGTERM-ignoring worker outlived cancellation (pid ${workerPidValue})`,
+    );
+  } finally {
+    if (workerPidValue) reap(workerPidValue);
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('bin/cli.mjs ignores RELATIVE PATH entries when resolving agy', () => {
   // join('.', 'agy') is 'agy' and join('bin', 'agy') is 'bin/agy' — both resolve
   // against the CURRENT DIRECTORY, so a PATH containing '.' or a project-relative
