@@ -215,7 +215,7 @@ export function peekOpenSegment(dir: string, options?: { cwd?: string }): { name
 export function readForestEntries(dir: string): Record<string, unknown>[];
 export function readOwnChains(dir: string, options?: { cwd?: string }): Record<string, unknown>[][];
 export function forestChainsIntact(dir: string, options?: { key?: string | null }): boolean;
-export function manifestKey(env?: NodeJS.ProcessEnv): string | null;
+export function manifestKey(env?: Record<string, string | undefined>): string | null;
 export function entrySigValid(key: string, entry: Record<string, unknown>): boolean;
 export function canonicalEntryBytes(entry: Record<string, unknown>): string;
 export function segmentPath(dir: string, name: string): string;
