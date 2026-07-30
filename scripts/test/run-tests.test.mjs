@@ -40,11 +40,15 @@ test('non-empty sensitive values are ABSENT from the segment env and reported', 
   assert.equal(env.HOME, '/h', 'unrelated vars pass through');
 });
 
-test("an explicitly-empty value ('') is PRESERVED as the deliberate fail-closed state", () => {
-  const { env, scrubbed } = buildSegmentEnv({ ADLC_MANIFEST_KEY: '', RAILS_BASE: '' });
-  assert.equal(env.ADLC_MANIFEST_KEY, '', "'' must survive: it blocks .env.local fallback by PRESENCE");
-  assert.equal(env.RAILS_BASE, '');
-  assert.deepEqual(scrubbed, [], 'preserving is not scrubbing — no notice for empty values');
+test("an explicitly-empty KEY is PRESERVED; empty OTHER variables are scrubbed", () => {
+  // '' preservation is a key-specific contract (presence blocks the .env.local
+  // loader). The rest have presence-checked consumers — ADLC_GATE_MOCK_RESPONSE=''
+  // could still select a mock path — so present-but-empty is scrubbed for them.
+  const { env, scrubbed } = buildSegmentEnv({ ADLC_MANIFEST_KEY: '', RAILS_BASE: '', ADLC_GATE_MOCK_RESPONSE: '' });
+  assert.equal(env.ADLC_MANIFEST_KEY, '', "'' key must survive: it blocks .env.local fallback by PRESENCE");
+  assert.equal(Object.hasOwn(env, 'RAILS_BASE'), false);
+  assert.equal(Object.hasOwn(env, 'ADLC_GATE_MOCK_RESPONSE'), false, "an empty mock seam must not reach segments");
+  assert.deepEqual([...scrubbed].sort(), ['ADLC_GATE_MOCK_RESPONSE', 'RAILS_BASE']);
 });
 
 test('unset variables stay absent and produce no notice', () => {
@@ -53,11 +57,11 @@ test('unset variables stay absent and produce no notice', () => {
   assert.deepEqual(scrubbed, []);
 });
 
-test('mixed input: only the non-empty members are scrubbed', () => {
+test('mixed input: a set key is scrubbed while an EMPTY key is the only preserved form', () => {
   const { env, scrubbed } = buildSegmentEnv({ ADLC_MANIFEST_KEY: 'k', RAILS_BASE: '' });
   assert.equal(Object.hasOwn(env, 'ADLC_MANIFEST_KEY'), false);
-  assert.equal(env.RAILS_BASE, '');
-  assert.deepEqual(scrubbed, ['ADLC_MANIFEST_KEY']);
+  assert.equal(Object.hasOwn(env, 'RAILS_BASE'), false, 'empty non-key variables are scrubbed too');
+  assert.deepEqual([...scrubbed].sort(), ['ADLC_MANIFEST_KEY', 'RAILS_BASE']);
 });
 
 test('the runner PATH prepend is preserved by the helper', () => {

@@ -42,6 +42,7 @@ const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 //   ADLC_GATE_MOCK_RESPONSE — a test seam that, exported ambiently, makes LLM-backed
 //     gates return canned verdicts instead of exercising the real path.
 // Tests that NEED one of these set their own value inline and are unaffected.
+export const PRESERVE_EMPTY = new Set(['ADLC_MANIFEST_KEY']);
 export const SCRUBBED_ENV_VARS = [
   'ADLC_MANIFEST_KEY',
   'RAILS_BASE',
@@ -80,10 +81,14 @@ export function buildSegmentEnv(baseEnv = process.env, { platform = process.plat
       : (Object.hasOwn(env, name) ? [name] : []);
     let removed = false;
     for (const match of matches) {
-      if (env[match] !== '') {
-        delete env[match];
-        removed = true;
-      }
+      // The explicit-'' carve-out applies ONLY to the key: its presence (even empty)
+      // is a deliberate fail-closed that blocks the .env.local loader. The other
+      // variables have PRESENCE-checked consumers (e.g. ADLC_GATE_MOCK_RESPONSE
+      // present-but-empty can still select a mock path), so for them any present
+      // value — empty included — is scrubbed (codex review finding).
+      if (env[match] === '' && PRESERVE_EMPTY.has(name)) continue;
+      delete env[match];
+      removed = true;
     }
     if (removed) scrubbed.push(name);
   }
