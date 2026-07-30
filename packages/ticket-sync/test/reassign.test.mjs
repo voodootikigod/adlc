@@ -96,7 +96,7 @@ test('migrateManifestEvidence appends (never rewrites) re-attestation entries un
   const appended = [];
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:acme/app#7', {
     now: '2026-06-27T00:00:00Z',
-    env: {},
+    key: null,
     appendBatch: (name, factory) => {
       const additions = lg.appendBatch(name, factory);
       appended.push(...additions);
@@ -123,7 +123,7 @@ test('migrateManifestEvidence chains a multi-gate migration correctly (entry N l
   const base = [ev('T7', 'p0', 1), ev('T7', 'prosecution', 2, { verdict: 'clear' })];
   const lg = fakeLedger(base);
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#9', {
-    now: '2026-06-27T00:00:00Z', env: {}, appendBatch: lg.appendBatch,
+    now: '2026-06-27T00:00:00Z', key: null, appendBatch: lg.appendBatch,
   });
   assert.equal(r.migrated, 2);
   assert.equal(r.entries[0].prev, sha256(JSON.stringify(base[base.length - 1])), 'first re-attestation links to the seeded tail');
@@ -135,7 +135,7 @@ test('migrateManifestEvidence signs re-attestation entries when ADLC_MANIFEST_KE
   const lg = fakeLedger([ev('T7', 'prosecution', 1, { verdict: 'clear' })]);
   const KEY = 'secret-key';
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', {
-    now: '2026-06-27T00:00:00Z', env: { ADLC_MANIFEST_KEY: KEY }, appendBatch: lg.appendBatch,
+    now: '2026-06-27T00:00:00Z', key: KEY, appendBatch: lg.appendBatch,
   });
   const e = r.entries[0];
   // Recompute the expected sig over the documented canonical byte order.
@@ -147,7 +147,7 @@ test('migrateManifestEvidence signs re-attestation entries when ADLC_MANIFEST_KE
 test('migrateManifestEvidence is a no-op (no append) when there is no evidence', () => {
   const lg = fakeLedger([ev('T8', 'prosecution', 1)]);
   const r = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', {
-    now: 'T', env: {}, appendBatch: lg.appendBatch,
+    now: 'T', key: null, appendBatch: lg.appendBatch,
   });
   assert.equal(r.migrated, 0);
   assert.equal(lg.all.length, 1);
@@ -155,8 +155,8 @@ test('migrateManifestEvidence is a no-op (no append) when there is no evidence',
 
 test('migrateManifestEvidence is idempotent after evidence append but before sidecar cleanup', () => {
   const lg = fakeLedger([ev('T7', 'prosecution', 1, { verdict: 'clear' })]);
-  const first = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T1', env: {}, appendBatch: lg.appendBatch });
-  const retry = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T2', env: {}, appendBatch: lg.appendBatch });
+  const first = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T1', key: null, appendBatch: lg.appendBatch });
+  const retry = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T2', key: null, appendBatch: lg.appendBatch });
   assert.equal(first.migrated, 1);
   assert.equal(retry.migrated, 0);
   assert.equal(lg.all.length, 2);
@@ -170,7 +170,7 @@ test('migrateManifestEvidence derives sequence and prev from state observed insi
     lg.appendBatch(name, () => [external]);
     return lg.appendBatch(name, factory);
   };
-  const result = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T', env: {}, appendBatch });
+  const result = migrateManifestEvidence('/repo', 'T7', 'gh:r#2', { now: 'T', key: null, appendBatch });
   assert.equal(result.entries[0].seq, 3);
   assert.equal(result.entries[0].prev, sha256(JSON.stringify(external)));
 });

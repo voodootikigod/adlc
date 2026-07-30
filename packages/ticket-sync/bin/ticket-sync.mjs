@@ -125,7 +125,7 @@ async function main() {
   }
 
   if (sub === 'doctor') {
-    const result = doctor({ dir: process.cwd() });
+    const result = doctor({ dir: process.cwd(), key: resolveKeyFromEnv() });
     if (flags.json) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } else {

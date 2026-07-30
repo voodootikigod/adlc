@@ -47,6 +47,9 @@ import { makeShutdownListener } from './shutdown.mjs';
 const SNAPSHOT_MAP_CAP = 100;
 
 export function createExtension({ env = process.env } = {}) {
+  // The extension entry resolves the signing key ONCE from ITS env (which tests inject)
+  // and threads it — no process.env reads below this line (spec Layer 2, P1).
+  const manifestKey = typeof env.ADLC_MANIFEST_KEY === 'string' && env.ADLC_MANIFEST_KEY.length > 0 ? env.ADLC_MANIFEST_KEY : null;
   return async function adlcPiExtension(pi) {
     let activeCwd = process.cwd();
     let active = { ticketId: null, ticket: null, error: null };
@@ -129,7 +132,7 @@ export function createExtension({ env = process.env } = {}) {
     // sites pass only { ctx, type, detail }; pi/root/ticketId are filled here.
     function noteGate({ ctx, type, detail = {} }) {
       lastGateEvent = { type, summary: gateSummary(detail) };
-      recordGateEvent({ pi, ctx, root: activeCwd, ticketId: active.ticketId, type, detail });
+      recordGateEvent({ key: manifestKey, pi, ctx, root: activeCwd, ticketId: active.ticketId, type, detail });
       refreshWidget(ctx);
       if (shouldNoticeGate(type)) emitGateNotice(type, detail);
     }
@@ -229,6 +232,7 @@ export function createExtension({ env = process.env } = {}) {
     // one durable 'session-shutdown-open-ticket' manifest entry. Never blocks
     // shutdown; the session-side write is best-effort as the file may be closing.
     const shutdown = makeShutdownListener({
+      key: manifestKey,
       pi,
       getActive: () => active,
       getCwd: () => activeCwd,

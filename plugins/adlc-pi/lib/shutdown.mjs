@@ -80,7 +80,7 @@ export function buildShutdownEvidence({ entries, ticketId = null } = {}) {
  * @param {(ctx: object) => object[]} [deps.getEntries]  defaults to readSessionEntries
  * @returns {(event: object, ctx: object) => Promise<undefined>}
  */
-export function makeShutdownListener({ pi, getActive, getCwd, getEntries = readSessionEntries } = {}) {
+export function makeShutdownListener({ key = null, pi, getActive, getCwd, getEntries = readSessionEntries } = {}) {
   return async function onSessionShutdown(_event, ctx) {
     try {
       const active = getActive?.() ?? { ticketId: null };
@@ -96,7 +96,7 @@ export function makeShutdownListener({ pi, getActive, getCwd, getEntries = readS
       const root = typeof getCwd === 'function' ? getCwd() : process.cwd();
       // ctx: null → recordGateEvent stays silent on failure (no notify into a
       // torn-down UI); the manifest mirror is what we care about here.
-      recordGateEvent({ pi, ctx: null, root, ticketId, type: 'session-shutdown-open-ticket', detail: payload });
+      recordGateEvent({ key, pi, ctx: null, root, ticketId, type: 'session-shutdown-open-ticket', detail: payload });
     } catch {
       // session_shutdown must never throw — a failed capture just means no entry.
     }

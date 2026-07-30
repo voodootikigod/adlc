@@ -27,7 +27,7 @@ const DEFAULT_LOCK_MAX_AGE_MS = 10 * 60 * 1000; // 10 min; a younger lock = acti
  * @param {string} [opts.schemaDir]      override the package schema dir (tests)
  * @returns {{ exitCode: 0|2, ok: boolean, checks: Array<{name,ok,detail}> }}
  */
-export function doctor({ dir = '.', now = Date.now(), lockMaxAgeMs = DEFAULT_LOCK_MAX_AGE_MS, schemaDir = PKG_SCHEMA_DIR } = {}) {
+export function doctor({ dir = '.', now = Date.now(), lockMaxAgeMs = DEFAULT_LOCK_MAX_AGE_MS, schemaDir = PKG_SCHEMA_DIR, key = null } = {}) {
   const checks = [];
   const add = (name, ok, detail = null) => checks.push({ name, ok, detail: ok ? null : detail });
 
@@ -43,7 +43,7 @@ export function doctor({ dir = '.', now = Date.now(), lockMaxAgeMs = DEFAULT_LOC
   // This stays offline and read-only; the sync-specific checks continue below.
   try {
     const store = detectTicketStore({ root: dir, allowRecovery: true });
-    const storeDoctor = doctorTicketStore(store, { root: dir, archive: true });
+    const storeDoctor = doctorTicketStore(store, { root: dir, archive: true, key });
     for (const check of storeDoctor.checks) {
       add(`store:${check.name}`, check.ok, check.message ?? check.code ?? (check.pending?.join(', ') || null));
     }

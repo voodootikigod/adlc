@@ -15,6 +15,7 @@
 
 import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
+import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 
 /**
  * Reassign one ticket id store-wide (pure, immutable). Returns a NEW ticket array
@@ -91,9 +92,9 @@ function canonicalEntryBytes(entry) {
  * @param {Function} [opts.appendBatch] injectable ownership-safe batch appender
  * @returns {{ migrated: number, entries: object[] }}
  */
-export function migrateManifestEvidence(dir, oldId, newId, { now, env = process.env, appendBatch = appendEntries } = {}) {
+export function migrateManifestEvidence(dir, oldId, newId, { now, key: keyParam, appendBatch = appendEntries } = {}) {
   const adlcDir = `${dir}/.adlc`;
-  const key = (() => { const k = env?.ADLC_MANIFEST_KEY; return typeof k === 'string' && k.length ? k : null; })();
+  const key = validateKeyParam(keyParam); // required: an omitted key is a caller bug, never an env read at library depth
   const out = appendBatch('manifest', ({ entries, skipped, lastRawLine }) => {
     if (skipped.length) throw new Error(`cannot re-attest evidence: manifest contains malformed line ${skipped[0].line}`);
     const sources = planManifestMigration(entries, oldId, newId);

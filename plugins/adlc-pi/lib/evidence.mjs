@@ -15,7 +15,6 @@
 
 import { join } from 'node:path';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
-import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 /**
  * @param {object} opts
@@ -26,7 +25,7 @@ import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
  * @param {string} opts.type - kebab event type, e.g. 'rail-deny', 'suppression-revert'
  * @param {object} [opts.detail]
  */
-export function recordGateEvent({ pi, ctx, root, ticketId, type, detail = {} }) {
+export function recordGateEvent({ key = null, pi, ctx, root, ticketId, type, detail = {} }) {
   const payload = { type, ticketId: ticketId ?? null, at: new Date().toISOString(), ...detail };
 
   try {
@@ -41,7 +40,7 @@ export function recordGateEvent({ pi, ctx, root, ticketId, type, detail = {} }) 
       ticket: ticketId ?? undefined,
       rawData: JSON.stringify(detail),
       dir: join(root, '.adlc'),
-      key: getKey(process.env), // pi command handlers are the process entry; env resolution happens here
+      key,
     });
   } catch (err) {
     ctx?.ui?.notify?.(`ADLC: manifest evidence write failed: ${err.message}`, 'warning');

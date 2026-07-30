@@ -181,7 +181,7 @@ export async function push({
         const syncedTicket = tickets.find((ticket) => ticket.id === newId);
         if (oldPresent || !syncedTicket) continue;
         try {
-          migrateManifestEvidence(dir, pending.localId, newId, { now, env });
+          migrateManifestEvidence(dir, pending.localId, newId, { now, key });
           const issue = issuesByNumber.get(pending.number);
           state.tickets[newId] = state.tickets[newId] ?? {
             provider: 'github', repo, number: pending.number,
@@ -356,7 +356,7 @@ export async function push({
         expectedSnapshotHash = after.hash;
         expectedStoreAbsent = false;
         try {
-          migrateManifestEvidence(dir, t.id, newId, { now, env });
+          migrateManifestEvidence(dir, t.id, newId, { now, key });
         } catch (error) {
           errors.push(`${newId}: ticket ID was committed but evidence re-attestation is pending — ${error.message}`);
           failed = true;
