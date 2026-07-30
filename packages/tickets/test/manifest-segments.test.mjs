@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recordTicketEvidence } from '../lib/evidence.mjs';
@@ -228,6 +229,48 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
       activate(dir); // simulate a migration cutover happening after this evidence was recorded
       const retry = recordTicketEvidence(root, baseEvidence());
       assert.deepEqual(retry, first, 'a segmented repo must still see root-recorded evidence for idempotency');
+    } finally { clean(root); }
+  });
+
+  // Adversarial-review finding: forestChainsIntact used to check ONLY the hash
+  // chain, never signatures — so with a signing key configured, an attacker who
+  // can write to the checkout (a malicious branch, or a compromised recovery
+  // path) could append a correctly hash-chained but UNSIGNED forged entry, and
+  // the idempotency scan would trust it as genuine evidence, finalizing a
+  // transaction (and deleting its recovery journal) against a claim nobody with
+  // the key ever actually signed.
+  it('refuses to trust a forged, correctly-chained-but-UNSIGNED entry once this chain\'s signed era has begun', () => {
+    const { root, dir } = gitRepo();
+    try {
+      withKey('forge-test-key', () => {
+        activate(dir);
+        recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' })); // real, signed
+
+        // Forge a SECOND entry: correctly hash-chained, but no `sig` at all —
+        // exactly what an attacker without the signing key can produce.
+        const resolved = resolveOpenSegment(dir, { cwd: root });
+        const segFile = segmentPath(dir, resolved.name);
+        const raw = readFileSync(segFile, 'utf8').trim().split('\n');
+        const prevLine = raw.at(-1);
+        const forged = {
+          seq: 2, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+          data: {
+            operation: 'complete', action: 'apply', transactionId: 'tx-forged',
+            ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
+          },
+          files: {},
+          prev: createHash('sha256').update(prevLine).digest('hex'),
+        };
+        writeFileSync(segFile, `${prevLine}\n${JSON.stringify(forged)}\n`);
+
+        assert.throws(
+          () => recordTicketEvidence(root, baseEvidence({
+            transactionId: 'tx-forged', ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+          })),
+          (error) => error.code === 'INVALID_MANIFEST',
+          'the forged entry must not be trusted as genuine evidence, even though it matches the lookup exactly'
+        );
+      });
     } finally { clean(root); }
   });
 });

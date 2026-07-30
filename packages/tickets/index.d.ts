@@ -214,7 +214,10 @@ export function resolveOpenSegment(dir: string, options?: { cwd?: string }): { n
 export function peekOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean } | null;
 export function readForestEntries(dir: string): Record<string, unknown>[];
 export function readOwnChains(dir: string, options?: { cwd?: string }): Record<string, unknown>[][];
-export function forestChainsIntact(dir: string): boolean;
+export function forestChainsIntact(dir: string, options?: { key?: string | null }): boolean;
+export function manifestKey(env?: NodeJS.ProcessEnv): string | null;
+export function entrySigValid(key: string, entry: Record<string, unknown>): boolean;
+export function canonicalEntryBytes(entry: Record<string, unknown>): string;
 export function segmentPath(dir: string, name: string): string;
 export function lineagePath(dir: string): string;
 export function fsyncFile(path: string): void;

@@ -1,13 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { canonicalJson } from './canonical.mjs';
 import { ARCHIVE_DIRECTORY, CURRENT_TICKET_FILE, LOCK_DIRECTORY } from './constants.mjs';
 import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, resolveOpenSegment, segmentPath } from './manifest-segments.mjs';
+import { isSegmentedRepo, resolveOpenSegment, segmentPath, manifestKey, entrySigValid } from './manifest-segments.mjs';
 
 /**
  * Validate `.adlc/current-ticket.json` the way the gates read it.
@@ -60,39 +59,11 @@ function currentTicketCheck(root, snapshot) {
  * removes the shard the same way a hand-delete would and records no evidence
  * either, so absence is inherently ambiguous and left to the archive/graph checks.
  */
-// Manifest HMAC verification, mirroring @adlc/gate-manifest's sign.mjs byte-for-byte.
-// It cannot be imported: the package graph is tickets ← core ← gate-manifest, so
-// tickets (the base layer) would create a cycle. The v1 form is a fixed key order;
-// v2 signs canonical JSON of every field but `sig` (this package's canonicalJson is
-// byte-identical to core's, verified by test). Keep in lockstep with sign.mjs.
-const MANIFEST_KEY_ENV = 'ADLC_MANIFEST_KEY';
-
-function manifestKey(env = process.env) {
-  const k = env[MANIFEST_KEY_ENV];
-  return typeof k === 'string' && k.length > 0 ? k : null;
-}
-
-function canonicalEntryBytes(entry) {
-  if (entry.sigVersion === 2) {
-    const { sig: _sig, ...signed } = entry;
-    return canonicalJson(signed);
-  }
-  const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
-  if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
-  if (entry.data !== undefined) canonical.data = entry.data;
-  canonical.files = entry.files;
-  canonical.prev = entry.prev;
-  return JSON.stringify(canonical);
-}
-
-function entrySigValid(key, entry) {
-  if (typeof entry.sig !== 'string' || entry.sig.length === 0) return false;
-  const expected = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
-  const a = Buffer.from(entry.sig, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
+// manifestKey/entrySigValid now live in manifest-segments.mjs — shared with
+// forestChainsIntact's own signature-aware chain check, and still the only
+// place in this package that mirrors @adlc/gate-manifest's sign.mjs
+// byte-for-byte (see that file's header for why this cannot be imported
+// from gate-manifest directly: tickets ← core ← gate-manifest would cycle).
 
 // Verify one chain's (root OR one segment) unbroken hash-link + (with a key)
 // per-entry signature, same rules as before this was factored out for

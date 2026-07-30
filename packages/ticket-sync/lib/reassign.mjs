@@ -150,8 +150,12 @@ function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, 
  */
 function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
   return withManifestLock(lineagePath(adlcDir), () => {
-    if (!forestChainsIntact(adlcDir)) {
-      throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken');
+    // `key` also enforces per-chain signature validity, not just the hash chain
+    // (adversarial-review finding, T-MANIFEST-FOREST): without it, a forged,
+    // correctly-chained-but-unsigned entry could be trusted as a genuine
+    // re-attestation source even with signing configured.
+    if (!forestChainsIntact(adlcDir, { key })) {
+      throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken, or an entry is unsigned/forged');
     }
     const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId);
     if (sources.length === 0) return [];

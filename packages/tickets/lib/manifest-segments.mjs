@@ -28,9 +28,9 @@
 
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, openSync, readSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { sha256 } from './canonical.mjs';
+import { sha256, canonicalJson } from './canonical.mjs';
 
 const SEGMENT_DIRNAME = 'manifest.d';
 const SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
@@ -104,20 +104,76 @@ function parseLines(lines) {
   }).filter(Boolean);
 }
 
-// Chain-only (no signature) integrity: each entry's `prev` must equal
-// sha256(previous raw line) and `seq` must increase by 1 from 1. Mirrors the
-// chain half of @adlc/gate-manifest/lib/verify.mjs's verifyChain — no
-// signature requirement, matching segment-writer.mjs's OWN precondition
-// (requireSignatures: false), and no anchor/cycle resolution (out of scope
-// here, see manifest-segments.mjs's header).
-function chainIsIntact(lines) {
+// Manifest HMAC verification, mirroring @adlc/gate-manifest's sign.mjs
+// byte-for-byte. It cannot be imported: the package graph is tickets ← core
+// ← gate-manifest, so tickets (the base layer) would create a cycle. The v1
+// form is a fixed key order; v2 signs canonical JSON of every field but
+// `sig` (this package's canonicalJson is byte-identical to core's, verified
+// by test). Keep in lockstep with sign.mjs. Shared by doctor.mjs and the
+// signature-aware chain check below — the one place both need it.
+const MANIFEST_KEY_ENV = 'ADLC_MANIFEST_KEY';
+
+export function manifestKey(env = process.env) {
+  const k = env[MANIFEST_KEY_ENV];
+  return typeof k === 'string' && k.length > 0 ? k : null;
+}
+
+export function canonicalEntryBytes(entry) {
+  if (entry.sigVersion === 2) {
+    const { sig: _sig, ...signed } = entry;
+    return canonicalJson(signed);
+  }
+  const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
+  if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
+  if (entry.data !== undefined) canonical.data = entry.data;
+  canonical.files = entry.files;
+  canonical.prev = entry.prev;
+  return JSON.stringify(canonical);
+}
+
+export function entrySigValid(key, entry) {
+  if (typeof entry.sig !== 'string' || entry.sig.length === 0) return false;
+  const expected = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
+  const a = Buffer.from(entry.sig, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+// Chain integrity: each entry's `prev` must equal sha256(previous raw line)
+// and `seq` must increase by 1 from 1. Mirrors the chain half of
+// @adlc/gate-manifest/lib/verify.mjs's verifyChain — no anchor/cycle
+// resolution (out of scope here, see manifest-segments.mjs's header).
+//
+// SIGNATURE (adversarial-review finding): when `key` is provided, also
+// enforce verifyChain's "requireSignatures:false" signed-continuity rule —
+// once this ONE chain has a validly-signed entry, every LATER entry in it
+// must also carry a valid signature (a present-but-invalid signature always
+// fails, everywhere). Evaluated PER CHAIN, matching gate-manifest's own
+// per-chain `seenSignedEntry` semantics. Without this, an attacker could
+// append a correctly hash-chained but UNSIGNED forged entry (matching a real
+// transactionId/action) and the idempotency scan in evidence.mjs would trust
+// it as genuine, even with a signing key configured. `key === null` keeps
+// the original chain-only check (no key means nothing can be verified;
+// matches segment-writer.mjs's own precondition).
+function chainIsIntact(lines, key = null) {
   let prevLine = null;
   let prevSeq = 0;
+  let seenSignedEntry = false;
   for (const line of lines) {
     let entry;
     try { entry = JSON.parse(line); } catch { return false; }
     const expectedPrev = prevLine === null ? null : sha256(prevLine);
     if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) return false;
+    if (key !== null) {
+      const hasSig = typeof entry?.sig === 'string' && entry.sig.length > 0;
+      if (hasSig) {
+        if (!entrySigValid(key, entry)) return false;
+        seenSignedEntry = true;
+      } else if (seenSignedEntry) {
+        return false; // missing sig after this chain's signed era began
+      }
+    }
     prevLine = line;
     prevSeq = entry.seq;
   }
@@ -131,10 +187,12 @@ function chainIsIntact(lines) {
  * segment-writer.mjs refuses to append onto a forest it hasn't confirmed is
  * valid — a ticket transaction must not finalize, and delete its recovery
  * journal, against evidence that lands in an already-broken forest).
+ * `key`, when provided, also enforces per-chain signature validity — see
+ * chainIsIntact's doc.
  */
-export function forestChainsIntact(dir) {
-  if (!chainIsIntact(readRawLines(join(dir, 'manifest.jsonl')))) return false;
-  return discoverSegmentNames(dir).every((name) => chainIsIntact(readRawLines(segmentPath(dir, name))));
+export function forestChainsIntact(dir, { key = null } = {}) {
+  if (!chainIsIntact(readRawLines(join(dir, 'manifest.jsonl')), key)) return false;
+  return discoverSegmentNames(dir).every((name) => chainIsIntact(readRawLines(segmentPath(dir, name)), key));
 }
 
 /**

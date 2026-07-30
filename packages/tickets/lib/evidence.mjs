@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { conflict } from './errors.mjs';
 import { sha256, canonicalJson } from './canonical.mjs';
 import { fsyncDirectory } from './durability.mjs';
-import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath } from './manifest-segments.mjs';
+import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath, manifestKey } from './manifest-segments.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
@@ -88,14 +88,19 @@ function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash
  * ever write to it directly).
  */
 function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision }) {
+  const key = manifestKey();
   return withManifestLock(lineagePath(dir), () => {
     // Adversarial-review finding: a corrupted OTHER segment (crash, manual
     // edit, or a malicious branch) must not let a ticket transaction finalize
     // — and delete its recovery journal — against evidence appended to an
     // already-invalid forest. Mirrors gate-manifest's own segment-writer.mjs
-    // precondition (chain-only, no signature requirement).
-    if (!forestChainsIntact(dir)) {
-      throw conflict('INVALID_MANIFEST', 'manifest forest is invalid: a segment or root chain is broken — refusing to append or trust the idempotency scan');
+    // precondition. Passing `key` (when configured) additionally rejects an
+    // unsigned-after-signed forgery: without it, an attacker's correctly
+    // hash-chained but UNSIGNED entry naming a real transactionId/action
+    // would pass this check and get trusted as genuine by the idempotency
+    // scan below, even with signing active (adversarial-review finding).
+    if (!forestChainsIntact(dir, { key })) {
+      throw conflict('INVALID_MANIFEST', 'manifest forest is invalid: a segment or root chain is broken, or an entry is unsigned/forged — refusing to append or trust the idempotency scan');
     }
     const existing = findMatchingEvidence(readForestEntries(dir), { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash });
     if (existing) return existing;
@@ -138,7 +143,6 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
         files: {},
         prev: prevRawLine === null ? null : sha256(prevRawLine),
       };
-      const key = process.env.ADLC_MANIFEST_KEY;
       if (key) {
         if (resolved.isNew) entry.sigVersion = 2; // forced: v1 never covers `anchor`
         entry.sig = entry.sigVersion === 2 ? signV2(key, entry) : sign(key, entry);
