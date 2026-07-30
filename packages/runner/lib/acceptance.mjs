@@ -227,7 +227,7 @@ export function recordAcceptancePacket({
     ticketHash: currentBinding.ticketHash,
     storeHash: currentBinding.storeHash,
     bindingScope: 'ticket',
-  }, dir);
+  }, dir, { cwd });
 
   return {
     ok: true,

@@ -11,8 +11,8 @@ function now() {
   return new Date().toISOString();
 }
 
-function writeEvidence(type, data, dir) {
-  return appendManifestEntry({ ts: now(), type, ...data }, dir);
+function writeEvidence(type, data, dir, cwd) {
+  return appendManifestEntry({ ts: now(), type, ...data }, dir, { cwd });
 }
 
 function manifestArtifactPaths(cwd, dir) {
@@ -279,7 +279,7 @@ export function runProsecution(input, {
       ticketHash,
       storeHash,
       bindingScope: 'ticket',
-    }, dir);
+    }, dir, cwd);
 
     for (const finding of pass.findings) {
       writeEvidence('p5-finding-raw', {
@@ -290,7 +290,7 @@ export function runProsecution(input, {
         lens: pass.lens,
         finding,
         ...binding,
-      }, dir);
+      }, dir, cwd);
       writeEvidence(`p5-finding-${finding.verified_status}`, {
         ticket,
         target,
@@ -299,7 +299,7 @@ export function runProsecution(input, {
         lens: pass.lens,
         finding,
         ...binding,
-      }, dir);
+      }, dir, cwd);
     }
 
     const result = classifyPass(pass);
@@ -314,7 +314,7 @@ export function runProsecution(input, {
         consecutiveDry,
         dryEvidence: pass.dry_evidence ?? null,
         ...binding,
-      }, dir);
+      }, dir, cwd);
     } else {
       consecutiveDry = 0;
       for (const finding of pass.findings) {
@@ -340,7 +340,7 @@ export function runProsecution(input, {
       needsHuman: result.needsHuman.length,
       consecutiveDry,
       ...binding,
-    }, dir);
+    }, dir, cwd);
 
     passResults.push({
       pass: passNo,
@@ -367,7 +367,7 @@ export function runProsecution(input, {
         pass: passResults.length,
         consecutiveDry,
         dryLenses: Array.from(dryLenses).sort(),
-      }, dir);
+      }, dir, cwd);
       return {
         status: 'gate-fail',
         exitCode: 2,
@@ -393,7 +393,7 @@ export function runProsecution(input, {
       ticketHash,
       storeHash,
       bindingScope: 'ticket',
-    }, dir);
+    }, dir, cwd);
     return {
       status: 'pass',
       exitCode: 0,

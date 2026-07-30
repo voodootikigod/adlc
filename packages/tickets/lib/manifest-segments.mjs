@@ -15,16 +15,19 @@
 // ticket-evidence append target" (using the SAME .lineage protocol and
 // segment-naming grammar as gate-manifest's writer, so both producers share
 // one open segment per branch instead of each minting their own), and (c) a
-// full-forest entry scan for the idempotency check. It deliberately skips
-// gate-manifest's content-aware *.lock handling (distinguishing a genuine
-// transient lock from a malicious rename): that exists to stop a security-
-// critical needs-attention REVOCATION from being hidden from the cross-model
-// gate. Ticket evidence has no such adversarial-trust concern — a *.lock
-// name can never match the segment filename grammar anyway (it doesn't end
-// in exactly `.jsonl`), so excluding it here on filename grammar ALONE is
-// sufficient: worst case a disguised rename is invisible to the idempotency
-// scan below (a correctness nicety, not a security boundary) or forces a
-// fresh segment mint (safe, just one extra file).
+// full-forest entry scan for the idempotency check.
+//
+// *.lock handling IS content-aware, mirroring gate-manifest's own
+// looksLikeGenuineLedgerLock (P5 prosecution finding): forestChainsIntact is
+// now a fail-closed precondition before finalizing a ticket transaction (see
+// its own doc), so a NAME-only *.lock skip would let a malicious branch
+// rename a real segment — one whose chain is broken, or one this checkout's
+// own idempotency scan should have seen — to end in `.lock`, silently
+// vanishing it from the forest instead of being caught as bad-filename-
+// grammar. Content-checking it against withManifestLock's own owner-record
+// shape ({version, token, pid, hostname, startedAt} in this file's own
+// withManifestLock) closes that exactly the way gate-manifest's history
+// already proved necessary for the identical class of object.
 
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, openSync, readSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -44,6 +47,27 @@ const LINEAGE_NAME = '.lineage';
 const MARKER_FORMAT = 'adlc-manifest-segments';
 const MARKER_VERSION = 1;
 const MAX_LOCAL_JSON_BYTES = 4096; // generous headroom for a marker/token; real ones are under 200 bytes
+const MAX_LOCK_OWNER_BYTES = 512; // withManifestLock's owner record is ~120 bytes; generous headroom, not a real limit
+
+// Mirrors @adlc/gate-manifest/lib/forest.mjs's looksLikeGenuineLedgerLock
+// exactly (see this file's header). A genuine lock is briefly 0 bytes
+// between withManifestLock's openSync('wx') and writeFileSync — size===0 is
+// always treated as a genuine transient lock, never a hidden segment (an
+// empty file can never hide real segment content).
+function looksLikeGenuineLedgerLock(path, size) {
+  if (size === 0) return true;
+  if (size >= MAX_LOCK_OWNER_BYTES) return false;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8').trim());
+  } catch {
+    // leave parsed at its null default — falls through to the same shape
+    // check below, which already rejects a non-object.
+  }
+  return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
+    && typeof parsed.token === 'string' && typeof parsed.pid === 'number'
+    && typeof parsed.hostname === 'string' && typeof parsed.startedAt === 'string';
+}
 
 function segmentDirPath(dir) {
   return join(dir, SEGMENT_DIRNAME);
@@ -104,12 +128,13 @@ function discoverSegments(dir) {
     if (st.isSymbolicLink()) { invalid.push({ name, reason: 'symlink' }); continue; }
     if (st.isDirectory()) { invalid.push({ name, reason: 'nested directory' }); continue; }
     if (!st.isFile()) { invalid.push({ name, reason: 'not a regular file' }); continue; }
+    if (name === LINEAGE_NAME) continue; // never a segment by grammar alone — expected, legitimate
+    if (name.endsWith('.lock')) {
+      if (looksLikeGenuineLedgerLock(join(segDir, name), st.size)) continue; // a transient advisory lock, not a segment
+      invalid.push({ name, reason: 'lock-suffixed object is not a genuine advisory lock' });
+      continue;
+    }
     if (!SEGMENT_NAME_RE.test(name)) {
-      // Both the .lineage token and any *.lock advisory-lock file are expected,
-      // legitimate non-segment objects here — never a segment by grammar alone
-      // (neither ends in exactly `.jsonl`), so they are excluded, not invalid.
-      // See this file's header for why *.lock content-awareness stays out of scope.
-      if (name === LINEAGE_NAME || name.endsWith('.lock')) continue;
       invalid.push({ name, reason: 'bad filename grammar' });
       continue;
     }

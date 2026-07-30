@@ -43,7 +43,7 @@ function lastLine(content) {
 function sign(key, entry) {
   const canonical = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
   if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
-  canonical.data = entry.data;
+  if (entry.data !== undefined) canonical.data = entry.data;
   canonical.files = entry.files;
   canonical.prev = entry.prev;
   return createHmac('sha256', key).update(JSON.stringify(canonical)).digest('hex');
@@ -202,10 +202,20 @@ export function recordTicketEvidence(root, {
     if (isSegmentedRepo(dir)) {
       throw conflict('MANIFEST_FROZEN', 'manifest chain is frozen; this repo uses .adlc/manifest.d/ — upgrade adlc if you are seeing this locally');
     }
+    const key = manifestKey();
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
         if (entry.data?.transactionId === transactionId && entry.data?.action === action) {
+          // `key`, when configured, means the candidate must carry a valid
+          // signature to be trusted as genuine (P5 prosecution finding —
+          // mirrors the segmented path's findMatchingEvidence): an attacker
+          // able to append an unsigned line to root with fabricated-but-
+          // computable transactionId/action/hash fields would otherwise get
+          // it silently accepted as "already recorded", even with signing
+          // active. An unsigned/invalid candidate here is treated as absent,
+          // not a match — the real write proceeds below instead.
+          if (key !== null && !entrySigValid(key, entry)) continue;
           const matches = entry.gate === `ticket-${operation}`
             && (entry.ticket ?? null) === ticketId
             && entry.data.operation === operation
@@ -256,7 +266,6 @@ export function recordTicketEvidence(root, {
       files: {},
       prev: previous ? sha256(previous) : null,
     };
-    const key = process.env.ADLC_MANIFEST_KEY;
     if (key) entry.sig = sign(key, entry);
     const descriptor = openSync(path, 'a');
     try {

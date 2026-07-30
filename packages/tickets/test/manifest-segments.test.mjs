@@ -336,4 +336,29 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
       );
     } finally { clean(root); }
   });
+
+  // P5 prosecution finding (security lens): a real segment renamed to end in
+  // .lock must NOT be silently hidden by a name-only skip — mirrors gate-
+  // manifest's own "a real segment renamed to end in .lock is NOT silently
+  // hidden" test (forest-format.test.mjs). forestChainsIntact's own doc
+  // claims to mirror gate-manifest's precondition; a name-only skip would
+  // let a malicious branch vanish a real (possibly broken or revoked)
+  // segment from the forest by renaming it, defeating that claim.
+  it('a real segment disguised with a .lock suffix is NOT silently hidden — its content does not match a genuine lock', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' })); // real segment
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      const realSegPath = segmentPath(dir, resolved.name);
+      const disguisedPath = `${realSegPath}.lock`;
+      execFileSync('mv', [realSegPath, disguisedPath]);
+
+      assert.throws(
+        () => recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-2' })),
+        (error) => error.code === 'INVALID_MANIFEST',
+        'a disguised real segment must be reported invalid, not excluded as a genuine transient lock'
+      );
+    } finally { clean(root); }
+  });
 });

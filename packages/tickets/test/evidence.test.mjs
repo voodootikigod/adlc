@@ -37,6 +37,44 @@ test('sensitive mutations append signed dual-hash evidence and retries are idemp
   }
 });
 
+// P5 prosecution finding (security lens): the root (non-segmented)
+// idempotency scan used to trust a matching entry regardless of signature,
+// unlike its segmented sibling (findMatchingEvidence). An attacker able to
+// append an unsigned line to root with fabricated-but-computable
+// transactionId/action/hash fields would get it silently accepted as
+// "already recorded" even with signing active.
+test('root idempotency scan never trusts a matching but UNSIGNED forged entry once a key is configured', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-ticket-evidence-forge-'));
+  const previous = process.env.ADLC_MANIFEST_KEY;
+  process.env.ADLC_MANIFEST_KEY = 'forge-test-key';
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    const path = join(root, '.adlc/manifest.jsonl');
+    const forged = {
+      seq: 1, gate: 'ticket-complete', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+      data: {
+        operation: 'complete', action: 'apply', transactionId: 'tx-forged',
+        ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), bindingScope: 'ticket',
+      },
+      files: {}, prev: null,
+      // no `sig` at all — exactly what an attacker without the key can produce.
+    };
+    writeFileSync(path, `${JSON.stringify(forged)}\n`);
+
+    const result = recordTicketEvidence(root, {
+      transactionId: 'tx-forged', operation: 'complete', ticketId: 'A',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+    assert.equal(typeof result.sig, 'string', 'the write that actually happened is genuinely signed, not the forged unsigned entry');
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 2, 'the real write is APPENDED after the forged line, not treated as a duplicate match');
+  } finally {
+    if (previous === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an old manifest lock is never stolen from a potentially live owner', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-ticket-evidence-lock-'));
   try {
