@@ -88,3 +88,12 @@ test('a single-chain input (flat array) still uses value-based seq/ts comparison
   const r = reduceTicketOutcomes(entries);
   assert.equal(r.get('T1').status, 'p5-pass', 'within one chain, the higher seq (100) still wins');
 });
+
+test('across DIFFERENT P5-family gate names, the causally-later chain wins regardless of gate iteration order', () => {
+  // 'prosecution' is iterated AFTER 'p5' in P5_GATES — pin that deriveStatus
+  // picks by chain priority, not by "whichever gate name comes last".
+  const rootChain = [{ ticket: 'T1', gate: 'prosecution', seq: 1, data: { verdict: 'blocked' } }];
+  const segmentChain = [{ ticket: 'T1', gate: 'p5', seq: 1, data: { verdict: 'clear' } }];
+  const r = reduceTicketOutcomes([rootChain, segmentChain]);
+  assert.equal(r.get('T1').status, 'p5-pass', 'the causally-later segment\'s p5 entry must win over the earlier root prosecution entry');
+});
