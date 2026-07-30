@@ -108,6 +108,18 @@ export function resolveGenerationDir(dir, generation) {
  * leaf file beneath it — exactly as this module's own readAdoptionRecord,
  * @adlc/gate-manifest's forest.mjs, and @adlc/tickets's own manifest-segments.mjs
  * already do lstatSync-immediately-before-open at their own point of access.
+ *
+ * RESIDUAL LIMITATION: this is a check, not an open — it inspects pathnames via
+ * lstatSync and returns, without retaining any file descriptor for what it verified.
+ * "Immediately before I/O" narrows the window between this check and the caller's
+ * subsequent open/read/write but cannot close it: a concurrent process could still
+ * replace a checked component (the leaf, or an intermediate directory) between this
+ * function returning and the caller's own I/O call. Fully closing that gap would mean
+ * every consumer opening files through retained, fd-relative (openat-style) directory
+ * handles rather than by pathname — Node's `fs` module has no such primitive without a
+ * native addon, and every other check in this codebase (readAdoptionRecord above,
+ * @adlc/gate-manifest's forest.mjs, @adlc/tickets's own manifest-segments.mjs) has the
+ * identical pathname-check-then-open shape and the identical gap.
  * @param {string} dir  the .adlc directory (now itself verified, not assumed trusted)
  * @param {string} targetPath  a path returned by resolveActiveGenerationPaths
  *   (generationDir, manifestPath, or segmentDirPath) — the EXACT path about to be used
