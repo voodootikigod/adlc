@@ -57,6 +57,27 @@ export function normalizeUsage({ inputTokens, outputTokens, cachedTokens }) {
 }
 
 /**
+ * Project a dispatch result into the `data` payload of a gate-manifest entry.
+ *
+ * The no-fabrication rule crosses the seam here: `usageStatus` is ALWAYS
+ * present, `usage` only when the harness actually reported. A dispatch that
+ * reported nothing therefore records `{usageStatus: 'unreported'}` — which
+ * `aggregateSpend` skips entirely — rather than a zeroed object it would
+ * happily count as a measured free call.
+ *
+ * Returns undefined for a missing result so a caller with nothing to say
+ * records nothing, rather than asserting "unreported" about a call that may
+ * never have happened.
+ */
+export function usageEvidence(result) {
+  if (result === null || typeof result !== 'object') return undefined;
+  const data = { usageStatus: result.usageStatus ?? 'unreported' };
+  if (result.usage !== undefined) data.usage = result.usage;
+  if (result.usageRaw !== undefined) data.usageRaw = result.usageRaw;
+  return data;
+}
+
+/**
  * Parse JSONL defensively: harnesses interleave their event stream with
  * whatever they print to stderr, and adapters concatenate both. A line that is
  * not JSON is not an error — it is not an event. Returns only the objects.

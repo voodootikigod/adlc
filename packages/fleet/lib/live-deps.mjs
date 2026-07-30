@@ -399,8 +399,15 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     // Best-effort evidence: never block the run on a recorder error (AC5).
-    recordGate: ({ ticket, phase, ok }) => {
-      try { io.adlc(['gate-manifest', 'record', phase, '--ticket', ticket.id, ok ? '--pass' : '--fail'], {}); }
+    recordGate: ({ ticket, phase, ok, data }) => {
+      // §8a: `data` carries the dispatch's parsed usage (or just its
+      // usageStatus when the harness reported nothing). Passed only when
+      // present, so a recorder with nothing to say still emits the same argv it
+      // always did — this stays a pure addition to the evidence, not a change
+      // to what an existing entry looks like.
+      const argv = ['gate-manifest', 'record', phase, '--ticket', ticket.id, ok ? '--pass' : '--fail'];
+      if (data !== undefined) argv.push('--data', JSON.stringify(data));
+      try { io.adlc(argv, {}); }
       catch { /* evidence is best-effort */ }
     },
 

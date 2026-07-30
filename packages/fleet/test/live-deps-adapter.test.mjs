@@ -132,3 +132,56 @@ test('a ticket with no seat refuses to dispatch rather than falling back to --ad
   );
   assert.equal(rec.length, 0, 'nothing was spawned');
 });
+
+// ---- T152 §8a: usage evidence reaches the gate-manifest recorder ----
+
+function ioCapturingAdlc(adlcCalls) {
+  const rec = [];
+  const io = fakeIo(rec, env);
+  io.adlc = (args) => { adlcCalls.push(args); return { status: 0, stdout: '{}' }; };
+  return io;
+}
+
+function depsForRecord(adlcCalls) {
+  return buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'codex', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    io: ioCapturingAdlc(adlcCalls),
+  });
+}
+
+test('recordGate passes usage evidence through as --data', () => {
+  const adlcCalls = [];
+  const data = { usageStatus: 'reported', usage: { inputTokens: 900, outputTokens: 150, cachedTokens: 40 } };
+  depsForRecord(adlcCalls).recordGate({ ticket, phase: 'p4', ok: true, data });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  assert.ok(call, 'the recorder was invoked');
+  const i = call.indexOf('--data');
+  assert.notEqual(i, -1, '--data must be present when there is usage to record');
+  assert.deepEqual(JSON.parse(call[i + 1]), data, 'the payload reaches the ledger verbatim');
+  assert.deepEqual(call.slice(0, 5), ['gate-manifest', 'record', 'p4', '--ticket', 'T1']);
+  assert.ok(call.includes('--pass'));
+});
+
+test('recordGate emits the SAME argv as before when there is nothing to record', () => {
+  // A pure addition to the evidence: a recorder with no usage must not start
+  // writing a new field, or every pre-T152 caller's entries change shape.
+  const adlcCalls = [];
+  depsForRecord(adlcCalls).recordGate({ ticket, phase: 'p5', ok: false });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  assert.deepEqual(call, ['gate-manifest', 'record', 'p5', '--ticket', 'T1', '--fail']);
+  assert.equal(call.includes('--data'), false);
+});
+
+test('a recorder failure never escapes — evidence stays best-effort (AC5)', () => {
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'codex', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    io: (() => { const io = fakeIo([], env); io.adlc = () => { throw new Error('ledger unavailable'); }; return io; })(),
+  });
+  assert.doesNotThrow(() => deps.recordGate({ ticket, phase: 'p4', ok: true, data: { usageStatus: 'unreported' } }));
+});

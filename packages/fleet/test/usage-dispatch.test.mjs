@@ -200,3 +200,96 @@ describe('P4 dispatch usage — test integrity', () => {
     }
   });
 });
+
+// ---- the recording seam: parsed usage reaching the gate-manifest entry ----
+//
+// These drive the REAL scheduler (advanceTicket) and the REAL recordGate
+// wiring, with the dispatch result shaped exactly as the adapters above
+// produce it. What they do NOT assert is `aggregate.byPhase.P4`: the fleet
+// records `gate: 'p4'`, which PHASE_BY_GATE does not map, so such an entry
+// aggregates to 'unphased'. That two-line mapping change is
+// T-01KYSNGQB4W8CTX16FMD6QAK67, which cannot land until T152 completes and its
+// spend.mjs rail expires. Flipping these assertions to byPhase.P4 is that
+// ticket's final step.
+
+import { advanceTicket } from '../lib/scheduler.mjs';
+import { usageEvidence } from '../lib/adapters/usage.mjs';
+
+const TICKET = { id: 'T1', title: 't', scope: [], rails: [], edges: [] };
+const okGate = () => ({ ok: true });
+const passProsecute = () => ({ verdict: 'pass' });
+const okMerge = () => ({ ok: true });
+const noFlail = () => ({ flail: false });
+
+function recorder() {
+  const calls = [];
+  return { calls, record: (phase, ok, data) => calls.push({ phase, ok, data }) };
+}
+
+describe('P4 recording seam', () => {
+  it('carries the dispatch usage onto the P4 entry as reported', async () => {
+    const { calls, record } = recorder();
+    const usage = { inputTokens: 53458, outputTokens: 3, cachedTokens: 0 };
+    await advanceTicket(TICKET, {
+      dispatch: () => ({ exitCode: 0, timedOut: false, output: 'done', usage, usageStatus: 'reported' }),
+      gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
+    });
+
+    const p4 = calls.filter((c) => c.phase === 'p4');
+    assert.equal(p4.length, 1);
+    assert.deepEqual(p4[0].data, { usageStatus: 'reported', usage });
+  });
+
+  it('records unreported WITHOUT a usage key when the harness said nothing', async () => {
+    const { calls, record } = recorder();
+    await advanceTicket(TICKET, {
+      dispatch: () => ({ exitCode: 0, timedOut: false, output: 'done', usageStatus: 'unreported' }),
+      gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
+    });
+
+    const p4 = calls.find((c) => c.phase === 'p4');
+    assert.equal(p4.data.usageStatus, 'unreported');
+    assert.equal('usage' in p4.data, false, 'a zeroed object would book an unmeasured call as free');
+  });
+
+  it('books each strike separately — a retried ticket really did make two calls', async () => {
+    const { calls, record } = recorder();
+    let n = 0;
+    await advanceTicket(TICKET, {
+      dispatch: () => {
+        n += 1;
+        return n === 1
+          ? { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: 10, outputTokens: 1, cachedTokens: 0 }, usageStatus: 'reported' }
+          : { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: 20, outputTokens: 2, cachedTokens: 0 }, usageStatus: 'reported' };
+      },
+      // Gate fails the first strike so a second dispatch happens.
+      gate: () => (n === 1 ? { ok: false, output: 'gate boom' } : { ok: true }),
+      prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
+    });
+
+    const p4 = calls.filter((c) => c.phase === 'p4' && c.data?.usage);
+    assert.equal(p4.length, 1, 'only the passing strike emits a p4 verdict entry');
+    assert.equal(p4[0].data.usage.inputTokens, 20, 'and it carries ITS OWN strike\'s spend, not the first\'s');
+  });
+
+  it('books the last strike\'s spend when no strike ever cleared the gate', async () => {
+    const { calls, record } = recorder();
+    let n = 0;
+    await advanceTicket(TICKET, {
+      dispatch: () => { n += 1; return { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: n * 10, outputTokens: n, cachedTokens: 0 }, usageStatus: 'reported' }; },
+      gate: () => ({ ok: false, output: 'always fails' }),
+      prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
+    });
+
+    const p4 = calls.filter((c) => c.phase === 'p4');
+    assert.equal(p4.length, 1);
+    assert.equal(p4[0].ok, false);
+    assert.equal(p4[0].data.usage.inputTokens, 20, 'the final strike\'s spend is recorded rather than none');
+  });
+
+  it('usageEvidence never invents a status for a dispatch that did not happen', () => {
+    assert.equal(usageEvidence(null), undefined);
+    assert.equal(usageEvidence(undefined), undefined);
+    assert.deepEqual(usageEvidence({ exitCode: 0 }), { usageStatus: 'unreported' });
+  });
+});

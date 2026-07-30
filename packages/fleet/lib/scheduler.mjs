@@ -7,6 +7,7 @@
 
 import { fence } from '@adlc/core';
 import { computeReady, selectDispatchable, unsatisfiableInSubset } from './plan.mjs';
+import { usageEvidence } from './adapters/usage.mjs';
 
 // issue #280: same cap as charters.mjs's re-fencing of these same deadEnds —
 // capping here (where the raw log first enters a deadEnd) is what actually
@@ -56,6 +57,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
   let strikes = 0;
   let gatePassed = false;      // did any strike clear the deterministic gate?
   let prosecution = null;      // last prosecution verdict, for evidence/status
+  let lastBuild = null;        // last dispatch result, for its §8a usage on the terminal record
   const canRetry = () => strikes < maxStrikes;
 
   const fail = (reason) => ({ state: 'failed', strikes, reason, deadEnds, gatePassed, prosecution });
@@ -82,6 +84,7 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     log(`${ticket.id} strike ${strikes}: building`);
 
     const build = await effects.dispatch({ ticket, strike: strikes, deadEnds });
+    lastBuild = build;
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the second strike.
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', deadEnds };
@@ -105,7 +108,10 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
 
     gatePassed = true;
-    effects.record?.('p4', true);
+    // §8a: the P4 entry carries THIS strike's dispatch spend. Usage belongs to
+    // the dispatch that incurred it, so each strike records its own — a retried
+    // ticket books two calls because it really made two.
+    effects.record?.('p4', true, usageEvidence(build));
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
     const pros = await effects.prosecute({ ticket });
@@ -132,7 +138,19 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
     return { state: 'merged', strikes, deadEnds, gatePassed, prosecution };
   }
-  if (!gatePassed) effects.record?.('p4', false);
+  // No strike ever cleared the gate, so no P4 entry carried usage yet. This
+  // terminal record books the LAST strike's dispatch spend.
+  //
+  // KNOWN LIMITATION (deliberate, and under-reporting rather than inventing):
+  // a run that burned several strikes without ever passing the gate records
+  // only the final strike's tokens — the earlier dispatches' spend is lost,
+  // because the existing evidence shape emits one P4 entry per gate verdict,
+  // not one per dispatch. Summing the strikes into this entry would fix the
+  // token total but corrupt `calls`, since aggregateSpend counts one call per
+  // entry carrying usage. Fixing it properly means a per-dispatch entry, which
+  // is an evidence-shape change beyond this ticket. Under-reporting is the safe
+  // direction: it never books spend that did not happen.
+  if (!gatePassed) effects.record?.('p4', false, usageEvidence(lastBuild));
   return fail('two-strike cap reached');
 }
 
