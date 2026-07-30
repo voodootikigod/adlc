@@ -188,26 +188,36 @@ test('config.json exceeding the byte cap is present but invalid, not silently tr
   assert.match(result.reason, /exceeds/);
 });
 
+// The exported constant's value is pinned directly here as a HARDCODED literal (not
+// derived from MAX_CONFIG_JSON_BYTES) so a mutation to the constant itself is caught —
+// a boundary test built FROM the same (possibly mutated) constant it is meant to check
+// can never observe the mutation, since both sides would move together.
+const EXPECTED_MAX_CONFIG_JSON_BYTES = 65536;
+
+test('MAX_CONFIG_JSON_BYTES is exactly 65536', () => {
+  assert.equal(MAX_CONFIG_JSON_BYTES, EXPECTED_MAX_CONFIG_JSON_BYTES);
+});
+
 test('a config.json of EXACTLY the byte cap length is rejected (boundary precision, not off by one)', () => {
   const { dir } = makeAdlcDir();
   const template = (fillerLength) =>
     JSON.stringify({ signing: { schemaVersion: 1, keyFingerprint: FP_A, filler: 'x'.repeat(fillerLength) } });
-  const shortfall = MAX_CONFIG_JSON_BYTES - Buffer.byteLength(template(0));
+  const shortfall = EXPECTED_MAX_CONFIG_JSON_BYTES - Buffer.byteLength(template(0));
   const content = template(shortfall);
-  assert.equal(Buffer.byteLength(content), MAX_CONFIG_JSON_BYTES, 'test setup: content must land exactly at the cap');
+  assert.equal(Buffer.byteLength(content), EXPECTED_MAX_CONFIG_JSON_BYTES, 'test setup: content must land exactly at the cap');
   writeFileSync(join(dir, CONFIG_FILENAME), content);
   const result = readAdoptionRecord(dir);
   assert.equal(result.present, true);
-  assert.equal(result.valid, false, 'a file of exactly MAX_CONFIG_JSON_BYTES must be rejected, not accepted');
+  assert.equal(result.valid, false, 'a file of exactly 65536 bytes must be rejected, not accepted');
 });
 
 test('a config.json ONE BYTE under the cap is read and parsed normally', () => {
   const { dir } = makeAdlcDir();
   const template = (fillerLength) =>
     JSON.stringify({ signing: { schemaVersion: 1, keyFingerprint: FP_A, filler: 'x'.repeat(fillerLength) } });
-  const shortfall = MAX_CONFIG_JSON_BYTES - 1 - Buffer.byteLength(template(0));
+  const shortfall = EXPECTED_MAX_CONFIG_JSON_BYTES - 1 - Buffer.byteLength(template(0));
   const content = template(shortfall);
-  assert.equal(Buffer.byteLength(content), MAX_CONFIG_JSON_BYTES - 1, 'test setup: content must land one byte under the cap');
+  assert.equal(Buffer.byteLength(content), EXPECTED_MAX_CONFIG_JSON_BYTES - 1, 'test setup: content must land one byte under the cap');
   writeFileSync(join(dir, CONFIG_FILENAME), content);
   const result = readAdoptionRecord(dir);
   assert.equal(result.present, true);
