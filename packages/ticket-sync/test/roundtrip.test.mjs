@@ -416,3 +416,37 @@ test('push succeeds normally in a freshly segmented repo with no .lineage token,
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The refuse guard must ALSO not fire on the ordinary happy path: a segmented
+// repo whose own `.lineage` token resolves cleanly (the normal case for every
+// checkout that has recorded its own evidence) must push exactly as it would
+// pre-lineage-durability — never refuse just because the repo happens to be
+// segmented.
+test('push succeeds normally in a segmented repo whose own .lineage token resolves cleanly', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-healthy-segment-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'feat/push-healthy-segment']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
+
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    // Records real evidence AND mints the segment's own valid .lineage token —
+    // the ordinary state of any checkout that has done real work.
+    recordTicketEvidence(dir, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T1',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
+    });
+
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: false, now: 'T' });
+    assert.equal(r.exitCode, 0, `must not refuse when this checkout's own segment resolves cleanly: ${JSON.stringify(r.errors)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
