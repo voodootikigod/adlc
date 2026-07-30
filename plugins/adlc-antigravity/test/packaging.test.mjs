@@ -403,6 +403,78 @@ test('bin/cli.mjs accepts the smallest positive ADLC_AGY_TIMEOUT_MS (boundary is
   }
 });
 
+test('bin/cli.mjs bounds an agy that IGNORES SIGTERM', () => {
+  // A single-signal timeout is not a bound. Measured directly: spawnSync with
+  // killSignal SIGTERM against a child trapping SIGTERM returned after 6147ms for
+  // a 300ms timeout, versus 303ms with SIGKILL. So SIGKILL alone risks tearing agy
+  // down mid-copy, SIGTERM alone lets a wedged agy hang forever, and only
+  // escalation gives both — this asserts the escalation actually escalates.
+  const started = Date.now();
+  const { res, cleanup } = runCliSealed(['install'], {
+    agyScript:
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\n' +
+      "trap '' TERM\nsleep 600\n",
+    extraEnv: { ADLC_AGY_TIMEOUT_MS: '1000' },
+  });
+  try {
+    const elapsed = Date.now() - started;
+    assert.equal(res.status, 1, `an unkillable-by-TERM agy must still fail:\n${res.stderr}`);
+    assert.match(res.stderr, /did not complete/);
+    // 1s timeout + 2s grace + overhead. The 600s sleep is the control: without
+    // escalation to SIGKILL this cannot finish anywhere near here.
+    assert.ok(elapsed < 30_000, `the bound did not hold — took ${elapsed}ms`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('bin/cli.mjs ignores RELATIVE PATH entries when resolving agy', () => {
+  // join('.', 'agy') is 'agy' and join('bin', 'agy') is 'bin/agy' — both resolve
+  // against the CURRENT DIRECTORY, so a PATH containing '.' or a project-relative
+  // bin dir lets the repository supply the very executable this resolution exists
+  // to distrust. Resolving to an absolute path is the entire point.
+  for (const relativeEntry of ['.', 'bin']) {
+    const work = mkdtempSync(join(tmpdir(), 'adlc-agy-relpath-'));
+    try {
+      const home = join(work, 'home');
+      const cwd = join(work, 'repo');
+      const realBin = join(work, 'realbin');
+      const marker = join(work, 'who-ran.txt');
+      mkdirSync(home, { recursive: true });
+      mkdirSync(join(cwd, 'bin'), { recursive: true });
+      mkdirSync(realBin, { recursive: true });
+
+      // The attacker's agy sits where the relative entry points, from cwd.
+      const evilPath = relativeEntry === '.' ? join(cwd, 'agy') : join(cwd, 'bin', 'agy');
+      for (const [abs, label] of [[evilPath, 'ATTACKER'], [join(realBin, 'agy'), 'REAL']]) {
+        writeFileSync(
+          abs,
+          `#!/bin/sh\nprintf '%s\\n' "${label} $*" >> "${marker}"\n` +
+            `if [ "$1" = "--version" ]; then echo 1.1.8; fi\nexit 0\n`,
+        );
+        chmodSync(abs, 0o755);
+      }
+
+      const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+        encoding: 'utf8',
+        timeout: 20_000,
+        cwd,
+        env: sealedEnv(home, `${relativeEntry}:${realBin}:/usr/bin:/bin`),
+      });
+      assert.equal(res.status, 0, `install failed: ${res.stdout}\n${res.stderr}`);
+
+      const ran = readFileSync(marker, 'utf8');
+      assert.ok(
+        !ran.includes('ATTACKER'),
+        `PATH entry "${relativeEntry}" let a cwd-relative agy run:\n${ran}`,
+      );
+      assert.ok(ran.includes('REAL'), `the trusted agy was never reached:\n${ran}`);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
+});
+
 test('bin/cli.mjs does not hang forever on a wedged agy', () => {
   // spawnSync with no timeout waits indefinitely. A wedged agy would hang the
   // helper with no failure path and no cleanup — the staging directory surviving

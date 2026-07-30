@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, cpSync, renameSync, rmSync } from 'node:fs';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 
@@ -50,6 +50,64 @@ function resolveAgyTimeoutMs(configured) {
 
 const AGY_TIMEOUT_MS = resolveAgyTimeoutMs(process.env.ADLC_AGY_TIMEOUT_MS);
 
+/** Grace between SIGTERM and SIGKILL. */
+const AGY_GRACE_MS = 2_000;
+
+/**
+ * Run a command under a HARD wall-clock bound.
+ *
+ * SIGTERM first, so agy can unwind a partially-written plugin directory rather
+ * than being torn down mid-copy — then SIGKILL after a grace period, so the bound
+ * is actually a bound.
+ *
+ * Both halves are necessary, and spawnSync can provide only one of them: it takes
+ * a single killSignal and, with SIGTERM, does NOT regain control when its timeout
+ * elapses — it waits for a child that may never leave. Measured directly: a child
+ * trapping SIGTERM against a 300ms timeout returned after 6147ms with SIGTERM and
+ * 303ms with SIGKILL. So SIGKILL alone risks a half-replaced install, SIGTERM
+ * alone is not a bound, and getting both requires async process control.
+ *
+ * Waits on 'exit', not 'close', and inherits or discards stdio rather than piping
+ * it. 'close' waits for the stdio streams to reach EOF, which a GRANDCHILD can
+ * hold open long after the child is gone — a stub that runs `sleep` kept the bound
+ * from ever firing, so the very hang this guards against reappeared through the
+ * plumbing. Nothing here reads the child's output, so there is no reason to own a
+ * pipe at all.
+ *
+ * @returns {Promise<{status: number | null, error?: Error}>}
+ */
+function runBounded(command, args, { inherit = false } = {}) {
+  return new Promise((resolvePromise) => {
+    let child;
+    try {
+      child = spawn(command, args, { stdio: inherit ? 'inherit' : 'ignore' });
+    } catch (error) {
+      resolvePromise({ status: null, error });
+      return;
+    }
+
+    let timedOut = false;
+    let killTimer;
+    const termTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), AGY_GRACE_MS);
+    }, AGY_TIMEOUT_MS);
+
+    const done = (result) => {
+      clearTimeout(termTimer);
+      clearTimeout(killTimer);
+      resolvePromise(result);
+    };
+    child.on('error', (error) => done({ status: null, error }));
+    child.on('exit', (code) => done(
+      timedOut
+        ? { status: null, error: new Error(`timed out after ${AGY_TIMEOUT_MS}ms`) }
+        : { status: code },
+    ));
+  });
+}
+
 /**
  * Resolve `agy` to an ABSOLUTE path, ignoring npm-injected bin directories.
  *
@@ -74,6 +132,13 @@ const AGY_TIMEOUT_MS = resolveAgyTimeoutMs(process.env.ADLC_AGY_TIMEOUT_MS);
 function resolveAgyBin() {
   const npmInjected = join('node_modules', '.bin');
   for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    // RELATIVE PATH entries are refused outright. `join('.', 'agy')` is `agy` and
+    // `join('bin', 'agy')` is `bin/agy` — both resolve against the CURRENT
+    // DIRECTORY, so a PATH containing `.` or a project-relative bin dir lets a
+    // repository supply the executable this function exists to distrust. An
+    // absolute path is the whole point of resolving here rather than letting
+    // spawn search PATH.
+    if (!isAbsolute(dir)) continue;
     const normalized = dir.replace(/[\\/]+$/, '');
     if (normalized.endsWith(npmInjected) || normalized.endsWith('node-gyp-bin')) continue;
     const candidate = join(dir, 'agy');
@@ -105,7 +170,7 @@ function resolveAgyBin() {
  * @param {string} agyBin Absolute path to agy, from resolveAgyBin().
  * @returns {number | null} agy's exit status, or null if staging failed.
  */
-function agyInstallFromStagedCopy(sourceDir, agyBin) {
+async function agyInstallFromStagedCopy(sourceDir, agyBin) {
   // ONE cleanup site, in `finally`. An earlier shape cleaned up in both a catch
   // (staging failed) and a finally (install finished), and the catch copy was
   // unreachable from any test that does not contrive a filesystem failure — so
@@ -125,23 +190,12 @@ function agyInstallFromStagedCopy(sourceDir, agyBin) {
       throw new Error(`no @-free temporary directory available (tried ${root})`);
     }
     cpSync(sourceDir, join(stage, PLUGIN_NAME), { recursive: true });
-    const result = spawnSync(agyBin, ['plugin', 'install', join(stage, PLUGIN_NAME)], {
-      stdio: 'inherit',
-      timeout: AGY_TIMEOUT_MS,
-      // SIGTERM, not SIGKILL. agy writes into the live plugin directory, so a
-      // forced kill mid-copy can leave a half-replaced install behind; SIGTERM
-      // gives it the chance to unwind. spawnSync accepts only ONE signal, so a
-      // graceful-then-forceful escalation would mean an async rewrite of this
-      // whole path — not worth it for a timeout that indicates a wedged agy
-      // either way. A child that ignores SIGTERM outlives us; we still fail fast
-      // and report, rather than hanging forever, which is the property that
-      // matters here.
-      killSignal: 'SIGTERM',
+    const result = await runBounded(agyBin, ['plugin', 'install', join(stage, PLUGIN_NAME)], {
+      inherit: true,
     });
     if (result.error) {
-      // Includes the timeout case, where spawnSync kills the child and reports
-      // ETIMEDOUT. Distinguished from a plain non-zero exit: agy printed nothing
-      // useful, so say what actually happened.
+      // Includes the timeout case. Distinguished from a plain non-zero exit:
+      // agy printed nothing useful, so say what actually happened.
       console.error(`\`agy plugin install\` did not complete: ${result.error.message}`);
       return null;
     }
@@ -190,16 +244,7 @@ if (command === 'install' || command === '--install') {
   // success path that the fail-closed branch exists to remove.
   const agyBin = resolveAgyBin();
   if (agyBin) {
-    let probe;
-    try {
-      probe = spawnSync(agyBin, ['--version'], {
-        encoding: 'utf8',
-        timeout: AGY_TIMEOUT_MS,
-        killSignal: 'SIGTERM', // see the note on the install call
-      });
-    } catch (err) {
-      probe = { status: null, error: err };
-    }
+    const probe = await runBounded(agyBin, ['--version']);
     if (probe.status !== 0) {
       console.error(`Found agy at ${agyBin}, but \`agy --version\` failed${probe.error ? `: ${probe.error.message}` : ` (exit ${probe.status})`}.`);
       console.error('Not falling back to a direct copy: an agy this broken cannot register the plugin.');
@@ -207,7 +252,7 @@ if (command === 'install' || command === '--install') {
     }
 
     console.log('Google Antigravity (agy) detected. Running agy plugin install...');
-    const status = agyInstallFromStagedCopy(packageRoot, agyBin);
+    const status = await agyInstallFromStagedCopy(packageRoot, agyBin);
     if (status === 0) {
       console.log('✓ Successfully installed @adlc/antigravity plugin via agy!');
       process.exit(0);
