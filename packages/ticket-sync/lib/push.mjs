@@ -150,15 +150,20 @@ export async function push({
   // root only, so post-cutover P5 outcomes recorded in a segment never surfaced in
   // push's rendered status).
   //
-  // readOwnChains can now THROW (lineage-durability finding): it recovers this
-  // checkout's segment even without a local `.lineage` token, but refuses to guess
-  // when more than one committed segment could be this branch's. That must surface
-  // as a real push failure — never silently fall through and render a status
-  // computed from root alone, which would look identical to "no evidence" and could
-  // remove a real status label a genuine, ambiguous-but-real segment recorded.
+  // readOwnChains can now THROW (lineage-durability finding): `allowRecovery: true`
+  // recovers this checkout's segment even without a local `.lineage` token, but
+  // refuses to guess when more than one committed segment could be this branch's.
+  // Safe to opt in here — push only RENDERS a status, it never mints a fresh
+  // signed entry from what it reads, so a slug-collision recovery mistake means a
+  // stale display, not a forged trust artifact (unlike reassignment's re-attestation
+  // or prosecute's carry-forward, which deliberately do NOT opt in — see
+  // readOwnChains's own doc). That must surface as a real push failure — never
+  // silently fall through and render a status computed from root alone, which
+  // would look identical to "no evidence" and could remove a real status label a
+  // genuine, ambiguous-but-real segment recorded.
   let outcomes;
   try {
-    outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChains(join(dir, '.adlc'), { cwd: dir }));
+    outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChains(join(dir, '.adlc'), { cwd: dir, allowRecovery: true }));
   } catch (error) {
     return { exitCode: 1, errors: [`cannot determine gate status: ${error.message}`] };
   }
@@ -215,12 +220,21 @@ export async function push({
         // Re-read for the same reason as the initial load above (a resumed
         // migration just re-attested evidence, possibly into a segment).
         // Same "must not silently fall through" rule as the initial load — see
-        // its comment above.
+        // its comment above. `allowRecovery: true` for the same reason too:
+        // this is a status RENDER, never a fresh-signed write.
         try {
-          outcomes = reduceTicketOutcomes(readOwnChains(join(dir, '.adlc'), { cwd: dir }));
+          outcomes = reduceTicketOutcomes(readOwnChains(join(dir, '.adlc'), { cwd: dir, allowRecovery: true }));
         } catch (error) {
-          errors.push(`cannot determine gate status after resuming evidence re-attestation: ${error.message}`);
-          failed = true;
+          // Adversarial-review finding: a failure here used to just set `failed`
+          // and fall through into Pass 1/2, which still render remote labels and
+          // comments from the STALE pre-migration `outcomes` map. Since a resumed
+          // migration moves evidence from the local id to the GitHub id, the
+          // stale map commonly has NO entry for the now-current ticket id —
+          // renderAndPush would then remove a real status label and publish a
+          // false "no evidence recorded yet" comment, even though the function
+          // ultimately returns exitCode 1. Abort before any remote mutation
+          // instead: a status we cannot verify must never be published.
+          return { exitCode: 1, errors: [...errors, `cannot determine gate status after resuming evidence re-attestation: ${error.message}`] };
         }
       }
     }

@@ -272,18 +272,35 @@ export function readForestEntries(dir) {
  * carryForwardCrossModelReview — no total order exists across UNRELATED
  * segments, so this deliberately never reads them.
  *
- * Uses recoverOpenSegment, not peekOpenSegment directly (T-MANIFEST-FOREST
- * lineage-durability finding): a fresh clone or a branch switch that
- * overwrote `.lineage` must not silently look like "this branch has no
- * segment" when a real, committed one exists on disk. Throws if the recovery
- * scan finds more than one candidate — this is a READ, so it must fail
- * closed rather than guess; callers should let that propagate as a real
- * failure, never swallow it into "no evidence".
+ * `allowRecovery` (T-MANIFEST-FOREST lineage-durability finding, default
+ * false — opt IN, not opt out): when true, falls back to recoverOpenSegment's
+ * slug-based scan when peekOpenSegment's token doesn't resolve a segment, so
+ * a fresh clone or a branch switch that overwrote `.lineage` does not
+ * silently look like "this branch has no segment" when a real, committed one
+ * exists on disk. Throws if the recovery scan finds more than one candidate
+ * — a READ must fail closed rather than guess; callers should let that
+ * propagate as a real failure, never swallow it into "no evidence".
+ *
+ * DELIBERATELY opt-in, not the default, and DELIBERATELY not used by every
+ * caller (distinct-provider adversarial-review finding, second round): the
+ * derived slug is a LOSSY, CALLER-CONTROLLED identity — `deriveSlug`
+ * lowercases, collapses, and truncates, and nothing stops an attacker from
+ * naming a branch specifically to derive the same slug as an EXISTING,
+ * unrelated committed segment. `allowRecovery: true` is safe only for
+ * informational, non-signing consumers (doctor's health check, ticket-sync's
+ * status render) where a wrong recovery means a stale display, not a forged
+ * trust artifact. It MUST stay false for any caller that turns "recovered"
+ * content into a FRESH SIGNED entry — reassignment's re-attestation and
+ * prosecute's cross-model carry-forward both do exactly that, so a
+ * slug-collision there could launder an unrelated lineage's evidence into a
+ * newly-signed approval. Those two callers pass no options (the strict,
+ * token-only default) on purpose; do not "fix" that without first closing
+ * the identity-binding gap (tracked as a follow-up — see T-MANIFEST-FOREST).
  */
-export function readOwnChains(dir, { cwd = dirname(dir) } = {}) {
+export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false } = {}) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
   if (!isSegmentedRepo(dir)) return [root];
-  const peeked = recoverOpenSegment(dir, { cwd });
+  const peeked = allowRecovery ? recoverOpenSegment(dir, { cwd }) : peekOpenSegment(dir, { cwd });
   if (!peeked) return [root];
   return [root, parseLines(readRawLines(segmentPath(dir, peeked.name)))];
 }

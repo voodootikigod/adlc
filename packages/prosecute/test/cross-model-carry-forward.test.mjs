@@ -340,32 +340,29 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     } finally { clean(dir); }
   });
 
-  // T-MANIFEST-FOREST lineage-durability finding: the "latest entry" lookup used
-  // to call peekOpenSegment directly, which returns null the moment the local,
-  // gitignored .lineage token is lost — a fresh clone or a branch switch away and
-  // back — even when the real prior approve sits in a committed segment on disk.
-  // That looked identical to "no prior verdict at all" and refused a carry-forward
-  // that should have succeeded.
-  it('still finds the prior approve in this checkout\'s own segment after the local .lineage token is lost (fresh clone / branch switch)', () => {
+  // T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" here
+  // (distinct-provider adversarial-review finding, second round): carry-forward
+  // stays on the strict, token-only peekOpenSegment, never the slug-based
+  // recoverOpenSegment. The derived slug is a lossy, caller-controlled identity —
+  // an attacker can name a branch specifically to derive the same slug as an
+  // unrelated, legitimate segment holding a real prior approve. Recovering across
+  // that boundary here would let a malicious branch mint a FRESH SIGNED carry
+  // trusting a foreign lineage's verdict as its own chain head. A lost token
+  // degrades to "no prior verdict, review again" — the safe failure mode for a
+  // signing decision — not silent recovery. See readOwnChains's own doc (the
+  // primitive doctor.mjs and ticket-sync DO opt into, since those never sign).
+  it('does NOT recover a prior approve across a lost .lineage token — refuses, does not trust an unverified lineage', () => {
     const dir = gitLedger();
     try {
       activateSegments(dir);
       seed(dir, rev(BASE1)); // lands in the newly-opened segment, writes .lineage
       rmSync(join(dir, 'manifest.d', '.lineage'), { force: true });
 
-      // Without the fix, this would throw "no prior cross-model verdict recorded".
-      carry(dir, rev(BASE1), rev(BASE2));
-      // The carry's own WRITE mints a fresh segment (never the recovered one) since
-      // .lineage is still gone at write time — writers stay precise and never reuse
-      // a segment identified only by a read-side recovery scan (by design; only
-      // READS recover). Scan every segment file for the carry entry rather than
-      // assuming it landed in the one .lineage originally pointed at.
-      const segDir = join(dir, 'manifest.d');
-      const entries = readdirSync(segDir).filter((n) => n.endsWith('.jsonl'))
-        .flatMap((n) => readFileSync(join(segDir, n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)));
-      const carried = entries.find((e) => e.data?.revision === rev(BASE2));
-      assert.ok(carried, 'the carry-forward entry must exist in SOME segment');
-      assert.equal(carried.data.carriedFrom, rev(BASE1), 'carried from the recovered prior approve, not lost');
+      assert.throws(
+        () => carry(dir, rev(BASE1), rev(BASE2)),
+        /no prior cross-model verdict recorded/,
+        'a lost token must refuse (require a fresh review), never silently recover an unverified segment',
+      );
     } finally { clean(dir); }
   });
 

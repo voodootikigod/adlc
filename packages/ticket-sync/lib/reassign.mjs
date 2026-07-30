@@ -169,6 +169,16 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
     if (!forestChainsIntact(adlcDir, { key })) {
       throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken, or an entry is unsigned/forged');
     }
+    // readOwnChains's default (no allowRecovery: true) is deliberate here
+    // (distinct-provider adversarial-review finding, T-MANIFEST-FOREST): this
+    // re-signs whatever it finds as a FRESH, newly-signed re-attestation under
+    // the new id — recovering across a lost `.lineage` token via the lossy,
+    // caller-controlled derived slug could launder an unrelated lineage's
+    // evidence into a validly-signed entry nobody with the key actually
+    // approved for THIS ticket. A lost token means no source is found (sources
+    // stays empty below), not a silently-recovered wrong one. See
+    // readOwnChains's own doc for which callers may safely opt in (informational
+    // reads that never sign, like doctor.mjs and ticket-sync's status render).
     const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId, key);
     if (sources.length === 0) return [];
 

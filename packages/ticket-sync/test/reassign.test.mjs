@@ -228,13 +228,16 @@ test('migrateManifestEvidence routes to the segment writer once segmented — ro
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-// T-MANIFEST-FOREST lineage-durability finding: migrateSegmentedSet's internal
-// readOwnChains call used to return root-only (silently finding ZERO sources to
-// carry forward) the moment the local, gitignored .lineage token was lost — a
-// fresh clone or a branch switch away and back — even though the real evidence
-// sat in a committed segment on disk. Simulates that precondition directly
-// (deleting the token after the evidence-bearing segment already exists).
-test('migrateManifestEvidence still finds source evidence after the local .lineage token is lost (fresh clone / branch switch)', () => {
+// T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" here
+// (distinct-provider adversarial-review finding, second round): migrateSegmentedSet
+// stays on readOwnChains's strict default (no allowRecovery), never the slug-based
+// recovery. Recovering across a lost `.lineage` token here would re-sign whatever
+// a lossy, attacker-controllable branch-slug match finds as a FRESH re-attestation
+// under the new id — a malicious branch could launder an unrelated lineage's
+// evidence into a validly-signed entry nobody actually approved for this ticket.
+// A lost token means no source is found (a real, if unfortunate, degradation for
+// a fresh clone or branch switch), not a silently-recovered wrong one.
+test('migrateManifestEvidence finds no source evidence (does not recover) after the local .lineage token is lost — refuses to trust an unverified lineage', () => {
   const { root, dir } = gitRepo();
   try {
     activate(dir);
@@ -244,8 +247,7 @@ test('migrateManifestEvidence still finds source evidence after the local .linea
     });
     rmSync(lineagePath(dir), { force: true });
     const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null });
-    assert.equal(result.migrated, 1, 'the committed segment\'s evidence must still be found and carried forward');
-    assert.equal(result.entries[0].data.migratedFrom, 'T7');
+    assert.equal(result.migrated, 0, 'a lost token must not be silently recovered for a re-signing operation');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { recordTicketEvidence } from '../lib/evidence.mjs';
 import {
   isSegmentedRepo, resolveOpenSegment, recoverOpenSegment, readForestEntries, segmentPath,
-  lineagePath, deriveSlug, generateSegmentUlid, currentBranch,
+  lineagePath, deriveSlug, generateSegmentUlid, currentBranch, readOwnChains,
 } from '../lib/manifest-segments.mjs';
 
 function gitRepo(branch = 'feat/ticket-evidence') {
@@ -484,6 +484,35 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       assert.equal(currentBranch(root), null, 'precondition: detached HEAD');
       assert.equal(recoverOpenSegment(dir, { cwd: root }), null);
+    } finally { clean(root); }
+  });
+});
+
+// readOwnChains's `allowRecovery` flag (distinct-provider adversarial-review
+// finding, second round): recovery must be OPT-IN, not the default, and every
+// caller that turns "recovered" content into a FRESH SIGNED entry (reassignment,
+// prosecute carry-forward) must NOT opt in — see readOwnChains's own doc for the
+// full rationale (derived slugs are a lossy, attacker-controllable identity).
+describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only (lineage-durability finding)', () => {
+  it('default (no allowRecovery): does not recover — returns root-only once the token is lost, even with a real committed segment', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      rmSync(lineagePath(dir), { force: true });
+      const chains = readOwnChains(dir, { cwd: root });
+      assert.equal(chains.length, 1, 'must fall back to root-only, never guess at a segment via the caller-controlled slug');
+    } finally { clean(root); }
+  });
+
+  it('allowRecovery: true opts into the slug-based recovery scan', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      rmSync(lineagePath(dir), { force: true });
+      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true });
+      assert.equal(chains.length, 2, 'root + the recovered segment');
     } finally { clean(root); }
   });
 });
