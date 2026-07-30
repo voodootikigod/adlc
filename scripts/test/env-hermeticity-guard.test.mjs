@@ -83,9 +83,26 @@ function sensitiveVarsForEntrypoint(pathText) {
   return null;
 }
 
-/** True iff `node` is a string Literal — the ONLY form this guard trusts as a value. */
+/**
+ * The literal string VALUE of `node` if it is a string Literal or a NO-SUBSTITUTION
+ * template literal (a backtick string with no `${...}` interpolation — acorn still
+ * represents even a plain backtick string as a TemplateLiteral, not a Literal, so
+ * `new URL(\`../bin/adlc-prosecute.mjs\`, ...)` was otherwise invisible to every check
+ * that only recognized `Literal` nodes) — the only two forms this guard trusts as a
+ * static value — else null.
+ * @param {object} node
+ * @returns {string|null}
+ */
+function stringLiteralValue(node) {
+  if (!node) return null;
+  if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node.type === 'TemplateLiteral' && node.expressions.length === 0) return node.quasis[0].value.cooked;
+  return null;
+}
+
+/** True iff `node` is a string Literal or no-substitution template literal. */
 function isStringLiteral(node) {
-  return !!node && node.type === 'Literal' && typeof node.value === 'string';
+  return stringLiteralValue(node) !== null;
 }
 
 /** Generic recursive walk: visit(node) is called on every node reachable from `root`. */
@@ -118,7 +135,7 @@ function walk(root, visit) {
  */
 function resolveCallToPathText(node) {
   const literals = [];
-  walk(node, (n) => { if (isStringLiteral(n)) literals.push(n.value); });
+  walk(node, (n) => { const v = stringLiteralValue(n); if (v !== null) literals.push(v); });
   return literals.length ? literals.join('/') : null;
 }
 
@@ -302,7 +319,7 @@ function mayReintroduce(objExpr, varName, objectLiteralVars, processEnvAliasVars
     }
     if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
     const key = p.key;
-    const keyName = key?.type === 'Identifier' ? key.name : (isStringLiteral(key) ? key.value : null);
+    const keyName = key?.type === 'Identifier' ? key.name : stringLiteralValue(key);
     if (keyName === varName && !isStringLiteral(p.value)) return true; // a dynamic value for this key
   }
   return false;
@@ -324,7 +341,20 @@ function mayReintroduce(objExpr, varName, objectLiteralVars, processEnvAliasVars
  * scanner cannot determine its shape at all) is left alone rather than assumed unsafe:
  * the common, deliberate "safe defaults the caller may override" shape (`{ ...process.env,
  * VAR: '', ...callerOverrides }`) is not itself an ambient leak, and flagging it would
- * make already-compliant code fail for no discoverable reason. INCLUDING an empty
+ * make already-compliant code fail for no discoverable reason.
+ *
+ * KNOWN, ACCEPTED LIMITATION (re-raised by review more than once — recorded here so it
+ * is not re-litigated): a caller who deliberately passes an override reintroducing the
+ * ambient value (`run(args, { env: { VAR: process.env.VAR } })`) defeats this. Every
+ * real call site this guard covers uses the override slot ONLY for test-controlled
+ * literal values (see packages/rails-guard/test/ci-bin.test.mjs's `env: { BASE_REF:
+ * 'main' }`), never to reintroduce ambient state — flipping this to fail-closed would
+ * flag that already-compliant, intentional pattern with no fix available (the literal
+ * pin cannot be moved after the override without also overriding a legitimate,
+ * deliberate caller-supplied value). Closing this gap for real needs either
+ * interprocedural analysis of what callers actually pass, or requiring an explicit
+ * suppression at every such override site — deferred as a follow-on, not a defect in
+ * what is implemented here. INCLUDING an empty
  * string for the literal itself, but NOT `VARNAME: process.env.VARNAME` (a no-op
  * re-injection) and NOT any other dynamic expression: only a provable literal is
  * trusted, and only when nothing after it in the SAME object undoes it.
@@ -358,7 +388,7 @@ function hasLiteralNeutralization(objExpr, varName, objectLiteralVars, processEn
     }
     if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
     const key = p.key;
-    const keyName = key?.type === 'Identifier' ? key.name : (isStringLiteral(key) ? key.value : null);
+    const keyName = key?.type === 'Identifier' ? key.name : stringLiteralValue(key);
     if (keyName !== varName) continue;
     neutralized = isStringLiteral(p.value); // a later property with the same key always wins outright
   }
@@ -449,7 +479,7 @@ function findEffectiveEnvProperty(objExpr, objectLiteralVars, seen) {
     }
     if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
     const key = p.key;
-    const keyName = key?.type === 'Identifier' ? key.name : (isStringLiteral(key) ? key.value : null);
+    const keyName = key?.type === 'Identifier' ? key.name : stringLiteralValue(key);
     if (keyName !== 'env') continue;
     result = { resolved: true, value: p.value };
   }
@@ -468,12 +498,14 @@ function isFunctionNode(node) {
  * or a named reference (arity alone disambiguates a 3-argument call, unlike the last
  * argument's shape), and a bare `exec(command, callback)` has no options argument at
  * all — only a 2-argument call whose second argument is an INLINE function can be told
- * apart from `exec(command, options)` by shape alone. `execFileSync`/`spawnSync` need
- * at least 3 arguments (command, args, options) before the last one is genuinely an
- * OPTIONS candidate at all — this codebase always writes an explicit args array as the
- * second argument (verified across every real call site), so a 1- or 2-argument call's
- * last argument is the COMMAND or the args list, never options, and returning it here
- * would wrongly treat an entrypoint path reference as an unresolvable "options" value.
+ * apart from `exec(command, options)` by shape alone. `execFileSync`/`spawnSync` also
+ * accept a 2-argument overload with args OMITTED (`execFileSync(file, options)`), not
+ * just the 3-argument `(file, args, options)` shape this codebase's own call sites
+ * always use — the two-argument case is disambiguated by the SECOND argument's shape:
+ * an ArrayExpression is the args list (matching this codebase's convention, so options
+ * is genuinely omitted); anything else (an object literal, an identifier, a call, …) is
+ * the options argument, with args omitted instead. A single argument (just the command)
+ * never has an options slot at all.
  * @param {object} node  a CallExpression matching one of SPAWN_FN_NAMES
  * @param {string} calleeName  the RESOLVED name (see resolveSpawnCalleeName) — not
  *   necessarily `node.callee.name`, which is absent for a namespace-member callee
@@ -486,7 +518,9 @@ function resolveOptionsArgument(node, calleeName) {
     if (args.length === 2) return isFunctionNode(args[1]) ? undefined : args[1]; // callback-only vs options-only
     return undefined; // exec(command) alone — no options argument
   }
-  return args.length >= 3 ? args.at(-1) : undefined;
+  if (args.length >= 3) return args.at(-1);
+  if (args.length === 2) return args[1].type === 'ArrayExpression' ? undefined : args[1]; // args-omitted vs options-omitted
+  return undefined; // 0 or 1 argument — no options slot at all
 }
 
 /**
@@ -1448,4 +1482,43 @@ test('ONE suppression comment does not silently cover a SECOND, different unsafe
   const violations = findViolationsInSource('fixtures/one-suppression-two-spawns.test.mjs', fixture);
   assert.equal(violations.length, 1, 'a suppression comment must cover only the ONE spawn it directly precedes, not a second unrelated one nearby');
   assert.match(violations[0].message, /:9 spawns/, 'the flagged call must be runSecond\'s (line 9), not runFirst\'s suppressed one');
+});
+
+// ── round-8 review: 2-argument options overloads and backtick entrypoint paths ────
+
+test('execFileSync(file, options) — the 2-argument overload with ARGS omitted — is still checked', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin() {
+      return execFileSync(BIN, { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/two-arg-options-overload.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a 2-argument call whose second argument is an object literal is the options-omitted-args overload, not an args-omitted-options one');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('execFileSync(file, args) — the 2-argument overload with OPTIONS omitted (an array second argument) — remains out of scope', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(BIN, [...args]);
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/two-arg-args-overload.test.mjs', fixture), []);
+});
+
+test('a BACKTICK (no-substitution template literal) entrypoint path is resolved exactly like a regular string literal', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL(\`../bin/adlc-prosecute.mjs\`, import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/backtick-entrypoint-path.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a backtick string is exactly as static as a quoted one and must resolve the entrypoint the same way');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
 });
