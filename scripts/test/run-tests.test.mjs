@@ -77,8 +77,15 @@ test('the runner PATH prepend is preserved by the helper', () => {
 function runRunner(extraEnv) {
   const env = { ...process.env, ...extraEnv };
   // Start from a clean slate for EVERY scrubbed variable — this test file itself may
-  // be running under a deliberately leaked env (that is T1's whole premise).
-  for (const name of SCRUBBED_ENV_VARS) delete env[name];
+  // be running under a deliberately leaked env (that is T1's whole premise). Case-fold
+  // on win32 for the same reason buildSegmentEnv does: an ambient mixed-case spelling
+  // would survive a canonical-only delete there and trip the no-notice assertion.
+  const fold = process.platform === 'win32';
+  for (const name of SCRUBBED_ENV_VARS) {
+    for (const k of Object.keys(env)) {
+      if (k === name || (fold && k.toUpperCase() === name)) delete env[k];
+    }
+  }
   Object.assign(env, extraEnv);
   return execFileSync(process.execPath, ['scripts/run-tests.mjs', 'generated-reader'], {
     cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
