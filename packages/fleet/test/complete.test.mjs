@@ -604,6 +604,48 @@ test('a completion that shares its freshly-minted segment with a concurrent reco
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Adversarial-review finding (second round): the ABOVE test covers a brand-new
+// (pending) segment. This covers the mirror case — an ALREADY-OPEN segment, where
+// priorManifest is captured OUTSIDE the ledger lock. A concurrent recorder can
+// append to that SAME segment in the unlocked window between that read and this
+// completion's own locked write; the file-identity check alone (raced only on a
+// DIFFERENT segment) never caught this, so priorManifest silently stopped being an
+// exact preimage of "everything except our own entry".
+test('a completion into an ALREADY-OPEN segment that races a concurrent recorder is also refused on withdrawal (T-MANIFEST-FOREST)', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+
+    // Open the segment first with a real completion — no race here, just establishing
+    // the "already open" precondition the race below needs.
+    completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+
+    const service = new TicketService(detectTicketStore({ root }), { root });
+    service.apply(service.planCreate({ id: 'T2', title: 'second' }));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'author T2');
+
+    const racingGit = makeMidTransactionConcurrentRecorderGit(git, root);
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T2', integrationBranch, git: racingGit });
+
+    assert.equal(res.completed, true, 'the write itself is correct — nothing is lost at commit time');
+    assert.equal(res.raced, true, 'the completion must flag that its ALREADY-OPEN segment gained an extra entry it did not write');
+
+    const segFile = openSegmentFile(root);
+    const linesAfterCommit = readFileSync(segFile, 'utf8').trim().split('\n');
+    assert.equal(linesAfterCommit.length, 3, 'T1\'s entry, the concurrent recorder\'s entry, and T2\'s completion all landed in the commit');
+
+    assert.throws(
+      () => revertCompletionCommit({ repo: root, toSha: res.preCompletionSha, shardPath: res.shardPath, completionSha: res.completionSha, integrationBranch, ledgerPath: res.ledgerPath, raced: res.raced, git }),
+      /refusing to withdraw/,
+      'withdrawal must refuse rather than restore priorManifest and silently delete the concurrent recorder\'s entry',
+    );
+    assert.equal(readFileSync(segFile, 'utf8').trim().split('\n').length, 3, 'all three entries remain intact; nothing was deleted');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('the completion holds the ticket writer lock across the transaction AND the commit, then releases it (T73)', () => {
   const { root, git, integrationBranch } = makeRepo();
   try {

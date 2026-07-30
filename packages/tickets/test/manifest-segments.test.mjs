@@ -3,7 +3,7 @@
 // and recordTicketEvidence's routing through it.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, renameSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -339,7 +339,7 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
       const resolved = resolveOpenSegment(dir, { cwd: root });
       const realSegPath = segmentPath(dir, resolved.name);
       const disguisedPath = `${realSegPath}.lock`;
-      execFileSync('mv', [realSegPath, disguisedPath]);
+      renameSync(realSegPath, disguisedPath);
 
       assert.throws(
         () => recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-2' })),

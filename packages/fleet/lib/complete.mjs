@@ -72,7 +72,7 @@ function resolveManifestArtifact(repo) {
  * caller the captured `priorManifest`/`afterManifest` belong to the WRONG
  * file — it must not attempt a targeted restore against them.
  */
-function resolveManifestArtifactAfterWrite(repo, artifact) {
+function resolveManifestArtifactAfterWrite(repo, artifact, priorLineCount) {
   const dir = join(repo, '.adlc');
   if (!isSegmentedRepo(dir)) return artifact; // root never moves
   const peeked = peekOpenSegment(dir, { cwd: repo }); // safe now: the file genuinely exists
@@ -80,6 +80,19 @@ function resolveManifestArtifactAfterWrite(repo, artifact) {
   const resolved = segmentArtifact(dir, peeked.name);
   if (!artifact.pending) {
     if (artifact.abs !== resolved.abs) return { ...resolved, raced: true };
+    // `priorManifest` (the caller's rollback preimage) was captured OUTSIDE the
+    // ledger lock (adversarial-review finding): a concurrent recorder can append to
+    // this SAME already-open segment in the unlocked window between that read and
+    // this write's own locked append. The file-identity check above only catches a
+    // DIFFERENT segment (a checkout-switch race); it says nothing about EXTRA lines
+    // landing in the SAME one. If more than exactly the one line this write itself
+    // added is now present, priorManifest is no longer an exact preimage of
+    // "everything except our own entry" — a rollback that restores to it would
+    // delete the concurrent recorder's entry along with ours.
+    const lineCount = existsSync(resolved.abs)
+      ? readFileSync(resolved.abs, 'utf8').split('\n').filter((l) => l.trim() !== '').length
+      : 0;
+    if (lineCount !== priorLineCount + 1) return { ...resolved, raced: true };
     return resolved;
   }
   // artifact.pending assumed no segment was open pre-write, so priorManifest
@@ -273,6 +286,7 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
     // ULID, astronomically unlikely to collide with anything already on disk.
     const priorStore = existsSync(storeAbs) ? readFileSync(storeAbs) : null;
     const priorManifest = artifact.pending ? null : (existsSync(artifact.abs) ? readFileSync(artifact.abs) : null);
+    const priorLineCount = priorManifest === null ? 0 : priorManifest.toString('utf8').split('\n').filter((l) => l.trim() !== '').length;
 
     // rails-guard-ci DENIES a PR that CREATES .adlc/manifest.jsonl with evidence
     // (only a verified migration may); appending to an existing one is allowed. On a
@@ -294,7 +308,7 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
     service.apply(service.planComplete(ticketId), { lock });
     // Re-resolve now that the write has happened: a `pending` artifact's real
     // name only exists on disk after this point (see resolveManifestArtifact).
-    artifact = resolveManifestArtifactAfterWrite(repo, artifact);
+    artifact = resolveManifestArtifactAfterWrite(repo, artifact, priorLineCount);
     const manifestAbs = artifact.abs;
     // What the manifest looks like immediately after OUR append — the baseline for
     // detecting a concurrent evidence append before any rollback.
@@ -346,11 +360,14 @@ export function completeTicketOnIntegration({ repo, ticketId, integrationBranch,
       // cannot deadlock against a concurrent recorder.
       let ledgerDirty = false;
       if (artifact.raced) {
-        // The write landed in a DIFFERENT segment than the one priorManifest was
-        // captured for (a checkout-switch race, see resolveManifestArtifactAfterWrite)
-        // — priorManifest belongs to the wrong file, so a targeted restore here would
-        // corrupt whatever this segment actually contained. Never guess: flag dirty so
-        // the caller quarantines the branch instead of silently leaving false evidence
+        // Either the write landed in a DIFFERENT segment than the one priorManifest
+        // was captured for (a checkout-switch race), or a concurrent recorder
+        // appended into the SAME already-open segment in the unlocked window before
+        // this write's own locked append (see resolveManifestArtifactAfterWrite for
+        // both cases) — either way, priorManifest is no longer a trustworthy preimage
+        // of "everything except our own entry": a targeted restore here would corrupt
+        // or delete real evidence that was never ours. Never guess: flag dirty so the
+        // caller quarantines the branch instead of silently leaving false evidence
         // behind under the pretense of a clean rollback.
         ledgerDirty = true;
       } else {
