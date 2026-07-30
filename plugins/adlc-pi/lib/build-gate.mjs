@@ -61,7 +61,7 @@ export function checkBuildGate({ ticket, usage, compacted, env = process.env, ro
     bypass: env.ADLC_BUILD_GATE_BYPASS === '1',
     recordBypass: () =>
       recordOverride({
-        key: getKey(),
+        key: getKey(env),
         ticketId: ticket.id,
         signals,
         depth: Math.round(percent),

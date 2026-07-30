@@ -83,7 +83,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
     bypass: env.ADLC_BUILD_GATE_BYPASS === '1',
     recordBypass: () =>
       recordOverride({
-        key: getKey(),
+        key: getKey(env),
         ticketId: active.id,
         signals,
         depth,

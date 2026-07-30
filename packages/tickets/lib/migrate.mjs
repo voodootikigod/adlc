@@ -12,6 +12,7 @@ import { LegacyTicketStore } from './stores/legacy.mjs';
 import { recordTicketEvidence } from './evidence.mjs';
 import { validateTickets } from './schema.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 // The tracked surface of `.adlc/` after a migration. `!.adlc/manifest.jsonl` is
 // NOT optional: the rails-guard CI migration gate requires hash-bound
@@ -178,6 +179,7 @@ export function migrationPlan(root = '.') {
 }
 
 export function migrateLegacyStore(root = '.', { write = false, yes = false, requireClean = true, faultInjector = null, key = null } = {}) {
+  key = validateKeyParam(key);
   const plan = migrationPlan(root);
   if (!write) return plan;
   if (!yes) throw conflict('CONFIRMATION_REQUIRED', 'migration write requires --yes');
@@ -263,6 +265,7 @@ export function migrateLegacyStore(root = '.', { write = false, yes = false, req
 }
 
 export function recoverMigration(root, id, { direction, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!['complete', 'rollback'].includes(direction)) throw conflict('RECOVERY_DIRECTION_REQUIRED', 'choose complete or rollback');
   const { runtime, journal } = loadMigrationJournal(root, id);
   const legacyPath = safeJournalPath(root, journal.source, 'source');

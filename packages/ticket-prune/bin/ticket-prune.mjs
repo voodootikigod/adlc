@@ -25,6 +25,7 @@
 import { parseArgs, opError, printJson } from '@adlc/core';
 import { runTicketPrune } from '../lib/run.mjs';
 import { renderReport, toJson } from '../lib/format.mjs';
+import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
 const USAGE = 'usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--ceremony] [--json]';
 
@@ -40,6 +41,7 @@ const { values } = parseArgs({
 });
 
 const result = runTicketPrune({
+  key: resolveKeyFromEnv(),
   cwd: process.cwd(),
   ticketsPath: values.tickets,
   baseRef: values['base-ref'],

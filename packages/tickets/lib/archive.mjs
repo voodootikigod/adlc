@@ -8,6 +8,7 @@ import { acquireTicketLock, releaseTicketLock } from './lock.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
 import { applyDirectoryTransaction } from './transaction.mjs';
 import { durableMkdir, durableWrite } from './durability.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 function validateArchivePath(root, path) {
   const expected = resolve(root, ARCHIVE_DIRECTORY);
@@ -25,6 +26,7 @@ function ensureArchive(path) {
 }
 
 export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, faultInjector = null, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'archiving requires explicit authorization');
   validateArchivePath(root, archivePath);
   const lock = acquireTicketLock(root, { command: 'ticket:archive' });
@@ -64,6 +66,7 @@ export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHa
 }
 
 export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHash, root = '.', authorized = false, faultInjector = null, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'restore requires explicit authorization');
   validateArchivePath(root, archivePath);
   const lock = acquireTicketLock(root, { command: 'ticket:restore' });

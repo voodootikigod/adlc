@@ -53,7 +53,7 @@ function writeAtomic(path, text) {
 }
 
 /** Atomically replace .adlc/tickets.json (caller must hold the lock). */
-export function writeTicketsAtomic(dir, ticketsObj, { expectedSnapshotHash, expectedStoreAbsent = false } = {}) {
+export function writeTicketsAtomic(dir, ticketsObj, { expectedSnapshotHash, expectedStoreAbsent = false, key = null } = {}) {
   let store;
   let storeWasAbsent = false;
   try { store = detectTicketStore({ root: dir }); }
@@ -64,7 +64,7 @@ export function writeTicketsAtomic(dir, ticketsObj, { expectedSnapshotHash, expe
     store = detectTicketStore({ root: dir });
   }
   if (expectedStoreAbsent && !storeWasAbsent) throw conflict('STALE_SNAPSHOT', 'ticket store appeared after synchronization planning');
-  const service = new TicketService(store, { root: dir });
+  const service = new TicketService(store, { root: dir, key });
   const plan = service.planReconciliation(ticketsObj.tickets, { authorized: true, expectedSnapshotHash });
   return service.apply(plan, { lock: heldLocks.get(resolve(dir)) ?? null });
 }

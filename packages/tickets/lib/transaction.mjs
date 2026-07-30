@@ -9,6 +9,7 @@ import { acquireTicketLock, releaseTicketLock } from './lock.mjs';
 import { validateTickets } from './schema.mjs';
 import { recordTicketEvidence } from './evidence.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
+import { validateKeyParam } from './key-contract.mjs';
 
 const fileHash = (path) => sha256(readFileSync(path));
 const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -93,6 +94,7 @@ function evidenceBinding(before, tickets, ticketId, beforeTicketId = null) {
 }
 
 export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash, operation = 'update', evidenceRequired = false, ticketId = null, beforeTicketId = null, root = '.', faultInjector = null, lock: existingLock = null, auxiliaryOperations = [], verify = null, key = null } = {}) {
+  key = validateKeyParam(key); // before ANY journal/lock/mutation — an invalid key must be side-effect-free
   validateTickets(tickets);
   const transactionId = randomUUID();
   const lock = existingLock ?? acquireTicketLock(root, { transactionId, command: `ticket:${operation}` });
@@ -196,6 +198,7 @@ export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash
 }
 
 export function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operation = 'update', evidenceRequired = false, ticketId = null, beforeTicketId = null, root = '.', faultInjector = null, lock: existingLock = null, key = null } = {}) {
+  key = validateKeyParam(key);
   validateTickets(tickets);
   const transactionId = randomUUID();
   const lock = existingLock ?? acquireTicketLock(root, { transactionId, command: `ticket:${operation}` });
@@ -278,6 +281,7 @@ function loadJournal(root, transactionId) {
 }
 
 export function recoverDirectoryTransaction(store, transactionId, { root = '.', direction, key = null } = {}) {
+  key = validateKeyParam(key);
   if (!['complete', 'rollback'].includes(direction)) throw invalid('RECOVERY_DIRECTION_REQUIRED', 'choose complete or rollback');
   const { transactionRoot, journal } = loadJournal(root, transactionId);
   const lock = acquireTicketLock(root, { transactionId, command: `ticket:recover:${direction}` });

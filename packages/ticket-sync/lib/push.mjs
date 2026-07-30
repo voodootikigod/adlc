@@ -111,6 +111,7 @@ function ticketBody(prose, block, key) {
  * @param {number} [opts.limit]
  */
 export async function push({
+  key = null,
   dir = '.', provider, runner, gitRemoteUrl, write = false,
   now = new Date().toISOString(), uuid = randomUUID, manifestEntries, env = process.env, limit,
 } = {}) {
@@ -351,7 +352,7 @@ export async function push({
         state.pendingCreates[createKey] = { localId: t.id, title: t.title, nodeId, number, url: url ?? null };
         writeSidecar(dir, state);
         ticketsDirty = true;
-        const after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent });
+        const after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent, key });
         expectedSnapshotHash = after.hash;
         expectedStoreAbsent = false;
         try {

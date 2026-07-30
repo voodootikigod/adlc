@@ -41,7 +41,7 @@ export function recordGateEvent({ pi, ctx, root, ticketId, type, detail = {} }) 
       ticket: ticketId ?? undefined,
       rawData: JSON.stringify(detail),
       dir: join(root, '.adlc'),
-      key: getKey(),
+      key: getKey(process.env), // pi command handlers are the process entry; env resolution happens here
     });
   } catch (err) {
     ctx?.ui?.notify?.(`ADLC: manifest evidence write failed: ${err.message}`, 'warning');

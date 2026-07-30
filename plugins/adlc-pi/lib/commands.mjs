@@ -304,7 +304,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
           ticket: ticketId,
           rawData: JSON.stringify({ spec: specArg, sha256: hash, verdict: 'approved' }),
           dir: join(root, '.adlc'),
-          key: getKey(),
+          key: getKey(process.env), // pi command handlers are the process entry; env resolution happens here
         });
       } catch (err) {
         ctx.ui.notify(`ADLC: failed to record spec approval: ${err.message}`, 'error');

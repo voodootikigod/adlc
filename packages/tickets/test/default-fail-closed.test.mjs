@@ -9,6 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -72,5 +73,65 @@ test('doctorTicketStore does NOT inspect the archive when archive is omitted', (
     const report = doctorTicketStore(store, { root, key: null });
     assert.equal(report.checks.some((c) => c.name === 'archive'), false,
       'no archive check may run unless archive: true is passed');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migrateLegacyStore with write but WITHOUT yes refuses; requireClean defaults ON (dirty tree refuses)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-defaults-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T('A')] }));
+    // write:true without yes → confirmation required, nothing applied.
+    assert.throws(() => migrateLegacyStore(root, { write: true, key: null }), /CONFIRMATION_REQUIRED|--yes/);
+    // write+yes on a DIRTY tree (tickets.json is untracked) → requireClean default refuses.
+    assert.throws(() => migrateLegacyStore(root, { write: true, yes: true, key: null }), /DIRTY_WORKTREE|clean worktree/);
+    assert.equal(existsSync(join(root, '.adlc', 'tickets')), false, 'no store materialized by either refusal');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('store recover routes by journal.operation: an interrupted MIGRATE journal recovers via migrate recovery', () => {
+  // Pins bin/adlc-tickets.mjs's `journal.operation === 'migrate'` comparison. A REAL
+  // interrupted migration leaves a prepared migrate journal; `store recover --complete`
+  // must route it to recoverMigration, which completes the migration (directory store
+  // materializes, exit 0). Inverted, the bin hands it to directory recovery, which
+  // cannot complete a migrate journal — a loud non-zero failure.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-defaults-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [T('A')] }, null, 2)}\n`);
+    writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
+    assert.throws(() => migrateLegacyStore(root, {
+      write: true, yes: true, requireClean: false, key: null,
+      faultInjector(name) { if (name === 'directory-renamed') throw new Error('fault:directory-renamed'); },
+    }), /fault:directory-renamed/);
+    const bin = new URL('../bin/adlc-tickets.mjs', import.meta.url).pathname;
+    let status = 0, out = '';
+    try {
+      out = execFileSync(process.execPath, [bin, 'store', 'recover', '--complete', '--json'], {
+        cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ADLC_MANIFEST_KEY: '' },
+      });
+    } catch (err) { status = err.status; out = `${err.stdout}\n${err.stderr}`; }
+    assert.equal(status, 0, `migrate journal must complete via migrate recovery, got:\n${out}`);
+    assert.equal(existsSync(join(root, '.adlc', 'tickets', '.store.json')), true,
+      'completion materializes the directory store — proof the migrate path ran');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an INVALID key is rejected BEFORE any mutation — store bytes, journal, and manifest untouched', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-defaults-'));
+  try {
+    const store = directoryStore(root, [T('A')]);
+    const beforeHash = store.load().hash;
+    assert.throws(
+      () => applyDirectoryTransaction(store, [T('A'), T('B')], {
+        root, expectedSnapshotHash: beforeHash, operation: 'update', evidenceRequired: true, key: '',
+      }),
+      /key/i,
+    );
+    assert.equal(store.load().hash, beforeHash, 'store bytes unchanged after the refusal');
+    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no evidence written');
+    assert.equal(existsSync(join(root, '.adlc', 'transactions')), false, 'no journal persisted');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

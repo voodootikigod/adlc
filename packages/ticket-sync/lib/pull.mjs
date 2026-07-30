@@ -101,6 +101,7 @@ export function validityGate(tickets) {
 }
 
 export async function pull({
+  key = null,
   dir = '.', provider, runner, gitRemoteUrl,
   write = false, force = false, allowRailNarrowing = false, limit,
   now = new Date().toISOString(),
@@ -178,6 +179,7 @@ export async function pull({
     writeTicketsAtomic(dir, { tickets: gate.tickets }, {
       expectedSnapshotHash: localState.hash,
       expectedStoreAbsent: localState.absent,
+      key,
     });
     const newSidecar = { ...sidecar, tickets: { ...sidecar.tickets } };
     for (const [id, u] of Object.entries(sidecarUpdates)) newSidecar.tickets[id] = { ...u, syncedAt: now };
