@@ -154,30 +154,49 @@ function collectParameterNames(ast) {
  * a scope-resolving compiler — but SEE `collectParameterNames` for the one shadowing
  * case this guard defends against by exclusion rather than by full resolution):
  *   entrypointVars: varName -> sensitiveVars, for `const BIN = new URL(...)`/`join(...)`
- *     assignments whose resolved path text matches a known entrypoint pattern.
+ *     assignments whose resolved path text matches a known entrypoint pattern. NOT
+ *     excluded on a parameter-name collision (see below) — a dropped entry does not
+ *     make a call ambiguous, it makes the call INVISIBLE to this guard entirely.
  *   objectLiteralVars: varName -> the ObjectExpression node, for EVERY
  *     `const X = { ... };` object-literal assignment — used to resolve both a bare
  *     `env: X` reference AND a `...X` spread nested inside a LARGER env object (the
- *     `env: { ...process.env, ...HERMETIC_ENV, BASE_REF: 'main' }` shape).
+ *     `env: { ...process.env, ...HERMETIC_ENV, BASE_REF: 'main' }` shape). Excluded on
+ *     a parameter-name collision — see `collectParameterNames`.
+ *   processEnvAliasVars: every name bound directly to `process.env` itself (e.g.
+ *     `const inherited = process.env;`) — NOT an object literal, so it is invisible to
+ *     `objectLiteralVars`, but spreading it is exactly as unsafe as `...process.env`.
  * @param {object} ast
- * @returns {{entrypointVars: Map<string,string[]>, objectLiteralVars: Map<string,object>}}
+ * @returns {{entrypointVars: Map<string,string[]>, objectLiteralVars: Map<string,object>, processEnvAliasVars: Set<string>}}
  */
 function resolveModuleVariables(ast) {
   const entrypointVars = new Map();
   const objectLiteralVars = new Map();
+  const processEnvAliasVars = new Set();
   const paramNames = collectParameterNames(ast);
   walk(ast, (node) => {
     if (node.type !== 'VariableDeclarator' || node.id.type !== 'Identifier' || !node.init) return;
     const name = node.id.name;
-    if (paramNames.has(name)) return; // shadowed elsewhere — do not trust a name-based match
-    if (node.init.type === 'ObjectExpression') objectLiteralVars.set(name, node.init);
+    if (node.init.type === 'ObjectExpression') {
+      // Excluding on a parameter-name collision is safe for OBJECT-LITERAL resolution
+      // specifically: resolveEnvArgument treats a missing entry as AMBIGUOUS (flagged),
+      // never as silently clean, so dropping it can only ever be over-cautious.
+      if (!paramNames.has(name)) objectLiteralVars.set(name, node.init);
+    }
+    if (isProcessEnv(node.init) && !paramNames.has(name)) processEnvAliasVars.add(name);
     const pathText = resolveCallToPathText(node.init);
     if (pathText) {
       const sensitive = sensitiveVarsForEntrypoint(pathText);
+      // An entrypoint match is kept even if `name` collides with an unrelated
+      // parameter elsewhere in the file: dropping it (as object-literal resolution
+      // does) would make this spawn call INVISIBLE to the guard — a real ADLC
+      // entrypoint (e.g. `const BIN = new URL('.../adlc-prosecute.mjs', ...)`) hidden
+      // by an unrelated function accepting a same-named parameter, with no
+      // "ambiguous" fallback to catch it. A false collision only risks flagging a call
+      // that a human can confirm or annotate — never a missed real leak.
       if (sensitive) entrypointVars.set(name, sensitive);
     }
   });
-  return { entrypointVars, objectLiteralVars };
+  return { entrypointVars, objectLiteralVars, processEnvAliasVars };
 }
 
 /** True iff `node` (MemberExpression) is exactly `process.env`. */
@@ -195,26 +214,65 @@ function isProcessEnvVar(node, varName) {
 }
 
 /**
- * True iff `objExpr` spreads ambient env — directly (`...process.env`) or through a
- * `...NAME` spread where NAME resolves (via `objectLiteralVars`) to an object that
- * itself spreads ambient env, recursively (the `{ ...process.env, ...HERMETIC_ENV }`
- * template-of-a-template shape). Cycle-guarded.
+ * True iff `objExpr` spreads ambient env — directly (`...process.env`), through a
+ * `...NAME` alias of `process.env` itself, or through a `...NAME` spread where NAME
+ * resolves (via `objectLiteralVars`) to an object that itself spreads ambient env,
+ * recursively (the `{ ...process.env, ...HERMETIC_ENV }` template-of-a-template
+ * shape). Cycle-guarded.
  * @param {object} objExpr
  * @param {Map<string,object>} objectLiteralVars
+ * @param {Set<string>} processEnvAliasVars
  * @param {Set<object>} [seen]
  * @returns {boolean}
  */
-function spreadsProcessEnvDeep(objExpr, objectLiteralVars, seen = new Set()) {
+function spreadsProcessEnvDeep(objExpr, objectLiteralVars, processEnvAliasVars, seen = new Set()) {
   if (seen.has(objExpr)) return false;
   seen.add(objExpr);
   return objExpr.properties.some((p) => {
     if (p.type !== 'SpreadElement') return false;
     if (isProcessEnv(p.argument)) return true;
+    if (p.argument.type === 'Identifier' && processEnvAliasVars.has(p.argument.name)) return true;
     if (p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name)) {
-      return spreadsProcessEnvDeep(objectLiteralVars.get(p.argument.name), objectLiteralVars, seen);
+      return spreadsProcessEnvDeep(objectLiteralVars.get(p.argument.name), objectLiteralVars, processEnvAliasVars, seen);
     }
     return false;
   });
+}
+
+/**
+ * True iff spreading `objExpr` (a STATICALLY KNOWN object literal, reached only through
+ * `objectLiteralVars` resolution) might reintroduce `varName` — a non-literal (or not
+ * provably neutralized) property for `varName`, or a nested spread of ambient env, a
+ * process.env alias, another resolved object that may reintroduce it, or anything this
+ * scanner cannot resolve at all. An object literal that provably never touches
+ * `varName` and never spreads anything unresolved (e.g. `{ SOME_OTHER_VAR: 'x' }`)
+ * returns false: it cannot undo a pin for a key it never mentions. Cycle-guarded.
+ * @param {object} objExpr
+ * @param {string} varName
+ * @param {Map<string,object>} objectLiteralVars
+ * @param {Set<string>} processEnvAliasVars
+ * @param {Set<object>} seen
+ * @returns {boolean}
+ */
+function mayReintroduce(objExpr, varName, objectLiteralVars, processEnvAliasVars, seen) {
+  if (seen.has(objExpr)) return false;
+  seen.add(objExpr);
+  for (const p of objExpr.properties) {
+    if (p.type === 'SpreadElement') {
+      if (isProcessEnv(p.argument)) return true;
+      if (p.argument.type === 'Identifier' && processEnvAliasVars.has(p.argument.name)) return true;
+      if (p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name)) {
+        if (mayReintroduce(objectLiteralVars.get(p.argument.name), varName, objectLiteralVars, processEnvAliasVars, seen)) return true;
+        continue;
+      }
+      return true; // an unresolvable nested spread cannot be proven to exclude varName
+    }
+    if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
+    const key = p.key;
+    const keyName = key?.type === 'Identifier' ? key.name : (isStringLiteral(key) ? key.value : null);
+    if (keyName === varName && !isStringLiteral(p.value)) return true; // a dynamic value for this key
+  }
+  return false;
 }
 
 /**
@@ -222,31 +280,47 @@ function spreadsProcessEnvDeep(objExpr, objectLiteralVars, seen = new Set()) {
  * i.e. no LATER property in the SAME object (source order, since object-literal
  * evaluation is order-sensitive: a later spread can silently override an earlier
  * literal) reintroduces the ambient value for `varName`. A spread is checked
- * recursively via `objectLiteralVars`; if it cannot be resolved OR if it resolves and
- * genuinely spreads ambient env for `varName` (i.e. would itself require but does not
- * itself trust a literal), it is treated as an override, not skipped. INCLUDING an
- * empty string for the literal itself, but NOT `VARNAME: process.env.VARNAME` (a no-op
+ * recursively via `objectLiteralVars`; a resolved object literal is trusted to
+ * preserve neutralization when IT ITSELF proves a literal pin for `varName`, and
+ * otherwise only when it provably CANNOT reintroduce `varName` (`mayReintroduce`) — a
+ * resolved object that merely has unrelated keys does not undo a pin for a different
+ * one. A direct `...process.env` spread, or a spread of an identifier this scanner has
+ * proven aliases `process.env` itself (e.g. `const inherited = process.env`), always
+ * overrides: both are definitively unsafe, not merely unresolved. An otherwise
+ * UNRESOLVABLE spread (a bare function parameter, a call expression, etc. — this
+ * scanner cannot determine its shape at all) is left alone rather than assumed unsafe:
+ * the common, deliberate "safe defaults the caller may override" shape (`{ ...process.env,
+ * VAR: '', ...callerOverrides }`) is not itself an ambient leak, and flagging it would
+ * make already-compliant code fail for no discoverable reason. INCLUDING an empty
+ * string for the literal itself, but NOT `VARNAME: process.env.VARNAME` (a no-op
  * re-injection) and NOT any other dynamic expression: only a provable literal is
  * trusted, and only when nothing after it in the SAME object undoes it.
  * @param {object} objExpr
  * @param {string} varName
  * @param {Map<string,object>} objectLiteralVars
+ * @param {Set<string>} processEnvAliasVars
  * @param {Set<object>} [seen]
  * @returns {boolean}
  */
-function hasLiteralNeutralization(objExpr, varName, objectLiteralVars, seen = new Set()) {
+function hasLiteralNeutralization(objExpr, varName, objectLiteralVars, processEnvAliasVars, seen = new Set()) {
   if (seen.has(objExpr)) return false;
   seen.add(objExpr);
   let neutralized = false;
   for (const p of objExpr.properties) {
     if (p.type === 'SpreadElement') {
-      if (p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name)) {
-        const resolved = objectLiteralVars.get(p.argument.name);
-        if (hasLiteralNeutralization(resolved, varName, objectLiteralVars, seen)) { neutralized = true; continue; }
-        if (spreadsProcessEnvDeep(resolved, objectLiteralVars, new Set())) neutralized = false; // a later ambient spread overrides
+      if (isProcessEnv(p.argument) || (p.argument.type === 'Identifier' && processEnvAliasVars.has(p.argument.name))) {
+        neutralized = false; // definitively ambient — always overrides whatever came before
         continue;
       }
-      if (isProcessEnv(p.argument)) neutralized = false; // a later `...process.env` overrides any earlier literal
+      if (p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name)) {
+        const resolved = objectLiteralVars.get(p.argument.name);
+        if (hasLiteralNeutralization(resolved, varName, objectLiteralVars, processEnvAliasVars, seen)) { neutralized = true; continue; }
+        if (mayReintroduce(resolved, varName, objectLiteralVars, processEnvAliasVars, new Set())) neutralized = false;
+        continue;
+      }
+      // Unresolvable (a bare function parameter, a call expression, etc.) — cannot be
+      // proven either way, so it is left alone: preserve whatever neutralization state
+      // came before it rather than assume this spread undoes it.
       continue;
     }
     if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
@@ -366,7 +440,7 @@ function hasNearbySuppression(node, comments, varName) {
 function findViolationsInSource(filePath, source) {
   const comments = [];
   const ast = parse(source, { ...ACORN_OPTIONS, onComment: comments });
-  const { entrypointVars, objectLiteralVars } = resolveModuleVariables(ast);
+  const { entrypointVars, objectLiteralVars, processEnvAliasVars } = resolveModuleVariables(ast);
   const violations = [];
 
   walk(ast, (node) => {
@@ -417,10 +491,10 @@ function findViolationsInSource(filePath, source) {
       return;
     }
 
-    if (!spreadsProcessEnvDeep(envArg.object, objectLiteralVars)) return; // no ambient spread reaches this call
+    if (!spreadsProcessEnvDeep(envArg.object, objectLiteralVars, processEnvAliasVars)) return; // no ambient spread reaches this call
 
     for (const varName of required) {
-      const neutralized = hasLiteralNeutralization(envArg.object, varName, objectLiteralVars) || fileTopPinsFor(ast, varName);
+      const neutralized = hasLiteralNeutralization(envArg.object, varName, objectLiteralVars, processEnvAliasVars) || fileTopPinsFor(ast, varName);
       const suppressed = hasNearbySuppression(node, comments, varName);
       if (!neutralized && !suppressed) {
         violations.push({
@@ -876,4 +950,74 @@ test('a process.env.VARNAME = literal pin at Program (module) top level is trust
     }
   `;
   assert.deepEqual(findViolationsInSource('fixtures/module-top-pin.test.mjs', fixture), []);
+});
+
+// ── round-4 review: an unresolved spread must fail closed, and entrypoint matches ──
+// ── must not be discarded on an unrelated parameter-name collision ────────────────
+
+test('a later spread of an identifier ALIASING process.env (not an object literal) still overrides an earlier literal', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const inherited = process.env;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env, ADLC_MANIFEST_KEY: '', ...inherited } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/aliased-process-env-respread.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a spread of an unresolvable alias of process.env must not be silently trusted as a no-op');
+});
+
+test('a later spread of a resolved object literal that never mentions the pinned variable does NOT override it', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const EXTRA = { SOME_OTHER_VAR: 'x' };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env, ADLC_MANIFEST_KEY: '', ...EXTRA } });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/unrelated-template-respread.test.mjs', fixture), [],
+    'a resolved object literal with no bearing on the pinned key cannot undo its pin');
+});
+
+test('a later spread of a resolved object literal that DOES dynamically set the pinned variable overrides it', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const OVERRIDES = { ADLC_MANIFEST_KEY: process.env.SOME_OTHER_SOURCE };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env, ADLC_MANIFEST_KEY: '', ...OVERRIDES } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/dynamic-template-respread.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a resolved object literal that itself sets the pinned key to a non-literal value can reintroduce the ambient value');
+});
+
+test('a later spread of an UNRESOLVABLE identifier (e.g. a caller-supplied override parameter) does not undo an earlier literal pin — the common safe-defaults-plus-override shape', () => {
+  const fixture = `
+    import { spawnSync } from 'node:child_process';
+    const BIN = join(ROOT, 'packages', 'rails-guard', 'bin', 'rails-guard-ci.mjs');
+    function run(args, { env = {} } = {}) {
+      return spawnSync(process.execPath, [BIN, ...args], { env: { ...process.env, RAILS_BASE: '', BASE_REF: '', ...env } });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/safe-defaults-plus-override.test.mjs', fixture), [],
+    'a caller-supplied override merged after a literal pin is not itself an ambient leak — this scanner cannot resolve it, so it is left alone rather than assumed unsafe');
+});
+
+test('an unrelated function parameter sharing a name with a real entrypoint variable does not hide that entrypoint from the guard', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function unrelatedHelper(BIN) {
+      return BIN.toUpperCase();
+    }
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/entrypoint-name-collision.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a real entrypoint match must not be dropped because an unrelated parameter elsewhere reuses its name');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
 });
