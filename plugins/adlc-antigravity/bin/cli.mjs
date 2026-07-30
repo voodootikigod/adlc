@@ -441,14 +441,22 @@ if (command === 'install' || command === '--install') {
 
   // Fallback for a machine with NO agy: place the files where agy would look.
   //
-  // The exits below deliberately do NOT route through exitAfterCancellation(),
-  // unlike every exit in the agy path. This branch is reached only when
-  // resolveAgyBin() returned null, so no subprocess was ever spawned and there is
-  // no process group to reap — the wait would be waiting on nothing. If the user
-  // interrupts during the copy, the interrupt handler's own exit reports 130 and
-  // races the success exit; whichever wins, the copy either completed (0 is
-  // truthful) or the rename swap left the previous install intact. Recorded here so
-  // the asymmetry reads as deliberate rather than as a site that was missed.
+  // No process group to reap here: this branch is reached only when
+  // resolveAgyBin() returned null, so no subprocess was ever spawned.
+  //
+  // CORRECTION to an earlier version of this comment, which claimed the interrupt
+  // handler "races" the success exit. It does not. cpSync and renameSync are
+  // SYNCHRONOUS, so the JavaScript stack never yields and Node cannot dispatch a
+  // queued SIGINT callback at all while the copy is in flight — there is no race,
+  // the handler simply does not run. Ctrl-C during a slow copy is therefore not
+  // honoured until the call returns. Making it so would mean rebuilding this path
+  // on async fs; that is not done here, because the copy targets a SIBLING
+  // `incoming` directory and the live install is untouched until the renames, so
+  // the worst case is a stale sibling that the next run removes unconditionally.
+  //
+  // What IS fixed: a cancellation queued during the copy no longer loses to the
+  // success exit. Yielding once before exiting lets the handler run, so a user who
+  // pressed Ctrl-C gets 130 rather than a success report.
   const pluginsDir = join(homedir(), '.gemini', 'config', 'plugins');
   const targetDir = join(pluginsDir, PLUGIN_NAME);
 
@@ -484,7 +492,10 @@ if (command === 'install' || command === '--install') {
     if (movedAside) rmSync(previous, { recursive: true, force: true });
     console.log(`✓ Plugin copied to ${targetDir}`);
     console.log('Note: Run `/adlc-init` inside your agent session to complete setup.');
-    process.exit(0);
+    // Yield so a SIGINT queued during the synchronous copy is dispatched before we
+    // claim success. If the user cancelled, onInterrupt now runs and exits 130.
+    await new Promise((resolveTick) => setImmediate(resolveTick));
+    await exitAfterCancellation(interruptSignal ? failureExitStatus() : 0);
   } catch (err) {
     rmSync(incoming, { recursive: true, force: true });
     if (movedAside && !existsSync(targetDir)) renameSync(previous, targetDir);
