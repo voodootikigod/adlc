@@ -28,6 +28,7 @@ import { pull } from '../lib/pull.mjs';
 import { push } from '../lib/push.mjs';
 import { serializeBlock } from '../lib/block.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
+import { recordTicketEvidence, deriveSlug, generateSegmentUlid, segmentPath } from '@adlc/tickets';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // The REAL consumer gate, resolved from the repo root (packages/ticket-sync/test → root).
@@ -337,6 +338,51 @@ test('pull still deletes a block field the remote dropped', async () => {
       .tickets.find((t) => t.id === id);
     assert.equal(ticket.category, undefined, 'a block field absent remotely is still cleared');
     assert.equal(ticket.completed, true, 'while local-only state is untouched');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// T-MANIFEST-FOREST lineage-durability finding: push's two readOwnChains calls
+// (push.mjs:152/205) can now THROW when the local .lineage token is lost AND more
+// than one committed segment could be this branch's — recoverOpenSegment refuses
+// to guess (see manifest-segments.test.mjs's own AC3 test for the primitive).
+// That must surface as a real push failure (exitCode 1), never crash uncaught or
+// silently render a status computed from root alone.
+test('push fails closed (exitCode 1) rather than crashing or rendering a false status when segment recovery is ambiguous', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-ambiguous-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'feat/push-ambiguous']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
+
+    // Segment first, THEN cut over — mirrors gitStoreWithSegmentedEvidence's fixture
+    // shape elsewhere in this package's tests.
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    recordTicketEvidence(dir, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T1',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
+    });
+    // A second, independently-minted segment for the SAME branch slug (legitimate
+    // per spec §7 point 1), then discard the token so neither is preferred.
+    const slug = deriveSlug('feat/push-ambiguous');
+    const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
+    writeFileSync(
+      segmentPath(join(dir, '.adlc'), secondName),
+      `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
+    );
+    rmSync(join(dir, '.adlc', 'manifest.d', '.lineage'), { force: true });
+
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: false, now: 'T' });
+    assert.equal(r.exitCode, 1, 'must fail closed, never crash uncaught or silently succeed with a wrong status');
+    assert.ok(r.errors.some((e) => /ambiguous/.test(e)), `expected an ambiguous-segment error, got: ${JSON.stringify(r.errors)}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

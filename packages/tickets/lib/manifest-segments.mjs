@@ -362,7 +362,13 @@ function encodeUlidPart(value, width) {
   }
   return output;
 }
+// Mirrors @adlc/gate-manifest/lib/lineage.mjs's identical validation: this was
+// previously internal-only, so a caller-supplied `now`/`entropy` was always this
+// file's own well-formed value; now exported (lineage-durability test fixtures
+// need it directly), the same guards apply as the sibling this mirrors.
 export function generateSegmentUlid(now = Date.now(), entropy = randomBytes(10)) {
+  if (!Number.isSafeInteger(now) || now < 0 || now > 0xffffffffffff) throw new RangeError('ULID timestamp out of range');
+  if (!Buffer.isBuffer(entropy) || entropy.length !== 10) throw new TypeError('ULID entropy must be 10 bytes');
   const random = BigInt(`0x${entropy.toString('hex')}`);
   return `${encodeUlidPart(BigInt(now), 10)}${encodeUlidPart(random, 16)}`;
 }

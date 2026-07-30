@@ -5,7 +5,7 @@ import { createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename } from '../index.mjs';
+import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename, deriveSlug, generateSegmentUlid, segmentPath } from '../index.mjs';
 import { ticket, writeDirectory } from './helpers.mjs';
 
 test('doctor is read-only and reports active/archive/runtime health', () => {
@@ -420,6 +420,27 @@ test('doctor storehash-manifest-bind: still binds after the local .lineage token
     const check = bindCheck(doctorTicketStore(store, { root }));
     assert.equal(check.ok, true, JSON.stringify(check));
     assert.equal(check.bound, true, 'must still find the committed segment\'s checkpoint without a local .lineage token');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: reports SEGMENT_AMBIGUOUS rather than a false clean bind when recovery cannot disambiguate', () => {
+  const { root, store } = gitStoreWithSegmentedEvidence();
+  const dir = join(root, '.adlc');
+  try {
+    // A second, independently-minted segment for the SAME branch slug — legitimate
+    // per spec §7 point 1; simulated by hand-writing a second well-formed segment
+    // sharing the slug, then discarding the token so neither is preferred.
+    const slug = deriveSlug('feat/doctor-segment-test');
+    const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
+    writeFileSync(
+      segmentPath(dir, secondName),
+      `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
+    );
+    rmSync(join(dir, 'manifest.d', '.lineage'), { force: true });
+
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false, 'must not report a false clean bind when it cannot tell which segment is real');
+    assert.equal(check.code, 'SEGMENT_AMBIGUOUS');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

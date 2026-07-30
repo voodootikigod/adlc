@@ -487,3 +487,27 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 });
+
+// Mirrors @adlc/gate-manifest/lib/lineage.mjs's identical describe block. Now
+// exported for the lineage-durability tests above; the same validation applies.
+describe('generateSegmentUlid (spec §4.2)', () => {
+  it('produces a 26-char uppercase Crockford-base32 string matching the segment grammar', () => {
+    const ulid = generateSegmentUlid();
+    assert.match(ulid, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+  });
+
+  it('is distinct across calls (fresh entropy each time)', () => {
+    const a = generateSegmentUlid();
+    const b = generateSegmentUlid();
+    assert.notEqual(a, b);
+  });
+
+  it('rejects entropy that is not exactly 10 bytes', () => {
+    assert.throws(() => generateSegmentUlid(Date.now(), Buffer.alloc(9)), TypeError);
+    assert.throws(() => generateSegmentUlid(Date.now(), Buffer.alloc(11)), TypeError);
+  });
+
+  it('rejects an out-of-range timestamp', () => {
+    assert.throws(() => generateSegmentUlid(-1), RangeError);
+  });
+});
