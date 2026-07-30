@@ -195,7 +195,13 @@ function collectParameterNames(ast) {
  *   entrypointVars: varName -> sensitiveVars, for `const BIN = new URL(...)`/`join(...)`
  *     assignments whose resolved path text matches a known entrypoint pattern. NOT
  *     excluded on a parameter-name collision (see below) — a dropped entry does not
- *     make a call ambiguous, it makes the call INVISIBLE to this guard entirely.
+ *     make a call ambiguous, it makes the call INVISIBLE to this guard entirely. A
+ *     SECOND same-named declaration (possibly matching a DIFFERENT entrypoint, e.g. one
+ *     scope's `BIN` pointing at rails-guard-ci.mjs and an unrelated scope's `BIN`
+ *     pointing at adlc-prosecute.mjs) does not overwrite the first: the sensitive-var
+ *     sets are UNIONED, so a reference resolved to the wrong declaration still gets
+ *     checked against every variable either entrypoint could require, rather than
+ *     silently checking only the last-declared one's set.
  *   objectLiteralVars: varName -> the ObjectExpression node, for EVERY
  *     `const X = { ... };` object-literal assignment — used to resolve both a bare
  *     `env: X` reference AND a `...X` spread nested inside a LARGER env object (the
@@ -210,7 +216,7 @@ function collectParameterNames(ast) {
  *     `const inherited = process.env;`) — NOT an object literal, so it is invisible to
  *     `objectLiteralVars`, but spreading it is exactly as unsafe as `...process.env`.
  * @param {object} ast
- * @returns {{entrypointVars: Map<string,string[]>, objectLiteralVars: Map<string,object>, processEnvAliasVars: Set<string>}}
+ * @returns {{entrypointVars: Map<string,Set<string>>, objectLiteralVars: Map<string,object>, processEnvAliasVars: Set<string>}}
  */
 function resolveModuleVariables(ast) {
   const entrypointVars = new Map();
@@ -242,8 +248,15 @@ function resolveModuleVariables(ast) {
       // entrypoint (e.g. `const BIN = new URL('.../adlc-prosecute.mjs', ...)`) hidden
       // by an unrelated function accepting a same-named parameter, with no
       // "ambiguous" fallback to catch it. A false collision only risks flagging a call
-      // that a human can confirm or annotate — never a missed real leak.
-      if (sensitive) entrypointVars.set(name, sensitive);
+      // that a human can confirm or annotate — never a missed real leak. A SECOND
+      // same-named entrypoint declaration is UNIONED into the existing set (see above)
+      // rather than overwriting it, so a name collision between two DIFFERENT
+      // entrypoints still requires every variable either one could need.
+      if (sensitive) {
+        const existing = entrypointVars.get(name);
+        if (existing) sensitive.forEach((v) => existing.add(v));
+        else entrypointVars.set(name, new Set(sensitive));
+      }
     }
   });
   return { entrypointVars, objectLiteralVars, processEnvAliasVars };
@@ -338,23 +351,19 @@ function mayReintroduce(objExpr, varName, objectLiteralVars, processEnvAliasVars
  * proven aliases `process.env` itself (e.g. `const inherited = process.env`), always
  * overrides: both are definitively unsafe, not merely unresolved. An otherwise
  * UNRESOLVABLE spread (a bare function parameter, a call expression, etc. — this
- * scanner cannot determine its shape at all) is left alone rather than assumed unsafe:
- * the common, deliberate "safe defaults the caller may override" shape (`{ ...process.env,
- * VAR: '', ...callerOverrides }`) is not itself an ambient leak, and flagging it would
- * make already-compliant code fail for no discoverable reason.
+ * scanner cannot determine its shape at all) is left alone: `neutralized` keeps
+ * whatever value it already had rather than being forced to either true or false.
  *
- * KNOWN, ACCEPTED LIMITATION (re-raised by review more than once — recorded here so it
- * is not re-litigated): a caller who deliberately passes an override reintroducing the
- * ambient value (`run(args, { env: { VAR: process.env.VAR } })`) defeats this. Every
- * real call site this guard covers uses the override slot ONLY for test-controlled
- * literal values (see packages/rails-guard/test/ci-bin.test.mjs's `env: { BASE_REF:
- * 'main' }`), never to reintroduce ambient state — flipping this to fail-closed would
- * flag that already-compliant, intentional pattern with no fix available (the literal
- * pin cannot be moved after the override without also overriding a legitimate,
- * deliberate caller-supplied value). Closing this gap for real needs either
- * interprocedural analysis of what callers actually pass, or requiring an explicit
- * suppression at every such override site — deferred as a follow-on, not a defect in
- * what is implemented here. INCLUDING an empty
+ * Concretely, this means a caller who passes an override that reintroduces the ambient
+ * value (`run(args, { env: { VAR: process.env.VAR } })`) is NOT flagged — this scanner
+ * has no interprocedural visibility into what any given caller actually supplies at
+ * that unresolvable spread. As implemented today, every real call site this guard
+ * scans (e.g. packages/rails-guard/test/ci-bin.test.mjs's `env: { BASE_REF: 'main' }`)
+ * only ever passes test-controlled literal values through that slot, never ambient
+ * ones — but that is a fact about the current call sites, not something this function
+ * verifies or enforces. Closing this for good needs either interprocedural analysis of
+ * what callers actually pass, or a required suppression at every such override site.
+ * INCLUDING an empty
  * string for the literal itself, but NOT `VARNAME: process.env.VARNAME` (a no-op
  * re-injection) and NOT any other dynamic expression: only a provable literal is
  * trusted, and only when nothing after it in the SAME object undoes it.
@@ -537,6 +546,14 @@ function resolveOptionsArgument(node, calleeName) {
  * assignment (`+=`, `??=`, …), or `delete process.env.VARNAME` undoes an earlier pin
  * before any spawn that runs after module load — presence alone would keep trusting a
  * pin that no longer holds by the time a test actually spawns.
+ *
+ * This checks the FINAL Program-level state only, not whether the pin textually
+ * precedes a given spawn, and does not see a write inside a function body that runs
+ * (e.g. a test hook) between module load and that spawn — this scanner has no
+ * control-flow or call-graph analysis. It matches this codebase's actual pattern today
+ * (every real file using this pin sets it once, synchronously, at module top, which
+ * always completes before any `node:test` callback runs) but does not itself verify
+ * that a given file follows that pattern.
  * @param {object} ast
  * @param {string} varName
  * @returns {boolean}
@@ -661,8 +678,8 @@ function resolveSpawnCalleeName(callee, bindings) {
  * independent — matches this codebase's varied call shapes: `[BIN, ...args]`,
  * `[BIN, 'sub', ...]`).
  * @param {object} node  a CallExpression already confirmed to be a spawn call
- * @param {Map<string,string[]>} entrypointVars
- * @returns {string[]|null}
+ * @param {Map<string,Set<string>>} entrypointVars
+ * @returns {string[]|Set<string>|null}
  */
 function findRequiredVars(node, entrypointVars) {
   for (const arg of node.arguments) {
@@ -1521,4 +1538,24 @@ test('a BACKTICK (no-substitution template literal) entrypoint path is resolved 
   const violations = findViolationsInSource('fixtures/backtick-entrypoint-path.test.mjs', fixture);
   assert.equal(violations.length, 1, 'a backtick string is exactly as static as a quoted one and must resolve the entrypoint the same way');
   assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+// ── round-9 review: entrypoint name collision across two DIFFERENT entrypoints ────
+
+test('two DIFFERENT entrypoints declared under the same variable name in unrelated scopes are checked against the UNION of both — never just the last one seen', () => {
+  const fixture = `
+    import { execFileSync, spawnSync } from 'node:child_process';
+    function railsGuardHelper() {
+      const BIN = join(ROOT, 'packages', 'rails-guard', 'bin', 'rails-guard-ci.mjs');
+      return spawnSync(process.execPath, [BIN], { env: { ...process.env, ADLC_MANIFEST_KEY: '' } });
+    }
+    function prosecuteHelper(args) {
+      const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env, ADLC_MANIFEST_KEY: '' } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/entrypoint-name-union.test.mjs', fixture);
+  const vars = violations.map((v) => v.variable).sort();
+  assert.deepEqual(vars, ['BASE_REF', 'BASE_REF', 'RAILS_BASE', 'RAILS_BASE'],
+    'both calls resolve BIN against the UNION of both entrypoints, so both are checked for RAILS_BASE/BASE_REF too, not just the adlc-prosecute.mjs call\'s ADLC_MANIFEST_KEY');
 });
