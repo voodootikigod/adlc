@@ -35,9 +35,21 @@ const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 //   ADLC_MANIFEST_KEY — flips key-present/key-absent branches deep in library code
 //     (measured: gate-manifest + tickets segments 0/2 with it exported, 2/2 without);
 //   RAILS_BASE / BASE_REF — retarget rails-guard base resolution at branches the
-//     tests' scratch repos don't contain (75/80 bootstrap tests failed).
+//     tests' scratch repos don't contain (75/80 bootstrap tests failed);
+//   ADLC_RAILS_BYPASS / ADLC_BUILD_GATE_BYPASS — documented operator overrides that
+//     flip gate outcomes: a bypass exported for legitimate maintenance would make a
+//     test expecting exit 2 see a recorded override and exit 0 (codex review finding);
+//   ADLC_GATE_MOCK_RESPONSE — a test seam that, exported ambiently, makes LLM-backed
+//     gates return canned verdicts instead of exercising the real path.
 // Tests that NEED one of these set their own value inline and are unaffected.
-export const SCRUBBED_ENV_VARS = ['ADLC_MANIFEST_KEY', 'RAILS_BASE', 'BASE_REF'];
+export const SCRUBBED_ENV_VARS = [
+  'ADLC_MANIFEST_KEY',
+  'RAILS_BASE',
+  'BASE_REF',
+  'ADLC_RAILS_BYPASS',
+  'ADLC_BUILD_GATE_BYPASS',
+  'ADLC_GATE_MOCK_RESPONSE',
+];
 
 /**
  * Build the env every segment is spawned with: the caller's env with the repo's

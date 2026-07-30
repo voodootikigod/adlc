@@ -22,8 +22,8 @@ import { buildSegmentEnv, SCRUBBED_ENV_VARS } from '../run-tests.mjs';
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
-test('the sensitive set is exactly the three ambient trust-root variables', () => {
-  assert.deepEqual([...SCRUBBED_ENV_VARS].sort(), ['ADLC_MANIFEST_KEY', 'BASE_REF', 'RAILS_BASE']);
+test('the sensitive set is exactly the six ambient trust-root/override variables', () => {
+  assert.deepEqual([...SCRUBBED_ENV_VARS].sort(), ['ADLC_BUILD_GATE_BYPASS', 'ADLC_GATE_MOCK_RESPONSE', 'ADLC_MANIFEST_KEY', 'ADLC_RAILS_BYPASS', 'BASE_REF', 'RAILS_BASE']);
 });
 
 test('non-empty sensitive values are ABSENT from the segment env and reported', () => {
@@ -134,4 +134,16 @@ test("win32: an explicitly-empty canonical value still blocks scrubbing of ITSEL
   assert.equal(env.ADLC_MANIFEST_KEY, '', "explicit '' preserved");
   assert.equal(Object.hasOwn(env, 'adlc_manifest_key'), false, 'the non-empty variant is scrubbed');
   assert.deepEqual(scrubbed, ['ADLC_MANIFEST_KEY']);
+});
+
+test('gate-bypass and mock-seam variables are scrubbed like the key', () => {
+  const { env, scrubbed } = buildSegmentEnv({
+    ADLC_RAILS_BYPASS: '1',
+    ADLC_BUILD_GATE_BYPASS: '1',
+    ADLC_GATE_MOCK_RESPONSE: '{"verdict":"pass"}',
+  });
+  for (const name of ['ADLC_RAILS_BYPASS', 'ADLC_BUILD_GATE_BYPASS', 'ADLC_GATE_MOCK_RESPONSE']) {
+    assert.equal(Object.hasOwn(env, name), false, `${name} must not reach test segments ambiently`);
+  }
+  assert.equal(scrubbed.length, 3);
 });
