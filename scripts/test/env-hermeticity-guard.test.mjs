@@ -685,19 +685,33 @@ function isProcessExecPath(node) {
 }
 
 /**
+ * True iff `node` is a NODE LAUNCHER — `process.execPath` or the literal string
+ * `'node'`, both verified in this codebase's own real call sites (`execFileSync('node',
+ * [BIN], …)` appears in packages/hollow-test, packages/merge-forecast,
+ * packages/model-ratchet, packages/review-calibration, and multiple scripts/test files
+ * — more common here than the `process.execPath` form). When the launcher itself is
+ * treated as the executable, the actual script (the array's first element) is invisible
+ * to entrypoint matching.
+ */
+function isNodeLauncher(node) {
+  return isProcessExecPath(node) || stringLiteralValue(node) === 'node';
+}
+
+/**
  * The single node occupying the EXECUTABLE position of a spawn call — never a later
  * (data) argument. For a direct call (`exec(BIN, ...)`, `execFileSync(BIN, ...)`) that
- * is the first argument; for the `execFileSync(process.execPath, [BIN, ...args], ...)`
- * shape this codebase uses throughout, it is the FIRST element of the args array (the
- * script Node actually runs), not `process.execPath` itself (which never matches any
- * entrypoint pattern) and not any later CLI argument.
+ * is the first argument; for the `execFileSync(<node launcher>, [BIN, ...args], ...)`
+ * shape this codebase uses throughout (either `process.execPath` or the literal `'node'`
+ * — see `isNodeLauncher`), it is the FIRST element of the args array (the script Node
+ * actually runs), not the launcher itself (which never matches any entrypoint pattern)
+ * and not any later CLI argument.
  * @param {object} node  a CallExpression already confirmed to be a spawn call
  * @returns {object|null}
  */
 function executablePositionArg(node) {
   const first = node.arguments[0];
   if (!first) return null;
-  if (isProcessExecPath(first) && node.arguments[1]?.type === 'ArrayExpression') {
+  if (isNodeLauncher(first) && node.arguments[1]?.type === 'ArrayExpression') {
     return node.arguments[1].elements[0] ?? null;
   }
   return first;
@@ -1616,5 +1630,21 @@ test('an unrelated function parameter sharing a name with a process.env alias do
   `;
   const violations = findViolationsInSource('fixtures/alias-name-collision.test.mjs', fixture);
   assert.equal(violations.length, 1, 'a real process.env alias must not be dropped because an unrelated parameter elsewhere reuses its name');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+// ── final review: the literal 'node' launcher must resolve the entrypoint the ────
+// ── same way process.execPath does (this codebase's more common form) ────────────
+
+test('execFileSync(\'node\', [BIN, ...args], ...) resolves the entrypoint exactly like process.execPath does', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync('node', [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/node-launcher-literal.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'the literal \'node\' launcher form must not hide the real target (BIN) from entrypoint matching');
   assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
 });
