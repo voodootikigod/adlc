@@ -147,6 +147,18 @@ test('priorFingerprints must be an array of valid fingerprints', () => {
   assert.throws(() => validateAdoptionRecord({ schemaVersion: 1, keyFingerprint: FP_A, priorFingerprints: ['bad'] }));
 });
 
+test('an ABSENT priorFingerprints field defaults to an empty array (no rotations yet)', () => {
+  const record = validateAdoptionRecord({ schemaVersion: 1, keyFingerprint: FP_A });
+  assert.deepEqual(record.priorFingerprints, []);
+});
+
+test('an EXPLICIT null priorFingerprints is rejected, not silently normalized to an empty array', () => {
+  assert.throws(
+    () => validateAdoptionRecord({ schemaVersion: 1, keyFingerprint: FP_A, priorFingerprints: null }),
+    /priorFingerprints/,
+  );
+});
+
 // ── readAdoptionRecord ──────────────────────────────────────────────────────────────
 
 test('no config.json at all is reported as absent, not malformed', () => {
@@ -210,6 +222,35 @@ test('config.json that is a DIRECTORY is present-but-invalid, not absent', () =>
   assert.equal(result.present, true);
   assert.equal(result.valid, false);
 });
+
+test('.adlc ITSELF being a symlink is caught by readAdoptionRecord, even when the shadow target has a well-formed config.json', () => {
+  const { root, dir } = makeAdlcDir();
+  const shadow = join(root, 'shadow-adlc');
+  mkdirSync(shadow, { recursive: true });
+  writeFileSync(join(shadow, CONFIG_FILENAME), JSON.stringify({ signing: { schemaVersion: 1, keyFingerprint: FP_A } }));
+  rmSync(dir, { recursive: true, force: true });
+  symlinkSync(shadow, dir);
+  const result = readAdoptionRecord(dir);
+  assert.equal(result.present, true, 'a symlinked .adlc must never be conflated with "no .adlc at all"');
+  assert.equal(result.valid, false);
+  assert.match(result.reason, /symlink/);
+});
+
+test('.adlc genuinely absent entirely (no directory at all) is the only case reported present:false', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const dir = join(root, '.adlc');
+  assert.deepEqual(readAdoptionRecord(dir), { present: false });
+});
+
+for (const [label, value] of [['null', null], ['an array', []], ['a string', '"nope"'], ['a number', 42]]) {
+  test(`config.json whose top-level value is ${label} is present-but-invalid, not conflated with "no signing key"`, () => {
+    const { dir } = makeAdlcDir();
+    writeFileSync(join(dir, CONFIG_FILENAME), JSON.stringify(value));
+    const result = readAdoptionRecord(dir);
+    assert.equal(result.present, true, `a malformed top-level ${label} must not be reported as absent`);
+    assert.equal(result.valid, false);
+  });
+}
 
 test('config.json exceeding the byte cap is present but invalid, not silently truncated', () => {
   const { dir } = makeAdlcDir();

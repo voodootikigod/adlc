@@ -172,7 +172,12 @@ export function validateAdoptionRecord(raw) {
     throw invalid('MALFORMED_ADOPTION_RECORD', 'signing.keyFingerprint must be a 64-character lowercase hex sha256 digest');
   }
   if (!isLegacyGeneration(raw.generation)) validateGenerationId(raw.generation);
-  const priorFingerprints = raw.priorFingerprints ?? [];
+  // Default ONLY when the field is absent — an explicit `null` (or any other non-array
+  // value) must fail validation, not be silently normalized to []. priorFingerprints is
+  // the append-only tree-side commitment to every retired key; converting a corrupted
+  // or tampered `null` into an empty array would erase that commitment instead of
+  // refusing the record.
+  const priorFingerprints = raw.priorFingerprints === undefined ? [] : raw.priorFingerprints;
   if (!Array.isArray(priorFingerprints) || priorFingerprints.some((f) => typeof f !== 'string' || !FINGERPRINT_RE.test(f))) {
     throw invalid('MALFORMED_ADOPTION_RECORD', 'signing.priorFingerprints must be an array of 64-character lowercase hex sha256 digests');
   }
@@ -247,12 +252,40 @@ function readBoundedJsonNoFollow(path, maxBytes) {
  * @returns {{present: false} | {present: true, valid: true, record: object} | {present: true, valid: false, reason: string}}
  */
 export function readAdoptionRecord(dir) {
+  // `dir` (.adlc) ITSELF is now confirmed safe before the config.json read, not just
+  // config.json's own lstat: readBoundedJsonNoFollow only ever inspects the leaf, so a
+  // symlinked .adlc ancestor would resolve through it to whatever config.json (present
+  // or absent) sits at the redirected target — a genuinely absent target even reads as
+  // "unadopted" rather than "unsafe". A confirmed ENOENT on dir itself IS genuine
+  // absence (no .adlc at all means no adoption record at all); anything else unsafe
+  // about dir is present-but-invalid, never silently treated as absent.
+  let dirStat;
+  try {
+    dirStat = lstatSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return { present: false };
+    return { present: true, valid: false, reason: `.adlc could not be stat'd: ${err.code ?? err.message}` };
+  }
+  if (dirStat.isSymbolicLink()) {
+    return { present: true, valid: false, reason: '.adlc is a symlink; it must never be reached through one' };
+  }
+  if (!dirStat.isDirectory()) {
+    return { present: true, valid: false, reason: '.adlc is not a directory' };
+  }
+
   const configPath = join(dir, CONFIG_FILENAME);
   const result = readBoundedJsonNoFollow(configPath, MAX_CONFIG_JSON_BYTES);
   if (!result.present) return { present: false };
   if (!result.valid) return result;
   const { config } = result;
-  if (config === null || typeof config !== 'object' || Array.isArray(config) || !(ADOPTION_RECORD_KEY in config)) {
+  // A structurally MALFORMED top-level value (null, an array, a primitive) is NOT the
+  // same as a valid object that merely lacks a "signing" key — the former is corruption
+  // and must fail closed (present:true, valid:false), the latter is legitimately
+  // "not yet adopted" (present:false).
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+    return { present: true, valid: false, reason: 'config.json must contain a JSON object at the top level' };
+  }
+  if (!(ADOPTION_RECORD_KEY in config)) {
     return { present: false };
   }
   try {
